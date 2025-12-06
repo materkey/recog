@@ -35,7 +35,7 @@ import torch
 DEFAULT_MODEL = "v3_e2e_rnnt"
 DEFAULT_CHUNK_DURATION = 20.0
 DEFAULT_OVERLAP = 1.0
-SPEAKER_SIMILARITY_THRESHOLD = 0.65  # Порог косинусного сходства для идентификации
+SPEAKER_SIMILARITY_THRESHOLD = 0.30  # Порог косинусного сходства для идентификации (низкий для коротких реплик)
 
 # Путь к venv для pyannote 4.x
 PYANNOTE4_VENV = Path(__file__).parent / "venv-pyannote"
