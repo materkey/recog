@@ -593,6 +593,101 @@ class DiarizationModule:
 
         return embeddings
 
+    def cluster_speakers(
+        self,
+        audio_path: str,
+        diarization_segments: List[DiarizationSegment],
+        similarity_threshold: float = 0.80
+    ) -> List[DiarizationSegment]:
+        """
+        Кластеризует спикеров по голосовым embeddings.
+        Объединяет спикеров с похожими голосами в один ID.
+
+        Args:
+            audio_path: путь к аудиофайлу
+            diarization_segments: сегменты после диаризации
+            similarity_threshold: порог сходства для объединения (0.0-1.0)
+
+        Returns:
+            Сегменты с объединёнными speaker_id
+        """
+        from tqdm import tqdm
+
+        unique_speakers = list(set(seg.speaker_id for seg in diarization_segments))
+
+        if len(unique_speakers) <= 1:
+            return diarization_segments
+
+        print(f"Кластеризация {len(unique_speakers)} спикеров...", file=sys.stderr)
+
+        # Извлекаем embeddings для каждого спикера
+        embeddings = {}
+        for speaker_id in tqdm(unique_speakers, desc="Embeddings", file=sys.stderr):
+            speaker_segs = [s for s in diarization_segments if s.speaker_id == speaker_id]
+            # Берём самые длинные сегменты
+            sorted_segs = sorted(speaker_segs, key=lambda s: s.end - s.start, reverse=True)[:3]
+
+            seg_embeddings = []
+            for seg in sorted_segs:
+                if seg.end - seg.start >= 1.0:
+                    emb = self.get_embedding(audio_path, seg.start, seg.end)
+                    if emb is not None:
+                        seg_embeddings.append(emb)
+
+            if seg_embeddings:
+                embeddings[speaker_id] = np.mean(seg_embeddings, axis=0)
+
+        # Если мало embeddings, возвращаем как есть
+        if len(embeddings) <= 1:
+            return diarization_segments
+
+        # Кластеризация с AgglomerativeClustering
+        try:
+            from sklearn.cluster import AgglomerativeClustering
+
+            speaker_ids = list(embeddings.keys())
+            emb_matrix = np.array([embeddings[s] for s in speaker_ids])
+
+            # distance_threshold = 1 - similarity_threshold для косинусной метрики
+            clustering = AgglomerativeClustering(
+                n_clusters=None,
+                distance_threshold=1 - similarity_threshold,
+                metric='cosine',
+                linkage='average'
+            )
+            labels = clustering.fit_predict(emb_matrix)
+
+            # Создаём маппинг старых ID в новые
+            cluster_to_canonical = {}
+            speaker_mapping = {}
+
+            for speaker_id, label in zip(speaker_ids, labels):
+                if label not in cluster_to_canonical:
+                    cluster_to_canonical[label] = f"speaker_{len(cluster_to_canonical)}"
+                speaker_mapping[speaker_id] = cluster_to_canonical[label]
+
+            num_clusters = len(cluster_to_canonical)
+            print(f"Объединено в {num_clusters} уникальных спикеров", file=sys.stderr)
+
+            # Применяем маппинг
+            clustered_segments = []
+            for seg in diarization_segments:
+                new_id = speaker_mapping.get(seg.speaker_id, seg.speaker_id)
+                clustered_segments.append(DiarizationSegment(
+                    start=seg.start,
+                    end=seg.end,
+                    speaker_id=new_id
+                ))
+
+            return clustered_segments
+
+        except ImportError:
+            print("sklearn не установлен, кластеризация пропущена", file=sys.stderr)
+            return diarization_segments
+        except Exception as e:
+            print(f"Ошибка кластеризации: {e}", file=sys.stderr)
+            return diarization_segments
+
 
 # ============================================================================
 # SPEAKER DATABASE
@@ -961,6 +1056,11 @@ def transcribe_pipeline(
         else:
             diar_segments = diarization.diarize(wav_path)
             print(f"Получено {len(diar_segments)} сегментов диаризации.", file=sys.stderr)
+
+            # 2.5. Пост-кластеризация спикеров (объединение фрагментированных ID)
+            unique_before = len(set(s.speaker_id for s in diar_segments))
+            if unique_before > 2:  # Кластеризация имеет смысл при > 2 спикеров
+                diar_segments = diarization.cluster_speakers(wav_path, diar_segments)
 
             # Получаем embeddings спикеров
             speaker_embeddings = diarization.get_speaker_embeddings(wav_path, diar_segments)
