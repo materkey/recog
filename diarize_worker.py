@@ -129,26 +129,23 @@ def extract_embeddings(
     segments: List[dict],
     hf_token: str
 ) -> Dict[str, np.ndarray]:
-    """Извлекает embeddings для каждого спикера."""
+    """Извлекает embeddings для каждого спикера используя SpeechBrain ECAPA-TDNN."""
     import soundfile as sf
     from tqdm import tqdm
-    from pyannote.audio import Model, Inference
+    from speechbrain.inference.speaker import EncoderClassifier
 
-    print("Извлечение embeddings...", file=sys.stderr)
+    print("Извлечение embeddings (ECAPA-TDNN)...", file=sys.stderr)
 
-    # Загружаем аудио через soundfile (обход torchcodec)
-    waveform, sample_rate = sf.read(audio_path)
-    if len(waveform.shape) == 1:
-        waveform = waveform.reshape(1, -1)
-    else:
-        waveform = waveform.T
-
-    # wespeaker-voxceleb-resnet34-LM (pyannote/embedding требует доступ на HF)
-    model = Model.from_pretrained(
-        "pyannote/wespeaker-voxceleb-resnet34-LM",
-        token=hf_token
+    # Загружаем ECAPA-TDNN модель
+    classifier = EncoderClassifier.from_hparams(
+        source="speechbrain/spkrec-ecapa-voxceleb",
+        savedir="/tmp/speechbrain_ecapa"
     )
-    inference = Inference(model, window="whole")
+
+    # Загружаем аудио
+    waveform, sample_rate = sf.read(audio_path)
+    if len(waveform.shape) > 1:
+        waveform = waveform.mean(axis=1)  # stereo -> mono
 
     # Группируем сегменты по спикерам
     speaker_segments: Dict[str, List[dict]] = {}
@@ -169,20 +166,14 @@ def extract_embeddings(
         for seg in sorted_segs:
             if seg["end"] - seg["start"] >= 1.0:
                 try:
-                    # Извлекаем сегмент вручную
                     start_sample = int(seg["start"] * sample_rate)
                     end_sample = int(seg["end"] * sample_rate)
-                    segment_waveform = waveform[:, start_sample:end_sample]
+                    segment_audio = waveform[start_sample:end_sample]
 
-                    # Передаём как dict с waveform
-                    audio_input = {
-                        "waveform": torch.from_numpy(segment_waveform).float(),
-                        "sample_rate": sample_rate
-                    }
-                    emb = inference(audio_input)
-                    if hasattr(emb, 'numpy'):
-                        emb = emb.numpy()
-                    seg_embeddings.append(np.array(emb))
+                    # SpeechBrain принимает tensor
+                    audio_tensor = torch.from_numpy(segment_audio).float().unsqueeze(0)
+                    emb = classifier.encode_batch(audio_tensor)
+                    seg_embeddings.append(emb.squeeze().numpy())
                 except Exception as e:
                     print(f"Ошибка embedding для {speaker_id}: {e}", file=sys.stderr)
 

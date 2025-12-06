@@ -494,21 +494,16 @@ class DiarizationModule:
         return self.pipeline
 
     def _load_embedding_model(self):
-        """Загружает модель для speaker embeddings."""
+        """Загружает модель для speaker embeddings (SpeechBrain ECAPA-TDNN)."""
         if self.embedding_model is None:
             try:
-                from pyannote.audio import Model
-                from pyannote.audio import Inference
+                from speechbrain.inference.speaker import EncoderClassifier
 
-                print("Загрузка модели speaker embeddings...", file=sys.stderr)
-                model = Model.from_pretrained(
-                    "pyannote/wespeaker-voxceleb-resnet34-LM",
-                    use_auth_token=self.hf_token
+                print("Загрузка модели speaker embeddings (ECAPA-TDNN)...", file=sys.stderr)
+                self.embedding_model = EncoderClassifier.from_hparams(
+                    source="speechbrain/spkrec-ecapa-voxceleb",
+                    savedir="/tmp/speechbrain_ecapa"
                 )
-                self.embedding_model = Inference(model, window="whole")
-
-                if torch.cuda.is_available():
-                    self.embedding_model.to(torch.device("cuda"))
 
             except Exception as e:
                 print(f"Предупреждение: не удалось загрузить embedding модель: {e}", file=sys.stderr)
@@ -635,7 +630,7 @@ class DiarizationModule:
 
     def get_embedding(self, audio_path: str, start: float = None, end: float = None) -> Optional[np.ndarray]:
         """
-        Вычисляет speaker embedding для аудио или его части.
+        Вычисляет speaker embedding для аудио или его части (SpeechBrain ECAPA-TDNN).
 
         Args:
             audio_path: путь к аудиофайлу
@@ -651,15 +646,21 @@ class DiarizationModule:
             return None
 
         try:
-            from pyannote.core import Segment as PyannoteSegment
+            import soundfile as sf
+
+            waveform, sample_rate = sf.read(audio_path)
+            if len(waveform.shape) > 1:
+                waveform = waveform.mean(axis=1)  # stereo -> mono
 
             if start is not None and end is not None:
-                excerpt = PyannoteSegment(start, end)
-                embedding = embedding_model.crop(audio_path, excerpt)
-            else:
-                embedding = embedding_model(audio_path)
+                start_sample = int(start * sample_rate)
+                end_sample = int(end * sample_rate)
+                waveform = waveform[start_sample:end_sample]
 
-            return embedding.numpy() if hasattr(embedding, 'numpy') else np.array(embedding)
+            audio_tensor = torch.from_numpy(waveform).float().unsqueeze(0)
+            embedding = embedding_model.encode_batch(audio_tensor)
+
+            return embedding.squeeze().numpy()
 
         except Exception as e:
             print(f"Ошибка при вычислении embedding: {e}", file=sys.stderr)
@@ -1455,36 +1456,32 @@ class LiveTranscriber:
         self.transcript_lines = []
 
     def _get_embedding(self, audio_chunk: np.ndarray) -> Optional[np.ndarray]:
-        """Извлекает embedding из аудио чанка."""
+        """Извлекает embedding из аудио чанка используя SpeechBrain ECAPA-TDNN."""
         if self.no_diarization:
             return None
 
         try:
+            # Используем subprocess для SpeechBrain embedding
             import tempfile
             import soundfile as sf
 
-            # Сохраняем во временный файл
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
                 sf.write(f.name, audio_chunk, 16000)
                 tmp_path = f.name
 
             try:
-                # Используем subprocess для pyannote embedding
                 result = subprocess.run(
                     [str(PYANNOTE4_VENV / "bin" / "python"), "-c", f'''
 import json
-import sys
-import numpy as np
-import soundfile as sf
 import torch
-from pyannote.audio import Model, Inference
+import soundfile as sf
+from speechbrain.inference.speaker import EncoderClassifier
 
 waveform, sr = sf.read("{tmp_path}")
-waveform = torch.from_numpy(waveform.reshape(1, -1)).float()
-model = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM", token="{os.environ.get('HF_TOKEN', '')}")
-inference = Inference(model, window="whole")
-emb = inference({{"waveform": waveform, "sample_rate": sr}})
-print(json.dumps(emb.tolist() if hasattr(emb, 'tolist') else list(emb)))
+audio_tensor = torch.from_numpy(waveform).float().unsqueeze(0)
+classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir="/tmp/speechbrain_ecapa")
+emb = classifier.encode_batch(audio_tensor)
+print(json.dumps(emb.squeeze().tolist()))
 '''],
                     capture_output=True,
                     text=True,
