@@ -133,10 +133,26 @@ class DiarizationSegment:
 
 
 @dataclass
+class EmbeddingSample:
+    """Один образец embedding с метаданными."""
+    embedding: List[float]
+    source_file: str = ""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    transcript: str = ""
+
+
+@dataclass
 class SpeakerInfo:
     """Информация о спикере в базе."""
     display_name: str
-    embedding: List[float]
+    embeddings: List[EmbeddingSample] = None  # Несколько образцов с метаданными
+    # Для обратной совместимости со старым форматом
+    embedding: List[float] = None  # deprecated, use embeddings
+
+    def __post_init__(self):
+        if self.embeddings is None:
+            self.embeddings = []
 
 
 # ============================================================================
@@ -776,7 +792,7 @@ class SpeakerDatabase:
             self.load()
 
     def load(self):
-        """Загружает базу из файла."""
+        """Загружает базу из файла. Поддерживает старый и новый формат."""
         if self.db_path is None:
             return
 
@@ -785,27 +801,61 @@ class SpeakerDatabase:
                 data = json.load(f)
 
             self.speakers = {}
+            total_embeddings = 0
+
             for key, value in data.items():
+                embeddings = []
+
+                # Новый формат: embeddings с метаданными
+                if "embeddings" in value:
+                    for emb_data in value["embeddings"]:
+                        embeddings.append(EmbeddingSample(
+                            embedding=emb_data.get("embedding", []),
+                            source_file=emb_data.get("source_file", ""),
+                            start_time=emb_data.get("start_time", 0.0),
+                            end_time=emb_data.get("end_time", 0.0),
+                            transcript=emb_data.get("transcript", "")
+                        ))
+                # Старый формат: один embedding
+                elif "embedding" in value:
+                    embeddings.append(EmbeddingSample(
+                        embedding=value["embedding"],
+                        source_file="legacy",
+                        transcript="migrated from old format"
+                    ))
+
                 self.speakers[key] = SpeakerInfo(
                     display_name=value.get("display_name", key),
-                    embedding=value.get("embedding", [])
+                    embeddings=embeddings
                 )
+                total_embeddings += len(embeddings)
 
-            print(f"Загружено {len(self.speakers)} спикеров из базы.", file=sys.stderr)
+            print(f"Загружено {len(self.speakers)} спикеров ({total_embeddings} embeddings) из базы.",
+                  file=sys.stderr)
 
         except Exception as e:
             print(f"Ошибка загрузки speaker-db: {e}", file=sys.stderr)
 
     def save(self):
-        """Сохраняет базу в файл."""
+        """Сохраняет базу в файл в новом формате с метаданными."""
         if self.db_path is None:
             return
 
         data = {}
         for key, info in self.speakers.items():
+            embeddings_data = []
+            for sample in info.embeddings:
+                embeddings_data.append({
+                    "embedding": sample.embedding,
+                    "source_file": sample.source_file,
+                    "start_time": sample.start_time,
+                    "end_time": sample.end_time,
+                    "transcript": sample.transcript
+                })
+
             data[key] = {
                 "display_name": info.display_name,
-                "embedding": info.embedding
+                "embeddings": embeddings_data
             }
 
         with open(self.db_path, 'w', encoding='utf-8') as f:
@@ -813,12 +863,36 @@ class SpeakerDatabase:
 
         print(f"База спикеров сохранена в {self.db_path}", file=sys.stderr)
 
-    def add_speaker(self, speaker_id: str, display_name: str, embedding: np.ndarray):
-        """Добавляет или обновляет спикера в базе."""
-        self.speakers[speaker_id] = SpeakerInfo(
-            display_name=display_name,
-            embedding=embedding.tolist() if isinstance(embedding, np.ndarray) else embedding
+    def add_speaker(
+        self,
+        speaker_id: str,
+        display_name: str,
+        embedding: np.ndarray,
+        source_file: str = "",
+        start_time: float = 0.0,
+        end_time: float = 0.0,
+        transcript: str = ""
+    ):
+        """Добавляет новый embedding к спикеру (или создаёт нового спикера)."""
+        emb_list = embedding.tolist() if isinstance(embedding, np.ndarray) else embedding
+
+        sample = EmbeddingSample(
+            embedding=emb_list,
+            source_file=source_file,
+            start_time=start_time,
+            end_time=end_time,
+            transcript=transcript
         )
+
+        if speaker_id in self.speakers:
+            # Добавляем к существующему спикеру
+            self.speakers[speaker_id].embeddings.append(sample)
+        else:
+            # Создаём нового спикера
+            self.speakers[speaker_id] = SpeakerInfo(
+                display_name=display_name,
+                embeddings=[sample]
+            )
 
     def get_speaker(self, speaker_id: str) -> Optional[SpeakerInfo]:
         """Получает информацию о спикере."""
@@ -831,9 +905,10 @@ class SpeakerDatabase:
     ) -> Optional[Tuple[str, str, float]]:
         """
         Находит наиболее похожего спикера в базе.
+        Сравнивает со всеми embeddings каждого спикера и берёт максимальный similarity.
 
         Returns:
-            (speaker_id, display_name, similarity) или None
+            (speaker_id, display_name, max_similarity) или None
         """
         if not self.speakers or embedding is None:
             return None
@@ -842,15 +917,22 @@ class SpeakerDatabase:
         best_similarity = -1.0
 
         for speaker_id, info in self.speakers.items():
-            if not info.embedding:
+            if not info.embeddings:
                 continue
 
-            db_embedding = np.array(info.embedding)
-            similarity = self._cosine_similarity(embedding, db_embedding)
+            # Находим максимальный similarity среди всех образцов спикера
+            max_sim_for_speaker = -1.0
+            for sample in info.embeddings:
+                if not sample.embedding:
+                    continue
+                db_embedding = np.array(sample.embedding)
+                similarity = self._cosine_similarity(embedding, db_embedding)
+                if similarity > max_sim_for_speaker:
+                    max_sim_for_speaker = similarity
 
-            if similarity > best_similarity:
-                best_similarity = similarity
-                best_match = (speaker_id, info.display_name, similarity)
+            if max_sim_for_speaker > best_similarity:
+                best_similarity = max_sim_for_speaker
+                best_match = (speaker_id, info.display_name, max_sim_for_speaker)
 
         if best_match and best_match[2] >= threshold:
             return best_match
