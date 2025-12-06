@@ -1,0 +1,20 @@
+# Media files
+*.mp4
+*.mp3
+*.wav
+*.m4a
+
+# Test outputs
+test_*.md
+full_result*.md
+*_result.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
