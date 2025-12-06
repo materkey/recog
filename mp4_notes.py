@@ -1557,6 +1557,7 @@ print(json.dumps(emb.squeeze().tolist()))
         """Основной цикл live транскрипции."""
         from datetime import datetime
         import time
+        import threading
 
         print("=" * 60)
         print(" LIVE TRANSCRIPTION")
@@ -1570,6 +1571,36 @@ print(json.dumps(emb.squeeze().tolist()))
         self.asr.load_model(quiet=True)
         self.capture.start()
         self.running = True
+        self._pending_update = None  # (line_num, chunk) для фонового обновления
+        self._line_count = 0
+        self._is_tty = sys.stdout.isatty()
+
+        def update_with_speaker():
+            """Фоновый поток для добавления спикера."""
+            while self.running or self._pending_update:
+                if self._pending_update:
+                    line_num, chunk, timestamp, text = self._pending_update
+                    self._pending_update = None
+
+                    embedding = self._get_embedding(chunk)
+                    speaker = self._identify_speaker(embedding)
+
+                    # Обновляем строку с спикером
+                    final_line = f"[{timestamp}] {speaker}: {text}"
+
+                    if self._is_tty:
+                        # Перезаписываем предыдущую строку
+                        lines_back = self._line_count - line_num
+                        if lines_back >= 0:
+                            # Курсор вверх, очистить, вывести, курсор вниз
+                            print(f"\033[{lines_back + 1}F\033[K{final_line}\033[{lines_back + 1}E", end='', flush=True)
+
+                    self.transcript_lines[line_num] = final_line
+                else:
+                    time.sleep(0.1)
+
+        speaker_thread = threading.Thread(target=update_with_speaker, daemon=True)
+        speaker_thread.start()
 
         try:
             while self.running:
@@ -1579,21 +1610,24 @@ print(json.dumps(emb.squeeze().tolist()))
                 if chunk is None or len(chunk) < 1000:
                     continue
 
-                # ASR (direct tensor, без temp файлов)
+                # ASR (direct tensor) — сразу выводим
                 text = self._transcribe_direct(chunk)
                 if not text:
                     continue
 
-                # Speaker ID
-                embedding = self._get_embedding(chunk)
-                speaker = self._identify_speaker(embedding)
-
-                # Output
                 timestamp = datetime.now().strftime("%H:%M:%S")
-                line = f"[{timestamp}] {speaker}: {text}"
-                print(line)
 
-                self.transcript_lines.append(line)
+                # Сразу выводим черновик (без спикера или с "...")
+                draft_line = f"[{timestamp}] ...: {text}"
+                print(draft_line, flush=True)
+
+                line_num = self._line_count
+                self.transcript_lines.append(draft_line)
+                self._line_count += 1
+
+                # Ставим в очередь на диаризацию (если включена)
+                if not self.no_diarization:
+                    self._pending_update = (line_num, chunk.copy(), timestamp, text)
 
         except KeyboardInterrupt:
             print("\n" + "-" * 60)
