@@ -28,6 +28,31 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 
+
+def load_dotenv(env_path: Path = None):
+    """Загружает переменные окружения из .env файла."""
+    if env_path is None:
+        env_path = Path(__file__).parent / ".env"
+
+    if not env_path.exists():
+        return
+
+    with open(env_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+
+
+# Загружаем .env при импорте модуля
+load_dotenv()
+
 # ============================================================================
 # КОНФИГУРАЦИЯ
 # ============================================================================
