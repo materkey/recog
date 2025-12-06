@@ -1195,7 +1195,7 @@ def transcribe_pipeline(
     no_diarization: bool = False,
     chunk_duration: float = DEFAULT_CHUNK_DURATION,
     overlap: float = DEFAULT_OVERLAP,
-    use_pyannote4: bool = False
+    use_pyannote4: bool = True  # pyannote 4.x по умолчанию
 ):
     """
     Основной пайплайн транскрибирования.
@@ -1432,9 +1432,9 @@ def main():
         help="Отключить диаризацию (один спикер)"
     )
     transcribe_parser.add_argument(
-        "--pyannote4",
+        "--pyannote3",
         action="store_true",
-        help="Использовать pyannote 4.x (community-1 модель, лучше качество)"
+        help="Использовать pyannote 3.x (старая модель, по умолчанию pyannote 4.x)"
     )
     transcribe_parser.add_argument(
         "--chunk-duration",
@@ -1511,7 +1511,7 @@ def main():
             no_diarization=args.no_diarization,
             chunk_duration=args.chunk_duration,
             overlap=args.overlap,
-            use_pyannote4=args.pyannote4
+            use_pyannote4=not args.pyannote3  # pyannote 4.x по умолчанию
         )
 
     elif args.command == "enroll-speaker":
