@@ -35,7 +35,7 @@ import torch
 DEFAULT_MODEL = "v3_e2e_rnnt"
 DEFAULT_CHUNK_DURATION = 20.0
 DEFAULT_OVERLAP = 1.0
-SPEAKER_SIMILARITY_THRESHOLD = 0.75  # Порог косинусного сходства для идентификации
+SPEAKER_SIMILARITY_THRESHOLD = 0.65  # Порог косинусного сходства для идентификации
 
 # Путь к venv для pyannote 4.x
 PYANNOTE4_VENV = Path(__file__).parent / "venv-pyannote"
@@ -49,7 +49,7 @@ DIARIZE_WORKER = Path(__file__).parent / "diarize_worker.py"
 def run_diarization_pyannote4(
     audio_path: str,
     hf_token: Optional[str] = None,
-    similarity_threshold: float = 0.60
+    similarity_threshold: float = 0.50
 ) -> Tuple[List['DiarizationSegment'], Dict[str, np.ndarray]]:
     """
     Запускает диаризацию через subprocess с pyannote 4.x.
@@ -930,6 +930,12 @@ def resolve_speaker_labels(
             print(f"Спикер {speaker_id} идентифицирован как '{display_name}' (сходство: {similarity:.2f})",
                   file=sys.stderr)
         else:
+            # Логируем лучший матч даже если не прошёл порог
+            best_match = speaker_db.match_speaker(embedding, threshold=0.0)
+            if best_match:
+                _, best_name, best_sim = best_match
+                print(f"Спикер {speaker_id} не идентифицирован (лучший: '{best_name}' = {best_sim:.2f})",
+                      file=sys.stderr)
             speaker_labels[speaker_id] = speaker_id
 
     # Применяем маппинг к сегментам
