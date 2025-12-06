@@ -1,0 +1,18 @@
+{
+  "ruslan": {
+    "display_name": "Руслан",
+    "embedding": []
+  },
+  "vyacheslav": {
+    "display_name": "Вячеслав",
+    "embedding": []
+  },
+  "kostya": {
+    "display_name": "Костя Тимлид",
+    "embedding": []
+  },
+  "vlad": {
+    "display_name": "Влад Воробъев",
+    "embedding": []
+  }
+}
