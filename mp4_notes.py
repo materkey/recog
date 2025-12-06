@@ -37,6 +37,78 @@ DEFAULT_CHUNK_DURATION = 20.0
 DEFAULT_OVERLAP = 1.0
 SPEAKER_SIMILARITY_THRESHOLD = 0.75  # Порог косинусного сходства для идентификации
 
+# Путь к venv для pyannote 4.x
+PYANNOTE4_VENV = Path(__file__).parent / "venv-pyannote"
+DIARIZE_WORKER = Path(__file__).parent / "diarize_worker.py"
+
+
+# ============================================================================
+# PYANNOTE 4.x SUBPROCESS
+# ============================================================================
+
+def run_diarization_pyannote4(
+    audio_path: str,
+    hf_token: Optional[str] = None,
+    similarity_threshold: float = 0.60
+) -> Tuple[List['DiarizationSegment'], Dict[str, np.ndarray]]:
+    """
+    Запускает диаризацию через subprocess с pyannote 4.x.
+
+    Returns:
+        (segments, embeddings)
+    """
+    import subprocess as sp
+
+    python_path = PYANNOTE4_VENV / "bin" / "python"
+
+    if not python_path.exists():
+        raise RuntimeError(f"venv-pyannote не найден: {python_path}")
+
+    if not DIARIZE_WORKER.exists():
+        raise RuntimeError(f"diarize_worker.py не найден: {DIARIZE_WORKER}")
+
+    hf_token = hf_token or os.environ.get("HF_TOKEN")
+
+    input_data = json.dumps({
+        "audio_path": audio_path,
+        "hf_token": hf_token,
+        "similarity_threshold": similarity_threshold
+    })
+
+    print("Запуск pyannote 4.x subprocess...", file=sys.stderr)
+
+    result = sp.run(
+        [str(python_path), str(DIARIZE_WORKER)],
+        input=input_data,
+        capture_output=True,
+        text=True
+    )
+
+    # Выводим stderr (логи воркера)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end='')
+
+    if result.returncode != 0:
+        raise RuntimeError(f"diarize_worker.py завершился с ошибкой: {result.returncode}")
+
+    # Парсим результат
+    output = json.loads(result.stdout)
+
+    segments = [
+        DiarizationSegment(
+            start=seg["start"],
+            end=seg["end"],
+            speaker_id=seg["speaker_id"]
+        )
+        for seg in output["segments"]
+    ]
+
+    embeddings = {
+        k: np.array(v) for k, v in output["embeddings"].items()
+    }
+
+    return segments, embeddings
+
 
 # ============================================================================
 # DATACLASSES
@@ -597,7 +669,7 @@ class DiarizationModule:
         self,
         audio_path: str,
         diarization_segments: List[DiarizationSegment],
-        similarity_threshold: float = 0.80
+        similarity_threshold: float = 0.50
     ) -> List[DiarizationSegment]:
         """
         Кластеризует спикеров по голосовым embeddings.
@@ -1009,7 +1081,8 @@ def transcribe_pipeline(
     include_timestamps: bool = True,
     no_diarization: bool = False,
     chunk_duration: float = DEFAULT_CHUNK_DURATION,
-    overlap: float = DEFAULT_OVERLAP
+    overlap: float = DEFAULT_OVERLAP,
+    use_pyannote4: bool = False
 ):
     """
     Основной пайплайн транскрибирования.
@@ -1053,7 +1126,12 @@ def transcribe_pipeline(
                 speaker_id="speaker_0"
             )]
             speaker_embeddings = {}
+        elif use_pyannote4:
+            # Используем pyannote 4.x через subprocess
+            diar_segments, speaker_embeddings = run_diarization_pyannote4(wav_path)
+            print(f"Получено {len(diar_segments)} сегментов диаризации (pyannote 4.x).", file=sys.stderr)
         else:
+            # Используем встроенный pyannote 3.x
             diar_segments = diarization.diarize(wav_path)
             print(f"Получено {len(diar_segments)} сегментов диаризации.", file=sys.stderr)
 
@@ -1241,6 +1319,11 @@ def main():
         help="Отключить диаризацию (один спикер)"
     )
     transcribe_parser.add_argument(
+        "--pyannote4",
+        action="store_true",
+        help="Использовать pyannote 4.x (community-1 модель, лучше качество)"
+    )
+    transcribe_parser.add_argument(
         "--chunk-duration",
         type=float,
         default=DEFAULT_CHUNK_DURATION,
@@ -1314,7 +1397,8 @@ def main():
             include_timestamps=not args.no_timestamps,
             no_diarization=args.no_diarization,
             chunk_duration=args.chunk_duration,
-            overlap=args.overlap
+            overlap=args.overlap,
+            use_pyannote4=args.pyannote4
         )
 
     elif args.command == "enroll-speaker":
