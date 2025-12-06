@@ -40,7 +40,7 @@ except:
 def run_diarization(
     audio_path: str,
     hf_token: str,
-    similarity_threshold: float = 0.60,
+    similarity_threshold: float = 0.50,
     use_parallel: bool = True,
     segment_duration: float = 60.0
 ) -> dict:
