@@ -1443,7 +1443,7 @@ class LiveTranscriber:
         mic_device=None,
         system_device=None,
         speaker_db_path=None,
-        chunk_duration=5.0,
+        chunk_duration=3.0,  # Уменьшено для быстрого отклика
         output_file=None,
         no_diarization=False
     ):
@@ -1457,6 +1457,32 @@ class LiveTranscriber:
         self.session_speakers = {}  # embedding -> speaker_label
         self.speaker_counter = 0
         self.transcript_lines = []
+        self._model_device = None
+        self._model_dtype = None
+
+    def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
+        """Транскрибирует напрямую через tensor без temp файлов."""
+        try:
+            model = self.asr.model
+            if model is None:
+                return None
+
+            # Кешируем device/dtype при первом вызове
+            if self._model_device is None:
+                self._model_device = model._device
+                self._model_dtype = model._dtype
+
+            wav = torch.from_numpy(audio_chunk).float()
+            wav = wav.to(self._model_device).to(self._model_dtype).unsqueeze(0)
+            length = torch.tensor([wav.shape[-1]], device=self._model_device, dtype=torch.long)
+
+            encoded, encoded_len = model.forward(wav, length)
+            text = model.decoding.decode(model.head, encoded, encoded_len)[0]
+            return text.strip() if text else None
+
+        except Exception as e:
+            # Fallback на temp file если direct не работает
+            return None
 
     def _get_embedding(self, audio_chunk: np.ndarray) -> Optional[np.ndarray]:
         """Извлекает embedding из аудио чанка используя SpeechBrain ECAPA-TDNN."""
@@ -1553,27 +1579,9 @@ print(json.dumps(emb.squeeze().tolist()))
                 if chunk is None or len(chunk) < 1000:
                     continue
 
-                # ASR
-                try:
-                    import tempfile
-                    import soundfile as sf
-
-                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
-                        sf.write(f.name, chunk, 16000)
-                        tmp_path = f.name
-
-                    segments = self.asr.transcribe_simple(tmp_path, chunk_duration=len(chunk)/16000, quiet=True)
-                    os.remove(tmp_path)
-
-                    if not segments:
-                        continue
-
-                    text = " ".join(s.text for s in segments).strip()
-                    if not text:
-                        continue
-
-                except Exception as e:
-                    print(f"ASR error: {e}", file=sys.stderr)
+                # ASR (direct tensor, без temp файлов)
+                text = self._transcribe_direct(chunk)
+                if not text:
                     continue
 
                 # Speaker ID
@@ -1710,8 +1718,8 @@ def main():
     live_parser.add_argument(
         "--chunk-duration",
         type=float,
-        default=5.0,
-        help="Длительность чанка для ASR (сек, по умолчанию: 5.0)"
+        default=3.0,
+        help="Длительность чанка для ASR (сек, по умолчанию: 3.0)"
     )
     live_parser.add_argument(
         "--speaker-db",
