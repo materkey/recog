@@ -56,9 +56,10 @@ if [ ! -d "venv-pyannote" ]; then
     echo "Creating venv-pyannote..."
     $PYTHON312 -m venv venv-pyannote
 
-    echo "Installing pyannote.audio 4.x..."
+    echo "Installing pyannote.audio 4.x and SpeechBrain..."
     ./venv-pyannote/bin/pip install --upgrade pip
     ./venv-pyannote/bin/pip install "pyannote.audio>=4.0"
+    ./venv-pyannote/bin/pip install speechbrain
     ./venv-pyannote/bin/pip install soundfile tqdm scikit-learn
 else
     echo "venv-pyannote already exists"

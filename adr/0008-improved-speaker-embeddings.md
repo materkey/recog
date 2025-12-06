@@ -1,4 +1,4 @@
-# ADR-0008: Модель speaker embeddings
+# ADR-0008: SpeechBrain ECAPA-TDNN для speaker embeddings
 
 ## Status
 Accepted
@@ -10,52 +10,56 @@ Accepted
 
 | Модель | Архитектура | EER (VoxCeleb) | Размерность | Доступ |
 |--------|-------------|----------------|-------------|--------|
-| **wespeaker-resnet34-LM** | ResNet34 | ~2.5% | 256 | Открытый |
-| pyannote/embedding | ECAPA-TDNN | ~1.2% | 192 | Gated (требует approval) |
-| speechbrain/ecapa-voxceleb | ECAPA-TDNN | ~0.8% | 192 | Открытый |
+| wespeaker-resnet34-LM | ResNet34 | ~2.5% | 256 | Открытый |
+| pyannote/embedding | ECAPA-TDNN | ~1.2% | 192 | Gated |
+| **speechbrain/spkrec-ecapa-voxceleb** | ECAPA-TDNN | ~0.8% | 192 | Открытый |
 
 ## Decision
-**Использовать `pyannote/wespeaker-voxceleb-resnet34-LM`**.
+**Использовать `speechbrain/spkrec-ecapa-voxceleb`** (ECAPA-TDNN).
 
 ### Причины:
-1. **Открытый доступ**: не требует дополнительного approval на HuggingFace
-2. **Достаточное качество**: 0.97 similarity для Руслана, 1.00 для Вячеслава
-3. **Совместимость**: работает с существующей speaker database
-4. **Та же экосистема**: интегрирован в pyannote.audio
+1. **Лучшее качество**: 0.8% EER — state-of-the-art для speaker verification
+2. **Открытый доступ**: не требует approval на HuggingFace
+3. **Меньше размерность**: 192 vs 256 (компактнее база, быстрее сравнение)
+4. **Лучше на коротких сегментах**: TDNN архитектура эффективнее на <3 сек
 
 ### Почему не pyannote/embedding:
 - Требует отдельного approval на HuggingFace (gated repo)
-- Усложняет onboarding новых пользователей
 
-### Почему не SpeechBrain:
-- Дополнительная зависимость
-- Сложнее интеграция
+### Почему не wespeaker-resnet34-LM:
+- Хуже качество (2.5% vs 0.8% EER)
+- Больше размерность embeddings
 
 ## Implementation
 
 ```python
-# diarize_worker.py и mp4_notes.py
-model = Model.from_pretrained(
-    "pyannote/wespeaker-voxceleb-resnet34-LM",
-    token=hf_token
+# diarize_worker.py
+from speechbrain.inference.speaker import EncoderClassifier
+
+classifier = EncoderClassifier.from_hparams(
+    source="speechbrain/spkrec-ecapa-voxceleb",
+    savedir="/tmp/speechbrain_ecapa"
 )
+embedding = classifier.encode_batch(audio_tensor)
 ```
 
 ### Threshold:
 ```python
-SPEAKER_SIMILARITY_THRESHOLD = 0.30  # Низкий для коротких реплик
+SPEAKER_SIMILARITY_THRESHOLD = 0.30  # Подбирается эмпирически
 ```
 
 ## Consequences
 
 ### Positive:
-- Простой onboarding (только один HF approval для diarization model)
-- Совместимость с существующей базой спикеров
-- Достаточная точность для 2-5 спикеров
+- Лучшая точность идентификации спикеров
+- Стабильнее на коротких репликах
+- Открытый доступ без approval
+- Меньше размер embeddings (192-dim)
 
 ### Negative:
-- Менее точен на очень коротких репликах (<2 сек)
-- 256-dim embeddings (больше чем ECAPA 192-dim)
+- **Breaking change**: embeddings несовместимы с предыдущей базой (256→192 dim)
+- Дополнительная зависимость: speechbrain
 
-### Future:
-При необходимости можно мигрировать на `pyannote/embedding` после получения доступа.
+### Migration:
+1. Установить speechbrain в venv-pyannote
+2. Перегенерировать speaker database
