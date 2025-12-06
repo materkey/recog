@@ -1502,6 +1502,9 @@ print(json.dumps(emb.squeeze().tolist()))
         if embedding is None:
             return "speaker"
 
+        # Приводим к float32 для консистентности
+        embedding = embedding.astype(np.float32)
+
         # Сначала проверяем speaker-DB
         if self.speaker_db:
             match = self.speaker_db.match_speaker(embedding, SPEAKER_SIMILARITY_THRESHOLD)
@@ -1518,7 +1521,7 @@ print(json.dumps(emb.squeeze().tolist()))
         # Новый спикер
         self.speaker_counter += 1
         label = f"speaker_{self.speaker_counter}"
-        self.session_speakers[embedding.tobytes()] = label
+        self.session_speakers[embedding.astype(np.float32).tobytes()] = label
         return label
 
     def run(self):
