@@ -39,10 +39,7 @@ except:
 
 def run_diarization(
     audio_path: str,
-    hf_token: str,
-    similarity_threshold: float = 0.50,
-    use_parallel: bool = True,
-    segment_duration: float = 60.0
+    hf_token: str
 ) -> dict:
     """
     Выполняет диаризацию с pyannote.audio 4.x.
@@ -58,7 +55,7 @@ def run_diarization(
     from tqdm import tqdm
 
     # Загрузка pipeline
-    print("Загрузка pyannote 4.0 (community-1)...", file=sys.stderr)
+    print("Загрузка pyannote (community-1)...", file=sys.stderr)
 
     from pyannote.audio import Pipeline
 
@@ -118,13 +115,8 @@ def run_diarization(
     # Извлекаем embeddings
     embeddings = extract_embeddings(audio_path, normalized_segments, hf_token)
 
-    # Кластеризация
-    if len(embeddings) > 2:
-        normalized_segments, embeddings = cluster_speakers(
-            normalized_segments,
-            embeddings,
-            similarity_threshold
-        )
+    # ADR-0009: убрана двойная кластеризация
+    # pyannote уже делает кластеризацию, embeddings используются только для speaker-DB matching
 
     return {
         "segments": normalized_segments,
@@ -151,6 +143,7 @@ def extract_embeddings(
     else:
         waveform = waveform.T
 
+    # wespeaker-voxceleb-resnet34-LM (pyannote/embedding требует доступ на HF)
     model = Model.from_pretrained(
         "pyannote/wespeaker-voxceleb-resnet34-LM",
         token=hf_token
@@ -199,73 +192,12 @@ def extract_embeddings(
     return embeddings
 
 
-def cluster_speakers(
-    segments: List[dict],
-    embeddings: Dict[str, np.ndarray],
-    similarity_threshold: float
-) -> tuple:
-    """Кластеризует спикеров по сходству embeddings."""
-    from sklearn.cluster import AgglomerativeClustering
-
-    if len(embeddings) <= 1:
-        return segments, embeddings
-
-    print(f"Кластеризация {len(embeddings)} спикеров (threshold={similarity_threshold})...", file=sys.stderr)
-
-    speaker_ids = list(embeddings.keys())
-    emb_matrix = np.array([embeddings[s] for s in speaker_ids])
-
-    clustering = AgglomerativeClustering(
-        n_clusters=None,
-        distance_threshold=1 - similarity_threshold,
-        metric='cosine',
-        linkage='average'
-    )
-    labels = clustering.fit_predict(emb_matrix)
-
-    # Создаём маппинг
-    cluster_to_canonical = {}
-    speaker_mapping = {}
-
-    for speaker_id, label in zip(speaker_ids, labels):
-        if label not in cluster_to_canonical:
-            cluster_to_canonical[label] = f"speaker_{len(cluster_to_canonical)}"
-        speaker_mapping[speaker_id] = cluster_to_canonical[label]
-
-    print(f"Объединено в {len(cluster_to_canonical)} уникальных спикеров", file=sys.stderr)
-
-    # Применяем маппинг к сегментам
-    new_segments = []
-    for seg in segments:
-        new_segments.append({
-            "start": seg["start"],
-            "end": seg["end"],
-            "speaker_id": speaker_mapping.get(seg["speaker_id"], seg["speaker_id"])
-        })
-
-    # Пересчитываем embeddings для кластеров
-    new_embeddings = {}
-    for old_id, new_id in speaker_mapping.items():
-        if old_id in embeddings:
-            if new_id not in new_embeddings:
-                new_embeddings[new_id] = []
-            new_embeddings[new_id].append(embeddings[old_id])
-
-    # Усредняем embeddings в кластерах
-    final_embeddings = {}
-    for speaker_id, emb_list in new_embeddings.items():
-        final_embeddings[speaker_id] = np.mean(emb_list, axis=0)
-
-    return new_segments, final_embeddings
-
-
 def main():
     # Читаем входные данные из stdin
     input_data = json.load(sys.stdin)
 
     audio_path = input_data["audio_path"]
     hf_token = input_data.get("hf_token") or os.environ.get("HF_TOKEN")
-    similarity_threshold = input_data.get("similarity_threshold", 0.60)
 
     if not hf_token:
         print("Ошибка: HF_TOKEN не указан", file=sys.stderr)
@@ -274,8 +206,7 @@ def main():
     try:
         result = run_diarization(
             audio_path=audio_path,
-            hf_token=hf_token,
-            similarity_threshold=similarity_threshold
+            hf_token=hf_token
         )
 
         # Выводим результат в stdout
