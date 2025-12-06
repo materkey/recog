@@ -255,10 +255,11 @@ class ASRModule:
         self.device = device
         self.model = None
 
-    def load_model(self):
+    def load_model(self, quiet: bool = False):
         """Загружает модель GigaAM."""
         if self.model is None:
-            print(f"Загрузка модели {self.model_name}...", file=sys.stderr)
+            if not quiet:
+                print(f"Загрузка модели {self.model_name}...", file=sys.stderr)
             self.model = self.gigaam.load_model(self.model_name, device=self.device)
         return self.model
 
@@ -282,7 +283,8 @@ class ASRModule:
         self,
         audio_path: str,
         chunk_duration: float = DEFAULT_CHUNK_DURATION,
-        overlap: float = DEFAULT_OVERLAP
+        overlap: float = DEFAULT_OVERLAP,
+        quiet: bool = False
     ) -> List[Segment]:
         """
         Транскрибирует, разбивая на фиксированные чанки.
@@ -308,9 +310,10 @@ class ASRModule:
 
         # Подсчёт количества чанков для прогресс-бара
         num_chunks = max(1, (total_samples - overlap_samples) // step_samples + 1)
-        print(f"Длительность аудио: {total_duration:.1f} сек ({total_duration/60:.1f} мин)", file=sys.stderr)
+        if not quiet:
+            print(f"Длительность аудио: {total_duration:.1f} сек ({total_duration/60:.1f} мин)", file=sys.stderr)
 
-        with tqdm(total=num_chunks, desc="ASR", unit="chunk", file=sys.stderr) as pbar:
+        with tqdm(total=num_chunks, desc="ASR", unit="chunk", file=sys.stderr, disable=quiet) as pbar:
             while start_sample < total_samples:
                 end_sample = min(start_sample + chunk_samples, total_samples)
                 chunk = audio[start_sample:end_sample]
@@ -1538,7 +1541,7 @@ print(json.dumps(emb.squeeze().tolist()))
         print("-" * 60)
         print()
 
-        self.asr.load_model()
+        self.asr.load_model(quiet=True)
         self.capture.start()
         self.running = True
 
@@ -1559,7 +1562,7 @@ print(json.dumps(emb.squeeze().tolist()))
                         sf.write(f.name, chunk, 16000)
                         tmp_path = f.name
 
-                    segments = self.asr.transcribe_simple(tmp_path, chunk_duration=len(chunk)/16000)
+                    segments = self.asr.transcribe_simple(tmp_path, chunk_duration=len(chunk)/16000, quiet=True)
                     os.remove(tmp_path)
 
                     if not segments:
