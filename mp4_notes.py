@@ -60,7 +60,8 @@ load_dotenv()
 DEFAULT_MODEL = "v3_e2e_rnnt"
 DEFAULT_CHUNK_DURATION = 20.0
 DEFAULT_OVERLAP = 1.0
-SPEAKER_SIMILARITY_THRESHOLD = 0.30  # Порог косинусного сходства для идентификации (низкий для коротких реплик)
+# Порог косинусного сходства для идентификации спикеров
+SPEAKER_SIMILARITY_THRESHOLD = 0.30
 
 # Путь к venv для pyannote 4.x
 PYANNOTE4_VENV = Path(__file__).parent / "venv-pyannote"
@@ -73,11 +74,11 @@ DIARIZE_WORKER = Path(__file__).parent / "diarize_worker.py"
 
 def run_diarization_pyannote4(
     audio_path: str,
-    hf_token: Optional[str] = None,
-    similarity_threshold: float = 0.50
+    hf_token: Optional[str] = None
 ) -> Tuple[List['DiarizationSegment'], Dict[str, np.ndarray]]:
     """
     Запускает диаризацию через subprocess с pyannote 4.x.
+    ADR-0007: унифицированный пайплайн speaker-diarization-3.1
 
     Returns:
         (segments, embeddings)
@@ -94,10 +95,10 @@ def run_diarization_pyannote4(
 
     hf_token = hf_token or os.environ.get("HF_TOKEN")
 
+    # ADR-0009: убран similarity_threshold (нет двойной кластеризации)
     input_data = json.dumps({
         "audio_path": audio_path,
-        "hf_token": hf_token,
-        "similarity_threshold": similarity_threshold
+        "hf_token": hf_token
     })
 
     print("Запуск pyannote 4.x subprocess...", file=sys.stderr)
@@ -1194,8 +1195,7 @@ def transcribe_pipeline(
     include_timestamps: bool = True,
     no_diarization: bool = False,
     chunk_duration: float = DEFAULT_CHUNK_DURATION,
-    overlap: float = DEFAULT_OVERLAP,
-    use_pyannote4: bool = True  # pyannote 4.x по умолчанию
+    overlap: float = DEFAULT_OVERLAP
 ):
     """
     Основной пайплайн транскрибирования.
@@ -1228,7 +1228,7 @@ def transcribe_pipeline(
 
         print(f"Получено {len(asr_segments)} сегментов транскрипции.", file=sys.stderr)
 
-        # 2. Диаризация
+        # 2. Диаризация (ADR-0007: унифицированный pyannote 4.x)
         if no_diarization:
             print("Диаризация отключена, используется один спикер.", file=sys.stderr)
             import soundfile as sf
@@ -1239,22 +1239,11 @@ def transcribe_pipeline(
                 speaker_id="speaker_0"
             )]
             speaker_embeddings = {}
-        elif use_pyannote4:
-            # Используем pyannote 4.x через subprocess
-            diar_segments, speaker_embeddings = run_diarization_pyannote4(wav_path)
-            print(f"Получено {len(diar_segments)} сегментов диаризации (pyannote 4.x).", file=sys.stderr)
         else:
-            # Используем встроенный pyannote 3.x
-            diar_segments = diarization.diarize(wav_path)
+            # ADR-0007: только pyannote 4.x через subprocess
+            # ADR-0009: без двойной кластеризации
+            diar_segments, speaker_embeddings = run_diarization_pyannote4(wav_path)
             print(f"Получено {len(diar_segments)} сегментов диаризации.", file=sys.stderr)
-
-            # 2.5. Пост-кластеризация спикеров (объединение фрагментированных ID)
-            unique_before = len(set(s.speaker_id for s in diar_segments))
-            if unique_before > 2:  # Кластеризация имеет смысл при > 2 спикеров
-                diar_segments = diarization.cluster_speakers(wav_path, diar_segments)
-
-            # Получаем embeddings спикеров
-            speaker_embeddings = diarization.get_speaker_embeddings(wav_path, diar_segments)
 
         # 3. Сопоставление ASR и спикеров
         aligned_segments = align_segments_with_speakers(asr_segments, diar_segments)
@@ -1378,6 +1367,263 @@ def build_speaker_db_pipeline(
 
 
 # ============================================================================
+# LIVE MODE (ADR-0010)
+# ============================================================================
+
+class LiveAudioCapture:
+    """Захват аудио с микрофона и/или системного звука (BlackHole)."""
+
+    def __init__(self, mic_device=None, system_device=None, sample_rate=16000):
+        import sounddevice as sd
+        self.sd = sd
+        self.sample_rate = sample_rate
+        self.mic_device = mic_device
+        self.system_device = system_device
+        self.buffer = []
+        self.running = False
+
+    @staticmethod
+    def list_devices():
+        import sounddevice as sd
+        print("Доступные аудио устройства:")
+        print(sd.query_devices())
+
+    def _callback(self, indata, frames, time, status):
+        if status:
+            print(f"Audio status: {status}", file=sys.stderr)
+        self.buffer.append(indata.copy())
+
+    def start(self):
+        device = self.system_device or self.mic_device
+        self.stream = self.sd.InputStream(
+            device=device,
+            channels=1,
+            samplerate=self.sample_rate,
+            callback=self._callback
+        )
+        self.stream.start()
+        self.running = True
+
+    def stop(self):
+        if self.running:
+            self.stream.stop()
+            self.stream.close()
+            self.running = False
+
+    def get_chunk(self, duration: float) -> Optional[np.ndarray]:
+        """Возвращает накопленный аудио чанк."""
+        samples_needed = int(duration * self.sample_rate)
+        if not self.buffer:
+            return None
+
+        audio = np.concatenate(self.buffer, axis=0)
+        if len(audio) < samples_needed:
+            return None
+
+        chunk = audio[:samples_needed]
+        # Оставляем overlap
+        overlap_samples = int(0.5 * self.sample_rate)
+        if len(audio) > overlap_samples:
+            self.buffer = [audio[-overlap_samples:]]
+        else:
+            self.buffer = []
+
+        return chunk.flatten()
+
+
+class LiveTranscriber:
+    """Координатор live транскрипции."""
+
+    def __init__(
+        self,
+        mic_device=None,
+        system_device=None,
+        speaker_db_path=None,
+        chunk_duration=5.0,
+        output_file=None,
+        no_diarization=False
+    ):
+        self.capture = LiveAudioCapture(mic_device, system_device)
+        self.asr = ASRModule()
+        self.speaker_db = SpeakerDatabase(speaker_db_path) if speaker_db_path else None
+        self.chunk_duration = chunk_duration
+        self.output_file = output_file
+        self.no_diarization = no_diarization
+        self.running = False
+        self.session_speakers = {}  # embedding -> speaker_label
+        self.speaker_counter = 0
+        self.transcript_lines = []
+
+    def _get_embedding(self, audio_chunk: np.ndarray) -> Optional[np.ndarray]:
+        """Извлекает embedding из аудио чанка."""
+        if self.no_diarization:
+            return None
+
+        try:
+            import tempfile
+            import soundfile as sf
+
+            # Сохраняем во временный файл
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                sf.write(f.name, audio_chunk, 16000)
+                tmp_path = f.name
+
+            try:
+                # Используем subprocess для pyannote embedding
+                result = subprocess.run(
+                    [str(PYANNOTE4_VENV / "bin" / "python"), "-c", f'''
+import json
+import sys
+import numpy as np
+import soundfile as sf
+import torch
+from pyannote.audio import Model, Inference
+
+waveform, sr = sf.read("{tmp_path}")
+waveform = torch.from_numpy(waveform.reshape(1, -1)).float()
+model = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM", token="{os.environ.get('HF_TOKEN', '')}")
+inference = Inference(model, window="whole")
+emb = inference({{"waveform": waveform, "sample_rate": sr}})
+print(json.dumps(emb.tolist() if hasattr(emb, 'tolist') else list(emb)))
+'''],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode == 0:
+                    return np.array(json.loads(result.stdout.strip()))
+            finally:
+                os.remove(tmp_path)
+
+        except Exception as e:
+            print(f"Embedding error: {e}", file=sys.stderr)
+
+        return None
+
+    def _identify_speaker(self, embedding: Optional[np.ndarray]) -> str:
+        """Идентифицирует спикера по embedding."""
+        if embedding is None:
+            return "speaker"
+
+        # Сначала проверяем speaker-DB
+        if self.speaker_db:
+            match = self.speaker_db.match_speaker(embedding, SPEAKER_SIMILARITY_THRESHOLD)
+            if match:
+                return match[1]  # display_name
+
+        # Проверяем среди спикеров сессии
+        for emb_key, label in self.session_speakers.items():
+            db_emb = np.frombuffer(emb_key, dtype=np.float32)
+            similarity = SpeakerDatabase._cosine_similarity(embedding, db_emb)
+            if similarity >= SPEAKER_SIMILARITY_THRESHOLD:
+                return label
+
+        # Новый спикер
+        self.speaker_counter += 1
+        label = f"speaker_{self.speaker_counter}"
+        self.session_speakers[embedding.tobytes()] = label
+        return label
+
+    def run(self):
+        """Основной цикл live транскрипции."""
+        from datetime import datetime
+        import time
+
+        print("=" * 60)
+        print(" LIVE TRANSCRIPTION")
+        print(f" Mic: {self.capture.mic_device or 'default'} | System: {self.capture.system_device or 'none'}")
+        print("=" * 60)
+        print()
+        print("Press Ctrl+C to stop")
+        print("-" * 60)
+        print()
+
+        self.asr.load_model()
+        self.capture.start()
+        self.running = True
+
+        try:
+            while self.running:
+                time.sleep(self.chunk_duration)
+
+                chunk = self.capture.get_chunk(self.chunk_duration)
+                if chunk is None or len(chunk) < 1000:
+                    continue
+
+                # ASR
+                try:
+                    import tempfile
+                    import soundfile as sf
+
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                        sf.write(f.name, chunk, 16000)
+                        tmp_path = f.name
+
+                    segments = self.asr.transcribe_simple(tmp_path, chunk_duration=len(chunk)/16000)
+                    os.remove(tmp_path)
+
+                    if not segments:
+                        continue
+
+                    text = " ".join(s.text for s in segments).strip()
+                    if not text:
+                        continue
+
+                except Exception as e:
+                    print(f"ASR error: {e}", file=sys.stderr)
+                    continue
+
+                # Speaker ID
+                embedding = self._get_embedding(chunk)
+                speaker = self._identify_speaker(embedding)
+
+                # Output
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                line = f"[{timestamp}] {speaker}: {text}"
+                print(line)
+
+                self.transcript_lines.append(line)
+
+        except KeyboardInterrupt:
+            print("\n" + "-" * 60)
+            print("Остановлено.")
+
+        finally:
+            self.capture.stop()
+            self.running = False
+
+            if self.output_file and self.transcript_lines:
+                with open(self.output_file, 'w', encoding='utf-8') as f:
+                    f.write("\n".join(self.transcript_lines))
+                print(f"Транскрипт сохранён в {self.output_file}")
+
+
+def live_pipeline(
+    mic_device=None,
+    system_device=None,
+    speaker_db_path=None,
+    chunk_duration=5.0,
+    output_file=None,
+    no_diarization=False,
+    list_devices=False
+):
+    """Пайплайн live транскрипции."""
+    if list_devices:
+        LiveAudioCapture.list_devices()
+        return
+
+    transcriber = LiveTranscriber(
+        mic_device=mic_device,
+        system_device=system_device,
+        speaker_db_path=speaker_db_path,
+        chunk_duration=chunk_duration,
+        output_file=output_file,
+        no_diarization=no_diarization
+    )
+    transcriber.run()
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
@@ -1431,11 +1677,7 @@ def main():
         action="store_true",
         help="Отключить диаризацию (один спикер)"
     )
-    transcribe_parser.add_argument(
-        "--pyannote3",
-        action="store_true",
-        help="Использовать pyannote 3.x (старая модель, по умолчанию pyannote 4.x)"
-    )
+    # ADR-0007: удалён --pyannote3, унификация на pyannote 4.x
     transcribe_parser.add_argument(
         "--chunk-duration",
         type=float,
@@ -1447,6 +1689,44 @@ def main():
         type=float,
         default=DEFAULT_OVERLAP,
         help=f"Перекрытие чанков (сек) для режима simple (по умолчанию: {DEFAULT_OVERLAP})"
+    )
+
+    # Команда: live (ADR-0010)
+    live_parser = subparsers.add_parser(
+        "live",
+        help="Live транскрипция с микрофона/BlackHole"
+    )
+    live_parser.add_argument(
+        "--mic-device",
+        help="ID или имя устройства микрофона"
+    )
+    live_parser.add_argument(
+        "--system-device",
+        help="ID или имя устройства системного звука (BlackHole)"
+    )
+    live_parser.add_argument(
+        "--chunk-duration",
+        type=float,
+        default=5.0,
+        help="Длительность чанка для ASR (сек, по умолчанию: 5.0)"
+    )
+    live_parser.add_argument(
+        "--speaker-db",
+        help="Путь к файлу базы спикеров (JSON)"
+    )
+    live_parser.add_argument(
+        "--output",
+        help="Сохранять транскрипт в файл"
+    )
+    live_parser.add_argument(
+        "--no-diarization",
+        action="store_true",
+        help="Только ASR без идентификации спикеров"
+    )
+    live_parser.add_argument(
+        "--list-devices",
+        action="store_true",
+        help="Показать доступные аудио устройства"
     )
 
     # Команда: enroll-speaker
@@ -1510,8 +1790,18 @@ def main():
             include_timestamps=not args.no_timestamps,
             no_diarization=args.no_diarization,
             chunk_duration=args.chunk_duration,
-            overlap=args.overlap,
-            use_pyannote4=not args.pyannote3  # pyannote 4.x по умолчанию
+            overlap=args.overlap
+        )
+
+    elif args.command == "live":
+        live_pipeline(
+            mic_device=args.mic_device,
+            system_device=args.system_device,
+            speaker_db_path=args.speaker_db,
+            chunk_duration=args.chunk_duration,
+            output_file=args.output,
+            no_diarization=args.no_diarization,
+            list_devices=args.list_devices
         )
 
     elif args.command == "enroll-speaker":
