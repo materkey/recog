@@ -1,11 +1,15 @@
 // KTalk Speaker Detector - Injected Script
-// Integrates transcript panel into KTalk side menu
+// Integrates transcript tab into KTalk side menu (next to General/Private)
 // WebSocket integration with recog for live transcription
 
 (function() {
   'use strict';
 
-  let panelElement = null;
+  let transcriptTabAdded = false;
+  let transcriptContentElement = null;
+  let originalChatContent = null;
+  let isTranscriptActive = false;
+
   let speakerHistory = [];
   const MAX_HISTORY = 100;
   const SPEAKING_THRESHOLD_MS = 500;
@@ -23,6 +27,198 @@
   let wsReconnectTimer = null;
   let wsConnected = false;
 
+  // Inject styles once
+  function injectStyles() {
+    if (document.querySelector('#ktalk-transcript-styles')) return;
+
+    const styles = document.createElement('style');
+    styles.id = 'ktalk-transcript-styles';
+    styles.textContent = `
+      /* Transcript tab button - matches KTalk style */
+      .ktalk-transcript-tab {
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        height: 100%;
+        cursor: pointer;
+        position: relative;
+        color: rgba(255,255,255,0.7);
+        font-size: 14px;
+        font-weight: 500;
+        transition: color 0.2s;
+        border: none;
+        background: none;
+        font-family: inherit;
+      }
+      .ktalk-transcript-tab:hover {
+        color: rgba(255,255,255,0.9);
+      }
+      .ktalk-transcript-tab._active {
+        color: white;
+      }
+      .ktalk-transcript-tab .underline {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background-color: rgb(0, 138, 255);
+        opacity: 0;
+        transition: opacity 0.2s;
+      }
+      .ktalk-transcript-tab._active .underline {
+        opacity: 1;
+      }
+      .ktalk-transcript-tab .ws-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #ef4444;
+        margin-left: 6px;
+        transition: background 0.3s;
+      }
+      .ktalk-transcript-tab .ws-dot.connected {
+        background: #22c55e;
+      }
+
+      /* Transcript content area */
+      .ktalk-transcript-content {
+        display: none;
+        flex-direction: column;
+        height: 100%;
+        background: var(--tl-color-background-primary, #1a1a2e);
+      }
+      .ktalk-transcript-content.active {
+        display: flex;
+      }
+
+      .ktalk-transcript-speaker-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: rgba(255,255,255,0.03);
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        flex-shrink: 0;
+      }
+
+      .ktalk-speaker-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #6b7280;
+        transition: all 0.3s;
+      }
+      .ktalk-speaker-dot.speaking {
+        background: #4ade80;
+        box-shadow: 0 0 8px #4ade80;
+        animation: ktalk-pulse 1.5s infinite;
+      }
+
+      @keyframes ktalk-pulse {
+        0%, 100% { box-shadow: 0 0 8px #4ade80; }
+        50% { box-shadow: 0 0 16px #4ade80; }
+      }
+
+      .ktalk-speaker-name {
+        font-size: 13px;
+        font-weight: 500;
+        color: rgba(255,255,255,0.9);
+      }
+
+      .ktalk-transcript-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px;
+      }
+
+      .ktalk-msg {
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.04);
+      }
+
+      .ktalk-msg-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+      }
+
+      .ktalk-msg-speaker {
+        font-weight: 600;
+        font-size: 12px;
+      }
+
+      .ktalk-msg-time {
+        font-size: 10px;
+        color: rgba(255,255,255,0.4);
+      }
+
+      .ktalk-msg-text {
+        font-size: 13px;
+        line-height: 1.4;
+        color: rgba(255,255,255,0.85);
+      }
+
+      /* Local messages (me/mic) - blue */
+      .ktalk-msg.local {
+        background: rgba(0, 138, 255, 0.12);
+        border-left: 3px solid rgb(0, 138, 255);
+      }
+      .ktalk-msg.local .ktalk-msg-speaker {
+        color: rgb(0, 138, 255);
+      }
+
+      /* Remote messages (others) - green */
+      .ktalk-msg.remote {
+        background: rgba(74, 222, 128, 0.08);
+      }
+      .ktalk-msg.remote .ktalk-msg-speaker {
+        color: #4ade80;
+      }
+
+      /* Uncertain messages - yellow */
+      .ktalk-msg.uncertain {
+        background: rgba(250, 204, 21, 0.08);
+        border-left: 3px dashed #facc15;
+      }
+      .ktalk-msg.uncertain .ktalk-msg-speaker {
+        color: #facc15;
+      }
+
+      .ktalk-transcript-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: rgba(255,255,255,0.4);
+        text-align: center;
+        padding: 20px;
+      }
+      .ktalk-transcript-empty-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.5;
+      }
+      .ktalk-transcript-empty-text {
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .ktalk-transcript-empty-cmd {
+        font-family: monospace;
+        font-size: 12px;
+        background: rgba(255,255,255,0.1);
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin-top: 12px;
+      }
+    `;
+    document.head.appendChild(styles);
+  }
+
   function connectWebSocket() {
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
       return;
@@ -32,21 +228,19 @@
       wsConnection = new WebSocket(WS_URL);
 
       wsConnection.onopen = () => {
-        console.log('[KTalk Speaker Detector] WebSocket connected to recog');
+        console.log('[KTalk Transcript] WebSocket connected');
         wsConnected = true;
         updateWsIndicator(true);
 
-        // Send current state including active speaker
         if (window.$conf) {
           sendWsParticipants(window.$conf);
           const activeSpeaker = getActiveSpeaker(window.$conf);
           sendWsSpeakerUpdate(activeSpeaker);
-          console.log('[KTalk Speaker Detector] Sent initial speaker:', activeSpeaker?.name || 'no one');
         }
       };
 
       wsConnection.onclose = () => {
-        console.log('[KTalk Speaker Detector] WebSocket disconnected');
+        console.log('[KTalk Transcript] WebSocket disconnected');
         wsConnected = false;
         updateWsIndicator(false);
 
@@ -58,8 +252,7 @@
         }
       };
 
-      wsConnection.onerror = (err) => {
-        console.log('[KTalk Speaker Detector] WebSocket error (recog server may not be running)');
+      wsConnection.onerror = () => {
         wsConnected = false;
       };
 
@@ -70,12 +263,12 @@
             handleTranscript(data);
           }
         } catch (e) {
-          console.log('[KTalk Speaker Detector] Error parsing message:', e);
+          console.log('[KTalk Transcript] Parse error:', e);
         }
       };
 
     } catch (e) {
-      console.log('[KTalk Speaker Detector] WebSocket connection failed:', e);
+      console.log('[KTalk Transcript] Connection failed:', e);
     }
   }
 
@@ -109,10 +302,9 @@
   }
 
   function updateWsIndicator(connected) {
-    const indicator = document.querySelector('.ktalk-transcript-ws-indicator');
-    if (indicator) {
-      indicator.classList.toggle('connected', connected);
-      indicator.title = connected ? 'recog connected' : 'recog disconnected';
+    const dot = document.querySelector('.ktalk-transcript-tab .ws-dot');
+    if (dot) {
+      dot.classList.toggle('connected', connected);
     }
   }
 
@@ -145,6 +337,22 @@
     const container = document.querySelector('.ktalk-transcript-messages');
     if (!container) return;
 
+    if (transcriptLines.length === 0) {
+      container.innerHTML = `
+        <div class="ktalk-transcript-empty">
+          <div class="ktalk-transcript-empty-icon">📝</div>
+          <div class="ktalk-transcript-empty-text">
+            Waiting for transcript...<br>
+            Start recog with:
+          </div>
+          <div class="ktalk-transcript-empty-cmd">
+            python mp4_notes.py live --screencapture --ktalk
+          </div>
+        </div>
+      `;
+      return;
+    }
+
     container.innerHTML = transcriptLines.map(line => {
       const classes = [
         'ktalk-msg',
@@ -166,8 +374,6 @@
     container.scrollTop = container.scrollHeight;
   }
 
-  setTimeout(connectWebSocket, 1000);
-
   function sendUpdate(data) {
     window.dispatchEvent(new CustomEvent('ktalk-speaker-update', { detail: data }));
   }
@@ -182,14 +388,14 @@
     const check = () => {
       attempts++;
       if (window.$conf && window.$conf._dominantSpeakerId$ && window.$conf.jitsiConf) {
-        console.log('[KTalk Speaker Detector] Conference object found!');
+        console.log('[KTalk Transcript] Conference found');
         callback(window.$conf);
         return;
       }
       if (attempts < maxAttempts) {
         setTimeout(check, 500);
       } else {
-        console.log('[KTalk Speaker Detector] Conference object not found');
+        console.log('[KTalk Transcript] Conference not found');
         sendConnectionStatus(false);
       }
     };
@@ -201,32 +407,19 @@
     if (userInfo) {
       const firstName = userInfo.firstName || '';
       const lastName = userInfo.lastName || '';
-      if (firstName && lastName) {
-        return `${firstName} ${lastName}`;
-      }
+      if (firstName && lastName) return `${firstName} ${lastName}`;
       if (firstName) return firstName;
       if (lastName) return lastName;
     }
 
-    if (participant?.displayName?.includes(' ')) {
-      return participant.displayName;
-    }
-    if (participant?.name?.includes(' ')) {
-      return participant.name;
-    }
+    if (participant?.displayName?.includes(' ')) return participant.displayName;
+    if (participant?.name?.includes(' ')) return participant.name;
 
     if (info) {
       const name = info.name || info.firstName || '';
       const surname = info.surname || info.lastName || '';
-
-      if (info.displayName && info.displayName.includes(' ')) {
-        return info.displayName;
-      }
-
-      if (name && surname) {
-        return `${name} ${surname}`;
-      }
-
+      if (info.displayName && info.displayName.includes(' ')) return info.displayName;
+      if (name && surname) return `${name} ${surname}`;
       if (info.displayName) return info.displayName;
       if (name) return name;
     }
@@ -253,7 +446,6 @@
 
   function getActiveSpeaker(conf) {
     let activeSpeaker = null;
-
     conf._participantsMap?.forEach((p, key) => {
       if (p._activeSpeaker$?.value === true) {
         const info = p._participantInfo$?.value || p._userInfo$?.value;
@@ -264,7 +456,6 @@
         };
       }
     });
-
     return activeSpeaker;
   }
 
@@ -274,20 +465,14 @@
     if (jitsiParticipant) {
       const tracks = jitsiParticipant.getTracks?.() || jitsiParticipant._tracks || [];
       const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
-      if (audioTrack) {
-        return audioTrack.isMuted?.() === true;
-      }
+      if (audioTrack) return audioTrack.isMuted?.() === true;
     }
-
     if (conf.localParticipant?.id === participantId) {
       const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
       const localAudio = localTracks.find(t => t.getType?.() === 'audio');
-      if (localAudio) {
-        return localAudio.isMuted?.() === true;
-      }
+      if (localAudio) return localAudio.isMuted?.() === true;
       return true;
     }
-
     return true;
   }
 
@@ -296,17 +481,11 @@
     for (const jp of jitsiParticipants) {
       const tracks = jp.getTracks?.() || jp._tracks || [];
       const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
-      if (audioTrack && !audioTrack.isMuted?.()) {
-        return true;
-      }
+      if (audioTrack && !audioTrack.isMuted?.()) return true;
     }
-
     const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
     const localAudio = localTracks.find(t => t.getType?.() === 'audio');
-    if (localAudio && !localAudio.isMuted?.()) {
-      return true;
-    }
-
+    if (localAudio && !localAudio.isMuted?.()) return true;
     return false;
   }
 
@@ -341,323 +520,182 @@
     return participants;
   }
 
-  // Find or create the slide menu container
-  function findSlideMenuContainer() {
-    return document.querySelector('.conference-slide-menu-container') ||
-           document.querySelector('[class*="slide-menu"]') ||
-           document.querySelector('[class*="SlideMenu"]');
+  // Add Transcript tab to KTalk's tab bar (next to General/Private)
+  function addTranscriptTab() {
+    if (document.querySelector('.ktalk-transcript-tab')) {
+      return true; // Already added
+    }
+
+    // Find the tabs container
+    const tabsContainer = document.querySelector('.tl-tabset__content');
+    if (!tabsContainer) {
+      return false;
+    }
+
+    console.log('[KTalk Transcript] Adding tab to tabset');
+
+    // Create transcript tab
+    const tab = document.createElement('div');
+    tab.className = 'tl-tab _switchable';
+    tab.innerHTML = `
+      <button type="button" class="ktalk-transcript-tab link">
+        <span class="title">Transcript</span>
+        <span class="ws-dot ${wsConnected ? 'connected' : ''}"></span>
+        <span class="underline"></span>
+      </button>
+    `;
+
+    tabsContainer.appendChild(tab);
+
+    // Add click handler
+    tab.querySelector('button').addEventListener('click', () => {
+      activateTranscriptTab();
+    });
+
+    transcriptTabAdded = true;
+    return true;
   }
 
-  // Add transcript tab button to toolbar
-  function addTranscriptTabButton() {
-    // Check if button already exists
-    if (document.querySelector('.ktalk-transcript-btn')) {
-      return document.querySelector('.ktalk-transcript-btn');
+  // Create transcript content area
+  function createTranscriptContent() {
+    if (document.querySelector('.ktalk-transcript-content')) {
+      return document.querySelector('.ktalk-transcript-content');
     }
 
-    // Try various toolbar selectors
-    const toolbarSelectors = [
-      '.conference-control-buttons',
-      '.toolbar',
-      '[class*="control-buttons"]',
-      '[class*="toolbar"]',
-      '.bottom-toolbar',
-      '.conference-toolbar'
-    ];
-
-    let toolbar = null;
-    for (const sel of toolbarSelectors) {
-      toolbar = document.querySelector(sel);
-      if (toolbar) {
-        console.log('[KTalk Speaker Detector] Found toolbar with selector:', sel);
-        break;
-      }
+    // Find the content area (where chat messages are)
+    const contentArea = document.querySelector('.slide-menu-wrapper .content');
+    if (!contentArea) {
+      console.log('[KTalk Transcript] Content area not found');
+      return null;
     }
 
-    const btn = document.createElement('button');
-    btn.className = 'ktalk-transcript-btn';
-    btn.innerHTML = '📝';
-    btn.title = 'Transcript (click to open)';
-    btn.onclick = toggleTranscriptPanel;
+    // Store reference to original chat content
+    originalChatContent = contentArea.firstElementChild;
 
-    if (toolbar) {
-      toolbar.appendChild(btn);
-      console.log('[KTalk Speaker Detector] Button added to toolbar');
-    } else {
-      // Fallback: create floating button in corner
-      console.log('[KTalk Speaker Detector] No toolbar found, creating floating button');
-      btn.classList.add('floating');
-      document.body.appendChild(btn);
-    }
-
-    return btn;
-  }
-
-  // Create the transcript panel
-  function createTranscriptPanel() {
-    if (panelElement) return panelElement;
-
-    const container = findSlideMenuContainer();
-
-    panelElement = document.createElement('div');
-    panelElement.className = 'ktalk-transcript-panel';
-    panelElement.innerHTML = `
-      <div class="ktalk-transcript-panel-header">
-        <div class="ktalk-transcript-panel-title">
-          <span>📝 Transcript</span>
-          <span class="ktalk-transcript-ws-indicator" title="recog disconnected"></span>
-        </div>
-        <button class="ktalk-transcript-panel-close">×</button>
-      </div>
-      <div class="ktalk-transcript-speaker-status">
-        <div class="ktalk-speaker-indicator"></div>
+    // Create transcript content element
+    transcriptContentElement = document.createElement('div');
+    transcriptContentElement.className = 'ktalk-transcript-content';
+    transcriptContentElement.innerHTML = `
+      <div class="ktalk-transcript-speaker-bar">
+        <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
       </div>
-      <div class="ktalk-transcript-messages"></div>
+      <div class="ktalk-transcript-messages">
+        <div class="ktalk-transcript-empty">
+          <div class="ktalk-transcript-empty-icon">📝</div>
+          <div class="ktalk-transcript-empty-text">
+            Waiting for transcript...<br>
+            Start recog with:
+          </div>
+          <div class="ktalk-transcript-empty-cmd">
+            python mp4_notes.py live --screencapture --ktalk
+          </div>
+        </div>
+      </div>
     `;
 
-    // Add styles
-    const styles = document.createElement('style');
-    styles.textContent = `
-      .ktalk-transcript-btn {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        border: none;
-        background: rgba(255,255,255,0.1);
-        color: white;
-        font-size: 18px;
-        cursor: pointer;
-        margin: 0 4px;
-        transition: all 0.2s;
-      }
-      .ktalk-transcript-btn:hover {
-        background: rgba(255,255,255,0.2);
-      }
-      .ktalk-transcript-btn.active {
-        background: #4ade80;
-      }
-      .ktalk-transcript-btn.floating {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        z-index: 9999;
-        width: 56px;
-        height: 56px;
-        font-size: 24px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-        background: #3b82f6;
-      }
-      .ktalk-transcript-btn.floating:hover {
-        background: #2563eb;
-        transform: scale(1.05);
-      }
-      .ktalk-transcript-btn.floating.active {
-        background: #4ade80;
-      }
+    contentArea.appendChild(transcriptContentElement);
+    console.log('[KTalk Transcript] Content element created');
 
-      .ktalk-transcript-panel {
-        position: fixed;
-        right: 0;
-        top: 0;
-        width: 380px;
-        height: 100vh;
-        background: #1a1a2e;
-        color: white;
-        display: none;
-        flex-direction: column;
-        z-index: 1000;
-        box-shadow: -4px 0 20px rgba(0,0,0,0.5);
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      }
-      .ktalk-transcript-panel.open {
-        display: flex;
-      }
-
-      .ktalk-transcript-panel-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 16px 20px;
-        background: rgba(255,255,255,0.05);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-      }
-
-      .ktalk-transcript-panel-title {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 16px;
-        font-weight: 600;
-      }
-
-      .ktalk-transcript-ws-indicator {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #ef4444;
-        transition: background 0.3s;
-      }
-      .ktalk-transcript-ws-indicator.connected {
-        background: #22c55e;
-      }
-
-      .ktalk-transcript-panel-close {
-        background: none;
-        border: none;
-        color: white;
-        font-size: 24px;
-        cursor: pointer;
-        opacity: 0.6;
-        padding: 0;
-        line-height: 1;
-      }
-      .ktalk-transcript-panel-close:hover {
-        opacity: 1;
-      }
-
-      .ktalk-transcript-speaker-status {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 12px 20px;
-        background: rgba(255,255,255,0.03);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-      }
-
-      .ktalk-speaker-indicator {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        background: #6b7280;
-        transition: all 0.3s;
-      }
-      .ktalk-speaker-indicator.speaking {
-        background: #4ade80;
-        box-shadow: 0 0 10px #4ade80;
-        animation: pulse 1.5s infinite;
-      }
-
-      @keyframes pulse {
-        0%, 100% { box-shadow: 0 0 10px #4ade80; }
-        50% { box-shadow: 0 0 20px #4ade80; }
-      }
-
-      .ktalk-speaker-name {
-        font-size: 14px;
-        font-weight: 500;
-      }
-
-      .ktalk-transcript-messages {
-        flex: 1;
-        overflow-y: auto;
-        padding: 12px;
-      }
-
-      .ktalk-msg {
-        padding: 10px 12px;
-        margin-bottom: 8px;
-        border-radius: 8px;
-        background: rgba(255,255,255,0.05);
-      }
-
-      .ktalk-msg-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 4px;
-      }
-
-      .ktalk-msg-speaker {
-        font-weight: 600;
-        font-size: 13px;
-      }
-
-      .ktalk-msg-time {
-        font-size: 11px;
-        color: #888;
-      }
-
-      .ktalk-msg-text {
-        font-size: 14px;
-        line-height: 1.4;
-        color: #e5e5e5;
-      }
-
-      /* Local messages (me/mic) - blue */
-      .ktalk-msg.local {
-        background: rgba(96, 165, 250, 0.15);
-        border-left: 3px solid #60a5fa;
-      }
-      .ktalk-msg.local .ktalk-msg-speaker {
-        color: #60a5fa;
-      }
-
-      /* Remote messages (others) - green */
-      .ktalk-msg.remote {
-        background: rgba(74, 222, 128, 0.1);
-      }
-      .ktalk-msg.remote .ktalk-msg-speaker {
-        color: #4ade80;
-      }
-
-      /* Uncertain messages - yellow */
-      .ktalk-msg.uncertain {
-        background: rgba(250, 204, 21, 0.1);
-        border-left: 3px dashed #facc15;
-      }
-      .ktalk-msg.uncertain .ktalk-msg-speaker {
-        color: #facc15;
-      }
-
-      .ktalk-transcript-messages:empty::before {
-        content: 'Waiting for transcript...\\A\\AStart recog with:\\Apython mp4_notes.py live --screencapture --ktalk';
-        white-space: pre-wrap;
-        color: #666;
-        font-style: italic;
-        display: block;
-        text-align: center;
-        padding: 40px 20px;
-      }
-    `;
-
-    document.head.appendChild(styles);
-    document.body.appendChild(panelElement);
-
-    // Close button handler
-    panelElement.querySelector('.ktalk-transcript-panel-close').onclick = () => {
-      toggleTranscriptPanel();
-    };
-
-    updateWsIndicator(wsConnected);
-    return panelElement;
+    return transcriptContentElement;
   }
 
-  function toggleTranscriptPanel() {
-    if (!panelElement) {
-      createTranscriptPanel();
+  // Activate transcript tab (deactivate others)
+  function activateTranscriptTab() {
+    const transcriptTab = document.querySelector('.ktalk-transcript-tab');
+    if (!transcriptTab) return;
+
+    // Deactivate other tabs
+    document.querySelectorAll('.tl-tabset__content .tl-tab').forEach(tab => {
+      const btn = tab.querySelector('button.link, button._active, .link.tab-content');
+      if (btn && !btn.classList.contains('ktalk-transcript-tab')) {
+        btn.classList.remove('_active');
+        const underline = btn.querySelector('.underline') || tab.querySelector('.underline');
+        if (underline) underline.style.opacity = '0';
+      }
+    });
+
+    // Activate transcript tab
+    transcriptTab.classList.add('_active');
+
+    // Hide original content, show transcript
+    if (originalChatContent) {
+      originalChatContent.style.display = 'none';
+    }
+    if (transcriptContentElement) {
+      transcriptContentElement.classList.add('active');
     }
 
-    const isOpen = panelElement.classList.toggle('open');
-    const btn = document.querySelector('.ktalk-transcript-btn');
-    if (btn) {
-      btn.classList.toggle('active', isOpen);
+    // Update selector title
+    const selector = document.querySelector('.tl-tabset__selector .title');
+    if (selector) {
+      selector.textContent = 'Transcript';
     }
+
+    isTranscriptActive = true;
+    updateTranscriptUI();
+  }
+
+  // Deactivate transcript tab (when user clicks General/Private)
+  function deactivateTranscriptTab() {
+    const transcriptTab = document.querySelector('.ktalk-transcript-tab');
+    if (transcriptTab) {
+      transcriptTab.classList.remove('_active');
+    }
+
+    // Show original content, hide transcript
+    if (originalChatContent) {
+      originalChatContent.style.display = '';
+    }
+    if (transcriptContentElement) {
+      transcriptContentElement.classList.remove('active');
+    }
+
+    isTranscriptActive = false;
+  }
+
+  // Watch for tab changes (user clicking General/Private)
+  function watchTabChanges() {
+    const tabsContainer = document.querySelector('.tl-tabset__content');
+    if (!tabsContainer) return;
+
+    tabsContainer.addEventListener('click', (e) => {
+      const clickedTab = e.target.closest('.tl-tab');
+      if (!clickedTab) return;
+
+      const isTranscriptTab = clickedTab.querySelector('.ktalk-transcript-tab');
+      if (!isTranscriptTab) {
+        // User clicked a different tab
+        deactivateTranscriptTab();
+      }
+    });
   }
 
   function updateSpeakerStatus(conf) {
     const activeSpeaker = getActiveSpeaker(conf);
     const hasMicsOn = anyMicOn(conf);
 
-    const indicator = document.querySelector('.ktalk-speaker-indicator');
+    const dot = document.querySelector('.ktalk-speaker-dot');
     const nameEl = document.querySelector('.ktalk-speaker-name');
 
-    if (!indicator || !nameEl) return;
+    if (dot && nameEl) {
+      if (activeSpeaker) {
+        dot.classList.add('speaking');
+        nameEl.textContent = activeSpeaker.name;
+      } else {
+        dot.classList.remove('speaking');
+        if (!hasMicsOn) {
+          nameEl.textContent = 'All mics off';
+        } else {
+          const dominantId = conf._dominantSpeakerId$?.value;
+          const dominantName = getParticipantName(conf, dominantId);
+          nameEl.textContent = dominantName || 'No one speaking';
+        }
+      }
+    }
 
+    // Track speaker changes
     if (activeSpeaker) {
-      indicator.className = 'ktalk-speaker-indicator speaking';
-      nameEl.textContent = activeSpeaker.name;
-
       if (currentSpeaker !== activeSpeaker.id) {
         if (currentSpeaker && speakingStartTime) {
           const prevName = getParticipantName(conf, currentSpeaker);
@@ -667,16 +705,6 @@
         speakingStartTime = Date.now();
       }
     } else {
-      indicator.className = 'ktalk-speaker-indicator';
-
-      if (!hasMicsOn) {
-        nameEl.textContent = 'All mics off';
-      } else {
-        const dominantId = conf._dominantSpeakerId$?.value;
-        const dominantName = getParticipantName(conf, dominantId);
-        nameEl.textContent = dominantName || 'No one speaking';
-      }
-
       if (currentSpeaker && speakingStartTime) {
         const prevName = getParticipantName(conf, currentSpeaker);
         addToHistory(prevName, currentSpeaker, Date.now() - speakingStartTime);
@@ -708,29 +736,35 @@
     if (speakerHistory.length > MAX_HISTORY) speakerHistory.pop();
   }
 
-  function subscribeToDominantSpeaker(conf) {
-    // Create UI elements
-    createTranscriptPanel();
-    addTranscriptTabButton();
+  function setupUI() {
+    injectStyles();
 
+    // Try to add tab and content
+    const tabAdded = addTranscriptTab();
+    if (tabAdded) {
+      createTranscriptContent();
+      watchTabChanges();
+      updateWsIndicator(wsConnected);
+    }
+
+    return tabAdded;
+  }
+
+  function subscribeToDominantSpeaker(conf) {
     sendConnectionStatus(true);
     sendWsParticipants(conf);
 
-    console.log('[KTalk Speaker Detector] Initial update');
+    console.log('[KTalk Transcript] Subscribing to speaker events');
     updateSpeakerStatus(conf);
 
     // Subscribe to all _activeSpeaker$ observables
     conf._participantsMap?.forEach((p, key) => {
       if (p._activeSpeaker$?.subscribe) {
-        p._activeSpeaker$.subscribe((isActive) => {
-          updateSpeakerStatus(conf);
-        });
+        p._activeSpeaker$.subscribe(() => updateSpeakerStatus(conf));
       }
     });
 
-    conf.jitsiConf.on('conference.dominantSpeaker', () => {
-      updateSpeakerStatus(conf);
-    });
+    conf.jitsiConf.on('conference.dominantSpeaker', () => updateSpeakerStatus(conf));
 
     conf.jitsiConf.on('conference.trackAdded', (track) => {
       if (track.getType?.() === 'audio') {
@@ -746,15 +780,11 @@
     });
 
     conf.jitsiConf.on('conference.trackRemoved', (track) => {
-      if (track.getType?.() === 'audio') {
-        updateSpeakerStatus(conf);
-      }
+      if (track.getType?.() === 'audio') updateSpeakerStatus(conf);
     });
 
     conf.jitsiConf.on('conference.trackMuteChanged', (track) => {
-      if (track.getType?.() === 'audio') {
-        updateSpeakerStatus(conf);
-      }
+      if (track.getType?.() === 'audio') updateSpeakerStatus(conf);
     });
 
     conf.jitsiConf.on('conference.userJoined', (id) => {
@@ -775,19 +805,25 @@
       }, 500);
     });
 
-    console.log('[KTalk Speaker Detector] Subscribed to all events');
+    console.log('[KTalk Transcript] Ready');
   }
 
-  console.log('[KTalk Speaker Detector] Script loaded, waiting for conference...');
+  // Main initialization
+  console.log('[KTalk Transcript] Script loaded');
 
-  // Periodically ensure button exists (KTalk rebuilds UI on join)
+  setTimeout(connectWebSocket, 1000);
+
+  // Periodically try to set up UI (KTalk rebuilds on join)
   setInterval(() => {
-    if (!document.querySelector('.ktalk-transcript-btn')) {
-      console.log('[KTalk Speaker Detector] Re-creating button...');
-      addTranscriptTabButton();
+    if (!document.querySelector('.ktalk-transcript-tab')) {
+      transcriptTabAdded = false;
+      setupUI();
     }
-    if (!document.querySelector('.ktalk-transcript-panel')) {
-      createTranscriptPanel();
+    // Also check if content element was removed
+    if (!document.querySelector('.ktalk-transcript-content')) {
+      transcriptContentElement = null;
+      originalChatContent = null;
+      createTranscriptContent();
     }
   }, 2000);
 
