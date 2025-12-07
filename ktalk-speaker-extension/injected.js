@@ -34,6 +34,12 @@
     const styles = document.createElement('style');
     styles.id = 'ktalk-transcript-styles';
     styles.textContent = `
+      /* Transcript tab wrapper - inline with other tabs */
+      .ktalk-transcript-tab-wrapper {
+        display: inline-flex !important;
+        flex-shrink: 0;
+      }
+
       /* Transcript tab button - matches KTalk style */
       .ktalk-transcript-tab {
         display: flex;
@@ -49,12 +55,17 @@
         border: none;
         background: none;
         font-family: inherit;
+        white-space: nowrap;
       }
       .ktalk-transcript-tab:hover {
         color: rgba(255,255,255,0.9);
       }
       .ktalk-transcript-tab._active {
         color: white;
+      }
+      .ktalk-transcript-tab .tab-content {
+        display: flex;
+        align-items: center;
       }
       .ktalk-transcript-tab .underline {
         position: absolute;
@@ -75,6 +86,7 @@
         border-radius: 50%;
         background: #ef4444;
         margin-left: 6px;
+        flex-shrink: 0;
         transition: background 0.3s;
       }
       .ktalk-transcript-tab .ws-dot.connected {
@@ -302,7 +314,7 @@
   }
 
   function updateWsIndicator(connected) {
-    const dot = document.querySelector('.ktalk-transcript-tab .ws-dot');
+    const dot = document.querySelector('.ktalk-transcript-tab-wrapper .ws-dot');
     if (dot) {
       dot.classList.toggle('connected', connected);
     }
@@ -534,14 +546,16 @@
 
     console.log('[KTalk Transcript] Adding tab to tabset');
 
-    // Create transcript tab
+    // Create transcript tab - match KTalk's tl-tab structure
     const tab = document.createElement('div');
-    tab.className = 'tl-tab _switchable';
+    tab.className = 'tl-tab _switchable ktalk-transcript-tab-wrapper';
     tab.innerHTML = `
       <button type="button" class="ktalk-transcript-tab link">
-        <span class="title">Transcript</span>
-        <span class="ws-dot ${wsConnected ? 'connected' : ''}"></span>
-        <span class="underline"></span>
+        <span class="tab-content">
+          <span class="title">Transcript</span>
+          <span class="ws-dot ${wsConnected ? 'connected' : ''}"></span>
+        </span>
+        <span class="underline" style="background-color: rgb(0, 138, 255);"></span>
       </button>
     `;
 
@@ -602,13 +616,14 @@
 
   // Activate transcript tab (deactivate others)
   function activateTranscriptTab() {
-    const transcriptTab = document.querySelector('.ktalk-transcript-tab');
-    if (!transcriptTab) return;
+    const transcriptTabBtn = document.querySelector('.ktalk-transcript-tab');
+    if (!transcriptTabBtn) return;
 
     // Deactivate other tabs
     document.querySelectorAll('.tl-tabset__content .tl-tab').forEach(tab => {
+      if (tab.classList.contains('ktalk-transcript-tab-wrapper')) return;
       const btn = tab.querySelector('button.link, button._active, .link.tab-content');
-      if (btn && !btn.classList.contains('ktalk-transcript-tab')) {
+      if (btn) {
         btn.classList.remove('_active');
         const underline = btn.querySelector('.underline') || tab.querySelector('.underline');
         if (underline) underline.style.opacity = '0';
@@ -616,7 +631,7 @@
     });
 
     // Activate transcript tab
-    transcriptTab.classList.add('_active');
+    transcriptTabBtn.classList.add('_active');
 
     // Hide original content, show transcript
     if (originalChatContent) {
