@@ -19,3 +19,6 @@ tqdm>=4.65
 
 # KTalk integration
 websockets>=12.0
+
+# ScreenCaptureKit for macOS (optional, for --screencapture mode)
+# pip install pyobjc-framework-ScreenCaptureKit
