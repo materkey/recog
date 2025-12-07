@@ -1398,7 +1398,7 @@ class LiveAudioCapture:
         self.buffer.append(indata.copy())
 
     def start(self):
-        device = self.system_device or self.mic_device
+        device = self.system_device if self.system_device is not None else self.mic_device
         self.stream = self.sd.InputStream(
             device=device,
             channels=1,
@@ -1552,7 +1552,12 @@ class LiveTranscriber:
 
         print("=" * 60)
         print(" LIVE TRANSCRIPTION")
-        print(f" Mic: {self.capture.mic_device or 'default'} | System: {self.capture.system_device or 'none'}")
+        if self.capture.system_device is not None:
+            mic_display = self.capture.mic_device if self.capture.mic_device is not None else 'none'
+        else:
+            mic_display = self.capture.mic_device if self.capture.mic_device is not None else 'default'
+        sys_display = self.capture.system_device if self.capture.system_device is not None else 'none'
+        print(f" Mic: {mic_display} | System: {sys_display}")
         print("=" * 60)
         print()
         print("Press Ctrl+C to stop")
