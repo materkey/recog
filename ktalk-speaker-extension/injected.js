@@ -350,25 +350,46 @@
 
   // Add transcript tab button to toolbar
   function addTranscriptTabButton() {
-    // Find the toolbar with chat/participants buttons
-    const toolbar = document.querySelector('.conference-control-buttons') ||
-                    document.querySelector('[class*="control-buttons"]') ||
-                    document.querySelector('.bottom-toolbar');
-
-    if (!toolbar) return null;
-
     // Check if button already exists
     if (document.querySelector('.ktalk-transcript-btn')) {
       return document.querySelector('.ktalk-transcript-btn');
     }
 
+    // Try various toolbar selectors
+    const toolbarSelectors = [
+      '.conference-control-buttons',
+      '.toolbar',
+      '[class*="control-buttons"]',
+      '[class*="toolbar"]',
+      '.bottom-toolbar',
+      '.conference-toolbar'
+    ];
+
+    let toolbar = null;
+    for (const sel of toolbarSelectors) {
+      toolbar = document.querySelector(sel);
+      if (toolbar) {
+        console.log('[KTalk Speaker Detector] Found toolbar with selector:', sel);
+        break;
+      }
+    }
+
     const btn = document.createElement('button');
     btn.className = 'ktalk-transcript-btn';
     btn.innerHTML = '📝';
-    btn.title = 'Transcript';
+    btn.title = 'Transcript (click to open)';
     btn.onclick = toggleTranscriptPanel;
 
-    toolbar.appendChild(btn);
+    if (toolbar) {
+      toolbar.appendChild(btn);
+      console.log('[KTalk Speaker Detector] Button added to toolbar');
+    } else {
+      // Fallback: create floating button in corner
+      console.log('[KTalk Speaker Detector] No toolbar found, creating floating button');
+      btn.classList.add('floating');
+      document.body.appendChild(btn);
+    }
+
     return btn;
   }
 
@@ -414,6 +435,24 @@
         background: rgba(255,255,255,0.2);
       }
       .ktalk-transcript-btn.active {
+        background: #4ade80;
+      }
+      .ktalk-transcript-btn.floating {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 9999;
+        width: 56px;
+        height: 56px;
+        font-size: 24px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        background: #3b82f6;
+      }
+      .ktalk-transcript-btn.floating:hover {
+        background: #2563eb;
+        transform: scale(1.05);
+      }
+      .ktalk-transcript-btn.floating.active {
         background: #4ade80;
       }
 
@@ -740,5 +779,15 @@
   }
 
   console.log('[KTalk Speaker Detector] Script loaded, waiting for conference...');
+
+  // Also try to add the button early (before conference loads)
+  setTimeout(() => {
+    if (!document.querySelector('.ktalk-transcript-btn')) {
+      console.log('[KTalk Speaker Detector] Attempting early button creation...');
+      createTranscriptPanel();
+      addTranscriptTabButton();
+    }
+  }, 3000);
+
   waitForConference(subscribeToDominantSpeaker);
 })();
