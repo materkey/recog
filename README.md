@@ -58,7 +58,7 @@ source venv-gigaam/bin/activate
 python mp4_notes.py live --speaker-db speakers_ecapa.json
 
 # From system audio (BlackHole)
-python mp4_notes.py live --speaker-db speakers_ecapa.json --system-audio "BlackHole 2ch"
+python mp4_notes.py live --speaker-db speakers_ecapa.json --system-device "BlackHole 2ch"
 
 # List audio devices
 python mp4_notes.py live --list-devices
