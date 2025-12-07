@@ -2360,30 +2360,24 @@ def main():
             if args.json:
                 print(json.dumps(meeting, ensure_ascii=False, indent=2))
             else:
-                meta = meeting["meta"]
                 segments = meeting["segments"]
 
-                print(f"{'=' * 60}")
-                print(f" Meeting: {meta['id']}")
-                print(f" Source: {meta['source']}")
-                if meta.get("title"):
-                    print(f" Title: {meta['title']}")
-                if meta["ktalk"].get("live_url"):
-                    print(f" KTalk URL: {meta['ktalk']['live_url']}")
-                print(f" Created: {meta['created_at']}")
-                print(f" Duration: {meta['stats']['duration_seconds']}s")
-                print(f" Segments: {meta['stats']['segment_count']}")
-                print(f"{'=' * 60}")
-                print()
+                # Format like extension's "Copy all" button
+                def get_uncertain_suffix(seg):
+                    if not seg.get("uncertain"):
+                        return ""
+                    if seg.get("uncertain_reason") == "mics_off":
+                        return " (🔇?)"
+                    return " (?)"
 
+                lines = []
                 for seg in segments:
-                    prefix = ""
-                    if seg.get("uncertain"):
-                        prefix = "(?) "
-                    if seg.get("cont"):
-                        print(f"{'':>12}  {seg['text']}")
-                    else:
-                        print(f"[{seg['ts_display']}] {prefix}{seg['speaker']}: {seg['text']}")
+                    speaker = seg["speaker"] + get_uncertain_suffix(seg)
+                    time = seg.get("ts_display", "")
+                    text = seg["text"]
+                    lines.append(f"**{speaker}** *[{time}]*: {text}")
+
+                print("\n\n".join(lines))
         else:
             # Показать список всех митингов
             meetings = storage.list_meetings()
