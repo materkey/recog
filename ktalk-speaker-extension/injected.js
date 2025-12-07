@@ -129,7 +129,7 @@
   }
 
   function handleTranscript(data) {
-    const { speaker, text, timestamp, is_continuation } = data;
+    const { speaker, text, timestamp, is_continuation, is_local } = data;
 
     if (is_continuation && transcriptLines.length > 0) {
       // Append to last line
@@ -140,6 +140,7 @@
         speaker,
         text,
         timestamp,
+        is_local: is_local || false,  // true = микрофон (я), false = другие
         time: new Date().toLocaleTimeString('ru-RU', {
           hour: '2-digit', minute: '2-digit', second: '2-digit'
         })
@@ -161,7 +162,7 @@
     if (!container) return;
 
     container.innerHTML = transcriptLines.map(line =>
-      `<div class="ktalk-transcript-line">
+      `<div class="ktalk-transcript-line ${line.is_local ? 'local' : 'remote'}">
         <span class="ktalk-transcript-time">[${line.time}]</span>
         <span class="ktalk-transcript-speaker">${line.speaker}:</span>
         <span class="ktalk-transcript-text">${line.text}</span>
@@ -641,9 +642,27 @@
       }
 
       .ktalk-transcript-speaker {
-        color: #4ade80;
         font-weight: 600;
         margin-right: 6px;
+      }
+
+      /* Локальные реплики (я/микрофон) - синий */
+      .ktalk-transcript-line.local .ktalk-transcript-speaker {
+        color: #60a5fa;
+      }
+      .ktalk-transcript-line.local {
+        background: rgba(96, 165, 250, 0.1);
+        border-left: 2px solid #60a5fa;
+        padding-left: 6px;
+        margin-left: -6px;
+      }
+
+      /* Удалённые реплики (другие/системный звук) - зелёный */
+      .ktalk-transcript-line.remote .ktalk-transcript-speaker {
+        color: #4ade80;
+      }
+      .ktalk-transcript-line.remote {
+        background: rgba(74, 222, 128, 0.05);
       }
 
       .ktalk-transcript-text {
