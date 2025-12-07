@@ -34,31 +34,33 @@
     const styles = document.createElement('style');
     styles.id = 'ktalk-transcript-styles';
     styles.textContent = `
-      /* Transcript tab - match KTalk's PRIVATE button style exactly */
+      /* Transcript tab - exact match of KTalk's PRIVATE button */
       .ktalk-transcript-tab-wrapper.tl-tab {
         display: inline-block !important;
+        height: 32px;
       }
 
       .ktalk-transcript-tab.link {
-        display: inline-flex;
-        align-items: center;
-        padding: 0 8px;
-        height: 48px;
+        display: block;
+        height: 32px;
+        padding: 0;
+        margin: 0;
         cursor: pointer;
         position: relative;
-        color: rgba(255,255,255,0.6);
-        font-size: 11px;
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 13px;
         font-weight: 600;
+        font-family: inherit;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        line-height: 16px;
+        letter-spacing: normal;
         border: none;
         background: none;
-        font-family: inherit;
-        white-space: nowrap;
+        vertical-align: middle;
         transition: color 0.15s;
       }
       .ktalk-transcript-tab.link:hover {
-        color: rgba(255,255,255,0.9);
+        color: rgba(255, 255, 255, 0.9);
       }
       .ktalk-transcript-tab.link._active {
         color: white;
@@ -66,13 +68,15 @@
       .ktalk-transcript-tab .tab-content {
         display: flex;
         align-items: center;
+        height: 32px;
+        line-height: 16px;
         gap: 4px;
       }
       .ktalk-transcript-tab .underline {
         position: absolute;
         bottom: 0;
-        left: 8px;
-        right: 8px;
+        left: 6px;
+        right: 6px;
         height: 2px;
         background-color: rgb(0, 138, 255);
         opacity: 0;
