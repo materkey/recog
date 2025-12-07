@@ -32,6 +32,45 @@ source venv-pyannote/bin/activate
 pip install pyannote.audio soundfile speechbrain "huggingface_hub>=0.28.1,<0.30"
 ```
 
+## System Audio Setup (macOS)
+
+To capture system audio (e.g., from YouTube, Zoom, etc.), you need BlackHole and a Multi-Output Device.
+
+### 1. Install BlackHole
+
+```bash
+brew install blackhole-2ch
+```
+
+### 2. Create Multi-Output Device
+
+Open **Audio MIDI Setup** (Spotlight → "Audio MIDI Setup"):
+1. Click **"+"** → **Create Multi-Output Device**
+2. Check both:
+   - ☑️ MacBook Air Speakers (or your output device)
+   - ☑️ BlackHole 2ch
+
+### 3. Switch audio output
+
+**Option A: Via terminal (recommended)**
+```bash
+brew install switchaudio-osx
+SwitchAudioSource -s "Multi-Output Device"
+```
+
+**Option B: Via System Settings**
+1. System Settings → Sound → Output
+2. Select **Multi-Output Device**
+
+### 4. Verify setup
+
+```bash
+python mp4_notes.py live --list-devices
+# Should show: BlackHole 2ch (device 0 or similar)
+```
+
+Now system audio will be routed to both speakers and BlackHole for capture.
+
 ## Usage
 
 ### Process audio/video file
@@ -57,8 +96,8 @@ source venv-gigaam/bin/activate
 # From microphone
 python mp4_notes.py live --speaker-db speakers_ecapa.json
 
-# From system audio (BlackHole)
-python mp4_notes.py live --speaker-db speakers_ecapa.json --system-device "BlackHole 2ch"
+# From system audio (BlackHole) - use device ID from --list-devices
+python mp4_notes.py live --speaker-db speakers_ecapa.json --system-device 0
 
 # List audio devices
 python mp4_notes.py live --list-devices
