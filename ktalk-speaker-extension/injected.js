@@ -141,10 +141,41 @@
         color: rgba(255,255,255,0.9);
       }
 
+      .ktalk-transcript-toolbar {
+        display: flex;
+        justify-content: flex-end;
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        flex-shrink: 0;
+      }
+      .ktalk-transcript-copy-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        border: none;
+        border-radius: 4px;
+        background: rgba(255,255,255,0.1);
+        color: rgba(255,255,255,0.7);
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .ktalk-transcript-copy-btn:hover {
+        background: rgba(255,255,255,0.15);
+        color: white;
+      }
+      .ktalk-transcript-copy-btn.copied {
+        background: rgba(34, 197, 94, 0.2);
+        color: #22c55e;
+      }
+
       .ktalk-transcript-messages {
         flex: 1;
         overflow-y: auto;
         padding: 12px;
+        user-select: text;
+        -webkit-user-select: text;
       }
 
       .ktalk-msg {
@@ -346,6 +377,30 @@
     }
 
     updateTranscriptUI();
+  }
+
+  function copyAllTranscript() {
+    if (transcriptLines.length === 0) return;
+
+    const text = transcriptLines.map(line => {
+      const speaker = line.uncertain ? `${line.speaker} (?)` : line.speaker;
+      return `[${line.time}] ${speaker}: ${line.text}`;
+    }).join('\n');
+
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.querySelector('.ktalk-transcript-copy-btn');
+      const textSpan = btn?.querySelector('.ktalk-copy-text');
+      if (btn && textSpan) {
+        btn.classList.add('copied');
+        textSpan.textContent = 'Copied!';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          textSpan.textContent = 'Copy all';
+        }, 2000);
+      }
+    }).catch(err => {
+      console.log('[KTalk Transcript] Copy failed:', err);
+    });
   }
 
   function updateTranscriptUI() {
@@ -597,6 +652,12 @@
         <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
       </div>
+      <div class="ktalk-transcript-toolbar">
+        <button class="ktalk-transcript-copy-btn" title="Copy all transcript">
+          <span>📋</span>
+          <span class="ktalk-copy-text">Copy all</span>
+        </button>
+      </div>
       <div class="ktalk-transcript-messages">
         <div class="ktalk-transcript-empty">
           <div class="ktalk-transcript-empty-icon">📝</div>
@@ -610,6 +671,9 @@
         </div>
       </div>
     `;
+
+    // Add copy button handler
+    transcriptContentElement.querySelector('.ktalk-transcript-copy-btn').addEventListener('click', copyAllTranscript);
 
     contentArea.appendChild(transcriptContentElement);
     console.log('[KTalk Transcript] Content element created');
