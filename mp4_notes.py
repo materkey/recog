@@ -2244,6 +2244,22 @@ def main():
         help="Использовать ScreenCaptureKit для захвата системного звука (не нужен BlackHole, громкость работает)"
     )
 
+    # Команда: meetings (просмотр сохранённых митингов)
+    meetings_parser = subparsers.add_parser(
+        "meetings",
+        help="Просмотр сохранённых митингов"
+    )
+    meetings_parser.add_argument(
+        "meeting_id",
+        nargs="?",
+        help="ID митинга для просмотра (без аргумента - список всех)"
+    )
+    meetings_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Вывести в JSON формате"
+    )
+
     # Команда: enroll-speaker
     enroll_parser = subparsers.add_parser(
         "enroll-speaker",
@@ -2329,6 +2345,63 @@ def main():
             use_ktalk=args.ktalk,
             use_screencapture=args.screencapture
         )
+
+    elif args.command == "meetings":
+        from meeting_storage import MeetingStorage
+        storage = MeetingStorage()
+
+        if args.meeting_id:
+            # Показать конкретный митинг
+            meeting = storage.get_meeting(args.meeting_id)
+            if not meeting:
+                print(f"Meeting not found: {args.meeting_id}", file=sys.stderr)
+                sys.exit(1)
+
+            if args.json:
+                print(json.dumps(meeting, ensure_ascii=False, indent=2))
+            else:
+                meta = meeting["meta"]
+                segments = meeting["segments"]
+
+                print(f"{'=' * 60}")
+                print(f" Meeting: {meta['id']}")
+                print(f" Source: {meta['source']}")
+                if meta.get("title"):
+                    print(f" Title: {meta['title']}")
+                if meta["ktalk"].get("live_url"):
+                    print(f" KTalk URL: {meta['ktalk']['live_url']}")
+                print(f" Created: {meta['created_at']}")
+                print(f" Duration: {meta['stats']['duration_seconds']}s")
+                print(f" Segments: {meta['stats']['segment_count']}")
+                print(f"{'=' * 60}")
+                print()
+
+                for seg in segments:
+                    prefix = ""
+                    if seg.get("uncertain"):
+                        prefix = "(?) "
+                    if seg.get("cont"):
+                        print(f"{'':>12}  {seg['text']}")
+                    else:
+                        print(f"[{seg['ts_display']}] {prefix}{seg['speaker']}: {seg['text']}")
+        else:
+            # Показать список всех митингов
+            meetings = storage.list_meetings()
+
+            if args.json:
+                print(json.dumps(meetings, ensure_ascii=False, indent=2))
+            else:
+                if not meetings:
+                    print("No meetings found.")
+                else:
+                    print(f"{'ID':<35} {'Source':<8} {'Segments':>8}  {'Duration':>10}  Title")
+                    print("-" * 80)
+                    for m in meetings:
+                        duration = f"{m['duration_seconds']}s" if m['duration_seconds'] else "-"
+                        title = m.get('title') or "(untitled)"
+                        if len(title) > 25:
+                            title = title[:22] + "..."
+                        print(f"{m['id']:<35} {m['source']:<8} {m['segment_count']:>8}  {duration:>10}  {title}")
 
     elif args.command == "enroll-speaker":
         enroll_speaker_pipeline(
