@@ -1374,39 +1374,43 @@ def build_speaker_db_pipeline(
 # LIVE MODE (ADR-0010)
 # ============================================================================
 
-class LiveAudioCapture:
-    """Захват аудио с микрофона и/или системного звука (BlackHole)."""
+class SingleDeviceCapture:
+    """Захват аудио с одного устройства."""
 
-    def __init__(self, mic_device=None, system_device=None, sample_rate=16000):
+    def __init__(self, device, sample_rate=16000, name="device"):
         import sounddevice as sd
         self.sd = sd
         self.sample_rate = sample_rate
-        self.mic_device = mic_device
-        self.system_device = system_device
+        self.device = device
+        self.name = name
         self.buffer = []
         self.running = False
-
-    @staticmethod
-    def list_devices():
-        import sounddevice as sd
-        print("Доступные аудио устройства:")
-        print(sd.query_devices())
+        self.stream = None
+        self._lock = None
 
     def _callback(self, indata, frames, time, status):
         if status:
-            print(f"Audio status: {status}", file=sys.stderr)
+            print(f"Audio status ({self.name}): {status}", file=sys.stderr)
         self.buffer.append(indata.copy())
 
     def start(self):
-        device = self.system_device if self.system_device is not None else self.mic_device
+        import threading
+        self._lock = threading.Lock()
+
+        # Определяем количество каналов устройства
+        device_info = self.sd.query_devices(self.device)
+        max_channels = device_info.get('max_input_channels', 1)
+        channels = min(max_channels, 2)  # Используем 1 или 2 канала
+
         self.stream = self.sd.InputStream(
-            device=device,
-            channels=1,
+            device=self.device,
+            channels=channels,
             samplerate=self.sample_rate,
             callback=self._callback
         )
         self.stream.start()
         self.running = True
+        self._channels = channels
 
     def stop(self):
         if self.running:
@@ -1415,7 +1419,7 @@ class LiveAudioCapture:
             self.running = False
 
     def get_chunk(self, duration: float) -> Optional[np.ndarray]:
-        """Возвращает накопленный аудио чанк."""
+        """Возвращает накопленный аудио чанк (моно)."""
         samples_needed = int(duration * self.sample_rate)
         if not self.buffer:
             return None
@@ -1425,12 +1429,61 @@ class LiveAudioCapture:
             return None
 
         chunk = audio[:samples_needed]
-        # Минимальный overlap + дедупликация в коде
-        overlap_samples = int(0.15 * self.sample_rate)  # 0.15s - минимум
+        overlap_samples = int(0.5 * self.sample_rate)  # 0.5 сек overlap для лучшего распознавания на границах
         overlap_start = max(0, samples_needed - overlap_samples)
         self.buffer = [audio[overlap_start:]]
 
+        # Конвертируем стерео в моно если нужно
+        if chunk.ndim > 1 and chunk.shape[1] > 1:
+            chunk = np.mean(chunk, axis=1)
+
         return chunk.flatten()
+
+    @staticmethod
+    def list_devices():
+        import sounddevice as sd
+        print("Доступные аудио устройства:")
+        print(sd.query_devices())
+
+    @staticmethod
+    def find_builtin_mic():
+        """Находит встроенный микрофон MacBook."""
+        import sounddevice as sd
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            name = dev['name'].lower()
+            # Ищем встроенный микрофон MacBook
+            if 'macbook' in name and 'microphone' in name and dev['max_input_channels'] > 0:
+                return i
+        # Fallback: любое устройство с "built-in" или "internal"
+        for i, dev in enumerate(devices):
+            name = dev['name'].lower()
+            if ('built-in' in name or 'internal' in name) and dev['max_input_channels'] > 0:
+                return i
+        return None
+
+    @staticmethod
+    def find_blackhole():
+        """Находит BlackHole устройство для захвата системного звука."""
+        import sounddevice as sd
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            if 'blackhole' in dev['name'].lower() and dev['max_input_channels'] > 0:
+                return i
+        return None
+
+
+class LiveAudioCapture:
+    """Захват аудио с микрофона и/или системного звука (BlackHole)."""
+
+    def __init__(self, mic_device=None, system_device=None, sample_rate=16000):
+        self.sample_rate = sample_rate
+        self.mic_device = mic_device
+        self.system_device = system_device
+
+    @staticmethod
+    def list_devices():
+        SingleDeviceCapture.list_devices()
 
 
 class LiveTranscriber:
@@ -1441,22 +1494,53 @@ class LiveTranscriber:
         mic_device=None,
         system_device=None,
         speaker_db_path=None,
-        chunk_duration=1.5,  # Минимальная задержка
+        chunk_duration=3.0,  # Баланс между задержкой и качеством
         output_file=None,
-        no_diarization=False
+        no_diarization=False,
+        use_ktalk=False  # Использовать KTalk bridge вместо embedding-based diarization
     ):
-        self.capture = LiveAudioCapture(mic_device, system_device)
+        self.mic_device = mic_device
+        self.system_device = system_device
+        self.sample_rate = 16000
+
+        # Определяем режим: dual (оба), mic-only, system-only
+        self.dual_mode = (mic_device is not None and system_device is not None)
+
+        # Создаём capture устройства
+        self.mic_capture = None
+        self.system_capture = None
+
+        if self.dual_mode:
+            self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
+            self.system_capture = SingleDeviceCapture(system_device, self.sample_rate, "system")
+        elif system_device is not None:
+            self.system_capture = SingleDeviceCapture(system_device, self.sample_rate, "system")
+        else:
+            self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
+
         self.asr = ASRModule()
         self.speaker_db = SpeakerDatabase(speaker_db_path) if speaker_db_path else None
         self.chunk_duration = chunk_duration
         self.output_file = output_file
         self.no_diarization = no_diarization
+        self.use_ktalk = use_ktalk
         self.running = False
         self.session_speakers = {}  # embedding -> speaker_label
         self.speaker_counter = 0
         self.transcript_lines = []
         self._model_device = None
         self._model_dtype = None
+
+        # KTalk bridge для получения данных о спикерах
+        self._ktalk_bridge = None
+        self._ktalk_current_speaker = None
+
+        # Буфер аудио для двухпроходной транскрипции (KTalk mode)
+        self._audio_buffer = []  # [(timestamp, audio_chunk), ...]
+        self._audio_buffer_max_seconds = 60  # Максимум 60 сек в буфере
+        self._draft_segments = {}  # segment_id -> {'lines': [...], 'speaker': str, 'start_time': float, 'chunks': [...]}
+        self._current_segment_id = None
+        self._current_segment_start_time = None  # Python timestamp начала текущего сегмента
 
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Транскрибирует напрямую через tensor без temp файлов."""
@@ -1544,6 +1628,106 @@ class LiveTranscriber:
         self.session_speakers[embedding.astype(np.float32).tobytes()] = label
         return label
 
+    def _ktalk_speaker_callback(self, speaker_name: Optional[str], is_speaking: bool):
+        """Callback для обновления текущего спикера из KTalk."""
+        self._ktalk_current_speaker = speaker_name if is_speaking else None
+
+    def _get_ktalk_speaker(self) -> Optional[str]:
+        """Возвращает текущего спикера из KTalk bridge (только реальные данные от extension)."""
+        if self._ktalk_bridge:
+            # get_current_speaker уже включает "память" о последнем спикере (3 сек)
+            return self._ktalk_bridge.get_current_speaker()
+        return self._ktalk_current_speaker
+
+    def _add_to_audio_buffer(self, timestamp: float, audio_chunk: np.ndarray):
+        """Добавляет аудио в буфер для последующей перетранскрипции."""
+        self._audio_buffer.append((timestamp, audio_chunk.copy()))
+
+        # Удаляем старые данные
+        cutoff_time = timestamp - self._audio_buffer_max_seconds
+        while self._audio_buffer and self._audio_buffer[0][0] < cutoff_time:
+            self._audio_buffer.pop(0)
+
+    def _get_audio_for_segment(self, start_time: float, end_time: float) -> Optional[np.ndarray]:
+        """Извлекает аудио для заданного временного диапазона."""
+        chunks = []
+        for ts, chunk in self._audio_buffer:
+            chunk_end = ts + len(chunk) / self.sample_rate
+            # Проверяем пересечение с запрошенным диапазоном
+            if chunk_end >= start_time and ts <= end_time:
+                chunks.append(chunk)
+
+        if not chunks:
+            return None
+
+        return np.concatenate(chunks)
+
+    def _handle_segment_complete(self, segment, speaker_width: int):
+        """Обрабатывает завершённый сегмент - перетранскрибирует и заменяет черновики."""
+        # Ищем сегмент по speaker_id с суффиксом _active
+        matching_segment_id = f"{segment.speaker_id}_active"
+
+        if matching_segment_id not in self._draft_segments:
+            # Это нормально если сегмент уже был обработан (например, по MAX_SEGMENT_DURATION)
+            # Не выводим ошибку для коротких сегментов
+            if segment.duration_ms > 500:
+                pass  # Тихо пропускаем - возможно дубликат
+            return
+
+        draft_info = self._draft_segments[matching_segment_id]
+        audio_chunks = draft_info.get('chunks', [])
+
+        if not audio_chunks:
+            print(f"\n[SEGMENT] No audio chunks for {segment.speaker_name}", file=sys.stderr)
+            del self._draft_segments[matching_segment_id]
+            return
+
+        # Склеиваем все чанки аудио
+        audio = np.concatenate(audio_chunks)
+        if len(audio) < 1000:
+            del self._draft_segments[matching_segment_id]
+            return
+
+        # Перетранскрибируем весь сегмент
+        final_text = self._transcribe_direct(audio)
+        if not final_text:
+            del self._draft_segments[matching_segment_id]
+            return
+
+        # Форматируем время (используем Python timestamp из draft_info)
+        from datetime import datetime
+        import time as time_module
+        start_time = draft_info.get('start_time', time_module.time())
+        start_dt = datetime.fromtimestamp(start_time)
+        timestamp = start_dt.strftime("%H:%M:%S")
+
+        # Формируем финальную строку
+        speaker = segment.speaker_name
+        duration_sec = len(audio) / self.sample_rate
+
+        # Находим черновые строки
+        draft_lines = []
+        line_indices = draft_info.get('lines', [])
+        for idx in line_indices:
+            if idx < len(self.transcript_lines) and self.transcript_lines[idx]:
+                draft_lines.append(self.transcript_lines[idx])
+
+        del self._draft_segments[matching_segment_id]
+
+        # Выводим финальную транскрипцию
+        sys.stdout.write(f"\n")
+        sys.stdout.write(f"{'─' * 60}\n")
+        sys.stdout.write(f"[FINAL {timestamp}] {speaker:{speaker_width}s} ({duration_sec:.1f}s):\n")
+        sys.stdout.write(f"  {final_text}\n")
+        if draft_lines:
+            sys.stdout.write(f"  (черновик: {len(draft_lines)} строк)\n")
+        sys.stdout.write(f"{'─' * 60}\n")
+        sys.stdout.flush()
+
+        # Обновляем transcript_lines
+        final_line = f"[{timestamp}] {speaker:{speaker_width}s}: {final_text}"
+        self.transcript_lines.append(final_line)
+
     def run(self):
         """Основной цикл live транскрипции."""
         from datetime import datetime
@@ -1552,139 +1736,232 @@ class LiveTranscriber:
 
         print("=" * 60)
         print(" LIVE TRANSCRIPTION")
-        if self.capture.system_device is not None:
-            mic_display = self.capture.mic_device if self.capture.mic_device is not None else 'none'
+        if self.dual_mode:
+            print(f" Mode: DUAL (Mic: {self.mic_device} + System: {self.system_device})")
+        elif self.system_device is not None:
+            print(f" Mic: none | System: {self.system_device}")
         else:
-            mic_display = self.capture.mic_device if self.capture.mic_device is not None else 'default'
-        sys_display = self.capture.system_device if self.capture.system_device is not None else 'none'
-        print(f" Mic: {mic_display} | System: {sys_display}")
+            mic_display = self.mic_device if self.mic_device is not None else 'default'
+            print(f" Mic: {mic_display} | System: none")
+
+        if self.use_ktalk:
+            print(" Speaker detection: KTalk (via Chrome extension)")
+        elif self.no_diarization:
+            print(" Speaker detection: disabled")
+        else:
+            print(" Speaker detection: embedding-based")
+
         print("=" * 60)
         print()
         print("Press Ctrl+C to stop")
         print("-" * 60)
         print()
 
+        # Initialize KTalk bridge if needed
+        if self.use_ktalk:
+            try:
+                from ktalk_bridge import KTalkBridge
+                self._ktalk_bridge = KTalkBridge()
+                self._ktalk_bridge.set_speaker_callback(self._ktalk_speaker_callback)
+                self._ktalk_bridge.start()
+                print("KTalk bridge started, waiting for Chrome extension...")
+                time.sleep(1)
+            except ImportError:
+                print("Warning: ktalk_bridge module not found, falling back to embedding-based", file=sys.stderr)
+                self.use_ktalk = False
+            except Exception as e:
+                print(f"Warning: KTalk bridge error: {e}, falling back to embedding-based", file=sys.stderr)
+                self.use_ktalk = False
+
         self.asr.load_model(quiet=True)
-        self.capture.start()
+
+        # Запускаем capture устройства
+        if self.mic_capture:
+            self.mic_capture.start()
+        if self.system_capture:
+            self.system_capture.start()
+
         self.running = True
         self._is_tty = sys.stdout.isatty()
 
         # Executor для фоновой диаризации
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
-        speaker_width = 16
-        pending_update = None  # (line_index, timestamp, text, future)
-        last_words = []  # Последние слова для дедупликации
-        last_speaker = None  # Для группировки реплик
-        last_speech_time = 0  # Время последней речи
-        speaker_turn_gap = 3.0  # Секунд тишины для нового "хода"
+        speaker_width = 24  # Для полных имён (имя + фамилия)
+        mic_speaker_name = "Вячеслав Ковалев"  # Имя для микрофона (без диаризации)
+
+        # Отдельные состояния для каждого источника
+        class SourceState:
+            def __init__(self):
+                self.pending_update = None
+                self.last_words = []
+                self.last_speaker = None
+                self.last_speech_time = 0
+
+        mic_state = SourceState()
+        sys_state = SourceState()
+
+        speaker_turn_gap = 3.0
 
         def normalize_word(w: str) -> str:
-            """Нормализует слово для сравнения."""
             return ''.join(c.lower() for c in w if c.isalnum())
 
         def deduplicate(text: str, prev_words: list) -> str:
-            """Убирает повторяющиеся слова в начале текста."""
             if not prev_words or not text:
                 return text
             words = text.split()
             if not words:
                 return text
-            # Нормализуем для сравнения
             norm_words = [normalize_word(w) for w in words]
             norm_prev = [normalize_word(w) for w in prev_words]
-            # Ищем overlap: сколько первых слов нового текста совпадают с последними словами предыдущего
-            max_overlap = min(len(words), len(prev_words), 6)  # Максимум 6 слов overlap
+            max_overlap = min(len(words), len(prev_words), 6)
             for overlap_len in range(max_overlap, 0, -1):
                 if norm_words[:overlap_len] == norm_prev[-overlap_len:]:
                     result = ' '.join(words[overlap_len:])
                     return result if result.strip() else None
             return text
 
+        def process_pending(state, is_mic=False):
+            """Обрабатывает pending update для источника."""
+            if state.pending_update is None:
+                return
+
+            line_idx, ts, txt, future, chunk_time = state.pending_update
+            if not future.done():
+                return
+
+            try:
+                speaker = future.result(timeout=0)
+            except:
+                speaker = "???"
+
+            time_gap = chunk_time - state.last_speech_time
+            is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap)
+
+            if is_continuation:
+                indent = " " * (10 + 1 + speaker_width + 2)
+                final_line = f"{indent}{txt}"
+            else:
+                display_speaker = f"{speaker:{speaker_width}s}"
+                state.last_speaker = speaker
+                final_line = f"[{ts}] {display_speaker}: {txt}"
+
+            state.last_speech_time = chunk_time
+
+            if line_idx == len(self.transcript_lines) - 1:
+                sys.stdout.write(f"\r{final_line}")
+                sys.stdout.flush()
+                self.transcript_lines[line_idx] = final_line
+            state.pending_update = None
+
+        def process_chunk(capture, state, is_mic=False):
+            """Обрабатывает чанк из источника."""
+            chunk = capture.get_chunk(self.chunk_duration)
+            if chunk is None or len(chunk) < 1000:
+                return
+
+            text = self._transcribe_direct(chunk)
+            if not text:
+                return
+
+            text = deduplicate(text, state.last_words)
+            if not text:
+                return
+            state.last_words = text.split()[-5:]
+
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            chunk_time = time.time()
+
+            if self.transcript_lines:
+                sys.stdout.write("\n")
+
+            # Микрофон: без диаризации, фиксированное имя
+            if is_mic:
+                time_gap = chunk_time - state.last_speech_time
+                is_continuation = (state.last_speaker == mic_speaker_name and time_gap < speaker_turn_gap)
+
+                if is_continuation:
+                    indent = " " * (10 + 1 + speaker_width + 2)
+                    line = f"{indent}{text}"
+                else:
+                    state.last_speaker = mic_speaker_name
+                    line = f"[{timestamp}] {mic_speaker_name:{speaker_width}s}: {text}"
+
+                state.last_speech_time = chunk_time
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                self.transcript_lines.append(line)
+
+            # Системный звук: диаризация
+            elif self.use_ktalk:
+                # KTalk mode: используем данные от Chrome extension
+                ktalk_speaker = self._get_ktalk_speaker()
+
+                # Используем спикера от extension, или последнего известного из транскрипции
+                speaker = ktalk_speaker or state.last_speaker
+                if not speaker:
+                    # Совсем никого не знаем - пропускаем (логируем потерянный текст)
+                    print(f"[KTalk] No speaker yet, skipped: {text[:50]}...", file=sys.stderr)
+                    return
+
+                time_gap = chunk_time - state.last_speech_time
+                is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap)
+
+                if is_continuation:
+                    indent = " " * (10 + 1 + speaker_width + 2)
+                    line = f"{indent}{text}"
+                else:
+                    state.last_speaker = speaker
+                    line = f"[{timestamp}] {speaker:{speaker_width}s}: {text}"
+
+                state.last_speech_time = chunk_time
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                self.transcript_lines.append(line)
+
+            elif self.no_diarization:
+                line = f"[{timestamp}] {'speaker':{speaker_width}s}: {text}"
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                self.transcript_lines.append(line)
+            else:
+                indent = " " * (10 + 1 + speaker_width + 2)
+                draft = f"{indent}{text}"
+                sys.stdout.write(draft)
+                sys.stdout.flush()
+                self.transcript_lines.append(draft)
+
+                chunk_copy = chunk.copy()
+
+                def get_speaker(c):
+                    emb = self._get_embedding(c)
+                    return self._identify_speaker(emb)
+
+                future = executor.submit(get_speaker, chunk_copy)
+                state.pending_update = (len(self.transcript_lines) - 1, timestamp, text, future, chunk_time)
+
         try:
             while self.running:
-                # Быстрый polling вместо длинного sleep
                 time.sleep(0.1)
 
-                # Проверяем готовность pending speaker ID
-                if pending_update is not None:
-                    line_idx, ts, txt, future, chunk_time = pending_update
-                    if future.done():
-                        try:
-                            speaker = future.result(timeout=0)
-                        except:
-                            speaker = "???"
+                # Обрабатываем pending updates
+                if self.mic_capture:
+                    process_pending(mic_state, is_mic=True)
+                if self.system_capture:
+                    process_pending(sys_state, is_mic=False)
 
-                        # Группировка: показываем имя только если спикер сменился или была пауза
-                        time_gap = chunk_time - last_speech_time
-                        is_continuation = (speaker == last_speaker and time_gap < speaker_turn_gap)
-
-                        if is_continuation:
-                            # Продолжение: без timestamp, имени и двоеточия
-                            indent = " " * (10 + 1 + speaker_width + 2)  # [HH:MM:SS] + пробел + имя + ": "
-                            final_line = f"{indent}{txt}"
-                        else:
-                            display_speaker = f"{speaker:{speaker_width}s}"
-                            last_speaker = speaker
-                            final_line = f"[{ts}] {display_speaker}: {txt}"
-
-                        last_speech_time = chunk_time
-
-                        # Обновляем строку если она последняя
-                        if line_idx == len(self.transcript_lines) - 1:
-                            sys.stdout.write(f"\r{final_line}")
-                            sys.stdout.flush()
-                            self.transcript_lines[line_idx] = final_line
-                        pending_update = None
-
-                chunk = self.capture.get_chunk(self.chunk_duration)
-                if chunk is None or len(chunk) < 1000:
-                    continue
-
-                # ASR — сразу
-                text = self._transcribe_direct(chunk)
-                if not text:
-                    continue
-
-                # Дедупликация overlap
-                text = deduplicate(text, last_words)
-                if not text:
-                    continue
-                last_words = text.split()[-5:]  # Сохраняем последние 5 слов
-
-                timestamp = datetime.now().strftime("%H:%M:%S")
-
-                # Newline перед новой строкой (кроме первой)
-                if self.transcript_lines:
-                    sys.stdout.write("\n")
-
-                if self.no_diarization:
-                    line = f"[{timestamp}] {'speaker':{speaker_width}s}: {text}"
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
-                    self.transcript_lines.append(line)
-                else:
-                    # Черновик сразу — НЕ ЖДЁМ speaker ID
-                    # Отступ как у продолжения, потом перезапишем если новый спикер
-                    indent = " " * (10 + 1 + speaker_width + 2)  # [HH:MM:SS] + пробел + имя + ": "
-                    draft = f"{indent}{text}"
-                    sys.stdout.write(draft)
-                    sys.stdout.flush()
-                    self.transcript_lines.append(draft)
-
-                    # Speaker ID в фоне
-                    chunk_copy = chunk.copy()
-                    chunk_time = time.time()
-
-                    def get_speaker(c):
-                        emb = self._get_embedding(c)
-                        return self._identify_speaker(emb)
-
-                    future = executor.submit(get_speaker, chunk_copy)
-                    pending_update = (len(self.transcript_lines) - 1, timestamp, text, future, chunk_time)
+                # Обрабатываем новые чанки
+                if self.mic_capture:
+                    process_chunk(self.mic_capture, mic_state, is_mic=True)
+                if self.system_capture:
+                    process_chunk(self.system_capture, sys_state, is_mic=False)
 
         except KeyboardInterrupt:
-            pass  # Обработка в finally
+            pass
+        except Exception as e:
+            print(f"\n[FATAL ERROR] {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
 
         finally:
             print("\n" + "-" * 60)
@@ -1692,14 +1969,21 @@ class LiveTranscriber:
 
             self.running = False
             executor.shutdown(wait=False, cancel_futures=True)
-            self.capture.stop()
+
+            if self.mic_capture:
+                self.mic_capture.stop()
+            if self.system_capture:
+                self.system_capture.stop()
+
+            # Stop KTalk bridge
+            if self._ktalk_bridge:
+                self._ktalk_bridge.stop()
 
             if self.output_file and self.transcript_lines:
                 with open(self.output_file, 'w', encoding='utf-8') as f:
                     f.write("\n".join(self.transcript_lines))
                 print(f"Транскрипт сохранён в {self.output_file}")
 
-            # Принудительный выход чтобы не ждать фоновые потоки
             import os
             os._exit(0)
 
@@ -1711,12 +1995,32 @@ def live_pipeline(
     chunk_duration=5.0,
     output_file=None,
     no_diarization=False,
-    list_devices=False
+    list_devices=False,
+    use_ktalk=False
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
         LiveAudioCapture.list_devices()
         return
+
+    # Автоопределение устройств
+    if mic_device == "auto":
+        mic_device = SingleDeviceCapture.find_builtin_mic()
+        if mic_device is not None:
+            import sounddevice as sd
+            name = sd.query_devices(mic_device)['name']
+            print(f"Auto-detected mic: {name} (device {mic_device})", file=sys.stderr)
+        else:
+            print("Warning: Could not find built-in microphone", file=sys.stderr)
+
+    if system_device == "auto":
+        system_device = SingleDeviceCapture.find_blackhole()
+        if system_device is not None:
+            import sounddevice as sd
+            name = sd.query_devices(system_device)['name']
+            print(f"Auto-detected system audio: {name} (device {system_device})", file=sys.stderr)
+        else:
+            print("Warning: Could not find BlackHole device", file=sys.stderr)
 
     transcriber = LiveTranscriber(
         mic_device=mic_device,
@@ -1724,7 +2028,8 @@ def live_pipeline(
         speaker_db_path=speaker_db_path,
         chunk_duration=chunk_duration,
         output_file=output_file,
-        no_diarization=no_diarization
+        no_diarization=no_diarization,
+        use_ktalk=use_ktalk
     )
     transcriber.run()
 
@@ -1804,11 +2109,12 @@ def main():
     )
     live_parser.add_argument(
         "--mic-device",
-        help="ID или имя устройства микрофона"
+        default="auto",
+        help="ID устройства микрофона или 'auto' для встроенного MacBook (по умолчанию: auto)"
     )
     live_parser.add_argument(
         "--system-device",
-        help="ID или имя устройства системного звука (BlackHole)"
+        help="ID устройства системного звука или 'auto' для BlackHole"
     )
     live_parser.add_argument(
         "--chunk-duration",
@@ -1833,6 +2139,11 @@ def main():
         "--list-devices",
         action="store_true",
         help="Показать доступные аудио устройства"
+    )
+    live_parser.add_argument(
+        "--ktalk",
+        action="store_true",
+        help="Использовать KTalk Chrome extension для определения спикеров (вместо embedding-based)"
     )
 
     # Команда: enroll-speaker
@@ -1916,7 +2227,8 @@ def main():
             chunk_duration=args.chunk_duration,
             output_file=args.output,
             no_diarization=args.no_diarization,
-            list_devices=args.list_devices
+            list_devices=args.list_devices,
+            use_ktalk=args.ktalk
         )
 
     elif args.command == "enroll-speaker":
