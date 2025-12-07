@@ -225,13 +225,22 @@
         color: #4ade80;
       }
 
-      /* Uncertain messages - yellow */
+      /* Uncertain messages - yellow (local speaker echo) */
       .ktalk-msg.uncertain {
         background: rgba(250, 204, 21, 0.08);
         border-left: 3px dashed #facc15;
       }
       .ktalk-msg.uncertain .ktalk-msg-speaker {
         color: #facc15;
+      }
+
+      /* Uncertain messages - orange (all mics off) */
+      .ktalk-msg.uncertain.mics-off {
+        background: rgba(251, 146, 60, 0.08);
+        border-left: 3px dashed #fb923c;
+      }
+      .ktalk-msg.uncertain.mics-off .ktalk-msg-speaker {
+        color: #fb923c;
       }
 
       .ktalk-transcript-empty {
@@ -355,7 +364,7 @@
   }
 
   function handleTranscript(data) {
-    const { speaker, text, timestamp, is_continuation, is_local, uncertain } = data;
+    const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason } = data;
 
     if (is_continuation && transcriptLines.length > 0) {
       transcriptLines[transcriptLines.length - 1].text += ' ' + text;
@@ -366,6 +375,7 @@
         timestamp,
         is_local: is_local || false,
         uncertain: uncertain || false,
+        uncertain_reason: uncertain_reason || "",  // "local" or "mics_off"
         time: new Date().toLocaleTimeString('ru-RU', {
           hour: '2-digit', minute: '2-digit', second: '2-digit'
         })
@@ -379,11 +389,17 @@
     updateTranscriptUI();
   }
 
+  function getUncertainSuffix(line) {
+    if (!line.uncertain) return "";
+    if (line.uncertain_reason === "mics_off") return " (🔇?)";
+    return " (?)";  // "local" or unknown
+  }
+
   function copyAllTranscript() {
     if (transcriptLines.length === 0) return;
 
     const text = transcriptLines.map(line => {
-      const speaker = line.uncertain ? `${line.speaker} (?)` : line.speaker;
+      const speaker = line.speaker + getUncertainSuffix(line);
       return `**${speaker}** *[${line.time}]*: ${line.text}`;
     }).join('\n\n');
 
@@ -427,10 +443,11 @@
       const classes = [
         'ktalk-msg',
         line.is_local ? 'local' : 'remote',
-        line.uncertain ? 'uncertain' : ''
+        line.uncertain ? 'uncertain' : '',
+        line.uncertain_reason === 'mics_off' ? 'mics-off' : ''
       ].filter(Boolean).join(' ');
 
-      const speakerDisplay = line.uncertain ? `${line.speaker} (?)` : line.speaker;
+      const speakerDisplay = line.speaker + getUncertainSuffix(line);
 
       return `<div class="${classes}">
         <div class="ktalk-msg-header">
