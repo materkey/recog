@@ -1905,9 +1905,9 @@ class LiveTranscriber:
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
 
-                # Отправляем транскрипт микрофона в Chrome extension
+                # Отправляем транскрипт микрофона в Chrome extension (is_local=True)
                 if self._ktalk_bridge:
-                    self._ktalk_bridge.send_transcript(mic_speaker_name, text, timestamp, is_continuation)
+                    self._ktalk_bridge.send_transcript(mic_speaker_name, text, timestamp, is_continuation, is_local=True)
 
             # Системный звук: диаризация
             elif self.use_ktalk:
