@@ -13,6 +13,10 @@
   let currentSpeaker = null;
   let speakingStartTime = null;
 
+  // Transcript storage
+  let transcriptLines = [];
+  const MAX_TRANSCRIPT_LINES = 50;
+
   // WebSocket connection to recog ktalk_bridge
   const WS_URL = 'ws://localhost:8765';
   let wsConnection = null;
@@ -59,6 +63,17 @@
       wsConnection.onerror = (err) => {
         console.log('[KTalk Speaker Detector] WebSocket error (recog server may not be running)');
         wsConnected = false;
+      };
+
+      wsConnection.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'transcript') {
+            handleTranscript(data);
+          }
+        } catch (e) {
+          console.log('[KTalk Speaker Detector] Error parsing message:', e);
+        }
       };
 
     } catch (e) {
@@ -111,6 +126,50 @@
     if (indicator) {
       indicator.classList.toggle('connected', connected);
     }
+  }
+
+  function handleTranscript(data) {
+    const { speaker, text, timestamp, is_continuation } = data;
+
+    if (is_continuation && transcriptLines.length > 0) {
+      // Append to last line
+      transcriptLines[transcriptLines.length - 1].text += ' ' + text;
+    } else {
+      // New line
+      transcriptLines.push({
+        speaker,
+        text,
+        timestamp,
+        time: new Date().toLocaleTimeString('ru-RU', {
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        })
+      });
+
+      // Keep max lines
+      if (transcriptLines.length > MAX_TRANSCRIPT_LINES) {
+        transcriptLines.shift();
+      }
+    }
+
+    updateTranscriptUI();
+  }
+
+  function updateTranscriptUI() {
+    if (!overlayElement) return;
+
+    const container = overlayElement.querySelector('.ktalk-transcript-content');
+    if (!container) return;
+
+    container.innerHTML = transcriptLines.map(line =>
+      `<div class="ktalk-transcript-line">
+        <span class="ktalk-transcript-time">[${line.time}]</span>
+        <span class="ktalk-transcript-speaker">${line.speaker}:</span>
+        <span class="ktalk-transcript-text">${line.text}</span>
+      </div>`
+    ).join('');
+
+    // Auto-scroll to bottom
+    container.scrollTop = container.scrollHeight;
   }
 
   // Connect to WebSocket on load
@@ -320,6 +379,15 @@
         </div>
         <div class="ktalk-speaker-name">-</div>
         <div class="ktalk-speaker-duration"></div>
+
+        <div class="ktalk-transcript-section">
+          <div class="ktalk-transcript-header">
+            <span class="ktalk-transcript-title">📝 Transcript</span>
+            <button class="ktalk-transcript-toggle">▼</button>
+          </div>
+          <div class="ktalk-transcript-content"></div>
+        </div>
+
         <div class="ktalk-speaker-history">
           <div class="ktalk-history-title">Recent speakers:</div>
           <ul class="ktalk-history-list"></ul>
@@ -502,6 +570,91 @@
         font-size: 11px;
         opacity: 0.5;
       }
+
+      /* Transcript section */
+      .ktalk-transcript-section {
+        border-top: 1px solid rgba(255,255,255,0.1);
+        margin-top: 12px;
+        padding-top: 12px;
+      }
+
+      .ktalk-transcript-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+
+      .ktalk-transcript-title {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        opacity: 0.6;
+      }
+
+      .ktalk-transcript-toggle {
+        background: none;
+        border: none;
+        color: white;
+        opacity: 0.5;
+        cursor: pointer;
+        font-size: 10px;
+        padding: 2px 6px;
+      }
+
+      .ktalk-transcript-toggle:hover { opacity: 1; }
+
+      .ktalk-transcript-content {
+        max-height: 200px;
+        overflow-y: auto;
+        font-size: 12px;
+        line-height: 1.5;
+        background: rgba(0,0,0,0.3);
+        border-radius: 6px;
+        padding: 8px;
+      }
+
+      .ktalk-transcript-section.collapsed .ktalk-transcript-content {
+        display: none;
+      }
+
+      .ktalk-transcript-section.collapsed .ktalk-transcript-toggle {
+        transform: rotate(-90deg);
+      }
+
+      .ktalk-transcript-line {
+        margin-bottom: 6px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+      }
+
+      .ktalk-transcript-line:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: none;
+      }
+
+      .ktalk-transcript-time {
+        color: #888;
+        font-size: 10px;
+        margin-right: 6px;
+      }
+
+      .ktalk-transcript-speaker {
+        color: #4ade80;
+        font-weight: 600;
+        margin-right: 6px;
+      }
+
+      .ktalk-transcript-text {
+        color: #e5e5e5;
+      }
+
+      .ktalk-transcript-content:empty::before {
+        content: 'Waiting for transcript...';
+        color: #666;
+        font-style: italic;
+      }
     `;
 
     document.head.appendChild(styles);
@@ -514,6 +667,15 @@
     overlayElement.querySelector('.ktalk-speaker-minimize').onclick = () => {
       overlayElement.classList.toggle('minimized');
     };
+
+    // Toggle transcript section
+    const transcriptToggle = overlayElement.querySelector('.ktalk-transcript-toggle');
+    if (transcriptToggle) {
+      transcriptToggle.onclick = () => {
+        const section = overlayElement.querySelector('.ktalk-transcript-section');
+        section.classList.toggle('collapsed');
+      };
+    }
 
     makeDraggable(overlayElement);
     return overlayElement;
