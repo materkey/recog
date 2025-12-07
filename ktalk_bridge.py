@@ -167,6 +167,27 @@ class KTalkBridge:
         with self._lock:
             return self._speaker_history.copy()
 
+    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False):
+        """Отправляет транскрипт всем подключённым клиентам."""
+        message = json.dumps({
+            "type": "transcript",
+            "speaker": speaker,
+            "text": text,
+            "timestamp": timestamp,
+            "is_continuation": is_continuation
+        })
+
+        # Отправляем асинхронно через event loop
+        if self._loop and self._connected_clients:
+            for client in list(self._connected_clients):
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        client.send(message),
+                        self._loop
+                    )
+                except Exception:
+                    pass  # Клиент может отключиться
+
     async def _handle_client(self, websocket):
         """Обрабатывает подключение клиента (Chrome extension)."""
         self._connected_clients.add(websocket)

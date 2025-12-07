@@ -1932,6 +1932,10 @@ class LiveTranscriber:
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
 
+                # Отправляем транскрипт в Chrome extension
+                if self._ktalk_bridge:
+                    self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation)
+
             elif self.no_diarization:
                 line = f"[{timestamp}] {'speaker':{speaker_width}s}: {text}"
                 sys.stdout.write(line)
