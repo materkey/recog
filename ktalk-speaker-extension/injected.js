@@ -180,6 +180,7 @@
         padding: 12px;
         user-select: text;
         -webkit-user-select: text;
+        background: rgba(0, 0, 0, 0.15);
       }
 
       .ktalk-msg {
