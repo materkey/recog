@@ -1895,9 +1895,18 @@ def main():
         )
 
     elif args.command == "live":
+        # Convert device ID to int if it's a number
+        def parse_device(dev):
+            if dev is None:
+                return None
+            try:
+                return int(dev)
+            except ValueError:
+                return dev
+
         live_pipeline(
-            mic_device=args.mic_device,
-            system_device=args.system_device,
+            mic_device=parse_device(args.mic_device),
+            system_device=parse_device(args.system_device),
             speaker_db_path=args.speaker_db,
             chunk_duration=args.chunk_duration,
             output_file=args.output,
