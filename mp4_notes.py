@@ -1942,16 +1942,17 @@ class LiveTranscriber:
                     all_mics_muted = self._ktalk_bridge.are_all_mics_muted()
 
                     # Определяем неопределённость и её причину
+                    # Приоритет: all_mics_muted > is_local (если все микрофоны выключены, это важнее)
                     uncertain = False
                     uncertain_reason = ""
-                    if is_local:
-                        # Системный звук помечен как локальный - может быть эхо
-                        uncertain = True
-                        uncertain_reason = "local"
-                    elif all_mics_muted:
+                    if all_mics_muted:
                         # Все микрофоны выключены - непонятно кто говорит
                         uncertain = True
                         uncertain_reason = "mics_off"
+                    elif is_local:
+                        # Системный звук помечен как локальный - может быть эхо
+                        uncertain = True
+                        uncertain_reason = "local"
 
                     self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation, is_local=is_local, uncertain=uncertain, uncertain_reason=uncertain_reason)
 
