@@ -1801,7 +1801,7 @@ class LiveTranscriber:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         speaker_width = 24  # Для полных имён (имя + фамилия)
-        mic_speaker_name = "Vyacheslav Kovalev"  # Имя для микрофона (без диаризации)
+        mic_speaker_name = "Vyacheslav K"  # Имя для микрофона (без диаризации)
 
         # Отдельные состояния для каждого источника
         class SourceState:
