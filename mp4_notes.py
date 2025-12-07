@@ -1939,7 +1939,9 @@ class LiveTranscriber:
                 # Отправляем транскрипт в Chrome extension (is_local из данных KTalk)
                 if self._ktalk_bridge:
                     is_local = self._ktalk_bridge.is_current_speaker_local()
-                    self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation, is_local=is_local)
+                    # Если системный звук помечен как локальный - это под вопросом (может быть эхо)
+                    uncertain = is_local  # системный звук + локальный спикер = неопределённость
+                    self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation, is_local=is_local, uncertain=uncertain)
 
             elif self.no_diarization:
                 line = f"[{timestamp}] {'speaker':{speaker_width}s}: {text}"
