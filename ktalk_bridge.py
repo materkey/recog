@@ -72,9 +72,11 @@ class KTalkBridge:
         self.port = port
         self._current_speaker: Optional[str] = None
         self._current_speaker_id: Optional[str] = None
+        self._current_is_local: bool = False  # Текущий спикер - локальный?
         self._is_speaking: bool = False
         self._last_speaker: Optional[str] = None  # Последний говоривший
         self._last_speaker_time: float = 0  # Когда последний раз кто-то говорил
+        self._last_is_local: bool = False  # Последний спикер был локальным?
         self._participants: Dict[str, Participant] = {}
         self._speaker_history: List[SpeakerEvent] = []
         self._lock = threading.Lock()
@@ -156,6 +158,20 @@ class KTalkBridge:
         """Возвращает True если кто-то говорит."""
         with self._lock:
             return self._is_speaking
+
+    def is_current_speaker_local(self) -> bool:
+        """Возвращает True если текущий спикер - локальный (я)."""
+        with self._lock:
+            if self._is_speaking:
+                return self._current_is_local
+
+            # Если никто не говорит, проверяем "память"
+            if self._last_speaker:
+                elapsed = time.time() - self._last_speaker_time
+                if elapsed < self.SPEAKER_MEMORY_SECONDS:
+                    return self._last_is_local
+
+            return False
 
     def get_participants(self) -> Dict[str, Participant]:
         """Возвращает словарь участников."""
@@ -267,11 +283,13 @@ class KTalkBridge:
 
                     self._current_speaker = new_speaker_name
                     self._current_speaker_id = new_speaker_id
+                    self._current_is_local = new_is_local
                     self._is_speaking = True
 
                     # Запоминаем последнего спикера
                     self._last_speaker = self._current_speaker
                     self._last_speaker_time = time.time()
+                    self._last_is_local = new_is_local
 
                     # Добавляем в историю
                     event = SpeakerEvent(
