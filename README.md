@@ -99,6 +99,10 @@ python mp4_notes.py live --speaker-db speakers_ecapa.json
 # From system audio (BlackHole) - use device ID from --list-devices
 python mp4_notes.py live --speaker-db speakers_ecapa.json --system-device 0
 
+# DUAL MODE: both mic and system audio (processed separately)
+# Mic always shows as "Vyacheslav", system audio uses speaker diarization
+python mp4_notes.py live --speaker-db speakers_ecapa.json --mic-device 1 --system-device 0
+
 # List audio devices
 python mp4_notes.py live --list-devices
 ```
