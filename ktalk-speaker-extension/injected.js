@@ -34,51 +34,49 @@
     const styles = document.createElement('style');
     styles.id = 'ktalk-transcript-styles';
     styles.textContent = `
-      /* Transcript tab wrapper - inline with other tabs */
-      .ktalk-transcript-tab-wrapper {
-        display: inline-flex !important;
-        flex-shrink: 0;
-        align-items: center;
-        height: 100%;
+      /* Transcript tab - match KTalk's PRIVATE button style exactly */
+      .ktalk-transcript-tab-wrapper.tl-tab {
+        display: inline-block !important;
       }
 
-      /* Transcript tab button - matches KTalk style */
-      .ktalk-transcript-tab {
+      .ktalk-transcript-tab.link {
         display: inline-flex;
         align-items: center;
-        padding: 0 12px;
+        padding: 0 8px;
         height: 48px;
         cursor: pointer;
         position: relative;
-        color: rgba(255,255,255,0.7);
-        font-size: 14px;
-        font-weight: 500;
-        transition: color 0.2s;
+        color: rgba(255,255,255,0.6);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
         border: none;
         background: none;
         font-family: inherit;
         white-space: nowrap;
-        vertical-align: middle;
+        transition: color 0.15s;
       }
-      .ktalk-transcript-tab:hover {
+      .ktalk-transcript-tab.link:hover {
         color: rgba(255,255,255,0.9);
       }
-      .ktalk-transcript-tab._active {
+      .ktalk-transcript-tab.link._active {
         color: white;
       }
       .ktalk-transcript-tab .tab-content {
         display: flex;
         align-items: center;
+        gap: 4px;
       }
       .ktalk-transcript-tab .underline {
         position: absolute;
         bottom: 0;
-        left: 0;
-        right: 0;
+        left: 8px;
+        right: 8px;
         height: 2px;
         background-color: rgb(0, 138, 255);
         opacity: 0;
-        transition: opacity 0.2s;
+        transition: opacity 0.15s;
       }
       .ktalk-transcript-tab._active .underline {
         opacity: 1;
@@ -87,13 +85,11 @@
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: #ef4444;
-        margin-left: 6px;
-        flex-shrink: 0;
-        transition: background 0.3s;
-      }
-      .ktalk-transcript-tab .ws-dot.connected {
         background: #22c55e;
+        flex-shrink: 0;
+      }
+      .ktalk-transcript-tab .ws-dot:not(.connected) {
+        background: #ef4444;
       }
 
       /* Transcript content area */
