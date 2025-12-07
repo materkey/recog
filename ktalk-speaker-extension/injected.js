@@ -27,6 +27,10 @@
   let wsReconnectTimer = null;
   let wsConnected = false;
 
+  // Meeting state tracking
+  let currentMeetingUrl = null;
+  let meetingCheckInterval = null;
+
   // Inject styles once
   function injectStyles() {
     if (document.querySelector('#ktalk-transcript-styles')) return;
@@ -319,7 +323,13 @@
           sendWsParticipants(window.$conf);
           const activeSpeaker = getActiveSpeaker(window.$conf);
           sendWsSpeakerUpdate(activeSpeaker);
+
+          // Send meeting_join with current URL
+          sendMeetingJoin();
         }
+
+        // Start meeting status check
+        startMeetingCheck();
       };
 
       wsConnection.onclose = () => {
@@ -344,6 +354,10 @@
           const data = JSON.parse(event.data);
           if (data.type === 'transcript') {
             handleTranscript(data);
+          } else if (data.type === 'transcript_history') {
+            handleTranscriptHistory(data);
+          } else if (data.type === 'new_meeting') {
+            handleNewMeeting(data);
           }
         } catch (e) {
           console.log('[KTalk Transcript] Parse error:', e);
@@ -382,6 +396,113 @@
       type: 'connection_status',
       connected: connected
     });
+  }
+
+  // Meeting tracking functions
+  function sendMeetingJoin() {
+    const url = window.location.href;
+    if (url && url.includes('ktalk.ru')) {
+      currentMeetingUrl = url;
+      sendWsMessage({
+        type: 'meeting_join',
+        url: url,
+        title: document.title || ''
+      });
+      console.log('[KTalk Transcript] Sent meeting_join:', url);
+    }
+  }
+
+  function sendMeetingLeave(reason = 'user_left') {
+    if (currentMeetingUrl) {
+      sendWsMessage({
+        type: 'meeting_leave',
+        reason: reason
+      });
+      console.log('[KTalk Transcript] Sent meeting_leave:', reason);
+      currentMeetingUrl = null;
+    }
+  }
+
+  function isInMeeting() {
+    // Check if we're in an active meeting by checking $conf participants
+    if (!window.$conf) return false;
+    const participantsMap = window.$conf._participantsMap;
+    return participantsMap && participantsMap.size > 0;
+  }
+
+  function startMeetingCheck() {
+    if (meetingCheckInterval) {
+      clearInterval(meetingCheckInterval);
+    }
+
+    meetingCheckInterval = setInterval(() => {
+      const inMeeting = isInMeeting();
+      const url = window.location.href;
+
+      if (inMeeting && url !== currentMeetingUrl) {
+        // Joined a (new) meeting
+        if (currentMeetingUrl) {
+          // Was in another meeting, send leave first
+          sendMeetingLeave('changed_meeting');
+        }
+        sendMeetingJoin();
+      } else if (!inMeeting && currentMeetingUrl) {
+        // Left the meeting
+        sendMeetingLeave('user_left');
+      }
+    }, 2000);
+  }
+
+  function handleTranscriptHistory(data) {
+    // Received transcript history from server (after reconnect or meeting_join)
+    console.log('[KTalk Transcript] Received history:', data.segments?.length || 0, 'segments');
+
+    if (!data.segments || data.segments.length === 0) {
+      return;
+    }
+
+    // Clear current transcript and load history
+    transcriptLines = [];
+
+    for (const seg of data.segments) {
+      transcriptLines.push({
+        speaker: seg.speaker,
+        text: seg.text,
+        timestamp: seg.ts_display || seg.timestamp,
+        is_local: seg.is_local || false,
+        uncertain: seg.uncertain || false,
+        uncertain_reason: seg.uncertain_reason || "",
+        time: seg.ts_display || new Date(seg.ts).toLocaleTimeString('ru-RU', {
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        })
+      });
+    }
+
+    // Keep only last MAX_TRANSCRIPT_LINES
+    if (transcriptLines.length > MAX_TRANSCRIPT_LINES) {
+      transcriptLines = transcriptLines.slice(-MAX_TRANSCRIPT_LINES);
+    }
+
+    updateTranscriptUI();
+
+    // Notify popup
+    window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
+      detail: { transcriptLines: transcriptLines.slice() }
+    }));
+  }
+
+  function handleNewMeeting(data) {
+    // Server created a new meeting (after meeting_leave)
+    console.log('[KTalk Transcript] New meeting:', data.meeting_id);
+
+    // Clear transcript for new meeting
+    transcriptLines = [];
+    updateTranscriptUI();
+
+    // Notify popup
+    window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
+      detail: { transcriptLines: [] }
+    }));
   }
 
   function updateWsIndicator(connected) {
@@ -979,4 +1100,11 @@
   }, 2000);
 
   waitForConference(subscribeToDominantSpeaker);
+
+  // Send meeting_leave when page is closed
+  window.addEventListener('beforeunload', () => {
+    if (currentMeetingUrl) {
+      sendMeetingLeave('page_closed');
+    }
+  });
 })();
