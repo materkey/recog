@@ -147,11 +147,32 @@
 
       .ktalk-transcript-toolbar {
         display: flex;
-        justify-content: flex-end;
+        justify-content: space-between;
         padding: 8px 12px;
         border-bottom: 1px solid rgba(255,255,255,0.06);
         flex-shrink: 0;
         background: rgba(0, 0, 0, 0.15);
+      }
+      .ktalk-transcript-toolbar-left {
+        display: flex;
+        gap: 6px;
+      }
+      .ktalk-transcript-scroll-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border: none;
+        border-radius: 4px;
+        background: rgba(255,255,255,0.08);
+        color: rgba(255,255,255,0.6);
+        font-size: 11px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .ktalk-transcript-scroll-btn:hover {
+        background: rgba(255,255,255,0.12);
+        color: rgba(255,255,255,0.8);
       }
       .ktalk-transcript-copy-btn {
         display: flex;
@@ -682,6 +703,10 @@
         <span class="ktalk-speaker-name">No one speaking</span>
       </div>
       <div class="ktalk-transcript-toolbar">
+        <div class="ktalk-transcript-toolbar-left">
+          <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑ Top</button>
+          <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓ Bottom</button>
+        </div>
         <button class="ktalk-transcript-copy-btn" title="Copy all transcript">
           <span>📋</span>
           <span class="ktalk-copy-text">Copy all</span>
@@ -701,8 +726,16 @@
       </div>
     `;
 
-    // Add copy button handler
+    // Add button handlers
     transcriptContentElement.querySelector('.ktalk-transcript-copy-btn').addEventListener('click', copyAllTranscript);
+    transcriptContentElement.querySelector('.ktalk-scroll-top').addEventListener('click', () => {
+      const container = document.querySelector('.ktalk-transcript-messages');
+      if (container) container.scrollTop = 0;
+    });
+    transcriptContentElement.querySelector('.ktalk-scroll-bottom').addEventListener('click', () => {
+      const container = document.querySelector('.ktalk-transcript-messages');
+      if (container) container.scrollTop = container.scrollHeight;
+    });
 
     contentArea.appendChild(transcriptContentElement);
     console.log('[KTalk Transcript] Content element created');
