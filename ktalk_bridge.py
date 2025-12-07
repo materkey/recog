@@ -183,7 +183,7 @@ class KTalkBridge:
         with self._lock:
             return self._speaker_history.copy()
 
-    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False):
+    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False):
         """Отправляет транскрипт всем подключённым клиентам."""
         message = json.dumps({
             "type": "transcript",
@@ -191,7 +191,8 @@ class KTalkBridge:
             "text": text,
             "timestamp": timestamp,
             "is_continuation": is_continuation,
-            "is_local": is_local  # True = микрофон (я), False = системный звук (другие)
+            "is_local": is_local,  # True = микрофон (я), False = системный звук (другие)
+            "uncertain": uncertain  # True = непонятно кто говорит (системный звук помечен как локальный)
         })
 
         # Отправляем асинхронно через event loop
