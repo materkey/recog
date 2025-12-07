@@ -38,14 +38,16 @@
       .ktalk-transcript-tab-wrapper {
         display: inline-flex !important;
         flex-shrink: 0;
+        align-items: center;
+        height: 100%;
       }
 
       /* Transcript tab button - matches KTalk style */
       .ktalk-transcript-tab {
-        display: flex;
+        display: inline-flex;
         align-items: center;
         padding: 0 12px;
-        height: 100%;
+        height: 48px;
         cursor: pointer;
         position: relative;
         color: rgba(255,255,255,0.7);
@@ -56,6 +58,7 @@
         background: none;
         font-family: inherit;
         white-space: nowrap;
+        vertical-align: middle;
       }
       .ktalk-transcript-tab:hover {
         color: rgba(255,255,255,0.9);
