@@ -780,14 +780,16 @@
 
   console.log('[KTalk Speaker Detector] Script loaded, waiting for conference...');
 
-  // Also try to add the button early (before conference loads)
-  setTimeout(() => {
+  // Periodically ensure button exists (KTalk rebuilds UI on join)
+  setInterval(() => {
     if (!document.querySelector('.ktalk-transcript-btn')) {
-      console.log('[KTalk Speaker Detector] Attempting early button creation...');
-      createTranscriptPanel();
+      console.log('[KTalk Speaker Detector] Re-creating button...');
       addTranscriptTabButton();
     }
-  }, 3000);
+    if (!document.querySelector('.ktalk-transcript-panel')) {
+      createTranscriptPanel();
+    }
+  }, 2000);
 
   waitForConference(subscribeToDominantSpeaker);
 })();
