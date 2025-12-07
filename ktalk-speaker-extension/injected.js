@@ -913,6 +913,7 @@
     conf.jitsiConf.on('conference.trackAdded', (track) => {
       if (track.getType?.() === 'audio') {
         updateSpeakerStatus(conf);
+        sendWsParticipants(conf);  // Update mic status
         const participantId = track.getParticipantId?.();
         if (participantId) {
           const p = conf._participantsMap?.get(participantId);
@@ -924,11 +925,17 @@
     });
 
     conf.jitsiConf.on('conference.trackRemoved', (track) => {
-      if (track.getType?.() === 'audio') updateSpeakerStatus(conf);
+      if (track.getType?.() === 'audio') {
+        updateSpeakerStatus(conf);
+        sendWsParticipants(conf);  // Update mic status
+      }
     });
 
     conf.jitsiConf.on('conference.trackMuteChanged', (track) => {
-      if (track.getType?.() === 'audio') updateSpeakerStatus(conf);
+      if (track.getType?.() === 'audio') {
+        updateSpeakerStatus(conf);
+        sendWsParticipants(conf);  // Update mic muted status
+      }
     });
 
     conf.jitsiConf.on('conference.userJoined', (id) => {
