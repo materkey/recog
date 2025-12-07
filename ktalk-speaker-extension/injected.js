@@ -38,6 +38,8 @@
       .ktalk-transcript-tab-wrapper.tl-tab {
         display: inline-block !important;
         height: 32px;
+        padding: 0;
+        margin: 0;
       }
 
       .ktalk-transcript-tab.link {
@@ -50,20 +52,21 @@
         color: rgba(255, 255, 255, 0.6);
         font-size: 13px;
         font-weight: 600;
-        font-family: inherit;
+        font-family: "Lab Grotesque", Arial, Helvetica, "Tahoma sans-serif";
         text-transform: uppercase;
         line-height: 16px;
         letter-spacing: normal;
         border: none;
-        background: none;
+        border-radius: 6px;
+        background: transparent;
         vertical-align: middle;
         transition: color 0.15s;
       }
       .ktalk-transcript-tab.link:hover {
-        color: rgba(255, 255, 255, 0.9);
+        color: rgba(255, 255, 255, 0.85);
       }
       .ktalk-transcript-tab.link._active {
-        color: white;
+        color: rgba(255, 255, 255, 0.85);
       }
       .ktalk-transcript-tab .tab-content {
         display: flex;
@@ -96,12 +99,13 @@
         background: #ef4444;
       }
 
-      /* Transcript content area */
+      /* Transcript content area - match KTalk's native chat style */
       .ktalk-transcript-content {
         display: none;
         flex-direction: column;
         height: 100%;
-        background: var(--tl-color-background-primary, #1a1a2e);
+        background: rgb(52, 52, 52);
+        color: rgba(255, 255, 255, 0.8);
       }
       .ktalk-transcript-content.active {
         display: flex;
@@ -111,41 +115,41 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 12px 16px;
-        background: rgba(255,255,255,0.03);
-        border-bottom: 1px solid rgba(255,255,255,0.08);
+        padding: 10px 16px;
+        background: rgba(0, 0, 0, 0.15);
+        border-bottom: 1px solid rgba(255,255,255,0.06);
         flex-shrink: 0;
       }
 
       .ktalk-speaker-dot {
-        width: 10px;
-        height: 10px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
-        background: #6b7280;
+        background: rgba(255,255,255,0.3);
         transition: all 0.3s;
       }
       .ktalk-speaker-dot.speaking {
         background: #4ade80;
-        box-shadow: 0 0 8px #4ade80;
+        box-shadow: 0 0 6px #4ade80;
         animation: ktalk-pulse 1.5s infinite;
       }
 
       @keyframes ktalk-pulse {
-        0%, 100% { box-shadow: 0 0 8px #4ade80; }
-        50% { box-shadow: 0 0 16px #4ade80; }
+        0%, 100% { box-shadow: 0 0 6px #4ade80; }
+        50% { box-shadow: 0 0 12px #4ade80; }
       }
 
       .ktalk-speaker-name {
         font-size: 13px;
         font-weight: 500;
-        color: rgba(255,255,255,0.9);
+        color: rgba(255,255,255,0.8);
       }
 
       .ktalk-transcript-toolbar {
         display: flex;
         justify-content: flex-end;
         padding: 8px 12px;
-        border-bottom: 1px solid rgba(255,255,255,0.08);
+        border-bottom: 1px solid rgba(255,255,255,0.06);
         flex-shrink: 0;
       }
       .ktalk-transcript-copy-btn {
@@ -155,19 +159,19 @@
         padding: 4px 10px;
         border: none;
         border-radius: 4px;
-        background: rgba(255,255,255,0.1);
-        color: rgba(255,255,255,0.7);
+        background: rgba(255,255,255,0.08);
+        color: rgba(255,255,255,0.6);
         font-size: 12px;
         cursor: pointer;
         transition: all 0.15s;
       }
       .ktalk-transcript-copy-btn:hover {
-        background: rgba(255,255,255,0.15);
-        color: white;
+        background: rgba(255,255,255,0.12);
+        color: rgba(255,255,255,0.8);
       }
       .ktalk-transcript-copy-btn.copied {
-        background: rgba(34, 197, 94, 0.2);
-        color: #22c55e;
+        background: rgba(34, 197, 94, 0.15);
+        color: #4ade80;
       }
 
       .ktalk-transcript-messages {
@@ -181,7 +185,7 @@
       .ktalk-msg {
         padding: 10px 12px;
         margin-bottom: 8px;
-        border-radius: 8px;
+        border-radius: 6px;
         background: rgba(255,255,255,0.04);
       }
 
@@ -195,40 +199,41 @@
       .ktalk-msg-speaker {
         font-weight: 600;
         font-size: 12px;
+        color: rgba(255,255,255,0.8);
       }
 
       .ktalk-msg-time {
-        font-size: 10px;
+        font-size: 11px;
         color: rgba(255,255,255,0.4);
       }
 
       .ktalk-msg-text {
         font-size: 13px;
         line-height: 1.4;
-        color: rgba(255,255,255,0.85);
+        color: rgba(255,255,255,0.8);
       }
 
-      /* Local messages (me/mic) - blue */
+      /* Local messages (me/mic) - blue accent */
       .ktalk-msg.local {
-        background: rgba(0, 138, 255, 0.12);
+        background: rgba(0, 138, 255, 0.1);
         border-left: 3px solid rgb(0, 138, 255);
       }
       .ktalk-msg.local .ktalk-msg-speaker {
-        color: rgb(0, 138, 255);
+        color: rgb(100, 180, 255);
       }
 
-      /* Remote messages (others) - green */
+      /* Remote messages (others) - subtle */
       .ktalk-msg.remote {
-        background: rgba(74, 222, 128, 0.08);
+        background: rgba(255, 255, 255, 0.04);
       }
       .ktalk-msg.remote .ktalk-msg-speaker {
-        color: #4ade80;
+        color: rgba(255,255,255,0.8);
       }
 
       /* Uncertain messages - yellow (local speaker echo) */
       .ktalk-msg.uncertain {
-        background: rgba(250, 204, 21, 0.08);
-        border-left: 3px dashed #facc15;
+        background: rgba(250, 204, 21, 0.06);
+        border-left: 3px dashed rgba(250, 204, 21, 0.6);
       }
       .ktalk-msg.uncertain .ktalk-msg-speaker {
         color: #facc15;
@@ -236,8 +241,8 @@
 
       /* Uncertain messages - orange (all mics off) */
       .ktalk-msg.uncertain.mics-off {
-        background: rgba(251, 146, 60, 0.08);
-        border-left: 3px dashed #fb923c;
+        background: rgba(251, 146, 60, 0.06);
+        border-left: 3px dashed rgba(251, 146, 60, 0.6);
       }
       .ktalk-msg.uncertain.mics-off .ktalk-msg-speaker {
         color: #fb923c;
@@ -256,16 +261,16 @@
       .ktalk-transcript-empty-icon {
         font-size: 48px;
         margin-bottom: 16px;
-        opacity: 0.5;
+        opacity: 0.4;
       }
       .ktalk-transcript-empty-text {
-        font-size: 14px;
+        font-size: 13px;
         line-height: 1.6;
       }
       .ktalk-transcript-empty-cmd {
         font-family: monospace;
-        font-size: 12px;
-        background: rgba(255,255,255,0.1);
+        font-size: 11px;
+        background: rgba(255,255,255,0.06);
         padding: 8px 12px;
         border-radius: 4px;
         margin-top: 12px;
