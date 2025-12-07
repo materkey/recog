@@ -387,6 +387,11 @@
     }
 
     updateTranscriptUI();
+
+    // Send transcript to content script for popup
+    window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
+      detail: { transcriptLines: transcriptLines.slice() }
+    }));
   }
 
   function getUncertainSuffix(line) {

@@ -34,6 +34,13 @@
     });
   });
 
+  // Listen for transcript updates
+  window.addEventListener('ktalk-transcript-update', (event) => {
+    chrome.storage.local.set({
+      transcriptLines: event.detail.transcriptLines
+    });
+  });
+
   console.log('[KTalk Speaker Detector] Content script loaded, injecting into page...');
   injectScript();
 })();

@@ -1,8 +1,16 @@
 // KTalk Speaker Detector - Popup Script
 
+let transcriptLines = [];
+
 function getInitials(name) {
   if (!name) return '?';
   return name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
+}
+
+function getUncertainSuffix(line) {
+  if (!line.uncertain) return "";
+  if (line.uncertain_reason === "mics_off") return " (🔇?)";
+  return " (?)";
 }
 
 function updateUI(data) {
@@ -20,6 +28,11 @@ function updateUI(data) {
     statusText.textContent = 'Connected to conference';
     currentSpeakerName.textContent = data.currentSpeaker.name || 'No one';
     currentSpeakerId.textContent = data.currentSpeaker.id || '';
+  } else if (data.connected) {
+    statusDot.classList.add('connected');
+    statusText.textContent = 'Connected (no one speaking)';
+    currentSpeakerName.textContent = '-';
+    currentSpeakerId.textContent = '';
   } else {
     statusDot.classList.remove('connected');
     statusText.textContent = 'Not in a conference';
@@ -55,11 +68,85 @@ function updateUI(data) {
   } else {
     historyList.innerHTML = '<li class="empty-state">No history yet</li>';
   }
+
+  // Update transcript
+  if (data.transcriptLines) {
+    transcriptLines = data.transcriptLines;
+  }
+  updateTranscriptUI();
+}
+
+function updateTranscriptUI() {
+  const transcriptList = document.getElementById('transcriptList');
+  const transcriptCount = document.getElementById('transcriptCount');
+
+  if (transcriptLines.length > 0) {
+    transcriptCount.textContent = transcriptLines.length;
+    transcriptList.innerHTML = transcriptLines.map(line => {
+      const classes = [
+        line.is_local ? 'local' : '',
+        line.uncertain ? 'uncertain' : '',
+        line.uncertain_reason === 'mics_off' ? 'mics-off' : ''
+      ].filter(Boolean).join(' ');
+
+      const speakerDisplay = line.speaker + getUncertainSuffix(line);
+
+      return `<li class="${classes}">
+        <span class="transcript-speaker">${speakerDisplay}</span>
+        <span class="transcript-time">${line.time}</span>
+        <div class="transcript-text">${line.text}</div>
+      </li>`;
+    }).join('');
+
+    // Auto-scroll to bottom
+    transcriptList.scrollTop = transcriptList.scrollHeight;
+  } else {
+    transcriptCount.textContent = '0';
+    transcriptList.innerHTML = '<li class="empty-state">No transcript yet</li>';
+  }
+}
+
+function copyAllTranscript() {
+  if (transcriptLines.length === 0) return;
+
+  const text = transcriptLines.map(line => {
+    const speaker = line.speaker + getUncertainSuffix(line);
+    return `**${speaker}** *[${line.time}]*: ${line.text}`;
+  }).join('\n\n');
+
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyTranscriptBtn');
+    const textSpan = btn.querySelector('.copy-text');
+    btn.classList.add('copied');
+    textSpan.textContent = 'Copied!';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      textSpan.textContent = 'Copy all';
+    }, 2000);
+  });
+}
+
+// Tab switching
+function setupTabs() {
+  const tabBtns = document.querySelectorAll('.tab-btn');
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tabId = btn.dataset.tab;
+
+      // Update buttons
+      tabBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      // Update content
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.getElementById('tab-' + tabId).classList.add('active');
+    });
+  });
 }
 
 // Load data from storage
 function loadData() {
-  chrome.storage.local.get(['currentSpeaker', 'speakerHistory', 'participants'], (data) => {
+  chrome.storage.local.get(['currentSpeaker', 'speakerHistory', 'participants', 'connected', 'transcriptLines'], (data) => {
     updateUI(data);
   });
 }
@@ -71,8 +158,14 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
   }
 });
 
-// Initial load
-document.addEventListener('DOMContentLoaded', loadData);
+// Initial setup
+document.addEventListener('DOMContentLoaded', () => {
+  setupTabs();
+  loadData();
+
+  // Copy button handler
+  document.getElementById('copyTranscriptBtn').addEventListener('click', copyAllTranscript);
+});
 
 // Refresh every second
 setInterval(loadData, 1000);
