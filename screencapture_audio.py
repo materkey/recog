@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""
+ScreenCaptureKit audio capture for macOS 13+
+
+Captures system audio without BlackHole or Multi-Output Device.
+Volume control works normally.
+
+Usage:
+    from screencapture_audio import ScreenCaptureAudio
+
+    capture = ScreenCaptureAudio()
+    capture.start()
+
+    # Get audio chunks
+    chunk = capture.get_chunk(duration=3.0)
+
+    capture.stop()
+"""
+
+import subprocess
+import threading
+import os
+import sys
+import numpy as np
+from typing import Optional
+from pathlib import Path
+
+
+class ScreenCaptureAudio:
+    """
+    Captures system audio using macOS ScreenCaptureKit via Swift utility.
+
+    Requires macOS 13+ and Screen Recording permission.
+    """
+
+    SAMPLE_RATE = 16000
+    BYTES_PER_SAMPLE = 4  # float32
+
+    def __init__(self, sample_rate: int = 16000):
+        self.sample_rate = sample_rate
+        self.process = None
+        self.buffer = []
+        self._lock = threading.Lock()
+        self._reader_thread = None
+        self.running = False
+        self.name = "screencapture"
+
+        # Find the Swift utility
+        self._utility_path = self._find_utility()
+
+    def _find_utility(self) -> str:
+        """Find the sck_audio_capture utility."""
+        # Check in same directory as this script
+        script_dir = Path(__file__).parent
+        utility = script_dir / "sck_audio_capture"
+
+        if utility.exists():
+            return str(utility)
+
+        # Check if source exists and needs compilation
+        source = script_dir / "sck_audio_capture.swift"
+        if source.exists():
+            print(f"[ScreenCaptureAudio] Compiling {source}...", file=sys.stderr)
+            result = subprocess.run([
+                "swiftc", "-o", str(utility), str(source),
+                "-framework", "ScreenCaptureKit",
+                "-framework", "CoreMedia",
+                "-framework", "AVFoundation"
+            ], capture_output=True, text=True)
+
+            if result.returncode == 0 and utility.exists():
+                return str(utility)
+            else:
+                raise RuntimeError(f"Failed to compile utility: {result.stderr}")
+
+        raise FileNotFoundError(
+            f"sck_audio_capture utility not found. "
+            f"Expected at: {utility}"
+        )
+
+    def _reader_loop(self):
+        """Read audio data from subprocess stdout."""
+        bytes_per_chunk = self.SAMPLE_RATE * self.BYTES_PER_SAMPLE // 10  # 100ms chunks
+
+        while self.running and self.process and self.process.poll() is None:
+            try:
+                data = self.process.stdout.read(bytes_per_chunk)
+                if data:
+                    # Convert bytes to float32 numpy array
+                    samples = np.frombuffer(data, dtype=np.float32)
+                    with self._lock:
+                        self.buffer.append(samples)
+            except Exception as e:
+                if self.running:
+                    print(f"[ScreenCaptureAudio] Reader error: {e}", file=sys.stderr)
+                break
+
+    def start(self):
+        """Start capturing system audio."""
+        if self.running:
+            return
+
+        # Start the Swift utility
+        self.process = subprocess.Popen(
+            [self._utility_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
+
+        self.running = True
+        self.buffer = []
+
+        # Start reader thread
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
+
+        # Wait a bit for startup
+        import time
+        time.sleep(0.5)
+
+        # Check if process is still running
+        if self.process.poll() is not None:
+            stderr = self.process.stderr.read().decode()
+            raise RuntimeError(f"Audio capture failed to start: {stderr}")
+
+        print(f"[ScreenCaptureAudio] Started (PID: {self.process.pid})", file=sys.stderr)
+
+    def stop(self):
+        """Stop capturing."""
+        if not self.running:
+            return
+
+        self.running = False
+
+        if self.process:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            self.process = None
+
+        if self._reader_thread:
+            self._reader_thread.join(timeout=1.0)
+            self._reader_thread = None
+
+        print("[ScreenCaptureAudio] Stopped", file=sys.stderr)
+
+    def get_chunk(self, duration: float) -> Optional[np.ndarray]:
+        """Get audio chunk of specified duration."""
+        if not self.running:
+            return None
+
+        samples_needed = int(duration * self.sample_rate)
+
+        with self._lock:
+            if not self.buffer:
+                return None
+
+            # Concatenate all buffered audio
+            audio = np.concatenate(self.buffer)
+
+            if len(audio) < samples_needed:
+                return None
+
+            # Extract chunk
+            chunk = audio[:samples_needed]
+
+            # Keep overlap (0.5 seconds)
+            overlap_samples = int(0.5 * self.sample_rate)
+            overlap_start = max(0, samples_needed - overlap_samples)
+            self.buffer = [audio[overlap_start:]]
+
+            return chunk.astype(np.float32)
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
+
+
+def test_capture():
+    """Test audio capture."""
+    import time
+
+    print("Testing ScreenCaptureKit audio capture...")
+    print("Make sure Screen Recording is allowed in System Settings > Privacy & Security")
+    print()
+
+    try:
+        capture = ScreenCaptureAudio()
+        capture.start()
+
+        print("Capturing... play some audio!")
+        time.sleep(4)
+
+        chunk = capture.get_chunk(3.0)
+        if chunk is not None:
+            print(f"Got chunk: {len(chunk)} samples, {len(chunk)/16000:.2f}s")
+            print(f"Audio level (RMS): {np.sqrt(np.mean(chunk**2)):.6f}")
+            print(f"Max amplitude: {np.abs(chunk).max():.6f}")
+        else:
+            print("No audio captured (buffer too small)")
+
+        capture.stop()
+        print("Done!")
+
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    test_capture()

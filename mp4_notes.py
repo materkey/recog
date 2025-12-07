@@ -1497,20 +1497,28 @@ class LiveTranscriber:
         chunk_duration=3.0,  # Баланс между задержкой и качеством
         output_file=None,
         no_diarization=False,
-        use_ktalk=False  # Использовать KTalk bridge вместо embedding-based diarization
+        use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
+        use_screencapture=False  # Использовать ScreenCaptureKit вместо BlackHole
     ):
         self.mic_device = mic_device
         self.system_device = system_device
         self.sample_rate = 16000
+        self.use_screencapture = use_screencapture
 
-        # Определяем режим: dual (оба), mic-only, system-only
-        self.dual_mode = (mic_device is not None and system_device is not None)
+        # Определяем режим: dual (оба), mic-only, system-only, screencapture
+        self.dual_mode = (mic_device is not None and (system_device is not None or use_screencapture))
 
         # Создаём capture устройства
         self.mic_capture = None
         self.system_capture = None
 
-        if self.dual_mode:
+        if use_screencapture:
+            # Используем ScreenCaptureKit для системного звука
+            from screencapture_audio import ScreenCaptureAudio
+            self.system_capture = ScreenCaptureAudio(self.sample_rate)
+            if mic_device is not None:
+                self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
+        elif self.dual_mode:
             self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
             self.system_capture = SingleDeviceCapture(system_device, self.sample_rate, "system")
         elif system_device is not None:
@@ -1736,7 +1744,12 @@ class LiveTranscriber:
 
         print("=" * 60)
         print(" LIVE TRANSCRIPTION")
-        if self.dual_mode:
+        if self.use_screencapture:
+            if self.mic_capture:
+                print(f" Mode: DUAL (Mic: {self.mic_device} + ScreenCaptureKit)")
+            else:
+                print(f" System audio: ScreenCaptureKit (no BlackHole needed)")
+        elif self.dual_mode:
             print(f" Mode: DUAL (Mic: {self.mic_device} + System: {self.system_device})")
         elif self.system_device is not None:
             print(f" Mic: none | System: {self.system_device}")
@@ -1996,7 +2009,8 @@ def live_pipeline(
     output_file=None,
     no_diarization=False,
     list_devices=False,
-    use_ktalk=False
+    use_ktalk=False,
+    use_screencapture=False
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
@@ -2013,7 +2027,7 @@ def live_pipeline(
         else:
             print("Warning: Could not find built-in microphone", file=sys.stderr)
 
-    if system_device == "auto":
+    if not use_screencapture and system_device == "auto":
         system_device = SingleDeviceCapture.find_blackhole()
         if system_device is not None:
             import sounddevice as sd
@@ -2024,12 +2038,13 @@ def live_pipeline(
 
     transcriber = LiveTranscriber(
         mic_device=mic_device,
-        system_device=system_device,
+        system_device=system_device if not use_screencapture else None,
         speaker_db_path=speaker_db_path,
         chunk_duration=chunk_duration,
         output_file=output_file,
         no_diarization=no_diarization,
-        use_ktalk=use_ktalk
+        use_ktalk=use_ktalk,
+        use_screencapture=use_screencapture
     )
     transcriber.run()
 
@@ -2145,6 +2160,11 @@ def main():
         action="store_true",
         help="Использовать KTalk Chrome extension для определения спикеров (вместо embedding-based)"
     )
+    live_parser.add_argument(
+        "--screencapture",
+        action="store_true",
+        help="Использовать ScreenCaptureKit для захвата системного звука (не нужен BlackHole, громкость работает)"
+    )
 
     # Команда: enroll-speaker
     enroll_parser = subparsers.add_parser(
@@ -2228,7 +2248,8 @@ def main():
             output_file=args.output,
             no_diarization=args.no_diarization,
             list_devices=args.list_devices,
-            use_ktalk=args.ktalk
+            use_ktalk=args.ktalk,
+            use_screencapture=args.screencapture
         )
 
     elif args.command == "enroll-speaker":
