@@ -384,8 +384,8 @@
 
     const text = transcriptLines.map(line => {
       const speaker = line.uncertain ? `${line.speaker} (?)` : line.speaker;
-      return `[${line.time}] ${speaker}: ${line.text}`;
-    }).join('\n');
+      return `**${speaker}** *[${line.time}]*: ${line.text}`;
+    }).join('\n\n');
 
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.querySelector('.ktalk-transcript-copy-btn');
