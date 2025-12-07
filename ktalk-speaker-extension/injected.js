@@ -129,7 +129,7 @@
   }
 
   function handleTranscript(data) {
-    const { speaker, text, timestamp, is_continuation, is_local } = data;
+    const { speaker, text, timestamp, is_continuation, is_local, uncertain } = data;
 
     if (is_continuation && transcriptLines.length > 0) {
       // Append to last line
@@ -141,6 +141,7 @@
         text,
         timestamp,
         is_local: is_local || false,  // true = микрофон (я), false = другие
+        uncertain: uncertain || false,  // true = под вопросом кто говорит
         time: new Date().toLocaleTimeString('ru-RU', {
           hour: '2-digit', minute: '2-digit', second: '2-digit'
         })
@@ -161,13 +162,21 @@
     const container = overlayElement.querySelector('.ktalk-transcript-content');
     if (!container) return;
 
-    container.innerHTML = transcriptLines.map(line =>
-      `<div class="ktalk-transcript-line ${line.is_local ? 'local' : 'remote'}">
+    container.innerHTML = transcriptLines.map(line => {
+      const classes = [
+        'ktalk-transcript-line',
+        line.is_local ? 'local' : 'remote',
+        line.uncertain ? 'uncertain' : ''
+      ].filter(Boolean).join(' ');
+
+      const speakerDisplay = line.uncertain ? `${line.speaker} (?)` : `${line.speaker}`;
+
+      return `<div class="${classes}">
         <span class="ktalk-transcript-time">[${line.time}]</span>
-        <span class="ktalk-transcript-speaker">${line.speaker}:</span>
+        <span class="ktalk-transcript-speaker">${speakerDisplay}:</span>
         <span class="ktalk-transcript-text">${line.text}</span>
-      </div>`
-    ).join('');
+      </div>`;
+    }).join('');
 
     // Auto-scroll to bottom
     container.scrollTop = container.scrollHeight;
@@ -663,6 +672,17 @@
       }
       .ktalk-transcript-line.remote {
         background: rgba(74, 222, 128, 0.05);
+      }
+
+      /* Неопределённые реплики (под вопросом кто говорит) - жёлтый */
+      .ktalk-transcript-line.uncertain {
+        background: rgba(250, 204, 21, 0.1);
+        border-left: 2px dashed #facc15;
+        padding-left: 6px;
+        margin-left: -6px;
+      }
+      .ktalk-transcript-line.uncertain .ktalk-transcript-speaker {
+        color: #facc15;
       }
 
       .ktalk-transcript-text {
