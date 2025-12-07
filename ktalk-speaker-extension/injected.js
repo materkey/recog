@@ -186,7 +186,7 @@
         padding: 10px 12px;
         margin-bottom: 8px;
         border-radius: 6px;
-        background: rgba(255,255,255,0.04);
+        background: rgba(0,0,0,0.2);
       }
 
       .ktalk-msg-header {
@@ -215,16 +215,16 @@
 
       /* Local messages (me/mic) - blue accent */
       .ktalk-msg.local {
-        background: rgba(0, 138, 255, 0.1);
+        background: rgba(0, 100, 200, 0.15);
         border-left: 3px solid rgb(0, 138, 255);
       }
       .ktalk-msg.local .ktalk-msg-speaker {
         color: rgb(100, 180, 255);
       }
 
-      /* Remote messages (others) - subtle */
+      /* Remote messages (others) - darker */
       .ktalk-msg.remote {
-        background: rgba(255, 255, 255, 0.04);
+        background: rgba(0,0,0,0.2);
       }
       .ktalk-msg.remote .ktalk-msg-speaker {
         color: rgba(255,255,255,0.8);
@@ -232,7 +232,7 @@
 
       /* Uncertain messages - yellow (local speaker echo) */
       .ktalk-msg.uncertain {
-        background: rgba(250, 204, 21, 0.06);
+        background: rgba(180, 150, 0, 0.12);
         border-left: 3px dashed rgba(250, 204, 21, 0.6);
       }
       .ktalk-msg.uncertain .ktalk-msg-speaker {
@@ -241,7 +241,7 @@
 
       /* Uncertain messages - orange (all mics off) */
       .ktalk-msg.uncertain.mics-off {
-        background: rgba(251, 146, 60, 0.06);
+        background: rgba(180, 100, 30, 0.12);
         border-left: 3px dashed rgba(251, 146, 60, 0.6);
       }
       .ktalk-msg.uncertain.mics-off .ktalk-msg-speaker {
