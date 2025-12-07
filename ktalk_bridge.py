@@ -53,6 +53,7 @@ class Participant:
     id: str
     name: str
     is_local: bool = False
+    mic_muted: bool = True
 
 
 class KTalkBridge:
@@ -178,12 +179,19 @@ class KTalkBridge:
         with self._lock:
             return self._participants.copy()
 
+    def are_all_mics_muted(self) -> bool:
+        """Возвращает True если у всех участников выключены микрофоны."""
+        with self._lock:
+            if not self._participants:
+                return True
+            return all(p.mic_muted for p in self._participants.values())
+
     def get_speaker_history(self) -> List[SpeakerEvent]:
         """Возвращает историю спикеров."""
         with self._lock:
             return self._speaker_history.copy()
 
-    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False):
+    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False, uncertain_reason: str = ""):
         """Отправляет транскрипт всем подключённым клиентам."""
         message = json.dumps({
             "type": "transcript",
@@ -192,7 +200,8 @@ class KTalkBridge:
             "timestamp": timestamp,
             "is_continuation": is_continuation,
             "is_local": is_local,  # True = микрофон (я), False = системный звук (другие)
-            "uncertain": uncertain  # True = непонятно кто говорит (системный звук помечен как локальный)
+            "uncertain": uncertain,  # True = непонятно кто говорит
+            "uncertain_reason": uncertain_reason  # "local" = системный звук + локальный спикер, "mics_off" = все микрофоны выключены
         })
 
         # Отправляем асинхронно через event loop
@@ -345,7 +354,8 @@ class KTalkBridge:
                     self._participants[pid] = Participant(
                         id=pid,
                         name=p.get("name", "Unknown"),
-                        is_local=p.get("isLocal", False)
+                        is_local=p.get("isLocal", False),
+                        mic_muted=p.get("micMuted", True)
                     )
 
         elif msg_type == "connection_status":
