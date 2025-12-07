@@ -1543,6 +1543,9 @@ class LiveTranscriber:
         self._ktalk_bridge = None
         self._ktalk_current_speaker = None
 
+        # Meeting storage для сохранения транскриптов
+        self._meeting_storage = None
+
         # Буфер аудио для двухпроходной транскрипции (KTalk mode)
         self._audio_buffer = []  # [(timestamp, audio_chunk), ...]
         self._audio_buffer_max_seconds = 60  # Максимум 60 сек в буфере
@@ -1770,12 +1773,33 @@ class LiveTranscriber:
         print("-" * 60)
         print()
 
+        # Initialize Meeting Storage
+        try:
+            from meeting_storage import MeetingStorage
+            self._meeting_storage = MeetingStorage()
+            meeting_id = self._meeting_storage.start_session(
+                mic=self.mic_capture is not None,
+                system_audio=self.system_capture is not None,
+                ktalk=self.use_ktalk,
+                screencapture=self.use_screencapture
+            )
+            print(f"Meeting started: {meeting_id}")
+        except ImportError:
+            print("Warning: meeting_storage module not found, transcripts won't be saved", file=sys.stderr)
+            self._meeting_storage = None
+        except Exception as e:
+            print(f"Warning: MeetingStorage error: {e}, transcripts won't be saved", file=sys.stderr)
+            self._meeting_storage = None
+
         # Initialize KTalk bridge if needed
         if self.use_ktalk:
             try:
                 from ktalk_bridge import KTalkBridge
                 self._ktalk_bridge = KTalkBridge()
                 self._ktalk_bridge.set_speaker_callback(self._ktalk_speaker_callback)
+                # Connect MeetingStorage to KTalk bridge
+                if self._meeting_storage:
+                    self._ktalk_bridge.set_meeting_storage(self._meeting_storage)
                 self._ktalk_bridge.start()
                 print("KTalk bridge started, waiting for Chrome extension...")
                 time.sleep(1)
@@ -1909,6 +1933,18 @@ class LiveTranscriber:
                 if self._ktalk_bridge:
                     self._ktalk_bridge.send_transcript(mic_speaker_name, text, timestamp, is_continuation, is_local=True)
 
+                # Сохраняем в MeetingStorage
+                if self._meeting_storage:
+                    self._meeting_storage.append_segment(
+                        speaker=mic_speaker_name,
+                        speaker_id="local",
+                        text=text,
+                        is_local=True,
+                        is_continuation=is_continuation,
+                        uncertain=False,
+                        uncertain_reason=""
+                    )
+
             # Системный звук: диаризация
             elif self.use_ktalk:
                 # KTalk mode: используем данные от Chrome extension
@@ -1955,6 +1991,18 @@ class LiveTranscriber:
                         uncertain_reason = "local"
 
                     self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation, is_local=is_local, uncertain=uncertain, uncertain_reason=uncertain_reason)
+
+                    # Сохраняем в MeetingStorage
+                    if self._meeting_storage:
+                        self._meeting_storage.append_segment(
+                            speaker=speaker,
+                            speaker_id=speaker,  # Используем имя как ID для KTalk
+                            text=text,
+                            is_local=is_local,
+                            is_continuation=is_continuation,
+                            uncertain=uncertain,
+                            uncertain_reason=uncertain_reason
+                        )
 
             elif self.no_diarization:
                 line = f"[{timestamp}] {'speaker':{speaker_width}s}: {text}"
@@ -2015,6 +2063,12 @@ class LiveTranscriber:
             # Stop KTalk bridge
             if self._ktalk_bridge:
                 self._ktalk_bridge.stop()
+
+            # End meeting session
+            if self._meeting_storage:
+                meeting_id = self._meeting_storage.end_session()
+                if meeting_id:
+                    print(f"Meeting saved: {meeting_id}")
 
             if self.output_file and self.transcript_lines:
                 with open(self.output_file, 'w', encoding='utf-8') as f:

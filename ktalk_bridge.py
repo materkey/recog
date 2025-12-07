@@ -23,8 +23,11 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Callable
+from typing import Optional, Dict, List, Callable, TYPE_CHECKING
 import sys
+
+if TYPE_CHECKING:
+    from meeting_storage import MeetingStorage
 
 
 @dataclass
@@ -103,6 +106,9 @@ class KTalkBridge:
         self._on_speaker_change: Optional[Callable[[Optional[str], bool], None]] = None
         self._on_segment_complete: Optional[Callable[[SpeakerSegment], None]] = None
 
+        # Meeting storage для сохранения транскриптов
+        self._meeting_storage: Optional['MeetingStorage'] = None
+
     def set_speaker_callback(self, callback: Callable[[Optional[str], bool], None]):
         """
         Устанавливает callback для уведомления о смене спикера.
@@ -120,6 +126,15 @@ class KTalkBridge:
             callback: функция (segment: SpeakerSegment)
         """
         self._on_segment_complete = callback
+
+    def set_meeting_storage(self, storage: 'MeetingStorage'):
+        """
+        Устанавливает MeetingStorage для сохранения транскриптов.
+
+        Args:
+            storage: экземпляр MeetingStorage
+        """
+        self._meeting_storage = storage
 
     def get_completed_segment(self) -> Optional['SpeakerSegment']:
         """Возвращает и удаляет первый завершённый сегмент из очереди."""
@@ -214,6 +229,32 @@ class KTalkBridge:
                     )
                 except Exception:
                     pass  # Клиент может отключиться
+
+    async def _send_transcript_history(self):
+        """Отправляет историю транскрипта текущей встречи всем подключённым клиентам."""
+        if not self._meeting_storage:
+            return
+
+        segments = self._meeting_storage.get_current_transcript()
+        meeting_id = self._meeting_storage.get_current_meeting_id()
+
+        await self._broadcast_message({
+            "type": "transcript_history",
+            "meeting_id": meeting_id,
+            "segments": segments
+        })
+
+    async def _broadcast_message(self, data: dict):
+        """Отправляет сообщение всем подключённым клиентам."""
+        if not self._connected_clients:
+            return
+
+        message = json.dumps(data, ensure_ascii=False)
+        for client in list(self._connected_clients):
+            try:
+                await client.send(message)
+            except Exception:
+                pass  # Клиент может отключиться
 
     async def _handle_client(self, websocket):
         """Обрабатывает подключение клиента (Chrome extension)."""
@@ -369,6 +410,32 @@ class KTalkBridge:
                 print("[KTalk Bridge] Conference disconnected", file=sys.stderr)
             else:
                 print("[KTalk Bridge] Conference connected", file=sys.stderr)
+
+        elif msg_type == "meeting_join":
+            # Extension сообщает о входе во встречу KTalk
+            url = data.get("url")
+            title = data.get("title")
+            if self._meeting_storage and url:
+                meeting_id = self._meeting_storage.on_ktalk_join(url, title)
+                print(f"[KTalk Bridge] Joined meeting: {url}", file=sys.stderr)
+                # Отправляем историю транскрипта в extension
+                await self._send_transcript_history()
+
+        elif msg_type == "meeting_leave":
+            # Extension сообщает о выходе из встречи
+            reason = data.get("reason", "user_left")
+            if self._meeting_storage:
+                new_meeting_id = self._meeting_storage.on_ktalk_leave(reason)
+                print(f"[KTalk Bridge] Left meeting (reason: {reason}), new meeting: {new_meeting_id}", file=sys.stderr)
+                # Оповестить extension о новой встрече
+                await self._broadcast_message({
+                    "type": "new_meeting",
+                    "meeting_id": new_meeting_id
+                })
+
+        elif msg_type == "request_transcript":
+            # Extension запрашивает историю транскрипта (при reconnect)
+            await self._send_transcript_history()
 
         elif msg_type == "ping":
             # Heartbeat
