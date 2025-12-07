@@ -151,6 +151,7 @@
         padding: 8px 12px;
         border-bottom: 1px solid rgba(255,255,255,0.06);
         flex-shrink: 0;
+        background: rgba(0, 0, 0, 0.15);
       }
       .ktalk-transcript-copy-btn {
         display: flex;
