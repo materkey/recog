@@ -1425,12 +1425,10 @@ class LiveAudioCapture:
             return None
 
         chunk = audio[:samples_needed]
-        # Оставляем overlap
-        overlap_samples = int(0.5 * self.sample_rate)
-        if len(audio) > overlap_samples:
-            self.buffer = [audio[-overlap_samples:]]
-        else:
-            self.buffer = []
+        # Минимальный overlap + дедупликация в коде
+        overlap_samples = int(0.15 * self.sample_rate)  # 0.15s - минимум
+        overlap_start = max(0, samples_needed - overlap_samples)
+        self.buffer = [audio[overlap_start:]]
 
         return chunk.flatten()
 
@@ -1443,7 +1441,7 @@ class LiveTranscriber:
         mic_device=None,
         system_device=None,
         speaker_db_path=None,
-        chunk_duration=3.0,  # Уменьшено для быстрого отклика
+        chunk_duration=1.5,  # Минимальная задержка
         output_file=None,
         no_diarization=False
     ):
@@ -1484,42 +1482,35 @@ class LiveTranscriber:
             # Fallback на temp file если direct не работает
             return None
 
+    # Кэш для модели embedding (загружается один раз)
+    _ecapa_classifier = None
+
     def _get_embedding(self, audio_chunk: np.ndarray) -> Optional[np.ndarray]:
         """Извлекает embedding из аудио чанка используя SpeechBrain ECAPA-TDNN."""
         if self.no_diarization:
             return None
 
         try:
-            # Используем subprocess для SpeechBrain embedding
-            import tempfile
-            import soundfile as sf
+            import torch
+            import warnings
 
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
-                sf.write(f.name, audio_chunk, 16000)
-                tmp_path = f.name
+            # Ленивая загрузка модели (один раз)
+            if LiveTranscriber._ecapa_classifier is None:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning)
+                    warnings.filterwarnings("ignore", category=FutureWarning)
+                    from speechbrain.inference.speaker import EncoderClassifier
+                    LiveTranscriber._ecapa_classifier = EncoderClassifier.from_hparams(
+                        source="speechbrain/spkrec-ecapa-voxceleb",
+                        savedir="/tmp/speechbrain_ecapa"
+                    )
 
-            try:
-                result = subprocess.run(
-                    [str(PYANNOTE4_VENV / "bin" / "python"), "-c", f'''
-import json
-import torch
-import soundfile as sf
-from speechbrain.inference.speaker import EncoderClassifier
-
-waveform, sr = sf.read("{tmp_path}")
-audio_tensor = torch.from_numpy(waveform).float().unsqueeze(0)
-classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", savedir="/tmp/speechbrain_ecapa")
-emb = classifier.encode_batch(audio_tensor)
-print(json.dumps(emb.squeeze().tolist()))
-'''],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                if result.returncode == 0:
-                    return np.array(json.loads(result.stdout.strip()))
-            finally:
-                os.remove(tmp_path)
+            # Прямое извлечение embedding без temp файлов
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore")
+                audio_tensor = torch.from_numpy(audio_chunk).float().unsqueeze(0)
+                emb = LiveTranscriber._ecapa_classifier.encode_batch(audio_tensor)
+            return emb.squeeze().cpu().numpy()
 
         except Exception as e:
             print(f"Embedding error: {e}", file=sys.stderr)
@@ -1575,84 +1566,137 @@ print(json.dumps(emb.squeeze().tolist()))
 
         # Executor для фоновой диаризации
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        pending_future = None
-        pending_text = None
+
+        speaker_width = 16
+        pending_update = None  # (line_index, timestamp, text, future)
+        last_words = []  # Последние слова для дедупликации
+        last_speaker = None  # Для группировки реплик
+        last_speech_time = 0  # Время последней речи
+        speaker_turn_gap = 3.0  # Секунд тишины для нового "хода"
+
+        def normalize_word(w: str) -> str:
+            """Нормализует слово для сравнения."""
+            return ''.join(c.lower() for c in w if c.isalnum())
+
+        def deduplicate(text: str, prev_words: list) -> str:
+            """Убирает повторяющиеся слова в начале текста."""
+            if not prev_words or not text:
+                return text
+            words = text.split()
+            if not words:
+                return text
+            # Нормализуем для сравнения
+            norm_words = [normalize_word(w) for w in words]
+            norm_prev = [normalize_word(w) for w in prev_words]
+            # Ищем overlap: сколько первых слов нового текста совпадают с последними словами предыдущего
+            max_overlap = min(len(words), len(prev_words), 6)  # Максимум 6 слов overlap
+            for overlap_len in range(max_overlap, 0, -1):
+                if norm_words[:overlap_len] == norm_prev[-overlap_len:]:
+                    result = ' '.join(words[overlap_len:])
+                    return result if result.strip() else None
+            return text
 
         try:
             while self.running:
-                time.sleep(self.chunk_duration)
+                # Быстрый polling вместо длинного sleep
+                time.sleep(0.1)
+
+                # Проверяем готовность pending speaker ID
+                if pending_update is not None:
+                    line_idx, ts, txt, future, chunk_time = pending_update
+                    if future.done():
+                        try:
+                            speaker = future.result(timeout=0)
+                        except:
+                            speaker = "???"
+
+                        # Группировка: показываем имя только если спикер сменился или была пауза
+                        time_gap = chunk_time - last_speech_time
+                        is_continuation = (speaker == last_speaker and time_gap < speaker_turn_gap)
+
+                        if is_continuation:
+                            # Продолжение: без timestamp, имени и двоеточия
+                            indent = " " * (10 + 1 + speaker_width + 2)  # [HH:MM:SS] + пробел + имя + ": "
+                            final_line = f"{indent}{txt}"
+                        else:
+                            display_speaker = f"{speaker:{speaker_width}s}"
+                            last_speaker = speaker
+                            final_line = f"[{ts}] {display_speaker}: {txt}"
+
+                        last_speech_time = chunk_time
+
+                        # Обновляем строку если она последняя
+                        if line_idx == len(self.transcript_lines) - 1:
+                            sys.stdout.write(f"\r{final_line}")
+                            sys.stdout.flush()
+                            self.transcript_lines[line_idx] = final_line
+                        pending_update = None
 
                 chunk = self.capture.get_chunk(self.chunk_duration)
                 if chunk is None or len(chunk) < 1000:
                     continue
 
-                # Проверяем готовность предыдущей диаризации
-                if pending_future and pending_future.done():
-                    try:
-                        speaker = pending_future.result(timeout=0)
-                        # Обновляем строку: стираем "..." и печатаем с спикером
-                        if self._is_tty:
-                            print(f"\r\033[K[{pending_text[0]}] {speaker}: {pending_text[1]}", flush=True)
-                        self.transcript_lines[-1] = f"[{pending_text[0]}] {speaker}: {pending_text[1]}"
-                    except:
-                        pass
-                    pending_future = None
-                    pending_text = None
-
-                # ASR (direct tensor) — сразу выводим
+                # ASR — сразу
                 text = self._transcribe_direct(chunk)
                 if not text:
                     continue
 
+                # Дедупликация overlap
+                text = deduplicate(text, last_words)
+                if not text:
+                    continue
+                last_words = text.split()[-5:]  # Сохраняем последние 5 слов
+
                 timestamp = datetime.now().strftime("%H:%M:%S")
 
+                # Newline перед новой строкой (кроме первой)
+                if self.transcript_lines:
+                    sys.stdout.write("\n")
+
                 if self.no_diarization:
-                    # Без диаризации — сразу финальная строка
-                    line = f"[{timestamp}] speaker: {text}"
-                    print(line, flush=True)
+                    line = f"[{timestamp}] {'speaker':{speaker_width}s}: {text}"
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
                     self.transcript_lines.append(line)
                 else:
-                    # С диаризацией — черновик, потом обновим
-                    draft = f"[{timestamp}] ...: {text}"
-                    print(draft, end='', flush=True)
+                    # Черновик сразу — НЕ ЖДЁМ speaker ID
+                    # Отступ как у продолжения, потом перезапишем если новый спикер
+                    indent = " " * (10 + 1 + speaker_width + 2)  # [HH:MM:SS] + пробел + имя + ": "
+                    draft = f"{indent}{text}"
+                    sys.stdout.write(draft)
+                    sys.stdout.flush()
                     self.transcript_lines.append(draft)
 
-                    # Запускаем диаризацию в фоне
+                    # Speaker ID в фоне
                     chunk_copy = chunk.copy()
-                    pending_text = (timestamp, text)
+                    chunk_time = time.time()
 
                     def get_speaker(c):
                         emb = self._get_embedding(c)
                         return self._identify_speaker(emb)
 
-                    pending_future = executor.submit(get_speaker, chunk_copy)
-
-                    # Ждём немного — если диаризация быстрая, сразу покажем
-                    try:
-                        speaker = pending_future.result(timeout=0.5)
-                        if self._is_tty:
-                            print(f"\r\033[K[{timestamp}] {speaker}: {text}", flush=True)
-                        else:
-                            print(f" → {speaker}", flush=True)
-                        self.transcript_lines[-1] = f"[{timestamp}] {speaker}: {text}"
-                        pending_future = None
-                        pending_text = None
-                    except concurrent.futures.TimeoutError:
-                        # Диаризация ещё не готова — оставляем черновик
-                        print(flush=True)  # Переход на новую строку
+                    future = executor.submit(get_speaker, chunk_copy)
+                    pending_update = (len(self.transcript_lines) - 1, timestamp, text, future, chunk_time)
 
         except KeyboardInterrupt:
+            pass  # Обработка в finally
+
+        finally:
             print("\n" + "-" * 60)
             print("Остановлено.")
 
-        finally:
-            self.capture.stop()
             self.running = False
+            executor.shutdown(wait=False, cancel_futures=True)
+            self.capture.stop()
 
             if self.output_file and self.transcript_lines:
                 with open(self.output_file, 'w', encoding='utf-8') as f:
                     f.write("\n".join(self.transcript_lines))
                 print(f"Транскрипт сохранён в {self.output_file}")
+
+            # Принудительный выход чтобы не ждать фоновые потоки
+            import os
+            os._exit(0)
 
 
 def live_pipeline(
