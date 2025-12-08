@@ -1911,6 +1911,11 @@ class LiveTranscriber:
 
             # Микрофон: без диаризации, фиксированное имя
             if is_mic:
+                # Пропускаем запись микрофона если на KTalk встрече и mic замьючен
+                # (то что говорится при mute не слышат другие участники)
+                if self._ktalk_bridge and self._ktalk_bridge.is_local_mic_muted():
+                    return
+
                 time_gap = chunk_time - state.last_speech_time
                 is_continuation = (state.last_speaker == mic_speaker_name and time_gap < speaker_turn_gap)
 
