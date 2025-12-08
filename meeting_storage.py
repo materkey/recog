@@ -11,7 +11,7 @@ Meeting Storage - хранилище митингов для KTalk режима.
 """
 
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, asdict
 from typing import Optional
 from urllib.parse import urlparse
@@ -21,6 +21,7 @@ import shutil
 
 
 UTC = timezone.utc
+MSK = timezone(timedelta(hours=3))
 
 
 @dataclass
@@ -273,7 +274,7 @@ class MeetingStorage:
         segment = TranscriptSegment(
             id=self._segment_counter,
             ts=now.isoformat(),
-            ts_display=now.strftime("%H:%M:%S"),
+            ts_display=now.astimezone(MSK).strftime("%H:%M:%S"),
             speaker=speaker,
             speaker_id=speaker_id,
             text=text,
