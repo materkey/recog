@@ -2382,10 +2382,22 @@ def main():
                         return " (🔇?)"
                     return " (?)"
 
+                # Конвертация в MSK
+                from datetime import datetime, timezone, timedelta
+                MSK = timezone(timedelta(hours=3))
+
+                def ts_to_msk(ts_iso: str) -> str:
+                    """Конвертирует ISO timestamp в MSK HH:MM:SS."""
+                    try:
+                        dt = datetime.fromisoformat(ts_iso)
+                        return dt.astimezone(MSK).strftime("%H:%M:%S")
+                    except:
+                        return ""
+
                 lines = []
                 for seg in segments:
                     speaker = seg["speaker"] + get_uncertain_suffix(seg)
-                    time = seg.get("ts_display", "")
+                    time = ts_to_msk(seg.get("ts", "")) or seg.get("ts_display", "")
                     text = seg["text"]
                     lines.append(f"**{speaker}** *[{time}]*: {text}")
 
