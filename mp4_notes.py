@@ -1735,8 +1735,8 @@ class LiveTranscriber:
         sys.stdout.write(f"{'─' * 60}\n")
         sys.stdout.flush()
 
-        # Обновляем transcript_lines
-        final_line = f"[{timestamp}] {speaker:{speaker_width}s}: {final_text}"
+        # Обновляем transcript_lines (markdown формат)
+        final_line = f"\n**{speaker}** *[{timestamp}]*: {final_text}\n"
         self.transcript_lines.append(final_line)
 
     def run(self):
@@ -1875,18 +1875,15 @@ class LiveTranscriber:
             time_gap = chunk_time - state.last_speech_time
             is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap)
 
-            if is_continuation:
-                indent = " " * (10 + 1 + speaker_width + 2)
-                final_line = f"{indent}{txt}"
-            else:
-                display_speaker = f"{speaker:{speaker_width}s}"
-                state.last_speaker = speaker
-                final_line = f"[{ts}] {display_speaker}: {txt}"
-
+            state.last_speaker = speaker
             state.last_speech_time = chunk_time
 
+            # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+            final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
+
             if line_idx == len(self.transcript_lines) - 1:
-                sys.stdout.write(f"\r{final_line}")
+                # Clear draft line and write final
+                sys.stdout.write(f"\r\033[K{final_line}")
                 sys.stdout.flush()
                 self.transcript_lines[line_idx] = final_line
             state.pending_update = None
@@ -1917,14 +1914,11 @@ class LiveTranscriber:
                 time_gap = chunk_time - state.last_speech_time
                 is_continuation = (state.last_speaker == mic_speaker_name and time_gap < speaker_turn_gap)
 
-                if is_continuation:
-                    indent = " " * (10 + 1 + speaker_width + 2)
-                    line = f"{indent}{text}"
-                else:
-                    state.last_speaker = mic_speaker_name
-                    line = f"[{timestamp}] {mic_speaker_name:{speaker_width}s}: {text}"
-
+                state.last_speaker = mic_speaker_name
                 state.last_speech_time = chunk_time
+
+                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+                line = f"\n**{mic_speaker_name}** *[{timestamp}]*: {text}\n"
                 sys.stdout.write(line)
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
@@ -1961,14 +1955,11 @@ class LiveTranscriber:
                 time_gap = chunk_time - state.last_speech_time
                 is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap)
 
-                if is_continuation:
-                    indent = " " * (10 + 1 + speaker_width + 2)
-                    line = f"{indent}{text}"
-                else:
-                    state.last_speaker = speaker
-                    line = f"[{timestamp}] {speaker:{speaker_width}s}: {text}"
-
+                state.last_speaker = speaker
                 state.last_speech_time = chunk_time
+
+                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+                line = f"\n**{speaker}** *[{timestamp}]*: {text}\n"
                 sys.stdout.write(line)
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
@@ -2010,13 +2001,14 @@ class LiveTranscriber:
                         )
 
             elif self.no_diarization:
-                line = f"[{timestamp}] {'speaker':{speaker_width}s}: {text}"
+                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+                line = f"\n**speaker** *[{timestamp}]*: {text}\n"
                 sys.stdout.write(line)
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
             else:
-                indent = " " * (10 + 1 + speaker_width + 2)
-                draft = f"{indent}{text}"
+                # Placeholder для async diarization
+                draft = f"\n**...** *[{timestamp}]*: {text}\n"
                 sys.stdout.write(draft)
                 sys.stdout.flush()
                 self.transcript_lines.append(draft)
