@@ -12,7 +12,7 @@ import AVFoundation
 class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
     var stream: SCStream?
     let sampleRate: Double = 16000
-    var running = true
+    let audioQueue = DispatchQueue(label: "audio.processing", qos: .userInteractive)
 
     func start() async throws {
         // Get shareable content
@@ -44,8 +44,8 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
         // Create stream
         stream = SCStream(filter: filter, configuration: config, delegate: self)
 
-        // Add output
-        try stream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: .main)
+        // Add output on dedicated queue (not main to avoid CPU spinning)
+        try stream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
 
         // Start
         try await stream?.startCapture()
@@ -53,21 +53,17 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
         fputs("Audio capture started. Outputting raw PCM (16kHz, mono, float32) to stdout.\n", stderr)
         fputs("Press Ctrl+C to stop.\n", stderr)
 
-        // Keep running
+        // Handle SIGINT
         signal(SIGINT) { _ in
             fputs("\nStopping...\n", stderr)
             exit(0)
-        }
-
-        while running {
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         }
     }
 
     // SCStreamDelegate
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         fputs("Stream stopped with error: \(error)\n", stderr)
-        running = false
+        exit(1)
     }
 
     // SCStreamOutput
@@ -88,9 +84,10 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
         let sampleCount = length / 4
 
         // Simple decimation (48kHz -> 16kHz = factor of 3)
-        var outputSamples: [Float32] = []
-        for i in stride(from: 0, to: sampleCount, by: 3) {
-            outputSamples.append(float32Pointer[i])
+        let outputCount = (sampleCount + 2) / 3
+        var outputSamples = [Float32](repeating: 0, count: outputCount)
+        for (outIdx, inIdx) in stride(from: 0, to: sampleCount, by: 3).enumerated() {
+            outputSamples[outIdx] = float32Pointer[inIdx]
         }
 
         // Write to stdout as raw bytes
