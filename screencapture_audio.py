@@ -79,10 +79,30 @@ class ScreenCaptureAudio:
         )
 
     def _reader_loop(self):
-        """Read audio data from subprocess stdout."""
+        """Read audio data from subprocess stdout with auto-restart."""
         bytes_per_chunk = self.SAMPLE_RATE * self.BYTES_PER_SAMPLE // 10  # 100ms chunks
+        restart_count = 0
+        max_restarts = 5
 
-        while self.running and self.process and self.process.poll() is None:
+        while self.running:
+            # Check if process is alive
+            if not self.process or self.process.poll() is not None:
+                if restart_count >= max_restarts:
+                    print(f"[ScreenCaptureAudio] Max restarts ({max_restarts}) reached, giving up", file=sys.stderr)
+                    break
+
+                # Process died, try to restart
+                print(f"[ScreenCaptureAudio] Process died, restarting... (attempt {restart_count + 1})", file=sys.stderr)
+                try:
+                    self._restart_process()
+                    restart_count += 1
+                    import time
+                    time.sleep(1)  # Wait for process to stabilize
+                    continue
+                except Exception as e:
+                    print(f"[ScreenCaptureAudio] Restart failed: {e}", file=sys.stderr)
+                    break
+
             try:
                 data = self.process.stdout.read(bytes_per_chunk)
                 if data:
@@ -90,10 +110,43 @@ class ScreenCaptureAudio:
                     samples = np.frombuffer(data, dtype=np.float32)
                     with self._lock:
                         self.buffer.append(samples)
+                    # Reset restart count on successful read
+                    restart_count = 0
             except Exception as e:
                 if self.running:
                     print(f"[ScreenCaptureAudio] Reader error: {e}", file=sys.stderr)
-                break
+                # Don't break, let the loop try to restart
+
+    def _restart_process(self):
+        """Restart the audio capture subprocess."""
+        # Clean up old process
+        if self.process:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=1.0)
+            except:
+                try:
+                    self.process.kill()
+                except:
+                    pass
+
+        # Start new process
+        self.process = subprocess.Popen(
+            [self._utility_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
+
+        # Wait for startup
+        import time
+        time.sleep(0.5)
+
+        if self.process.poll() is not None:
+            stderr = self.process.stderr.read().decode()
+            raise RuntimeError(f"Audio capture failed to restart: {stderr}")
+
+        print(f"[ScreenCaptureAudio] Restarted (PID: {self.process.pid})", file=sys.stderr)
 
     def start(self):
         """Start capturing system audio."""

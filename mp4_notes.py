@@ -1957,7 +1957,6 @@ class LiveTranscriber:
                     # Совсем никого не знаем - используем Unknown и помечаем как uncertain
                     speaker = "Unknown"
                     no_speaker_yet = True
-                    print(f"[KTalk] No speaker yet: {text[:50]}...", file=sys.stderr)
 
                 time_gap = chunk_time - state.last_speech_time
                 is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap)

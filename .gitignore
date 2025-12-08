@@ -24,3 +24,6 @@ venv/
 .vscode/
 venv-pyannote/
 venv-gigaam
+
+# Service logs
+logs/
