@@ -1952,10 +1952,12 @@ class LiveTranscriber:
 
                 # Используем спикера от extension, или последнего известного из транскрипции
                 speaker = ktalk_speaker or state.last_speaker
+                no_speaker_yet = False
                 if not speaker:
-                    # Совсем никого не знаем - пропускаем (логируем потерянный текст)
-                    print(f"[KTalk] No speaker yet, skipped: {text[:50]}...", file=sys.stderr)
-                    return
+                    # Совсем никого не знаем - используем Unknown и помечаем как uncertain
+                    speaker = "Unknown"
+                    no_speaker_yet = True
+                    print(f"[KTalk] No speaker yet: {text[:50]}...", file=sys.stderr)
 
                 time_gap = chunk_time - state.last_speech_time
                 is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap)
@@ -1978,10 +1980,14 @@ class LiveTranscriber:
                     all_mics_muted = self._ktalk_bridge.are_all_mics_muted()
 
                     # Определяем неопределённость и её причину
-                    # Приоритет: all_mics_muted > is_local (если все микрофоны выключены, это важнее)
+                    # Приоритет: no_speaker > all_mics_muted > is_local
                     uncertain = False
                     uncertain_reason = ""
-                    if all_mics_muted:
+                    if no_speaker_yet:
+                        # Ещё не было информации о спикере от extension
+                        uncertain = True
+                        uncertain_reason = "no_speaker"
+                    elif all_mics_muted:
                         # Все микрофоны выключены - непонятно кто говорит
                         uncertain = True
                         uncertain_reason = "mics_off"
