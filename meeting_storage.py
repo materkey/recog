@@ -157,14 +157,26 @@ class MeetingStorage:
         Returns:
             meeting_id текущей встречи
         """
-        if not self.current_meeting_path:
-            # Нет активной встречи - создаём
-            self._create_meeting(source="ktalk")
-
         parsed = urlparse(url)
         # Извлекаем ID: /abcd1234wxyz или /history/ExampleHistoryId0001
         path_parts = parsed.path.strip("/").split("/")
         live_id = path_parts[-1] if path_parts else None
+
+        # Проверяем, нужно ли создать новую встречу
+        need_new_meeting = False
+        if not self.current_meeting_path:
+            need_new_meeting = True
+        else:
+            # Проверяем, изменился ли live_id (новая встреча по другой ссылке)
+            meta = self._load_meta()
+            current_live_id = meta.get("ktalk", {}).get("live_id")
+            if current_live_id and current_live_id != live_id:
+                # Другая встреча - завершаем старую, создаём новую
+                prev_id = self._end_current_meeting(end_reason="new_meeting")
+                need_new_meeting = True
+
+        if need_new_meeting:
+            self._create_meeting(source="ktalk")
 
         meta = self._load_meta()
 
