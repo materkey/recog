@@ -201,6 +201,15 @@ class KTalkBridge:
                 return True
             return all(p.mic_muted for p in self._participants.values())
 
+    def is_local_mic_muted(self) -> bool:
+        """Возвращает True если микрофон локального пользователя замьючен в KTalk."""
+        with self._lock:
+            for p in self._participants.values():
+                if p.is_local:
+                    return p.mic_muted
+            # Нет локального участника - считаем что не замьючен
+            return False
+
     def get_speaker_history(self) -> List[SpeakerEvent]:
         """Возвращает историю спикеров."""
         with self._lock:
