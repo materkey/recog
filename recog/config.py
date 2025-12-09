@@ -1,0 +1,45 @@
+"""
+Конфигурация и константы для Recog.
+"""
+
+import os
+from pathlib import Path
+
+
+def load_dotenv(env_path: Path = None):
+    """Загружает переменные окружения из .env файла."""
+    if env_path is None:
+        env_path = Path(__file__).parent.parent / ".env"
+
+    if not env_path.exists():
+        return
+
+    with open(env_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+
+
+# Загружаем .env при импорте модуля
+load_dotenv()
+
+# ============================================================================
+# КОНФИГУРАЦИЯ
+# ============================================================================
+
+DEFAULT_MODEL = "v3_e2e_rnnt"
+DEFAULT_CHUNK_DURATION = 20.0
+DEFAULT_OVERLAP = 1.0
+# Порог косинусного сходства для идентификации спикеров
+SPEAKER_SIMILARITY_THRESHOLD = 0.30
+
+# Путь к venv для pyannote 4.x
+PYANNOTE4_VENV = Path(__file__).parent.parent / "venv-pyannote"
+DIARIZE_WORKER = Path(__file__).parent.parent / "diarize_worker.py"

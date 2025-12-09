@@ -21,7 +21,6 @@ import shutil
 
 
 UTC = timezone.utc
-MSK = timezone(timedelta(hours=3))
 
 
 @dataclass
@@ -286,7 +285,7 @@ class MeetingStorage:
         segment = TranscriptSegment(
             id=self._segment_counter,
             ts=now.isoformat(),
-            ts_display=now.astimezone(MSK).strftime("%H:%M:%S"),
+            ts_display=now.astimezone().strftime("%H:%M:%S"),
             speaker=speaker,
             speaker_id=speaker_id,
             text=text,
