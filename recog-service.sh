@@ -162,6 +162,22 @@ cmd_restart() {
     cmd_start
 }
 
+cmd_restart_web() {
+    info "Restarting frontend service..."
+    stop_service "$FRONTEND_PLIST_NAME"
+    sleep 1
+    start_service "$FRONTEND_PLIST_NAME"
+    info "Frontend restarted. Available at: http://127.0.0.1:8080"
+}
+
+cmd_restart_live() {
+    info "Restarting live transcription service..."
+    stop_service "$LIVE_PLIST_NAME"
+    sleep 1
+    start_service "$LIVE_PLIST_NAME"
+    info "Live transcription restarted."
+}
+
 cmd_status() {
     echo "=== Service Status ==="
     echo ""
@@ -219,15 +235,17 @@ cmd_help() {
     echo "Usage: $0 <command>"
     echo ""
     echo "Commands:"
-    echo "  install   - Install and enable both services"
-    echo "  uninstall - Stop and remove both services"
-    echo "  start     - Start both services"
-    echo "  stop      - Stop both services"
-    echo "  restart   - Restart both services"
-    echo "  status    - Show status of both services"
-    echo "  logs      - Tail live stderr logs"
-    echo "  logs-out  - Tail live stdout logs (transcripts)"
-    echo "  logs-web  - Tail frontend logs"
+    echo "  install      - Install and enable both services"
+    echo "  uninstall    - Stop and remove both services"
+    echo "  start        - Start both services"
+    echo "  stop         - Stop both services"
+    echo "  restart      - Restart both services"
+    echo "  restart-web  - Restart frontend only"
+    echo "  restart-live - Restart live transcription only"
+    echo "  status       - Show status of both services"
+    echo "  logs         - Tail live stderr logs"
+    echo "  logs-out     - Tail live stdout logs (transcripts)"
+    echo "  logs-web     - Tail frontend logs"
     echo ""
     echo "Services:"
     echo "  - Live transcription: mp4_notes.py live --screencapture --ktalk"
@@ -236,15 +254,17 @@ cmd_help() {
 
 # Main
 case "${1:-}" in
-    install)   cmd_install ;;
-    uninstall) cmd_uninstall ;;
-    start)     cmd_start ;;
-    stop)      cmd_stop ;;
-    restart)   cmd_restart ;;
-    status)    cmd_status ;;
-    logs)      cmd_logs ;;
-    logs-out)  cmd_logs_out ;;
-    logs-web)  cmd_logs_web ;;
+    install)      cmd_install ;;
+    uninstall)    cmd_uninstall ;;
+    start)        cmd_start ;;
+    stop)         cmd_stop ;;
+    restart)      cmd_restart ;;
+    restart-web)  cmd_restart_web ;;
+    restart-live) cmd_restart_live ;;
+    status)       cmd_status ;;
+    logs)         cmd_logs ;;
+    logs-out)     cmd_logs_out ;;
+    logs-web)     cmd_logs_web ;;
     help|--help|-h) cmd_help ;;
     *)
         cmd_help
