@@ -372,18 +372,87 @@ class MeetingStorage:
         """Получить ID текущей встречи."""
         return self.current_meeting_id
 
-    def list_meetings(self) -> list[dict]:
+    def list_meetings(self, include_active: bool = True) -> list[dict]:
         """
         Список всех встреч для UI.
 
+        Args:
+            include_active: Включать ли активные (незавершённые) встречи
+
         Returns:
-            Список метаданных встреч (из index.json)
+            Список метаданных встреч (из index.json + активные)
         """
+        meetings = []
+
+        # Завершённые встречи из index.json
         index_path = self.base_path / "index.json"
         if index_path.exists():
             data = json.loads(index_path.read_text(encoding="utf-8"))
-            return data.get("meetings", [])
-        return []
+            meetings = data.get("meetings", [])
+
+        if include_active:
+            # Добавить активные (незавершённые) встречи
+            active = self.list_active_meetings()
+            # Добавить в начало (они самые свежие)
+            meetings = active + meetings
+
+        return meetings
+
+    def list_active_meetings(self) -> list[dict]:
+        """
+        Список активных (незавершённых) встреч.
+
+        Сканирует директории meetings/ и находит те, где ended_at is null.
+
+        Returns:
+            Список метаданных активных встреч
+        """
+        active = []
+
+        for meeting_dir in self.base_path.iterdir():
+            if not meeting_dir.is_dir():
+                continue
+
+            meta_path = meeting_dir / "meta.json"
+            if not meta_path.exists():
+                continue
+
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+                # Только незавершённые
+                if meta.get("ended_at") is not None:
+                    continue
+
+                # Формат как в index.json
+                active.append({
+                    "id": meta["id"],
+                    "created_at": meta["created_at"],
+                    "ended_at": None,
+                    "duration_seconds": self._calc_duration(meta["created_at"]),
+                    "title": meta.get("title"),
+                    "source": meta.get("source"),
+                    "end_reason": None,
+                    "ktalk_live_url": meta.get("ktalk", {}).get("live_url"),
+                    "segment_count": meta.get("stats", {}).get("segment_count", 0),
+                    "participants": [p["name"] for p in meta.get("participants", {}).values()],
+                    "is_active": True  # Маркер активной встречи
+                })
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        # Сортировка по дате создания (новые сверху)
+        active.sort(key=lambda m: m["created_at"], reverse=True)
+        return active
+
+    def _calc_duration(self, created_at: str) -> int:
+        """Вычислить длительность от created_at до сейчас."""
+        try:
+            created = datetime.fromisoformat(created_at)
+            now = datetime.now(UTC)
+            return int((now - created).total_seconds())
+        except (ValueError, TypeError):
+            return 0
 
     def get_meeting(self, meeting_id: str) -> Optional[dict]:
         """
