@@ -18,8 +18,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
+from ai_provider import get_provider, build_prompt
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -299,6 +302,71 @@ async def get_live_status():
             "current_meeting": active_meetings[0] if active_meetings else None,
             "active_meetings": active_meetings
         })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- AI Analysis ---
+
+class AnalyzeRequest(BaseModel):
+    question: str = "increment"  # "increment" | "summary" | "custom"
+    custom_prompt: Optional[str] = None
+
+
+class AnalyzeResponse(BaseModel):
+    answer: str
+    provider: str
+
+
+@app.post("/api/meetings/{meeting_id}/analyze")
+async def analyze_meeting(meeting_id: str, request: AnalyzeRequest):
+    """Analyze meeting transcript with AI."""
+    try:
+        # 1. Load meeting
+        storage = get_storage()
+        meeting = storage.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        # 2. Get local participant name
+        participants = meeting["meta"].get("participants", {})
+        local_participant = next(
+            (p["name"] for p in participants.values() if p.get("is_local")),
+            "User"
+        )
+
+        # 3. Build transcript text
+        segments = meeting.get("segments", [])
+        if not segments:
+            raise HTTPException(status_code=400, detail="Meeting has no transcript")
+
+        transcript = "\n".join(
+            f"[{s['ts_display']}] {s['speaker']}: {s['text']}"
+            for s in segments
+        )
+
+        # Limit transcript length (rough estimate: 4 chars per token)
+        max_chars = 100000  # ~25k tokens
+        if len(transcript) > max_chars:
+            transcript = transcript[-max_chars:]
+            transcript = "...(начало обрезано)...\n" + transcript
+
+        # 4. Build prompt
+        prompt = build_prompt(
+            question=request.question,
+            transcript=transcript,
+            user_name=local_participant,
+            custom_prompt=request.custom_prompt
+        )
+
+        # 5. Call AI provider
+        provider = get_provider()
+        answer = await provider.complete(prompt)
+
+        return AnalyzeResponse(answer=answer, provider=provider.name)
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
