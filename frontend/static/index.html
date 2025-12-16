@@ -47,6 +47,7 @@
                     <div class="meeting-actions">
                         <button class="btn" onclick="copyToClipboard()">Copy</button>
                         <button class="btn" onclick="exportMarkdown()">Export MD</button>
+                        <button class="btn btn-ai" onclick="analyzeIncrement()">My increment</button>
                     </div>
                 </div>
                 <div class="meeting-meta" id="meeting-meta"></div>
@@ -69,6 +70,23 @@
                 <div id="live-transcript" class="transcript live-transcript"></div>
             </div>
         </main>
+    </div>
+
+    <!-- AI Analysis Modal -->
+    <div id="ai-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>AI Analysis</h3>
+                <button class="modal-close" onclick="closeAiModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="ai-response">
+                Loading...
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="copyAiResponse()">Copy</button>
+                <button class="btn" onclick="closeAiModal()">Close</button>
+            </div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>

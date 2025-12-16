@@ -595,6 +595,56 @@ function exportMarkdown() {
 }
 
 
+// --- AI Analysis ---
+
+async function analyzeIncrement() {
+    const meeting = views.meeting;
+    if (!meeting.id) return;
+
+    // Show modal with loading
+    document.getElementById('ai-modal').style.display = 'flex';
+    document.getElementById('ai-response').innerHTML =
+        '<div class="loading">Analyzing transcript...</div>';
+
+    try {
+        const response = await fetch(`/api/meetings/${meeting.id}/analyze`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({question: 'increment'})
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Analysis failed');
+        }
+
+        const data = await response.json();
+        document.getElementById('ai-response').innerHTML =
+            `<div class="ai-answer">${escapeHtml(data.answer).replace(/\n/g, '<br>')}</div>
+             <div class="ai-provider">via ${escapeHtml(data.provider)}</div>`;
+    } catch (e) {
+        document.getElementById('ai-response').innerHTML =
+            `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function closeAiModal() {
+    document.getElementById('ai-modal').style.display = 'none';
+}
+
+function copyAiResponse() {
+    const text = document.querySelector('.ai-answer')?.textContent;
+    if (text) {
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.querySelector('.modal-footer .btn');
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = originalText, 1500);
+        });
+    }
+}
+
+
 // --- Init ---
 
 document.addEventListener('DOMContentLoaded', () => {
