@@ -86,24 +86,52 @@ class ClaudeCliProvider(AIProvider):
 class CodexCliProvider(AIProvider):
     """Codex CLI - uses ChatGPT Pro subscription."""
 
+    def __init__(self):
+        self.model = os.getenv("CODEX_MODEL", "gpt-5.2")
+
     @property
     def name(self) -> str:
-        return "codex-cli"
+        return f"codex-cli ({self.model})"
 
     async def complete(self, prompt: str) -> str:
+        import json as json_module
+
+        # Codex exec expects prompt via stdin when using "-"
         proc = await asyncio.create_subprocess_exec(
             "codex", "exec",
-            "--prompt", prompt,
+            "-m", self.model,
+            "--json",
+            "-",
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await proc.communicate()
+        stdout, stderr = await proc.communicate(input=prompt.encode())
 
         if proc.returncode != 0:
             error_msg = stderr.decode().strip() if stderr else "Unknown error"
             raise Exception(f"Codex CLI error: {error_msg}")
 
-        return stdout.decode().strip()
+        # Parse JSON lines output to find the agent message
+        answer_parts = []
+        for line in stdout.decode().strip().split('\n'):
+            if not line:
+                continue
+            try:
+                event = json_module.loads(line)
+                if event.get("type") == "item.completed":
+                    item = event.get("item", {})
+                    if item.get("type") == "agent_message":
+                        answer_parts.append(item.get("text", ""))
+                elif event.get("type") == "error":
+                    raise Exception(event.get("message", "Unknown error"))
+            except json_module.JSONDecodeError:
+                continue
+
+        if not answer_parts:
+            raise Exception("No response from Codex")
+
+        return "\n".join(answer_parts)
 
 
 class OpenRouterProvider(AIProvider):
