@@ -715,10 +715,49 @@ function updateAiResponseDisplay(provider, text, isDone) {
 
     const providerName = aiProviderNames[provider] || provider;
     const statusIndicator = isDone ? '' : '<span class="streaming-indicator">●</span> ';
+    const formattedText = renderMarkdown(text);
 
     container.innerHTML =
-        `<div class="ai-answer">${statusIndicator}${escapeHtml(text).replace(/\n/g, '<br>')}</div>
+        `<div class="ai-answer">${statusIndicator}${formattedText}</div>
          <div class="ai-provider">via ${escapeHtml(providerName)}</div>`;
+}
+
+function renderMarkdown(text) {
+    // Simple markdown renderer for headers, lists, bold, italic
+    let html = escapeHtml(text);
+
+    // Headers: ## Header
+    html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+
+    // Bold: **text** or __text__
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+
+    // Italic: *text* or _text_
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+
+    // Code: `code`
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    // Lists: - item or * item
+    html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+    html = html.replace(/^\* (.+)$/gm, '<li>$1</li>');
+
+    // Wrap consecutive <li> in <ul>
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+    // Line breaks for remaining text
+    html = html.replace(/\n/g, '<br>');
+
+    // Clean up extra <br> after block elements
+    html = html.replace(/<\/h3><br>/g, '</h3>');
+    html = html.replace(/<\/h4><br>/g, '</h4>');
+    html = html.replace(/<\/ul><br>/g, '</ul>');
+    html = html.replace(/<br><ul>/g, '<ul>');
+
+    return html;
 }
 
 function switchAiTab(provider) {
