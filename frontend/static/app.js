@@ -784,8 +784,8 @@ function closeAiModal() {
 }
 
 function copyAiResponse() {
-    const activeContent = document.querySelector('.ai-tab-content.active .ai-answer');
-    const text = activeContent?.textContent;
+    // Copy raw markdown from aiResponses, not rendered HTML
+    const text = aiResponses[activeAiTab];
     if (text) {
         navigator.clipboard.writeText(text).then(() => {
             const btn = document.querySelector('.modal-footer .btn');
