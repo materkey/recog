@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -431,6 +431,99 @@ async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/meetings/{meeting_id}/analyze-stream")
+async def analyze_meeting_stream(meeting_id: str, question: str = "increment"):
+    """Stream AI analysis from multiple providers using SSE."""
+
+    async def generate():
+        try:
+            # 1. Load meeting
+            storage = get_storage()
+            meeting = storage.get_meeting(meeting_id)
+            if not meeting:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Meeting not found'})}\n\n"
+                return
+
+            # 2. Get local participant names
+            participants = meeting["meta"].get("participants", {})
+            local_names = [p["name"] for p in participants.values() if p.get("is_local")]
+            local_participant = ", ".join(local_names) if local_names else "User"
+
+            # 3. Build transcript text
+            segments = meeting.get("segments", [])
+            if not segments:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Meeting has no transcript'})}\n\n"
+                return
+
+            transcript = "\n".join(
+                f"[{s['ts_display']}] {s['speaker']}: {s['text']}"
+                for s in segments
+            )
+
+            # Limit transcript length
+            max_chars = 100000
+            if len(transcript) > max_chars:
+                transcript = transcript[-max_chars:]
+                transcript = "...(начало обрезано)...\n" + transcript
+
+            # 4. Build prompt
+            prompt = build_prompt(
+                question=question,
+                transcript=transcript,
+                user_name=local_participant,
+                custom_prompt=None
+            )
+
+            # 5. Stream from all providers in parallel
+            providers = get_all_providers()
+
+            # Send provider info
+            for provider in providers:
+                yield f"data: {json.dumps({'type': 'start', 'provider': provider.key, 'name': provider.name})}\n\n"
+
+            async def stream_provider(provider):
+                """Stream from a single provider and yield SSE events."""
+                events = []
+                try:
+                    async for text, is_done in provider.stream(prompt):
+                        event = {
+                            'type': 'chunk' if not is_done else 'done',
+                            'provider': provider.key,
+                            'text': text
+                        }
+                        events.append(event)
+                except Exception as e:
+                    events.append({
+                        'type': 'error',
+                        'provider': provider.key,
+                        'message': str(e)
+                    })
+                return events
+
+            # Run all providers concurrently
+            tasks = [stream_provider(p) for p in providers]
+
+            # Process as they complete
+            for coro in asyncio.as_completed(tasks):
+                events = await coro
+                for event in events:
+                    yield f"data: {json.dumps(event)}\n\n"
+
+            yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 # --- WebSocket ---

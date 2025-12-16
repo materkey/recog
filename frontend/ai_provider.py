@@ -65,6 +65,12 @@ class AIProvider(ABC):
         """Send prompt and get completion."""
         pass
 
+    async def stream(self, prompt: str):
+        """Stream completion chunks. Yields (chunk_text, is_done) tuples."""
+        # Default implementation: just yield the full result
+        result = await self.complete(prompt)
+        yield result, True
+
 
 class ClaudeCliProvider(AIProvider):
     """Claude CLI - uses Max/Pro subscription."""
@@ -95,6 +101,54 @@ class ClaudeCliProvider(AIProvider):
             raise Exception(f"Claude CLI error: {error_msg}")
 
         return stdout.decode().strip()
+
+    async def stream(self, prompt: str):
+        """Stream Claude CLI response."""
+        import json as json_module
+
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "-p", prompt,
+            "--model", self.model,
+            "--output-format", "stream-json",
+            "--verbose",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        full_text = ""
+        try:
+            async for line in proc.stdout:
+                line = line.decode().strip()
+                if not line:
+                    continue
+                try:
+                    event = json_module.loads(line)
+                    if event.get("type") == "assistant":
+                        msg = event.get("message", {})
+                        content = msg.get("content", [])
+                        for block in content:
+                            if block.get("type") == "text":
+                                text = block.get("text", "")
+                                if text:
+                                    full_text = text  # Claude sends full text each time
+                                    yield text, False
+                    elif event.get("type") == "result":
+                        result = event.get("result", full_text)
+                        yield result, True
+                        return
+                except json_module.JSONDecodeError:
+                    continue
+
+            await proc.wait()
+            if proc.returncode != 0:
+                stderr = await proc.stderr.read()
+                raise Exception(f"Claude CLI error: {stderr.decode().strip()}")
+
+            # If we didn't get a result event, yield what we have
+            if full_text:
+                yield full_text, True
+        except Exception as e:
+            raise Exception(f"Claude streaming error: {str(e)}")
 
 
 class CodexCliProvider(AIProvider):
@@ -150,6 +204,58 @@ class CodexCliProvider(AIProvider):
             raise Exception("No response from Codex")
 
         return "\n".join(answer_parts)
+
+    async def stream(self, prompt: str):
+        """Stream Codex CLI response."""
+        import json as json_module
+
+        proc = await asyncio.create_subprocess_exec(
+            "codex", "exec",
+            "-m", self.model,
+            "--json",
+            "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        # Write prompt to stdin
+        proc.stdin.write(prompt.encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
+
+        full_text = ""
+        try:
+            async for line in proc.stdout:
+                line = line.decode().strip()
+                if not line:
+                    continue
+                try:
+                    event = json_module.loads(line)
+                    if event.get("type") == "item.completed":
+                        item = event.get("item", {})
+                        if item.get("type") == "agent_message":
+                            text = item.get("text", "")
+                            if text:
+                                full_text = text
+                                yield text, False
+                    elif event.get("type") == "turn.completed":
+                        yield full_text, True
+                        return
+                    elif event.get("type") == "error":
+                        raise Exception(event.get("message", "Unknown error"))
+                except json_module.JSONDecodeError:
+                    continue
+
+            await proc.wait()
+            if proc.returncode != 0:
+                stderr = await proc.stderr.read()
+                raise Exception(f"Codex CLI error: {stderr.decode().strip()}")
+
+            if full_text:
+                yield full_text, True
+        except Exception as e:
+            raise Exception(f"Codex streaming error: {str(e)}")
 
 
 class OpenRouterProvider(AIProvider):
