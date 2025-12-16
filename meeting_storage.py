@@ -72,6 +72,9 @@ class MeetingStorage:
         Returns:
             meeting_id созданной встречи
         """
+        # Закрыть все предыдущие незавершённые сессии
+        self._close_stale_sessions()
+
         self._mode = {
             "mic": mic,
             "system_audio": system_audio,
@@ -88,6 +91,48 @@ class MeetingStorage:
             source = "local"
 
         return self._create_meeting(source=source)
+
+    def _close_stale_sessions(self):
+        """
+        Закрыть все незавершённые сессии от предыдущих запусков.
+        Вызывается при start_session().
+        """
+        closed_count = 0
+        for meeting_dir in self.base_path.iterdir():
+            if not meeting_dir.is_dir():
+                continue
+
+            meta_path = meeting_dir / "meta.json"
+            if not meta_path.exists():
+                continue
+
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+                # Только незавершённые
+                if meta.get("ended_at") is not None:
+                    continue
+
+                # Закрыть сессию
+                now = datetime.now(UTC)
+                created = datetime.fromisoformat(meta["created_at"])
+
+                meta["ended_at"] = meta.get("updated_at") or now.isoformat()
+                meta["end_reason"] = "stale_session"
+                meta["stats"]["duration_seconds"] = int(
+                    (datetime.fromisoformat(meta["ended_at"]) - created).total_seconds()
+                )
+
+                self._save_json(meta_path, meta)
+                self._update_index(meta)
+                closed_count += 1
+
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                print(f"Warning: Could not close stale session {meeting_dir.name}: {e}")
+                continue
+
+        if closed_count > 0:
+            print(f"Closed {closed_count} stale session(s) from previous runs")
 
     def _create_meeting(
         self,
