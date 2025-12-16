@@ -22,6 +22,7 @@ import threading
 import os
 import sys
 import numpy as np
+from collections import deque
 from typing import Optional
 from pathlib import Path
 
@@ -42,6 +43,9 @@ class ScreenCaptureAudio:
         self.buffer = []
         self._lock = threading.Lock()
         self._reader_thread = None
+        self._stderr_thread = None
+        self._stderr_lock = threading.Lock()
+        self._stderr_tail = deque(maxlen=200)
         self.running = False
         self.name = "screencapture"
 
@@ -53,13 +57,9 @@ class ScreenCaptureAudio:
         # Check in same directory as this script
         script_dir = Path(__file__).parent
         utility = script_dir / "sck_audio_capture"
-
-        if utility.exists():
-            return str(utility)
-
-        # Check if source exists and needs compilation
         source = script_dir / "sck_audio_capture.swift"
-        if source.exists():
+
+        def compile_utility():
             print(f"[ScreenCaptureAudio] Compiling {source}...", file=sys.stderr)
             result = subprocess.run([
                 "swiftc", "-o", str(utility), str(source),
@@ -70,8 +70,23 @@ class ScreenCaptureAudio:
 
             if result.returncode == 0 and utility.exists():
                 return str(utility)
-            else:
-                raise RuntimeError(f"Failed to compile utility: {result.stderr}")
+
+            raise RuntimeError(f"Failed to compile utility: {result.stderr}")
+
+        if utility.exists():
+            # Rebuild if source is newer (repo may ship an old binary)
+            if source.exists():
+                try:
+                    if source.stat().st_mtime > utility.stat().st_mtime:
+                        return compile_utility()
+                except OSError:
+                    # If stat fails for any reason, try compiling
+                    return compile_utility()
+            return str(utility)
+
+        # Compile from source if binary is missing
+        if source.exists():
+            return compile_utility()
 
         raise FileNotFoundError(
             f"sck_audio_capture utility not found. "
@@ -117,6 +132,25 @@ class ScreenCaptureAudio:
                     print(f"[ScreenCaptureAudio] Reader error: {e}", file=sys.stderr)
                 # Don't break, let the loop try to restart
 
+    def _start_stderr_drain_thread(self):
+        """Drain stderr to prevent the subprocess from blocking on a full stderr pipe."""
+        if not self.process or self.process.stderr is None:
+            return
+
+        with self._stderr_lock:
+            self._stderr_tail.clear()
+
+        def _drain(pipe):
+            try:
+                for line in iter(pipe.readline, b""):
+                    with self._stderr_lock:
+                        self._stderr_tail.append(line.decode(errors="ignore"))
+            except Exception:
+                pass
+
+        self._stderr_thread = threading.Thread(target=_drain, args=(self.process.stderr,), daemon=True)
+        self._stderr_thread.start()
+
     def _restart_process(self):
         """Restart the audio capture subprocess."""
         # Clean up old process
@@ -146,6 +180,7 @@ class ScreenCaptureAudio:
             stderr = self.process.stderr.read().decode()
             raise RuntimeError(f"Audio capture failed to restart: {stderr}")
 
+        self._start_stderr_drain_thread()
         print(f"[ScreenCaptureAudio] Restarted (PID: {self.process.pid})", file=sys.stderr)
 
     def start(self):
@@ -177,6 +212,7 @@ class ScreenCaptureAudio:
             stderr = self.process.stderr.read().decode()
             raise RuntimeError(f"Audio capture failed to start: {stderr}")
 
+        self._start_stderr_drain_thread()
         print(f"[ScreenCaptureAudio] Started (PID: {self.process.pid})", file=sys.stderr)
 
     def stop(self):
