@@ -597,17 +597,32 @@ function exportMarkdown() {
 
 // --- AI Analysis ---
 
+let aiResponses = {};  // Store responses for each provider
+let activeAiTab = 'claude-cli';
+
 async function analyzeIncrement() {
     const meeting = views.meeting;
     if (!meeting.id) return;
 
-    // Show modal with loading
+    // Reset state
+    aiResponses = {};
+    activeAiTab = 'claude-cli';
+
+    // Show modal with loading states
     document.getElementById('ai-modal').style.display = 'flex';
-    document.getElementById('ai-response').innerHTML =
-        '<div class="loading">Analyzing transcript...</div>';
+    document.getElementById('ai-response-claude-cli').innerHTML =
+        '<div class="loading">Analyzing with Claude...</div>';
+    document.getElementById('ai-response-codex-cli').innerHTML =
+        '<div class="loading">Analyzing with Codex...</div>';
+
+    // Reset tabs
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelector('.tab-btn[data-provider="claude-cli"]').classList.add('active');
+    document.querySelectorAll('.ai-tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('ai-response-claude-cli').classList.add('active');
 
     try {
-        const response = await fetch(`/api/meetings/${meeting.id}/analyze`, {
+        const response = await fetch(`/api/meetings/${meeting.id}/analyze-multi`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({question: 'increment'})
@@ -619,13 +634,41 @@ async function analyzeIncrement() {
         }
 
         const data = await response.json();
-        document.getElementById('ai-response').innerHTML =
-            `<div class="ai-answer">${escapeHtml(data.answer).replace(/\n/g, '<br>')}</div>
-             <div class="ai-provider">via ${escapeHtml(data.provider)}</div>`;
+        aiResponses = data.responses;
+
+        // Update each tab content
+        for (const [provider, result] of Object.entries(aiResponses)) {
+            const container = document.getElementById(`ai-response-${provider}`);
+            if (!container) continue;
+
+            if (result.error) {
+                container.innerHTML = `<div class="error">Error: ${escapeHtml(result.error)}</div>`;
+            } else {
+                container.innerHTML =
+                    `<div class="ai-answer">${escapeHtml(result.answer).replace(/\n/g, '<br>')}</div>`;
+            }
+        }
     } catch (e) {
-        document.getElementById('ai-response').innerHTML =
+        // Show error in both tabs
+        document.getElementById('ai-response-claude-cli').innerHTML =
+            `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
+        document.getElementById('ai-response-codex-cli').innerHTML =
             `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
     }
+}
+
+function switchAiTab(provider) {
+    activeAiTab = provider;
+
+    // Update tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.provider === provider);
+    });
+
+    // Update tab content
+    document.querySelectorAll('.ai-tab-content').forEach(content => {
+        content.classList.toggle('active', content.id === `ai-response-${provider}`);
+    });
 }
 
 function closeAiModal() {
@@ -633,7 +676,8 @@ function closeAiModal() {
 }
 
 function copyAiResponse() {
-    const text = document.querySelector('.ai-answer')?.textContent;
+    const activeContent = document.querySelector('.ai-tab-content.active .ai-answer');
+    const text = activeContent?.textContent;
     if (text) {
         navigator.clipboard.writeText(text).then(() => {
             const btn = document.querySelector('.modal-footer .btn');
