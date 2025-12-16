@@ -418,9 +418,9 @@ async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
         async def call_provider(provider):
             try:
                 answer = await provider.complete(prompt)
-                return provider.name, {"answer": answer, "error": None}
+                return provider.key, {"answer": answer, "name": provider.name, "error": None}
             except Exception as e:
-                return provider.name, {"answer": None, "error": str(e)}
+                return provider.key, {"answer": None, "name": provider.name, "error": str(e)}
 
         results = await asyncio.gather(*[call_provider(p) for p in providers])
         responses = dict(results)
