@@ -31,6 +31,11 @@ PORT = 8080
 MEETINGS_DIR = Path(__file__).parent.parent / "meetings"
 
 
+def get_storage() -> MeetingStorage:
+    """Get MeetingStorage instance."""
+    return MeetingStorage(MEETINGS_DIR)
+
+
 class TranscriptWatcher(FileSystemEventHandler):
     """Watch transcript files for changes and notify WebSocket clients."""
 
@@ -148,23 +153,20 @@ class LiveWatcher(FileSystemEventHandler):
     async def _check_current_meeting(self):
         """Check for new/changed current meeting."""
         try:
-            storage = MeetingStorage(MEETINGS_DIR)
-            meetings = storage.list_meetings()
+            storage = get_storage()
+            active_meetings = storage.list_active_meetings()
+            current = active_meetings[0] if active_meetings else None
 
-            if meetings:
-                # Find most recent active meeting (no ended_at or recent)
-                latest = meetings[0]  # Already sorted by date desc
+            if current and current["id"] != self.current_meeting_id:
+                self.current_meeting_id = current["id"]
+                self.file_position = 0
 
-                if latest["id"] != self.current_meeting_id:
-                    self.current_meeting_id = latest["id"]
-                    self.file_position = 0
-
-                    # Notify clients about meeting change
-                    message = json.dumps({
-                        "type": "meeting_change",
-                        "meeting": latest
-                    })
-                    await self._broadcast(message)
+                # Notify clients about meeting change
+                message = json.dumps({
+                    "type": "meeting_change",
+                    "meeting": current
+                })
+                await self._broadcast(message)
         except Exception as e:
             print(f"Error checking current meeting: {e}")
 
@@ -289,19 +291,13 @@ async def get_transcript(meeting_id: str):
 async def get_live_status():
     """Get current live transcription status."""
     try:
-        storage = MeetingStorage(MEETINGS_DIR)
-        meetings = storage.list_meetings()
-
-        # Check if there's an active meeting (no ended_at)
-        current = None
-        for m in meetings:
-            if not m.get("ended_at"):
-                current = m
-                break
+        storage = get_storage()
+        active_meetings = storage.list_active_meetings()
 
         return JSONResponse(content={
-            "active": current is not None,
-            "current_meeting": current
+            "active": len(active_meetings) > 0,
+            "current_meeting": active_meetings[0] if active_meetings else None,
+            "active_meetings": active_meetings
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -333,14 +329,9 @@ async def live_stream(websocket: WebSocket):
 
     # Send current meeting info
     try:
-        storage = MeetingStorage(MEETINGS_DIR)
-        meetings = storage.list_meetings()
-
-        current = None
-        for m in meetings:
-            if not m.get("ended_at"):
-                current = m
-                break
+        storage = get_storage()
+        active_meetings = storage.list_active_meetings()
+        current = active_meetings[0] if active_meetings else None
 
         if current:
             live_watcher.current_meeting_id = current["id"]
@@ -348,7 +339,15 @@ async def live_stream(websocket: WebSocket):
             await websocket.send_text(json.dumps({
                 "type": "init",
                 "meeting": current,
-                "segments": meeting_data.get("segments", []) if meeting_data else []
+                "segments": meeting_data.get("segments", []) if meeting_data else [],
+                "active_meetings": active_meetings
+            }))
+        else:
+            await websocket.send_text(json.dumps({
+                "type": "init",
+                "meeting": None,
+                "segments": [],
+                "active_meetings": []
             }))
     except Exception as e:
         await websocket.send_text(json.dumps({

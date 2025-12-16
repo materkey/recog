@@ -212,6 +212,37 @@ a:hover {
     margin-bottom: 8px;
 }
 
+.meeting-card-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.badge-live {
+    padding: 2px 6px;
+    background: #ef4444;
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    border-radius: var(--radius-sm);
+    animation: pulse-live 2s infinite;
+}
+
+@keyframes pulse-live {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+.meeting-card-active {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3);
+}
+
+.meeting-card-active:hover {
+    border-color: #ef4444;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+}
+
 .meeting-source {
     padding: 2px 8px;
     border-radius: var(--radius-sm);

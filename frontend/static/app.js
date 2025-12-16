@@ -117,7 +117,11 @@ const views = {
             let filtered = this.meetings;
 
             if (this.filterSource) {
-                filtered = this.meetings.filter(m => m.source === this.filterSource);
+                if (this.filterSource === 'active') {
+                    filtered = this.meetings.filter(m => m.is_active);
+                } else {
+                    filtered = this.meetings.filter(m => m.source === this.filterSource);
+                }
             }
 
             if (filtered.length === 0) {
@@ -151,11 +155,16 @@ const views = {
 
             const sourceClass = `source-${meeting.source || 'unknown'}`;
             const sourceLabel = meeting.source || 'unknown';
+            const isActive = meeting.is_active;
+            const cardClass = isActive ? 'meeting-card meeting-card-active' : 'meeting-card';
 
             return `
-                <a href="#/meeting/${meeting.id}" class="meeting-card">
+                <a href="#/meeting/${meeting.id}" class="${cardClass}">
                     <div class="meeting-card-header">
-                        <span class="meeting-source ${sourceClass}">${sourceLabel}</span>
+                        <div class="meeting-card-badges">
+                            ${isActive ? '<span class="badge-live">LIVE</span>' : ''}
+                            <span class="meeting-source ${sourceClass}">${sourceLabel}</span>
+                        </div>
                         <span class="meeting-date">${dateStr} ${timeStr}</span>
                     </div>
                     <h3 class="meeting-card-title">${escapeHtml(meeting.title || 'Untitled')}</h3>
