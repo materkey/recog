@@ -80,14 +80,14 @@
                 <button class="modal-close" onclick="closeAiModal()">&times;</button>
             </div>
             <div class="modal-tabs">
-                <button class="tab-btn active" data-provider="claude-cli" onclick="switchAiTab('claude-cli')">Claude</button>
-                <button class="tab-btn" data-provider="codex-cli" onclick="switchAiTab('codex-cli')">Codex</button>
+                <button class="tab-btn active" data-provider="claude" onclick="switchAiTab('claude')">Claude</button>
+                <button class="tab-btn" data-provider="codex" onclick="switchAiTab('codex')">Codex</button>
             </div>
             <div class="modal-body">
-                <div id="ai-response-claude-cli" class="ai-tab-content active">
+                <div id="ai-response-claude" class="ai-tab-content active">
                     <div class="loading">Analyzing with Claude...</div>
                 </div>
-                <div id="ai-response-codex-cli" class="ai-tab-content">
+                <div id="ai-response-codex" class="ai-tab-content">
                     <div class="loading">Analyzing with Codex...</div>
                 </div>
             </div>

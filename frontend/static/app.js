@@ -598,7 +598,7 @@ function exportMarkdown() {
 // --- AI Analysis ---
 
 let aiResponses = {};  // Store responses for each provider
-let activeAiTab = 'claude-cli';
+let activeAiTab = 'claude';
 
 async function analyzeIncrement() {
     const meeting = views.meeting;
@@ -606,20 +606,20 @@ async function analyzeIncrement() {
 
     // Reset state
     aiResponses = {};
-    activeAiTab = 'claude-cli';
+    activeAiTab = 'claude';
 
     // Show modal with loading states
     document.getElementById('ai-modal').style.display = 'flex';
-    document.getElementById('ai-response-claude-cli').innerHTML =
+    document.getElementById('ai-response-claude').innerHTML =
         '<div class="loading">Analyzing with Claude...</div>';
-    document.getElementById('ai-response-codex-cli').innerHTML =
+    document.getElementById('ai-response-codex').innerHTML =
         '<div class="loading">Analyzing with Codex...</div>';
 
     // Reset tabs
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelector('.tab-btn[data-provider="claude-cli"]').classList.add('active');
+    document.querySelector('.tab-btn[data-provider="claude"]').classList.add('active');
     document.querySelectorAll('.ai-tab-content').forEach(c => c.classList.remove('active'));
-    document.getElementById('ai-response-claude-cli').classList.add('active');
+    document.getElementById('ai-response-claude').classList.add('active');
 
     try {
         const response = await fetch(`/api/meetings/${meeting.id}/analyze-multi`, {
@@ -637,22 +637,23 @@ async function analyzeIncrement() {
         aiResponses = data.responses;
 
         // Update each tab content
-        for (const [provider, result] of Object.entries(aiResponses)) {
-            const container = document.getElementById(`ai-response-${provider}`);
+        for (const [providerKey, result] of Object.entries(aiResponses)) {
+            const container = document.getElementById(`ai-response-${providerKey}`);
             if (!container) continue;
 
             if (result.error) {
                 container.innerHTML = `<div class="error">Error: ${escapeHtml(result.error)}</div>`;
             } else {
                 container.innerHTML =
-                    `<div class="ai-answer">${escapeHtml(result.answer).replace(/\n/g, '<br>')}</div>`;
+                    `<div class="ai-answer">${escapeHtml(result.answer).replace(/\n/g, '<br>')}</div>
+                     <div class="ai-provider">via ${escapeHtml(result.name)}</div>`;
             }
         }
     } catch (e) {
         // Show error in both tabs
-        document.getElementById('ai-response-claude-cli').innerHTML =
+        document.getElementById('ai-response-claude').innerHTML =
             `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
-        document.getElementById('ai-response-codex-cli').innerHTML =
+        document.getElementById('ai-response-codex').innerHTML =
             `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
     }
 }

@@ -50,8 +50,14 @@ class AIProvider(ABC):
 
     @property
     @abstractmethod
+    def key(self) -> str:
+        """Provider key for API responses (e.g., 'claude', 'codex')."""
+        pass
+
+    @property
+    @abstractmethod
     def name(self) -> str:
-        """Provider name for display."""
+        """Provider name for display (e.g., 'claude-cli (haiku)')."""
         pass
 
     @abstractmethod
@@ -67,8 +73,12 @@ class ClaudeCliProvider(AIProvider):
         self.model = os.getenv("CLAUDE_MODEL", "haiku")
 
     @property
+    def key(self) -> str:
+        return "claude"
+
+    @property
     def name(self) -> str:
-        return f"claude-cli ({self.model})"
+        return f"Claude ({self.model})"
 
     async def complete(self, prompt: str) -> str:
         proc = await asyncio.create_subprocess_exec(
@@ -94,8 +104,12 @@ class CodexCliProvider(AIProvider):
         self.model = os.getenv("CODEX_MODEL", "gpt-5.2")
 
     @property
+    def key(self) -> str:
+        return "codex"
+
+    @property
     def name(self) -> str:
-        return f"codex-cli ({self.model})"
+        return f"Codex ({self.model})"
 
     async def complete(self, prompt: str) -> str:
         import json as json_module
@@ -149,8 +163,12 @@ class OpenRouterProvider(AIProvider):
             raise ValueError("OPENROUTER_API_KEY environment variable is required")
 
     @property
+    def key(self) -> str:
+        return "openrouter"
+
+    @property
     def name(self) -> str:
-        return f"openrouter/{self.model}"
+        return f"OpenRouter ({self.model})"
 
     async def complete(self, prompt: str) -> str:
         import httpx
