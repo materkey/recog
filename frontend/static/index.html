@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recog - Transcripts</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Navigation -->
+        <nav class="nav">
+            <div class="nav-brand">Recog</div>
+            <div class="nav-links">
+                <a href="#/" class="nav-link" data-route="meetings">Meetings</a>
+                <a href="#/live" class="nav-link" data-route="live">Live</a>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Meetings List View -->
+            <div id="view-meetings" class="view">
+                <div class="view-header">
+                    <h1>Meetings</h1>
+                    <div class="filters">
+                        <select id="filter-source" class="filter-select">
+                            <option value="">All sources</option>
+                            <option value="ktalk">KTalk</option>
+                            <option value="local">Local</option>
+                            <option value="orphan">Orphan</option>
+                            <option value="diarized">Diarized</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="meetings-list" class="meetings-list">
+                    <div class="loading">Loading meetings...</div>
+                </div>
+            </div>
+
+            <!-- Meeting Detail View -->
+            <div id="view-meeting" class="view" style="display: none;">
+                <div class="view-header">
+                    <button class="btn-back" onclick="router.navigate('/')">&larr; Back</button>
+                    <h1 id="meeting-title">Meeting</h1>
+                    <div class="meeting-actions">
+                        <button class="btn" onclick="exportMarkdown()">Export MD</button>
+                    </div>
+                </div>
+                <div class="meeting-meta" id="meeting-meta"></div>
+                <div class="transcript-search">
+                    <input type="text" id="transcript-search" placeholder="Search in transcript..." class="search-input">
+                </div>
+                <div id="transcript" class="transcript"></div>
+            </div>
+
+            <!-- Live View -->
+            <div id="view-live" class="view" style="display: none;">
+                <div class="view-header">
+                    <h1>Live Transcription</h1>
+                    <div class="live-status" id="live-status">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Connecting...</span>
+                    </div>
+                </div>
+                <div class="live-meeting-info" id="live-meeting-info"></div>
+                <div id="live-transcript" class="transcript live-transcript"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
