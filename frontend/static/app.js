@@ -598,22 +598,31 @@ function exportMarkdown() {
 // --- AI Analysis ---
 
 let aiResponses = {};  // Store responses for each provider
+let aiProviderNames = {};  // Store provider display names
 let activeAiTab = 'claude';
+let aiEventSource = null;
 
 async function analyzeIncrement() {
     const meeting = views.meeting;
     if (!meeting.id) return;
 
+    // Close any existing connection
+    if (aiEventSource) {
+        aiEventSource.close();
+        aiEventSource = null;
+    }
+
     // Reset state
     aiResponses = {};
+    aiProviderNames = {};
     activeAiTab = 'claude';
 
     // Show modal with loading states
     document.getElementById('ai-modal').style.display = 'flex';
     document.getElementById('ai-response-claude').innerHTML =
-        '<div class="loading">Analyzing with Claude...</div>';
+        '<div class="loading">Connecting to Claude...</div>';
     document.getElementById('ai-response-codex').innerHTML =
-        '<div class="loading">Analyzing with Codex...</div>';
+        '<div class="loading">Connecting to Codex...</div>';
 
     // Reset tabs
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
@@ -621,41 +630,95 @@ async function analyzeIncrement() {
     document.querySelectorAll('.ai-tab-content').forEach(c => c.classList.remove('active'));
     document.getElementById('ai-response-claude').classList.add('active');
 
-    try {
-        const response = await fetch(`/api/meetings/${meeting.id}/analyze-multi`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({question: 'increment'})
-        });
+    // Use SSE for streaming
+    const url = `/api/meetings/${meeting.id}/analyze-stream?question=increment`;
+    aiEventSource = new EventSource(url);
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Analysis failed');
+    aiEventSource.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            handleAiStreamEvent(data);
+        } catch (e) {
+            console.error('Failed to parse SSE event:', e);
         }
+    };
 
-        const data = await response.json();
-        aiResponses = data.responses;
+    aiEventSource.onerror = (e) => {
+        console.error('SSE error:', e);
+        aiEventSource.close();
+        aiEventSource = null;
 
-        // Update each tab content
-        for (const [providerKey, result] of Object.entries(aiResponses)) {
-            const container = document.getElementById(`ai-response-${providerKey}`);
-            if (!container) continue;
+        // Show error if no responses received
+        if (Object.keys(aiResponses).length === 0) {
+            document.getElementById('ai-response-claude').innerHTML =
+                '<div class="error">Connection error</div>';
+            document.getElementById('ai-response-codex').innerHTML =
+                '<div class="error">Connection error</div>';
+        }
+    };
+}
 
-            if (result.error) {
-                container.innerHTML = `<div class="error">Error: ${escapeHtml(result.error)}</div>`;
-            } else {
-                container.innerHTML =
-                    `<div class="ai-answer">${escapeHtml(result.answer).replace(/\n/g, '<br>')}</div>
-                     <div class="ai-provider">via ${escapeHtml(result.name)}</div>`;
+function handleAiStreamEvent(data) {
+    const { type, provider, name, text, message } = data;
+
+    switch (type) {
+        case 'start':
+            // Provider started
+            aiProviderNames[provider] = name;
+            const startContainer = document.getElementById(`ai-response-${provider}`);
+            if (startContainer) {
+                startContainer.innerHTML = '<div class="loading">Analyzing...</div>';
             }
-        }
-    } catch (e) {
-        // Show error in both tabs
-        document.getElementById('ai-response-claude').innerHTML =
-            `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
-        document.getElementById('ai-response-codex').innerHTML =
-            `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
+            break;
+
+        case 'chunk':
+            // Partial response
+            aiResponses[provider] = text;
+            updateAiResponseDisplay(provider, text, false);
+            break;
+
+        case 'done':
+            // Final response from provider
+            aiResponses[provider] = text;
+            updateAiResponseDisplay(provider, text, true);
+            break;
+
+        case 'error':
+            // Error from provider
+            if (provider) {
+                const errorContainer = document.getElementById(`ai-response-${provider}`);
+                if (errorContainer) {
+                    errorContainer.innerHTML = `<div class="error">Error: ${escapeHtml(message)}</div>`;
+                }
+            } else {
+                // Global error
+                document.getElementById('ai-response-claude').innerHTML =
+                    `<div class="error">Error: ${escapeHtml(message)}</div>`;
+                document.getElementById('ai-response-codex').innerHTML =
+                    `<div class="error">Error: ${escapeHtml(message)}</div>`;
+            }
+            break;
+
+        case 'complete':
+            // All providers done
+            if (aiEventSource) {
+                aiEventSource.close();
+                aiEventSource = null;
+            }
+            break;
     }
+}
+
+function updateAiResponseDisplay(provider, text, isDone) {
+    const container = document.getElementById(`ai-response-${provider}`);
+    if (!container) return;
+
+    const providerName = aiProviderNames[provider] || provider;
+    const statusIndicator = isDone ? '' : '<span class="streaming-indicator">●</span> ';
+
+    container.innerHTML =
+        `<div class="ai-answer">${statusIndicator}${escapeHtml(text).replace(/\n/g, '<br>')}</div>
+         <div class="ai-provider">via ${escapeHtml(providerName)}</div>`;
 }
 
 function switchAiTab(provider) {
@@ -673,6 +736,11 @@ function switchAiTab(provider) {
 }
 
 function closeAiModal() {
+    // Close SSE connection if active
+    if (aiEventSource) {
+        aiEventSource.close();
+        aiEventSource = null;
+    }
     document.getElementById('ai-modal').style.display = 'none';
 }
 
