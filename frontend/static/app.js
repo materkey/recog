@@ -533,6 +533,37 @@ function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function copyToClipboard() {
+    const meeting = views.meeting;
+    if (!meeting.meta || !meeting.segments) return;
+
+    const date = new Date(meeting.meta.created_at);
+    const dateStr = date.toLocaleDateString('ru-RU', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+    });
+
+    let md = `# ${meeting.meta.title || 'Untitled Meeting'}\n\n`;
+    md += `**Date:** ${dateStr}\n\n`;
+    md += `---\n\n`;
+
+    const grouped = meeting.groupSegments(meeting.segments);
+    for (const group of grouped) {
+        md += `**${group.speaker}** *[${group.ts_display}]*: ${group.text}\n\n`;
+    }
+
+    navigator.clipboard.writeText(md).then(() => {
+        // Show brief feedback
+        const btn = document.querySelector('.meeting-actions .btn');
+        const originalText = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = originalText, 1500);
+    }).catch(err => {
+        console.error('Copy failed:', err);
+    });
+}
+
 function exportMarkdown() {
     const meeting = views.meeting;
     if (!meeting.meta || !meeting.segments) return;
