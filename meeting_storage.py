@@ -211,22 +211,24 @@ class MeetingStorage:
         if not self.current_meeting_path:
             need_new_meeting = True
         else:
-            # Проверяем, изменился ли live_id (новая встреча по другой ссылке)
             meta = self._load_meta()
             current_live_id = meta.get("ktalk", {}).get("live_id")
+
+            # Случай 1: другая KTalk комната
             if current_live_id and current_live_id != live_id:
-                # Другая встреча - завершаем старую, создаём новую
-                prev_id = self._end_current_meeting(end_reason="new_meeting")
+                prev_id = self._end_current_meeting(end_reason="changed_meeting")
+                need_new_meeting = True
+
+            # Случай 2: orphan с сегментами -> новая KTalk встреча
+            # Не склеивать orphan-сегменты с KTalk встречей
+            elif meta["source"] == "orphan" and meta["stats"]["segment_count"] > 0:
+                prev_id = self._end_current_meeting(end_reason="ktalk_join")
                 need_new_meeting = True
 
         if need_new_meeting:
             self._create_meeting(source="ktalk")
 
         meta = self._load_meta()
-
-        # Обновляем на ktalk если был orphan
-        if meta["source"] == "orphan":
-            meta["source"] = "ktalk"
 
         meta["ktalk"]["live_url"] = url
         meta["ktalk"]["live_id"] = live_id
