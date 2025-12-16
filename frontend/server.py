@@ -328,12 +328,10 @@ async def analyze_meeting(meeting_id: str, request: AnalyzeRequest):
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
-        # 2. Get local participant name
+        # 2. Get local participant names (may have multiple: mic name + KTalk name)
         participants = meeting["meta"].get("participants", {})
-        local_participant = next(
-            (p["name"] for p in participants.values() if p.get("is_local")),
-            "User"
-        )
+        local_names = [p["name"] for p in participants.values() if p.get("is_local")]
+        local_participant = ", ".join(local_names) if local_names else "User"
 
         # 3. Build transcript text
         segments = meeting.get("segments", [])
