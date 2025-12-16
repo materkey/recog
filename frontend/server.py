@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from ai_provider import get_provider, build_prompt
+from ai_provider import get_provider, get_all_providers, build_prompt
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -318,6 +318,10 @@ class AnalyzeResponse(BaseModel):
     provider: str
 
 
+class MultiAnalyzeResponse(BaseModel):
+    responses: dict[str, dict]  # provider -> {answer, error}
+
+
 @app.post("/api/meetings/{meeting_id}/analyze")
 async def analyze_meeting(meeting_id: str, request: AnalyzeRequest):
     """Analyze meeting transcript with AI."""
@@ -362,6 +366,66 @@ async def analyze_meeting(meeting_id: str, request: AnalyzeRequest):
         answer = await provider.complete(prompt)
 
         return AnalyzeResponse(answer=answer, provider=provider.name)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/meetings/{meeting_id}/analyze-multi")
+async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
+    """Analyze meeting transcript with multiple AI providers in parallel."""
+    try:
+        # 1. Load meeting
+        storage = get_storage()
+        meeting = storage.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        # 2. Get local participant names
+        participants = meeting["meta"].get("participants", {})
+        local_names = [p["name"] for p in participants.values() if p.get("is_local")]
+        local_participant = ", ".join(local_names) if local_names else "User"
+
+        # 3. Build transcript text
+        segments = meeting.get("segments", [])
+        if not segments:
+            raise HTTPException(status_code=400, detail="Meeting has no transcript")
+
+        transcript = "\n".join(
+            f"[{s['ts_display']}] {s['speaker']}: {s['text']}"
+            for s in segments
+        )
+
+        # Limit transcript length
+        max_chars = 100000
+        if len(transcript) > max_chars:
+            transcript = transcript[-max_chars:]
+            transcript = "...(начало обрезано)...\n" + transcript
+
+        # 4. Build prompt
+        prompt = build_prompt(
+            question=request.question,
+            transcript=transcript,
+            user_name=local_participant,
+            custom_prompt=request.custom_prompt
+        )
+
+        # 5. Call all providers in parallel
+        providers = get_all_providers()
+
+        async def call_provider(provider):
+            try:
+                answer = await provider.complete(prompt)
+                return provider.name, {"answer": answer, "error": None}
+            except Exception as e:
+                return provider.name, {"answer": None, "error": str(e)}
+
+        results = await asyncio.gather(*[call_provider(p) for p in providers])
+        responses = dict(results)
+
+        return MultiAnalyzeResponse(responses=responses)
 
     except HTTPException:
         raise

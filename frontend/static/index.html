@@ -79,8 +79,17 @@
                 <h3>AI Analysis</h3>
                 <button class="modal-close" onclick="closeAiModal()">&times;</button>
             </div>
-            <div class="modal-body" id="ai-response">
-                Loading...
+            <div class="modal-tabs">
+                <button class="tab-btn active" data-provider="claude-cli" onclick="switchAiTab('claude-cli')">Claude</button>
+                <button class="tab-btn" data-provider="codex-cli" onclick="switchAiTab('codex-cli')">Codex</button>
+            </div>
+            <div class="modal-body">
+                <div id="ai-response-claude-cli" class="ai-tab-content active">
+                    <div class="loading">Analyzing with Claude...</div>
+                </div>
+                <div id="ai-response-codex-cli" class="ai-tab-content">
+                    <div class="loading">Analyzing with Codex...</div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn" onclick="copyAiResponse()">Copy</button>

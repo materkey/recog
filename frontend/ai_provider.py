@@ -156,6 +156,11 @@ def get_provider() -> AIProvider:
         raise ValueError(f"Unknown AI provider: {provider_name}. Use: claude, codex, openrouter")
 
 
+def get_all_providers() -> list[AIProvider]:
+    """Get all CLI-based providers (Claude and Codex)."""
+    return [ClaudeCliProvider(), CodexCliProvider()]
+
+
 def build_prompt(
     question: str,
     transcript: str,
