@@ -63,13 +63,17 @@ class AIProvider(ABC):
 class ClaudeCliProvider(AIProvider):
     """Claude CLI - uses Max/Pro subscription."""
 
+    def __init__(self):
+        self.model = os.getenv("CLAUDE_MODEL", "haiku")
+
     @property
     def name(self) -> str:
-        return "claude-cli"
+        return f"claude-cli ({self.model})"
 
     async def complete(self, prompt: str) -> str:
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", prompt,
+            "--model", self.model,
             "--output-format", "text",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
