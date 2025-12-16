@@ -564,8 +564,8 @@ class MeetingStorage:
                 shutil.rmtree(meeting_path, ignore_errors=True)
             return
 
-        # Добавить в начало (новые сверху)
-        index["meetings"].insert(0, {
+        # Добавить запись
+        index["meetings"].append({
             "id": meta["id"],
             "created_at": meta["created_at"],
             "ended_at": meta["ended_at"],
@@ -577,5 +577,8 @@ class MeetingStorage:
             "segment_count": meta["stats"]["segment_count"],
             "participants": [p["name"] for p in meta["participants"].values()]
         })
+
+        # Сортировка по дате создания (новые сверху)
+        index["meetings"].sort(key=lambda m: m["created_at"], reverse=True)
 
         self._save_json(index_path, index)
