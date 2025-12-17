@@ -474,7 +474,8 @@
         uncertain_reason: seg.uncertain_reason || "",
         time: seg.ts_display || new Date(seg.ts).toLocaleTimeString('ru-RU', {
           hour: '2-digit', minute: '2-digit', second: '2-digit'
-        })
+        }),
+        createdAt: seg.ts ? new Date(seg.ts).getTime() : Date.now()
       });
     }
 
@@ -527,7 +528,8 @@
         uncertain_reason: uncertain_reason || "",  // "local" or "mics_off"
         time: new Date().toLocaleTimeString('ru-RU', {
           hour: '2-digit', minute: '2-digit', second: '2-digit'
-        })
+        }),
+        createdAt: Date.now()
       });
 
       if (transcriptLines.length > MAX_TRANSCRIPT_LINES) {
