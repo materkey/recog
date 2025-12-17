@@ -204,6 +204,215 @@
         color: #4ade80;
       }
 
+      .ktalk-transcript-summary-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 24px;
+        padding: 0;
+        border: none;
+        border-radius: 4px;
+        background: rgba(139, 92, 246, 0.15);
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .ktalk-transcript-summary-btn:hover {
+        background: rgba(139, 92, 246, 0.25);
+        color: #a78bfa;
+      }
+      .ktalk-transcript-summary-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .ktalk-transcript-summary-btn.loading {
+        background: rgba(139, 92, 246, 0.1);
+      }
+
+      /* Summary Floating Window */
+      .ktalk-summary-modal {
+        display: none;
+        position: fixed;
+        bottom: 80px;
+        right: 20px;
+        z-index: 100000;
+      }
+      .ktalk-summary-modal.active {
+        display: block;
+      }
+      .ktalk-summary-modal-content {
+        background: rgb(40, 40, 40);
+        border-radius: 12px;
+        width: 360px;
+        max-height: 400px;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(255,255,255,0.1);
+      }
+      .ktalk-summary-modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 14px;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        cursor: move;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .ktalk-summary-modal-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: rgba(255,255,255,0.9);
+      }
+      .ktalk-summary-modal-close {
+        background: none;
+        border: none;
+        color: rgba(255,255,255,0.6);
+        font-size: 24px;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+      }
+      .ktalk-summary-modal-close:hover {
+        color: rgba(255,255,255,0.9);
+      }
+      .ktalk-summary-modal-body {
+        flex: 1;
+        padding: 12px 14px;
+        overflow-y: auto;
+        color: rgba(255,255,255,0.85);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .ktalk-summary-modal-body.loading {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 120px;
+        color: rgba(255,255,255,0.6);
+      }
+      .ktalk-summary-spinner {
+        width: 32px;
+        height: 32px;
+        border: 3px solid rgba(139, 92, 246, 0.2);
+        border-top-color: rgba(139, 92, 246, 0.8);
+        border-radius: 50%;
+        animation: ktalk-spin 0.8s linear infinite;
+      }
+      @keyframes ktalk-spin {
+        to { transform: rotate(360deg); }
+      }
+      .ktalk-summary-modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 8px 14px;
+        border-top: 1px solid rgba(255,255,255,0.1);
+      }
+      .ktalk-summary-copy-btn {
+        padding: 6px 12px;
+        border: none;
+        border-radius: 4px;
+        background: rgba(255,255,255,0.1);
+        color: rgba(255,255,255,0.8);
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .ktalk-summary-copy-btn:hover {
+        background: rgba(255,255,255,0.15);
+      }
+      .ktalk-summary-copy-btn.copied {
+        background: rgba(34, 197, 94, 0.15);
+        color: #4ade80;
+      }
+      .ktalk-summary-error {
+        color: #f87171;
+        text-align: center;
+      }
+      .ktalk-summary-question-input {
+        display: flex;
+        gap: 8px;
+        padding: 10px 14px;
+        border-top: 1px solid rgba(255,255,255,0.1);
+      }
+      .ktalk-question-field {
+        flex: 1;
+        padding: 8px 12px;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 6px;
+        background: rgba(255,255,255,0.05);
+        color: rgba(255,255,255,0.9);
+        font-size: 13px;
+        outline: none;
+      }
+      .ktalk-question-field:focus {
+        border-color: rgba(139, 92, 246, 0.5);
+      }
+      .ktalk-question-field::placeholder {
+        color: rgba(255,255,255,0.4);
+      }
+      .ktalk-question-submit {
+        padding: 8px 14px;
+        border: none;
+        border-radius: 6px;
+        background: rgba(139, 92, 246, 0.3);
+        color: rgba(255,255,255,0.9);
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .ktalk-question-submit:hover {
+        background: rgba(139, 92, 246, 0.5);
+      }
+      .ktalk-question-submit:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .ktalk-model-select {
+        padding: 4px 8px;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+        background: rgba(255,255,255,0.05);
+        color: rgba(255,255,255,0.8);
+        font-size: 11px;
+        outline: none;
+        cursor: pointer;
+      }
+      .ktalk-model-select:focus {
+        border-color: rgba(139, 92, 246, 0.5);
+      }
+      .ktalk-model-select option {
+        background: #2a2a2a;
+        color: white;
+      }
+
+      .ktalk-summary-text h3, .ktalk-summary-text h4 {
+        margin: 16px 0 8px 0;
+        color: rgba(255,255,255,0.95);
+      }
+      .ktalk-summary-text h3:first-child {
+        margin-top: 0;
+      }
+      .ktalk-summary-text ul {
+        margin: 8px 0;
+        padding-left: 20px;
+      }
+      .ktalk-summary-text li {
+        margin: 4px 0;
+      }
+      .ktalk-summary-text strong {
+        color: rgba(255,255,255,0.95);
+      }
+      .ktalk-summary-text em {
+        color: rgba(139, 92, 246, 0.9);
+      }
+
       .ktalk-transcript-messages {
         flex: 1;
         overflow-y: auto;
@@ -362,6 +571,8 @@
             handleTranscriptHistory(data);
           } else if (data.type === 'new_meeting') {
             handleNewMeeting(data);
+          } else if (data.type === 'summarize_response') {
+            handleSummaryResponse(data);
           }
         } catch (e) {
           console.log('[KTalk Transcript] Parse error:', e);
@@ -555,6 +766,315 @@
     return " (?)";  // "local" or unknown
   }
 
+  // Summary modal state
+  let summaryModalElement = null;
+  let currentSummaryText = '';
+  let summaryRequestPending = false;
+  let currentSummaryType = 'catchup';
+  let selectedModel = localStorage.getItem('ktalk-ai-model') || 'gemini-2.5-flash';
+  let meetingTitle = document.title || '';
+
+  function createSummaryModal() {
+    if (document.querySelector('.ktalk-summary-modal')) return;
+
+    summaryModalElement = document.createElement('div');
+    summaryModalElement.className = 'ktalk-summary-modal';
+    summaryModalElement.innerHTML = `
+      <div class="ktalk-summary-modal-content">
+        <div class="ktalk-summary-modal-header">
+          <span class="ktalk-summary-modal-title">✨ Catch Up</span>
+          <select class="ktalk-model-select">
+            <option value="gemini-2.5-flash">2.5 Flash</option>
+            <option value="gemini-2.5-pro">2.5 Pro</option>
+            <option value="gemini-2.0-flash">2.0 Flash</option>
+            <option value="gemini-2.0-flash-lite">2.0 Lite</option>
+          </select>
+          <button class="ktalk-summary-modal-close">×</button>
+        </div>
+        <div class="ktalk-summary-modal-body loading">
+          <div class="ktalk-summary-spinner"></div>
+          <span>Анализирую транскрипт...</span>
+        </div>
+        <div class="ktalk-summary-question-input" style="display: none;">
+          <input type="text" class="ktalk-question-field" placeholder="Задай уточняющий вопрос..." />
+          <button class="ktalk-question-submit">→</button>
+        </div>
+        <div class="ktalk-summary-modal-footer">
+          <button class="ktalk-summary-copy-btn">📋 Копировать</button>
+        </div>
+      </div>
+    `;
+
+    // Close button
+    summaryModalElement.querySelector('.ktalk-summary-modal-close').addEventListener('click', closeSummaryModal);
+
+    // Copy button
+    summaryModalElement.querySelector('.ktalk-summary-copy-btn').addEventListener('click', copySummary);
+
+    // Question submit
+    summaryModalElement.querySelector('.ktalk-question-submit').addEventListener('click', askFollowUpQuestion);
+    summaryModalElement.querySelector('.ktalk-question-field').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') askFollowUpQuestion();
+    });
+
+    // Model select
+    const modelSelect = summaryModalElement.querySelector('.ktalk-model-select');
+    modelSelect.value = selectedModel;
+    modelSelect.addEventListener('change', (e) => {
+      selectedModel = e.target.value;
+      localStorage.setItem('ktalk-ai-model', selectedModel);
+    });
+
+    // Drag functionality
+    const header = summaryModalElement.querySelector('.ktalk-summary-modal-header');
+    let isDragging = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.classList.contains('ktalk-summary-modal-close')) return;
+      isDragging = true;
+      const rect = summaryModalElement.getBoundingClientRect();
+      dragOffsetX = e.clientX - rect.left;
+      dragOffsetY = e.clientY - rect.top;
+      header.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      e.preventDefault();
+      const x = e.clientX - dragOffsetX;
+      const y = e.clientY - dragOffsetY;
+      summaryModalElement.style.left = x + 'px';
+      summaryModalElement.style.top = y + 'px';
+      summaryModalElement.style.right = 'auto';
+      summaryModalElement.style.bottom = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        header.style.cursor = 'move';
+      }
+    });
+
+    document.body.appendChild(summaryModalElement);
+  }
+
+  function showSummaryModal(summaryType = 'catchup') {
+    if (!summaryModalElement) {
+      createSummaryModal();
+    }
+
+    // Set title based on type
+    const titles = {
+      'catchup': '🎯 Catch Up',
+      'brief': '📋 Краткое (2 мин)',
+      'full': '💬 Вся встреча'
+    };
+    summaryModalElement.querySelector('.ktalk-summary-modal-title').textContent = titles[summaryType] || titles.catchup;
+
+    // Show/hide question input
+    const questionInput = summaryModalElement.querySelector('.ktalk-summary-question-input');
+    questionInput.style.display = summaryType === 'full' ? 'flex' : 'none';
+
+    summaryModalElement.classList.add('active');
+    const body = summaryModalElement.querySelector('.ktalk-summary-modal-body');
+    body.className = 'ktalk-summary-modal-body loading';
+    body.innerHTML = `
+      <div class="ktalk-summary-spinner"></div>
+      <span>Анализирую транскрипт...</span>
+    `;
+  }
+
+  function closeSummaryModal() {
+    if (summaryModalElement) {
+      summaryModalElement.classList.remove('active');
+    }
+  }
+
+  function updateSummaryContent(text, isError = false) {
+    if (!summaryModalElement) return;
+
+    currentSummaryText = text;
+    const body = summaryModalElement.querySelector('.ktalk-summary-modal-body');
+    body.className = 'ktalk-summary-modal-body';
+
+    if (isError) {
+      body.innerHTML = `<div class="ktalk-summary-error">${text}</div>`;
+    } else {
+      body.innerHTML = `<div class="ktalk-summary-text">${renderMarkdown(text)}</div>`;
+    }
+  }
+
+  function renderMarkdown(text) {
+    // Simple markdown renderer
+    let html = escapeHtml(text);
+
+    // Headers: ## Header
+    html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+
+    // Bold: **text**
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // Italic: *text*
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+    // Lists: - item
+    html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+
+    // Wrap consecutive <li> in <ul>
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+    // Line breaks
+    html = html.replace(/\n/g, '<br>');
+
+    // Clean up
+    html = html.replace(/<\/h3><br>/g, '</h3>');
+    html = html.replace(/<\/h4><br>/g, '</h4>');
+    html = html.replace(/<\/ul><br>/g, '</ul>');
+    html = html.replace(/<br><ul>/g, '<ul>');
+
+    return html;
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function copySummary() {
+    if (!currentSummaryText) return;
+
+    navigator.clipboard.writeText(currentSummaryText).then(() => {
+      const btn = summaryModalElement.querySelector('.ktalk-summary-copy-btn');
+      if (btn) {
+        btn.classList.add('copied');
+        btn.textContent = '✓ Скопировано';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.textContent = '📋 Копировать';
+        }, 2000);
+      }
+    });
+  }
+
+  function requestSummary(summaryType = 'catchup') {
+    if (summaryRequestPending) return;
+    if (transcriptLines.length === 0) {
+      alert('Нет транскрипта для анализа');
+      return;
+    }
+
+    currentSummaryType = summaryType;
+    let linesToSend;
+
+    if (summaryType === 'catchup') {
+      // Last 1 minute for catch up
+      const oneMinuteAgo = Date.now() - 60000;
+      const recentLines = transcriptLines.filter(line => line.createdAt && line.createdAt >= oneMinuteAgo);
+      linesToSend = recentLines.length > 0 ? recentLines : transcriptLines.slice(-10);
+    } else if (summaryType === 'brief') {
+      // Last 2 minutes for brief
+      const twoMinutesAgo = Date.now() - 120000;
+      const recentLines = transcriptLines.filter(line => line.createdAt && line.createdAt >= twoMinutesAgo);
+      linesToSend = recentLines.length > 0 ? recentLines : transcriptLines.slice(-20);
+    } else {
+      // Full meeting
+      linesToSend = transcriptLines;
+    }
+
+    if (linesToSend.length === 0) {
+      alert('Нет данных для анализа');
+      return;
+    }
+
+    // Build transcript text
+    const transcriptText = linesToSend.map(line => {
+      const speaker = line.speaker + getUncertainSuffix(line);
+      return `[${line.time}] ${speaker}: ${line.text}`;
+    }).join('\n');
+
+    // Show modal with appropriate title
+    showSummaryModal(summaryType);
+    summaryRequestPending = true;
+
+    // Update button state
+    document.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
+      btn.classList.add('loading');
+      btn.disabled = true;
+    });
+
+    // Send request via WebSocket
+    sendWsMessage({
+      type: 'summarize_request',
+      summary_type: summaryType,
+      transcript: transcriptText,
+      lines_count: linesToSend.length,
+      model: selectedModel,
+      meeting_title: meetingTitle
+    });
+  }
+
+  function askFollowUpQuestion() {
+    const input = summaryModalElement.querySelector('.ktalk-question-field');
+    const question = input.value.trim();
+    if (!question) return;
+
+    // Build full transcript for context
+    const transcriptText = transcriptLines.map(line => {
+      const speaker = line.speaker + getUncertainSuffix(line);
+      return `[${line.time}] ${speaker}: ${line.text}`;
+    }).join('\n');
+
+    // Show loading state
+    const body = summaryModalElement.querySelector('.ktalk-summary-modal-body');
+    const prevContent = body.innerHTML;
+    body.innerHTML = `
+      <div class="ktalk-summary-spinner"></div>
+      <span>Отвечаю на вопрос...</span>
+    `;
+    body.classList.add('loading');
+
+    const submitBtn = summaryModalElement.querySelector('.ktalk-question-submit');
+    submitBtn.disabled = true;
+
+    // Send question via WebSocket
+    sendWsMessage({
+      type: 'summarize_request',
+      summary_type: 'question',
+      transcript: transcriptText,
+      question: question,
+      previous_summary: currentSummaryText,
+      model: selectedModel,
+      meeting_title: meetingTitle
+    });
+
+    input.value = '';
+  }
+
+  function handleSummaryResponse(data) {
+    summaryRequestPending = false;
+
+    // Reset button state
+    document.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
+      btn.classList.remove('loading');
+      btn.disabled = false;
+    });
+
+    // Reset question submit button
+    const submitBtn = summaryModalElement?.querySelector('.ktalk-question-submit');
+    if (submitBtn) submitBtn.disabled = false;
+
+    if (data.error) {
+      updateSummaryContent('Ошибка: ' + data.error, true);
+    } else if (data.summary) {
+      updateSummaryContent(data.summary);
+    }
+  }
+
   function copyAllTranscript() {
     if (transcriptLines.length === 0) return;
 
@@ -565,13 +1085,12 @@
 
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.querySelector('.ktalk-transcript-copy-btn');
-      const textSpan = btn?.querySelector('.ktalk-copy-text');
-      if (btn && textSpan) {
+      if (btn) {
         btn.classList.add('copied');
-        textSpan.textContent = 'Copied!';
+        btn.textContent = '✓';
         setTimeout(() => {
           btn.classList.remove('copied');
-          textSpan.textContent = 'Copy all';
+          btn.textContent = 'Copy';
         }, 2000);
       }
     }).catch(err => {
@@ -907,10 +1426,12 @@
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑ Top</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓ Bottom</button>
         </div>
-        <button class="ktalk-transcript-copy-btn" title="Copy all transcript">
-          <span>📋</span>
-          <span class="ktalk-copy-text">Copy all</span>
-        </button>
+        <div class="ktalk-transcript-toolbar-left">
+          <button class="ktalk-transcript-summary-btn" data-type="catchup" title="Catch up - включиться в дискуссию">🎯</button>
+          <button class="ktalk-transcript-summary-btn" data-type="brief" title="Краткое за 2 мин">📋</button>
+          <button class="ktalk-transcript-summary-btn" data-type="full" title="Вся встреча + вопрос">💬</button>
+          <button class="ktalk-transcript-copy-btn" title="Copy all transcript">Copy</button>
+        </div>
       </div>
       <div class="ktalk-transcript-messages">
         <div class="ktalk-transcript-empty">
@@ -928,6 +1449,9 @@
 
     // Add button handlers
     transcriptContentElement.querySelector('.ktalk-transcript-copy-btn').addEventListener('click', copyAllTranscript);
+    transcriptContentElement.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
+      btn.addEventListener('click', () => requestSummary(btn.dataset.type));
+    });
     transcriptContentElement.querySelector('.ktalk-scroll-top').addEventListener('click', () => {
       const container = document.querySelector('.ktalk-transcript-messages');
       if (container) container.scrollTop = 0;
@@ -936,6 +1460,9 @@
       const container = document.querySelector('.ktalk-transcript-messages');
       if (container) container.scrollTop = container.scrollHeight;
     });
+
+    // Create summary modal
+    createSummaryModal();
 
     contentArea.appendChild(transcriptContentElement);
     console.log('[KTalk Transcript] Content element created');
