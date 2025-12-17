@@ -689,6 +689,9 @@
 
   function getActiveSpeaker(conf) {
     let activeSpeaker = null;
+
+    // Method 1: Check _activeSpeaker$ observable on each participant
+    // This is the most reliable - it means someone is CURRENTLY speaking
     conf._participantsMap?.forEach((p, key) => {
       if (p._activeSpeaker$?.value === true) {
         const info = p._participantInfo$?.value || p._userInfo$?.value;
@@ -699,36 +702,88 @@
         };
       }
     });
+
+    // NOTE: We intentionally do NOT use _dominantSpeakerId$ or jitsiConf dominant speaker
+    // as a fallback because those represent the LAST speaker, not the CURRENT speaker.
+    // If no one has _activeSpeaker$ = true, then no one is speaking right now.
+
     return activeSpeaker;
   }
 
   function isMicMuted(conf, participantId) {
+    // First try jitsi participant tracks
     const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
     const jitsiParticipant = jitsiParticipants.find(p => p._id === participantId);
     if (jitsiParticipant) {
       const tracks = jitsiParticipant.getTracks?.() || jitsiParticipant._tracks || [];
       const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
-      if (audioTrack) return audioTrack.isMuted?.() === true;
+      if (audioTrack) {
+        const muted = audioTrack.isMuted?.();
+        if (muted !== undefined) return muted === true;
+      }
     }
+
+    // Check local participant
     if (conf.localParticipant?.id === participantId) {
       const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
       const localAudio = localTracks.find(t => t.getType?.() === 'audio');
-      if (localAudio) return localAudio.isMuted?.() === true;
-      return true;
+      if (localAudio) {
+        const muted = localAudio.isMuted?.();
+        if (muted !== undefined) return muted === true;
+      }
     }
+
+    // Fallback: check _participantsMap for direct mute state
+    const participant = conf._participantsMap?.get(participantId);
+    if (participant) {
+      // Try _audioMuted$ observable
+      if (participant._audioMuted$?.value !== undefined) {
+        return participant._audioMuted$.value === true;
+      }
+      // Try direct _audioMuted property
+      if (participant._audioMuted !== undefined) {
+        return participant._audioMuted === true;
+      }
+    }
+
+    // If we can't determine, check if participant is speaking
+    const speaking = conf._participantsMap?.get(participantId)?._activeSpeaker$?.value;
+    if (speaking === true) {
+      // If participant is actively speaking, they can't have muted mic
+      return false;
+    }
+
     return true;
   }
 
   function anyMicOn(conf) {
+    // Check remote participants via jitsi tracks
     const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+
     for (const jp of jitsiParticipants) {
       const tracks = jp.getTracks?.() || jp._tracks || [];
       const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
-      if (audioTrack && !audioTrack.isMuted?.()) return true;
+      if (audioTrack) {
+        if (audioTrack.isMuted?.() === false) return true;
+      }
     }
+
+    // Check local participant
     const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
     const localAudio = localTracks.find(t => t.getType?.() === 'audio');
-    if (localAudio && !localAudio.isMuted?.()) return true;
+    if (localAudio) {
+      if (localAudio.isMuted?.() === false) return true;
+    }
+
+    // Fallback: check _participantsMap for any unmuted participant
+    let hasAnyParticipantWithUnmutedMic = false;
+    conf._participantsMap?.forEach((p) => {
+      if (p._audioMuted$?.value === false || p._audioMuted === false) {
+        hasAnyParticipantWithUnmutedMic = true;
+      }
+    });
+    if (hasAnyParticipantWithUnmutedMic) return true;
+
     return false;
   }
 
@@ -954,9 +1009,7 @@
         if (!hasMicsOn) {
           nameEl.textContent = 'All mics off';
         } else {
-          const dominantId = conf._dominantSpeakerId$?.value;
-          const dominantName = getParticipantName(conf, dominantId);
-          nameEl.textContent = dominantName || 'No one speaking';
+          nameEl.textContent = 'No one speaking';
         }
       }
     }
