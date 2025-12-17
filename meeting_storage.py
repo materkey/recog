@@ -225,6 +225,11 @@ class MeetingStorage:
                 prev_id = self._end_current_meeting(end_reason="ktalk_join")
                 need_new_meeting = True
 
+            # Случай 3: пустой orphan -> просто обновляем source на ktalk
+            elif meta["source"] == "orphan" and meta["stats"]["segment_count"] == 0:
+                meta["source"] = "ktalk"
+                self._save_meta(meta)
+
         if need_new_meeting:
             self._create_meeting(source="ktalk")
 
