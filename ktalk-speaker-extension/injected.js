@@ -27,6 +27,10 @@
   let wsReconnectTimer = null;
   let wsConnected = false;
 
+  // Track if conference is fully initialized (tracks loaded)
+  let conferenceReady = false;
+  let conferenceReadyTimeout = null;
+
   // Meeting state tracking
   let currentMeetingUrl = null;
   let meetingCheckInterval = null;
@@ -759,11 +763,13 @@
   function anyMicOn(conf) {
     // Check remote participants via jitsi tracks
     const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+    let foundAnyAudioTrack = false;
 
     for (const jp of jitsiParticipants) {
       const tracks = jp.getTracks?.() || jp._tracks || [];
       const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
       if (audioTrack) {
+        foundAnyAudioTrack = true;
         if (audioTrack.isMuted?.() === false) return true;
       }
     }
@@ -772,10 +778,26 @@
     const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
     const localAudio = localTracks.find(t => t.getType?.() === 'audio');
     if (localAudio) {
+      foundAnyAudioTrack = true;
       if (localAudio.isMuted?.() === false) return true;
     }
 
     // Fallback: check _participantsMap for any unmuted participant
+    // This catches cases where jitsiConf tracks are not yet loaded
+    conf._participantsMap?.forEach((p) => {
+      // Some participants may have _audioMuted property directly
+      if (p._audioMuted$?.value === false || p._audioMuted === false) {
+        foundAnyAudioTrack = true;
+      }
+    });
+
+    // If we haven't found ANY audio tracks yet, conference is still loading
+    // In this case, don't report "all mics off" - return true to avoid false alarm
+    if (!foundAnyAudioTrack && !conferenceReady) {
+      return true; // Assume mics are on until we can properly detect
+    }
+
+    // Check _participantsMap for unmuted state
     let hasAnyParticipantWithUnmutedMic = false;
     conf._participantsMap?.forEach((p) => {
       if (p._audioMuted$?.value === false || p._audioMuted === false) {
@@ -1000,10 +1022,46 @@
     const dot = document.querySelector('.ktalk-speaker-dot');
     const nameEl = document.querySelector('.ktalk-speaker-name');
 
+    // Debug logging when "All mics off" would be shown (only after conference is ready)
+    if (!activeSpeaker && !hasMicsOn && conferenceReady) {
+      const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+      const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
+      console.log('[KTalk Debug] All mics off detected:', {
+        conferenceReady,
+        jitsiParticipantsCount: jitsiParticipants.length,
+        localTracksCount: localTracks.length,
+        participantsMapSize: conf._participantsMap?.size,
+        jitsiConfExists: !!conf.jitsiConf,
+        participants: jitsiParticipants.map(p => ({
+          id: p._id,
+          tracks: (p.getTracks?.() || p._tracks || []).map(t => ({
+            type: t.getType?.() || t.type,
+            muted: t.isMuted?.()
+          }))
+        })),
+        localTracks: localTracks.map(t => ({
+          type: t.getType?.(),
+          muted: t.isMuted?.()
+        }))
+      });
+    }
+
     if (dot && nameEl) {
       if (activeSpeaker) {
-        dot.classList.add('speaking');
-        nameEl.textContent = activeSpeaker.name;
+        // Only show as speaking if they actually have an unmuted mic
+        const speakerMuted = isMicMuted(conf, activeSpeaker.id);
+        if (!speakerMuted) {
+          dot.classList.add('speaking');
+          nameEl.textContent = activeSpeaker.name;
+        } else {
+          // Speaker has muted mic - treat as no one speaking
+          dot.classList.remove('speaking');
+          if (!hasMicsOn) {
+            nameEl.textContent = 'All mics off';
+          } else {
+            nameEl.textContent = 'No one speaking';
+          }
+        }
       } else {
         dot.classList.remove('speaking');
         if (!hasMicsOn) {
@@ -1074,6 +1132,34 @@
     sendConnectionStatus(true);
     sendWsParticipants(conf);
 
+    // Reset conference ready state on new conference
+    conferenceReady = false;
+    if (conferenceReadyTimeout) clearTimeout(conferenceReadyTimeout);
+
+    // Mark conference as ready after a delay to allow tracks to load
+    // Or immediately if we already have tracks
+    const checkAndMarkReady = () => {
+      const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+      const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
+      const hasAnyTrack = jitsiParticipants.some(jp => {
+        const tracks = jp.getTracks?.() || jp._tracks || [];
+        return tracks.some(t => (t.getType?.() || t.type) === 'audio');
+      }) || localTracks.some(t => t.getType?.() === 'audio');
+
+      if (hasAnyTrack) {
+        conferenceReady = true;
+        console.log('[KTalk Transcript] Conference ready - tracks loaded');
+      }
+    };
+
+    // Check immediately and also after delay
+    checkAndMarkReady();
+    conferenceReadyTimeout = setTimeout(() => {
+      conferenceReady = true; // Force ready after 5 seconds
+      console.log('[KTalk Transcript] Conference ready - timeout');
+      updateSpeakerStatus(conf);
+    }, 5000);
+
     console.log('[KTalk Transcript] Subscribing to speaker events');
     updateSpeakerStatus(conf);
 
@@ -1084,10 +1170,23 @@
       }
     });
 
-    conf.jitsiConf.on('conference.dominantSpeaker', () => updateSpeakerStatus(conf));
+    // Subscribe to _dominantSpeakerId$ observable
+    if (conf._dominantSpeakerId$?.subscribe) {
+      conf._dominantSpeakerId$.subscribe(() => {
+        console.log('[KTalk Transcript] Dominant speaker changed:', conf._dominantSpeakerId$?.value);
+        updateSpeakerStatus(conf);
+      });
+    }
+
+    conf.jitsiConf.on('conference.dominantSpeaker', (id) => {
+      console.log('[KTalk Transcript] Jitsi dominant speaker event:', id);
+      updateSpeakerStatus(conf);
+    });
 
     conf.jitsiConf.on('conference.trackAdded', (track) => {
       if (track.getType?.() === 'audio') {
+        // Track added - mark conference as ready
+        checkAndMarkReady();
         updateSpeakerStatus(conf);
         sendWsParticipants(conf);  // Update mic status
         const participantId = track.getParticipantId?.();
