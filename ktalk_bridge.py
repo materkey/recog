@@ -22,12 +22,30 @@ import asyncio
 import json
 import threading
 import time
+import os
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Callable, TYPE_CHECKING
 import sys
+from pathlib import Path
 
 if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
+
+# Load .env file
+def _load_dotenv():
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+    with open(env_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' in line:
+                key, value = line.split('=', 1)
+                os.environ.setdefault(key.strip(), value.strip())
+
+_load_dotenv()
 
 
 @dataclass
@@ -265,6 +283,198 @@ class KTalkBridge:
             except Exception:
                 pass  # Клиент может отключиться
 
+    async def _handle_summarize(self, transcript: str, summary_type: str = "catchup", question: str = "", previous_summary: str = "", model: str = "gemini-2.5-flash", meeting_title: str = ""):
+        """Обрабатывает запрос на AI summarize через Google Gemini API."""
+        try:
+            if not transcript.strip():
+                await self._broadcast_message({
+                    "type": "summarize_response",
+                    "error": "Нет транскрипта для анализа"
+                })
+                return
+
+            # Check for API key (try both names)
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                await self._broadcast_message({
+                    "type": "summarize_response",
+                    "error": "GEMINI_API_KEY не установлен"
+                })
+                return
+
+            # Meeting context
+            meeting_context = f"Встреча: {meeting_title}\n\n" if meeting_title else ""
+
+            # Build prompt based on summary type
+            if summary_type == "catchup":
+                prompt = f"""Ты помощник Вячеслава Ковалева на рабочей встрече. Он отвлёкся на минуту и хочет быстро включиться в дискуссию.
+
+{meeting_context}Проанализируй транскрипт и помоги ему:
+
+1. **Контекст** (2-3 предложения): Что сейчас обсуждают? Какая проблема или решение на столе?
+
+2. **Один умный вопрос**: Предложи один вопрос, который Вячеслав может задать прямо сейчас. Вопрос должен:
+   - Показать, что он следит за дискуссией
+   - Продвинуть обсуждение вперёд
+   - Быть из одной из категорий:
+     * Исследовательский: "А мы проверяли...?", "Какие данные говорят...?"
+     * Спекулятивный: "Что если...?", "А можно ли...?"
+     * Продуктивный: "Какой следующий шаг?", "Кто возьмёт на себя...?"
+     * Интерпретационный: "То есть это значит, что...?", "Правильно ли я понимаю...?"
+     * Субъективный: "Все согласны с этим подходом?", "Есть ли сомнения?"
+
+Формат ответа — кратко, без воды:
+
+## Контекст
+[2-3 предложения]
+
+## Вопрос
+> [Один конкретный вопрос который можно задать прямо сейчас]
+
+Транскрипт:
+{transcript}
+"""
+            elif summary_type == "brief":
+                prompt = f"""{meeting_context}Дай краткое изложение того, что обсуждалось на встрече за последние 2 минуты.
+
+Формат — кратко и по делу:
+
+## Темы
+- Что обсуждали (буллеты)
+
+## Решения
+- Какие решения приняли или к чему склоняются
+
+## Открытые вопросы
+- Что осталось нерешённым
+
+Транскрипт:
+{transcript}
+"""
+            elif summary_type == "full":
+                prompt = f"""{meeting_context}Дай полное summary встречи.
+
+Формат ответа:
+
+## Участники
+- Кто участвовал в обсуждении
+
+## Основные темы
+- Что обсуждали (по пунктам)
+
+## Ключевые решения
+- Что решили
+
+## Action items
+- Кто что взял на себя (если упоминалось)
+
+## Открытые вопросы
+- Что осталось нерешённым
+
+Транскрипт:
+{transcript}
+"""
+            elif summary_type == "question":
+                prompt = f"""{meeting_context}Контекст встречи (summary):
+{previous_summary}
+
+Полный транскрипт:
+{transcript}
+
+Вопрос пользователя: {question}
+
+Ответь на вопрос кратко и по существу, основываясь на транскрипте встречи.
+"""
+            else:
+                prompt = f"Кратко изложи:\n{transcript}"
+
+            # Log prompt to file for debugging
+            with open("/tmp/ktalk_summarize_prompt.txt", "w") as f:
+                f.write(f"Model: {model}\n")
+                f.write(f"Meeting: {meeting_title}\n")
+                f.write(f"Type: {summary_type}\n")
+                f.write(f"---\n{prompt}\n")
+
+            # Call Google Gemini API
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                # Pro models use thinking tokens, need higher limit
+                max_tokens = 8192 if "pro" in model else 2048
+
+                async with session.post(
+                    url,
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {
+                            "temperature": 0.3,
+                            "maxOutputTokens": max_tokens
+                        }
+                    },
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=60 if "pro" in model else 30)
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        print(f"[KTalk Bridge] Gemini error: {error_text}", file=sys.stderr)
+                        await self._broadcast_message({
+                            "type": "summarize_response",
+                            "error": f"Gemini API error: {response.status}"
+                        })
+                        return
+
+                    data = await response.json()
+
+            # Extract text from response
+            candidates = data.get("candidates", [])
+            if not candidates:
+                print(f"[KTalk Bridge] No candidates in response: {data}", file=sys.stderr)
+                await self._broadcast_message({
+                    "type": "summarize_response",
+                    "error": f"No candidates: {data.get('error', data.get('promptFeedback', 'unknown'))}"
+                })
+                return
+
+            # Check finish reason
+            finish_reason = candidates[0].get("finishReason", "")
+            if finish_reason and finish_reason not in ["STOP", "MAX_TOKENS"]:
+                print(f"[KTalk Bridge] Unexpected finish reason: {finish_reason}", file=sys.stderr)
+                await self._broadcast_message({
+                    "type": "summarize_response",
+                    "error": f"Gemini blocked: {finish_reason}"
+                })
+                return
+
+            summary = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+
+            if not summary:
+                print(f"[KTalk Bridge] Empty text in response: {candidates[0]}", file=sys.stderr)
+                await self._broadcast_message({
+                    "type": "summarize_response",
+                    "error": "Пустой ответ от Gemini"
+                })
+                return
+
+            print(f"[KTalk Bridge] Summary generated: {len(summary)} chars", file=sys.stderr)
+
+            await self._broadcast_message({
+                "type": "summarize_response",
+                "summary": summary
+            })
+
+        except ImportError:
+            await self._broadcast_message({
+                "type": "summarize_response",
+                "error": "aiohttp не установлен. Выполните: pip install aiohttp"
+            })
+        except Exception as e:
+            print(f"[KTalk Bridge] Summarize error: {e}", file=sys.stderr)
+            await self._broadcast_message({
+                "type": "summarize_response",
+                "error": str(e)
+            })
+
     async def _handle_client(self, websocket):
         """Обрабатывает подключение клиента (Chrome extension)."""
         self._connected_clients.add(websocket)
@@ -449,6 +659,20 @@ class KTalkBridge:
         elif msg_type == "ping":
             # Heartbeat
             pass
+
+        elif msg_type == "summarize_request":
+            # AI summary request from extension
+            transcript = data.get("transcript", "")
+            summary_type = data.get("summary_type", "catchup")
+            lines_count = data.get("lines_count", 0)
+            question = data.get("question", "")
+            previous_summary = data.get("previous_summary", "")
+            model = data.get("model", "gemini-2.5-flash")
+            meeting_title = data.get("meeting_title", "")
+            print(f"[KTalk Bridge] Summarize request ({summary_type}): {lines_count} lines, model: {model}, meeting: {meeting_title[:50]}", file=sys.stderr)
+
+            # Run summarize in background
+            asyncio.create_task(self._handle_summarize(transcript, summary_type, question, previous_summary, model, meeting_title))
 
     async def _run_server(self):
         """Запускает WebSocket сервер."""
