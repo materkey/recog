@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KTalk Speaker Detector</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 400px;
+      max-height: 600px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: white;
+    }
+
+    .header {
+      padding: 15px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      text-align: center;
+    }
+
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .header p {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-top: 4px;
+    }
+
+    .status {
+      padding: 10px 15px;
+      background: rgba(255,255,255,0.05);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ff4444;
+    }
+
+    .status-dot.connected {
+      background: #44ff44;
+      animation: blink 2s infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .section {
+      padding: 15px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      opacity: 0.5;
+      margin-bottom: 10px;
+    }
+
+    .current-speaker {
+      background: rgba(102, 126, 234, 0.2);
+      border-radius: 8px;
+      padding: 15px;
+      text-align: center;
+    }
+
+    .current-speaker .icon {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+
+    .current-speaker .name {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .current-speaker .id {
+      font-size: 10px;
+      opacity: 0.5;
+      margin-top: 4px;
+      font-family: monospace;
+    }
+
+    .participants-list, .history-list {
+      list-style: none;
+    }
+
+    .participants-list li, .history-list li {
+      padding: 8px 10px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+    }
+
+    .participants-list li:last-child, .history-list li:last-child {
+      margin-bottom: 0;
+    }
+
+    .participant-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .participant-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    .participant-local {
+      font-size: 10px;
+      background: rgba(102, 126, 234, 0.3);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .history-time {
+      font-size: 11px;
+      opacity: 0.5;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 20px;
+      opacity: 0.5;
+      font-size: 13px;
+    }
+
+    .footer {
+      padding: 10px 15px;
+      text-align: center;
+      font-size: 10px;
+      opacity: 0.3;
+    }
+
+    /* Transcript section */
+    .transcript-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .transcript-copy-btn {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border: none;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.7);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .transcript-copy-btn:hover {
+      background: rgba(255,255,255,0.15);
+      color: white;
+    }
+    .transcript-copy-btn.copied {
+      background: rgba(34, 197, 94, 0.2);
+      color: #22c55e;
+    }
+
+    .transcript-list {
+      max-height: 250px;
+      overflow-y: auto;
+      list-style: none;
+    }
+
+    .transcript-list li {
+      padding: 8px 10px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .transcript-list li.local {
+      background: rgba(0, 138, 255, 0.12);
+      border-left: 3px solid rgb(0, 138, 255);
+    }
+    .transcript-list li.uncertain {
+      background: rgba(250, 204, 21, 0.08);
+      border-left: 3px dashed #facc15;
+    }
+    .transcript-list li.mics-off {
+      background: rgba(251, 146, 60, 0.08);
+      border-left: 3px dashed #fb923c;
+    }
+
+    .transcript-speaker {
+      font-weight: 600;
+      font-size: 11px;
+      margin-right: 6px;
+    }
+    .transcript-list li.local .transcript-speaker {
+      color: rgb(0, 138, 255);
+    }
+    .transcript-list li.uncertain .transcript-speaker {
+      color: #facc15;
+    }
+    .transcript-list li.mics-off .transcript-speaker {
+      color: #fb923c;
+    }
+
+    .transcript-time {
+      font-size: 10px;
+      opacity: 0.5;
+      margin-left: 4px;
+    }
+
+    .transcript-text {
+      color: rgba(255,255,255,0.85);
+      margin-top: 4px;
+    }
+
+    .tab-buttons {
+      display: flex;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      background: none;
+      color: rgba(255,255,255,0.5);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover {
+      color: rgba(255,255,255,0.8);
+    }
+    .tab-btn.active {
+      color: white;
+      border-bottom: 2px solid #667eea;
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>KTalk Speaker Detector</h1>
+    <p>Real-time active speaker detection</p>
+  </div>
+
+  <div class="status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Checking connection...</span>
+  </div>
+
+  <div class="tab-buttons">
+    <button class="tab-btn active" data-tab="info">Info</button>
+    <button class="tab-btn" data-tab="transcript">Transcript</button>
+  </div>
+
+  <div class="tab-content active" id="tab-info">
+    <div class="section">
+      <div class="section-title">Current Speaker</div>
+      <div class="current-speaker">
+        <div class="icon">🎤</div>
+        <div class="name" id="currentSpeakerName">-</div>
+        <div class="id" id="currentSpeakerId"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Participants (<span id="participantCount">0</span>)</div>
+      <ul class="participants-list" id="participantsList">
+        <li class="empty-state">No participants</li>
+      </ul>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Recent Speakers</div>
+      <ul class="history-list" id="historyList">
+        <li class="empty-state">No history yet</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-transcript">
+    <div class="section">
+      <div class="transcript-header">
+        <div class="section-title">Transcript (<span id="transcriptCount">0</span>)</div>
+        <button class="transcript-copy-btn" id="copyTranscriptBtn">
+          <span>📋</span>
+          <span class="copy-text">Copy all</span>
+        </button>
+      </div>
+      <ul class="transcript-list" id="transcriptList">
+        <li class="empty-state">No transcript yet</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">
+    KTalk Speaker Detector v1.0
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
