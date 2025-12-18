@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "KTalk Speaker Detector",
+  "version": "1.0.0",
+  "description": "Detects and displays the current active speaker in KTalk video conferences",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.ktalk.ru/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.ktalk.ru/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["https://*.ktalk.ru/*"]
+    }
+  ]
+}
