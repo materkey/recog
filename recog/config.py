@@ -40,6 +40,10 @@ DEFAULT_OVERLAP = 1.0
 # Порог косинусного сходства для идентификации спикеров
 SPEAKER_SIMILARITY_THRESHOLD = 0.30
 
+# VAD (Voice Activity Detection) - порог RMS для определения тишины
+# Аудио с RMS ниже этого порога считается тишиной и не отправляется на inference
+VAD_RMS_THRESHOLD = 0.005
+
 # Путь к venv для pyannote 4.x
 PYANNOTE4_VENV = Path(__file__).parent.parent / "venv-pyannote"
 DIARIZE_WORKER = Path(__file__).parent.parent / "diarize_worker.py"
