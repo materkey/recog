@@ -10,7 +10,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from .config import SPEAKER_SIMILARITY_THRESHOLD
+from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
 
@@ -529,6 +529,11 @@ class LiveTranscriber:
             """Обрабатывает чанк из источника."""
             chunk = capture.get_chunk(self.chunk_duration)
             if chunk is None or len(chunk) < 1000:
+                return
+
+            # VAD: пропускаем тишину (не тратим CPU на inference)
+            rms = np.sqrt(np.mean(chunk ** 2))
+            if rms < VAD_RMS_THRESHOLD:
                 return
 
             text = self._transcribe_direct(chunk)
