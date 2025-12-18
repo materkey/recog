@@ -85,9 +85,31 @@ def run_diarization(
     audio_input = {"waveform": waveform_tensor, "sample_rate": sample_rate}
     diarization = pipeline(audio_input)
 
-    # Конвертируем в список сегментов (pyannote 4.x API)
+    def _iter_tracks(diarization_result):
+        annotation = getattr(diarization_result, "speaker_diarization", diarization_result)
+
+        if hasattr(annotation, "itertracks"):
+            for turn, _, speaker in annotation.itertracks(yield_label=True):
+                yield turn, speaker
+            return
+
+        try:
+            for item in annotation:
+                if not isinstance(item, tuple):
+                    continue
+                if len(item) == 2:
+                    turn, speaker = item
+                elif len(item) == 3:
+                    turn, _, speaker = item
+                else:
+                    continue
+                yield turn, speaker
+        except TypeError as e:
+            raise RuntimeError(f"Unexpected diarization output type: {type(diarization_result)}") from e
+
+    # Конвертируем в список сегментов
     segments = []
-    for turn, speaker in diarization.speaker_diarization:
+    for turn, speaker in _iter_tracks(diarization):
         segments.append({
             "start": turn.start,
             "end": turn.end,

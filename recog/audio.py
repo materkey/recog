@@ -55,9 +55,22 @@ def get_audio_path(input_path: str, temp_dir: Optional[str] = None) -> Tuple[str
     if temp_dir is None:
         temp_dir = tempfile.gettempdir()
 
-    wav_path = os.path.join(temp_dir, f"{path.stem}_temp.wav")
+    temp_dir_path = Path(temp_dir)
+    temp_dir_path.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(
+        prefix=f"{path.stem}_",
+        suffix=".wav",
+        dir=temp_dir_path,
+        delete=False,
+    ) as tmp:
+        wav_path = tmp.name
 
     if extract_audio_to_wav(input_path, wav_path):
         return wav_path, True
-    else:
-        raise RuntimeError(f"Не удалось извлечь аудио из {input_path}")
+
+    try:
+        os.remove(wav_path)
+    except OSError:
+        pass
+    raise RuntimeError(f"Не удалось извлечь аудио из {input_path}")

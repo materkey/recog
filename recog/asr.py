@@ -68,9 +68,23 @@ class ASRModule:
         total_samples = audio.shape[0]
         total_duration = total_samples / self.SAMPLE_RATE
 
+        if chunk_duration <= 0:
+            raise ValueError(f"chunk_duration must be > 0, got {chunk_duration}")
+        if overlap < 0:
+            raise ValueError(f"overlap must be >= 0, got {overlap}")
+        if overlap >= chunk_duration:
+            raise ValueError(
+                f"overlap must be < chunk_duration (got overlap={overlap}, chunk_duration={chunk_duration})"
+            )
+
         chunk_samples = int(chunk_duration * self.SAMPLE_RATE)
         overlap_samples = int(overlap * self.SAMPLE_RATE)
         step_samples = chunk_samples - overlap_samples
+        if step_samples <= 0:
+            raise ValueError(
+                f"Invalid chunking: step_samples must be > 0 (got {step_samples}); "
+                f"choose smaller overlap or larger chunk_duration."
+            )
 
         device = model._device
         dtype = model._dtype

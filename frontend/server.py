@@ -224,14 +224,14 @@ async def lifespan(app: FastAPI):
     global observer
 
     # Start file watcher
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     transcript_watcher.set_loop(loop)
     live_watcher.set_loop(loop)
 
+    MEETINGS_DIR.mkdir(parents=True, exist_ok=True)
     observer = Observer()
-    if MEETINGS_DIR.exists():
-        observer.schedule(transcript_watcher, str(MEETINGS_DIR), recursive=True)
-        observer.schedule(live_watcher, str(MEETINGS_DIR), recursive=True)
+    observer.schedule(transcript_watcher, str(MEETINGS_DIR), recursive=True)
+    observer.schedule(live_watcher, str(MEETINGS_DIR), recursive=True)
     observer.start()
 
     print(f"Server started at http://{HOST}:{PORT}")
@@ -483,9 +483,9 @@ async def analyze_meeting_stream(meeting_id: str, question: str = "increment"):
             for provider in providers:
                 yield f"data: {json.dumps({'type': 'start', 'provider': provider.key, 'name': provider.name})}\n\n"
 
-            async def stream_provider(provider):
-                """Stream from a single provider and yield SSE events."""
-                events = []
+            queue: asyncio.Queue[dict] = asyncio.Queue()
+
+            async def produce_events(provider):
                 try:
                     async for text, is_done in provider.stream(prompt):
                         event = {
@@ -493,23 +493,30 @@ async def analyze_meeting_stream(meeting_id: str, question: str = "increment"):
                             'provider': provider.key,
                             'text': text
                         }
-                        events.append(event)
+                        await queue.put(event)
                 except Exception as e:
-                    events.append({
+                    await queue.put({
                         'type': 'error',
                         'provider': provider.key,
                         'message': str(e)
                     })
-                return events
+                finally:
+                    await queue.put({'type': 'provider_complete', 'provider': provider.key})
 
-            # Run all providers concurrently
-            tasks = [stream_provider(p) for p in providers]
+            tasks = [asyncio.create_task(produce_events(p)) for p in providers]
 
-            # Process as they complete
-            for coro in asyncio.as_completed(tasks):
-                events = await coro
-                for event in events:
+            pending = len(tasks)
+            try:
+                while pending:
+                    event = await queue.get()
+                    if event.get('type') == 'provider_complete':
+                        pending -= 1
+                        continue
                     yield f"data: {json.dumps(event)}\n\n"
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
