@@ -20,15 +20,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from recog import (
-    DEFAULT_MODEL,
-    DEFAULT_CHUNK_DURATION,
-    DEFAULT_OVERLAP,
-    transcribe_pipeline,
-    enroll_speaker_pipeline,
-    build_speaker_db_pipeline,
-    live_pipeline,
-)
+from recog import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP
 
 
 def main():
@@ -208,6 +200,8 @@ def main():
     args = parser.parse_args()
 
     if args.command == "transcribe":
+        from recog.pipeline import transcribe_pipeline
+
         input_path = args.input
         output_path = args.out or str(Path(input_path).with_suffix(".md"))
 
@@ -225,6 +219,8 @@ def main():
         )
 
     elif args.command == "live":
+        from recog.live import live_pipeline
+
         # Convert device ID to int if it's a number
         def parse_device(dev):
             if dev is None:
@@ -322,6 +318,8 @@ def main():
                         print(f"{m['id']:<35} {m['source']:<8} {m['segment_count']:>8}  {duration:>10}  {title}")
 
     elif args.command == "enroll-speaker":
+        from recog.pipeline import enroll_speaker_pipeline
+
         enroll_speaker_pipeline(
             speaker_id=args.speaker_id,
             audio_files=args.audio_files,
@@ -330,6 +328,8 @@ def main():
         )
 
     elif args.command == "build-speaker-db":
+        from recog.pipeline import build_speaker_db_pipeline
+
         # Парсим маппинг
         speaker_mapping = None
         if args.mapping:

@@ -95,7 +95,7 @@ class ScreenCaptureAudio:
 
     def _reader_loop(self):
         """Read audio data from subprocess stdout with auto-restart."""
-        bytes_per_chunk = self.SAMPLE_RATE * self.BYTES_PER_SAMPLE // 10  # 100ms chunks
+        bytes_per_chunk = self.sample_rate * self.BYTES_PER_SAMPLE // 10  # 100ms chunks
         restart_count = 0
         max_restarts = 5
 

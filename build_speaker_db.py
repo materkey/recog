@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import os
+from pathlib import Path
 
 # Сегменты для каждого спикера (start, end, transcript)
 SEGMENTS = {
@@ -44,8 +45,9 @@ SEGMENTS = {
 }
 
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
-VENV_PYTHON = "/Users/vkkovalev/projects/recog/venv-pyannote/bin/python"
-DIARIZE_WORKER = "/Users/vkkovalev/projects/recog/diarize_worker.py"
+ROOT_DIR = Path(__file__).resolve().parent
+VENV_PYTHON = str(ROOT_DIR / "venv-pyannote" / "bin" / "python")
+DIARIZE_WORKER = str(ROOT_DIR / "diarize_worker.py")
 
 def extract_embedding(wav_path: str) -> list:
     """Извлекает embedding из wav файла."""
@@ -82,11 +84,31 @@ def main():
         for start, end, transcript in info["samples"]:
             duration = end - start
             wav_path = f"/tmp/{speaker_id}_{start}_{end}.wav"
-            
+
             # Извлекаем аудио
-            cmd = f"ffmpeg -i example.mp4 -ss {start} -t {duration} -ar 16000 -ac 1 {wav_path} -y 2>/dev/null"
-            os.system(cmd)
-            
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    "example.mp4",
+                    "-ss",
+                    str(start),
+                    "-t",
+                    str(duration),
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    wav_path,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if result.returncode != 0:
+                print(f"  [{start//60:02d}:{start%60:02d}] FAILED (ffmpeg)", file=sys.stderr)
+                continue
+
             # Извлекаем embedding
             emb = extract_embedding(wav_path)
             if emb:
@@ -100,9 +122,12 @@ def main():
                 print(f"  [{start//60:02d}:{start%60:02d}-{end//60:02d}:{end%60:02d}] OK")
             else:
                 print(f"  [{start//60:02d}:{start%60:02d}] FAILED")
-            
+
             # Удаляем временный файл
-            os.remove(wav_path)
+            try:
+                os.remove(wav_path)
+            except FileNotFoundError:
+                pass
         
         db[speaker_id] = {
             "display_name": info["display_name"],

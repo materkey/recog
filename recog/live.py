@@ -378,7 +378,7 @@ class LiveTranscriber:
         final_line = f"\n**{speaker}** *[{timestamp}]*: {final_text}\n"
         self.transcript_lines.append(final_line)
 
-    def run(self):
+    def run(self, force_exit: bool = False):
         """Основной цикл live транскрипции."""
         import concurrent.futures
 
@@ -719,8 +719,9 @@ class LiveTranscriber:
                     f.write("\n".join(self.transcript_lines))
                 print(f"Транскрипт сохранён в {self.output_file}")
 
-            import os
-            os._exit(0)
+            if force_exit:
+                import os
+                os._exit(0)
 
 
 def live_pipeline(
@@ -768,4 +769,4 @@ def live_pipeline(
         use_ktalk=use_ktalk,
         use_screencapture=use_screencapture
     )
-    transcriber.run()
+    transcriber.run(force_exit=True)
