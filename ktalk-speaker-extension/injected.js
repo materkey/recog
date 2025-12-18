@@ -785,9 +785,12 @@
           <span class="ktalk-summary-modal-title">✨ Catch Up</span>
           <select class="ktalk-model-select">
             <option value="gemini-2.5-flash">2.5 Flash</option>
+            <option value="gemini-2.5-flash-lite">2.5 Flash Lite</option>
             <option value="gemini-2.5-pro">2.5 Pro</option>
             <option value="gemini-2.0-flash">2.0 Flash</option>
             <option value="gemini-2.0-flash-lite">2.0 Lite</option>
+            <option value="gemini-3-flash-preview">3.0 Flash</option>
+            <option value="gemini-3-pro-preview">3.0 Pro</option>
           </select>
           <button class="ktalk-summary-modal-close">×</button>
         </div>
