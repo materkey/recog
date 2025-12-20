@@ -284,6 +284,9 @@ class MeetingStorage:
         else:
             self._segment_counter = 0
 
+        # Добавить маркер возобновления сессии
+        self._append_system_event("session_resume", "Сессия возобновлена")
+
         return True
 
     def on_ktalk_join(self, url: str, title: Optional[str] = None) -> str:
@@ -379,6 +382,11 @@ class MeetingStorage:
             return None
 
         meta = self._load_meta()
+
+        # Для KTalk встреч добавляем маркер паузы (может быть переоткрыта)
+        if meta.get("source") == "ktalk" and end_reason != "session_end":
+            self._append_system_event("session_pause", "Сессия приостановлена")
+
         now = datetime.now(UTC)
 
         meta["ended_at"] = now.isoformat()
@@ -489,6 +497,45 @@ class MeetingStorage:
             if meta["participants"][speaker_id]["name"] != speaker:
                 meta["participants"][speaker_id]["name"] = speaker
 
+        self._save_meta(meta)
+
+    def _append_system_event(self, event_type: str, message: str):
+        """
+        Добавить системное событие в транскрипт.
+
+        Используется для маркировки пауз/возобновлений сессии.
+
+        Args:
+            event_type: Тип события (session_pause, session_resume)
+            message: Текст сообщения для отображения
+        """
+        if not self.current_meeting_path:
+            return
+
+        self._segment_counter += 1
+        now = datetime.now(UTC)
+
+        event = {
+            "id": self._segment_counter,
+            "ts": now.isoformat(),
+            "ts_display": now.astimezone().strftime("%H:%M:%S"),
+            "speaker": "Система",
+            "speaker_id": "__system__",
+            "text": message,
+            "is_local": False,
+            "cont": False,
+            "uncertain": False,
+            "uncertain_reason": "",
+            "event_type": event_type
+        }
+
+        with open(self.current_meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+        # Update stats
+        meta = self._load_meta()
+        meta["stats"]["segment_count"] = self._segment_counter
+        meta["updated_at"] = now.isoformat()
         self._save_meta(meta)
 
     def update_participants(self, participants: dict):

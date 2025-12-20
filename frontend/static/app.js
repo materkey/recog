@@ -292,6 +292,16 @@ const views = {
             const grouped = this.groupSegments(segments);
 
             container.innerHTML = grouped.map(group => {
+                // Системные события отображаются как разделители
+                if (group.event_type) {
+                    return `
+                        <div class="transcript-event ${group.event_type}">
+                            <span class="event-time">${group.ts_display}</span>
+                            <span class="event-text">${escapeHtml(group.text)}</span>
+                        </div>
+                    `;
+                }
+
                 const speakerClass = group.is_local ? 'speaker-local' : 'speaker-other';
                 const text = searchTerm
                     ? this.highlightSearch(group.text, searchTerm)
@@ -314,6 +324,21 @@ const views = {
             let current = null;
 
             for (const seg of segments) {
+                // Системные события не группируются
+                if (seg.event_type) {
+                    if (current) groups.push(current);
+                    current = null;
+                    groups.push({
+                        speaker: seg.speaker,
+                        speaker_id: seg.speaker_id,
+                        is_local: false,
+                        ts_display: seg.ts_display,
+                        text: seg.text,
+                        event_type: seg.event_type
+                    });
+                    continue;
+                }
+
                 if (current && current.speaker_id === seg.speaker_id && seg.cont) {
                     current.text += ' ' + seg.text;
                 } else {
