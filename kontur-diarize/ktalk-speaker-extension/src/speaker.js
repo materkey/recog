@@ -101,31 +101,78 @@ export function anyMicOn(conf) {
 
 export function getParticipantsList(conf) {
   const participants = [];
+  const byId = new Map();
+  state.lastParticipantsMapSize = conf._participantsMap?.size || 0;
 
   if (conf.localParticipant) {
     const lp = conf.localParticipant;
     const localInfo = lp._participantInfo$?.value || lp._userInfo$?.value;
-    participants.push({
+    const entry = {
       id: lp.id,
       name: getFullName(lp, localInfo, lp.name || lp.displayName || 'You'),
       isLocal: true,
       isSpeaking: conf._participantsMap?.get(lp.id)?._activeSpeaker$?.value || false,
       micMuted: isMicMuted(conf, lp.id)
-    });
+    };
+    participants.push(entry);
+    byId.set(lp.id, entry);
   }
 
   conf._participantsMap?.forEach((p, key) => {
     if (p._id !== conf.localParticipant?.id) {
       const info = p._participantInfo$?.value || p._userInfo$?.value;
-      participants.push({
+      const entry = {
         id: p._id,
         name: getFullName(p, info, p.name || p.displayName || key),
         isLocal: false,
         isSpeaking: p._activeSpeaker$?.value || false,
         micMuted: isMicMuted(conf, p._id)
-      });
+      };
+      participants.push(entry);
+      byId.set(p._id, entry);
     }
   });
+
+  // Fallback: add participants from Jitsi if map is empty or missing remotes
+  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  state.lastJitsiParticipantsCount = jitsiParticipants.length;
+  const jitsiParticipantsMap = conf.jitsiConf?.participants || conf.jitsiConf?._participants;
+  const jitsiMapValues = jitsiParticipantsMap
+    ? (typeof jitsiParticipantsMap.values === 'function'
+      ? Array.from(jitsiParticipantsMap.values())
+      : Object.values(jitsiParticipantsMap))
+    : [];
+  state.lastJitsiParticipantsMapCount = jitsiMapValues.length;
+
+  for (const jp of jitsiParticipants) {
+    const pid = jp._id || jp.getId?.() || jp.id;
+    if (!pid || byId.has(pid)) continue;
+    const name = jp.getDisplayName?.() || jp._displayName || jp.displayName || jp._name || pid;
+    const entry = {
+      id: pid,
+      name,
+      isLocal: false,
+      isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+      micMuted: isMicMuted(conf, pid)
+    };
+    participants.push(entry);
+    byId.set(pid, entry);
+  }
+
+  for (const jp of jitsiMapValues) {
+    const pid = jp?._id || jp?.getId?.() || jp?.id;
+    if (!pid || byId.has(pid)) continue;
+    const name = jp?.getDisplayName?.() || jp?._displayName || jp?.displayName || jp?._name || pid;
+    const entry = {
+      id: pid,
+      name,
+      isLocal: false,
+      isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+      micMuted: isMicMuted(conf, pid)
+    };
+    participants.push(entry);
+    byId.set(pid, entry);
+  }
 
   return participants;
 }

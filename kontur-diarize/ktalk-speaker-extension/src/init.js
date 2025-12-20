@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { injectStyles, addTranscriptTab, createTranscriptContent, watchTabChanges, updateWsIndicator } from './ui.js';
 import { connectWebSocket } from './ws.js';
-import { updateSpeakerStatus, sendParticipantsUpdate } from './speaker.js';
+import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
 import { sendWsConnectionStatus } from './ws_api.js';
 import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
@@ -30,6 +30,19 @@ function waitForConference(callback, maxAttempts = 100) {
   check();
 }
 
+function tryAttachConference() {
+  if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
+    return;
+  }
+
+  if (window.$conf !== state.activeConfRef || window.$conf.jitsiConf !== state.activeJitsiConf) {
+    state.activeConfRef = window.$conf;
+    state.activeJitsiConf = window.$conf.jitsiConf;
+    console.log('[KTalk Transcript] Conference reattached');
+    subscribeToDominantSpeaker(window.$conf);
+  }
+}
+
 function setupUI() {
   injectStyles();
 
@@ -47,6 +60,7 @@ function setupUI() {
 function subscribeToDominantSpeaker(conf) {
   sendConnectionStatus(true);
   sendParticipantsUpdate(conf);
+  startParticipantsRefresh(conf, 'conference_ready');
 
   state.conferenceReady = false;
   if (state.conferenceReadyTimeout) clearTimeout(state.conferenceReadyTimeout);
@@ -130,6 +144,7 @@ function subscribeToDominantSpeaker(conf) {
       }
       updateSpeakerStatus(conf);
       sendParticipantsUpdate(conf);
+      startParticipantsRefresh(conf, 'user_joined');
     }, 1000);
   });
 
@@ -137,10 +152,36 @@ function subscribeToDominantSpeaker(conf) {
     setTimeout(() => {
       updateSpeakerStatus(conf);
       sendParticipantsUpdate(conf);
+      startParticipantsRefresh(conf, 'user_left');
     }, 500);
   });
 
   console.log('[KTalk Transcript] Ready');
+}
+
+function startParticipantsRefresh(conf, reason) {
+  const intervalMs = 2000;
+  const durationMs = 30000;
+  const deadline = Date.now() + durationMs;
+
+  if (state.participantsRefreshTimer) {
+    clearInterval(state.participantsRefreshTimer);
+    state.participantsRefreshTimer = null;
+  }
+
+  const tick = () => {
+    updateSpeakerStatus(conf);
+    sendParticipantsUpdate(conf);
+    const count = getParticipantsList(conf).length;
+    if (count >= 2 || Date.now() >= deadline) {
+      clearInterval(state.participantsRefreshTimer);
+      state.participantsRefreshTimer = null;
+    }
+  };
+
+  console.log('[KTalk Transcript] Participants refresh start:', reason);
+  tick();
+  state.participantsRefreshTimer = setInterval(tick, intervalMs);
 }
 
 export function init() {
@@ -158,6 +199,7 @@ export function init() {
       state.originalChatContent = null;
       createTranscriptContent();
     }
+    tryAttachConference();
     updateDebugPanel();
   }, 2000);
 
