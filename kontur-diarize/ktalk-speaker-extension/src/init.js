@@ -1,9 +1,10 @@
 import { state } from './state.js';
-import { injectStyles, addTranscriptTab, createTranscriptContent, watchTabChanges, updateWsIndicator, ensureDebugPanel, updateDebugPanel } from './ui.js';
+import { injectStyles, addTranscriptTab, createTranscriptContent, watchTabChanges, updateWsIndicator } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
 import { sendWsConnectionStatus } from './ws_api.js';
+import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
 
 function sendConnectionStatus(connected) {
   window.dispatchEvent(new CustomEvent('ktalk-connection-status', { detail: { connected } }));

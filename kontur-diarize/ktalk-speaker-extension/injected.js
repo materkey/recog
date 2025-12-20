@@ -2,6 +2,182 @@
 /******/ 	"use strict";
 /******/ 	var __webpack_modules__ = ({
 
+/***/ "./src/debug/panel.js"
+/*!****************************!*\
+  !*** ./src/debug/panel.js ***!
+  \****************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   ensureDebugPanel: () => (/* binding */ ensureDebugPanel),
+/* harmony export */   updateDebugPanel: () => (/* binding */ updateDebugPanel)
+/* harmony export */ });
+/* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../state.js */ "./src/state.js");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../utils.js */ "./src/utils.js");
+/* harmony import */ var _styles_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./styles.js */ "./src/debug/styles.js");
+
+
+
+
+function ensureDebugPanel() {
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement) return;
+
+  (0,_styles_js__WEBPACK_IMPORTED_MODULE_2__.injectDebugStyles)();
+
+  const toggle = document.createElement('button');
+  toggle.className = 'ktalk-debug-toggle';
+  toggle.textContent = 'Debug';
+  toggle.addEventListener('click', () => {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugVisible = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugVisible;
+    if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement) {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement.classList.toggle('active', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugVisible);
+    }
+  });
+
+  const panel = document.createElement('div');
+  panel.className = 'ktalk-debug-panel';
+  panel.innerHTML = '<div class="ktalk-debug-title">KTalk Debug</div>';
+
+  document.body.appendChild(toggle);
+  document.body.appendChild(panel);
+
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement = panel;
+}
+
+function updateDebugPanel() {
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement) return;
+
+  const activeSpeaker = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastActiveSpeaker;
+  const participants = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipants || [];
+  const speakerName = activeSpeaker?.name || '—';
+  const speakerId = activeSpeaker?.id || '—';
+
+  const rows = [
+    ['wsConnected', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected],
+    ['conferenceReady', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady],
+    ['meetingUrl', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl || '—'],
+    ['activeSpeaker', speakerName],
+    ['activeSpeakerId', speakerId],
+    ['participants', participants.length],
+    ['transcriptLines', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length],
+    ['speakerHistory', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakerHistory.length]
+  ];
+
+  const rowsHtml = rows.map(([key, value]) => {
+    return `<div class="ktalk-debug-row"><div class="ktalk-debug-key">${key}</div><div class="ktalk-debug-value">${formatValue(value)}</div></div>`;
+  }).join('');
+
+  const payload = {
+    wsConnected: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected,
+    conferenceReady: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady,
+    currentMeetingUrl: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl,
+    activeSpeaker: activeSpeaker,
+    participants: participants,
+    transcriptLines: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length,
+    speakerHistory: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakerHistory.length
+  };
+
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(JSON.stringify(payload, null, 2))}</div>`;
+}
+
+function formatValue(value) {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value);
+}
+
+
+/***/ },
+
+/***/ "./src/debug/styles.js"
+/*!*****************************!*\
+  !*** ./src/debug/styles.js ***!
+  \*****************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   injectDebugStyles: () => (/* binding */ injectDebugStyles)
+/* harmony export */ });
+function injectDebugStyles() {
+  if (document.querySelector('#ktalk-debug-styles')) return;
+
+  const styles = document.createElement('style');
+  styles.id = 'ktalk-debug-styles';
+  styles.textContent = `
+      /* Debug panel */
+      .ktalk-debug-toggle {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        z-index: 9999;
+        padding: 6px 10px;
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 6px;
+        color: #fff;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .ktalk-debug-panel {
+        position: fixed;
+        right: 12px;
+        bottom: 48px;
+        width: 360px;
+        max-height: 50vh;
+        overflow: auto;
+        z-index: 9999;
+        background: rgba(17, 17, 17, 0.92);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 8px;
+        color: #e5e7eb;
+        font-size: 11px;
+        padding: 10px;
+        display: none;
+        font-family: "Lab Grotesque", Arial, sans-serif;
+      }
+      .ktalk-debug-panel.active {
+        display: block;
+      }
+      .ktalk-debug-title {
+        font-weight: 600;
+        margin-bottom: 8px;
+        color: #fff;
+      }
+      .ktalk-debug-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+      .ktalk-debug-key {
+        color: rgba(255,255,255,0.6);
+      }
+      .ktalk-debug-value {
+        color: #fff;
+        text-align: right;
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ktalk-debug-json {
+        margin-top: 8px;
+        padding: 6px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 6px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    `;
+
+  document.head.appendChild(styles);
+}
+
+
+/***/ },
+
 /***/ "./src/init.js"
 /*!*********************!*\
   !*** ./src/init.js ***!
@@ -18,6 +194,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _speaker_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./speaker.js */ "./src/speaker.js");
 /* harmony import */ var _meeting_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./meeting.js */ "./src/meeting.js");
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+/* harmony import */ var _debug_panel_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./debug/panel.js */ "./src/debug/panel.js");
+
 
 
 
@@ -59,7 +237,7 @@ function setupUI() {
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicator)(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected);
   }
 
-  (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.ensureDebugPanel)();
+  (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.ensureDebugPanel)();
   return tabAdded;
 }
 
@@ -177,7 +355,7 @@ function init() {
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
     }
-    (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateDebugPanel)();
+    (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.updateDebugPanel)();
   }, 2000);
 
   waitForConference(subscribeToDominantSpeaker);
@@ -582,13 +760,11 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   addTranscriptTab: () => (/* binding */ addTranscriptTab),
 /* harmony export */   createTranscriptContent: () => (/* binding */ createTranscriptContent),
-/* harmony export */   ensureDebugPanel: () => (/* binding */ ensureDebugPanel),
 /* harmony export */   handleNewMeeting: () => (/* binding */ handleNewMeeting),
 /* harmony export */   handleSummaryResponse: () => (/* binding */ handleSummaryResponse),
 /* harmony export */   handleTranscript: () => (/* binding */ handleTranscript),
 /* harmony export */   handleTranscriptHistory: () => (/* binding */ handleTranscriptHistory),
 /* harmony export */   injectStyles: () => (/* binding */ injectStyles),
-/* harmony export */   updateDebugPanel: () => (/* binding */ updateDebugPanel),
 /* harmony export */   updateWsIndicator: () => (/* binding */ updateWsIndicator),
 /* harmony export */   watchTabChanges: () => (/* binding */ watchTabChanges)
 /* harmony export */ });
@@ -1014,70 +1190,6 @@ function injectStyles() {
         margin-top: 12px;
       }
 
-      /* Debug panel */
-      .ktalk-debug-toggle {
-        position: fixed;
-        right: 12px;
-        bottom: 12px;
-        z-index: 9999;
-        padding: 6px 10px;
-        background: rgba(0, 0, 0, 0.6);
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 6px;
-        color: #fff;
-        font-size: 11px;
-        cursor: pointer;
-      }
-      .ktalk-debug-panel {
-        position: fixed;
-        right: 12px;
-        bottom: 48px;
-        width: 360px;
-        max-height: 50vh;
-        overflow: auto;
-        z-index: 9999;
-        background: rgba(17, 17, 17, 0.92);
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 8px;
-        color: #e5e7eb;
-        font-size: 11px;
-        padding: 10px;
-        display: none;
-        font-family: "Lab Grotesque", Arial, sans-serif;
-      }
-      .ktalk-debug-panel.active {
-        display: block;
-      }
-      .ktalk-debug-title {
-        font-weight: 600;
-        margin-bottom: 8px;
-        color: #fff;
-      }
-      .ktalk-debug-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        margin-bottom: 4px;
-      }
-      .ktalk-debug-key {
-        color: rgba(255,255,255,0.6);
-      }
-      .ktalk-debug-value {
-        color: #fff;
-        text-align: right;
-        max-width: 220px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .ktalk-debug-json {
-        margin-top: 8px;
-        padding: 6px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 6px;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
     `;
   document.head.appendChild(styles);
 }
@@ -1387,70 +1499,6 @@ function updateTranscriptUI() {
   container.scrollTop = container.scrollHeight;
 }
 
-function ensureDebugPanel() {
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement) return;
-
-  const toggle = document.createElement('button');
-  toggle.className = 'ktalk-debug-toggle';
-  toggle.textContent = 'Debug';
-  toggle.addEventListener('click', () => {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugVisible = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugVisible;
-    if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement) {
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement.classList.toggle('active', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugVisible);
-    }
-  });
-
-  const panel = document.createElement('div');
-  panel.className = 'ktalk-debug-panel';
-  panel.innerHTML = '<div class="ktalk-debug-title">KTalk Debug</div>';
-
-  document.body.appendChild(toggle);
-  document.body.appendChild(panel);
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement = panel;
-}
-
-function updateDebugPanel() {
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement) return;
-
-  const activeSpeaker = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastActiveSpeaker;
-  const participants = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipants || [];
-  const speakerName = activeSpeaker?.name || '—';
-  const speakerId = activeSpeaker?.id || '—';
-
-  const rows = [
-    ['wsConnected', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected],
-    ['conferenceReady', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady],
-    ['meetingUrl', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl || '—'],
-    ['activeSpeaker', speakerName],
-    ['activeSpeakerId', speakerId],
-    ['participants', participants.length],
-    ['transcriptLines', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length],
-    ['speakerHistory', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakerHistory.length]
-  ];
-
-  const rowsHtml = rows.map(([key, value]) => {
-    return `<div class="ktalk-debug-row"><div class="ktalk-debug-key">${key}</div><div class="ktalk-debug-value">${formatValue(value)}</div></div>`;
-  }).join('');
-
-  const payload = {
-    wsConnected: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected,
-    conferenceReady: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady,
-    currentMeetingUrl: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl,
-    activeSpeaker: activeSpeaker,
-    participants: participants,
-    transcriptLines: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length,
-    speakerHistory: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakerHistory.length
-  };
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(JSON.stringify(payload, null, 2))}</div>`;
-}
-
-function formatValue(value) {
-  if (value === null || value === undefined) return '—';
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  return String(value);
-}
 
 function createSummaryModal() {
   if (document.querySelector('.ktalk-summary-modal')) return;
