@@ -26,7 +26,11 @@
                 <div class="view-header">
                     <h1>Meetings</h1>
                     <div class="filters">
-                        <input type="date" id="filter-date" class="filter-date">
+                        <div class="date-nav">
+                            <button id="date-prev" class="date-nav-btn" title="Previous day">←</button>
+                            <input type="date" id="filter-date" class="filter-date">
+                            <button id="date-next" class="date-nav-btn" title="Next day">→</button>
+                        </div>
                         <input type="text" id="filter-title" placeholder="Search by title..." class="search-input filter-title-input">
                         <select id="filter-source" class="filter-select">
                             <option value="">All sources</option>

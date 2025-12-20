@@ -6,29 +6,55 @@
 const DatePicker = {
     filterDate: localStorage.getItem('filterDate') || '',
     onChange: null,
+    input: null,
 
     init(inputId, onChange) {
         this.onChange = onChange;
-        const input = document.getElementById(inputId);
-        if (!input) return;
+        this.input = document.getElementById(inputId);
+        if (!this.input) return;
 
         // Restore saved date
-        input.value = this.filterDate;
+        this.input.value = this.filterDate;
 
         // Handle change
-        input.addEventListener('change', (e) => {
-            this.filterDate = e.target.value;
-            localStorage.setItem('filterDate', this.filterDate);
-            if (this.onChange) this.onChange(this.filterDate);
+        this.input.addEventListener('change', (e) => {
+            this.setDate(e.target.value);
         });
 
-        // Clear button on double-click
-        input.addEventListener('dblclick', () => {
-            input.value = '';
-            this.filterDate = '';
-            localStorage.setItem('filterDate', '');
-            if (this.onChange) this.onChange('');
+        // Clear on double-click
+        this.input.addEventListener('dblclick', () => {
+            this.setDate('');
         });
+
+        // Navigation buttons
+        const prevBtn = document.getElementById('date-prev');
+        const nextBtn = document.getElementById('date-next');
+
+        if (prevBtn) {
+            prevBtn.addEventListener('click', () => this.navigate(-1));
+        }
+        if (nextBtn) {
+            nextBtn.addEventListener('click', () => this.navigate(1));
+        }
+    },
+
+    setDate(dateStr) {
+        this.filterDate = dateStr;
+        this.input.value = dateStr;
+        localStorage.setItem('filterDate', dateStr);
+        if (this.onChange) this.onChange(dateStr);
+    },
+
+    navigate(days) {
+        let date;
+        if (this.filterDate) {
+            date = new Date(this.filterDate);
+        } else {
+            date = new Date();
+        }
+        date.setDate(date.getDate() + days);
+        const dateStr = date.toISOString().split('T')[0];
+        this.setDate(dateStr);
     },
 
     getDate() {
