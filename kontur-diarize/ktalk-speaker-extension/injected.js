@@ -483,6 +483,24 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+let titleSentForUrl = null;
+
+function sendDelayedTitle() {
+  // Отправляем title через 2 сек после входа, когда страница уже загрузилась
+  setTimeout(() => {
+    const title = document.title;
+    const url = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl;
+    if (title && url && titleSentForUrl !== url) {
+      titleSentForUrl = url;
+      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_1__.sendWsMessage)({
+        type: 'meeting_title_update',
+        title: title
+      });
+      console.log('[KTalk Transcript] Sent title update:', title);
+    }
+  }, 2000);
+}
+
 function sendMeetingJoin() {
   const url = window.location.href;
   if (url && url.includes('ktalk.ru')) {
@@ -490,9 +508,10 @@ function sendMeetingJoin() {
     (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_1__.sendWsMessage)({
       type: 'meeting_join',
       url: url,
-      title: document.title || ''
+      title: ''  // Title отправим позже когда страница загрузится
     });
     console.log('[KTalk Transcript] Sent meeting_join:', url);
+    sendDelayedTitle();
   }
 }
 
@@ -504,6 +523,7 @@ function sendMeetingLeave(reason = 'user_left') {
     });
     console.log('[KTalk Transcript] Sent meeting_leave:', reason);
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl = null;
+    titleSentForUrl = null;
   }
 }
 

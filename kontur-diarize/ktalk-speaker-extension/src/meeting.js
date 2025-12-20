@@ -1,6 +1,24 @@
 import { state } from './state.js';
 import { sendWsMessage } from './ws_api.js';
 
+let titleSentForUrl = null;
+
+function sendDelayedTitle() {
+  // Отправляем title через 2 сек после входа, когда страница уже загрузилась
+  setTimeout(() => {
+    const title = document.title;
+    const url = state.currentMeetingUrl;
+    if (title && url && titleSentForUrl !== url) {
+      titleSentForUrl = url;
+      sendWsMessage({
+        type: 'meeting_title_update',
+        title: title
+      });
+      console.log('[KTalk Transcript] Sent title update:', title);
+    }
+  }, 2000);
+}
+
 export function sendMeetingJoin() {
   const url = window.location.href;
   if (url && url.includes('ktalk.ru')) {
@@ -8,9 +26,10 @@ export function sendMeetingJoin() {
     sendWsMessage({
       type: 'meeting_join',
       url: url,
-      title: document.title || ''
+      title: ''  // Title отправим позже когда страница загрузится
     });
     console.log('[KTalk Transcript] Sent meeting_join:', url);
+    sendDelayedTitle();
   }
 }
 
@@ -22,6 +41,7 @@ export function sendMeetingLeave(reason = 'user_left') {
     });
     console.log('[KTalk Transcript] Sent meeting_leave:', reason);
     state.currentMeetingUrl = null;
+    titleSentForUrl = null;
   }
 }
 

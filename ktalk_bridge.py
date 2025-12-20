@@ -721,6 +721,13 @@ class KTalkBridge:
                     "meeting_id": new_meeting_id
                 })
 
+        elif msg_type == "meeting_title_update":
+            # Extension отправляет обновлённый title (после "Joining..." -> реальный)
+            title = data.get("title")
+            if self._meeting_storage and title:
+                self._meeting_storage.update_title(title)
+                print(f"[KTalk Bridge] Updated meeting title: {title}", file=sys.stderr)
+
         elif msg_type == "request_transcript":
             # Extension запрашивает историю транскрипта (при reconnect)
             await self._send_transcript_history()
