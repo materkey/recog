@@ -358,7 +358,23 @@ class MeetingStorage:
         meta["updated_at"] = now.isoformat()
 
         # Track participants
-        if speaker_id not in meta["participants"]:
+        # Для локальных участников: если уже есть другой локальный — не дублируем
+        if is_local and speaker_id not in meta["participants"]:
+            existing_local = next(
+                (pid for pid, p in meta["participants"].items() if p.get("is_local")),
+                None
+            )
+            if existing_local:
+                # Уже есть локальный участник — пропускаем добавление нового
+                # (KTalk имя обычно точнее чем speaker_db)
+                pass
+            else:
+                meta["participants"][speaker_id] = {
+                    "name": speaker,
+                    "is_local": is_local,
+                    "first_seen": now.isoformat()
+                }
+        elif speaker_id not in meta["participants"]:
             meta["participants"][speaker_id] = {
                 "name": speaker,
                 "is_local": is_local,
@@ -385,10 +401,25 @@ class MeetingStorage:
         now = datetime.now(UTC).isoformat()
 
         for pid, pinfo in participants.items():
+            is_local = pinfo.get("is_local", False)
+
             if pid not in meta["participants"]:
+                # Для локальных: проверяем нет ли уже другого локального
+                if is_local:
+                    existing_local_id = next(
+                        (p_id for p_id, p in meta["participants"].items() if p.get("is_local")),
+                        None
+                    )
+                    if existing_local_id and existing_local_id != pid:
+                        # Уже есть локальный с другим ID — обновляем его имя (KTalk имя точнее)
+                        new_name = pinfo.get("name")
+                        if new_name:
+                            meta["participants"][existing_local_id]["name"] = new_name
+                        continue
+
                 meta["participants"][pid] = {
                     "name": pinfo.get("name", f"Participant_{pid}"),
-                    "is_local": pinfo.get("is_local", False),
+                    "is_local": is_local,
                     "first_seen": now
                 }
             else:
