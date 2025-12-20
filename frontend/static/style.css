@@ -446,6 +446,53 @@ a:hover {
     border-radius: 2px;
 }
 
+/* --- System Events (session pause/resume) --- */
+.transcript-event {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px 16px;
+    margin: 16px 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    position: relative;
+}
+
+.transcript-event::before,
+.transcript-event::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+.event-time {
+    font-family: monospace;
+    color: var(--text-muted);
+}
+
+.event-text {
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.transcript-event.session_pause {
+    color: var(--source-orphan);
+}
+
+.transcript-event.session_pause .event-text {
+    color: var(--source-orphan);
+}
+
+.transcript-event.session_resume {
+    color: var(--speaker-local);
+}
+
+.transcript-event.session_resume .event-text {
+    color: var(--speaker-local);
+}
+
 /* --- Live View --- */
 .live-status {
     display: flex;
