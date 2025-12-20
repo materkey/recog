@@ -660,6 +660,12 @@ function getParticipantsList(conf) {
   const byId = new Map();
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipantsMapSize = conf._participantsMap?.size || 0;
 
+  // Only return participants if we're actually in a meeting
+  const isInMeeting = conf._participantsMap && conf._participantsMap.size > 0;
+  if (!isInMeeting) {
+    return participants;
+  }
+
   if (conf.localParticipant) {
     const lp = conf.localParticipant;
     const localInfo = lp._participantInfo$?.value || lp._userInfo$?.value;

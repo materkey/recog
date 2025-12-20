@@ -104,6 +104,12 @@ export function getParticipantsList(conf) {
   const byId = new Map();
   state.lastParticipantsMapSize = conf._participantsMap?.size || 0;
 
+  // Only return participants if we're actually in a meeting
+  const isInMeeting = conf._participantsMap && conf._participantsMap.size > 0;
+  if (!isInMeeting) {
+    return participants;
+  }
+
   if (conf.localParticipant) {
     const lp = conf.localParticipant;
     const localInfo = lp._participantInfo$?.value || lp._userInfo$?.value;
