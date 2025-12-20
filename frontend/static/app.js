@@ -194,7 +194,7 @@ const views = {
                             <div class="search-match">
                                 <span class="match-time">${m.ts_display}</span>
                                 <span class="match-speaker">${escapeHtml(m.speaker)}:</span>
-                                <span class="match-text">${this.highlightSearch(escapeHtml(m.text), this.filterTitle)}</span>
+                                <span class="match-text">${highlightSearch(m.text, this.filterTitle)}</span>
                             </div>
                         `).join('')}
                     </div>
@@ -406,7 +406,7 @@ const views = {
 
                 const speakerClass = group.is_local ? 'speaker-local' : 'speaker-other';
                 const text = searchTerm
-                    ? this.highlightSearch(group.text, searchTerm)
+                    ? highlightSearch(group.text, searchTerm)
                     : escapeHtml(group.text);
 
                 return `
@@ -474,12 +474,6 @@ const views = {
             );
 
             this.renderTranscript(filtered, container, searchTerm);
-        },
-
-        highlightSearch(text, term) {
-            const escaped = escapeHtml(text);
-            const regex = new RegExp(`(${escapeRegex(term)})`, 'gi');
-            return escaped.replace(regex, '<mark>$1</mark>');
         }
     },
 
@@ -670,6 +664,13 @@ function formatDate(isoString) {
 
 function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlightSearch(text, term) {
+    if (!term) return escapeHtml(text);
+    const escaped = escapeHtml(text);
+    const regex = new RegExp(`(${escapeRegex(term)})`, 'gi');
+    return escaped.replace(regex, '<mark>$1</mark>');
 }
 
 function copyToClipboard() {
