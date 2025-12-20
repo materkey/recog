@@ -190,6 +190,102 @@ class MeetingStorage:
 
         return meeting_id
 
+    def _find_same_day_ktalk_meeting(self, live_id: str) -> Optional[str]:
+        """
+        Найти завершённую KTalk встречу с тем же live_id за сегодня.
+
+        Используется для группировки встреч одной комнаты в один день.
+
+        Args:
+            live_id: ID KTalk комнаты (например, abcd1234wxyz)
+
+        Returns:
+            meeting_id если найдена, иначе None
+        """
+        if not live_id:
+            return None
+
+        today_local = datetime.now().date()
+
+        for meeting_dir in self.base_path.iterdir():
+            if not meeting_dir.is_dir():
+                continue
+
+            meta_path = meeting_dir / "meta.json"
+            if not meta_path.exists():
+                continue
+
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+                # Только завершённые KTalk встречи
+                if meta.get("ended_at") is None:
+                    continue
+                if meta.get("source") != "ktalk":
+                    continue
+
+                # Тот же live_id
+                if meta.get("ktalk", {}).get("live_id") != live_id:
+                    continue
+
+                # Тот же день (по локальному времени)
+                created_at = datetime.fromisoformat(meta["created_at"])
+                meeting_date = created_at.astimezone().date()
+
+                if meeting_date == today_local:
+                    return meta["id"]
+
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+
+        return None
+
+    def _reopen_meeting(self, meeting_id: str) -> bool:
+        """
+        Переоткрыть завершённую встречу для продолжения записи.
+
+        Args:
+            meeting_id: ID встречи для переоткрытия
+
+        Returns:
+            True если успешно, False если встреча не найдена
+        """
+        meeting_path = self.base_path / meeting_id
+        meta_path = meeting_path / "meta.json"
+
+        if not meta_path.exists():
+            return False
+
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+        # Снять флаг завершения
+        meta["ended_at"] = None
+        meta["end_reason"] = None
+        meta["updated_at"] = datetime.now(UTC).isoformat()
+
+        self._save_json(meta_path, meta)
+
+        # Удалить из index.json (встреча снова активная)
+        index_path = self.base_path / "index.json"
+        if index_path.exists():
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index["meetings"] = [m for m in index["meetings"] if m["id"] != meeting_id]
+            self._save_json(index_path, index)
+
+        # Установить как текущую
+        self.current_meeting_id = meeting_id
+        self.current_meeting_path = meeting_path
+
+        # Восстановить счётчик сегментов
+        transcript_path = meeting_path / "transcript.jsonl"
+        if transcript_path.exists():
+            content = transcript_path.read_text(encoding="utf-8").strip()
+            self._segment_counter = len(content.split("\n")) if content else 0
+        else:
+            self._segment_counter = 0
+
+        return True
+
     def on_ktalk_join(self, url: str, title: Optional[str] = None) -> str:
         """
         Extension сообщает о входе в KTalk встречу.
@@ -231,7 +327,14 @@ class MeetingStorage:
                 self._save_meta(meta)
 
         if need_new_meeting:
-            self._create_meeting(source="ktalk")
+            # Попробовать найти существующую встречу с тем же live_id за сегодня
+            existing_meeting_id = self._find_same_day_ktalk_meeting(live_id)
+            if existing_meeting_id:
+                # Переоткрыть существующую встречу (группировка)
+                self._reopen_meeting(existing_meeting_id)
+                print(f"Reopened same-day meeting: {existing_meeting_id}")
+            else:
+                self._create_meeting(source="ktalk")
 
         meta = self._load_meta()
 
