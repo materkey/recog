@@ -60,6 +60,9 @@ function updateDebugPanel() {
     ['activeSpeaker', speakerName],
     ['activeSpeakerId', speakerId],
     ['participants', participants.length],
+    ['participantsMap', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipantsMapSize],
+    ['jitsiParticipants', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsCount],
+    ['jitsiParticipantsMap', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsMapCount],
     ['transcriptLines', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length],
     ['speakerHistory', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakerHistory.length]
   ];
@@ -74,17 +77,36 @@ function updateDebugPanel() {
     currentMeetingUrl: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl,
     activeSpeaker: activeSpeaker,
     participants: participants,
+    participantsMapSize: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipantsMapSize,
+    jitsiParticipantsCount: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsCount,
+    jitsiParticipantsMapCount: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsMapCount,
     transcriptLines: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length,
     speakerHistory: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakerHistory.length
   };
 
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(JSON.stringify(payload, null, 2))}</div>`;
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(JSON.stringify(payload, null, 2))}</div><div class="ktalk-debug-actions"><button class="ktalk-debug-copy-btn">Copy</button></div>`;
+  const copyBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.debugPanelElement.querySelector('.ktalk-debug-copy-btn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => copyDebug(payload, copyBtn));
+  }
 }
 
 function formatValue(value) {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   return String(value);
+}
+
+function copyDebug(payload, btn) {
+  const text = JSON.stringify(payload, null, 2);
+  navigator.clipboard.writeText(text).then(() => {
+    btn.classList.add('copied');
+    btn.textContent = 'Copied';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.textContent = 'Copy';
+    }, 1200);
+  });
 }
 
 
@@ -169,6 +191,28 @@ function injectDebugStyles() {
         border-radius: 6px;
         white-space: pre-wrap;
         word-break: break-word;
+      }
+      .ktalk-debug-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .ktalk-debug-copy-btn {
+        padding: 4px 8px;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        border-radius: 4px;
+        color: rgba(255,255,255,0.8);
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .ktalk-debug-copy-btn:hover {
+        background: rgba(255,255,255,0.2);
+      }
+      .ktalk-debug-copy-btn.copied {
+        background: #22c55e;
+        color: #fff;
       }
     `;
 

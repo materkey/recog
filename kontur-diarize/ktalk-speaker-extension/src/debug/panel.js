@@ -42,6 +42,9 @@ export function updateDebugPanel() {
     ['activeSpeaker', speakerName],
     ['activeSpeakerId', speakerId],
     ['participants', participants.length],
+    ['participantsMap', state.lastParticipantsMapSize],
+    ['jitsiParticipants', state.lastJitsiParticipantsCount],
+    ['jitsiParticipantsMap', state.lastJitsiParticipantsMapCount],
     ['transcriptLines', state.transcriptLines.length],
     ['speakerHistory', state.speakerHistory.length]
   ];
@@ -56,15 +59,34 @@ export function updateDebugPanel() {
     currentMeetingUrl: state.currentMeetingUrl,
     activeSpeaker: activeSpeaker,
     participants: participants,
+    participantsMapSize: state.lastParticipantsMapSize,
+    jitsiParticipantsCount: state.lastJitsiParticipantsCount,
+    jitsiParticipantsMapCount: state.lastJitsiParticipantsMapCount,
     transcriptLines: state.transcriptLines.length,
     speakerHistory: state.speakerHistory.length
   };
 
-  state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${escapeHtml(JSON.stringify(payload, null, 2))}</div>`;
+  state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${escapeHtml(JSON.stringify(payload, null, 2))}</div><div class="ktalk-debug-actions"><button class="ktalk-debug-copy-btn">Copy</button></div>`;
+  const copyBtn = state.debugPanelElement.querySelector('.ktalk-debug-copy-btn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => copyDebug(payload, copyBtn));
+  }
 }
 
 function formatValue(value) {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   return String(value);
+}
+
+function copyDebug(payload, btn) {
+  const text = JSON.stringify(payload, null, 2);
+  navigator.clipboard.writeText(text).then(() => {
+    btn.classList.add('copied');
+    btn.textContent = 'Copied';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.textContent = 'Copy';
+    }, 1200);
+  });
 }

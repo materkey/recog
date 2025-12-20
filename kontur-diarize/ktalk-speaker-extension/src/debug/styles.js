@@ -68,6 +68,28 @@ export function injectDebugStyles() {
         white-space: pre-wrap;
         word-break: break-word;
       }
+      .ktalk-debug-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .ktalk-debug-copy-btn {
+        padding: 4px 8px;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        border-radius: 4px;
+        color: rgba(255,255,255,0.8);
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .ktalk-debug-copy-btn:hover {
+        background: rgba(255,255,255,0.2);
+      }
+      .ktalk-debug-copy-btn.copied {
+        background: #22c55e;
+        color: #fff;
+      }
     `;
 
   document.head.appendChild(styles);
