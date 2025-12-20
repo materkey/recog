@@ -35,5 +35,6 @@ export const state = {
   debugPanelElement: null,
   debugVisible: false,
   lastParticipants: [],
-  lastActiveSpeaker: null
+  lastActiveSpeaker: null,
+  autoScrollEnabled: true
 };

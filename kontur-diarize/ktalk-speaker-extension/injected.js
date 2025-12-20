@@ -744,7 +744,8 @@ const state = {
   debugPanelElement: null,
   debugVisible: false,
   lastParticipants: [],
-  lastActiveSpeaker: null
+  lastActiveSpeaker: null,
+  autoScrollEnabled: true
 };
 
 
@@ -856,6 +857,7 @@ function injectStyles() {
         height: 100%;
         background: rgb(52, 52, 52);
         color: rgba(255, 255, 255, 0.8);
+        user-select: text;
       }
       .ktalk-transcript-content.active {
         display: flex;
@@ -890,17 +892,27 @@ function injectStyles() {
       }
       .ktalk-transcript-toolbar {
         display: flex;
-        justify-content: space-between;
-        padding: 8px 16px;
+        justify-content: flex-start;
+        padding: 8px 24px 8px 16px;
         background: rgb(56, 56, 56);
         border-bottom: 1px solid rgba(255,255,255,0.1);
+        flex-wrap: nowrap;
       }
       .ktalk-transcript-toolbar-left {
         display: flex;
         gap: 8px;
+        flex-wrap: nowrap;
+        align-items: center;
+      }
+      .ktalk-transcript-toolbar-left + .ktalk-transcript-toolbar-left {
+        margin-left: 12px;
+      }
+      .ktalk-transcript-toolbar-left:last-child {
+        margin-left: auto;
+        margin-right: 12px;
       }
       .ktalk-transcript-scroll-btn {
-        padding: 4px 8px;
+        padding: 0 8px;
         background: rgba(255,255,255,0.1);
         border: none;
         border-radius: 4px;
@@ -908,12 +920,19 @@ function injectStyles() {
         font-size: 11px;
         cursor: pointer;
         transition: background 0.15s;
+        height: 22px;
+        line-height: 22px;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
       }
       .ktalk-transcript-scroll-btn:hover {
         background: rgba(255,255,255,0.2);
       }
       .ktalk-transcript-copy-btn {
-        padding: 4px 8px;
+        padding: 0 8px;
         background: rgba(255,255,255,0.1);
         border: none;
         border-radius: 4px;
@@ -921,6 +940,13 @@ function injectStyles() {
         font-size: 11px;
         cursor: pointer;
         transition: background 0.15s;
+        height: 22px;
+        line-height: 22px;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
       }
       .ktalk-transcript-copy-btn:hover {
         background: rgba(255,255,255,0.2);
@@ -928,8 +954,8 @@ function injectStyles() {
       .ktalk-transcript-copy-btn.copied {
         background: #22c55e;
       }
-      .ktalk-transcript-summary-btn {
-        padding: 4px 8px;
+      .ktalk-transcript-follow-btn {
+        padding: 0 8px;
         background: rgba(255,255,255,0.1);
         border: none;
         border-radius: 4px;
@@ -937,6 +963,38 @@ function injectStyles() {
         font-size: 11px;
         cursor: pointer;
         transition: background 0.15s;
+        min-width: 56px;
+        height: 22px;
+        line-height: 22px;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+      }
+      .ktalk-transcript-follow-btn:hover {
+        background: rgba(255,255,255,0.2);
+      }
+      .ktalk-transcript-follow-btn.active {
+        background: #0ea5e9;
+        color: #fff;
+      }
+      .ktalk-transcript-summary-btn {
+        padding: 0 8px;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        border-radius: 4px;
+        color: rgba(255,255,255,0.8);
+        font-size: 11px;
+        cursor: pointer;
+        transition: background 0.15s;
+        height: 22px;
+        line-height: 22px;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
       }
       .ktalk-transcript-summary-btn:hover {
         background: rgba(255,255,255,0.2);
@@ -1118,6 +1176,7 @@ function injectStyles() {
         display: flex;
         flex-direction: column;
         gap: 12px;
+        user-select: text;
       }
       .ktalk-msg {
         background: rgba(255,255,255,0.05);
@@ -1161,6 +1220,7 @@ function injectStyles() {
       .ktalk-msg-text {
         font-size: 13px;
         line-height: 1.4;
+        user-select: text;
       }
       .ktalk-transcript-empty {
         display: flex;
@@ -1250,13 +1310,14 @@ function createTranscriptContent() {
       </div>
       <div class="ktalk-transcript-toolbar">
         <div class="ktalk-transcript-toolbar-left">
-          <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑ Top</button>
-          <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓ Bottom</button>
+          <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑</button>
+          <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓</button>
         </div>
         <div class="ktalk-transcript-toolbar-left">
           <button class="ktalk-transcript-summary-btn" data-type="catchup" title="Catch up - включиться в дискуссию">🎯</button>
           <button class="ktalk-transcript-summary-btn" data-type="brief" title="Краткое за 2 мин">📋</button>
           <button class="ktalk-transcript-summary-btn" data-type="full" title="Вся встреча + вопрос">💬</button>
+          <button class="ktalk-transcript-follow-btn" title="Auto-follow latest">Follow</button>
           <button class="ktalk-transcript-copy-btn" title="Copy all transcript">Copy</button>
         </div>
       </div>
@@ -1275,6 +1336,8 @@ function createTranscriptContent() {
     `;
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-transcript-copy-btn').addEventListener('click', copyAllTranscript);
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-transcript-follow-btn').addEventListener('click', toggleAutoFollow);
+  updateFollowButton();
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
     btn.addEventListener('click', () => requestSummary(btn.dataset.type));
   });
@@ -1461,6 +1524,10 @@ function updateTranscriptUI() {
   const container = document.querySelector('.ktalk-transcript-messages');
   if (!container) return;
 
+  const shouldAutoScroll = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled && isNearBottom(container);
+
+  updateFollowButton();
+
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) {
     container.innerHTML = `
         <div class="ktalk-transcript-empty">
@@ -1496,7 +1563,31 @@ function updateTranscriptUI() {
       </div>`;
   }).join('');
 
-  container.scrollTop = container.scrollHeight;
+  if (shouldAutoScroll) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function isNearBottom(container) {
+  const thresholdPx = 80;
+  const distance = container.scrollHeight - (container.scrollTop + container.clientHeight);
+  return distance <= thresholdPx;
+}
+
+function toggleAutoFollow() {
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled;
+  updateFollowButton();
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled) {
+    const container = document.querySelector('.ktalk-transcript-messages');
+    if (container) container.scrollTop = container.scrollHeight;
+  }
+}
+
+function updateFollowButton() {
+  const btn = document.querySelector('.ktalk-transcript-follow-btn');
+  if (!btn) return;
+  btn.classList.toggle('active', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled);
+  btn.textContent = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled ? 'Follow' : 'Paused';
 }
 
 
