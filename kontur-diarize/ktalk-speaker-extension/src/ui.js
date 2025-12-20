@@ -1,5 +1,5 @@
 import { state, constants } from './state.js';
-import { getUncertainSuffix, renderMarkdown, escapeHtml } from './utils.js';
+import { getUncertainSuffix, renderMarkdown } from './utils.js';
 import { sendWsMessage } from './ws_api.js';
 
 let selectedModel = localStorage.getItem('ktalk-ai-model') || 'gemini-2.5-flash';
@@ -417,70 +417,6 @@ export function injectStyles() {
         margin-top: 12px;
       }
 
-      /* Debug panel */
-      .ktalk-debug-toggle {
-        position: fixed;
-        right: 12px;
-        bottom: 12px;
-        z-index: 9999;
-        padding: 6px 10px;
-        background: rgba(0, 0, 0, 0.6);
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 6px;
-        color: #fff;
-        font-size: 11px;
-        cursor: pointer;
-      }
-      .ktalk-debug-panel {
-        position: fixed;
-        right: 12px;
-        bottom: 48px;
-        width: 360px;
-        max-height: 50vh;
-        overflow: auto;
-        z-index: 9999;
-        background: rgba(17, 17, 17, 0.92);
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 8px;
-        color: #e5e7eb;
-        font-size: 11px;
-        padding: 10px;
-        display: none;
-        font-family: "Lab Grotesque", Arial, sans-serif;
-      }
-      .ktalk-debug-panel.active {
-        display: block;
-      }
-      .ktalk-debug-title {
-        font-weight: 600;
-        margin-bottom: 8px;
-        color: #fff;
-      }
-      .ktalk-debug-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        margin-bottom: 4px;
-      }
-      .ktalk-debug-key {
-        color: rgba(255,255,255,0.6);
-      }
-      .ktalk-debug-value {
-        color: #fff;
-        text-align: right;
-        max-width: 220px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .ktalk-debug-json {
-        margin-top: 8px;
-        padding: 6px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 6px;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
     `;
   document.head.appendChild(styles);
 }
@@ -790,70 +726,6 @@ function updateTranscriptUI() {
   container.scrollTop = container.scrollHeight;
 }
 
-export function ensureDebugPanel() {
-  if (state.debugPanelElement) return;
-
-  const toggle = document.createElement('button');
-  toggle.className = 'ktalk-debug-toggle';
-  toggle.textContent = 'Debug';
-  toggle.addEventListener('click', () => {
-    state.debugVisible = !state.debugVisible;
-    if (state.debugPanelElement) {
-      state.debugPanelElement.classList.toggle('active', state.debugVisible);
-    }
-  });
-
-  const panel = document.createElement('div');
-  panel.className = 'ktalk-debug-panel';
-  panel.innerHTML = '<div class="ktalk-debug-title">KTalk Debug</div>';
-
-  document.body.appendChild(toggle);
-  document.body.appendChild(panel);
-
-  state.debugPanelElement = panel;
-}
-
-export function updateDebugPanel() {
-  if (!state.debugPanelElement) return;
-
-  const activeSpeaker = state.lastActiveSpeaker;
-  const participants = state.lastParticipants || [];
-  const speakerName = activeSpeaker?.name || '—';
-  const speakerId = activeSpeaker?.id || '—';
-
-  const rows = [
-    ['wsConnected', state.wsConnected],
-    ['conferenceReady', state.conferenceReady],
-    ['meetingUrl', state.currentMeetingUrl || '—'],
-    ['activeSpeaker', speakerName],
-    ['activeSpeakerId', speakerId],
-    ['participants', participants.length],
-    ['transcriptLines', state.transcriptLines.length],
-    ['speakerHistory', state.speakerHistory.length]
-  ];
-
-  const rowsHtml = rows.map(([key, value]) => {
-    return `<div class="ktalk-debug-row"><div class="ktalk-debug-key">${key}</div><div class="ktalk-debug-value">${formatValue(value)}</div></div>`;
-  }).join('');
-
-  const payload = {
-    wsConnected: state.wsConnected,
-    conferenceReady: state.conferenceReady,
-    currentMeetingUrl: state.currentMeetingUrl,
-    activeSpeaker: activeSpeaker,
-    participants: participants,
-    transcriptLines: state.transcriptLines.length,
-    speakerHistory: state.speakerHistory.length
-  };
-
-  state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${escapeHtml(JSON.stringify(payload, null, 2))}</div>`;
-}
-
-function formatValue(value) {
-  if (value === null || value === undefined) return '—';
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  return String(value);
-}
 
 function createSummaryModal() {
   if (document.querySelector('.ktalk-summary-modal')) return;
