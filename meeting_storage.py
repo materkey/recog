@@ -305,31 +305,42 @@ class MeetingStorage:
         path_parts = parsed.path.strip("/").split("/")
         live_id = path_parts[-1] if path_parts else None
 
-        # Проверяем, нужно ли создать новую встречу
-        need_new_meeting = False
+        # Проверяем, нужно ли создать/переоткрыть встречу
+        need_new_or_reopen = False
         if not self.current_meeting_path:
-            need_new_meeting = True
+            need_new_or_reopen = True
         else:
             meta = self._load_meta()
             current_live_id = meta.get("ktalk", {}).get("live_id")
 
             # Случай 1: другая KTalk комната
             if current_live_id and current_live_id != live_id:
-                prev_id = self._end_current_meeting(end_reason="changed_meeting")
-                need_new_meeting = True
+                self._end_current_meeting(end_reason="changed_meeting")
+                need_new_or_reopen = True
 
             # Случай 2: orphan с сегментами -> новая KTalk встреча
             # Не склеивать orphan-сегменты с KTalk встречей
             elif meta["source"] == "orphan" and meta["stats"]["segment_count"] > 0:
-                prev_id = self._end_current_meeting(end_reason="ktalk_join")
-                need_new_meeting = True
+                self._end_current_meeting(end_reason="ktalk_join")
+                need_new_or_reopen = True
 
-            # Случай 3: пустой orphan -> просто обновляем source на ktalk
+            # Случай 3: пустой orphan -> ищем существующую или обновляем на ktalk
             elif meta["source"] == "orphan" and meta["stats"]["segment_count"] == 0:
-                meta["source"] = "ktalk"
-                self._save_meta(meta)
+                # Сначала проверим, есть ли существующая встреча за сегодня
+                existing_meeting_id = self._find_same_day_ktalk_meeting(live_id)
+                if existing_meeting_id:
+                    # Удалить пустой orphan и переоткрыть существующую
+                    orphan_path = self.current_meeting_path
+                    self._reopen_meeting(existing_meeting_id)
+                    # Удалить пустой orphan
+                    if orphan_path and orphan_path.exists():
+                        shutil.rmtree(orphan_path, ignore_errors=True)
+                    print(f"Reopened same-day meeting: {existing_meeting_id}")
+                else:
+                    meta["source"] = "ktalk"
+                    self._save_meta(meta)
 
-        if need_new_meeting:
+        if need_new_or_reopen:
             # Попробовать найти существующую встречу с тем же live_id за сегодня
             existing_meeting_id = self._find_same_day_ktalk_meeting(live_id)
             if existing_meeting_id:
@@ -345,7 +356,8 @@ class MeetingStorage:
         meta["ktalk"]["live_id"] = live_id
         meta["ktalk"]["host"] = parsed.netloc
 
-        if title:
+        # Не перезаписывать title если уже есть (при reopen)
+        if title and not meta.get("title"):
             meta["title"] = title
             meta["title_source"] = "ktalk"
 
