@@ -470,7 +470,8 @@ class MeetingStorage:
             if existing_local:
                 # Уже есть локальный участник — пропускаем добавление нового
                 # (KTalk имя обычно точнее чем speaker_db)
-                pass
+                if speaker and meta["participants"][existing_local]["name"] != speaker:
+                    meta["participants"][existing_local]["name"] = speaker
             else:
                 meta["participants"][speaker_id] = {
                     "name": speaker,
