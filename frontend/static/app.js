@@ -93,6 +93,7 @@ const views = {
     meetings: {
         meetings: [],
         filterSource: 'ktalk',
+        filterTitle: '',
 
         async load() {
             const container = document.getElementById('meetings-list');
@@ -105,9 +106,15 @@ const views = {
                 container.innerHTML = `<div class="error">Error: ${e.message}</div>`;
             }
 
-            // Setup filter
+            // Setup source filter
             document.getElementById('filter-source').addEventListener('change', (e) => {
                 this.filterSource = e.target.value;
+                this.render();
+            });
+
+            // Setup title filter
+            document.getElementById('filter-title').addEventListener('input', (e) => {
+                this.filterTitle = e.target.value;
                 this.render();
             });
         },
@@ -116,12 +123,21 @@ const views = {
             const container = document.getElementById('meetings-list');
             let filtered = this.meetings;
 
+            // Filter by source
             if (this.filterSource) {
                 if (this.filterSource === 'active') {
-                    filtered = this.meetings.filter(m => m.is_active);
+                    filtered = filtered.filter(m => m.is_active);
                 } else {
-                    filtered = this.meetings.filter(m => m.source === this.filterSource);
+                    filtered = filtered.filter(m => m.source === this.filterSource);
                 }
+            }
+
+            // Filter by title
+            if (this.filterTitle) {
+                const term = this.filterTitle.toLowerCase();
+                filtered = filtered.filter(m =>
+                    (m.title || '').toLowerCase().includes(term)
+                );
             }
 
             if (filtered.length === 0) {
