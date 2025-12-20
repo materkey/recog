@@ -92,12 +92,18 @@ const router = {
 const views = {
     meetings: {
         meetings: [],
-        filterSource: 'ktalk',
-        filterTitle: '',
+        filterSource: localStorage.getItem('filterSource') ?? 'ktalk',
+        filterTitle: localStorage.getItem('filterTitle') ?? '',
 
         async load() {
             const container = document.getElementById('meetings-list');
             container.innerHTML = '<div class="loading">Loading meetings...</div>';
+
+            // Restore filter values to UI
+            const sourceSelect = document.getElementById('filter-source');
+            const titleInput = document.getElementById('filter-title');
+            sourceSelect.value = this.filterSource;
+            titleInput.value = this.filterTitle;
 
             try {
                 this.meetings = await api.getMeetings();
@@ -107,14 +113,16 @@ const views = {
             }
 
             // Setup source filter
-            document.getElementById('filter-source').addEventListener('change', (e) => {
+            sourceSelect.addEventListener('change', (e) => {
                 this.filterSource = e.target.value;
+                localStorage.setItem('filterSource', this.filterSource);
                 this.render();
             });
 
             // Setup title filter
-            document.getElementById('filter-title').addEventListener('input', (e) => {
+            titleInput.addEventListener('input', (e) => {
                 this.filterTitle = e.target.value;
+                localStorage.setItem('filterTitle', this.filterTitle);
                 this.render();
             });
         },
