@@ -182,22 +182,6 @@ a:hover {
     border-color: var(--accent);
 }
 
-.filter-date {
-    padding: 8px 12px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: 14px;
-    cursor: pointer;
-    color-scheme: dark;
-}
-
-.filter-date:focus {
-    outline: none;
-    border-color: var(--accent);
-}
-
 .filter-title-input {
     width: 200px;
     padding: 8px 12px;
