@@ -759,6 +759,8 @@ class KTalkBridge:
 
                 while self._running:
                     await asyncio.sleep(0.1)
+                    # Периодически обновляем debug state даже без событий
+                    self._write_debug_state()
 
         except Exception as e:
             print(f"[KTalk Bridge] Server error: {e}", file=sys.stderr)
