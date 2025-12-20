@@ -92,7 +92,7 @@ const router = {
 const views = {
     meetings: {
         meetings: [],
-        filterSource: '',
+        filterSource: 'ktalk',
 
         async load() {
             const container = document.getElementById('meetings-list');
