@@ -9,6 +9,7 @@
 #   ./recog-service.sh stop      - Stop both services
 #   ./recog-service.sh restart   - Restart both services
 #   ./recog-service.sh status    - Show status of both services
+#   ./recog-service.sh debug     - Show debug info (participants, speaker, mics)
 #   ./recog-service.sh logs      - Tail logs (stderr)
 #   ./recog-service.sh logs-out  - Tail logs (stdout/transcripts)
 #   ./recog-service.sh logs-web  - Tail frontend logs
@@ -144,7 +145,7 @@ cmd_start() {
     cmd_status
 
     echo ""
-    info "Frontend available at: http://127.0.0.1:8080"
+    info "Frontend available at: http://127.0.0.1:9080"
 }
 
 cmd_stop() {
@@ -167,7 +168,7 @@ cmd_restart_web() {
     stop_service "$FRONTEND_PLIST_NAME"
     sleep 1
     start_service "$FRONTEND_PLIST_NAME"
-    info "Frontend restarted. Available at: http://127.0.0.1:8080"
+    info "Frontend restarted. Available at: http://127.0.0.1:9080"
 }
 
 cmd_restart_live() {
@@ -229,6 +230,26 @@ cmd_logs_web() {
     tail -f "$LOG_FILE"
 }
 
+cmd_debug() {
+    echo "=== Recog Debug Status ==="
+    echo ""
+
+    # Check if frontend is running
+    if ! curl -s "http://127.0.0.1:9080/api/debug" > /dev/null 2>&1; then
+        error "Frontend server not responding at http://127.0.0.1:9080"
+    fi
+
+    # Get debug info from frontend
+    RESPONSE=$(curl -s "http://127.0.0.1:9080/api/debug")
+
+    # Pretty print with jq if available, otherwise raw
+    if command -v jq &> /dev/null; then
+        echo "$RESPONSE" | jq .
+    else
+        echo "$RESPONSE"
+    fi
+}
+
 cmd_help() {
     echo "recog-service.sh - Manage recog live transcription and frontend services"
     echo ""
@@ -243,13 +264,14 @@ cmd_help() {
     echo "  restart-web  - Restart frontend only"
     echo "  restart-live - Restart live transcription only"
     echo "  status       - Show status of both services"
+    echo "  debug        - Show debug info (participants, speaker, mics)"
     echo "  logs         - Tail live stderr logs"
     echo "  logs-out     - Tail live stdout logs (transcripts)"
     echo "  logs-web     - Tail frontend logs"
     echo ""
     echo "Services:"
     echo "  - Live transcription: mp4_notes.py live --screencapture --ktalk"
-    echo "  - Frontend: http://127.0.0.1:8080"
+    echo "  - Frontend: http://127.0.0.1:9080"
 }
 
 # Main
@@ -262,6 +284,7 @@ case "${1:-}" in
     restart-web)  cmd_restart_web ;;
     restart-live) cmd_restart_live ;;
     status)       cmd_status ;;
+    debug)        cmd_debug ;;
     logs)         cmd_logs ;;
     logs-out)     cmd_logs_out ;;
     logs-web)     cmd_logs_web ;;
