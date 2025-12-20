@@ -471,11 +471,13 @@ class LiveTranscriber:
                 self.last_words = []
                 self.last_speaker = None
                 self.last_speech_time = 0
+                self.segment_start_time = 0  # Время начала текущего сегмента
 
         mic_state = SourceState()
         sys_state = SourceState()
 
         speaker_turn_gap = 3.0
+        max_segment_duration = 20.0  # Принудительный разрыв сегмента после N секунд
 
         def normalize_word(w: str) -> str:
             return ''.join(c.lower() for c in w if c.isalnum())
@@ -510,10 +512,13 @@ class LiveTranscriber:
                 speaker = "???"
 
             time_gap = chunk_time - state.last_speech_time
-            is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap)
+            segment_duration = chunk_time - state.segment_start_time
+            is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
 
             state.last_speaker = speaker
             state.last_speech_time = chunk_time
+            if not is_continuation:
+                state.segment_start_time = chunk_time
 
             # Markdown формат: **Speaker** *[HH:MM:SS]*: text
             final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
@@ -559,10 +564,13 @@ class LiveTranscriber:
                     return
 
                 time_gap = chunk_time - state.last_speech_time
-                is_continuation = (state.last_speaker == mic_speaker_name and time_gap < speaker_turn_gap)
+                segment_duration = chunk_time - state.segment_start_time
+                is_continuation = (state.last_speaker == mic_speaker_name and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
 
                 state.last_speaker = mic_speaker_name
                 state.last_speech_time = chunk_time
+                if not is_continuation:
+                    state.segment_start_time = chunk_time
 
                 # Markdown формат: **Speaker** *[HH:MM:SS]*: text
                 line = f"\n**{mic_speaker_name}** *[{timestamp}]*: {text}\n"
@@ -600,10 +608,13 @@ class LiveTranscriber:
                     no_speaker_yet = True
 
                 time_gap = chunk_time - state.last_speech_time
-                is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap)
+                segment_duration = chunk_time - state.segment_start_time
+                is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
 
                 state.last_speaker = speaker
                 state.last_speech_time = chunk_time
+                if not is_continuation:
+                    state.segment_start_time = chunk_time
 
                 # Markdown формат: **Speaker** *[HH:MM:SS]*: text
                 line = f"\n**{speaker}** *[{timestamp}]*: {text}\n"
