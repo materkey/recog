@@ -9,6 +9,11 @@ import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
 function sendConnectionStatus(connected) {
   window.dispatchEvent(new CustomEvent('ktalk-connection-status', { detail: { connected } }));
   sendWsConnectionStatus(connected);
+  if (!connected) {
+    state.conferenceReady = false;
+    state.activeConfRef = null;
+    state.activeJitsiConf = null;
+  }
 }
 
 function waitForConference(callback, maxAttempts = 100) {
@@ -32,6 +37,11 @@ function waitForConference(callback, maxAttempts = 100) {
 
 function tryAttachConference() {
   if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
+    if (state.activeConfRef || state.activeJitsiConf) {
+      state.conferenceReady = false;
+      state.activeConfRef = null;
+      state.activeJitsiConf = null;
+    }
     return;
   }
 

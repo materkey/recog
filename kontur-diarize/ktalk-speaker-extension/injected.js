@@ -250,6 +250,11 @@ __webpack_require__.r(__webpack_exports__);
 function sendConnectionStatus(connected) {
   window.dispatchEvent(new CustomEvent('ktalk-connection-status', { detail: { connected } }));
   (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_5__.sendWsConnectionStatus)(connected);
+  if (!connected) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = false;
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = null;
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = null;
+  }
 }
 
 function waitForConference(callback, maxAttempts = 100) {
@@ -273,6 +278,11 @@ function waitForConference(callback, maxAttempts = 100) {
 
 function tryAttachConference() {
   if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
+    if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = false;
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = null;
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = null;
+    }
     return;
   }
 
