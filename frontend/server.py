@@ -30,7 +30,7 @@ from meeting_storage import MeetingStorage
 
 # Configuration
 HOST = "127.0.0.1"
-PORT = 8080
+PORT = 9080
 MEETINGS_DIR = Path(__file__).parent.parent / "meetings"
 
 
@@ -304,6 +304,58 @@ async def get_live_status():
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/debug")
+async def get_debug_status():
+    """Get debug status from KTalk bridge and live transcription."""
+    import time
+    from datetime import datetime
+
+    debug_file = Path("/tmp/ktalk_debug.json")
+    ktalk_state = None
+    ktalk_stale = True
+
+    # Read KTalk bridge state from debug file
+    if debug_file.exists():
+        try:
+            with open(debug_file, 'r') as f:
+                ktalk_state = json.load(f)
+            # Check if state is stale (older than 5 seconds)
+            if ktalk_state and "timestamp" in ktalk_state:
+                age = time.time() - ktalk_state["timestamp"]
+                ktalk_stale = age > 5.0
+                ktalk_state["age_seconds"] = round(age, 1)
+        except Exception as e:
+            ktalk_state = {"error": str(e)}
+
+    # Get active meetings
+    try:
+        storage = get_storage()
+        active_meetings = storage.list_active_meetings()
+        all_meetings = storage.list_meetings()
+    except Exception as e:
+        active_meetings = []
+        all_meetings = []
+
+    return JSONResponse(content={
+        "timestamp": time.time(),
+        "timestamp_iso": datetime.now().isoformat(),
+        "ktalk_bridge": {
+            "state": ktalk_state,
+            "stale": ktalk_stale,
+            "debug_file": str(debug_file)
+        },
+        "meetings": {
+            "active": active_meetings,
+            "active_count": len(active_meetings),
+            "total_count": len(all_meetings)
+        },
+        "server": {
+            "host": HOST,
+            "port": PORT
+        }
+    })
 
 
 # --- AI Analysis ---
