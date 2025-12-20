@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { injectStyles, addTranscriptTab, createTranscriptContent, watchTabChanges, updateWsIndicator } from './ui.js';
+import { injectStyles, addTranscriptTab, createTranscriptContent, watchTabChanges, updateWsIndicator, ensureDebugPanel, updateDebugPanel } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
@@ -39,6 +39,7 @@ function setupUI() {
     updateWsIndicator(state.wsConnected);
   }
 
+  ensureDebugPanel();
   return tabAdded;
 }
 
@@ -156,6 +157,7 @@ export function init() {
       state.originalChatContent = null;
       createTranscriptContent();
     }
+    updateDebugPanel();
   }, 2000);
 
   waitForConference(subscribeToDominantSpeaker);

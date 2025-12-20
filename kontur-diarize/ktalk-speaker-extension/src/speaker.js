@@ -206,10 +206,14 @@ export function updateSpeakerStatus(conf) {
     }
   }
 
+  const participants = getParticipantsList(conf);
+  state.lastActiveSpeaker = activeSpeaker;
+  state.lastParticipants = participants;
+
   sendUpdate({
     currentSpeaker: activeSpeaker,
     speakerHistory: state.speakerHistory,
-    participants: getParticipantsList(conf)
+    participants: participants
   });
 
   sendWsSpeakerUpdate(activeSpeaker);
