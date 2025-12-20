@@ -31,7 +31,13 @@
                             <input type="date" id="filter-date" class="filter-date">
                             <button id="date-next" class="date-nav-btn" title="Next day">→</button>
                         </div>
-                        <input type="text" id="filter-title" placeholder="Search by title..." class="search-input filter-title-input">
+                        <div class="search-box">
+                            <input type="text" id="filter-title" placeholder="Search..." class="search-input filter-title-input">
+                            <select id="search-mode" class="search-mode-select">
+                                <option value="title">by title</option>
+                                <option value="content">by content</option>
+                            </select>
+                        </div>
                         <select id="filter-source" class="filter-select">
                             <option value="">All sources</option>
                             <option value="active">Active (LIVE)</option>
@@ -45,6 +51,7 @@
                 <div id="meetings-list" class="meetings-list">
                     <div class="loading">Loading meetings...</div>
                 </div>
+                <div id="search-results" class="search-results" style="display: none;"></div>
             </div>
 
             <!-- Meeting Detail View -->

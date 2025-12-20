@@ -27,6 +27,12 @@ const api = {
         const res = await fetch('/api/live/status');
         if (!res.ok) throw new Error('Failed to get live status');
         return res.json();
+    },
+
+    async searchTranscripts(query) {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        if (!res.ok) throw new Error('Search failed');
+        return res.json();
     }
 };
 
@@ -94,6 +100,8 @@ const views = {
         meetings: [],
         filterSource: localStorage.getItem('filterSource') ?? 'ktalk',
         filterTitle: localStorage.getItem('filterTitle') ?? '',
+        searchMode: localStorage.getItem('searchMode') ?? 'title',
+        searchTimeout: null,
 
         async load() {
             const container = document.getElementById('meetings-list');
@@ -102,8 +110,10 @@ const views = {
             // Restore filter values to UI
             const sourceSelect = document.getElementById('filter-source');
             const titleInput = document.getElementById('filter-title');
+            const searchModeSelect = document.getElementById('search-mode');
             sourceSelect.value = this.filterSource;
             titleInput.value = this.filterTitle;
+            searchModeSelect.value = this.searchMode;
 
             // Init date picker
             DatePicker.init('filter-date', () => this.render());
@@ -122,12 +132,74 @@ const views = {
                 this.render();
             });
 
-            // Setup title filter
+            // Setup search mode
+            searchModeSelect.addEventListener('change', (e) => {
+                this.searchMode = e.target.value;
+                localStorage.setItem('searchMode', this.searchMode);
+                this.handleSearch();
+            });
+
+            // Setup title/content filter with debounce
             titleInput.addEventListener('input', (e) => {
                 this.filterTitle = e.target.value;
                 localStorage.setItem('filterTitle', this.filterTitle);
-                this.render();
+
+                clearTimeout(this.searchTimeout);
+                this.searchTimeout = setTimeout(() => this.handleSearch(), 300);
             });
+        },
+
+        handleSearch() {
+            if (this.searchMode === 'content' && this.filterTitle.length >= 2) {
+                this.searchContent();
+            } else {
+                document.getElementById('search-results').style.display = 'none';
+                document.getElementById('meetings-list').style.display = '';
+                this.render();
+            }
+        },
+
+        async searchContent() {
+            const container = document.getElementById('meetings-list');
+            const resultsContainer = document.getElementById('search-results');
+
+            container.style.display = 'none';
+            resultsContainer.style.display = '';
+            resultsContainer.innerHTML = '<div class="loading">Searching...</div>';
+
+            try {
+                const results = await api.searchTranscripts(this.filterTitle);
+                this.renderSearchResults(results);
+            } catch (e) {
+                resultsContainer.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+            }
+        },
+
+        renderSearchResults(results) {
+            const container = document.getElementById('search-results');
+
+            if (results.length === 0) {
+                container.innerHTML = '<div class="empty">No matches found</div>';
+                return;
+            }
+
+            container.innerHTML = results.map(r => `
+                <div class="search-result">
+                    <a href="#/meeting/${r.meeting_id}" class="search-result-header">
+                        <span class="search-result-title">${escapeHtml(r.title)}</span>
+                        <span class="search-result-date">${formatDate(r.created_at)}</span>
+                    </a>
+                    <div class="search-result-matches">
+                        ${r.matches.map(m => `
+                            <div class="search-match">
+                                <span class="match-time">${m.ts_display}</span>
+                                <span class="match-speaker">${escapeHtml(m.speaker)}:</span>
+                                <span class="match-text">${this.highlightSearch(escapeHtml(m.text), this.filterTitle)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
         },
 
         render() {
