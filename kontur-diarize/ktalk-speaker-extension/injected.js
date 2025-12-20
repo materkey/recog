@@ -271,6 +271,19 @@ function waitForConference(callback, maxAttempts = 100) {
   check();
 }
 
+function tryAttachConference() {
+  if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
+    return;
+  }
+
+  if (window.$conf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || window.$conf.jitsiConf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = window.$conf;
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = window.$conf.jitsiConf;
+    console.log('[KTalk Transcript] Conference reattached');
+    subscribeToDominantSpeaker(window.$conf);
+  }
+}
+
 function setupUI() {
   (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.injectStyles)();
 
@@ -288,6 +301,7 @@ function setupUI() {
 function subscribeToDominantSpeaker(conf) {
   sendConnectionStatus(true);
   (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+  startParticipantsRefresh(conf, 'conference_ready');
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = false;
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReadyTimeout) clearTimeout(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReadyTimeout);
@@ -371,6 +385,7 @@ function subscribeToDominantSpeaker(conf) {
       }
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+      startParticipantsRefresh(conf, 'user_joined');
     }, 1000);
   });
 
@@ -378,10 +393,36 @@ function subscribeToDominantSpeaker(conf) {
     setTimeout(() => {
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+      startParticipantsRefresh(conf, 'user_left');
     }, 500);
   });
 
   console.log('[KTalk Transcript] Ready');
+}
+
+function startParticipantsRefresh(conf, reason) {
+  const intervalMs = 2000;
+  const durationMs = 30000;
+  const deadline = Date.now() + durationMs;
+
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.participantsRefreshTimer) {
+    clearInterval(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.participantsRefreshTimer);
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.participantsRefreshTimer = null;
+  }
+
+  const tick = () => {
+    (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
+    (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+    const count = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getParticipantsList)(conf).length;
+    if (count >= 2 || Date.now() >= deadline) {
+      clearInterval(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.participantsRefreshTimer);
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.participantsRefreshTimer = null;
+    }
+  };
+
+  console.log('[KTalk Transcript] Participants refresh start:', reason);
+  tick();
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.participantsRefreshTimer = setInterval(tick, intervalMs);
 }
 
 function init() {
@@ -399,6 +440,7 @@ function init() {
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
     }
+    tryAttachConference();
     (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.updateDebugPanel)();
   }, 2000);
 
@@ -605,31 +647,78 @@ function anyMicOn(conf) {
 
 function getParticipantsList(conf) {
   const participants = [];
+  const byId = new Map();
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipantsMapSize = conf._participantsMap?.size || 0;
 
   if (conf.localParticipant) {
     const lp = conf.localParticipant;
     const localInfo = lp._participantInfo$?.value || lp._userInfo$?.value;
-    participants.push({
+    const entry = {
       id: lp.id,
       name: (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getFullName)(lp, localInfo, lp.name || lp.displayName || 'You'),
       isLocal: true,
       isSpeaking: conf._participantsMap?.get(lp.id)?._activeSpeaker$?.value || false,
       micMuted: isMicMuted(conf, lp.id)
-    });
+    };
+    participants.push(entry);
+    byId.set(lp.id, entry);
   }
 
   conf._participantsMap?.forEach((p, key) => {
     if (p._id !== conf.localParticipant?.id) {
       const info = p._participantInfo$?.value || p._userInfo$?.value;
-      participants.push({
+      const entry = {
         id: p._id,
         name: (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getFullName)(p, info, p.name || p.displayName || key),
         isLocal: false,
         isSpeaking: p._activeSpeaker$?.value || false,
         micMuted: isMicMuted(conf, p._id)
-      });
+      };
+      participants.push(entry);
+      byId.set(p._id, entry);
     }
   });
+
+  // Fallback: add participants from Jitsi if map is empty or missing remotes
+  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsCount = jitsiParticipants.length;
+  const jitsiParticipantsMap = conf.jitsiConf?.participants || conf.jitsiConf?._participants;
+  const jitsiMapValues = jitsiParticipantsMap
+    ? (typeof jitsiParticipantsMap.values === 'function'
+      ? Array.from(jitsiParticipantsMap.values())
+      : Object.values(jitsiParticipantsMap))
+    : [];
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsMapCount = jitsiMapValues.length;
+
+  for (const jp of jitsiParticipants) {
+    const pid = jp._id || jp.getId?.() || jp.id;
+    if (!pid || byId.has(pid)) continue;
+    const name = jp.getDisplayName?.() || jp._displayName || jp.displayName || jp._name || pid;
+    const entry = {
+      id: pid,
+      name,
+      isLocal: false,
+      isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+      micMuted: isMicMuted(conf, pid)
+    };
+    participants.push(entry);
+    byId.set(pid, entry);
+  }
+
+  for (const jp of jitsiMapValues) {
+    const pid = jp?._id || jp?.getId?.() || jp?.id;
+    if (!pid || byId.has(pid)) continue;
+    const name = jp?.getDisplayName?.() || jp?._displayName || jp?.displayName || jp?._name || pid;
+    const entry = {
+      id: pid,
+      name,
+      isLocal: false,
+      isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+      micMuted: isMicMuted(conf, pid)
+    };
+    participants.push(entry);
+    byId.set(pid, entry);
+  }
 
   return participants;
 }
@@ -789,7 +878,13 @@ const state = {
   debugVisible: false,
   lastParticipants: [],
   lastActiveSpeaker: null,
-  autoScrollEnabled: true
+  lastParticipantsMapSize: 0,
+  lastJitsiParticipantsCount: 0,
+  lastJitsiParticipantsMapCount: 0,
+  autoScrollEnabled: true,
+  participantsRefreshTimer: null,
+  activeConfRef: null,
+  activeJitsiConf: null
 };
 
 

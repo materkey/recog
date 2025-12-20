@@ -36,5 +36,11 @@ export const state = {
   debugVisible: false,
   lastParticipants: [],
   lastActiveSpeaker: null,
-  autoScrollEnabled: true
+  lastParticipantsMapSize: 0,
+  lastJitsiParticipantsCount: 0,
+  lastJitsiParticipantsMapCount: 0,
+  autoScrollEnabled: true,
+  participantsRefreshTimer: null,
+  activeConfRef: null,
+  activeJitsiConf: null
 };
