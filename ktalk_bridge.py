@@ -24,6 +24,7 @@ import threading
 import time
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, Dict, List, Callable, TYPE_CHECKING
 import sys
 from pathlib import Path
@@ -126,6 +127,11 @@ class KTalkBridge:
 
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
+
+        # Debug state file
+        self._debug_file = Path("/tmp/ktalk_debug.json")
+        self._debug_update_interval = 1.0  # seconds
+        self._last_debug_update = 0.0
 
     def set_speaker_callback(self, callback: Callable[[Optional[str], bool], None]):
         """
@@ -232,6 +238,63 @@ class KTalkBridge:
         """Возвращает историю спикеров."""
         with self._lock:
             return self._speaker_history.copy()
+
+    def _write_debug_state(self):
+        """Записывает текущее состояние в debug файл."""
+        now = time.time()
+        if now - self._last_debug_update < self._debug_update_interval:
+            return
+        self._last_debug_update = now
+
+        try:
+            with self._lock:
+                participants = [
+                    {
+                        "id": p.id,
+                        "name": p.name,
+                        "is_local": p.is_local,
+                        "mic_muted": p.mic_muted
+                    }
+                    for p in self._participants.values()
+                ]
+
+                state = {
+                    "timestamp": now,
+                    "timestamp_iso": datetime.fromtimestamp(now).isoformat(),
+                    "bridge": {
+                        "running": self._running,
+                        "connected_clients": len(self._connected_clients),
+                        "port": self.port
+                    },
+                    "conference": {
+                        "participants": participants,
+                        "participant_count": len(participants),
+                        "all_mics_muted": all(p.mic_muted for p in self._participants.values()) if self._participants else True
+                    },
+                    "speaker": {
+                        "current": self._current_speaker,
+                        "current_id": self._current_speaker_id,
+                        "is_speaking": self._is_speaking,
+                        "is_local": self._current_is_local,
+                        "last_speaker": self._last_speaker,
+                        "last_speaker_time": self._last_speaker_time
+                    },
+                    "segments": {
+                        "active_start": self._segment_start_time,
+                        "active_speaker": self._segment_speaker_name,
+                        "completed_queue": len(self._completed_segments),
+                        "history_count": len(self._speaker_history)
+                    },
+                    "meeting": {
+                        "id": self._meeting_storage.get_current_meeting_id() if self._meeting_storage else None
+                    }
+                }
+
+            with open(self._debug_file, 'w') as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+
+        except Exception as e:
+            print(f"[KTalk Bridge] Debug write error: {e}", file=sys.stderr)
 
     def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False, uncertain_reason: str = ""):
         """Отправляет транскрипт всем подключённым клиентам."""
@@ -598,6 +661,9 @@ class KTalkBridge:
                 if self._on_speaker_change:
                     self._on_speaker_change(self._current_speaker, self._is_speaking)
 
+            # Обновляем debug state
+            self._write_debug_state()
+
             # Вызываем segment callback вне lock
             if self._on_segment_complete:
                 for segment in completed_segments:
@@ -617,6 +683,9 @@ class KTalkBridge:
                         is_local=p.get("isLocal", False),
                         mic_muted=p.get("micMuted", True)
                     )
+
+            # Обновляем debug state
+            self._write_debug_state()
 
         elif msg_type == "connection_status":
             # Статус подключения к конференции
