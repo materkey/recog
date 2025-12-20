@@ -550,6 +550,29 @@ class MeetingStorage:
         meta["updated_at"] = now.isoformat()
         self._save_meta(meta)
 
+    def update_title(self, title: str):
+        """
+        Обновить title текущей встречи.
+
+        Вызывается когда extension отправляет обновлённый title
+        (например, после смены с 'Joining the meeting' на реальное название).
+
+        Args:
+            title: Новый заголовок встречи
+        """
+        if not self.current_meeting_path or not title:
+            return
+
+        meta = self._load_meta()
+
+        # Обновляем title только если он ещё не установлен или начинается с "Joining"
+        current_title = meta.get("title") or ""
+        if not current_title or current_title.startswith("Joining"):
+            meta["title"] = title
+            meta["title_source"] = "ktalk"
+            meta["updated_at"] = datetime.now(UTC).isoformat()
+            self._save_meta(meta)
+
     def update_participants(self, participants: dict):
         """
         Обновить список участников от KTalk.
