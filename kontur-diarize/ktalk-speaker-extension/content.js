@@ -19,26 +19,39 @@
     const data = event.detail;
 
     // Save to chrome storage for popup
-    chrome.storage.local.set({
-      currentSpeaker: data.currentSpeaker,
-      speakerHistory: data.speakerHistory,
-      participants: data.participants,
-      connected: true
-    });
+    try {
+      chrome.storage.local.set({
+        currentSpeaker: data.currentSpeaker,
+        speakerHistory: data.speakerHistory,
+        participants: data.participants,
+        connected: true
+      });
+    } catch (e) {
+      // Extension context can be invalidated on reload
+      console.debug('[KTalk Speaker Detector] Storage write skipped:', e);
+    }
   });
 
   // Listen for connection status
   window.addEventListener('ktalk-connection-status', (event) => {
-    chrome.storage.local.set({
-      connected: event.detail.connected
-    });
+    try {
+      chrome.storage.local.set({
+        connected: event.detail.connected
+      });
+    } catch (e) {
+      console.debug('[KTalk Speaker Detector] Storage write skipped:', e);
+    }
   });
 
   // Listen for transcript updates
   window.addEventListener('ktalk-transcript-update', (event) => {
-    chrome.storage.local.set({
-      transcriptLines: event.detail.transcriptLines
-    });
+    try {
+      chrome.storage.local.set({
+        transcriptLines: event.detail.transcriptLines
+      });
+    } catch (e) {
+      console.debug('[KTalk Speaker Detector] Storage write skipped:', e);
+    }
   });
 
   console.log('[KTalk Speaker Detector] Content script loaded, injecting into page...');
