@@ -25,6 +25,9 @@ venv/
 venv-pyannote/
 venv-gigaam
 
+# Node
+node_modules/
+
 # Service logs
 logs/
 meetings/
