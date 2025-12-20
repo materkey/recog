@@ -30,5 +30,10 @@ export const state = {
   summaryModalElement: null,
   currentSummaryText: '',
   summaryRequestPending: false,
-  currentSummaryType: 'catchup'
+  currentSummaryType: 'catchup',
+
+  debugPanelElement: null,
+  debugVisible: false,
+  lastParticipants: [],
+  lastActiveSpeaker: null
 };
