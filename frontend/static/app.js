@@ -105,6 +105,9 @@ const views = {
             sourceSelect.value = this.filterSource;
             titleInput.value = this.filterTitle;
 
+            // Init date picker
+            DatePicker.init('filter-date', () => this.render());
+
             try {
                 this.meetings = await api.getMeetings();
                 this.render();
@@ -130,6 +133,9 @@ const views = {
         render() {
             const container = document.getElementById('meetings-list');
             let filtered = this.meetings;
+
+            // Filter by date
+            filtered = DatePicker.filterMeetings(filtered, DatePicker.getDate());
 
             // Filter by source
             if (this.filterSource) {
