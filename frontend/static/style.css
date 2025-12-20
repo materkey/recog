@@ -201,6 +201,106 @@ a:hover {
     border-color: var(--accent);
 }
 
+.search-box {
+    display: flex;
+    gap: 0;
+}
+
+.search-box .filter-title-input {
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.search-mode-select {
+    padding: 8px 8px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-left: none;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.search-mode-select:focus {
+    outline: none;
+}
+
+/* --- Search Results --- */
+.search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.search-result {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.search-result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: background var(--transition);
+}
+
+.search-result-header:hover {
+    background: var(--bg-hover);
+}
+
+.search-result-title {
+    font-weight: 500;
+}
+
+.search-result-date {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.search-result-matches {
+    padding: 8px 16px;
+}
+
+.search-match {
+    padding: 6px 0;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+}
+
+.search-match:last-child {
+    border-bottom: none;
+}
+
+.match-time {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-right: 8px;
+}
+
+.match-speaker {
+    color: var(--speaker-other);
+    font-weight: 500;
+    margin-right: 4px;
+}
+
+.match-text {
+    color: var(--text-primary);
+}
+
+.match-text mark {
+    background: rgba(251, 191, 36, 0.3);
+    color: inherit;
+    padding: 0 2px;
+    border-radius: 2px;
+}
+
 /* --- Meetings List --- */
 .meetings-list {
     display: grid;

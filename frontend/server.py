@@ -260,6 +260,49 @@ async def list_meetings():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/search")
+async def search_transcripts(q: str = ""):
+    """Search across all transcripts."""
+    if not q or len(q) < 2:
+        return JSONResponse(content=[])
+
+    try:
+        storage = MeetingStorage(MEETINGS_DIR)
+        meetings = storage.list_meetings()
+        results = []
+        query_lower = q.lower()
+
+        for meeting_info in meetings:
+            meeting = storage.get_meeting(meeting_info["id"])
+            if not meeting:
+                continue
+
+            segments = meeting.get("segments", [])
+            matches = []
+
+            for seg in segments:
+                text = seg.get("text", "")
+                if query_lower in text.lower():
+                    matches.append({
+                        "ts_display": seg.get("ts_display"),
+                        "speaker": seg.get("speaker"),
+                        "text": text
+                    })
+
+            if matches:
+                results.append({
+                    "meeting_id": meeting_info["id"],
+                    "title": meeting_info.get("title") or meeting_info["id"],
+                    "created_at": meeting_info.get("created_at"),
+                    "source": meeting_info.get("source"),
+                    "matches": matches[:5]  # Limit matches per meeting
+                })
+
+        return JSONResponse(content=results)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/meetings/{meeting_id}")
 async def get_meeting(meeting_id: str):
     """Get meeting metadata."""
