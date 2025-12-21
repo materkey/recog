@@ -42,5 +42,14 @@ export const state = {
   autoScrollEnabled: true,
   participantsRefreshTimer: null,
   activeConfRef: null,
-  activeJitsiConf: null
+  activeJitsiConf: null,
+  bioRead: {
+    enabled: false,
+    fixation: 40,
+    tailOpacity: 60,
+    minWordLength: 3,
+    maxHeadRatio: 0.6,
+    ignoreNumbers: true,
+    panelOpen: false
+  }
 };

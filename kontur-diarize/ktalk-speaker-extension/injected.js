@@ -2,6 +2,125 @@
 /******/ 	"use strict";
 /******/ 	var __webpack_modules__ = ({
 
+/***/ "./src/bioread.js"
+/*!************************!*\
+  !*** ./src/bioread.js ***!
+  \************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   BIOREAD_LIMITS: () => (/* binding */ BIOREAD_LIMITS),
+/* harmony export */   BIOREAD_SETTINGS_KEY: () => (/* binding */ BIOREAD_SETTINGS_KEY),
+/* harmony export */   formatBioReadText: () => (/* binding */ formatBioReadText),
+/* harmony export */   normalizeBioReadSettings: () => (/* binding */ normalizeBioReadSettings)
+/* harmony export */ });
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./utils.js */ "./src/utils.js");
+
+
+const BIOREAD_SETTINGS_KEY = 'ktalk-bioread-settings';
+
+const BIOREAD_LIMITS = {
+  fixation: { min: 10, max: 60, step: 5, default: 40 },
+  tailOpacity: { min: 35, max: 90, step: 5, default: 60 },
+  minWordLength: 3,
+  maxHeadRatio: 0.6,
+  ignoreNumbers: true
+};
+
+function normalizeBioReadSettings(input = {}) {
+  const fixation = clampNumber(
+    parseInt(input.fixation, 10),
+    BIOREAD_LIMITS.fixation.default,
+    BIOREAD_LIMITS.fixation.min,
+    BIOREAD_LIMITS.fixation.max
+  );
+  const tailOpacity = clampNumber(
+    parseInt(input.tailOpacity, 10),
+    BIOREAD_LIMITS.tailOpacity.default,
+    BIOREAD_LIMITS.tailOpacity.min,
+    BIOREAD_LIMITS.tailOpacity.max
+  );
+
+  return {
+    enabled: Boolean(input.enabled),
+    fixation,
+    tailOpacity,
+    minWordLength: BIOREAD_LIMITS.minWordLength,
+    maxHeadRatio: BIOREAD_LIMITS.maxHeadRatio,
+    ignoreNumbers: input.ignoreNumbers !== undefined ? Boolean(input.ignoreNumbers) : BIOREAD_LIMITS.ignoreNumbers
+  };
+}
+
+function formatBioReadText(text, settings) {
+  const safeText = typeof text === 'string' ? text : String(text ?? '');
+  if (!settings || !settings.enabled) {
+    return safeText;
+  }
+
+  const tokens = tokenize(safeText);
+  return tokens.map(token => formatToken(token, settings)).join('');
+}
+
+function tokenize(text) {
+  if (!text) return [''];
+  return text.match(/[\p{L}\p{M}\p{N}]+|[^\p{L}\p{M}\p{N}]+/gu) || [text];
+}
+
+function formatToken(token, settings) {
+  if (!token) return '';
+
+  if (isWordToken(token, settings)) {
+    if (settings.ignoreNumbers && isNumericToken(token)) {
+      return (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.escapeHtml)(token);
+    }
+
+    if (token.length < settings.minWordLength) {
+      return (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.escapeHtml)(token);
+    }
+
+    const headLen = getHeadLength(token.length, settings.fixation, settings.maxHeadRatio);
+    if (headLen <= 0 || headLen >= token.length) {
+      return (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.escapeHtml)(token);
+    }
+
+    const head = token.slice(0, headLen);
+    const tail = token.slice(headLen);
+    return `<span class="bio-word"><span class="bio-head">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.escapeHtml)(head)}</span><span class="bio-tail">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.escapeHtml)(tail)}</span></span>`;
+  }
+
+  return (0,_utils_js__WEBPACK_IMPORTED_MODULE_0__.escapeHtml)(token);
+}
+
+function isWordToken(token, settings) {
+  if (/[\p{L}\p{M}]/u.test(token)) return true;
+  if (!settings.ignoreNumbers && /[\p{N}]/u.test(token)) return true;
+  return false;
+}
+
+function isNumericToken(token) {
+  return /^[\p{N}]+$/u.test(token);
+}
+
+function getHeadLength(wordLength, fixationPercent, maxHeadRatio) {
+  const ratio = fixationPercent / 100;
+  const raw = Math.ceil(wordLength * ratio);
+  const max = Math.max(1, Math.floor(wordLength * maxHeadRatio));
+  return clamp(raw, 1, max);
+}
+
+function clampNumber(value, fallback, min, max) {
+  if (!Number.isFinite(value)) return fallback;
+  return clamp(value, min, max);
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+
+/***/ },
+
 /***/ "./src/debug/panel.js"
 /*!****************************!*\
   !*** ./src/debug/panel.js ***!
@@ -920,7 +1039,16 @@ const state = {
   autoScrollEnabled: true,
   participantsRefreshTimer: null,
   activeConfRef: null,
-  activeJitsiConf: null
+  activeJitsiConf: null,
+  bioRead: {
+    enabled: false,
+    fixation: 40,
+    tailOpacity: 60,
+    minWordLength: 3,
+    maxHeadRatio: 0.6,
+    ignoreNumbers: true,
+    panelOpen: false
+  }
 };
 
 
@@ -945,14 +1073,20 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   watchTabChanges: () => (/* binding */ watchTabChanges)
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
-/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils.js */ "./src/utils.js");
-/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+/* harmony import */ var _bioread_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./bioread.js */ "./src/bioread.js");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./utils.js */ "./src/utils.js");
+/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+
 
 
 
 
 let selectedModel = localStorage.getItem('ktalk-ai-model') || 'gemini-2.5-flash';
 let meetingTitle = document.title || '';
+let bioReadHotkeyBound = false;
+let bioReadPanelListenerBound = false;
+let summaryMenuOpen = false;
+let summaryMenuListenerBound = false;
 
 function injectStyles() {
   if (document.querySelector('#ktalk-transcript-styles')) return;
@@ -1033,6 +1167,7 @@ function injectStyles() {
         background: rgb(52, 52, 52);
         color: rgba(255, 255, 255, 0.8);
         user-select: text;
+        --bioread-tail-opacity: 0.6;
       }
       .ktalk-transcript-content.active {
         display: flex;
@@ -1068,23 +1203,22 @@ function injectStyles() {
       .ktalk-transcript-toolbar {
         display: flex;
         justify-content: flex-start;
-        padding: 8px 24px 8px 16px;
+        padding: 8px 12px;
         background: rgb(56, 56, 56);
         border-bottom: 1px solid rgba(255,255,255,0.1);
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
+        gap: 6px 8px;
+        position: relative;
       }
       .ktalk-transcript-toolbar-left {
         display: flex;
-        gap: 8px;
-        flex-wrap: nowrap;
+        gap: 6px;
+        flex-wrap: wrap;
         align-items: center;
       }
-      .ktalk-transcript-toolbar-left + .ktalk-transcript-toolbar-left {
-        margin-left: 12px;
-      }
-      .ktalk-transcript-toolbar-left:last-child {
+      .ktalk-transcript-toolbar-actions {
         margin-left: auto;
-        margin-right: 12px;
+        justify-content: flex-end;
       }
       .ktalk-transcript-scroll-btn {
         padding: 0 8px;
@@ -1185,6 +1319,123 @@ function injectStyles() {
         0% { opacity: 0.5; }
         50% { opacity: 1; }
         100% { opacity: 0.5; }
+      }
+      .ktalk-summary-menu {
+        position: relative;
+        display: inline-flex;
+      }
+      .ktalk-summary-menu-toggle {
+        padding: 0 8px;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        border-radius: 4px;
+        color: rgba(255,255,255,0.8);
+        font-size: 11px;
+        cursor: pointer;
+        transition: background 0.15s;
+        height: 22px;
+        line-height: 22px;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .ktalk-summary-menu-toggle:hover {
+        background: rgba(255,255,255,0.2);
+      }
+      .ktalk-summary-menu-toggle.active {
+        background: rgba(255,255,255,0.25);
+      }
+      .ktalk-summary-menu-panel {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        min-width: 160px;
+        padding: 6px;
+        background: rgb(44, 44, 44);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 8px;
+        box-shadow: 0 12px 24px rgba(0,0,0,0.35);
+        display: none;
+        flex-direction: column;
+        gap: 4px;
+        z-index: 5;
+      }
+      .ktalk-summary-menu-panel.active {
+        display: flex;
+      }
+      .ktalk-summary-menu-panel .ktalk-transcript-summary-btn {
+        width: 100%;
+        justify-content: flex-start;
+        gap: 8px;
+      }
+      .ktalk-bioread-toggle,
+      .ktalk-bioread-settings-btn {
+        padding: 0 8px;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        border-radius: 4px;
+        color: rgba(255,255,255,0.8);
+        font-size: 11px;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        height: 22px;
+        line-height: 22px;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .ktalk-bioread-toggle:hover,
+      .ktalk-bioread-settings-btn:hover {
+        background: rgba(255,255,255,0.2);
+      }
+      .ktalk-bioread-toggle.active {
+        background: rgba(0, 138, 255, 0.8);
+        color: #fff;
+      }
+      .ktalk-bioread-settings-btn.active {
+        background: rgba(255,255,255,0.25);
+      }
+      .ktalk-bioread-panel {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 12px;
+        min-width: 220px;
+        padding: 10px 12px;
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+        background: rgb(44, 44, 44);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 8px;
+        box-shadow: 0 12px 24px rgba(0,0,0,0.35);
+        z-index: 5;
+      }
+      .ktalk-bioread-panel.active {
+        display: flex;
+      }
+      .ktalk-bioread-panel-header {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        opacity: 0.6;
+      }
+      .ktalk-bioread-control {
+        display: grid;
+        grid-template-columns: 70px 1fr 40px;
+        gap: 8px;
+        align-items: center;
+        font-size: 11px;
+        color: rgba(255,255,255,0.75);
+      }
+      .ktalk-bioread-control input[type="range"] {
+        width: 100%;
+      }
+      .ktalk-bioread-value {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: rgba(255,255,255,0.9);
       }
 
       /* Summary Floating Window */
@@ -1397,6 +1648,15 @@ function injectStyles() {
         line-height: 1.4;
         user-select: text;
       }
+      .bio-word {
+        display: inline;
+      }
+      .bio-head {
+        font-weight: 700;
+      }
+      .bio-tail {
+        opacity: var(--bioread-tail-opacity, 0.6);
+      }
       .ktalk-transcript-empty {
         display: flex;
         flex-direction: column;
@@ -1478,6 +1738,7 @@ function createTranscriptContent() {
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = document.createElement('div');
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.className = 'ktalk-transcript-content';
+  loadBioReadSettings();
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.innerHTML = `
       <div class="ktalk-transcript-speaker-bar">
         <div class="ktalk-speaker-dot"></div>
@@ -1488,12 +1749,48 @@ function createTranscriptContent() {
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓</button>
         </div>
-        <div class="ktalk-transcript-toolbar-left">
-          <button class="ktalk-transcript-summary-btn" data-type="catchup" title="Catch up - включиться в дискуссию">🎯</button>
-          <button class="ktalk-transcript-summary-btn" data-type="brief" title="Краткое за 2 мин">📋</button>
-          <button class="ktalk-transcript-summary-btn" data-type="full" title="Вся встреча + вопрос">💬</button>
+        <div class="ktalk-transcript-toolbar-left ktalk-transcript-toolbar-actions">
+          <div class="ktalk-summary-menu">
+            <button class="ktalk-summary-menu-toggle" title="Summary actions">
+              Summary <span class="ktalk-summary-caret">▾</span>
+            </button>
+            <div class="ktalk-summary-menu-panel">
+              <button class="ktalk-transcript-summary-btn" data-type="catchup" title="Catch up - включиться в дискуссию">🎯 Catch up</button>
+              <button class="ktalk-transcript-summary-btn" data-type="brief" title="Краткое за 2 мин">📋 Brief</button>
+              <button class="ktalk-transcript-summary-btn" data-type="full" title="Вся встреча + вопрос">💬 Full</button>
+            </div>
+          </div>
           <button class="ktalk-transcript-follow-btn" title="Auto-follow latest">Follow</button>
           <button class="ktalk-transcript-copy-btn" title="Copy all transcript">Copy</button>
+          <button class="ktalk-bioread-toggle" title="BioRead">Bio</button>
+          <button class="ktalk-bioread-settings-btn" title="BioRead settings">⚙</button>
+        </div>
+        <div class="ktalk-bioread-panel">
+          <div class="ktalk-bioread-panel-header">BioRead</div>
+          <label class="ktalk-bioread-control">
+            <span>Fixation</span>
+            <input
+              type="range"
+              class="ktalk-bioread-fixation"
+              min="${_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_LIMITS.fixation.min}"
+              max="${_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_LIMITS.fixation.max}"
+              step="${_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_LIMITS.fixation.step}"
+              value="${_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.fixation}"
+            />
+            <span class="ktalk-bioread-value" data-bioread-value="fixation"></span>
+          </label>
+          <label class="ktalk-bioread-control">
+            <span>Contrast</span>
+            <input
+              type="range"
+              class="ktalk-bioread-contrast"
+              min="${_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_LIMITS.tailOpacity.min}"
+              max="${_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_LIMITS.tailOpacity.max}"
+              step="${_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_LIMITS.tailOpacity.step}"
+              value="${_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.tailOpacity}"
+            />
+            <span class="ktalk-bioread-value" data-bioread-value="contrast"></span>
+          </label>
         </div>
       </div>
       <div class="ktalk-transcript-messages">
@@ -1514,7 +1811,10 @@ function createTranscriptContent() {
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-transcript-follow-btn').addEventListener('click', toggleAutoFollow);
   updateFollowButton();
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
-    btn.addEventListener('click', () => requestSummary(btn.dataset.type));
+    btn.addEventListener('click', () => {
+      requestSummary(btn.dataset.type);
+      closeSummaryMenu();
+    });
   });
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-scroll-top').addEventListener('click', () => {
     const container = document.querySelector('.ktalk-transcript-messages');
@@ -1525,6 +1825,8 @@ function createTranscriptContent() {
     if (container) container.scrollTop = container.scrollHeight;
   });
 
+  setupSummaryMenu(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
+  setupBioReadControls(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
   createSummaryModal();
 
   contentArea.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
@@ -1676,7 +1978,7 @@ function copyAllTranscript() {
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) return;
 
   const text = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map(line => {
-    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
+    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
     return `**${speaker}** *[${line.time}]*: ${line.text}`;
   }).join('\n\n');
 
@@ -1727,14 +2029,16 @@ function updateTranscriptUI() {
       line.uncertain_reason === 'mics_off' ? 'mics-off' : ''
     ].filter(Boolean).join(' ');
 
-    const speakerDisplay = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
+    const speakerDisplay = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
+
+    const messageText = formatTranscriptText(line.text);
 
     return `<div class="${classes}">
         <div class="ktalk-msg-header">
           <span class="ktalk-msg-speaker">${speakerDisplay}</span>
           <span class="ktalk-msg-time">${line.time}</span>
         </div>
-        <div class="ktalk-msg-text">${line.text}</div>
+        <div class="ktalk-msg-text">${messageText}</div>
       </div>`;
   }).join('');
 
@@ -1763,6 +2067,202 @@ function updateFollowButton() {
   if (!btn) return;
   btn.classList.toggle('active', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled);
   btn.textContent = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled ? 'Follow' : 'Paused';
+}
+
+function updateSummaryMenu() {
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) return;
+  const toggle = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-summary-menu-toggle');
+  const panel = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-summary-menu-panel');
+  if (toggle) toggle.classList.toggle('active', summaryMenuOpen);
+  if (panel) panel.classList.toggle('active', summaryMenuOpen);
+}
+
+function closeSummaryMenu() {
+  if (!summaryMenuOpen) return;
+  summaryMenuOpen = false;
+  updateSummaryMenu();
+}
+
+function setupSummaryMenu(container) {
+  const toggle = container.querySelector('.ktalk-summary-menu-toggle');
+  const panel = container.querySelector('.ktalk-summary-menu-panel');
+
+  summaryMenuOpen = false;
+
+  if (toggle) {
+    toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      summaryMenuOpen = !summaryMenuOpen;
+      updateSummaryMenu();
+    });
+  }
+
+  if (panel) {
+    panel.addEventListener('click', (event) => event.stopPropagation());
+  }
+
+  if (!summaryMenuListenerBound) {
+    summaryMenuListenerBound = true;
+    document.addEventListener('click', (event) => {
+      if (!summaryMenuOpen) return;
+      const activePanel = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement?.querySelector('.ktalk-summary-menu-panel');
+      const activeToggle = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement?.querySelector('.ktalk-summary-menu-toggle');
+      if (activePanel && activePanel.contains(event.target)) return;
+      if (activeToggle && activeToggle.contains(event.target)) return;
+      closeSummaryMenu();
+    });
+  }
+
+  updateSummaryMenu();
+}
+
+function loadBioReadSettings() {
+  const fallback = (0,_bioread_js__WEBPACK_IMPORTED_MODULE_1__.normalizeBioReadSettings)(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead);
+  const saved = localStorage.getItem(_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_SETTINGS_KEY);
+  if (!saved) {
+    Object.assign(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead, fallback);
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(saved);
+    Object.assign(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead, (0,_bioread_js__WEBPACK_IMPORTED_MODULE_1__.normalizeBioReadSettings)({ ...fallback, ...parsed }));
+  } catch (e) {
+    console.log('[KTalk Transcript] BioRead settings load failed:', e);
+    Object.assign(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead, fallback);
+  }
+}
+
+function saveBioReadSettings() {
+  const payload = {
+    enabled: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.enabled,
+    fixation: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.fixation,
+    tailOpacity: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.tailOpacity,
+    ignoreNumbers: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.ignoreNumbers
+  };
+  localStorage.setItem(_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_SETTINGS_KEY, JSON.stringify(payload));
+}
+
+function applyBioReadSettings({ persist = true, rerender = true } = {}) {
+  Object.assign(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead, (0,_bioread_js__WEBPACK_IMPORTED_MODULE_1__.normalizeBioReadSettings)(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead));
+
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.style.setProperty(
+      '--bioread-tail-opacity',
+      (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.tailOpacity / 100).toString()
+    );
+  }
+
+  updateBioReadControls();
+
+  if (persist) {
+    saveBioReadSettings();
+  }
+  if (rerender) {
+    updateTranscriptUI();
+  }
+}
+
+function updateBioReadControls() {
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) return;
+
+  const toggleBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-bioread-toggle');
+  const settingsBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-bioread-settings-btn');
+  const panel = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-bioread-panel');
+  const fixationSlider = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-bioread-fixation');
+  const contrastSlider = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-bioread-contrast');
+  const fixationValue = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('[data-bioread-value="fixation"]');
+  const contrastValue = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('[data-bioread-value="contrast"]');
+
+  if (toggleBtn) toggleBtn.classList.toggle('active', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.enabled);
+  if (settingsBtn) settingsBtn.classList.toggle('active', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.panelOpen);
+  if (panel) panel.classList.toggle('active', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.panelOpen);
+
+  if (fixationSlider) fixationSlider.value = String(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.fixation);
+  if (contrastSlider) contrastSlider.value = String(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.tailOpacity);
+  if (fixationValue) fixationValue.textContent = `${_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.fixation}%`;
+  if (contrastValue) contrastValue.textContent = `${_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.tailOpacity}%`;
+}
+
+function setupBioReadControls(container) {
+  const toggleBtn = container.querySelector('.ktalk-bioread-toggle');
+  const settingsBtn = container.querySelector('.ktalk-bioread-settings-btn');
+  const panel = container.querySelector('.ktalk-bioread-panel');
+  const fixationSlider = container.querySelector('.ktalk-bioread-fixation');
+  const contrastSlider = container.querySelector('.ktalk-bioread-contrast');
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.enabled = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.enabled;
+      applyBioReadSettings();
+    });
+  }
+
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.panelOpen = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.panelOpen;
+      updateBioReadControls();
+    });
+  }
+
+  if (panel) {
+    panel.addEventListener('click', (event) => event.stopPropagation());
+  }
+
+  if (fixationSlider) {
+    fixationSlider.addEventListener('input', () => {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.fixation = parseInt(fixationSlider.value, 10);
+      applyBioReadSettings();
+    });
+  }
+
+  if (contrastSlider) {
+    contrastSlider.addEventListener('input', () => {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.tailOpacity = parseInt(contrastSlider.value, 10);
+      applyBioReadSettings();
+    });
+  }
+
+  if (!bioReadHotkeyBound) {
+    bioReadHotkeyBound = true;
+    document.addEventListener('keydown', (event) => {
+      if (!event.altKey || event.code !== 'KeyB') return;
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.enabled = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.enabled;
+      applyBioReadSettings();
+    });
+  }
+
+  if (!bioReadPanelListenerBound) {
+    bioReadPanelListenerBound = true;
+    document.addEventListener('click', (event) => {
+      if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.panelOpen) return;
+      const activePanel = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement?.querySelector('.ktalk-bioread-panel');
+      const activeSettingsBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement?.querySelector('.ktalk-bioread-settings-btn');
+      if (activePanel && activePanel.contains(event.target)) return;
+      if (activeSettingsBtn && activeSettingsBtn.contains(event.target)) return;
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.panelOpen = false;
+      updateBioReadControls();
+    });
+  }
+
+  applyBioReadSettings({ persist: false, rerender: false });
+}
+
+function isEditableTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+}
+
+function formatTranscriptText(text) {
+  const safeText = typeof text === 'string' ? text : String(text ?? '');
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead.enabled) {
+    return safeText;
+  }
+  return (0,_bioread_js__WEBPACK_IMPORTED_MODULE_1__.formatBioReadText)(safeText, _state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead);
 }
 
 
@@ -1890,7 +2390,7 @@ function updateSummaryContent(text, isError = false) {
   if (isError) {
     body.innerHTML = `<div class="ktalk-summary-error">${text}</div>`;
   } else {
-    body.innerHTML = `<div class="ktalk-summary-text">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.renderMarkdown)(text)}</div>`;
+    body.innerHTML = `<div class="ktalk-summary-text">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.renderMarkdown)(text)}</div>`;
   }
 }
 
@@ -1938,7 +2438,7 @@ function requestSummary(summaryType = 'catchup') {
   }
 
   const transcriptText = linesToSend.map(line => {
-    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
+    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
     return `[${line.time}] ${speaker}: ${line.text}`;
   }).join('\n');
 
@@ -1950,7 +2450,7 @@ function requestSummary(summaryType = 'catchup') {
     btn.disabled = true;
   });
 
-  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsMessage)({
+  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsMessage)({
     type: 'summarize_request',
     summary_type: summaryType,
     transcript: transcriptText,
@@ -1966,7 +2466,7 @@ function askFollowUpQuestion() {
   if (!question) return;
 
   const transcriptText = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map(line => {
-    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
+    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
     return `[${line.time}] ${speaker}: ${line.text}`;
   }).join('\n');
 
@@ -1980,7 +2480,7 @@ function askFollowUpQuestion() {
   const submitBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-question-submit');
   submitBtn.disabled = true;
 
-  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsMessage)({
+  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsMessage)({
     type: 'summarize_request',
     summary_type: 'question',
     transcript: transcriptText,
