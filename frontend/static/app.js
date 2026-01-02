@@ -495,8 +495,10 @@ const views = {
         ws: null,
         segments: [],
         currentMeeting: null,
+        followMode: localStorage.getItem('liveFollowMode') !== 'false',
 
         connect() {
+            this.updateFollowButton();
             const statusEl = document.getElementById('live-status');
             const infoEl = document.getElementById('live-meeting-info');
             const transcriptEl = document.getElementById('live-transcript');
@@ -639,11 +641,38 @@ const views = {
                 setTimeout(() => div.classList.remove('segment-new'), 500);
             }
 
-            // Auto-scroll to bottom
-            container.scrollTop = container.scrollHeight;
+            // Auto-scroll to bottom if follow mode is on
+            if (this.followMode) {
+                container.scrollTop = container.scrollHeight;
+            }
+        },
+
+        updateFollowButton() {
+            const btn = document.getElementById('follow-btn');
+            if (btn) {
+                btn.classList.toggle('active', this.followMode);
+            }
+        },
+
+        toggleFollow() {
+            this.followMode = !this.followMode;
+            localStorage.setItem('liveFollowMode', this.followMode);
+            this.updateFollowButton();
+
+            // Scroll to bottom immediately when enabling
+            if (this.followMode) {
+                const container = document.getElementById('live-transcript');
+                if (container) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            }
         }
     }
 };
+
+function toggleFollowMode() {
+    views.live.toggleFollow();
+}
 
 
 // --- Utilities ---
