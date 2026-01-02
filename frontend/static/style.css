@@ -613,6 +613,21 @@ a:hover {
 }
 
 /* --- Live View --- */
+.btn-follow {
+    border-color: var(--border);
+    color: var(--text-secondary);
+}
+
+.btn-follow.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+.btn-follow:hover {
+    border-color: var(--accent);
+}
+
 .live-status {
     display: flex;
     align-items: center;
