@@ -915,6 +915,223 @@ a:hover {
     50% { opacity: 0.3; }
 }
 
+/* --- Anchor / WDIM --- */
+.btn-anchor {
+    border-color: var(--accent);
+}
+
+.btn-anchor:hover {
+    border-color: var(--accent-hover);
+}
+
+.btn-anchor:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.anchor-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(6, 6, 14, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+    padding: 24px;
+}
+
+.anchor-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 32px var(--shadow);
+    width: min(720px, 92vw);
+    max-height: 80vh;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+}
+
+.anchor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.anchor-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+}
+
+.anchor-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.anchor-close:hover {
+    color: var(--text-primary);
+}
+
+.anchor-topic {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+.anchor-topic-text {
+    font-size: 16px;
+    font-weight: 600;
+    flex: 1;
+}
+
+.anchor-tone {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border: 1px solid transparent;
+}
+
+.tone-neutral {
+    color: var(--text-secondary);
+    background: rgba(160, 160, 184, 0.15);
+    border-color: rgba(160, 160, 184, 0.3);
+}
+
+.tone-calm {
+    color: var(--speaker-local);
+    background: rgba(74, 222, 128, 0.12);
+    border-color: rgba(74, 222, 128, 0.3);
+}
+
+.tone-heated {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.anchor-section-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.anchor-bullets {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.anchor-bullet {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.anchor-ts {
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-family: monospace;
+    padding: 2px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.anchor-ts:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.anchor-ts-empty {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.anchor-ts-empty:hover {
+    color: var(--text-secondary);
+    border-color: var(--border);
+}
+
+.anchor-bullet-text {
+    font-size: 14px;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+
+.anchor-footer {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+
+.anchor-mention {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.mention-ok {
+    color: var(--speaker-local);
+}
+
+.mention-alert {
+    color: #ef4444;
+}
+
+.anchor-mention-context {
+    color: var(--text-primary);
+}
+
+.anchor-note {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.anchor-loading {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.segment-highlight {
+    animation: highlightPulse 1.6s ease;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.5);
+}
+
+@keyframes highlightPulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.6);
+    }
+    100% {
+        box-shadow: 0 0 0 6px rgba(99, 102, 241, 0);
+    }
+}
+
 /* --- Responsive --- */
 @media (max-width: 768px) {
     .nav {

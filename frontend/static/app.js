@@ -29,6 +29,19 @@ const api = {
         return res.json();
     },
 
+    async getLiveAnchor(payload) {
+        const res = await fetch('/api/live/anchor', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+            const error = await res.json().catch(() => ({}));
+            throw new Error(error.detail || 'Failed to fetch context');
+        }
+        return res.json();
+    },
+
     async searchTranscripts(query) {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         if (!res.ok) throw new Error('Search failed');
@@ -84,6 +97,7 @@ const router = {
         // Disconnect live if leaving
         if (name !== 'live') {
             views.live.disconnect();
+            closeAnchor();
         }
 
         document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
@@ -544,6 +558,7 @@ const views = {
                 case 'init':
                     this.currentMeeting = msg.meeting;
                     this.segments = msg.segments || [];
+                    lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
                     this.renderTranscript(transcriptEl);
                     break;
@@ -551,6 +566,7 @@ const views = {
                 case 'meeting_change':
                     this.currentMeeting = msg.meeting;
                     this.segments = [];
+                    lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
                     this.renderTranscript(transcriptEl);
                     break;
@@ -608,6 +624,7 @@ const views = {
 
                 const div = document.createElement('div');
                 div.className = `transcript-segment ${speakerClass} segment-new`;
+                div.dataset.tsDisplay = seg.ts_display || '';
                 div.innerHTML = `
                     <div class="segment-header">
                         <span class="segment-speaker">${escapeHtml(seg.speaker)}</span>
@@ -937,8 +954,265 @@ function copyAiResponse() {
 }
 
 
+// --- Anchor / WDIM ---
+
+let anchorRequestInFlight = false;
+let anchorLastRequestAt = 0;
+let lastAnchorPayload = null;
+const ANCHOR_MIN_INTERVAL_MS = 8000;
+
+function isTextInputActive() {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+}
+
+function isLiveViewActive() {
+    const view = document.getElementById('view-live');
+    return view && view.style.display !== 'none';
+}
+
+function openAnchor() {
+    if (!isLiveViewActive()) return;
+    const overlay = document.getElementById('anchor-overlay');
+    if (!overlay) return;
+
+    overlay.style.display = 'flex';
+    if (lastAnchorPayload && Date.now() - anchorLastRequestAt < ANCHOR_MIN_INTERVAL_MS) {
+        renderAnchorData(lastAnchorPayload);
+        return;
+    }
+    renderAnchorLoading();
+    requestAnchor();
+}
+
+function closeAnchor() {
+    const overlay = document.getElementById('anchor-overlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+async function requestAnchor() {
+    if (anchorRequestInFlight) return;
+
+    const now = Date.now();
+    if (now - anchorLastRequestAt < ANCHOR_MIN_INTERVAL_MS) {
+        const noteEl = document.getElementById('anchor-note');
+        if (noteEl) {
+            noteEl.textContent = 'Please wait a few seconds before requesting again.';
+        }
+        return;
+    }
+
+    anchorRequestInFlight = true;
+    anchorLastRequestAt = now;
+
+    const btn = document.getElementById('anchor-btn');
+    if (btn) btn.disabled = true;
+
+    try {
+        const payload = {
+            window_seconds: 240,
+            max_segments: 35
+        };
+        if (views.live.currentMeeting?.id) {
+            payload.meeting_id = views.live.currentMeeting.id;
+        }
+
+        const response = await api.getLiveAnchor(payload);
+        renderAnchorData(response);
+    } catch (e) {
+        renderAnchorError(e.message);
+    } finally {
+        anchorRequestInFlight = false;
+        if (btn) btn.disabled = false;
+    }
+}
+
+function renderAnchorLoading() {
+    const toneEl = document.getElementById('anchor-tone');
+    const topicEl = document.getElementById('anchor-topic-text');
+    const bulletsEl = document.getElementById('anchor-bullets');
+    const mentionEl = document.getElementById('anchor-mention');
+    const noteEl = document.getElementById('anchor-note');
+
+    if (toneEl) {
+        toneEl.className = 'anchor-tone tone-neutral';
+        toneEl.textContent = 'neutral';
+    }
+    if (topicEl) topicEl.textContent = 'Loading...';
+    if (bulletsEl) {
+        bulletsEl.innerHTML = '';
+        const li = document.createElement('li');
+        li.className = 'anchor-loading';
+        li.textContent = 'Loading context...';
+        bulletsEl.appendChild(li);
+    }
+    if (mentionEl) mentionEl.textContent = '';
+    if (noteEl) noteEl.textContent = '';
+}
+
+function renderAnchorError(message) {
+    const topicEl = document.getElementById('anchor-topic-text');
+    const bulletsEl = document.getElementById('anchor-bullets');
+    const mentionEl = document.getElementById('anchor-mention');
+    const noteEl = document.getElementById('anchor-note');
+
+    if (topicEl) topicEl.textContent = 'Context unavailable';
+    if (bulletsEl) {
+        bulletsEl.innerHTML = '';
+        const li = document.createElement('li');
+        li.className = 'anchor-loading';
+        li.textContent = message || 'Failed to load context';
+        bulletsEl.appendChild(li);
+    }
+    if (mentionEl) mentionEl.textContent = '';
+    if (noteEl) noteEl.textContent = '';
+}
+
+function renderAnchorData(payload) {
+    const data = payload?.data || payload || {};
+    lastAnchorPayload = payload;
+    const rawTone = (data.topic_tone || 'neutral').toLowerCase();
+    const tone = ['neutral', 'calm', 'heated'].includes(rawTone) ? rawTone : 'neutral';
+    const toneEl = document.getElementById('anchor-tone');
+    const topicEl = document.getElementById('anchor-topic-text');
+    const bulletsEl = document.getElementById('anchor-bullets');
+    const mentionEl = document.getElementById('anchor-mention');
+    const noteEl = document.getElementById('anchor-note');
+
+    if (toneEl) {
+        toneEl.className = `anchor-tone tone-${tone}`;
+        toneEl.textContent = tone;
+    }
+    if (topicEl) {
+        topicEl.textContent = data.current_topic || 'No recent context.';
+    }
+
+    if (bulletsEl) {
+        bulletsEl.innerHTML = '';
+        const bullets = Array.isArray(data.summary_bullets) ? data.summary_bullets : [];
+        if (bullets.length === 0) {
+            const li = document.createElement('li');
+            li.className = 'anchor-loading';
+            li.textContent = 'No recent points.';
+            bulletsEl.appendChild(li);
+        } else {
+            for (const bullet of bullets) {
+                const li = document.createElement('li');
+                li.className = 'anchor-bullet';
+
+                const tsDisplay = bullet.ts_display || '';
+                if (tsDisplay) {
+                    const tsBtn = document.createElement('button');
+                    tsBtn.type = 'button';
+                    tsBtn.className = 'anchor-ts';
+                    tsBtn.textContent = tsDisplay;
+                    tsBtn.dataset.tsDisplay = tsDisplay;
+                    tsBtn.addEventListener('click', () => {
+                        scrollToLiveTimestamp(tsDisplay);
+                    });
+                    li.appendChild(tsBtn);
+                } else {
+                    const tsSpan = document.createElement('span');
+                    tsSpan.className = 'anchor-ts anchor-ts-empty';
+                    tsSpan.textContent = '--:--:--';
+                    li.appendChild(tsSpan);
+                }
+
+                const textSpan = document.createElement('span');
+                textSpan.className = 'anchor-bullet-text';
+                textSpan.textContent = bullet.text || '';
+                li.appendChild(textSpan);
+
+                bulletsEl.appendChild(li);
+            }
+        }
+    }
+
+    if (mentionEl) {
+        mentionEl.innerHTML = '';
+        const userMentioned = Boolean(data.user_mentioned);
+        mentionEl.className = `anchor-mention ${userMentioned ? 'mention-alert' : 'mention-ok'}`;
+
+        if (userMentioned) {
+            const label = document.createElement('span');
+            label.textContent = 'Mentioned';
+            mentionEl.appendChild(label);
+
+            if (data.mention_ts_display) {
+                const tsBtn = document.createElement('button');
+                tsBtn.type = 'button';
+                tsBtn.className = 'anchor-ts';
+                tsBtn.textContent = data.mention_ts_display;
+                tsBtn.addEventListener('click', () => {
+                    scrollToLiveTimestamp(data.mention_ts_display);
+                });
+                mentionEl.appendChild(tsBtn);
+            }
+
+            if (data.mention_context) {
+                const ctx = document.createElement('span');
+                ctx.className = 'anchor-mention-context';
+                ctx.textContent = data.mention_context;
+                mentionEl.appendChild(ctx);
+            }
+        } else {
+            mentionEl.textContent = 'No mentions for you in the last minutes.';
+        }
+    }
+
+    if (noteEl) {
+        noteEl.textContent = payload?.approximate ? 'Summary may be approximate.' : '';
+    }
+}
+
+function escapeCssSelector(value) {
+    if (window.CSS && CSS.escape) return CSS.escape(value);
+    return value.replace(/["\\]/g, '\\$&');
+}
+
+function scrollToLiveTimestamp(tsDisplay) {
+    if (!tsDisplay) return;
+    const container = document.getElementById('live-transcript');
+    if (!container) return;
+
+    const selector = `[data-ts-display="${escapeCssSelector(tsDisplay)}"]`;
+    const target = container.querySelector(selector);
+    if (!target) return;
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('segment-highlight');
+    setTimeout(() => target.classList.remove('segment-highlight'), 1600);
+}
+
+function initAnchorOverlay() {
+    const overlay = document.getElementById('anchor-overlay');
+    if (overlay) {
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) closeAnchor();
+        });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeAnchor();
+            return;
+        }
+
+        if (isTextInputActive()) return;
+
+        if (e.altKey && e.key.toLowerCase() === 'j') {
+            e.preventDefault();
+            openAnchor();
+        }
+    });
+}
+
+
 // --- Init ---
 
 document.addEventListener('DOMContentLoaded', () => {
     router.init();
+    initAnchorOverlay();
 });

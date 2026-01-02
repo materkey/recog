@@ -76,6 +76,7 @@
             <div id="view-live" class="view" style="display: none;">
                 <div class="view-header">
                     <h1>Live Transcription</h1>
+                    <button class="btn btn-anchor" id="anchor-btn" onclick="openAnchor()" title="Alt+J">Context</button>
                     <div class="live-status" id="live-status">
                         <span class="status-dot"></span>
                         <span class="status-text">Connecting...</span>
@@ -109,6 +110,28 @@
             <div class="modal-footer">
                 <button class="btn" onclick="copyAiResponse()">Copy</button>
                 <button class="btn" onclick="closeAiModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Anchor / WDIM Overlay -->
+    <div id="anchor-overlay" class="anchor-overlay" style="display: none;">
+        <div class="anchor-card" role="dialog" aria-modal="true" aria-labelledby="anchor-title">
+            <div class="anchor-header">
+                <div class="anchor-title" id="anchor-title">Right now</div>
+                <button class="anchor-close" onclick="closeAnchor()">&times;</button>
+            </div>
+            <div class="anchor-topic">
+                <span class="anchor-tone tone-neutral" id="anchor-tone">neutral</span>
+                <div class="anchor-topic-text" id="anchor-topic-text">Loading...</div>
+            </div>
+            <div class="anchor-section">
+                <div class="anchor-section-title">Last minutes</div>
+                <ul id="anchor-bullets" class="anchor-bullets"></ul>
+            </div>
+            <div class="anchor-footer">
+                <div id="anchor-mention" class="anchor-mention"></div>
+                <div id="anchor-note" class="anchor-note"></div>
             </div>
         </div>
     </div>
