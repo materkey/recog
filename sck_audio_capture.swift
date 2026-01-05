@@ -10,6 +10,91 @@ import CoreMedia
 import AVFoundation
 import Darwin
 
+/// Fixed-capacity ring buffer to avoid memory fragmentation from Data.append/removeFirst.
+/// Uses a pre-allocated [UInt8] array with head/tail indices for zero-copy circular access.
+final class RingBuffer {
+    private var storage: [UInt8]
+    private var head: Int = 0  // Read position
+    private var tail: Int = 0  // Write position
+    private var count_: Int = 0
+    private let capacity: Int
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        self.storage = [UInt8](repeating: 0, count: capacity)
+    }
+
+    var count: Int { count_ }
+    var isEmpty: Bool { count_ == 0 }
+    var freeSpace: Int { capacity - count_ }
+
+    /// Append data, dropping oldest bytes if necessary to make room.
+    /// Maintains float32 alignment (4 bytes) when dropping.
+    func append(_ data: Data) {
+        guard !data.isEmpty else { return }
+
+        var bytesToWrite = data.count
+
+        // If data won't fit, drop oldest bytes (aligned to 4 bytes)
+        if bytesToWrite > freeSpace {
+            let overflow = bytesToWrite - freeSpace
+            let alignedDrop = ((overflow + 3) / 4) * 4
+            drop(min(alignedDrop, count_))
+        }
+
+        // Truncate if still too large
+        bytesToWrite = min(bytesToWrite, freeSpace)
+        guard bytesToWrite > 0 else { return }
+
+        data.withUnsafeBytes { raw in
+            guard let src = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+
+            let firstChunk = min(bytesToWrite, capacity - tail)
+            storage[tail..<(tail + firstChunk)].withUnsafeMutableBytes { dest in
+                dest.copyBytes(from: UnsafeBufferPointer(start: src, count: firstChunk))
+            }
+
+            let secondChunk = bytesToWrite - firstChunk
+            if secondChunk > 0 {
+                storage[0..<secondChunk].withUnsafeMutableBytes { dest in
+                    dest.copyBytes(from: UnsafeBufferPointer(start: src + firstChunk, count: secondChunk))
+                }
+            }
+
+            tail = (tail + bytesToWrite) % capacity
+            count_ += bytesToWrite
+        }
+    }
+
+    /// Drop oldest n bytes from buffer.
+    func drop(_ n: Int) {
+        let toDrop = min(n, count_)
+        head = (head + toDrop) % capacity
+        count_ -= toDrop
+    }
+
+    /// Write up to `maxBytes` from buffer to file descriptor.
+    /// Returns bytes written (>0), 0 for would-block, or -1 for error with errno set.
+    func writeToFD(_ fd: Int32, maxBytes: Int) -> Int {
+        guard count_ > 0 else { return 0 }
+
+        let toWrite = min(maxBytes, count_, capacity - head)
+        guard toWrite > 0 else { return 0 }
+
+        let written = storage.withUnsafeBytes { raw -> Int in
+            let base = raw.baseAddress!.advanced(by: head)
+            return Darwin.write(fd, base, toWrite)
+        }
+
+        if written > 0 {
+            head = (head + written) % capacity
+            count_ -= written
+        }
+
+        return written
+    }
+}
+
 enum CaptureError: Error, CustomStringConvertible {
     case noDisplay
 
@@ -24,13 +109,12 @@ enum CaptureError: Error, CustomStringConvertible {
 final class StdoutWriter {
     private let fd: Int32
     private let queue = DispatchQueue(label: "stdout.writer", qos: .userInitiated)
-    private var buffer = Data()
+    private let buffer: RingBuffer  // Fixed-capacity ring buffer, no realloc
     private var flushScheduled = false
-    private let maxBufferBytes: Int
 
     init(fd: Int32 = STDOUT_FILENO, maxBufferBytes: Int = 1_000_000) {
         self.fd = fd
-        self.maxBufferBytes = maxBufferBytes
+        self.buffer = RingBuffer(capacity: maxBufferBytes)
 
         signal(SIGPIPE, SIG_IGN)
         setNonBlocking(fd)
@@ -39,17 +123,7 @@ final class StdoutWriter {
     func enqueue(_ data: Data) {
         guard !data.isEmpty else { return }
         queue.async {
-            if self.buffer.count + data.count > self.maxBufferBytes {
-                let overflow = self.buffer.count + data.count - self.maxBufferBytes
-                // Keep float32 alignment (4 bytes per sample) when dropping.
-                let alignedOverflow = ((overflow + 3) / 4) * 4
-                if alignedOverflow >= self.buffer.count {
-                    self.buffer.removeAll(keepingCapacity: true)
-                } else {
-                    self.buffer.removeFirst(alignedOverflow)
-                }
-            }
-
+            // RingBuffer.append handles overflow with aligned dropping internally
             self.buffer.append(data)
             self.flushIfNeeded()
         }
@@ -63,13 +137,9 @@ final class StdoutWriter {
 
     private func flushLoop() {
         while !buffer.isEmpty {
-            let written = buffer.withUnsafeBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return 0 }
-                return Darwin.write(fd, base, raw.count)
-            }
+            let written = buffer.writeToFD(fd, maxBytes: buffer.count)
 
             if written > 0 {
-                buffer.removeFirst(written)
                 continue
             }
 
