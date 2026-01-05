@@ -31,6 +31,11 @@ export const state = {
   currentSummaryText: '',
   summaryRequestPending: false,
   currentSummaryType: 'catchup',
+  contextContentElement: null,
+  isContextActive: false,
+  anchorRequestPending: false,
+  currentAnchorData: null,
+  anchorLastUpdated: 0,
 
   debugPanelElement: null,
   debugVisible: false,

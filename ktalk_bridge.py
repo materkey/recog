@@ -23,6 +23,7 @@ import json
 import threading
 import time
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, List, Callable, TYPE_CHECKING
@@ -47,6 +48,174 @@ def _load_dotenv():
                 os.environ.setdefault(key.strip(), value.strip())
 
 _load_dotenv()
+
+
+def _truncate_text(text: str, max_len: int) -> str:
+    clean = " ".join(text.split())
+    if len(clean) <= max_len:
+        return clean
+    return clean[: max_len - 3].rstrip() + "..."
+
+
+def _extract_json_payload(text: str) -> Optional[dict]:
+    if not text:
+        return None
+    cleaned = text.strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        cleaned = cleaned[start:end + 1]
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
+
+def _parse_anchor_lines(transcript: str) -> list[dict]:
+    lines = []
+    if not transcript:
+        return lines
+
+    pattern = re.compile(r"^\[(\d{2}:\d{2}:\d{2})\]\s*([^:]+):\s*(.*)$")
+    for raw in transcript.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        match = pattern.match(raw)
+        if match:
+            ts_display, speaker, text = match.groups()
+            lines.append({
+                "ts_display": ts_display,
+                "speaker": speaker.strip(),
+                "text": text.strip()
+            })
+        else:
+            lines.append({
+                "ts_display": "",
+                "speaker": "",
+                "text": raw
+            })
+    return lines
+
+
+def _detect_user_mention(lines: list[dict], user_name: str) -> tuple[bool, str, str]:
+    if not user_name:
+        return False, "", ""
+
+    names = [n.strip().lower() for n in re.split(r"[;,]", user_name) if n.strip()]
+    if not names:
+        return False, "", ""
+
+    for line in reversed(lines):
+        text = line.get("text", "")
+        text_lower = text.lower()
+        for name in names:
+            if name and name in text_lower:
+                return True, _truncate_text(text, 160), line.get("ts_display", "")
+
+    return False, "", ""
+
+
+def _fallback_anchor_payload(transcript: str, user_name: str) -> dict:
+    lines = _parse_anchor_lines(transcript)
+    current_text = lines[-1]["text"] if lines else ""
+    current_topic = _truncate_text(current_text, 140) if current_text else "No recent transcript."
+
+    bullets = []
+    for line in lines[-3:]:
+        text = line.get("text") or ""
+        if not text:
+            continue
+        bullets.append({
+            "text": _truncate_text(text, 120),
+            "ts_display": line.get("ts_display", "")
+        })
+
+    mentioned, mention_context, mention_ts = _detect_user_mention(lines, user_name)
+
+    return {
+        "current_topic": current_topic,
+        "topic_tone": "neutral",
+        "summary_bullets": bullets if bullets else [{"text": "No recent transcript.", "ts_display": ""}],
+        "user_mentioned": mentioned,
+        "mention_context": mention_context if mentioned else "",
+        "mention_ts_display": mention_ts if mentioned else ""
+    }
+
+
+def _normalize_anchor_payload(payload: dict, transcript: str, user_name: str) -> tuple[dict, bool]:
+    approximate = False
+    if not isinstance(payload, dict):
+        return _fallback_anchor_payload(transcript, user_name), True
+
+    current_topic = str(payload.get("current_topic") or "").strip()
+    if not current_topic:
+        approximate = True
+        current_topic = _fallback_anchor_payload(transcript, user_name)["current_topic"]
+
+    topic_tone = str(payload.get("topic_tone") or "").strip().lower()
+    if topic_tone not in {"neutral", "calm", "heated"}:
+        topic_tone = "neutral"
+        approximate = True
+
+    raw_bullets = payload.get("summary_bullets") or []
+    bullets = []
+    for item in raw_bullets:
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            ts_display = str(item.get("ts_display") or "").strip()
+        else:
+            text = str(item).strip()
+            ts_display = ""
+        if text:
+            bullets.append({"text": text, "ts_display": ts_display})
+
+    if not bullets:
+        approximate = True
+        bullets = _fallback_anchor_payload(transcript, user_name)["summary_bullets"]
+
+    if len(bullets) > 3:
+        bullets = bullets[:3]
+
+    user_mentioned = payload.get("user_mentioned")
+    mention_context = str(payload.get("mention_context") or "").strip()
+    mention_ts_display = str(payload.get("mention_ts_display") or "").strip()
+
+    if not isinstance(user_mentioned, bool):
+        approximate = True
+        user_mentioned, mention_context, mention_ts_display = _detect_user_mention(
+            _parse_anchor_lines(transcript),
+            user_name
+        )
+    elif user_mentioned and not mention_context:
+        approximate = True
+        _, mention_context, mention_ts_display = _detect_user_mention(
+            _parse_anchor_lines(transcript),
+            user_name
+        )
+
+    if not user_mentioned:
+        mention_context = ""
+        mention_ts_display = ""
+
+    return {
+        "current_topic": current_topic,
+        "topic_tone": topic_tone,
+        "summary_bullets": bullets,
+        "user_mentioned": user_mentioned,
+        "mention_context": mention_context,
+        "mention_ts_display": mention_ts_display
+    }, approximate
 
 
 @dataclass
@@ -538,6 +707,152 @@ class KTalkBridge:
                 "error": str(e)
             })
 
+    async def _handle_anchor(self, transcript: str, user_name: str = "User", model: str = "gemini-3-pro-preview", meeting_title: str = ""):
+        """Обрабатывает запрос на WDIM/Context через Google Gemini API."""
+        try:
+            if not transcript.strip():
+                await self._broadcast_message({
+                    "type": "anchor_response",
+                    "error": "Нет транскрипта для анализа"
+                })
+                return
+
+            # Check for API key (try both names)
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                await self._broadcast_message({
+                    "type": "anchor_response",
+                    "error": "GEMINI_API_KEY не установлен"
+                })
+                return
+
+            if not model or not model.startswith("gemini-"):
+                model = "gemini-3-pro-preview"
+
+            if not user_name:
+                user_name = "User"
+
+            meeting_context = f"Встреча: {meeting_title}\n\n" if meeting_title else ""
+
+            prompt = f"""Ты — ассистент для быстрого восстановления контекста встречи.
+
+{meeting_context}Участник: {user_name}
+
+Вход: транскрипт последних минут. Формат строк:
+[HH:MM:SS] Speaker: text
+
+Твоя задача:
+1) current_topic: 1 короткая фраза, что обсуждают прямо сейчас.
+2) topic_tone: одно из "neutral" | "calm" | "heated".
+3) summary_bullets: 3 пункта (каждый до 10 слов) + ts_display из транскрипта.
+4) user_mentioned: true/false если обращались к участнику или назначали задачи.
+5) mention_context: короткий контекст (если user_mentioned=true).
+6) mention_ts_display: ts_display (если user_mentioned=true).
+
+Если данных недостаточно — не выдумывай, заполни безопасными значениями.
+
+Верни строго валидный JSON без markdown и комментариев:
+{{
+  "current_topic": "...",
+  "topic_tone": "neutral|calm|heated",
+  "summary_bullets": [
+    {{"text": "...", "ts_display": "HH:MM:SS"}}
+  ],
+  "user_mentioned": false,
+  "mention_context": "",
+  "mention_ts_display": ""
+}}
+
+Транскрипт:
+{transcript}
+"""
+
+            with open("/tmp/ktalk_anchor_prompt.txt", "w") as f:
+                f.write(f"Model: {model}\n")
+                f.write(f"Meeting: {meeting_title}\n")
+                f.write(f"---\n{prompt}\n")
+
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                max_tokens = 2048 if "pro" in model else 1024
+
+                async with session.post(
+                    url,
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {
+                            "temperature": 0.2,
+                            "maxOutputTokens": max_tokens
+                        }
+                    },
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=60 if "pro" in model else 30)
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        print(f"[KTalk Bridge] Gemini anchor error: {error_text}", file=sys.stderr)
+                        await self._broadcast_message({
+                            "type": "anchor_response",
+                            "error": f"Gemini API error: {response.status}"
+                        })
+                        return
+
+                    data = await response.json()
+
+            candidates = data.get("candidates", [])
+            if not candidates:
+                print(f"[KTalk Bridge] Anchor no candidates: {data}", file=sys.stderr)
+                await self._broadcast_message({
+                    "type": "anchor_response",
+                    "error": "No candidates from Gemini"
+                })
+                return
+
+            finish_reason = candidates[0].get("finishReason", "")
+            if finish_reason and finish_reason not in ["STOP", "MAX_TOKENS"]:
+                print(f"[KTalk Bridge] Anchor finish reason: {finish_reason}", file=sys.stderr)
+                await self._broadcast_message({
+                    "type": "anchor_response",
+                    "error": f"Gemini blocked: {finish_reason}"
+                })
+                return
+
+            raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            if not raw_text:
+                await self._broadcast_message({
+                    "type": "anchor_response",
+                    "error": "Пустой ответ от Gemini"
+                })
+                return
+
+            payload = _extract_json_payload(raw_text)
+            if payload is None:
+                normalized = _fallback_anchor_payload(transcript, user_name)
+                approximate = True
+            else:
+                normalized, approximate = _normalize_anchor_payload(payload, transcript, user_name)
+
+            await self._broadcast_message({
+                "type": "anchor_response",
+                "data": normalized,
+                "approximate": approximate,
+                "model": model
+            })
+
+        except ImportError:
+            await self._broadcast_message({
+                "type": "anchor_response",
+                "error": "aiohttp не установлен. Выполните: pip install aiohttp"
+            })
+        except Exception as e:
+            print(f"[KTalk Bridge] Anchor error: {e}", file=sys.stderr)
+            await self._broadcast_message({
+                "type": "anchor_response",
+                "error": str(e)
+            })
+
     async def _handle_client(self, websocket):
         """Обрабатывает подключение клиента (Chrome extension)."""
         self._connected_clients.add(websocket)
@@ -749,6 +1064,16 @@ class KTalkBridge:
 
             # Run summarize in background
             asyncio.create_task(self._handle_summarize(transcript, summary_type, question, previous_summary, model, meeting_title))
+        elif msg_type == "anchor_request":
+            transcript = data.get("transcript", "")
+            lines_count = data.get("lines_count", 0)
+            window_seconds = data.get("window_seconds", 0)
+            model = data.get("model", "gemini-3-pro-preview")
+            user_name = data.get("user_name", "User")
+            meeting_title = data.get("meeting_title", "")
+            print(f"[KTalk Bridge] Anchor request: {lines_count} lines, window: {window_seconds}s, model: {model}, meeting: {meeting_title[:50]}", file=sys.stderr)
+
+            asyncio.create_task(self._handle_anchor(transcript, user_name, model, meeting_title))
 
     async def _run_server(self):
         """Запускает WebSocket сервер."""
