@@ -416,15 +416,17 @@ function tryAttachConference() {
 function setupUI() {
   (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.injectStyles)();
 
-  const tabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addTranscriptTab)();
-  if (tabAdded) {
+  const transcriptTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addTranscriptTab)();
+  const contextTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addContextTab)();
+  if (transcriptTabAdded || contextTabAdded) {
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
+    (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.watchTabChanges)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicator)(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected);
   }
 
   (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.ensureDebugPanel)();
-  return tabAdded;
+  return transcriptTabAdded || contextTabAdded;
 }
 
 function subscribeToDominantSpeaker(conf) {
@@ -560,7 +562,7 @@ function init() {
   setTimeout(_ws_js__WEBPACK_IMPORTED_MODULE_2__.connectWebSocket, 1000);
 
   setInterval(() => {
-    if (!document.querySelector('.ktalk-transcript-tab')) {
+    if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab')) {
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = false;
       setupUI();
     }
@@ -568,6 +570,11 @@ function init() {
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = null;
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
+    }
+    if (!document.querySelector('.ktalk-context-content')) {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = null;
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
+      (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
     }
     tryAttachConference();
     (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.updateDebugPanel)();
@@ -1028,6 +1035,11 @@ const state = {
   currentSummaryText: '',
   summaryRequestPending: false,
   currentSummaryType: 'catchup',
+  contextContentElement: null,
+  isContextActive: false,
+  anchorRequestPending: false,
+  currentAnchorData: null,
+  anchorLastUpdated: 0,
 
   debugPanelElement: null,
   debugVisible: false,
@@ -1062,8 +1074,11 @@ const state = {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   addContextTab: () => (/* binding */ addContextTab),
 /* harmony export */   addTranscriptTab: () => (/* binding */ addTranscriptTab),
+/* harmony export */   createContextContent: () => (/* binding */ createContextContent),
 /* harmony export */   createTranscriptContent: () => (/* binding */ createTranscriptContent),
+/* harmony export */   handleAnchorResponse: () => (/* binding */ handleAnchorResponse),
 /* harmony export */   handleNewMeeting: () => (/* binding */ handleNewMeeting),
 /* harmony export */   handleSummaryResponse: () => (/* binding */ handleSummaryResponse),
 /* harmony export */   handleTranscript: () => (/* binding */ handleTranscript),
@@ -1082,11 +1097,13 @@ __webpack_require__.r(__webpack_exports__);
 
 
 let selectedModel = localStorage.getItem('ktalk-ai-model') || 'gemini-2.5-flash';
+let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'gemini-3-pro-preview';
 let meetingTitle = document.title || '';
 let bioReadHotkeyBound = false;
 let bioReadPanelListenerBound = false;
 let summaryMenuOpen = false;
 let summaryMenuListenerBound = false;
+let anchorHotkeyBound = false;
 
 function injectStyles() {
   if (document.querySelector('#ktalk-transcript-styles')) return;
@@ -1095,14 +1112,19 @@ function injectStyles() {
   styles.id = 'ktalk-transcript-styles';
   styles.textContent = `
       /* Transcript tab - exact match of KTalk's PRIVATE button */
-      .ktalk-transcript-tab-wrapper.tl-tab {
+      .ktalk-transcript-tab-wrapper.tl-tab,
+      .ktalk-context-tab-wrapper.tl-tab {
         display: inline-block !important;
         height: 32px;
         padding: 0;
         margin: 0;
       }
+      .ktalk-transcript-tab-wrapper.tl-tab {
+        margin-right: 8px;
+      }
 
-      .ktalk-transcript-tab.link {
+      .ktalk-transcript-tab.link,
+      .ktalk-context-tab.link {
         display: block;
         height: 32px;
         padding: 0;
@@ -1122,41 +1144,21 @@ function injectStyles() {
         vertical-align: middle;
         transition: color 0.15s;
       }
-      .ktalk-transcript-tab.link:hover {
+      .ktalk-transcript-tab.link:hover,
+      .ktalk-context-tab.link:hover {
         color: rgba(255, 255, 255, 0.85);
       }
-      .ktalk-transcript-tab.link._active {
+      .ktalk-transcript-tab.link._active,
+      .ktalk-context-tab.link._active {
         color: rgba(255, 255, 255, 0.85);
       }
-      .ktalk-transcript-tab .tab-content {
+      .ktalk-transcript-tab .tab-content,
+      .ktalk-context-tab .tab-content {
         display: flex;
         align-items: center;
         height: 32px;
         line-height: 16px;
         gap: 4px;
-      }
-      .ktalk-transcript-tab .underline {
-        position: absolute;
-        bottom: 0;
-        left: 6px;
-        right: 6px;
-        height: 2px;
-        background-color: rgb(0, 138, 255);
-        opacity: 0;
-        transition: opacity 0.15s;
-      }
-      .ktalk-transcript-tab._active .underline {
-        opacity: 1;
-      }
-      .ktalk-transcript-tab .ws-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: #22c55e;
-        flex-shrink: 0;
-      }
-      .ktalk-transcript-tab .ws-dot:not(.connected) {
-        background: #ef4444;
       }
 
       /* Transcript content area - match KTalk's native chat style */
@@ -1171,6 +1173,74 @@ function injectStyles() {
       }
       .ktalk-transcript-content.active {
         display: flex;
+      }
+      .ktalk-context-content {
+        display: none;
+        flex-direction: column;
+        height: 100%;
+        background: rgb(52, 52, 52);
+        color: rgba(255, 255, 255, 0.85);
+      }
+      .ktalk-context-content.active {
+        display: flex;
+      }
+      .ktalk-context-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 16px;
+        background: rgb(60, 60, 60);
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+      }
+      .ktalk-context-title {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .ktalk-context-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .ktalk-context-refresh-btn {
+        padding: 0 10px;
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(0, 138, 255, 0.6);
+        border-radius: 4px;
+        color: rgba(255,255,255,0.9);
+        font-size: 11px;
+        cursor: pointer;
+        height: 22px;
+        line-height: 22px;
+      }
+      .ktalk-context-refresh-btn:hover {
+        background: rgba(0, 138, 255, 0.2);
+        border-color: rgba(0, 138, 255, 0.9);
+      }
+      .ktalk-context-refresh-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .ktalk-context-model-select {
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: rgba(255,255,255,0.9);
+        font-size: 12px;
+        border-radius: 4px;
+        padding: 2px 6px;
+      }
+      .ktalk-context-body {
+        padding: 16px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        flex: 1;
+      }
+      .ktalk-context-body.loading {
+        align-items: center;
+        justify-content: center;
+        color: rgba(255,255,255,0.7);
       }
       .ktalk-transcript-speaker-bar {
         display: flex;
@@ -1593,6 +1663,103 @@ function injectStyles() {
       .ktalk-summary-text em {
         color: rgba(255,255,255,0.8);
       }
+      .ktalk-anchor-section-title {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: rgba(255,255,255,0.5);
+        margin-bottom: 4px;
+      }
+      .ktalk-anchor-topic {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 10px;
+        background: rgba(255,255,255,0.06);
+        border-radius: 6px;
+      }
+      .ktalk-anchor-topic-text {
+        font-size: 14px;
+        font-weight: 600;
+        color: rgba(255,255,255,0.92);
+      }
+      .ktalk-anchor-tone {
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .ktalk-anchor-tone.neutral {
+        color: rgba(255,255,255,0.65);
+        border-color: rgba(255,255,255,0.2);
+      }
+      .ktalk-anchor-tone.calm {
+        color: #4ade80;
+        border-color: rgba(74, 222, 128, 0.5);
+      }
+      .ktalk-anchor-tone.heated {
+        color: #f87171;
+        border-color: rgba(248, 113, 113, 0.6);
+      }
+      .ktalk-anchor-bullets {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 0;
+        margin: 0;
+      }
+      .ktalk-anchor-bullet {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      .ktalk-anchor-ts-btn {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: rgba(255,255,255,0.7);
+        font-size: 11px;
+        border-radius: 999px;
+        padding: 2px 8px;
+        cursor: pointer;
+        font-family: monospace;
+      }
+      .ktalk-anchor-ts-btn:hover {
+        border-color: rgba(0, 138, 255, 0.8);
+        color: rgba(255,255,255,0.9);
+      }
+      .ktalk-anchor-ts-btn.empty {
+        cursor: default;
+        opacity: 0.5;
+      }
+      .ktalk-anchor-bullet-text {
+        font-size: 13px;
+        color: rgba(255,255,255,0.85);
+        line-height: 1.4;
+      }
+      .ktalk-anchor-mention {
+        font-size: 13px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        background: rgba(255,255,255,0.05);
+      }
+      .ktalk-anchor-mention.ok {
+        color: #4ade80;
+      }
+      .ktalk-anchor-mention.alert {
+        color: #fca5a5;
+      }
+      .ktalk-anchor-note {
+        font-size: 11px;
+        color: rgba(255,255,255,0.5);
+        margin-top: 2px;
+      }
+      .ktalk-msg.anchor-highlight {
+        box-shadow: 0 0 0 2px rgba(0, 138, 255, 0.6);
+        border-radius: 6px;
+      }
 
       /* Transcript messages */
       .ktalk-transcript-messages {
@@ -1707,9 +1874,7 @@ function addTranscriptTab() {
       <button type="button" class="ktalk-transcript-tab link">
         <span class="tab-content">
           <span class="title">Transcript</span>
-          <span class="ws-dot ${_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected ? 'connected' : ''}"></span>
         </span>
-        <span class="underline" style="background-color: rgb(0, 138, 255);"></span>
       </button>
     `;
 
@@ -1720,6 +1885,37 @@ function addTranscriptTab() {
   });
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = true;
+  return true;
+}
+
+function addContextTab() {
+  if (document.querySelector('.ktalk-context-tab')) {
+    return true;
+  }
+
+  const tabsContainer = document.querySelector('.tl-tabset__content');
+  if (!tabsContainer) {
+    return false;
+  }
+
+  console.log('[KTalk Transcript] Adding context tab to tabset');
+
+  const tab = document.createElement('div');
+  tab.className = 'tl-tab _switchable ktalk-context-tab-wrapper';
+  tab.innerHTML = `
+      <button type="button" class="ktalk-context-tab link">
+        <span class="tab-content">
+          <span class="title">Context</span>
+        </span>
+      </button>
+    `;
+
+  tabsContainer.appendChild(tab);
+
+  tab.querySelector('button').addEventListener('click', () => {
+    activateContextTab();
+  });
+
   return true;
 }
 
@@ -1826,6 +2022,7 @@ function createTranscriptContent() {
   });
 
   setupSummaryMenu(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
+  setupAnchorControls();
   setupBioReadControls(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
   createSummaryModal();
 
@@ -1835,44 +2032,108 @@ function createTranscriptContent() {
   return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement;
 }
 
-function activateTranscriptTab() {
-  const transcriptTabBtn = document.querySelector('.ktalk-transcript-tab');
-  if (!transcriptTabBtn) return;
-
-  const tab = transcriptTabBtn.closest('.tl-tab');
-  if (tab) {
-    tab.classList.add('_active');
-    transcriptTabBtn.classList.add('_active');
+function createContextContent() {
+  if (document.querySelector('.ktalk-context-content')) {
+    return document.querySelector('.ktalk-context-content');
   }
 
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent.style.display = 'none';
-  }
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.classList.add('active');
+  const contentArea = document.querySelector('.slide-menu-wrapper .content');
+  if (!contentArea) {
+    console.log('[KTalk Transcript] Content area not found for context');
+    return null;
   }
 
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isTranscriptActive = true;
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = contentArea.firstElementChild;
+  }
+
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = document.createElement('div');
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.className = 'ktalk-context-content';
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.innerHTML = `
+      <div class="ktalk-context-header">
+        <span class="ktalk-context-title">Context</span>
+        <div class="ktalk-context-actions">
+          <select class="ktalk-context-model-select">
+            ${getAnchorModelOptions()}
+          </select>
+          <button class="ktalk-context-refresh-btn" title="Refresh (Alt+J)">Refresh</button>
+        </div>
+      </div>
+      <div class="ktalk-context-body loading">
+        <div class="ktalk-summary-spinner"></div>
+        <span>Собираю контекст...</span>
+      </div>
+    `;
+
+  const modelSelect = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.querySelector('.ktalk-context-model-select');
+  modelSelect.value = anchorModel;
+  if (modelSelect.value !== anchorModel) {
+    anchorModel = 'gemini-3-pro-preview';
+    modelSelect.value = anchorModel;
+    localStorage.setItem('ktalk-anchor-model', anchorModel);
+  }
+  modelSelect.addEventListener('change', (e) => {
+    anchorModel = e.target.value;
+    localStorage.setItem('ktalk-anchor-model', anchorModel);
+  });
+
+  const refreshBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.querySelector('.ktalk-context-refresh-btn');
+  refreshBtn.addEventListener('click', () => {
+    requestAnchor();
+  });
+
+  contentArea.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement);
+  console.log('[KTalk Transcript] Context element created');
+  return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement;
 }
 
-function deactivateTranscriptTab() {
+function setActiveView(view) {
   const transcriptTabBtn = document.querySelector('.ktalk-transcript-tab');
-  if (!transcriptTabBtn) return;
+  const contextTabBtn = document.querySelector('.ktalk-context-tab');
 
-  const tab = transcriptTabBtn.closest('.tl-tab');
-  if (tab) {
-    tab.classList.remove('_active');
-    transcriptTabBtn.classList.remove('_active');
-  }
+  const transcriptTab = transcriptTabBtn?.closest('.tl-tab');
+  const contextTab = contextTabBtn?.closest('.tl-tab');
+
+  const isTranscript = view === 'transcript';
+  const isContext = view === 'context';
+
+  if (transcriptTab) transcriptTab.classList.toggle('_active', isTranscript);
+  if (contextTab) contextTab.classList.toggle('_active', isContext);
+
+  if (transcriptTabBtn) transcriptTabBtn.classList.toggle('_active', isTranscript);
+  if (contextTabBtn) contextTabBtn.classList.toggle('_active', isContext);
 
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent.style.display = '';
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent.style.display = isTranscript || isContext ? 'none' : '';
   }
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.classList.remove('active');
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.classList.toggle('active', isTranscript);
+  }
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.classList.toggle('active', isContext);
   }
 
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isTranscriptActive = false;
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isTranscriptActive = isTranscript;
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isContextActive = isContext;
+}
+
+function activateTranscriptTab() {
+  setActiveView('transcript');
+}
+
+function activateContextTab() {
+  ensureContextContent();
+  setActiveView('context');
+  const now = Date.now();
+  const staleMs = 90000;
+  const isStale = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentAnchorData || (now - _state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorLastUpdated) > staleMs;
+  if (isStale && !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorRequestPending) {
+    requestAnchor();
+  }
+}
+
+function deactivateCustomTabs() {
+  setActiveView(null);
 }
 
 function watchTabChanges() {
@@ -1884,17 +2145,18 @@ function watchTabChanges() {
     if (!clickedTab) return;
 
     const isTranscriptTab = clickedTab.querySelector('.ktalk-transcript-tab');
-    if (!isTranscriptTab) {
-      deactivateTranscriptTab();
+    const isContextTab = clickedTab.querySelector('.ktalk-context-tab');
+    if (!isTranscriptTab && !isContextTab) {
+      deactivateCustomTabs();
     }
   });
 }
 
 function updateWsIndicator(connected) {
-  const dot = document.querySelector('.ktalk-transcript-tab-wrapper .ws-dot');
-  if (dot) {
-    dot.classList.toggle('connected', connected);
-  }
+  document.querySelectorAll('.ktalk-transcript-tab-wrapper .ws-dot, .ktalk-context-tab-wrapper .ws-dot')
+    .forEach((dot) => {
+      dot.classList.toggle('connected', connected);
+    });
 }
 
 function handleTranscriptHistory(data) {
@@ -2032,8 +2294,9 @@ function updateTranscriptUI() {
     const speakerDisplay = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
 
     const messageText = formatTranscriptText(line.text);
+    const timeValue = line.time || '';
 
-    return `<div class="${classes}">
+    return `<div class="${classes}" data-ts="${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(timeValue)}">
         <div class="ktalk-msg-header">
           <span class="ktalk-msg-speaker">${speakerDisplay}</span>
           <span class="ktalk-msg-time">${line.time}</span>
@@ -2114,6 +2377,200 @@ function setupSummaryMenu(container) {
   }
 
   updateSummaryMenu();
+}
+
+function getAnchorModelOptions() {
+  return [
+    { value: 'gemini-3-pro-preview', label: '3.0 Pro' },
+    { value: 'gemini-3-flash-preview', label: '3.0 Flash' },
+    { value: 'gemini-2.5-pro', label: '2.5 Pro' },
+    { value: 'gemini-2.5-flash', label: '2.5 Flash' },
+    { value: 'gemini-2.5-flash-lite', label: '2.5 Flash Lite' },
+    { value: 'gemini-2.0-flash', label: '2.0 Flash' },
+    { value: 'gemini-2.0-flash-lite', label: '2.0 Lite' }
+  ].map(option => `<option value="${option.value}">${option.label}</option>`).join('');
+}
+
+function ensureContextContent() {
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement) {
+    createContextContent();
+  }
+}
+
+function setContextLoading() {
+  ensureContextContent();
+  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-body');
+  if (!body) return;
+  body.className = 'ktalk-context-body loading';
+  body.innerHTML = `
+      <div class="ktalk-summary-spinner"></div>
+      <span>Собираю контекст...</span>
+    `;
+  const refreshBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-refresh-btn');
+  if (refreshBtn) refreshBtn.disabled = true;
+}
+
+function updateAnchorContent(payload, approximate = false) {
+  ensureContextContent();
+
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentAnchorData = payload;
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorLastUpdated = Date.now();
+  const data = payload?.data || payload || {};
+  const tone = ['neutral', 'calm', 'heated'].includes(data.topic_tone) ? data.topic_tone : 'neutral';
+
+  const topic = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(data.current_topic || 'No recent context.');
+  const bullets = Array.isArray(data.summary_bullets) ? data.summary_bullets : [];
+  const mention = data.user_mentioned === true;
+  const mentionText = mention
+    ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(data.mention_context || 'Упоминание без деталей.')
+    : 'Ваше имя не упоминалось.';
+  const mentionTs = data.mention_ts_display ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(data.mention_ts_display) : '';
+
+  const bulletsHtml = bullets.length > 0
+    ? bullets.map((bullet) => {
+      const text = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(bullet.text || '');
+      const ts = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(bullet.ts_display || '');
+      const tsButton = ts
+        ? `<button class="ktalk-anchor-ts-btn" data-ts="${ts}">${ts}</button>`
+        : '<span class="ktalk-anchor-ts-btn empty">--:--:--</span>';
+      return `<li class="ktalk-anchor-bullet">${tsButton}<span class="ktalk-anchor-bullet-text">${text}</span></li>`;
+    }).join('')
+    : '<li class="ktalk-anchor-bullet"><span class="ktalk-anchor-bullet-text">Нет свежих пунктов.</span></li>';
+
+  const mentionHtml = mention
+    ? `<div class="ktalk-anchor-mention alert">Упомянули вас ${mentionTs ? `<button class="ktalk-anchor-ts-btn" data-ts="${mentionTs}">${mentionTs}</button>` : ''}<span>${mentionText}</span></div>`
+    : `<div class="ktalk-anchor-mention ok">${mentionText}</div>`;
+
+  const noteHtml = approximate ? '<div class="ktalk-anchor-note">Ответ может быть приблизительным.</div>' : '';
+
+  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-body');
+  if (!body) return;
+  body.className = 'ktalk-context-body';
+  body.innerHTML = `
+      <div class="ktalk-anchor-section">
+        <div class="ktalk-anchor-section-title">Right now</div>
+        <div class="ktalk-anchor-topic">
+          <span class="ktalk-anchor-tone ${tone}">${tone}</span>
+          <span class="ktalk-anchor-topic-text">${topic}</span>
+        </div>
+      </div>
+      <div class="ktalk-anchor-section">
+        <div class="ktalk-anchor-section-title">Last minutes</div>
+        <ul class="ktalk-anchor-bullets">${bulletsHtml}</ul>
+      </div>
+      <div class="ktalk-anchor-section">
+        <div class="ktalk-anchor-section-title">Mentions</div>
+        ${mentionHtml}
+        ${noteHtml}
+      </div>
+    `;
+
+  body.querySelectorAll('.ktalk-anchor-ts-btn').forEach((btn) => {
+    if (btn.classList.contains('empty')) return;
+    btn.addEventListener('click', () => {
+      const ts = btn.getAttribute('data-ts');
+      if (ts) scrollToAnchorTimestamp(ts);
+    });
+  });
+}
+
+function updateAnchorError(message) {
+  ensureContextContent();
+  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-body');
+  if (!body) return;
+  body.className = 'ktalk-context-body';
+  body.innerHTML = `<div class="ktalk-summary-error">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(message || 'Не удалось получить контекст.')}</div>`;
+}
+
+function getLocalUserName() {
+  const participants = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipants || [];
+  const local = participants.find(p => p.isLocal && p.name);
+  if (local?.name) return local.name;
+
+  for (let idx = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length - 1; idx >= 0; idx -= 1) {
+    const line = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[idx];
+    if (line && line.is_local && line.speaker) return line.speaker;
+  }
+
+  return '';
+}
+
+function requestAnchor() {
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorRequestPending) return;
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) {
+    updateAnchorError('Нет транскрипта для анализа');
+    return;
+  }
+
+  meetingTitle = document.title || meetingTitle;
+
+  const windowMs = 4 * 60 * 1000;
+  const cutoff = Date.now() - windowMs;
+  const recentLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.filter(line => line.createdAt && line.createdAt >= cutoff);
+  const linesToSend = recentLines.length > 0 ? recentLines : _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-25);
+
+  if (linesToSend.length === 0) {
+    updateAnchorError('Нет данных для анализа');
+    return;
+  }
+
+  const transcriptText = linesToSend.map(line => {
+    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
+    return `[${line.time}] ${speaker}: ${line.text}`;
+  }).join('\n');
+
+  setContextLoading();
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorRequestPending = true;
+
+  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsMessage)({
+    type: 'anchor_request',
+    transcript: transcriptText,
+    lines_count: linesToSend.length,
+    window_seconds: Math.round(windowMs / 1000),
+    model: anchorModel,
+    user_name: getLocalUserName() || 'User',
+    meeting_title: meetingTitle
+  });
+}
+
+function scrollToAnchorTimestamp(ts) {
+  const container = document.querySelector('.ktalk-transcript-messages');
+  if (!container) return;
+
+  const escaped = window.CSS && CSS.escape ? CSS.escape(ts) : ts.replace(/"/g, '\\"');
+  const target = container.querySelector(`.ktalk-msg[data-ts="${escaped}"]`);
+  if (!target) return;
+
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target.classList.add('anchor-highlight');
+  setTimeout(() => target.classList.remove('anchor-highlight'), 1600);
+}
+
+function setupAnchorControls() {
+  if (anchorHotkeyBound) return;
+  anchorHotkeyBound = true;
+
+  document.addEventListener('keydown', (event) => {
+    if (!event.altKey || event.code !== 'KeyJ') return;
+    if (isEditableTarget(event.target)) return;
+    event.preventDefault();
+    activateContextTab();
+    requestAnchor();
+  });
+}
+
+function handleAnchorResponse(data) {
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorRequestPending = false;
+
+  const refreshBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-refresh-btn');
+  if (refreshBtn) refreshBtn.disabled = false;
+
+  if (data.error) {
+    updateAnchorError(data.error);
+    return;
+  }
+
+  updateAnchorContent(data.data || data, data.approximate);
 }
 
 function loadBioReadSettings() {
@@ -2681,6 +3138,8 @@ function connectWebSocket() {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleNewMeeting)(data);
         } else if (data.type === 'summarize_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleSummaryResponse)(data);
+        } else if (data.type === 'anchor_response') {
+          (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);
