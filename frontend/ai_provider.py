@@ -50,6 +50,40 @@ SUMMARY_PROMPT = """Проанализируй транскрипт рабоче
 {transcript}
 """
 
+ANCHOR_PROMPT = """Ты — помощник для быстрого восстановления контекста встречи.
+
+Участник: {user_name}
+(это один и тот же человек — имя может отличаться из-за разных источников записи)
+
+Вход: транскрипт последних минут. Формат строк:
+[HH:MM:SS] Speaker: text
+
+Твоя задача:
+1) current_topic: 1 короткая фраза, что обсуждают прямо сейчас.
+2) topic_tone: одно из "neutral" | "calm" | "heated".
+3) summary_bullets: 3 пункта (каждый до 10 слов) + ts_display из транскрипта.
+4) user_mentioned: true/false если обращались к участнику или назначали задачи.
+5) mention_context: короткий контекст (если user_mentioned=true).
+6) mention_ts_display: ts_display (если user_mentioned=true).
+
+Если данных недостаточно — не выдумывай, заполни безопасными значениями.
+
+Верни строго валидный JSON без markdown и комментариев:
+{{
+  "current_topic": "...",
+  "topic_tone": "neutral|calm|heated",
+  "summary_bullets": [
+    {{"text": "...", "ts_display": "HH:MM:SS"}}
+  ],
+  "user_mentioned": false,
+  "mention_context": "",
+  "mention_ts_display": ""
+}}
+
+Транскрипт:
+{transcript}
+"""
+
 
 class AIProvider(ABC):
     """Abstract base class for AI providers."""
@@ -334,6 +368,8 @@ def build_prompt(
         return INCREMENT_PROMPT.format(user_name=user_name, transcript=transcript)
     elif question == "summary":
         return SUMMARY_PROMPT.format(transcript=transcript)
+    elif question == "anchor":
+        return ANCHOR_PROMPT.format(user_name=user_name, transcript=transcript)
     elif question == "custom" and custom_prompt:
         return custom_prompt.format(user_name=user_name, transcript=transcript)
     else:

@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { injectStyles, addTranscriptTab, createTranscriptContent, watchTabChanges, updateWsIndicator } from './ui.js';
+import { injectStyles, addTranscriptTab, addContextTab, createTranscriptContent, createContextContent, watchTabChanges, updateWsIndicator } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
@@ -56,15 +56,17 @@ function tryAttachConference() {
 function setupUI() {
   injectStyles();
 
-  const tabAdded = addTranscriptTab();
-  if (tabAdded) {
+  const transcriptTabAdded = addTranscriptTab();
+  const contextTabAdded = addContextTab();
+  if (transcriptTabAdded || contextTabAdded) {
     createTranscriptContent();
+    createContextContent();
     watchTabChanges();
     updateWsIndicator(state.wsConnected);
   }
 
   ensureDebugPanel();
-  return tabAdded;
+  return transcriptTabAdded || contextTabAdded;
 }
 
 function subscribeToDominantSpeaker(conf) {
@@ -200,7 +202,7 @@ export function init() {
   setTimeout(connectWebSocket, 1000);
 
   setInterval(() => {
-    if (!document.querySelector('.ktalk-transcript-tab')) {
+    if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab')) {
       state.transcriptTabAdded = false;
       setupUI();
     }
@@ -208,6 +210,11 @@ export function init() {
       state.transcriptContentElement = null;
       state.originalChatContent = null;
       createTranscriptContent();
+    }
+    if (!document.querySelector('.ktalk-context-content')) {
+      state.contextContentElement = null;
+      state.originalChatContent = null;
+      createContextContent();
     }
     tryAttachConference();
     updateDebugPanel();

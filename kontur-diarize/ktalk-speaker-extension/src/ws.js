@@ -1,5 +1,5 @@
 import { state, constants } from './state.js';
-import { updateWsIndicator, handleTranscript, handleTranscriptHistory, handleNewMeeting, handleSummaryResponse } from './ui.js';
+import { updateWsIndicator, handleTranscript, handleTranscriptHistory, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
 import { getActiveSpeaker, sendParticipantsUpdate } from './speaker.js';
 import { sendWsSpeakerUpdate } from './ws_api.js';
 import { sendMeetingJoin, startMeetingCheck } from './meeting.js';
@@ -55,6 +55,8 @@ export function connectWebSocket() {
           handleNewMeeting(data);
         } else if (data.type === 'summarize_response') {
           handleSummaryResponse(data);
+        } else if (data.type === 'anchor_response') {
+          handleAnchorResponse(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);

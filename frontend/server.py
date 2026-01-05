@@ -10,7 +10,9 @@ FastAPI server providing:
 
 import asyncio
 import json
+import os
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -212,6 +214,399 @@ class LiveWatcher(FileSystemEventHandler):
             self.clients.discard(ws)
 
 
+# --- Helpers (WDIM / Cognitive Anchor) ---
+
+def _parse_iso_ts(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        if value.endswith("Z"):
+            try:
+                return datetime.fromisoformat(value[:-1] + "+00:00")
+            except ValueError:
+                return None
+    return None
+
+
+def _tail_lines(path: Path, max_lines: int, chunk_size: int = 8192) -> list[str]:
+    if max_lines <= 0 or not path.exists():
+        return []
+
+    lines: list[bytes] = []
+    buffer = b""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        position = f.tell()
+
+        while position > 0 and len(lines) < max_lines:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            f.seek(position)
+            buffer = f.read(read_size) + buffer
+
+            while len(lines) < max_lines:
+                idx = buffer.rfind(b"\n")
+                if idx == -1:
+                    break
+                line = buffer[idx + 1:]
+                buffer = buffer[:idx]
+                if line:
+                    lines.append(line)
+
+        if buffer and len(lines) < max_lines:
+            lines.append(buffer)
+
+    lines = [line.decode("utf-8", errors="ignore") for line in reversed(lines)]
+    return lines
+
+
+def _load_recent_segments(transcript_path: Path, max_lines: int) -> list[dict]:
+    segments = []
+    for line in _tail_lines(transcript_path, max_lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            segments.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return segments
+
+
+def _select_anchor_segments(meeting_id: str, window_seconds: int, max_segments: int) -> list[dict]:
+    transcript_path = MEETINGS_DIR / meeting_id / "transcript.jsonl"
+    if not transcript_path.exists():
+        return []
+
+    scan_limit = max(max_segments * 5, 200)
+    segments = _load_recent_segments(transcript_path, scan_limit)
+    if not segments:
+        return []
+
+    last_ts = _parse_iso_ts(segments[-1].get("ts"))
+    if last_ts:
+        cutoff = last_ts - timedelta(seconds=window_seconds)
+        windowed = []
+        for seg in segments:
+            ts = _parse_iso_ts(seg.get("ts"))
+            if ts and ts >= cutoff:
+                windowed.append(seg)
+        if windowed:
+            segments = windowed
+
+    if len(segments) > max_segments:
+        segments = segments[-max_segments:]
+
+    return segments
+
+
+def _truncate_text(text: str, max_len: int) -> str:
+    clean = " ".join(text.split())
+    if len(clean) <= max_len:
+        return clean
+    return clean[: max_len - 3].rstrip() + "..."
+
+
+def _segments_to_transcript(segments: list[dict]) -> str:
+    lines = []
+    for seg in segments:
+        if seg.get("event_type"):
+            continue
+        ts_display = seg.get("ts_display") or ""
+        speaker = seg.get("speaker") or ""
+        text = seg.get("text") or ""
+        if not text:
+            continue
+        lines.append(f"[{ts_display}] {speaker}: {text}")
+
+    return "\n".join(lines)
+
+
+def _build_anchor_transcript(segments: list[dict], max_chars: int = 12000) -> str:
+    transcript = _segments_to_transcript(segments)
+    if len(transcript) > max_chars:
+        transcript = transcript[-max_chars:]
+        transcript = "...(начало обрезано)...\n" + transcript
+    return transcript
+
+
+def _build_ai_transcript(segments: list[dict], max_chars: int) -> str:
+    transcript = _segments_to_transcript(segments)
+    if len(transcript) > max_chars:
+        transcript = transcript[-max_chars:]
+        transcript = "...(truncated)...\n" + transcript
+    return transcript
+
+
+def _detect_user_mention(segments: list[dict], local_names: list[str]) -> tuple[bool, str, str]:
+    names = [name.strip().lower() for name in local_names if name and name.strip()]
+    if not names:
+        return False, "", ""
+
+    for seg in reversed(segments):
+        text = seg.get("text", "")
+        text_lower = text.lower()
+        for name in names:
+            if name and name in text_lower:
+                return True, _truncate_text(text, 160), seg.get("ts_display", "")
+
+    return False, "", ""
+
+
+def _fallback_bullets(segments: list[dict]) -> list[dict]:
+    bullets = []
+    for seg in segments[-3:]:
+        text = seg.get("text") or ""
+        if not text:
+            continue
+        bullets.append({
+            "text": _truncate_text(text, 120),
+            "ts_display": seg.get("ts_display", "")
+        })
+    return bullets
+
+
+def _fallback_anchor_payload(segments: list[dict], local_names: list[str]) -> dict:
+    current_text = segments[-1].get("text", "") if segments else ""
+    current_topic = _truncate_text(current_text, 140) if current_text else "No recent transcript."
+    bullets = _fallback_bullets(segments)
+    mentioned, mention_context, mention_ts = _detect_user_mention(segments, local_names)
+
+    return {
+        "current_topic": current_topic,
+        "topic_tone": "neutral",
+        "summary_bullets": bullets if bullets else [{"text": "No recent transcript.", "ts_display": ""}],
+        "user_mentioned": mentioned,
+        "mention_context": mention_context if mentioned else "",
+        "mention_ts_display": mention_ts if mentioned else ""
+    }
+
+
+def _extract_json_payload(text: str) -> Optional[dict]:
+    if not text:
+        return None
+    cleaned = text.strip()
+
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        cleaned = cleaned[start:end + 1]
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
+
+def _normalize_anchor_payload(
+    payload: dict,
+    segments: list[dict],
+    local_names: list[str]
+) -> tuple[dict, bool]:
+    approximate = False
+    if not isinstance(payload, dict):
+        return _fallback_anchor_payload(segments, local_names), True
+
+    current_topic = str(payload.get("current_topic") or "").strip()
+    if not current_topic:
+        approximate = True
+        current_topic = _fallback_anchor_payload(segments, local_names)["current_topic"]
+
+    topic_tone = str(payload.get("topic_tone") or "").strip().lower()
+    if topic_tone not in {"neutral", "calm", "heated"}:
+        topic_tone = "neutral"
+        approximate = True
+
+    raw_bullets = payload.get("summary_bullets") or []
+    normalized_bullets = []
+    for item in raw_bullets:
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            ts_display = str(item.get("ts_display") or "").strip()
+        else:
+            text = str(item).strip()
+            ts_display = ""
+        if text:
+            normalized_bullets.append({"text": text, "ts_display": ts_display})
+
+    if not normalized_bullets:
+        approximate = True
+        normalized_bullets = _fallback_bullets(segments)
+
+    if len(normalized_bullets) > 3:
+        normalized_bullets = normalized_bullets[:3]
+
+    user_mentioned = payload.get("user_mentioned")
+    mention_context = str(payload.get("mention_context") or "").strip()
+    mention_ts_display = str(payload.get("mention_ts_display") or "").strip()
+
+    if not isinstance(user_mentioned, bool):
+        approximate = True
+        user_mentioned, mention_context, mention_ts_display = _detect_user_mention(
+            segments, local_names
+        )
+    elif user_mentioned and not mention_context:
+        approximate = True
+        _, fallback_context, fallback_ts = _detect_user_mention(segments, local_names)
+        mention_context = mention_context or fallback_context
+        mention_ts_display = mention_ts_display or fallback_ts
+
+    if not user_mentioned:
+        mention_context = ""
+        mention_ts_display = ""
+
+    return {
+        "current_topic": current_topic,
+        "topic_tone": topic_tone,
+        "summary_bullets": normalized_bullets,
+        "user_mentioned": user_mentioned,
+        "mention_context": mention_context,
+        "mention_ts_display": mention_ts_display
+    }, approximate
+
+
+# --- Debug AI Context ---
+
+debug_ai_context: dict[str, object] = {
+    "segments": [],
+    "user_name": None,
+    "meeting_id": None,
+    "meeting_title": None,
+    "set_at": None
+}
+
+
+def _local_participant_names(meta: dict) -> list[str]:
+    participants = meta.get("participants", {})
+    return [p.get("name", "") for p in participants.values() if p.get("is_local")]
+
+
+def _find_meeting_by_title(title: str) -> Optional[str]:
+    if not title:
+        return None
+
+    title_lower = title.lower()
+    best_id = None
+    best_created = None
+    fallback_id = None
+    fallback_created = None
+
+    for meeting_dir in MEETINGS_DIR.iterdir():
+        if not meeting_dir.is_dir():
+            continue
+        meta_path = meeting_dir / "meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+
+        meeting_title = (meta.get("title") or "").strip()
+        if not meeting_title:
+            continue
+
+        created = _parse_iso_ts(meta.get("created_at"))
+
+        if meeting_title.lower() == title_lower:
+            if best_created is None or (created and created > best_created):
+                best_created = created
+                best_id = meta.get("id")
+        elif title_lower in meeting_title.lower():
+            if fallback_created is None or (created and created > fallback_created):
+                fallback_created = created
+                fallback_id = meta.get("id")
+
+    return best_id or fallback_id
+
+
+def _slice_segments_by_id(
+    segments: list[dict],
+    from_id: Optional[int],
+    to_id: Optional[int],
+    max_segments: int
+) -> list[dict]:
+    if not segments:
+        return []
+    filtered = []
+    for seg in segments:
+        seg_id = seg.get("id")
+        if seg_id is None:
+            continue
+        if from_id is not None and seg_id < from_id:
+            continue
+        if to_id is not None and seg_id > to_id:
+            continue
+        filtered.append(seg)
+
+    if len(filtered) > max_segments:
+        filtered = filtered[:max_segments]
+    return filtered
+
+
+def _slice_segments_by_ts_display(
+    segments: list[dict],
+    start_ts_display: str,
+    max_segments: int
+) -> list[dict]:
+    if not segments or not start_ts_display:
+        return []
+    start_index = None
+    for idx, seg in enumerate(segments):
+        if seg.get("ts_display") == start_ts_display:
+            start_index = idx
+            break
+    if start_index is None:
+        return []
+    return segments[start_index:start_index + max_segments]
+
+
+def _get_debug_segments() -> list[dict]:
+    segments = debug_ai_context.get("segments")
+    if isinstance(segments, list) and segments:
+        return segments
+    return []
+
+
+def _resolve_ai_context(
+    meeting_id: Optional[str],
+    storage: MeetingStorage,
+    debug: bool
+) -> tuple[list[dict], str, Optional[str]]:
+    if debug:
+        debug_segments = _get_debug_segments()
+        if debug_segments:
+            user_name = debug_ai_context.get("user_name")
+            if not isinstance(user_name, str) or not user_name.strip():
+                user_name = "User"
+            return debug_segments, user_name, debug_ai_context.get("meeting_id") or meeting_id
+
+    if not meeting_id:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    meeting = storage.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    local_names = _local_participant_names(meeting.get("meta", {}))
+    local_participant = ", ".join(local_names) if local_names else "User"
+    segments = meeting.get("segments", [])
+    if not segments:
+        raise HTTPException(status_code=400, detail="Meeting has no transcript")
+
+    return segments, local_participant, meeting_id
+
+
 # Global watchers
 transcript_watcher = TranscriptWatcher()
 live_watcher = LiveWatcher()
@@ -401,11 +796,248 @@ async def get_debug_status():
     })
 
 
+# --- Debug AI Context ---
+
+class DebugAiContextRequest(BaseModel):
+    meeting_id: Optional[str] = None
+    meeting_title: Optional[str] = None
+    from_id: Optional[int] = None
+    to_id: Optional[int] = None
+    start_ts_display: Optional[str] = None
+    window_seconds: int = 240
+    max_segments: int = 35
+    segments: Optional[list[dict]] = None
+    user_name: Optional[str] = None
+
+
+class DebugAiContextResponse(BaseModel):
+    active: bool
+    meeting_id: Optional[str]
+    meeting_title: Optional[str]
+    segment_count: int
+    user_name: Optional[str]
+    set_at: Optional[str]
+    segments: Optional[list[dict]] = None
+
+
+@app.get("/api/debug/ai-context")
+async def get_debug_ai_context(include_segments: bool = False, limit: int = 50):
+    segments = _get_debug_segments()
+    payload = {
+        "active": bool(segments),
+        "meeting_id": debug_ai_context.get("meeting_id"),
+        "meeting_title": debug_ai_context.get("meeting_title"),
+        "segment_count": len(segments),
+        "user_name": debug_ai_context.get("user_name"),
+        "set_at": debug_ai_context.get("set_at")
+    }
+
+    if include_segments and segments:
+        capped = segments[:max(1, min(limit, 200))]
+        payload["segments"] = capped
+
+    return JSONResponse(content=payload)
+
+
+@app.post("/api/debug/ai-context")
+async def set_debug_ai_context(request: DebugAiContextRequest):
+    storage = get_storage()
+
+    max_segments = max(5, min(request.max_segments, 200))
+    window_seconds = max(30, min(request.window_seconds, 900))
+
+    meeting_id = request.meeting_id
+    meeting_title = request.meeting_title
+    segments = []
+    local_names: list[str] = []
+
+    if request.segments:
+        segments = request.segments[:max_segments]
+    else:
+        if not meeting_id and request.meeting_title:
+            meeting_id = _find_meeting_by_title(request.meeting_title)
+
+        if not meeting_id:
+            raise HTTPException(status_code=400, detail="meeting_id or segments required")
+
+        meeting = storage.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        meeting_title = meeting.get("meta", {}).get("title")
+        local_names = _local_participant_names(meeting.get("meta", {}))
+        meeting_segments = meeting.get("segments", [])
+
+        if request.from_id is not None or request.to_id is not None:
+            segments = _slice_segments_by_id(
+                meeting_segments,
+                request.from_id,
+                request.to_id,
+                max_segments
+            )
+        elif request.start_ts_display:
+            segments = _slice_segments_by_ts_display(
+                meeting_segments,
+                request.start_ts_display,
+                max_segments
+            )
+        else:
+            segments = _select_anchor_segments(meeting_id, window_seconds, max_segments)
+
+    if not segments:
+        raise HTTPException(status_code=400, detail="No segments selected for debug context")
+
+    user_name = request.user_name
+    if not user_name:
+        if local_names:
+            user_name = ", ".join([name for name in local_names if name])
+        else:
+            user_name = debug_ai_context.get("user_name") or "User"
+
+    debug_ai_context["segments"] = segments
+    debug_ai_context["user_name"] = user_name
+    debug_ai_context["meeting_id"] = meeting_id
+    debug_ai_context["meeting_title"] = meeting_title
+    debug_ai_context["set_at"] = datetime.now().isoformat()
+
+    return JSONResponse(content={
+        "active": True,
+        "meeting_id": meeting_id,
+        "meeting_title": meeting_title,
+        "segment_count": len(segments),
+        "user_name": user_name,
+        "set_at": debug_ai_context.get("set_at")
+    })
+
+
+@app.delete("/api/debug/ai-context")
+async def clear_debug_ai_context():
+    debug_ai_context["segments"] = []
+    debug_ai_context["user_name"] = None
+    debug_ai_context["meeting_id"] = None
+    debug_ai_context["meeting_title"] = None
+    debug_ai_context["set_at"] = None
+    return JSONResponse(content={"active": False})
+
+
 # --- AI Analysis ---
+
+class AnchorRequest(BaseModel):
+    window_seconds: int = 240
+    max_segments: int = 35
+    meeting_id: Optional[str] = None
+    debug: bool = False
+
+
+class AnchorBullet(BaseModel):
+    text: str
+    ts_display: str = ""
+
+
+class AnchorData(BaseModel):
+    current_topic: str
+    topic_tone: str
+    summary_bullets: list[AnchorBullet]
+    user_mentioned: bool
+    mention_context: str = ""
+    mention_ts_display: str = ""
+
+
+class AnchorResponse(BaseModel):
+    meeting_id: str
+    provider: str
+    approximate: bool
+    data: AnchorData
+
+
+@app.post("/api/live/anchor")
+async def live_anchor(request: AnchorRequest):
+    """Return a short WDIM context snapshot for the active meeting."""
+    try:
+        storage = get_storage()
+        meeting_id = request.meeting_id
+        segments: list[dict] = []
+        local_names: list[str] = []
+        local_participant: Optional[str] = None
+
+        if request.debug:
+            debug_segments = _get_debug_segments()
+            if debug_segments:
+                segments = debug_segments
+                meeting_id = debug_ai_context.get("meeting_id") or meeting_id
+                debug_user_name = debug_ai_context.get("user_name")
+                if isinstance(debug_user_name, str) and debug_user_name.strip():
+                    local_participant = debug_user_name.strip()
+                    local_names = [name.strip() for name in debug_user_name.split(",") if name.strip()]
+
+        if not segments:
+            if not meeting_id:
+                active = storage.list_active_meetings()
+                meeting_id = active[0]["id"] if active else None
+
+            if not meeting_id:
+                raise HTTPException(status_code=404, detail="No active meeting")
+
+            meeting = storage.get_meeting(meeting_id)
+            if not meeting:
+                raise HTTPException(status_code=404, detail="Meeting not found")
+
+            local_names = _local_participant_names(meeting.get("meta", {}))
+            local_participant = ", ".join(local_names) if local_names else "User"
+
+            window_seconds = max(30, min(request.window_seconds, 600))
+            max_segments = max(10, min(request.max_segments, 120))
+
+            segments = _select_anchor_segments(meeting_id, window_seconds, max_segments)
+            if not segments:
+                raise HTTPException(status_code=400, detail="Meeting has no transcript")
+
+        if not local_participant:
+            local_participant = "User"
+
+        transcript = _build_anchor_transcript(segments)
+        prompt = build_prompt(
+            question="anchor",
+            transcript=transcript,
+            user_name=local_participant,
+            custom_prompt=None
+        )
+
+        provider = get_provider()
+        approximate = False
+
+        try:
+            answer = await provider.complete(prompt)
+            payload = _extract_json_payload(answer)
+            if payload is None:
+                approximate = True
+                payload = _fallback_anchor_payload(segments, local_names)
+
+            normalized, normalized_approx = _normalize_anchor_payload(
+                payload, segments, local_names
+            )
+            approximate = approximate or normalized_approx
+        except Exception:
+            normalized = _fallback_anchor_payload(segments, local_names)
+            approximate = True
+
+        return AnchorResponse(
+            meeting_id=meeting_id or "debug",
+            provider=provider.name,
+            approximate=approximate,
+            data=normalized
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 class AnalyzeRequest(BaseModel):
     question: str = "increment"  # "increment" | "summary" | "custom"
     custom_prompt: Optional[str] = None
+    debug: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -421,32 +1053,14 @@ class MultiAnalyzeResponse(BaseModel):
 async def analyze_meeting(meeting_id: str, request: AnalyzeRequest):
     """Analyze meeting transcript with AI."""
     try:
-        # 1. Load meeting
+        # 1. Resolve context
         storage = get_storage()
-        meeting = storage.get_meeting(meeting_id)
-        if not meeting:
-            raise HTTPException(status_code=404, detail="Meeting not found")
-
-        # 2. Get local participant names (may have multiple: mic name + KTalk name)
-        participants = meeting["meta"].get("participants", {})
-        local_names = [p["name"] for p in participants.values() if p.get("is_local")]
-        local_participant = ", ".join(local_names) if local_names else "User"
-
-        # 3. Build transcript text
-        segments = meeting.get("segments", [])
-        if not segments:
-            raise HTTPException(status_code=400, detail="Meeting has no transcript")
-
-        transcript = "\n".join(
-            f"[{s['ts_display']}] {s['speaker']}: {s['text']}"
-            for s in segments
+        segments, local_participant, _ = _resolve_ai_context(
+            meeting_id, storage, request.debug
         )
 
-        # Limit transcript length (rough estimate: 4 chars per token)
-        max_chars = 100000  # ~25k tokens
-        if len(transcript) > max_chars:
-            transcript = transcript[-max_chars:]
-            transcript = "...(начало обрезано)...\n" + transcript
+        # 2. Build transcript text
+        transcript = _build_ai_transcript(segments, max_chars=100000)
 
         # 4. Build prompt
         prompt = build_prompt(
@@ -472,32 +1086,14 @@ async def analyze_meeting(meeting_id: str, request: AnalyzeRequest):
 async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
     """Analyze meeting transcript with multiple AI providers in parallel."""
     try:
-        # 1. Load meeting
+        # 1. Resolve context
         storage = get_storage()
-        meeting = storage.get_meeting(meeting_id)
-        if not meeting:
-            raise HTTPException(status_code=404, detail="Meeting not found")
-
-        # 2. Get local participant names
-        participants = meeting["meta"].get("participants", {})
-        local_names = [p["name"] for p in participants.values() if p.get("is_local")]
-        local_participant = ", ".join(local_names) if local_names else "User"
-
-        # 3. Build transcript text
-        segments = meeting.get("segments", [])
-        if not segments:
-            raise HTTPException(status_code=400, detail="Meeting has no transcript")
-
-        transcript = "\n".join(
-            f"[{s['ts_display']}] {s['speaker']}: {s['text']}"
-            for s in segments
+        segments, local_participant, _ = _resolve_ai_context(
+            meeting_id, storage, request.debug
         )
 
-        # Limit transcript length
-        max_chars = 100000
-        if len(transcript) > max_chars:
-            transcript = transcript[-max_chars:]
-            transcript = "...(начало обрезано)...\n" + transcript
+        # 2. Build transcript text
+        transcript = _build_ai_transcript(segments, max_chars=100000)
 
         # 4. Build prompt
         prompt = build_prompt(
@@ -529,39 +1125,27 @@ async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
 
 
 @app.get("/api/meetings/{meeting_id}/analyze-stream")
-async def analyze_meeting_stream(meeting_id: str, question: str = "increment"):
+async def analyze_meeting_stream(
+    meeting_id: str,
+    question: str = "increment",
+    debug: bool = False
+):
     """Stream AI analysis from multiple providers using SSE."""
 
     async def generate():
         try:
-            # 1. Load meeting
+            # 1. Resolve context
             storage = get_storage()
-            meeting = storage.get_meeting(meeting_id)
-            if not meeting:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Meeting not found'})}\n\n"
+            try:
+                segments, local_participant, _ = _resolve_ai_context(
+                    meeting_id, storage, debug
+                )
+            except HTTPException as exc:
+                yield f"data: {json.dumps({'type': 'error', 'message': exc.detail})}\n\n"
                 return
 
-            # 2. Get local participant names
-            participants = meeting["meta"].get("participants", {})
-            local_names = [p["name"] for p in participants.values() if p.get("is_local")]
-            local_participant = ", ".join(local_names) if local_names else "User"
-
-            # 3. Build transcript text
-            segments = meeting.get("segments", [])
-            if not segments:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Meeting has no transcript'})}\n\n"
-                return
-
-            transcript = "\n".join(
-                f"[{s['ts_display']}] {s['speaker']}: {s['text']}"
-                for s in segments
-            )
-
-            # Limit transcript length
-            max_chars = 100000
-            if len(transcript) > max_chars:
-                transcript = transcript[-max_chars:]
-                transcript = "...(начало обрезано)...\n" + transcript
+            # 2. Build transcript text
+            transcript = _build_ai_transcript(segments, max_chars=100000)
 
             # 4. Build prompt
             prompt = build_prompt(
