@@ -785,6 +785,41 @@ function copyLiveToClipboard() {
     });
 }
 
+function downloadLiveMarkdown() {
+    const segments = views.live.segments;
+    if (!segments || segments.length === 0) return;
+
+    const meeting = views.live.currentMeeting;
+    const title = meeting?.title || 'Live Transcription';
+    const dateStr = new Date().toLocaleDateString('ru-RU', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+    });
+
+    let md = `# ${title}\n\n`;
+    md += `**Date:** ${dateStr}\n\n`;
+    md += `---\n\n`;
+
+    const grouped = views.meeting.groupSegments(segments);
+    for (const group of grouped) {
+        if (group.event_type) {
+            md += `*[${group.ts_display}] ${group.text}*\n\n`;
+        } else {
+            md += `**${group.speaker}** *[${group.ts_display}]*: ${group.text}\n\n`;
+        }
+    }
+
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const filename = meeting?.id || `live-${Date.now()}`;
+    a.download = `${filename}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
 function exportMarkdown() {
     const meeting = views.meeting;
     if (!meeting.meta || !meeting.segments) return;
