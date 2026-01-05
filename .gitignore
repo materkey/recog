@@ -27,6 +27,7 @@ venv-gigaam
 
 # Node
 node_modules/
+kontur-diarize/ktalk-speaker-extension/injected.js
 
 # Service logs
 logs/
