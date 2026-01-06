@@ -171,6 +171,51 @@ class SpeakerDatabase:
 
         return None
 
+    def delete_speaker(self, speaker_id: str) -> bool:
+        """Удаляет спикера полностью."""
+        if speaker_id not in self.speakers:
+            return False
+        del self.speakers[speaker_id]
+        return True
+
+    def rename_speaker(self, speaker_id: str, new_display_name: str) -> bool:
+        """Переименовывает спикера."""
+        if speaker_id not in self.speakers:
+            return False
+        self.speakers[speaker_id].display_name = new_display_name
+        return True
+
+    def delete_embedding(self, speaker_id: str, index: int) -> bool:
+        """Удаляет отдельный embedding у спикера."""
+        if speaker_id not in self.speakers:
+            return False
+        speaker = self.speakers[speaker_id]
+        if index < 0 or index >= len(speaker.embeddings):
+            return False
+        speaker.embeddings.pop(index)
+        return True
+
+    def get_all_speakers(self) -> List[dict]:
+        """Возвращает список всех спикеров с краткой информацией."""
+        result = []
+        for speaker_id, info in self.speakers.items():
+            embeddings_info = []
+            for i, emb in enumerate(info.embeddings):
+                embeddings_info.append({
+                    "index": i,
+                    "source_file": emb.source_file,
+                    "start_time": emb.start_time,
+                    "end_time": emb.end_time,
+                    "transcript": emb.transcript[:100] + "..." if len(emb.transcript) > 100 else emb.transcript
+                })
+            result.append({
+                "id": speaker_id,
+                "display_name": info.display_name,
+                "embedding_count": len(info.embeddings),
+                "embeddings": embeddings_info
+            })
+        return result
+
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
         """Вычисляет косинусное сходство между векторами."""
