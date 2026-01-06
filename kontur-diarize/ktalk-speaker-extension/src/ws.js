@@ -1,5 +1,6 @@
 import { state, constants } from './state.js';
 import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
+import { handleVas3kSummaryResponse } from './ui-vas3k.js';
 import { getActiveSpeaker, sendParticipantsUpdate } from './speaker.js';
 import { sendWsSpeakerUpdate } from './ws_api.js';
 import { sendMeetingJoin, startMeetingCheck } from './meeting.js';
@@ -66,6 +67,7 @@ export function connectWebSocket() {
           handleNewMeeting(data);
         } else if (data.type === 'summarize_response') {
           handleSummaryResponse(data);
+          handleVas3kSummaryResponse(data);
         } else if (data.type === 'anchor_response') {
           handleAnchorResponse(data);
         }

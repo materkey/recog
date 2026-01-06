@@ -5,7 +5,7 @@ import { sendWsMessage } from './ws_api.js';
 import { getPlatform, isJitsiPlatform } from './platforms/index.js';
 import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine } from './ui-vas3k.js';
 
-let selectedModel = localStorage.getItem('ktalk-ai-model') || 'gemini-2.5-flash';
+let selectedModel = localStorage.getItem('ktalk-ai-model') || 'codex';
 let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'gemini-3-pro-preview';
 let meetingTitle = document.title || '';
 let bioReadHotkeyBound = false;
