@@ -1563,24 +1563,33 @@ async def get_segment_audio(
 
     # Calculate segment duration (default 3 seconds, but extend for continuations)
     segment_duration_ms = 3000
+    default_chunk_duration = 3000  # Typical chunk duration
 
     # Look ahead for continuations to extend duration
     extended_end = segment_index + 1
+    last_valid_offset = audio_offset_ms
     while extended_end < len(segments):
         next_seg = segments[extended_end]
         if next_seg.get("cont") and next_seg.get("speaker_id") == segment.get("speaker_id"):
+            # Track last valid offset for fallback
+            seg_offset = next_seg.get("audio_offset_ms")
+            if seg_offset is not None:
+                last_valid_offset = seg_offset
             extended_end += 1
         else:
             break
 
-    # Calculate total duration based on next segment's offset or default
+    # Calculate total duration based on next segment's offset
     if extended_end < len(segments):
         next_offset = segments[extended_end].get("audio_offset_ms")
         if next_offset is not None:
             segment_duration_ms = next_offset - audio_offset_ms
+        else:
+            # Next segment has no offset (e.g., system event) - use last valid + default
+            segment_duration_ms = (last_valid_offset - audio_offset_ms) + default_chunk_duration
     else:
-        # Last segment - use default duration
-        segment_duration_ms = 3000
+        # Last segment - use last valid offset + default
+        segment_duration_ms = (last_valid_offset - audio_offset_ms) + default_chunk_duration
 
     # Ensure minimum and maximum duration
     segment_duration_ms = max(1000, min(segment_duration_ms, 30000))
