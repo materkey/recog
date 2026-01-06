@@ -1006,7 +1006,7 @@ const constants = {
   MAX_HISTORY: 100,
   SPEAKING_THRESHOLD_MS: 500,
   MAX_TRANSCRIPT_LINES: 100,
-  WS_URL: 'ws://localhost:8765'
+  WS_URL: 'ws://localhost:8766'
 };
 
 const state = {
