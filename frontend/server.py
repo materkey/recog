@@ -1491,6 +1491,136 @@ async def delete_speaker(speaker_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/meetings/{meeting_id}/audio/{segment_index}")
+async def get_segment_audio(
+    meeting_id: str,
+    segment_index: int,
+    track: Optional[str] = None  # "mic", "system", or None for auto
+):
+    """
+    Get audio slice for a specific transcript segment.
+
+    Auto-selects track based on speaker (local → mic, remote → system)
+    unless explicitly specified.
+    """
+    import subprocess
+    import tempfile
+
+    storage = get_storage()
+    meeting = storage.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    meta = meeting.get("meta", {})
+    segments = meeting.get("segments", [])
+    meeting_path = MEETINGS_DIR / meeting_id
+
+    if segment_index < 0 or segment_index >= len(segments):
+        raise HTTPException(status_code=400, detail="Invalid segment index")
+
+    segment = segments[segment_index]
+
+    # Check if segment has audio offset
+    audio_offset_ms = segment.get("audio_offset_ms")
+    if audio_offset_ms is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Segment has no audio data (recorded before audio feature)"
+        )
+
+    # Auto-select track based on speaker if not specified
+    if track is None:
+        is_local = segment.get("is_local", False)
+        track = "mic" if is_local else "system"
+
+    # Get audio file path - check meta first, then look in folder
+    audio_path = meta.get(f"audio_{track}_path")
+    if not audio_path or not Path(audio_path).exists():
+        # Check for audio file directly in meeting folder
+        folder_audio = meeting_path / f"audio_{track}.wav"
+        if folder_audio.exists():
+            audio_path = str(folder_audio)
+        else:
+            # Fallback to other track
+            fallback_track = "system" if track == "mic" else "mic"
+            audio_path = meta.get(f"audio_{fallback_track}_path")
+            if not audio_path or not Path(audio_path).exists():
+                folder_audio = meeting_path / f"audio_{fallback_track}.wav"
+                if folder_audio.exists():
+                    audio_path = str(folder_audio)
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="No audio file available for this meeting"
+                    )
+
+    audio_path = Path(audio_path)
+    if not audio_path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="Audio file not found (may have been cleaned up)"
+        )
+
+    # Calculate segment duration (default 3 seconds, but extend for continuations)
+    segment_duration_ms = 3000
+
+    # Look ahead for continuations to extend duration
+    extended_end = segment_index + 1
+    while extended_end < len(segments):
+        next_seg = segments[extended_end]
+        if next_seg.get("cont") and next_seg.get("speaker_id") == segment.get("speaker_id"):
+            extended_end += 1
+        else:
+            break
+
+    # Calculate total duration based on next segment's offset or default
+    if extended_end < len(segments):
+        next_offset = segments[extended_end].get("audio_offset_ms")
+        if next_offset is not None:
+            segment_duration_ms = next_offset - audio_offset_ms
+    else:
+        # Last segment - use default duration
+        segment_duration_ms = 3000
+
+    # Ensure minimum and maximum duration
+    segment_duration_ms = max(1000, min(segment_duration_ms, 30000))
+
+    # Extract audio slice using ffmpeg
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        result = subprocess.run([
+            "/opt/homebrew/bin/ffmpeg", "-y",
+            "-i", str(audio_path),
+            "-ss", str(audio_offset_ms / 1000),
+            "-t", str(segment_duration_ms / 1000),
+            "-ar", "16000",
+            "-ac", "1",
+            tmp_path
+        ], capture_output=True)
+
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Audio extraction failed: {result.stderr.decode()[:200]}"
+            )
+
+        # Read the extracted audio
+        audio_data = Path(tmp_path).read_bytes()
+
+        return StreamingResponse(
+            iter([audio_data]),
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": f'inline; filename="segment_{segment_index}.wav"',
+                "Content-Length": str(len(audio_data))
+            }
+        )
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
 @app.delete("/api/speakers/{speaker_id}/embeddings/{index}")
 async def delete_embedding(speaker_id: str, index: int):
     """Delete a single embedding from a speaker."""

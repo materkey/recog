@@ -524,6 +524,16 @@ const views = {
                     </label>
                 ` : '';
 
+                // Play button for segments with audio (only first segment in group)
+                const firstSegmentIdx = group.segmentIndices ? group.segmentIndices[0] : null;
+                const playButton = hasAudio && !this.enrollMode && firstSegmentIdx !== null ? `
+                    <button class="btn-play-segment" onclick="playSegmentAudio(${firstSegmentIdx}, this)" title="Play audio">
+                        <svg class="play-icon" viewBox="0 0 24 24" width="16" height="16">
+                            <polygon points="5,3 19,12 5,21" fill="currentColor"/>
+                        </svg>
+                    </button>
+                ` : '';
+
                 return `
                     <div class="transcript-segment ${speakerClass} ${isSelected ? 'segment-selected' : ''}"
                          data-segment-indices="${segmentIndices}">
@@ -531,6 +541,7 @@ const views = {
                         <div class="segment-content">
                             <div class="segment-header">
                                 <span class="segment-speaker">${escapeHtml(group.speaker)}</span>
+                                ${playButton}
                                 <span class="segment-time">${group.ts_display}</span>
                             </div>
                             <div class="segment-text">${text}</div>
@@ -887,6 +898,137 @@ const views = {
 
 function toggleFollowMode() {
     views.live.toggleFollow();
+}
+
+
+// --- Segment Audio Playback ---
+
+let currentAudio = null;
+let currentPlayButton = null;
+let currentAudioUrl = null;
+let audioLoadingFor = null;  // Track which segment is loading to prevent race conditions
+
+async function playSegmentAudio(segmentIndex, buttonEl) {
+    const meeting = views.meeting;
+    if (!meeting.id) return;
+
+    // If already loading for this button, ignore
+    if (audioLoadingFor === buttonEl) {
+        return;
+    }
+
+    // If already playing this segment, stop it
+    if (currentAudio && currentPlayButton === buttonEl) {
+        stopAudio();
+        return;
+    }
+
+    // Stop any currently playing audio
+    stopAudio();
+
+    // Mark as loading for this button
+    audioLoadingFor = buttonEl;
+
+    // Update button to loading state
+    buttonEl.classList.add('loading');
+    buttonEl.disabled = true;
+
+    try {
+        const audioApiUrl = `/api/meetings/${meeting.id}/audio/${segmentIndex}`;
+        const response = await fetch(audioApiUrl);
+
+        // Check if we're still supposed to be loading for this button
+        if (audioLoadingFor !== buttonEl) {
+            return;  // Another click happened, abort
+        }
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.detail || 'Failed to load audio');
+        }
+
+        const audioBlob = await response.blob();
+
+        // Check again after blob load
+        if (audioLoadingFor !== buttonEl) {
+            return;
+        }
+
+        const audioObjectUrl = URL.createObjectURL(audioBlob);
+
+        currentAudio = new Audio(audioObjectUrl);
+        currentAudioUrl = audioObjectUrl;
+        currentPlayButton = buttonEl;
+        audioLoadingFor = null;
+
+        // Update button to playing state
+        buttonEl.classList.remove('loading');
+        buttonEl.classList.add('playing');
+        buttonEl.innerHTML = `
+            <svg class="stop-icon" viewBox="0 0 24 24" width="16" height="16">
+                <rect x="6" y="6" width="12" height="12" fill="currentColor"/>
+            </svg>
+        `;
+        buttonEl.disabled = false;
+
+        // Highlight the segment
+        const segmentEl = buttonEl.closest('.transcript-segment');
+        if (segmentEl) {
+            segmentEl.classList.add('segment-playing');
+        }
+
+        currentAudio.onended = () => {
+            stopAudio();
+        };
+
+        currentAudio.onerror = () => {
+            stopAudio();
+            showNotification('Audio playback failed', 'error');
+        };
+
+        await currentAudio.play();
+
+    } catch (e) {
+        audioLoadingFor = null;
+        stopAudio();
+        buttonEl.classList.remove('loading');
+        buttonEl.disabled = false;
+        showNotification(`Audio error: ${e.message}`, 'error');
+    }
+}
+
+function stopAudio() {
+    audioLoadingFor = null;
+
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.onended = null;
+        currentAudio.onerror = null;
+        currentAudio = null;
+    }
+
+    // Revoke object URL to free memory
+    if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = null;
+    }
+
+    if (currentPlayButton) {
+        currentPlayButton.classList.remove('playing', 'loading');
+        currentPlayButton.innerHTML = `
+            <svg class="play-icon" viewBox="0 0 24 24" width="16" height="16">
+                <polygon points="5,3 19,12 5,21" fill="currentColor"/>
+            </svg>
+        `;
+
+        // Remove playing highlight from segment
+        const segmentEl = currentPlayButton.closest('.transcript-segment');
+        if (segmentEl) {
+            segmentEl.classList.remove('segment-playing');
+        }
+
+        currentPlayButton = null;
+    }
 }
 
 
