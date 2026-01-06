@@ -18,9 +18,18 @@ export class Vas3kAdapter {
   }
 
   /**
-   * Wait for conference to be available
+   * Check if user is in prejoin screen
    */
-  waitForConference(maxAttempts = 100) {
+  isInPrejoin() {
+    const state = window.APP?.store?.getState?.();
+    return state?.['features/prejoin']?.showPrejoin === true;
+  }
+
+  /**
+   * Wait for conference to be available
+   * Uses Redux store to detect when conference is joined
+   */
+  waitForConference(maxAttempts = 200) {
     return new Promise((resolve, reject) => {
       let attempts = 0;
 
@@ -28,17 +37,23 @@ export class Vas3kAdapter {
         attempts++;
         const room = this._getRoom();
 
-        if (room && window.APP?.conference?.isJoined?.()) {
-          console.log('[Vas3k Adapter] Conference found');
+        if (room) {
+          console.log('[Vas3k Adapter] Conference found via Redux store');
           this.room = room;
           resolve(room);
           return;
         }
 
+        // Log state for debugging
+        if (attempts % 20 === 0) {
+          const inPrejoin = this.isInPrejoin();
+          console.log(`[Vas3k Adapter] Waiting for conference... attempt ${attempts}, inPrejoin: ${inPrejoin}`);
+        }
+
         if (attempts < maxAttempts) {
           setTimeout(check, 500);
         } else {
-          console.log('[Vas3k Adapter] Conference not found');
+          console.log('[Vas3k Adapter] Conference not found after max attempts');
           reject(new Error('Conference not found'));
         }
       };
@@ -51,7 +66,7 @@ export class Vas3kAdapter {
    * Check if conference is currently available
    */
   isConferenceAvailable() {
-    return !!(this._getRoom() && window.APP?.conference?.isJoined?.());
+    return !!this._getRoom();
   }
 
   /**
@@ -376,6 +391,13 @@ export class Vas3kAdapter {
   // Private helper methods
 
   _getRoom() {
+    // Primary: Get from Redux store (more reliable)
+    const state = window.APP?.store?.getState?.();
+    const roomFromRedux = state?.['features/base/conference']?.conference;
+    if (roomFromRedux) {
+      return roomFromRedux;
+    }
+    // Fallback: Try APP.conference._room (older Jitsi versions)
     return window.APP?.conference?._room;
   }
 

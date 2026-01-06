@@ -1,5 +1,6 @@
 import { state } from './state.js';
 import { sendWsMessage } from './ws_api.js';
+import { getPlatformAdapter, getPlatform } from './platforms/index.js';
 
 let titleSentForUrl = null;
 
@@ -21,14 +22,16 @@ function sendDelayedTitle() {
 
 export function sendMeetingJoin() {
   const url = window.location.href;
-  if (url && url.includes('ktalk.ru')) {
+  const platform = getPlatform();
+  // Send meeting_join for both KTalk and vas3k platforms
+  if (url && platform) {
     state.currentMeetingUrl = url;
     sendWsMessage({
       type: 'meeting_join',
       url: url,
       title: ''  // Title отправим позже когда страница загрузится
     });
-    console.log('[KTalk Transcript] Sent meeting_join:', url);
+    console.log(`[${platform} Transcript] Sent meeting_join:`, url);
     sendDelayedTitle();
   }
 }
@@ -46,6 +49,11 @@ export function sendMeetingLeave(reason = 'user_left') {
 }
 
 function isInMeeting() {
+  const adapter = getPlatformAdapter();
+  if (adapter) {
+    return adapter.isConferenceAvailable();
+  }
+  // Legacy fallback for KTalk
   if (!window.$conf) return false;
   const participantsMap = window.$conf._participantsMap;
   return participantsMap && participantsMap.size > 0;

@@ -359,6 +359,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
 /* harmony import */ var _debug_panel_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./debug/panel.js */ "./src/debug/panel.js");
 /* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+/* harmony import */ var _ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! ./ui-vas3k.js */ "./src/ui-vas3k.js");
+
 
 
 
@@ -386,14 +388,33 @@ function waitForConference(callback, maxAttempts = 100) {
   console.log(`[${platformName} Transcript] Waiting for conference...`);
 
   if (adapter) {
+    // For vas3k.cloud: Check if in prejoin and update UI accordingly
+    if (platform === 'vas3k' && adapter.isInPrejoin?.()) {
+      console.log(`[${platformName} Transcript] User is in prejoin screen`);
+      (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__.showVas3kPrejoinState)();
+    }
+
     adapter.waitForConference(maxAttempts)
       .then((conf) => {
         console.log(`[${platformName} Transcript] Conference found`);
         callback(conf);
       })
       .catch(() => {
-        console.log(`[${platformName} Transcript] Conference not found`);
-        sendConnectionStatus(false);
+        console.log(`[${platformName} Transcript] Conference not found after ${maxAttempts} attempts`);
+        // For vas3k: keep retrying until conference is found
+        if (platform === 'vas3k') {
+          if (adapter.isInPrejoin?.()) {
+            console.log(`[${platformName} Transcript] Still in prejoin, retrying...`);
+            (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__.showVas3kPrejoinState)();
+          } else {
+            console.log(`[${platformName} Transcript] Not in prejoin, retrying...`);
+            (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__.showVas3kWaitingState)();
+          }
+          // Retry after a delay
+          setTimeout(() => waitForConference(callback, maxAttempts), 2000);
+        } else {
+          sendConnectionStatus(false);
+        }
       });
   } else {
     // Legacy fallback for KTalk
@@ -418,6 +439,7 @@ function waitForConference(callback, maxAttempts = 100) {
 
 function tryAttachConference() {
   const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformAdapter)();
+  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatform)();
 
   if (adapter) {
     // Use adapter to check conference availability
@@ -426,6 +448,14 @@ function tryAttachConference() {
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = false;
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = null;
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = null;
+      }
+      // Update UI based on prejoin state
+      if (platform === 'vas3k') {
+        if (adapter.isInPrejoin?.()) {
+          (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__.showVas3kPrejoinState)();
+        } else {
+          (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__.showVas3kWaitingState)();
+        }
       }
       return;
     }
@@ -701,6 +731,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+
 
 
 
@@ -724,14 +756,16 @@ function sendDelayedTitle() {
 
 function sendMeetingJoin() {
   const url = window.location.href;
-  if (url && url.includes('ktalk.ru')) {
+  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_2__.getPlatform)();
+  // Send meeting_join for both KTalk and vas3k platforms
+  if (url && platform) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl = url;
     (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_1__.sendWsMessage)({
       type: 'meeting_join',
       url: url,
       title: ''  // Title отправим позже когда страница загрузится
     });
-    console.log('[KTalk Transcript] Sent meeting_join:', url);
+    console.log(`[${platform} Transcript] Sent meeting_join:`, url);
     sendDelayedTitle();
   }
 }
@@ -749,6 +783,11 @@ function sendMeetingLeave(reason = 'user_left') {
 }
 
 function isInMeeting() {
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_2__.getPlatformAdapter)();
+  if (adapter) {
+    return adapter.isConferenceAvailable();
+  }
+  // Legacy fallback for KTalk
   if (!window.$conf) return false;
   const participantsMap = window.$conf._participantsMap;
   return participantsMap && participantsMap.size > 0;
@@ -1325,9 +1364,18 @@ class Vas3kAdapter {
   }
 
   /**
-   * Wait for conference to be available
+   * Check if user is in prejoin screen
    */
-  waitForConference(maxAttempts = 100) {
+  isInPrejoin() {
+    const state = window.APP?.store?.getState?.();
+    return state?.['features/prejoin']?.showPrejoin === true;
+  }
+
+  /**
+   * Wait for conference to be available
+   * Uses Redux store to detect when conference is joined
+   */
+  waitForConference(maxAttempts = 200) {
     return new Promise((resolve, reject) => {
       let attempts = 0;
 
@@ -1335,17 +1383,23 @@ class Vas3kAdapter {
         attempts++;
         const room = this._getRoom();
 
-        if (room && window.APP?.conference?.isJoined?.()) {
-          console.log('[Vas3k Adapter] Conference found');
+        if (room) {
+          console.log('[Vas3k Adapter] Conference found via Redux store');
           this.room = room;
           resolve(room);
           return;
         }
 
+        // Log state for debugging
+        if (attempts % 20 === 0) {
+          const inPrejoin = this.isInPrejoin();
+          console.log(`[Vas3k Adapter] Waiting for conference... attempt ${attempts}, inPrejoin: ${inPrejoin}`);
+        }
+
         if (attempts < maxAttempts) {
           setTimeout(check, 500);
         } else {
-          console.log('[Vas3k Adapter] Conference not found');
+          console.log('[Vas3k Adapter] Conference not found after max attempts');
           reject(new Error('Conference not found'));
         }
       };
@@ -1358,7 +1412,7 @@ class Vas3kAdapter {
    * Check if conference is currently available
    */
   isConferenceAvailable() {
-    return !!(this._getRoom() && window.APP?.conference?.isJoined?.());
+    return !!this._getRoom();
   }
 
   /**
@@ -1683,6 +1737,13 @@ class Vas3kAdapter {
   // Private helper methods
 
   _getRoom() {
+    // Primary: Get from Redux store (more reliable)
+    const state = window.APP?.store?.getState?.();
+    const roomFromRedux = state?.['features/base/conference']?.conference;
+    if (roomFromRedux) {
+      return roomFromRedux;
+    }
+    // Fallback: Try APP.conference._room (older Jitsi versions)
     return window.APP?.conference?._room;
   }
 
@@ -1727,6 +1788,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils.js */ "./src/utils.js");
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
 /* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+/* harmony import */ var _ui_vas3k_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./ui-vas3k.js */ "./src/ui-vas3k.js");
+
 
 
 
@@ -1989,7 +2052,14 @@ function getParticipantName(conf, participantId) {
 function updateSpeakerStatus(conf) {
   const activeSpeaker = getActiveSpeaker(conf);
   const hasMicsOn = anyMicOn(conf);
+  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.getPlatform)();
 
+  // Update platform-specific UI
+  if (platform === 'vas3k') {
+    (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_4__.updateVas3kSpeakerStatus)(activeSpeaker, hasMicsOn);
+  }
+
+  // KTalk UI elements
   const dot = document.querySelector('.ktalk-speaker-dot');
   const nameEl = document.querySelector('.ktalk-speaker-name');
 
@@ -2176,6 +2246,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   createFloatingPanel: () => (/* binding */ createFloatingPanel),
 /* harmony export */   initVas3kUI: () => (/* binding */ initVas3kUI),
 /* harmony export */   injectVas3kStyles: () => (/* binding */ injectVas3kStyles),
+/* harmony export */   showVas3kPrejoinState: () => (/* binding */ showVas3kPrejoinState),
+/* harmony export */   showVas3kWaitingState: () => (/* binding */ showVas3kWaitingState),
 /* harmony export */   updateVas3kSpeakerStatus: () => (/* binding */ updateVas3kSpeakerStatus),
 /* harmony export */   updateVas3kWsIndicator: () => (/* binding */ updateVas3kWsIndicator)
 /* harmony export */ });
@@ -2560,6 +2632,26 @@ function updateVas3kSpeakerStatus(speaker, micsOn) {
     } else {
       nameEl.textContent = 'Никто не говорит';
     }
+  }
+}
+
+/**
+ * Show prejoin state message
+ */
+function showVas3kPrejoinState() {
+  const nameEl = document.querySelector('.jitsi-speaker-name');
+  if (nameEl) {
+    nameEl.textContent = 'Нажмите "Присоединиться" для начала';
+  }
+}
+
+/**
+ * Show waiting for conference message
+ */
+function showVas3kWaitingState() {
+  const nameEl = document.querySelector('.jitsi-speaker-name');
+  if (nameEl) {
+    nameEl.textContent = 'Ожидание подключения...';
   }
 }
 
@@ -3771,28 +3863,36 @@ function handleNewMeeting(data) {
 function handleTranscript(data) {
   const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason } = data;
 
+  const newLine = {
+    speaker,
+    text,
+    timestamp,
+    is_local: is_local || false,
+    uncertain: uncertain || false,
+    uncertain_reason: uncertain_reason || '',
+    time: new Date().toLocaleTimeString('ru-RU', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }),
+    createdAt: Date.now()
+  };
+
   if (is_continuation && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length > 0) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length - 1].text += ' ' + text;
   } else {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.push({
-      speaker,
-      text,
-      timestamp,
-      is_local: is_local || false,
-      uncertain: uncertain || false,
-      uncertain_reason: uncertain_reason || '',
-      time: new Date().toLocaleTimeString('ru-RU', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
-      }),
-      createdAt: Date.now()
-    });
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.push(newLine);
 
     if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length > _state_js__WEBPACK_IMPORTED_MODULE_0__.constants.MAX_TRANSCRIPT_LINES) {
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.shift();
     }
   }
 
-  updateTranscriptUI();
+  // Update platform-specific UI
+  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.getPlatform)();
+  if (platform === 'vas3k') {
+    (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.addVas3kTranscriptLine)(newLine);
+  } else {
+    updateTranscriptUI();
+  }
 
   window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
     detail: { transcriptLines: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice() }
@@ -4686,6 +4786,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _speaker_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./speaker.js */ "./src/speaker.js");
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
 /* harmony import */ var _meeting_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./meeting.js */ "./src/meeting.js");
+/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+
 
 
 
@@ -4703,9 +4805,19 @@ function connectWebSocket() {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.onopen = () => {
       console.log('[KTalk Transcript] WebSocket connected');
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected = true;
-      (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicator)(true);
+      (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicatorPlatform)(true);
 
-      if (window.$conf) {
+      // Send participants for both KTalk and vas3k
+      const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_5__.getPlatformAdapter)();
+      if (adapter) {
+        const conf = adapter.getConference();
+        if (conf) {
+          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_2__.sendParticipantsUpdate)(conf);
+          const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_2__.getActiveSpeaker)(conf);
+          (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsSpeakerUpdate)(activeSpeaker);
+          (0,_meeting_js__WEBPACK_IMPORTED_MODULE_4__.sendMeetingJoin)();
+        }
+      } else if (window.$conf) {
         (0,_speaker_js__WEBPACK_IMPORTED_MODULE_2__.sendParticipantsUpdate)(window.$conf);
         const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_2__.getActiveSpeaker)(window.$conf);
         (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsSpeakerUpdate)(activeSpeaker);
@@ -4718,7 +4830,7 @@ function connectWebSocket() {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.onclose = () => {
       console.log('[KTalk Transcript] WebSocket disconnected');
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected = false;
-      (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicator)(false);
+      (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicatorPlatform)(false);
 
       if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsReconnectTimer) {
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsReconnectTimer = setTimeout(() => {

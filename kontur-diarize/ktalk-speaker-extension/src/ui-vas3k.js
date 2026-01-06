@@ -381,6 +381,26 @@ export function updateVas3kSpeakerStatus(speaker, micsOn) {
 }
 
 /**
+ * Show prejoin state message
+ */
+export function showVas3kPrejoinState() {
+  const nameEl = document.querySelector('.jitsi-speaker-name');
+  if (nameEl) {
+    nameEl.textContent = 'Нажмите "Присоединиться" для начала';
+  }
+}
+
+/**
+ * Show waiting for conference message
+ */
+export function showVas3kWaitingState() {
+  const nameEl = document.querySelector('.jitsi-speaker-name');
+  if (nameEl) {
+    nameEl.textContent = 'Ожидание подключения...';
+  }
+}
+
+/**
  * Add transcript line to the panel
  */
 export function addVas3kTranscriptLine(line) {
