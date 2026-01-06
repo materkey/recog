@@ -1436,6 +1436,272 @@ async def live_stream(websocket: WebSocket):
         live_watcher.unregister(websocket)
 
 
+# --- Speaker Database Management ---
+
+SPEAKER_DB_PATH = Path(__file__).parent.parent / "speakers_ecapa.json"
+
+
+def get_speaker_db():
+    """Get SpeakerDatabase instance."""
+    from recog.speaker_db import SpeakerDatabase
+    return SpeakerDatabase(str(SPEAKER_DB_PATH))
+
+
+@app.get("/api/speakers")
+async def list_speakers():
+    """Get list of all speakers in the database."""
+    try:
+        speaker_db = get_speaker_db()
+        return JSONResponse(content=speaker_db.get_all_speakers())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RenameSpeakerRequest(BaseModel):
+    display_name: str
+
+
+@app.put("/api/speakers/{speaker_id}")
+async def rename_speaker(speaker_id: str, request: RenameSpeakerRequest):
+    """Rename a speaker."""
+    try:
+        speaker_db = get_speaker_db()
+        if not speaker_db.rename_speaker(speaker_id, request.display_name):
+            raise HTTPException(status_code=404, detail="Speaker not found")
+        speaker_db.save()
+        return JSONResponse(content={"success": True})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/speakers/{speaker_id}")
+async def delete_speaker(speaker_id: str):
+    """Delete a speaker entirely."""
+    try:
+        speaker_db = get_speaker_db()
+        if not speaker_db.delete_speaker(speaker_id):
+            raise HTTPException(status_code=404, detail="Speaker not found")
+        speaker_db.save()
+        return JSONResponse(content={"success": True})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/speakers/{speaker_id}/embeddings/{index}")
+async def delete_embedding(speaker_id: str, index: int):
+    """Delete a single embedding from a speaker."""
+    try:
+        speaker_db = get_speaker_db()
+        if not speaker_db.delete_embedding(speaker_id, index):
+            raise HTTPException(status_code=404, detail="Speaker or embedding not found")
+
+        # If no embeddings left, delete the speaker entirely
+        speaker = speaker_db.get_speaker(speaker_id)
+        if speaker and len(speaker.embeddings) == 0:
+            speaker_db.delete_speaker(speaker_id)
+
+        speaker_db.save()
+        return JSONResponse(content={"success": True})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class EnrollFromSegmentsRequest(BaseModel):
+    meeting_id: str
+    segment_indices: list[int]  # Indices of segments in transcript
+    speaker_id: Optional[str] = None  # Existing speaker to add to, or None for new
+    display_name: Optional[str] = None  # Required for new speakers, optional for existing
+    track: str = "system"  # "mic" or "system"
+
+
+@app.post("/api/speakers/enroll-from-segments")
+async def enroll_from_segments(request: EnrollFromSegmentsRequest):
+    """
+    Extract embedding from selected segments and add to speaker database.
+
+    Process:
+    1. Get meeting and validate audio exists
+    2. Load transcript to get segment time offsets
+    3. Extract audio slices for each segment using audio_offset_ms
+    4. Call embedding_worker.py to extract embeddings
+    5. Average embeddings if multiple segments
+    6. Add to speaker database
+    """
+    import subprocess
+    import tempfile
+    import numpy as np
+
+    try:
+        storage = get_storage()
+        meeting = storage.get_meeting(request.meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        meta = meeting.get("meta", {})
+        segments = meeting.get("segments", [])
+
+        # Determine audio path based on track
+        if request.track == "mic":
+            audio_path = meta.get("audio_mic_path")
+        else:
+            audio_path = meta.get("audio_system_path")
+
+        if not audio_path:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No {request.track} audio file available for this meeting"
+            )
+
+        audio_path = Path(audio_path)
+        if not audio_path.exists():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Audio file not found: {audio_path}"
+            )
+
+        # Validate segment indices
+        if not request.segment_indices:
+            raise HTTPException(status_code=400, detail="No segments selected")
+
+        # Validate: either existing speaker_id or new display_name required
+        if not request.speaker_id and not request.display_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Either speaker_id (for existing) or display_name (for new) is required"
+            )
+
+        selected_segments = []
+        for idx in request.segment_indices:
+            if idx < 0 or idx >= len(segments):
+                raise HTTPException(status_code=400, detail=f"Invalid segment index: {idx}")
+            seg = segments[idx]
+            if "audio_offset_ms" not in seg:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Segment {idx} has no audio_offset_ms (recorded before audio feature)"
+                )
+            selected_segments.append(seg)
+
+        # Extract embeddings for each segment
+        embeddings = []
+        venv_python = Path(__file__).parent.parent / "venv-pyannote" / "bin" / "python"
+        worker_path = Path(__file__).parent.parent / "embedding_worker.py"
+
+        # Assume ~3 second segments (chunk_duration from live.py)
+        segment_duration_ms = 3000
+
+        for seg in selected_segments:
+            start_ms = seg["audio_offset_ms"]
+            end_ms = start_ms + segment_duration_ms
+
+            # Extract audio slice with ffmpeg
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp_path = tmp.name
+
+            try:
+                ffmpeg_result = subprocess.run([
+                    "ffmpeg", "-y",
+                    "-i", str(audio_path),
+                    "-ss", str(start_ms / 1000),
+                    "-t", str(segment_duration_ms / 1000),
+                    "-ar", "16000",
+                    "-ac", "1",
+                    tmp_path
+                ], capture_output=True)
+
+                if ffmpeg_result.returncode != 0:
+                    print(f"ffmpeg error: {ffmpeg_result.stderr.decode()}", file=sys.stderr)
+                    continue
+
+                # Call embedding worker
+                result = subprocess.run(
+                    [str(venv_python), str(worker_path)],
+                    input=json.dumps({"audio_path": tmp_path}),
+                    capture_output=True,
+                    text=True
+                )
+
+                if result.returncode != 0:
+                    print(f"embedding_worker error: {result.stderr}", file=sys.stderr)
+                    continue
+
+                data = json.loads(result.stdout)
+                if "error" in data:
+                    print(f"embedding_worker error: {data['error']}", file=sys.stderr)
+                    continue
+
+                embeddings.append(np.array(data["embedding"]))
+
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+
+        if not embeddings:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to extract any embeddings from selected segments"
+            )
+
+        # Average embeddings
+        avg_embedding = np.mean(embeddings, axis=0)
+
+        # Add to speaker database
+        speaker_db = get_speaker_db()
+
+        # Generate speaker_id if not provided
+        speaker_id = request.speaker_id
+        display_name = request.display_name
+
+        if speaker_id:
+            # Adding to existing speaker - get display_name from database
+            if speaker_id not in speaker_db.speakers:
+                raise HTTPException(status_code=404, detail=f"Speaker not found: {speaker_id}")
+            display_name = speaker_db.speakers[speaker_id].display_name
+        else:
+            # Create new speaker - generate ID from display_name
+            speaker_id = display_name.lower().replace(" ", "_")
+            # Ensure uniqueness
+            base_id = speaker_id
+            counter = 1
+            while speaker_id in speaker_db.speakers:
+                speaker_id = f"{base_id}_{counter}"
+                counter += 1
+
+        # Build transcript from selected segments
+        transcript = " ".join(seg.get("text", "") for seg in selected_segments)[:200]
+
+        speaker_db.add_speaker(
+            speaker_id=speaker_id,
+            display_name=display_name,
+            embedding=avg_embedding,
+            source_file=f"meeting_{request.meeting_id}",
+            start_time=selected_segments[0]["audio_offset_ms"] / 1000,
+            end_time=(selected_segments[-1]["audio_offset_ms"] + segment_duration_ms) / 1000,
+            transcript=transcript
+        )
+        speaker_db.save()
+
+        return JSONResponse(content={
+            "success": True,
+            "speaker_id": speaker_id,
+            "display_name": display_name,
+            "embeddings_extracted": len(embeddings),
+            "segments_used": len(selected_segments)
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Static Files ---
 
 @app.get("/")
