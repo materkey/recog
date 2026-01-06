@@ -2,9 +2,11 @@
 Модуль live транскрипции (микрофон, системный звук, KTalk).
 """
 
+import struct
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -13,6 +15,85 @@ import torch
 from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
+
+
+class IncrementalWavWriter:
+    """
+    Writes WAV file incrementally during live capture.
+    Supports streaming write of audio chunks without loading entire file in memory.
+    """
+
+    def __init__(self, path: Path, sample_rate: int = 16000, channels: int = 1):
+        self.path = Path(path)
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self._file = None
+        self._samples_written = 0
+        self._start_time: Optional[float] = None
+
+    def open(self):
+        """Opens file and writes WAV header placeholder."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = open(self.path, 'wb')
+        self._write_header(0)  # Placeholder with 0 data size
+        self._start_time = time.time()
+
+    def write_chunk(self, chunk: np.ndarray):
+        """
+        Appends audio chunk to file.
+
+        Args:
+            chunk: Audio samples as float32 array (values in [-1, 1])
+        """
+        if self._file is None:
+            return
+
+        # Convert float32 [-1, 1] to int16
+        chunk_int16 = (chunk * 32767).astype(np.int16)
+        self._file.write(chunk_int16.tobytes())
+        self._samples_written += len(chunk)
+
+    def get_offset_ms(self) -> int:
+        """Returns current offset in milliseconds from recording start."""
+        if self._start_time is None:
+            return 0
+        return int((time.time() - self._start_time) * 1000)
+
+    def finalize(self):
+        """Updates header with final size and closes file."""
+        if self._file is None:
+            return
+
+        # Update header with correct data size
+        data_size = self._samples_written * 2  # 2 bytes per int16 sample
+        self._file.seek(0)
+        self._write_header(data_size)
+        self._file.close()
+        self._file = None
+
+    def _write_header(self, data_size: int):
+        """Writes WAV header with specified data size."""
+        # WAV header structure (44 bytes)
+        # RIFF chunk
+        self._file.write(b'RIFF')
+        self._file.write(struct.pack('<I', 36 + data_size))  # File size - 8
+        self._file.write(b'WAVE')
+
+        # fmt chunk
+        self._file.write(b'fmt ')
+        self._file.write(struct.pack('<I', 16))  # Subchunk1 size (PCM)
+        self._file.write(struct.pack('<H', 1))   # Audio format (1 = PCM)
+        self._file.write(struct.pack('<H', self.channels))
+        self._file.write(struct.pack('<I', self.sample_rate))
+        byte_rate = self.sample_rate * self.channels * 2  # 2 bytes per sample
+        self._file.write(struct.pack('<I', byte_rate))
+        block_align = self.channels * 2
+        self._file.write(struct.pack('<H', block_align))
+        self._file.write(struct.pack('<H', 16))  # Bits per sample
+
+        # data chunk
+        self._file.write(b'data')
+        self._file.write(struct.pack('<I', data_size))
 
 
 class SingleDeviceCapture:
@@ -139,12 +220,14 @@ class LiveTranscriber:
         output_file=None,
         no_diarization=False,
         use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
-        use_screencapture=False  # Использовать ScreenCaptureKit вместо BlackHole
+        use_screencapture=False,  # Использовать ScreenCaptureKit вместо BlackHole
+        save_audio=True  # Сохранять аудио для последующей диаризации
     ):
         self.mic_device = mic_device
         self.system_device = system_device
         self.sample_rate = 16000
         self.use_screencapture = use_screencapture
+        self.save_audio = save_audio
 
         # Определяем режим: dual (оба), mic-only, system-only, screencapture
         self.dual_mode = (mic_device is not None and (system_device is not None or use_screencapture))
@@ -193,6 +276,10 @@ class LiveTranscriber:
         self._draft_segments = {}  # segment_id -> {'lines': [...], 'speaker': str, 'start_time': float, 'chunks': [...]}
         self._current_segment_id = None
         self._current_segment_start_time = None  # Python timestamp начала текущего сегмента
+
+        # Audio recording for on-demand diarization
+        self._wav_writer_mic: Optional[IncrementalWavWriter] = None
+        self._wav_writer_system: Optional[IncrementalWavWriter] = None
 
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Транскрибирует напрямую через tensor без temp файлов."""
@@ -421,6 +508,20 @@ class LiveTranscriber:
                 screencapture=self.use_screencapture
             )
             print(f"Meeting started: {meeting_id}")
+
+            # Initialize audio recording if enabled
+            if self.save_audio:
+                meeting_path = self._meeting_storage.base_path / meeting_id
+                if self.mic_capture:
+                    mic_audio_path = meeting_path / "audio_mic.wav"
+                    self._wav_writer_mic = IncrementalWavWriter(mic_audio_path, self.sample_rate)
+                    self._wav_writer_mic.open()
+                    print(f"Recording mic audio: {mic_audio_path}")
+                if self.system_capture:
+                    system_audio_path = meeting_path / "audio_system.wav"
+                    self._wav_writer_system = IncrementalWavWriter(system_audio_path, self.sample_rate)
+                    self._wav_writer_system.open()
+                    print(f"Recording system audio: {system_audio_path}")
         except ImportError:
             print("Warning: meeting_storage module not found, transcripts won't be saved", file=sys.stderr)
             self._meeting_storage = None
@@ -537,6 +638,12 @@ class LiveTranscriber:
             if chunk is None or len(chunk) < 1000:
                 return
 
+            # Write audio to WAV file (before VAD - record everything for diarization)
+            if is_mic and self._wav_writer_mic:
+                self._wav_writer_mic.write_chunk(chunk)
+            elif not is_mic and self._wav_writer_system:
+                self._wav_writer_system.write_chunk(chunk)
+
             # VAD: пропускаем тишину (не тратим CPU на inference)
             rms = np.sqrt(np.mean(chunk ** 2))
             if rms < VAD_RMS_THRESHOLD:
@@ -592,6 +699,7 @@ class LiveTranscriber:
 
                 # Сохраняем в MeetingStorage
                 if self._meeting_storage:
+                    audio_offset = self._wav_writer_mic.get_offset_ms() if self._wav_writer_mic else 0
                     self._meeting_storage.append_segment(
                         speaker=mic_speaker_name,
                         speaker_id="local",
@@ -599,7 +707,8 @@ class LiveTranscriber:
                         is_local=True,
                         is_continuation=is_continuation,
                         uncertain=False,
-                        uncertain_reason=""
+                        uncertain_reason="",
+                        audio_offset_ms=audio_offset
                     )
 
             # Системный звук: диаризация
@@ -656,6 +765,7 @@ class LiveTranscriber:
 
                     # Сохраняем в MeetingStorage
                     if self._meeting_storage:
+                        audio_offset = self._wav_writer_system.get_offset_ms() if self._wav_writer_system else 0
                         self._meeting_storage.append_segment(
                             speaker=speaker,
                             speaker_id=speaker,  # Используем имя как ID для KTalk
@@ -663,7 +773,8 @@ class LiveTranscriber:
                             is_local=is_local,
                             is_continuation=is_continuation,
                             uncertain=uncertain,
-                            uncertain_reason=uncertain_reason
+                            uncertain_reason=uncertain_reason,
+                            audio_offset_ms=audio_offset
                         )
 
             elif self.no_diarization:
@@ -722,6 +833,22 @@ class LiveTranscriber:
                 self.mic_capture.stop()
             if self.system_capture:
                 self.system_capture.stop()
+
+            # Finalize audio recordings
+            mic_audio_path = None
+            system_audio_path = None
+            if self._wav_writer_mic:
+                self._wav_writer_mic.finalize()
+                mic_audio_path = str(self._wav_writer_mic.path)
+                print(f"Mic audio saved: {mic_audio_path}")
+            if self._wav_writer_system:
+                self._wav_writer_system.finalize()
+                system_audio_path = str(self._wav_writer_system.path)
+                print(f"System audio saved: {system_audio_path}")
+
+            # Store audio paths in meeting meta
+            if self._meeting_storage and (mic_audio_path or system_audio_path):
+                self._meeting_storage.set_audio_paths(mic_audio_path, system_audio_path)
 
             # Stop KTalk bridge
             if self._ktalk_bridge:
