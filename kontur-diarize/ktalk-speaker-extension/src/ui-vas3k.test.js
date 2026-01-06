@@ -454,3 +454,45 @@ describe('Model Selector Feature', () => {
     });
   });
 });
+
+describe('Transcript Panel Layout', () => {
+  let createFloatingPanel;
+
+  beforeAll(async () => {
+    const module = await import('./ui-vas3k.js');
+    createFloatingPanel = module.createFloatingPanel;
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  test('header controls have flex-wrap for button overflow', () => {
+    createFloatingPanel();
+
+    const controls = document.querySelector('.jitsi-transcript-header-controls');
+    const style = window.getComputedStyle(controls);
+
+    expect(style.flexWrap).toBe('wrap');
+  });
+
+  test('all header buttons are present', () => {
+    createFloatingPanel();
+
+    const controls = document.querySelector('.jitsi-transcript-header-controls');
+    const buttons = controls.querySelectorAll('button');
+
+    // Should have: Copy, AI, Follow, ↑, ↓, −, ×
+    expect(buttons.length).toBe(7);
+  });
+
+  test('header buttons have compact styling', () => {
+    createFloatingPanel();
+
+    const button = document.querySelector('.jitsi-transcript-header button');
+    const style = window.getComputedStyle(button);
+
+    // Font should be small
+    expect(parseInt(style.fontSize)).toBeLessThanOrEqual(12);
+  });
+});
