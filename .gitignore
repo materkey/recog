@@ -32,3 +32,6 @@ kontur-diarize/ktalk-speaker-extension/injected.js
 # Service logs
 logs/
 meetings/
+
+# Git worktrees
+.worktrees/
