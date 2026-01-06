@@ -728,6 +728,71 @@ async def get_transcript(meeting_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/meetings/{meeting_id}/generate-title")
+async def generate_meeting_title(meeting_id: str):
+    """Generate title for a meeting using Codex."""
+    try:
+        # Import title generator
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from recog.title_generator import generate_title_async
+
+        storage = MeetingStorage(MEETINGS_DIR)
+        meeting = storage.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        segments = meeting.get("segments", [])
+        if not segments:
+            raise HTTPException(status_code=400, detail="Meeting has no transcript")
+
+        # Build transcript text
+        transcript = _segments_to_transcript(segments)
+        if not transcript:
+            raise HTTPException(status_code=400, detail="Meeting has no transcript text")
+
+        # Generate title
+        title = await generate_title_async(transcript)
+        if not title:
+            raise HTTPException(status_code=500, detail="Failed to generate title")
+
+        # Update meta.json
+        meta_path = MEETINGS_DIR / meeting_id / "meta.json"
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["title"] = title
+            meta["title_source"] = "codex"
+            meta["updated_at"] = datetime.now().isoformat()
+            meta_path.write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+
+            # Update index.json if meeting is completed
+            if meta.get("ended_at"):
+                index_path = MEETINGS_DIR / "index.json"
+                if index_path.exists():
+                    index = json.loads(index_path.read_text(encoding="utf-8"))
+                    for m in index.get("meetings", []):
+                        if m.get("id") == meeting_id:
+                            m["title"] = title
+                            break
+                    index_path.write_text(
+                        json.dumps(index, ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+
+        return JSONResponse(content={
+            "meeting_id": meeting_id,
+            "title": title,
+            "title_source": "codex"
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/live/status")
 async def get_live_status():
     """Get current live transcription status."""

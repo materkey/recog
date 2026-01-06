@@ -388,6 +388,32 @@ class MeetingStorage:
 
         return new_id
 
+    def split_on_silence_timeout(self) -> Optional[str]:
+        """
+        Разделить orphan-встречу при timeout тишины.
+        Вызывается из live.py перед append_segment().
+
+        Returns:
+            meeting_id новой встречи или None если split не нужен
+        """
+        if not self.current_meeting_path:
+            return None
+
+        meta = self._load_meta()
+
+        # Только для orphan-встреч
+        if meta["source"] != "orphan":
+            return None
+
+        # Только если есть сегменты (не пустой orphan)
+        if meta["stats"]["segment_count"] == 0:
+            return None
+
+        prev_id = self._end_current_meeting(end_reason="silence_timeout")
+        new_id = self._create_meeting(source="orphan", prev_meeting_id=prev_id)
+
+        return new_id
+
     def _end_current_meeting(self, end_reason: str) -> Optional[str]:
         """Завершить текущую встречу без создания новой."""
         if not self.current_meeting_path:
@@ -407,10 +433,69 @@ class MeetingStorage:
         created = datetime.fromisoformat(meta["created_at"])
         meta["stats"]["duration_seconds"] = int((now - created).total_seconds())
 
+        # Generate title for orphan sessions without title
+        if meta.get("source") == "orphan" and not meta.get("title"):
+            if meta["stats"]["segment_count"] > 0:
+                title = self._generate_title_for_meeting()
+                if title:
+                    meta["title"] = title
+                    meta["title_source"] = "codex"
+
         self._save_meta(meta)
         self._update_index(meta)
 
         return self.current_meeting_id
+
+    def _generate_title_for_meeting(self) -> Optional[str]:
+        """Generate title using Codex for current meeting."""
+        try:
+            from recog.title_generator import generate_title
+
+            transcript_text = self._get_transcript_as_text()
+            if not transcript_text:
+                return None
+
+            title = generate_title(transcript_text)
+            if title:
+                print(f"Generated title: {title}")
+            return title
+        except ImportError:
+            print("Warning: title_generator not available")
+            return None
+        except Exception as e:
+            print(f"Warning: Title generation failed: {e}")
+            return None
+
+    def _get_transcript_as_text(self) -> str:
+        """Get current meeting transcript as plain text."""
+        if not self.current_meeting_path:
+            return ""
+
+        transcript_path = self.current_meeting_path / "transcript.jsonl"
+        if not transcript_path.exists():
+            return ""
+
+        lines = []
+        content = transcript_path.read_text(encoding="utf-8").strip()
+        if not content:
+            return ""
+
+        for line in content.split("\n"):
+            if not line:
+                continue
+            try:
+                segment = json.loads(line)
+                # Skip system events
+                if segment.get("speaker_id") == "__system__":
+                    continue
+                speaker = segment.get("speaker", "Unknown")
+                text = segment.get("text", "")
+                ts = segment.get("ts_display", "")
+                lines.append(f"[{ts}] {speaker}: {text}")
+            except json.JSONDecodeError:
+                continue
+
+        return "\n".join(lines)
 
     def end_session(self) -> Optional[str]:
         """
