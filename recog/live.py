@@ -538,6 +538,8 @@ class LiveTranscriber:
                 # Connect MeetingStorage to KTalk bridge
                 if self._meeting_storage:
                     self._ktalk_bridge.set_meeting_storage(self._meeting_storage)
+                # Register callback for meeting changes to reinitialize audio recording
+                self._ktalk_bridge.set_meeting_change_callback(self._on_meeting_change)
                 self._ktalk_bridge.start()
                 print("KTalk bridge started, waiting for Chrome extension...")
                 time.sleep(1)
@@ -868,6 +870,33 @@ class LiveTranscriber:
             if force_exit:
                 import os
                 os._exit(0)
+
+    def _on_meeting_change(self, meeting_id: str, meeting_path: Path):
+        """Called when meeting changes via KTalk bridge to reinitialize audio recording."""
+        if not self.save_audio:
+            return
+
+        # Finalize current wav writers
+        if self._wav_writer_mic:
+            self._wav_writer_mic.finalize()
+            print(f"Mic audio saved: {self._wav_writer_mic.path}")
+            self._wav_writer_mic = None
+        if self._wav_writer_system:
+            self._wav_writer_system.finalize()
+            print(f"System audio saved: {self._wav_writer_system.path}")
+            self._wav_writer_system = None
+
+        # Open new wav writers for new meeting
+        if self.mic_capture:
+            mic_audio_path = meeting_path / "audio_mic.wav"
+            self._wav_writer_mic = IncrementalWavWriter(mic_audio_path, self.sample_rate)
+            self._wav_writer_mic.open()
+            print(f"Recording mic audio: {mic_audio_path}")
+        if self.system_capture:
+            system_audio_path = meeting_path / "audio_system.wav"
+            self._wav_writer_system = IncrementalWavWriter(system_audio_path, self.sample_rate)
+            self._wav_writer_system.open()
+            print(f"Recording system audio: {system_audio_path}")
 
 
 def live_pipeline(

@@ -293,6 +293,7 @@ class KTalkBridge:
         # Callbacks для уведомления о событиях
         self._on_speaker_change: Optional[Callable[[Optional[str], bool], None]] = None
         self._on_segment_complete: Optional[Callable[[SpeakerSegment], None]] = None
+        self._on_meeting_change: Optional[Callable[[str, Path], None]] = None
 
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
@@ -319,6 +320,15 @@ class KTalkBridge:
             callback: функция (segment: SpeakerSegment)
         """
         self._on_segment_complete = callback
+
+    def set_meeting_change_callback(self, callback: Callable[[str, Path], None]):
+        """
+        Устанавливает callback для уведомления о смене встречи.
+
+        Args:
+            callback: функция (meeting_id: str, meeting_path: Path)
+        """
+        self._on_meeting_change = callback
 
     def set_meeting_storage(self, storage: 'MeetingStorage'):
         """
@@ -1021,6 +1031,10 @@ class KTalkBridge:
             if self._meeting_storage and url:
                 meeting_id = self._meeting_storage.on_ktalk_join(url, title)
                 print(f"[KTalk Bridge] Joined meeting: {url}", file=sys.stderr)
+                # Notify about meeting change for audio recording
+                if self._on_meeting_change:
+                    meeting_path = self._meeting_storage.current_meeting_path
+                    self._on_meeting_change(meeting_id, meeting_path)
                 # Отправляем историю транскрипта в extension
                 await self._send_transcript_history()
 
@@ -1030,6 +1044,10 @@ class KTalkBridge:
             if self._meeting_storage:
                 new_meeting_id = self._meeting_storage.on_ktalk_leave(reason)
                 print(f"[KTalk Bridge] Left meeting (reason: {reason}), new meeting: {new_meeting_id}", file=sys.stderr)
+                # Notify about meeting change for audio recording
+                if self._on_meeting_change:
+                    meeting_path = self._meeting_storage.current_meeting_path
+                    self._on_meeting_change(new_meeting_id, meeting_path)
                 # Оповестить extension о новой встрече
                 await self._broadcast_message({
                     "type": "new_meeting",
