@@ -1,26 +1,55 @@
 import { state, constants } from './state.js';
-import { sendUpdate, getFullName, getParticipantName } from './utils.js';
+import { sendUpdate } from './utils.js';
 import { sendWsSpeakerUpdate, sendWsParticipants } from './ws_api.js';
+import { getPlatformAdapter } from './platforms/index.js';
 
 export function getActiveSpeaker(conf) {
-  let activeSpeaker = null;
+  const adapter = getPlatformAdapter();
+  if (adapter) {
+    return adapter.getActiveSpeaker();
+  }
 
-  conf._participantsMap?.forEach((p, key) => {
+  // Legacy fallback for KTalk if adapter not ready
+  let activeSpeaker = null;
+  conf?._participantsMap?.forEach((p, key) => {
     if (p._activeSpeaker$?.value === true) {
       const info = p._participantInfo$?.value || p._userInfo$?.value;
       activeSpeaker = {
         id: p._id,
-        name: getFullName(p, info, p.name || p.displayName || key),
+        name: _getFullNameLegacy(p, info, p.name || p.displayName || key),
         isLocal: p.local
       };
     }
   });
-
   return activeSpeaker;
 }
 
+// Legacy helper for fallback
+function _getFullNameLegacy(participant, info, fallback) {
+  const userInfo = participant?._userInfo$?.value;
+  if (userInfo) {
+    const firstName = userInfo.firstName || '';
+    const lastName = userInfo.lastName || '';
+    if (firstName && lastName) return `${firstName} ${lastName}`;
+    if (firstName) return firstName;
+  }
+  if (info) {
+    const firstName = info.firstName || '';
+    const lastName = info.lastName || '';
+    if (firstName && lastName) return `${firstName} ${lastName}`;
+    if (firstName) return firstName;
+  }
+  return fallback || 'Unknown';
+}
+
 export function isMicMuted(conf, participantId) {
-  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  const adapter = getPlatformAdapter();
+  if (adapter) {
+    return adapter.isMicMuted(participantId);
+  }
+
+  // Legacy fallback
+  const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
   const jitsiParticipant = jitsiParticipants.find(p => p._id === participantId);
   if (jitsiParticipant) {
     const tracks = jitsiParticipant.getTracks?.() || jitsiParticipant._tracks || [];
@@ -31,7 +60,7 @@ export function isMicMuted(conf, participantId) {
     }
   }
 
-  if (conf.localParticipant?.id === participantId) {
+  if (conf?.localParticipant?.id === participantId) {
     const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
     const localAudio = localTracks.find(t => t.getType?.() === 'audio');
     if (localAudio) {
@@ -40,7 +69,7 @@ export function isMicMuted(conf, participantId) {
     }
   }
 
-  const participant = conf._participantsMap?.get(participantId);
+  const participant = conf?._participantsMap?.get(participantId);
   if (participant) {
     if (participant._audioMuted$?.value !== undefined) {
       return participant._audioMuted$.value === true;
@@ -50,7 +79,7 @@ export function isMicMuted(conf, participantId) {
     }
   }
 
-  const speaking = conf._participantsMap?.get(participantId)?._activeSpeaker$?.value;
+  const speaking = conf?._participantsMap?.get(participantId)?._activeSpeaker$?.value;
   if (speaking === true) {
     return false;
   }
@@ -59,7 +88,13 @@ export function isMicMuted(conf, participantId) {
 }
 
 export function anyMicOn(conf) {
-  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  const adapter = getPlatformAdapter();
+  if (adapter) {
+    return adapter.anyMicOn();
+  }
+
+  // Legacy fallback
+  const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
   let foundAnyAudioTrack = false;
 
   for (const jp of jitsiParticipants) {
@@ -71,14 +106,14 @@ export function anyMicOn(conf) {
     }
   }
 
-  const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
+  const localTracks = conf?.jitsiConf?.getLocalTracks?.() || [];
   const localAudio = localTracks.find(t => t.getType?.() === 'audio');
   if (localAudio) {
     foundAnyAudioTrack = true;
     if (localAudio.isMuted?.() === false) return true;
   }
 
-  conf._participantsMap?.forEach((p) => {
+  conf?._participantsMap?.forEach((p) => {
     if (p._audioMuted$?.value === false || p._audioMuted === false) {
       foundAnyAudioTrack = true;
     }
@@ -89,7 +124,7 @@ export function anyMicOn(conf) {
   }
 
   let hasAnyParticipantWithUnmutedMic = false;
-  conf._participantsMap?.forEach((p) => {
+  conf?._participantsMap?.forEach((p) => {
     if (p._audioMuted$?.value === false || p._audioMuted === false) {
       hasAnyParticipantWithUnmutedMic = true;
     }
@@ -100,12 +135,20 @@ export function anyMicOn(conf) {
 }
 
 export function getParticipantsList(conf) {
+  const adapter = getPlatformAdapter();
+  if (adapter) {
+    const participants = adapter.getParticipants();
+    state.lastParticipantsMapSize = participants.length;
+    return participants;
+  }
+
+  // Legacy fallback
   const participants = [];
   const byId = new Map();
-  state.lastParticipantsMapSize = conf._participantsMap?.size || 0;
+  state.lastParticipantsMapSize = conf?._participantsMap?.size || 0;
 
   // Only return participants if we're actually in a meeting
-  const isInMeeting = conf._participantsMap && conf._participantsMap.size > 0;
+  const isInMeeting = conf?._participantsMap && conf._participantsMap.size > 0;
   if (!isInMeeting) {
     return participants;
   }
@@ -115,7 +158,7 @@ export function getParticipantsList(conf) {
     const localInfo = lp._participantInfo$?.value || lp._userInfo$?.value;
     const entry = {
       id: lp.id,
-      name: getFullName(lp, localInfo, lp.name || lp.displayName || 'You'),
+      name: _getFullNameLegacy(lp, localInfo, lp.name || lp.displayName || 'You'),
       isLocal: true,
       isSpeaking: conf._participantsMap?.get(lp.id)?._activeSpeaker$?.value || false,
       micMuted: isMicMuted(conf, lp.id)
@@ -129,7 +172,7 @@ export function getParticipantsList(conf) {
       const info = p._participantInfo$?.value || p._userInfo$?.value;
       const entry = {
         id: p._id,
-        name: getFullName(p, info, p.name || p.displayName || key),
+        name: _getFullNameLegacy(p, info, p.name || p.displayName || key),
         isLocal: false,
         isSpeaking: p._activeSpeaker$?.value || false,
         micMuted: isMicMuted(conf, p._id)
@@ -140,9 +183,9 @@ export function getParticipantsList(conf) {
   });
 
   // Fallback: add participants from Jitsi if map is empty or missing remotes
-  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
   state.lastJitsiParticipantsCount = jitsiParticipants.length;
-  const jitsiParticipantsMap = conf.jitsiConf?.participants || conf.jitsiConf?._participants;
+  const jitsiParticipantsMap = conf?.jitsiConf?.participants || conf?.jitsiConf?._participants;
   const jitsiMapValues = jitsiParticipantsMap
     ? (typeof jitsiParticipantsMap.values === 'function'
       ? Array.from(jitsiParticipantsMap.values())
@@ -158,7 +201,7 @@ export function getParticipantsList(conf) {
       id: pid,
       name,
       isLocal: false,
-      isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+      isSpeaking: conf?._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
       micMuted: isMicMuted(conf, pid)
     };
     participants.push(entry);
@@ -173,7 +216,7 @@ export function getParticipantsList(conf) {
       id: pid,
       name,
       isLocal: false,
-      isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+      isSpeaking: conf?._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
       micMuted: isMicMuted(conf, pid)
     };
     participants.push(entry);
@@ -185,6 +228,33 @@ export function getParticipantsList(conf) {
 
 export function sendParticipantsUpdate(conf) {
   sendWsParticipants(getParticipantsList(conf));
+}
+
+// Get participant name using adapter
+function getParticipantName(conf, participantId) {
+  const adapter = getPlatformAdapter();
+  if (adapter) {
+    return adapter.getParticipantName(participantId);
+  }
+
+  // Legacy fallback
+  if (!participantId) return 'Unknown';
+
+  if (conf?.localParticipant && conf.localParticipant.id === participantId) {
+    const p = conf.localParticipant;
+    const info = p._participantInfo$?.value || p._userInfo$?.value;
+    return _getFullNameLegacy(p, info, p.name || p.displayName || 'You');
+  }
+
+  if (conf?._participantsMap) {
+    const participant = conf._participantsMap.get(participantId);
+    if (participant) {
+      const info = participant._participantInfo$?.value || participant._userInfo$?.value;
+      return _getFullNameLegacy(participant, info, participant.name || participant.displayName || participantId);
+    }
+  }
+
+  return participantId;
 }
 
 export function updateSpeakerStatus(conf) {

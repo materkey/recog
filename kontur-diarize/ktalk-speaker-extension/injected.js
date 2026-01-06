@@ -358,6 +358,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _meeting_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./meeting.js */ "./src/meeting.js");
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
 /* harmony import */ var _debug_panel_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./debug/panel.js */ "./src/debug/panel.js");
+/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+
 
 
 
@@ -377,45 +379,100 @@ function sendConnectionStatus(connected) {
 }
 
 function waitForConference(callback, maxAttempts = 100) {
-  let attempts = 0;
-  const check = () => {
-    attempts++;
-    if (window.$conf && window.$conf._dominantSpeakerId$ && window.$conf.jitsiConf) {
-      console.log('[KTalk Transcript] Conference found');
-      callback(window.$conf);
-      return;
-    }
-    if (attempts < maxAttempts) {
-      setTimeout(check, 500);
-    } else {
-      console.log('[KTalk Transcript] Conference not found');
-      sendConnectionStatus(false);
-    }
-  };
-  check();
+  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatform)();
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformAdapter)();
+  const platformName = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformDisplayName)();
+
+  console.log(`[${platformName} Transcript] Waiting for conference...`);
+
+  if (adapter) {
+    adapter.waitForConference(maxAttempts)
+      .then((conf) => {
+        console.log(`[${platformName} Transcript] Conference found`);
+        callback(conf);
+      })
+      .catch(() => {
+        console.log(`[${platformName} Transcript] Conference not found`);
+        sendConnectionStatus(false);
+      });
+  } else {
+    // Legacy fallback for KTalk
+    let attempts = 0;
+    const check = () => {
+      attempts++;
+      if (window.$conf && window.$conf._dominantSpeakerId$ && window.$conf.jitsiConf) {
+        console.log('[KTalk Transcript] Conference found');
+        callback(window.$conf);
+        return;
+      }
+      if (attempts < maxAttempts) {
+        setTimeout(check, 500);
+      } else {
+        console.log('[KTalk Transcript] Conference not found');
+        sendConnectionStatus(false);
+      }
+    };
+    check();
+  }
 }
 
 function tryAttachConference() {
-  if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
-    if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = false;
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = null;
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = null;
-    }
-    return;
-  }
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformAdapter)();
 
-  if (window.$conf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || window.$conf.jitsiConf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = window.$conf;
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = window.$conf.jitsiConf;
-    console.log('[KTalk Transcript] Conference reattached');
-    subscribeToDominantSpeaker(window.$conf);
+  if (adapter) {
+    // Use adapter to check conference availability
+    if (!adapter.isConferenceAvailable()) {
+      if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = false;
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = null;
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = null;
+      }
+      return;
+    }
+
+    const conf = adapter.getConference();
+    const jitsiConf = adapter.getJitsiConference();
+
+    if (conf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || jitsiConf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = conf;
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = jitsiConf;
+      console.log(`[${(0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformDisplayName)()} Transcript] Conference reattached`);
+      subscribeToDominantSpeaker(conf);
+    }
+  } else {
+    // Legacy fallback for KTalk
+    if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
+      if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = false;
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = null;
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = null;
+      }
+      return;
+    }
+
+    if (window.$conf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || window.$conf.jitsiConf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = window.$conf;
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = window.$conf.jitsiConf;
+      console.log('[KTalk Transcript] Conference reattached');
+      subscribeToDominantSpeaker(window.$conf);
+    }
   }
 }
 
 function setupUI() {
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformAdapter)();
+
   (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.injectStyles)();
 
+  // Use platform-specific UI initialization
+  if (adapter && !adapter.supportsTabInjection()) {
+    // For platforms without native tab support (vas3k.cloud), use floating panel
+    const uiReady = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.initPlatformUI)();
+    (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.ensureDebugPanel)();
+    return uiReady;
+  }
+
+  // KTalk: Use tab injection
   const transcriptTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addTranscriptTab)();
   const contextTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addContextTab)();
   if (transcriptTabAdded || contextTabAdded) {
@@ -430,6 +487,9 @@ function setupUI() {
 }
 
 function subscribeToDominantSpeaker(conf) {
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformAdapter)();
+  const platformName = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformDisplayName)();
+
   sendConnectionStatus(true);
   (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
   startParticipantsRefresh(conf, 'conference_ready');
@@ -438,97 +498,121 @@ function subscribeToDominantSpeaker(conf) {
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReadyTimeout) clearTimeout(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReadyTimeout);
 
   const checkAndMarkReady = () => {
-    const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
-    const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
-    const hasAnyTrack = jitsiParticipants.some(jp => {
-      const tracks = jp.getTracks?.() || jp._tracks || [];
-      return tracks.some(t => (t.getType?.() || t.type) === 'audio');
-    }) || localTracks.some(t => t.getType?.() === 'audio');
+    if (adapter) {
+      if (adapter.isConferenceReady()) {
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = true;
+        console.log(`[${platformName} Transcript] Conference ready - tracks loaded`);
+      }
+    } else {
+      // Legacy KTalk check
+      const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
+      const localTracks = conf?.jitsiConf?.getLocalTracks?.() || [];
+      const hasAnyTrack = jitsiParticipants.some(jp => {
+        const tracks = jp.getTracks?.() || jp._tracks || [];
+        return tracks.some(t => (t.getType?.() || t.type) === 'audio');
+      }) || localTracks.some(t => t.getType?.() === 'audio');
 
-    if (hasAnyTrack) {
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = true;
-      console.log('[KTalk Transcript] Conference ready - tracks loaded');
+      if (hasAnyTrack) {
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = true;
+        console.log('[KTalk Transcript] Conference ready - tracks loaded');
+      }
     }
   };
 
   checkAndMarkReady();
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReadyTimeout = setTimeout(() => {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.conferenceReady = true;
-    console.log('[KTalk Transcript] Conference ready - timeout');
+    console.log(`[${platformName} Transcript] Conference ready - timeout`);
     (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
   }, 5000);
 
-  console.log('[KTalk Transcript] Subscribing to speaker events');
+  console.log(`[${platformName} Transcript] Subscribing to speaker events`);
   (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
 
-  conf._participantsMap?.forEach((p, key) => {
-    if (p._activeSpeaker$?.subscribe) {
-      p._activeSpeaker$.subscribe(() => (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf));
-    }
-  });
-
-  if (conf._dominantSpeakerId$?.subscribe) {
-    conf._dominantSpeakerId$.subscribe(() => {
-      console.log('[KTalk Transcript] Dominant speaker changed:', conf._dominantSpeakerId$?.value);
-      (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
-    });
-  }
-
-  conf.jitsiConf.on('conference.dominantSpeaker', (id) => {
-    console.log('[KTalk Transcript] Jitsi dominant speaker event:', id);
-    (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
-  });
-
-  conf.jitsiConf.on('conference.trackAdded', (track) => {
-    if (track.getType?.() === 'audio') {
+  // Use adapter for event subscription
+  if (adapter) {
+    adapter.subscribeToSpeakerChanges(() => {
       checkAndMarkReady();
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
-      const participantId = track.getParticipantId?.();
-      if (participantId) {
-        const p = conf._participantsMap?.get(participantId);
-        if (p?._activeSpeaker$?.subscribe) {
-          p._activeSpeaker$.subscribe(() => (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf));
-        }
-      }
-    }
-  });
+    });
 
-  conf.jitsiConf.on('conference.trackRemoved', (track) => {
-    if (track.getType?.() === 'audio') {
-      (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
-      (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
-    }
-  });
-
-  conf.jitsiConf.on('conference.trackMuteChanged', (track) => {
-    if (track.getType?.() === 'audio') {
-      (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
-      (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
-    }
-  });
-
-  conf.jitsiConf.on('conference.userJoined', (id) => {
-    setTimeout(() => {
-      const p = conf._participantsMap?.get(id);
-      if (p?._activeSpeaker$?.subscribe) {
-        p._activeSpeaker$.subscribe(() => (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf));
-      }
+    adapter.onParticipantJoined?.((id) => {
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
       startParticipantsRefresh(conf, 'user_joined');
-    }, 1000);
-  });
+    });
+  } else {
+    // Legacy KTalk event subscription
+    conf?._participantsMap?.forEach((p, key) => {
+      if (p._activeSpeaker$?.subscribe) {
+        p._activeSpeaker$.subscribe(() => (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf));
+      }
+    });
 
-  conf.jitsiConf.on('conference.userLeft', () => {
-    setTimeout(() => {
+    if (conf?._dominantSpeakerId$?.subscribe) {
+      conf._dominantSpeakerId$.subscribe(() => {
+        console.log('[KTalk Transcript] Dominant speaker changed:', conf._dominantSpeakerId$?.value);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
+      });
+    }
+
+    conf?.jitsiConf?.on('conference.dominantSpeaker', (id) => {
+      console.log('[KTalk Transcript] Jitsi dominant speaker event:', id);
       (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
-      (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
-      startParticipantsRefresh(conf, 'user_left');
-    }, 500);
-  });
+    });
 
-  console.log('[KTalk Transcript] Ready');
+    conf?.jitsiConf?.on('conference.trackAdded', (track) => {
+      if (track.getType?.() === 'audio') {
+        checkAndMarkReady();
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+        const participantId = track.getParticipantId?.();
+        if (participantId) {
+          const p = conf._participantsMap?.get(participantId);
+          if (p?._activeSpeaker$?.subscribe) {
+            p._activeSpeaker$.subscribe(() => (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf));
+          }
+        }
+      }
+    });
+
+    conf?.jitsiConf?.on('conference.trackRemoved', (track) => {
+      if (track.getType?.() === 'audio') {
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+      }
+    });
+
+    conf?.jitsiConf?.on('conference.trackMuteChanged', (track) => {
+      if (track.getType?.() === 'audio') {
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+      }
+    });
+
+    conf?.jitsiConf?.on('conference.userJoined', (id) => {
+      setTimeout(() => {
+        const p = conf._participantsMap?.get(id);
+        if (p?._activeSpeaker$?.subscribe) {
+          p._activeSpeaker$.subscribe(() => (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf));
+        }
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+        startParticipantsRefresh(conf, 'user_joined');
+      }, 1000);
+    });
+
+    conf?.jitsiConf?.on('conference.userLeft', () => {
+      setTimeout(() => {
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.updateSpeakerStatus)(conf);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+        startParticipantsRefresh(conf, 'user_left');
+      }, 500);
+    });
+  }
+
+  console.log(`[${platformName} Transcript] Ready`);
 }
 
 function startParticipantsRefresh(conf, reason) {
@@ -551,30 +635,41 @@ function startParticipantsRefresh(conf, reason) {
     }
   };
 
-  console.log('[KTalk Transcript] Participants refresh start:', reason);
+  console.log(`[${(0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformDisplayName)()} Transcript] Participants refresh start:`, reason);
   tick();
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.participantsRefreshTimer = setInterval(tick, intervalMs);
 }
 
 function init() {
-  console.log('[KTalk Transcript] Script loaded');
+  const platformName = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformDisplayName)();
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformAdapter)();
+
+  console.log(`[${platformName} Transcript] Script loaded on platform: ${(0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatform)()}`);
 
   setTimeout(_ws_js__WEBPACK_IMPORTED_MODULE_2__.connectWebSocket, 1000);
 
   setInterval(() => {
-    if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab')) {
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = false;
-      setupUI();
-    }
-    if (!document.querySelector('.ktalk-transcript-content')) {
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = null;
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
-      (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
-    }
-    if (!document.querySelector('.ktalk-context-content')) {
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = null;
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
-      (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
+    if (adapter && !adapter.supportsTabInjection()) {
+      // For vas3k.cloud: check floating panel exists
+      if (!document.querySelector('.jitsi-transcript-panel')) {
+        setupUI();
+      }
+    } else {
+      // For KTalk: check tabs exist
+      if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab')) {
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = false;
+        setupUI();
+      }
+      if (!document.querySelector('.ktalk-transcript-content')) {
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = null;
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
+        (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
+      }
+      if (!document.querySelector('.ktalk-context-content')) {
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = null;
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
+        (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
+      }
     }
     tryAttachConference();
     (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.updateDebugPanel)();
@@ -682,6 +777,937 @@ function startMeetingCheck() {
 
 /***/ },
 
+/***/ "./src/platforms/index.js"
+/*!********************************!*\
+  !*** ./src/platforms/index.js ***!
+  \********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   detectPlatform: () => (/* binding */ detectPlatform),
+/* harmony export */   getPlatform: () => (/* binding */ getPlatform),
+/* harmony export */   getPlatformAdapter: () => (/* binding */ getPlatformAdapter),
+/* harmony export */   getPlatformDisplayName: () => (/* binding */ getPlatformDisplayName),
+/* harmony export */   resetAdapter: () => (/* binding */ resetAdapter)
+/* harmony export */ });
+/* harmony import */ var _ktalk_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./ktalk.js */ "./src/platforms/ktalk.js");
+/* harmony import */ var _vas3k_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./vas3k.js */ "./src/platforms/vas3k.js");
+/**
+ * Platform detection and adapter factory
+ *
+ * Supports:
+ * - KTalk (ktalk.ru) - uses custom $conf wrapper with RxJS observables
+ * - vas3k.cloud - uses standard Jitsi Meet APP object
+ */
+
+
+
+
+let currentPlatform = null;
+let currentAdapter = null;
+
+/**
+ * Detect which platform we're on based on hostname
+ */
+function detectPlatform() {
+  const hostname = window.location.hostname;
+
+  if (hostname.includes('ktalk.ru')) {
+    return 'ktalk';
+  }
+  if (hostname.includes('vas3k.cloud')) {
+    return 'vas3k';
+  }
+
+  return null;
+}
+
+/**
+ * Get the current platform name
+ */
+function getPlatform() {
+  if (!currentPlatform) {
+    currentPlatform = detectPlatform();
+  }
+  return currentPlatform;
+}
+
+/**
+ * Get the platform adapter instance
+ * Creates adapter on first call, returns cached instance after
+ */
+function getPlatformAdapter() {
+  if (!currentAdapter) {
+    const platform = getPlatform();
+
+    switch (platform) {
+      case 'ktalk':
+        currentAdapter = new _ktalk_js__WEBPACK_IMPORTED_MODULE_0__.KTalkAdapter();
+        break;
+      case 'vas3k':
+        currentAdapter = new _vas3k_js__WEBPACK_IMPORTED_MODULE_1__.Vas3kAdapter();
+        break;
+      default:
+        console.warn('[Platform] Unknown platform:', platform);
+        return null;
+    }
+
+    console.log('[Platform] Using adapter:', platform);
+  }
+
+  return currentAdapter;
+}
+
+/**
+ * Reset the adapter (for testing or page navigation)
+ */
+function resetAdapter() {
+  currentPlatform = null;
+  currentAdapter = null;
+}
+
+/**
+ * Get platform display name for UI
+ */
+function getPlatformDisplayName() {
+  const platform = getPlatform();
+  switch (platform) {
+    case 'ktalk':
+      return 'KTalk';
+    case 'vas3k':
+      return 'Вастрик Мит';
+    default:
+      return 'Unknown';
+  }
+}
+
+
+/***/ },
+
+/***/ "./src/platforms/ktalk.js"
+/*!********************************!*\
+  !*** ./src/platforms/ktalk.js ***!
+  \********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   KTalkAdapter: () => (/* binding */ KTalkAdapter)
+/* harmony export */ });
+/**
+ * KTalk Platform Adapter
+ *
+ * KTalk uses a custom wrapper around Jitsi with RxJS observables:
+ * - window.$conf - main conference object
+ * - $conf._participantsMap - Map of participants with RxJS observables
+ * - $conf._dominantSpeakerId$ - RxJS observable for dominant speaker
+ * - $conf.jitsiConf - underlying Jitsi conference
+ */
+
+class KTalkAdapter {
+  constructor() {
+    this.name = 'ktalk';
+    this.conf = null;
+    this.subscriptions = [];
+  }
+
+  /**
+   * Wait for conference to be available
+   */
+  waitForConference(maxAttempts = 100) {
+    return new Promise((resolve, reject) => {
+      let attempts = 0;
+
+      const check = () => {
+        attempts++;
+        if (window.$conf && window.$conf._dominantSpeakerId$ && window.$conf.jitsiConf) {
+          console.log('[KTalk Adapter] Conference found');
+          this.conf = window.$conf;
+          resolve(this.conf);
+          return;
+        }
+        if (attempts < maxAttempts) {
+          setTimeout(check, 500);
+        } else {
+          console.log('[KTalk Adapter] Conference not found');
+          reject(new Error('Conference not found'));
+        }
+      };
+
+      check();
+    });
+  }
+
+  /**
+   * Check if conference is currently available
+   */
+  isConferenceAvailable() {
+    return !!(window.$conf && window.$conf.jitsiConf && window.$conf._dominantSpeakerId$);
+  }
+
+  /**
+   * Get the conference object
+   */
+  getConference() {
+    if (this.isConferenceAvailable()) {
+      this.conf = window.$conf;
+    }
+    return this.conf;
+  }
+
+  /**
+   * Get the underlying Jitsi conference
+   */
+  getJitsiConference() {
+    return this.conf?.jitsiConf;
+  }
+
+  /**
+   * Get active speaker
+   */
+  getActiveSpeaker() {
+    const conf = this.getConference();
+    if (!conf) return null;
+
+    let activeSpeaker = null;
+
+    conf._participantsMap?.forEach((p, key) => {
+      if (p._activeSpeaker$?.value === true) {
+        const info = p._participantInfo$?.value || p._userInfo$?.value;
+        activeSpeaker = {
+          id: p._id,
+          name: this._getFullName(p, info, p.name || p.displayName || key),
+          isLocal: p.local
+        };
+      }
+    });
+
+    return activeSpeaker;
+  }
+
+  /**
+   * Check if participant's mic is muted
+   */
+  isMicMuted(participantId) {
+    const conf = this.getConference();
+    if (!conf) return true;
+
+    // Check Jitsi participant tracks
+    const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+    const jitsiParticipant = jitsiParticipants.find(p => p._id === participantId);
+    if (jitsiParticipant) {
+      const tracks = jitsiParticipant.getTracks?.() || jitsiParticipant._tracks || [];
+      const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
+      if (audioTrack) {
+        const muted = audioTrack.isMuted?.();
+        if (muted !== undefined) return muted === true;
+      }
+    }
+
+    // Check local participant
+    if (conf.localParticipant?.id === participantId) {
+      const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
+      const localAudio = localTracks.find(t => t.getType?.() === 'audio');
+      if (localAudio) {
+        const muted = localAudio.isMuted?.();
+        if (muted !== undefined) return muted === true;
+      }
+    }
+
+    // Check RxJS observables
+    const participant = conf._participantsMap?.get(participantId);
+    if (participant) {
+      if (participant._audioMuted$?.value !== undefined) {
+        return participant._audioMuted$.value === true;
+      }
+      if (participant._audioMuted !== undefined) {
+        return participant._audioMuted === true;
+      }
+    }
+
+    // If actively speaking, probably not muted
+    const speaking = conf._participantsMap?.get(participantId)?._activeSpeaker$?.value;
+    if (speaking === true) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if any mic is on
+   */
+  anyMicOn() {
+    const conf = this.getConference();
+    if (!conf) return false;
+
+    const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+
+    for (const jp of jitsiParticipants) {
+      const tracks = jp.getTracks?.() || jp._tracks || [];
+      const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
+      if (audioTrack && audioTrack.isMuted?.() === false) return true;
+    }
+
+    const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
+    const localAudio = localTracks.find(t => t.getType?.() === 'audio');
+    if (localAudio && localAudio.isMuted?.() === false) return true;
+
+    let hasUnmuted = false;
+    conf._participantsMap?.forEach((p) => {
+      if (p._audioMuted$?.value === false || p._audioMuted === false) {
+        hasUnmuted = true;
+      }
+    });
+
+    return hasUnmuted;
+  }
+
+  /**
+   * Get list of participants
+   */
+  getParticipants() {
+    const conf = this.getConference();
+    if (!conf) return [];
+
+    const participants = [];
+    const byId = new Map();
+
+    // Check if we're in a meeting
+    if (!conf._participantsMap || conf._participantsMap.size === 0) {
+      return participants;
+    }
+
+    // Add local participant
+    if (conf.localParticipant) {
+      const lp = conf.localParticipant;
+      const localInfo = lp._participantInfo$?.value || lp._userInfo$?.value;
+      const entry = {
+        id: lp.id,
+        name: this._getFullName(lp, localInfo, lp.name || lp.displayName || 'You'),
+        isLocal: true,
+        isSpeaking: conf._participantsMap?.get(lp.id)?._activeSpeaker$?.value || false,
+        micMuted: this.isMicMuted(lp.id)
+      };
+      participants.push(entry);
+      byId.set(lp.id, entry);
+    }
+
+    // Add remote participants from _participantsMap
+    conf._participantsMap?.forEach((p, key) => {
+      if (p._id !== conf.localParticipant?.id) {
+        const info = p._participantInfo$?.value || p._userInfo$?.value;
+        const entry = {
+          id: p._id,
+          name: this._getFullName(p, info, p.name || p.displayName || key),
+          isLocal: false,
+          isSpeaking: p._activeSpeaker$?.value || false,
+          micMuted: this.isMicMuted(p._id)
+        };
+        participants.push(entry);
+        byId.set(p._id, entry);
+      }
+    });
+
+    // Fallback: add from Jitsi if missing
+    const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+    for (const jp of jitsiParticipants) {
+      const pid = jp._id || jp.getId?.() || jp.id;
+      if (!pid || byId.has(pid)) continue;
+      const name = jp.getDisplayName?.() || jp._displayName || jp.displayName || jp._name || pid;
+      const entry = {
+        id: pid,
+        name,
+        isLocal: false,
+        isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+        micMuted: this.isMicMuted(pid)
+      };
+      participants.push(entry);
+      byId.set(pid, entry);
+    }
+
+    return participants;
+  }
+
+  /**
+   * Get participant name by ID
+   */
+  getParticipantName(participantId) {
+    const conf = this.getConference();
+    if (!conf || !participantId) return 'Unknown';
+
+    if (conf.localParticipant && conf.localParticipant.id === participantId) {
+      const p = conf.localParticipant;
+      const info = p._participantInfo$?.value || p._userInfo$?.value;
+      return this._getFullName(p, info, p.name || p.displayName || 'You');
+    }
+
+    if (conf._participantsMap) {
+      const participant = conf._participantsMap.get(participantId);
+      if (participant) {
+        const info = participant._participantInfo$?.value || participant._userInfo$?.value;
+        return this._getFullName(participant, info, participant.name || participant.displayName || participantId);
+      }
+    }
+
+    return participantId;
+  }
+
+  /**
+   * Subscribe to speaker changes
+   */
+  subscribeToSpeakerChanges(callback) {
+    const conf = this.getConference();
+    if (!conf) return;
+
+    // Subscribe to RxJS dominant speaker observable
+    if (conf._dominantSpeakerId$?.subscribe) {
+      const sub = conf._dominantSpeakerId$.subscribe(() => {
+        console.log('[KTalk Adapter] Dominant speaker changed:', conf._dominantSpeakerId$?.value);
+        callback();
+      });
+      this.subscriptions.push(sub);
+    }
+
+    // Subscribe to individual participant speaking state
+    conf._participantsMap?.forEach((p, key) => {
+      if (p._activeSpeaker$?.subscribe) {
+        const sub = p._activeSpeaker$.subscribe(() => callback());
+        this.subscriptions.push(sub);
+      }
+    });
+
+    // Also subscribe to Jitsi events
+    const jitsiConf = conf.jitsiConf;
+    if (jitsiConf) {
+      jitsiConf.on('conference.dominantSpeaker', () => callback());
+      jitsiConf.on('conference.trackAdded', (track) => {
+        if (track.getType?.() === 'audio') callback();
+      });
+      jitsiConf.on('conference.trackRemoved', (track) => {
+        if (track.getType?.() === 'audio') callback();
+      });
+      jitsiConf.on('conference.trackMuteChanged', (track) => {
+        if (track.getType?.() === 'audio') callback();
+      });
+      jitsiConf.on('conference.userJoined', () => {
+        setTimeout(callback, 1000);
+      });
+      jitsiConf.on('conference.userLeft', () => {
+        setTimeout(callback, 500);
+      });
+    }
+  }
+
+  /**
+   * Subscribe to new participant joining
+   */
+  onParticipantJoined(callback) {
+    const conf = this.getConference();
+    if (!conf?.jitsiConf) return;
+
+    conf.jitsiConf.on('conference.userJoined', (id) => {
+      setTimeout(() => {
+        const p = conf._participantsMap?.get(id);
+        if (p?._activeSpeaker$?.subscribe) {
+          const sub = p._activeSpeaker$.subscribe(() => {
+            // Notify speaker changes for this participant
+          });
+          this.subscriptions.push(sub);
+        }
+        callback(id);
+      }, 1000);
+    });
+  }
+
+  /**
+   * Check if conference is ready (has audio tracks)
+   */
+  isConferenceReady() {
+    const conf = this.getConference();
+    if (!conf) return false;
+
+    const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+    const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
+
+    const hasAnyTrack = jitsiParticipants.some(jp => {
+      const tracks = jp.getTracks?.() || jp._tracks || [];
+      return tracks.some(t => (t.getType?.() || t.type) === 'audio');
+    }) || localTracks.some(t => t.getType?.() === 'audio');
+
+    return hasAnyTrack;
+  }
+
+  /**
+   * Get UI tab container selector (KTalk uses custom tab system)
+   */
+  getTabContainerSelector() {
+    return '.tl-tabset__content';
+  }
+
+  /**
+   * Get content area selector
+   */
+  getContentAreaSelector() {
+    return '.slide-menu-wrapper .content';
+  }
+
+  /**
+   * Check if platform supports tab injection
+   */
+  supportsTabInjection() {
+    return true;
+  }
+
+  /**
+   * Cleanup subscriptions
+   */
+  dispose() {
+    this.subscriptions.forEach(sub => {
+      if (sub.unsubscribe) sub.unsubscribe();
+    });
+    this.subscriptions = [];
+  }
+
+  // Private helper methods
+
+  _getFullName(participant, info, fallback) {
+    const userInfo = participant?._userInfo$?.value;
+    if (userInfo) {
+      const firstName = userInfo.firstName || '';
+      const lastName = userInfo.lastName || '';
+      if (firstName && lastName) return `${firstName} ${lastName}`;
+      if (firstName) return firstName;
+    }
+
+    if (info) {
+      const firstName = info.firstName || '';
+      const lastName = info.lastName || '';
+      if (firstName && lastName) return `${firstName} ${lastName}`;
+      if (firstName) return firstName;
+    }
+
+    return fallback || 'Unknown';
+  }
+}
+
+
+/***/ },
+
+/***/ "./src/platforms/vas3k.js"
+/*!********************************!*\
+  !*** ./src/platforms/vas3k.js ***!
+  \********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   Vas3kAdapter: () => (/* binding */ Vas3kAdapter)
+/* harmony export */ });
+/**
+ * vas3k.cloud (Standard Jitsi Meet) Platform Adapter
+ *
+ * Uses standard Jitsi Meet API:
+ * - window.APP - main application object
+ * - APP.conference._room - JitsiConference object
+ * - APP.store - Redux store with participants state
+ * - room.on('conference.dominantSpeaker', callback) - speaker events
+ */
+
+class Vas3kAdapter {
+  constructor() {
+    this.name = 'vas3k';
+    this.room = null;
+    this.eventHandlers = [];
+    this.storeUnsubscribe = null;
+    this.lastDominantSpeaker = null;
+  }
+
+  /**
+   * Wait for conference to be available
+   */
+  waitForConference(maxAttempts = 100) {
+    return new Promise((resolve, reject) => {
+      let attempts = 0;
+
+      const check = () => {
+        attempts++;
+        const room = this._getRoom();
+
+        if (room && window.APP?.conference?.isJoined?.()) {
+          console.log('[Vas3k Adapter] Conference found');
+          this.room = room;
+          resolve(room);
+          return;
+        }
+
+        if (attempts < maxAttempts) {
+          setTimeout(check, 500);
+        } else {
+          console.log('[Vas3k Adapter] Conference not found');
+          reject(new Error('Conference not found'));
+        }
+      };
+
+      check();
+    });
+  }
+
+  /**
+   * Check if conference is currently available
+   */
+  isConferenceAvailable() {
+    return !!(this._getRoom() && window.APP?.conference?.isJoined?.());
+  }
+
+  /**
+   * Get the conference object (returns room for compatibility)
+   */
+  getConference() {
+    if (this.isConferenceAvailable()) {
+      this.room = this._getRoom();
+    }
+    return this.room;
+  }
+
+  /**
+   * Get the underlying Jitsi conference
+   */
+  getJitsiConference() {
+    return this._getRoom();
+  }
+
+  /**
+   * Get active speaker
+   */
+  getActiveSpeaker() {
+    const state = window.APP?.store?.getState?.();
+    if (!state) return null;
+
+    const participants = state['features/base/participants'];
+    if (!participants) return null;
+
+    // Check local participant
+    const local = participants.local;
+    if (local?.dominantSpeaker) {
+      return {
+        id: local.id,
+        name: local.name || 'You',
+        isLocal: true
+      };
+    }
+
+    // Check remote participants
+    const remote = participants.remote;
+    if (remote && remote.forEach) {
+      let activeSpeaker = null;
+      remote.forEach((p, id) => {
+        if (p.dominantSpeaker) {
+          activeSpeaker = {
+            id: p.id || id,
+            name: p.name || id,
+            isLocal: false
+          };
+        }
+      });
+      if (activeSpeaker) return activeSpeaker;
+    }
+
+    // Fallback: check large-video participant
+    const largeVideoParticipantId = state['features/large-video']?.participantId;
+    if (largeVideoParticipantId) {
+      const participant = this._getParticipantById(largeVideoParticipantId);
+      if (participant) {
+        return {
+          id: largeVideoParticipantId,
+          name: participant.name || largeVideoParticipantId,
+          isLocal: participant.id === local?.id
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if participant's mic is muted
+   */
+  isMicMuted(participantId) {
+    const room = this._getRoom();
+    if (!room) return true;
+
+    // Check local participant
+    const state = window.APP?.store?.getState?.();
+    const local = state?.['features/base/participants']?.local;
+
+    if (local?.id === participantId) {
+      const localTracks = room.getLocalTracks?.() || [];
+      const audioTrack = localTracks.find(t => t.getType?.() === 'audio');
+      if (audioTrack) {
+        return audioTrack.isMuted?.() === true;
+      }
+      // Check Redux state
+      return state?.['features/base/media']?.audio?.muted !== false;
+    }
+
+    // Check remote participants
+    const jitsiParticipants = room.getParticipants?.() || [];
+    const participant = jitsiParticipants.find(p =>
+      (p.getId?.() || p._id) === participantId
+    );
+
+    if (participant) {
+      const tracks = participant.getTracks?.() || [];
+      const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
+      if (audioTrack) {
+        return audioTrack.isMuted?.() === true;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if any mic is on
+   */
+  anyMicOn() {
+    const room = this._getRoom();
+    if (!room) return false;
+
+    // Check local tracks
+    const localTracks = room.getLocalTracks?.() || [];
+    const localAudio = localTracks.find(t => t.getType?.() === 'audio');
+    if (localAudio && localAudio.isMuted?.() === false) {
+      return true;
+    }
+
+    // Check remote participants
+    const jitsiParticipants = room.getParticipants?.() || [];
+    for (const jp of jitsiParticipants) {
+      const tracks = jp.getTracks?.() || [];
+      const audioTrack = tracks.find(t => (t.getType?.() || t.type) === 'audio');
+      if (audioTrack && audioTrack.isMuted?.() === false) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Get list of participants
+   */
+  getParticipants() {
+    const state = window.APP?.store?.getState?.();
+    if (!state) return [];
+
+    const participants = [];
+    const participantsState = state['features/base/participants'];
+    if (!participantsState) return participants;
+
+    // Add local participant
+    const local = participantsState.local;
+    if (local) {
+      participants.push({
+        id: local.id,
+        name: local.name || 'You',
+        isLocal: true,
+        isSpeaking: local.dominantSpeaker || false,
+        micMuted: this.isMicMuted(local.id)
+      });
+    }
+
+    // Add remote participants
+    const remote = participantsState.remote;
+    if (remote && remote.forEach) {
+      remote.forEach((p, id) => {
+        participants.push({
+          id: p.id || id,
+          name: p.name || id,
+          isLocal: false,
+          isSpeaking: p.dominantSpeaker || false,
+          micMuted: this.isMicMuted(p.id || id)
+        });
+      });
+    }
+
+    return participants;
+  }
+
+  /**
+   * Get participant name by ID
+   */
+  getParticipantName(participantId) {
+    if (!participantId) return 'Unknown';
+
+    const participant = this._getParticipantById(participantId);
+    return participant?.name || participantId;
+  }
+
+  /**
+   * Subscribe to speaker changes
+   */
+  subscribeToSpeakerChanges(callback) {
+    const room = this._getRoom();
+
+    if (room) {
+      // Subscribe to Jitsi conference events
+      const dominantSpeakerHandler = (id) => {
+        console.log('[Vas3k Adapter] Dominant speaker changed:', id);
+        callback();
+      };
+
+      const trackHandler = (track) => {
+        if (track.getType?.() === 'audio') {
+          callback();
+        }
+      };
+
+      const userHandler = () => {
+        setTimeout(callback, 500);
+      };
+
+      room.on('conference.dominantSpeaker', dominantSpeakerHandler);
+      room.on('conference.trackAdded', trackHandler);
+      room.on('conference.trackRemoved', trackHandler);
+      room.on('conference.trackMuteChanged', trackHandler);
+      room.on('conference.userJoined', userHandler);
+      room.on('conference.userLeft', userHandler);
+
+      this.eventHandlers.push(
+        { event: 'conference.dominantSpeaker', handler: dominantSpeakerHandler },
+        { event: 'conference.trackAdded', handler: trackHandler },
+        { event: 'conference.trackRemoved', handler: trackHandler },
+        { event: 'conference.trackMuteChanged', handler: trackHandler },
+        { event: 'conference.userJoined', handler: userHandler },
+        { event: 'conference.userLeft', handler: userHandler }
+      );
+    }
+
+    // Also subscribe to Redux store for dominant speaker changes
+    if (window.APP?.store?.subscribe) {
+      this.storeUnsubscribe = window.APP.store.subscribe(() => {
+        const state = window.APP.store.getState();
+        const participantsState = state?.['features/base/participants'];
+        let currentDominantSpeaker = null;
+
+        if (participantsState?.local?.dominantSpeaker) {
+          currentDominantSpeaker = participantsState.local.id;
+        } else if (participantsState?.remote) {
+          participantsState.remote.forEach((p, id) => {
+            if (p.dominantSpeaker) {
+              currentDominantSpeaker = p.id || id;
+            }
+          });
+        }
+
+        if (currentDominantSpeaker !== this.lastDominantSpeaker) {
+          this.lastDominantSpeaker = currentDominantSpeaker;
+          callback();
+        }
+      });
+    }
+  }
+
+  /**
+   * Subscribe to new participant joining
+   */
+  onParticipantJoined(callback) {
+    const room = this._getRoom();
+    if (!room) return;
+
+    room.on('conference.userJoined', (id) => {
+      setTimeout(() => callback(id), 1000);
+    });
+  }
+
+  /**
+   * Check if conference is ready (has audio tracks)
+   */
+  isConferenceReady() {
+    const room = this._getRoom();
+    if (!room) return false;
+
+    const localTracks = room.getLocalTracks?.() || [];
+    if (localTracks.some(t => t.getType?.() === 'audio')) {
+      return true;
+    }
+
+    const jitsiParticipants = room.getParticipants?.() || [];
+    return jitsiParticipants.some(jp => {
+      const tracks = jp.getTracks?.() || [];
+      return tracks.some(t => (t.getType?.() || t.type) === 'audio');
+    });
+  }
+
+  /**
+   * Get UI tab container selector (standard Jitsi doesn't have KTalk tabs)
+   */
+  getTabContainerSelector() {
+    return null; // No tab container in standard Jitsi
+  }
+
+  /**
+   * Get content area selector
+   */
+  getContentAreaSelector() {
+    return null; // No content area in standard Jitsi
+  }
+
+  /**
+   * Check if platform supports tab injection
+   */
+  supportsTabInjection() {
+    return false; // Use floating panel instead
+  }
+
+  /**
+   * Cleanup subscriptions
+   */
+  dispose() {
+    const room = this._getRoom();
+    if (room) {
+      this.eventHandlers.forEach(({ event, handler }) => {
+        room.off?.(event, handler);
+      });
+    }
+    this.eventHandlers = [];
+
+    if (this.storeUnsubscribe) {
+      this.storeUnsubscribe();
+      this.storeUnsubscribe = null;
+    }
+  }
+
+  // Private helper methods
+
+  _getRoom() {
+    return window.APP?.conference?._room;
+  }
+
+  _getParticipantById(participantId) {
+    const state = window.APP?.store?.getState?.();
+    if (!state) return null;
+
+    const participantsState = state['features/base/participants'];
+    if (!participantsState) return null;
+
+    if (participantsState.local?.id === participantId) {
+      return participantsState.local;
+    }
+
+    if (participantsState.remote?.get) {
+      return participantsState.remote.get(participantId);
+    }
+
+    return null;
+  }
+}
+
+
+/***/ },
+
 /***/ "./src/speaker.js"
 /*!************************!*\
   !*** ./src/speaker.js ***!
@@ -700,29 +1726,59 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils.js */ "./src/utils.js");
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+
 
 
 
 
 function getActiveSpeaker(conf) {
-  let activeSpeaker = null;
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.getPlatformAdapter)();
+  if (adapter) {
+    return adapter.getActiveSpeaker();
+  }
 
-  conf._participantsMap?.forEach((p, key) => {
+  // Legacy fallback for KTalk if adapter not ready
+  let activeSpeaker = null;
+  conf?._participantsMap?.forEach((p, key) => {
     if (p._activeSpeaker$?.value === true) {
       const info = p._participantInfo$?.value || p._userInfo$?.value;
       activeSpeaker = {
         id: p._id,
-        name: (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getFullName)(p, info, p.name || p.displayName || key),
+        name: _getFullNameLegacy(p, info, p.name || p.displayName || key),
         isLocal: p.local
       };
     }
   });
-
   return activeSpeaker;
 }
 
+// Legacy helper for fallback
+function _getFullNameLegacy(participant, info, fallback) {
+  const userInfo = participant?._userInfo$?.value;
+  if (userInfo) {
+    const firstName = userInfo.firstName || '';
+    const lastName = userInfo.lastName || '';
+    if (firstName && lastName) return `${firstName} ${lastName}`;
+    if (firstName) return firstName;
+  }
+  if (info) {
+    const firstName = info.firstName || '';
+    const lastName = info.lastName || '';
+    if (firstName && lastName) return `${firstName} ${lastName}`;
+    if (firstName) return firstName;
+  }
+  return fallback || 'Unknown';
+}
+
 function isMicMuted(conf, participantId) {
-  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.getPlatformAdapter)();
+  if (adapter) {
+    return adapter.isMicMuted(participantId);
+  }
+
+  // Legacy fallback
+  const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
   const jitsiParticipant = jitsiParticipants.find(p => p._id === participantId);
   if (jitsiParticipant) {
     const tracks = jitsiParticipant.getTracks?.() || jitsiParticipant._tracks || [];
@@ -733,7 +1789,7 @@ function isMicMuted(conf, participantId) {
     }
   }
 
-  if (conf.localParticipant?.id === participantId) {
+  if (conf?.localParticipant?.id === participantId) {
     const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
     const localAudio = localTracks.find(t => t.getType?.() === 'audio');
     if (localAudio) {
@@ -742,7 +1798,7 @@ function isMicMuted(conf, participantId) {
     }
   }
 
-  const participant = conf._participantsMap?.get(participantId);
+  const participant = conf?._participantsMap?.get(participantId);
   if (participant) {
     if (participant._audioMuted$?.value !== undefined) {
       return participant._audioMuted$.value === true;
@@ -752,7 +1808,7 @@ function isMicMuted(conf, participantId) {
     }
   }
 
-  const speaking = conf._participantsMap?.get(participantId)?._activeSpeaker$?.value;
+  const speaking = conf?._participantsMap?.get(participantId)?._activeSpeaker$?.value;
   if (speaking === true) {
     return false;
   }
@@ -761,7 +1817,13 @@ function isMicMuted(conf, participantId) {
 }
 
 function anyMicOn(conf) {
-  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.getPlatformAdapter)();
+  if (adapter) {
+    return adapter.anyMicOn();
+  }
+
+  // Legacy fallback
+  const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
   let foundAnyAudioTrack = false;
 
   for (const jp of jitsiParticipants) {
@@ -773,14 +1835,14 @@ function anyMicOn(conf) {
     }
   }
 
-  const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
+  const localTracks = conf?.jitsiConf?.getLocalTracks?.() || [];
   const localAudio = localTracks.find(t => t.getType?.() === 'audio');
   if (localAudio) {
     foundAnyAudioTrack = true;
     if (localAudio.isMuted?.() === false) return true;
   }
 
-  conf._participantsMap?.forEach((p) => {
+  conf?._participantsMap?.forEach((p) => {
     if (p._audioMuted$?.value === false || p._audioMuted === false) {
       foundAnyAudioTrack = true;
     }
@@ -791,7 +1853,7 @@ function anyMicOn(conf) {
   }
 
   let hasAnyParticipantWithUnmutedMic = false;
-  conf._participantsMap?.forEach((p) => {
+  conf?._participantsMap?.forEach((p) => {
     if (p._audioMuted$?.value === false || p._audioMuted === false) {
       hasAnyParticipantWithUnmutedMic = true;
     }
@@ -802,12 +1864,20 @@ function anyMicOn(conf) {
 }
 
 function getParticipantsList(conf) {
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.getPlatformAdapter)();
+  if (adapter) {
+    const participants = adapter.getParticipants();
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipantsMapSize = participants.length;
+    return participants;
+  }
+
+  // Legacy fallback
   const participants = [];
   const byId = new Map();
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipantsMapSize = conf._participantsMap?.size || 0;
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipantsMapSize = conf?._participantsMap?.size || 0;
 
   // Only return participants if we're actually in a meeting
-  const isInMeeting = conf._participantsMap && conf._participantsMap.size > 0;
+  const isInMeeting = conf?._participantsMap && conf._participantsMap.size > 0;
   if (!isInMeeting) {
     return participants;
   }
@@ -817,7 +1887,7 @@ function getParticipantsList(conf) {
     const localInfo = lp._participantInfo$?.value || lp._userInfo$?.value;
     const entry = {
       id: lp.id,
-      name: (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getFullName)(lp, localInfo, lp.name || lp.displayName || 'You'),
+      name: _getFullNameLegacy(lp, localInfo, lp.name || lp.displayName || 'You'),
       isLocal: true,
       isSpeaking: conf._participantsMap?.get(lp.id)?._activeSpeaker$?.value || false,
       micMuted: isMicMuted(conf, lp.id)
@@ -831,7 +1901,7 @@ function getParticipantsList(conf) {
       const info = p._participantInfo$?.value || p._userInfo$?.value;
       const entry = {
         id: p._id,
-        name: (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getFullName)(p, info, p.name || p.displayName || key),
+        name: _getFullNameLegacy(p, info, p.name || p.displayName || key),
         isLocal: false,
         isSpeaking: p._activeSpeaker$?.value || false,
         micMuted: isMicMuted(conf, p._id)
@@ -842,9 +1912,9 @@ function getParticipantsList(conf) {
   });
 
   // Fallback: add participants from Jitsi if map is empty or missing remotes
-  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsCount = jitsiParticipants.length;
-  const jitsiParticipantsMap = conf.jitsiConf?.participants || conf.jitsiConf?._participants;
+  const jitsiParticipantsMap = conf?.jitsiConf?.participants || conf?.jitsiConf?._participants;
   const jitsiMapValues = jitsiParticipantsMap
     ? (typeof jitsiParticipantsMap.values === 'function'
       ? Array.from(jitsiParticipantsMap.values())
@@ -860,7 +1930,7 @@ function getParticipantsList(conf) {
       id: pid,
       name,
       isLocal: false,
-      isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+      isSpeaking: conf?._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
       micMuted: isMicMuted(conf, pid)
     };
     participants.push(entry);
@@ -875,7 +1945,7 @@ function getParticipantsList(conf) {
       id: pid,
       name,
       isLocal: false,
-      isSpeaking: conf._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
+      isSpeaking: conf?._participantsMap?.get(pid)?._activeSpeaker$?.value || false,
       micMuted: isMicMuted(conf, pid)
     };
     participants.push(entry);
@@ -887,6 +1957,33 @@ function getParticipantsList(conf) {
 
 function sendParticipantsUpdate(conf) {
   (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsParticipants)(getParticipantsList(conf));
+}
+
+// Get participant name using adapter
+function getParticipantName(conf, participantId) {
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.getPlatformAdapter)();
+  if (adapter) {
+    return adapter.getParticipantName(participantId);
+  }
+
+  // Legacy fallback
+  if (!participantId) return 'Unknown';
+
+  if (conf?.localParticipant && conf.localParticipant.id === participantId) {
+    const p = conf.localParticipant;
+    const info = p._participantInfo$?.value || p._userInfo$?.value;
+    return _getFullNameLegacy(p, info, p.name || p.displayName || 'You');
+  }
+
+  if (conf?._participantsMap) {
+    const participant = conf._participantsMap.get(participantId);
+    if (participant) {
+      const info = participant._participantInfo$?.value || participant._userInfo$?.value;
+      return _getFullNameLegacy(participant, info, participant.name || participant.displayName || participantId);
+    }
+  }
+
+  return participantId;
 }
 
 function updateSpeakerStatus(conf) {
@@ -946,7 +2043,7 @@ function updateSpeakerStatus(conf) {
   if (activeSpeaker) {
     if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker !== activeSpeaker.id) {
       if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakingStartTime) {
-        const prevName = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getParticipantName)(conf, _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker);
+        const prevName = getParticipantName(conf, _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker);
         addToHistory(prevName, _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker, Date.now() - _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakingStartTime);
       }
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker = activeSpeaker.id;
@@ -954,7 +2051,7 @@ function updateSpeakerStatus(conf) {
     }
   } else {
     if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakingStartTime) {
-      const prevName = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getParticipantName)(conf, _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker);
+      const prevName = getParticipantName(conf, _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker);
       addToHistory(prevName, _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker, Date.now() - _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakingStartTime);
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSpeaker = null;
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakingStartTime = null;
@@ -1066,6 +2163,465 @@ const state = {
 
 /***/ },
 
+/***/ "./src/ui-vas3k.js"
+/*!*************************!*\
+  !*** ./src/ui-vas3k.js ***!
+  \*************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   addVas3kTranscriptLine: () => (/* binding */ addVas3kTranscriptLine),
+/* harmony export */   clearVas3kTranscript: () => (/* binding */ clearVas3kTranscript),
+/* harmony export */   createFloatingPanel: () => (/* binding */ createFloatingPanel),
+/* harmony export */   initVas3kUI: () => (/* binding */ initVas3kUI),
+/* harmony export */   injectVas3kStyles: () => (/* binding */ injectVas3kStyles),
+/* harmony export */   updateVas3kSpeakerStatus: () => (/* binding */ updateVas3kSpeakerStatus),
+/* harmony export */   updateVas3kWsIndicator: () => (/* binding */ updateVas3kWsIndicator)
+/* harmony export */ });
+/* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
+/* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils.js */ "./src/utils.js");
+/**
+ * Floating Panel UI for vas3k.cloud (Standard Jitsi Meet)
+ *
+ * Creates a draggable floating panel for transcript display
+ * since vas3k.cloud doesn't have KTalk's tab system.
+ */
+
+
+
+
+let panelVisible = true;
+let isDragging = false;
+let dragOffset = { x: 0, y: 0 };
+
+/**
+ * Inject styles for the floating panel
+ */
+function injectVas3kStyles() {
+  if (document.querySelector('#jitsi-transcript-styles')) return;
+
+  const styles = document.createElement('style');
+  styles.id = 'jitsi-transcript-styles';
+  styles.textContent = `
+    /* Floating panel container */
+    .jitsi-transcript-panel {
+      position: fixed;
+      bottom: 80px;
+      right: 20px;
+      width: 360px;
+      max-height: 400px;
+      background: rgba(30, 30, 30, 0.95);
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: rgba(255, 255, 255, 0.9);
+      overflow: hidden;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+
+    .jitsi-transcript-panel.collapsed {
+      max-height: 44px;
+    }
+
+    .jitsi-transcript-panel.hidden {
+      opacity: 0;
+      transform: translateY(20px);
+      pointer-events: none;
+    }
+
+    /* Panel header - draggable */
+    .jitsi-transcript-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(50, 50, 50, 0.9);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      cursor: move;
+      user-select: none;
+    }
+
+    .jitsi-transcript-header h3 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .jitsi-transcript-header-controls {
+      display: flex;
+      gap: 6px;
+    }
+
+    .jitsi-transcript-header button {
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.7);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .jitsi-transcript-header button:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.95);
+    }
+
+    /* Connection indicator */
+    .jitsi-ws-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ff4444;
+    }
+
+    .jitsi-ws-indicator.connected {
+      background: #44ff44;
+    }
+
+    /* Speaker status */
+    .jitsi-speaker-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: rgba(40, 40, 40, 0.9);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 12px;
+    }
+
+    .jitsi-speaker-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.3);
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+
+    .jitsi-speaker-dot.speaking {
+      background: #4CAF50;
+      box-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
+    }
+
+    .jitsi-speaker-name {
+      flex: 1;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    /* Transcript content area */
+    .jitsi-transcript-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      max-height: 300px;
+    }
+
+    .jitsi-transcript-content::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .jitsi-transcript-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .jitsi-transcript-content::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+    }
+
+    /* Transcript line */
+    .jitsi-transcript-line {
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .jitsi-transcript-line-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .jitsi-transcript-speaker {
+      font-weight: 600;
+      color: #64B5F6;
+    }
+
+    .jitsi-transcript-time {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    .jitsi-transcript-text {
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .jitsi-transcript-uncertain {
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* Empty state */
+    .jitsi-transcript-empty {
+      text-align: center;
+      padding: 30px 20px;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 13px;
+    }
+
+    /* Toggle button (when panel is hidden) */
+    .jitsi-transcript-toggle {
+      position: fixed;
+      bottom: 80px;
+      right: 20px;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: rgba(30, 30, 30, 0.95);
+      border: none;
+      color: rgba(255, 255, 255, 0.8);
+      cursor: pointer;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+      transition: background 0.15s, transform 0.15s;
+    }
+
+    .jitsi-transcript-toggle:hover {
+      background: rgba(50, 50, 50, 0.95);
+      transform: scale(1.05);
+    }
+
+    .jitsi-transcript-toggle svg {
+      width: 24px;
+      height: 24px;
+    }
+  `;
+
+  document.head.appendChild(styles);
+}
+
+/**
+ * Create the floating panel
+ */
+function createFloatingPanel() {
+  if (document.querySelector('.jitsi-transcript-panel')) return true;
+
+  injectVas3kStyles();
+
+  const panel = document.createElement('div');
+  panel.className = 'jitsi-transcript-panel';
+  panel.innerHTML = `
+    <div class="jitsi-transcript-header">
+      <h3>
+        <span class="jitsi-ws-indicator"></span>
+        Транскрипт
+      </h3>
+      <div class="jitsi-transcript-header-controls">
+        <button class="jitsi-collapse-btn" title="Свернуть">−</button>
+        <button class="jitsi-close-btn" title="Скрыть">×</button>
+      </div>
+    </div>
+    <div class="jitsi-speaker-status">
+      <span class="jitsi-speaker-dot"></span>
+      <span class="jitsi-speaker-name">Ожидание подключения...</span>
+    </div>
+    <div class="jitsi-transcript-content">
+      <div class="jitsi-transcript-empty">
+        Транскрипт появится здесь, когда начнётся речь
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(panel);
+
+  // Create toggle button (hidden initially)
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'jitsi-transcript-toggle';
+  toggleBtn.style.display = 'none';
+  toggleBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
+    </svg>
+  `;
+  toggleBtn.title = 'Показать транскрипт';
+  document.body.appendChild(toggleBtn);
+
+  // Set up drag functionality
+  setupDrag(panel);
+
+  // Set up button handlers
+  const collapseBtn = panel.querySelector('.jitsi-collapse-btn');
+  const closeBtn = panel.querySelector('.jitsi-close-btn');
+
+  collapseBtn.addEventListener('click', () => {
+    panel.classList.toggle('collapsed');
+    collapseBtn.textContent = panel.classList.contains('collapsed') ? '+' : '−';
+  });
+
+  closeBtn.addEventListener('click', () => {
+    panel.classList.add('hidden');
+    toggleBtn.style.display = 'flex';
+    panelVisible = false;
+  });
+
+  toggleBtn.addEventListener('click', () => {
+    panel.classList.remove('hidden');
+    toggleBtn.style.display = 'none';
+    panelVisible = true;
+  });
+
+  // Store reference
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = panel.querySelector('.jitsi-transcript-content');
+
+  return true;
+}
+
+/**
+ * Set up drag functionality for the panel
+ */
+function setupDrag(panel) {
+  const header = panel.querySelector('.jitsi-transcript-header');
+
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+
+    isDragging = true;
+    const rect = panel.getBoundingClientRect();
+    dragOffset.x = e.clientX - rect.left;
+    dragOffset.y = e.clientY - rect.top;
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e) {
+    if (!isDragging) return;
+
+    const x = e.clientX - dragOffset.x;
+    const y = e.clientY - dragOffset.y;
+
+    // Keep panel within viewport
+    const maxX = window.innerWidth - panel.offsetWidth;
+    const maxY = window.innerHeight - panel.offsetHeight;
+
+    panel.style.left = Math.max(0, Math.min(x, maxX)) + 'px';
+    panel.style.top = Math.max(0, Math.min(y, maxY)) + 'px';
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+  }
+
+  function onMouseUp() {
+    isDragging = false;
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+/**
+ * Update WebSocket connection indicator
+ */
+function updateVas3kWsIndicator(connected) {
+  const indicator = document.querySelector('.jitsi-ws-indicator');
+  if (indicator) {
+    indicator.classList.toggle('connected', connected);
+  }
+}
+
+/**
+ * Update speaker status display
+ */
+function updateVas3kSpeakerStatus(speaker, micsOn) {
+  const dot = document.querySelector('.jitsi-speaker-dot');
+  const nameEl = document.querySelector('.jitsi-speaker-name');
+
+  if (!dot || !nameEl) return;
+
+  if (speaker && !speaker.micMuted) {
+    dot.classList.add('speaking');
+    nameEl.textContent = speaker.name;
+  } else {
+    dot.classList.remove('speaking');
+    if (!micsOn) {
+      nameEl.textContent = 'Все микрофоны выключены';
+    } else {
+      nameEl.textContent = 'Никто не говорит';
+    }
+  }
+}
+
+/**
+ * Add transcript line to the panel
+ */
+function addVas3kTranscriptLine(line) {
+  const content = document.querySelector('.jitsi-transcript-content');
+  if (!content) return;
+
+  // Remove empty state message
+  const emptyMsg = content.querySelector('.jitsi-transcript-empty');
+  if (emptyMsg) {
+    emptyMsg.remove();
+  }
+
+  const lineEl = document.createElement('div');
+  lineEl.className = 'jitsi-transcript-line';
+
+  const uncertainSuffix = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
+
+  lineEl.innerHTML = `
+    <div class="jitsi-transcript-line-header">
+      <span class="jitsi-transcript-speaker">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(line.speaker || 'Unknown')}</span>
+      <span class="jitsi-transcript-time">${line.time || ''}</span>
+    </div>
+    <div class="jitsi-transcript-text ${line.uncertain ? 'jitsi-transcript-uncertain' : ''}">
+      ${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(line.text || '')}${uncertainSuffix}
+    </div>
+  `;
+
+  content.appendChild(lineEl);
+
+  // Auto-scroll to bottom
+  content.scrollTop = content.scrollHeight;
+}
+
+/**
+ * Clear transcript content
+ */
+function clearVas3kTranscript() {
+  const content = document.querySelector('.jitsi-transcript-content');
+  if (!content) return;
+
+  content.innerHTML = `
+    <div class="jitsi-transcript-empty">
+      Транскрипт появится здесь, когда начнётся речь
+    </div>
+  `;
+}
+
+/**
+ * Initialize the vas3k.cloud floating panel UI
+ */
+function initVas3kUI() {
+  injectVas3kStyles();
+  return createFloatingPanel();
+}
+
+
+/***/ },
+
 /***/ "./src/ui.js"
 /*!*******************!*\
   !*** ./src/ui.js ***!
@@ -1075,6 +2631,7 @@ const state = {
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   addContextTab: () => (/* binding */ addContextTab),
+/* harmony export */   addTranscriptLinePlatform: () => (/* binding */ addTranscriptLinePlatform),
 /* harmony export */   addTranscriptTab: () => (/* binding */ addTranscriptTab),
 /* harmony export */   createContextContent: () => (/* binding */ createContextContent),
 /* harmony export */   createTranscriptContent: () => (/* binding */ createTranscriptContent),
@@ -1083,14 +2640,20 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   handleSummaryResponse: () => (/* binding */ handleSummaryResponse),
 /* harmony export */   handleTranscript: () => (/* binding */ handleTranscript),
 /* harmony export */   handleTranscriptHistory: () => (/* binding */ handleTranscriptHistory),
+/* harmony export */   initPlatformUI: () => (/* binding */ initPlatformUI),
 /* harmony export */   injectStyles: () => (/* binding */ injectStyles),
 /* harmony export */   updateWsIndicator: () => (/* binding */ updateWsIndicator),
+/* harmony export */   updateWsIndicatorPlatform: () => (/* binding */ updateWsIndicatorPlatform),
 /* harmony export */   watchTabChanges: () => (/* binding */ watchTabChanges)
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 /* harmony import */ var _bioread_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./bioread.js */ "./src/bioread.js");
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./utils.js */ "./src/utils.js");
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+/* harmony import */ var _ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./ui-vas3k.js */ "./src/ui-vas3k.js");
+
+
 
 
 
@@ -2965,6 +4528,48 @@ function handleSummaryResponse(data) {
     updateSummaryContent('Ошибка: ' + data.error, true);
   } else if (data.summary) {
     updateSummaryContent(data.summary);
+  }
+}
+
+/**
+ * Initialize platform-specific UI
+ * For vas3k.cloud: creates floating panel
+ * For KTalk: uses existing tab injection (handled separately)
+ */
+function initPlatformUI() {
+  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.getPlatform)();
+
+  if (platform === 'vas3k') {
+    return (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.initVas3kUI)();
+  }
+
+  // For KTalk, return false - tabs are handled by addTranscriptTab/addContextTab
+  return false;
+}
+
+/**
+ * Platform-aware WebSocket indicator update
+ */
+function updateWsIndicatorPlatform(connected) {
+  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.getPlatform)();
+
+  if (platform === 'vas3k') {
+    (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.updateVas3kWsIndicator)(connected);
+  } else {
+    updateWsIndicator(connected);
+  }
+}
+
+/**
+ * Platform-aware transcript line addition
+ */
+function addTranscriptLinePlatform(line) {
+  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.getPlatform)();
+
+  if (platform === 'vas3k') {
+    (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.addVas3kTranscriptLine)(line);
+  } else {
+    addTranscriptLine(line);
   }
 }
 
