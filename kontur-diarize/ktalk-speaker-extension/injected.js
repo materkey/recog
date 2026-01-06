@@ -2350,7 +2350,9 @@ function injectVas3kStyles() {
 
     .jitsi-transcript-header-controls {
       display: flex;
-      gap: 6px;
+      gap: 4px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
 
     .jitsi-transcript-header button {
@@ -2358,10 +2360,11 @@ function injectVas3kStyles() {
       border: none;
       color: rgba(255, 255, 255, 0.7);
       cursor: pointer;
-      padding: 4px 8px;
+      padding: 4px 6px;
       border-radius: 4px;
-      font-size: 12px;
+      font-size: 11px;
       transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
     }
 
     .jitsi-transcript-header button:hover {
