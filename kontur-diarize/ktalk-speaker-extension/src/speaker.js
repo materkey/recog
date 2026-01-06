@@ -1,7 +1,7 @@
 import { state, constants } from './state.js';
 import { sendUpdate } from './utils.js';
 import { sendWsSpeakerUpdate, sendWsParticipants } from './ws_api.js';
-import { getPlatformAdapter, getPlatform } from './platforms/index.js';
+import { getPlatformAdapter, getPlatform, isJitsiPlatform } from './platforms/index.js';
 import { updateVas3kSpeakerStatus } from './ui-vas3k.js';
 
 export function getActiveSpeaker(conf) {
@@ -261,10 +261,9 @@ function getParticipantName(conf, participantId) {
 export function updateSpeakerStatus(conf) {
   const activeSpeaker = getActiveSpeaker(conf);
   const hasMicsOn = anyMicOn(conf);
-  const platform = getPlatform();
 
   // Update platform-specific UI
-  if (platform === 'vas3k') {
+  if (isJitsiPlatform()) {
     updateVas3kSpeakerStatus(activeSpeaker, hasMicsOn);
   }
 

@@ -2,7 +2,7 @@ import { state, constants } from './state.js';
 import { formatBioReadText, normalizeBioReadSettings, BIOREAD_LIMITS, BIOREAD_SETTINGS_KEY } from './bioread.js';
 import { getUncertainSuffix, renderMarkdown, escapeHtml } from './utils.js';
 import { sendWsMessage } from './ws_api.js';
-import { getPlatform } from './platforms/index.js';
+import { getPlatform, isJitsiPlatform } from './platforms/index.js';
 import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine } from './ui-vas3k.js';
 
 let selectedModel = localStorage.getItem('ktalk-ai-model') || 'gemini-2.5-flash';
@@ -1141,8 +1141,7 @@ export function handleTranscript(data) {
   }
 
   // Update platform-specific UI
-  const platform = getPlatform();
-  if (platform === 'vas3k') {
+  if (isJitsiPlatform()) {
     addVas3kTranscriptLine(newLine);
   } else {
     updateTranscriptUI();
@@ -1891,9 +1890,7 @@ export function handleSummaryResponse(data) {
  * For KTalk: uses existing tab injection (handled separately)
  */
 export function initPlatformUI() {
-  const platform = getPlatform();
-
-  if (platform === 'vas3k') {
+  if (isJitsiPlatform()) {
     return initVas3kUI();
   }
 
@@ -1905,9 +1902,7 @@ export function initPlatformUI() {
  * Platform-aware WebSocket indicator update
  */
 export function updateWsIndicatorPlatform(connected) {
-  const platform = getPlatform();
-
-  if (platform === 'vas3k') {
+  if (isJitsiPlatform()) {
     updateVas3kWsIndicator(connected);
   } else {
     updateWsIndicator(connected);
@@ -1918,9 +1913,7 @@ export function updateWsIndicatorPlatform(connected) {
  * Platform-aware transcript line addition
  */
 export function addTranscriptLinePlatform(line) {
-  const platform = getPlatform();
-
-  if (platform === 'vas3k') {
+  if (isJitsiPlatform()) {
     addVas3kTranscriptLine(line);
   } else {
     addTranscriptLine(line);

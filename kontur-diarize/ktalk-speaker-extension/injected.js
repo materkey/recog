@@ -388,8 +388,8 @@ function waitForConference(callback, maxAttempts = 100) {
   console.log(`[${platformName} Transcript] Waiting for conference...`);
 
   if (adapter) {
-    // For vas3k.cloud: Check if in prejoin and update UI accordingly
-    if (platform === 'vas3k' && adapter.isInPrejoin?.()) {
+    // For Jitsi platforms: Check if in prejoin and update UI accordingly
+    if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.isJitsiPlatform)() && adapter.isInPrejoin?.()) {
       console.log(`[${platformName} Transcript] User is in prejoin screen`);
       (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__.showVas3kPrejoinState)();
     }
@@ -401,8 +401,8 @@ function waitForConference(callback, maxAttempts = 100) {
       })
       .catch(() => {
         console.log(`[${platformName} Transcript] Conference not found after ${maxAttempts} attempts`);
-        // For vas3k: keep retrying until conference is found
-        if (platform === 'vas3k') {
+        // For Jitsi platforms: keep retrying until conference is found
+        if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.isJitsiPlatform)()) {
           if (adapter.isInPrejoin?.()) {
             console.log(`[${platformName} Transcript] Still in prejoin, retrying...`);
             (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__.showVas3kPrejoinState)();
@@ -450,7 +450,7 @@ function tryAttachConference() {
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = null;
       }
       // Update UI based on prejoin state
-      if (platform === 'vas3k') {
+      if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.isJitsiPlatform)()) {
         if (adapter.isInPrejoin?.()) {
           (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_8__.showVas3kPrejoinState)();
         } else {
@@ -828,6 +828,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   getPlatform: () => (/* binding */ getPlatform),
 /* harmony export */   getPlatformAdapter: () => (/* binding */ getPlatformAdapter),
 /* harmony export */   getPlatformDisplayName: () => (/* binding */ getPlatformDisplayName),
+/* harmony export */   isJitsiPlatform: () => (/* binding */ isJitsiPlatform),
 /* harmony export */   resetAdapter: () => (/* binding */ resetAdapter)
 /* harmony export */ });
 /* harmony import */ var _ktalk_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./ktalk.js */ "./src/platforms/ktalk.js");
@@ -838,6 +839,7 @@ __webpack_require__.r(__webpack_exports__);
  * Supports:
  * - KTalk (ktalk.ru) - uses custom $conf wrapper with RxJS observables
  * - vas3k.cloud - uses standard Jitsi Meet APP object
+ * - vkkovalev.work - uses standard Jitsi Meet APP object
  */
 
 
@@ -857,6 +859,9 @@ function detectPlatform() {
   }
   if (hostname.includes('vas3k.cloud')) {
     return 'vas3k';
+  }
+  if (hostname.includes('vkkovalev.work')) {
+    return 'vkkovalev';
   }
 
   return null;
@@ -885,6 +890,7 @@ function getPlatformAdapter() {
         currentAdapter = new _ktalk_js__WEBPACK_IMPORTED_MODULE_0__.KTalkAdapter();
         break;
       case 'vas3k':
+      case 'vkkovalev':
         currentAdapter = new _vas3k_js__WEBPACK_IMPORTED_MODULE_1__.Vas3kAdapter();
         break;
       default:
@@ -916,9 +922,19 @@ function getPlatformDisplayName() {
       return 'KTalk';
     case 'vas3k':
       return 'Вастрик Мит';
+    case 'vkkovalev':
+      return 'VK Meet';
     default:
       return 'Unknown';
   }
+}
+
+/**
+ * Check if platform uses standard Jitsi Meet (not KTalk)
+ */
+function isJitsiPlatform() {
+  const platform = getPlatform();
+  return platform === 'vas3k' || platform === 'vkkovalev';
 }
 
 
@@ -2052,10 +2068,9 @@ function getParticipantName(conf, participantId) {
 function updateSpeakerStatus(conf) {
   const activeSpeaker = getActiveSpeaker(conf);
   const hasMicsOn = anyMicOn(conf);
-  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.getPlatform)();
 
   // Update platform-specific UI
-  if (platform === 'vas3k') {
+  if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.isJitsiPlatform)()) {
     (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_4__.updateVas3kSpeakerStatus)(activeSpeaker, hasMicsOn);
   }
 
@@ -3887,8 +3902,7 @@ function handleTranscript(data) {
   }
 
   // Update platform-specific UI
-  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.getPlatform)();
-  if (platform === 'vas3k') {
+  if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
     (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.addVas3kTranscriptLine)(newLine);
   } else {
     updateTranscriptUI();
@@ -4637,9 +4651,7 @@ function handleSummaryResponse(data) {
  * For KTalk: uses existing tab injection (handled separately)
  */
 function initPlatformUI() {
-  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.getPlatform)();
-
-  if (platform === 'vas3k') {
+  if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
     return (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.initVas3kUI)();
   }
 
@@ -4651,9 +4663,7 @@ function initPlatformUI() {
  * Platform-aware WebSocket indicator update
  */
 function updateWsIndicatorPlatform(connected) {
-  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.getPlatform)();
-
-  if (platform === 'vas3k') {
+  if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
     (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.updateVas3kWsIndicator)(connected);
   } else {
     updateWsIndicator(connected);
@@ -4664,9 +4674,7 @@ function updateWsIndicatorPlatform(connected) {
  * Platform-aware transcript line addition
  */
 function addTranscriptLinePlatform(line) {
-  const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.getPlatform)();
-
-  if (platform === 'vas3k') {
+  if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
     (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.addVas3kTranscriptLine)(line);
   } else {
     addTranscriptLine(line);
