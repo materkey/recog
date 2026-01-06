@@ -525,16 +525,61 @@ class KTalkBridge:
             except Exception:
                 pass  # Клиент может отключиться
 
+    def _get_node_env(self) -> dict:
+        """Get environment with node/nvm paths for subprocess."""
+        import shutil
+        env = os.environ.copy()
+
+        # If node already in PATH, use current env
+        if shutil.which("node"):
+            return env
+
+        # Find nvm node directory and add to PATH
+        nvm_locations = [
+            Path.home() / ".local/share/nvm",
+            Path.home() / ".nvm/versions/node",
+        ]
+        for nvm_base in nvm_locations:
+            if nvm_base.exists():
+                for version_dir in sorted(nvm_base.iterdir(), reverse=True):
+                    node_bin = version_dir / "bin"
+                    if (node_bin / "node").exists():
+                        env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
+                        return env
+        return env
+
+    def _find_cli_binary(self, name: str) -> str:
+        """Find CLI binary path, checking common nvm locations."""
+        import shutil
+        # Try PATH first
+        path = shutil.which(name)
+        if path:
+            return path
+        # Check common nvm locations
+        nvm_locations = [
+            Path.home() / ".local/share/nvm",
+            Path.home() / ".nvm/versions/node",
+        ]
+        for nvm_base in nvm_locations:
+            if nvm_base.exists():
+                for version_dir in sorted(nvm_base.iterdir(), reverse=True):
+                    candidate = version_dir / "bin" / name
+                    if candidate.exists():
+                        return str(candidate)
+        raise FileNotFoundError(f"{name} not found in PATH or nvm")
+
     async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.2") -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
+        codex_path = self._find_cli_binary("codex")
         proc = await asyncio.create_subprocess_exec(
-            "codex", "exec",
+            codex_path, "exec",
             "-m", model,
             "--json",
             "-",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=self._get_node_env()
         )
         stdout, stderr = await proc.communicate(input=prompt.encode())
 
@@ -554,12 +599,14 @@ class KTalkBridge:
 
     async def _call_claude_cli(self, prompt: str, model: str = "opus") -> str:
         """Call Claude CLI (uses Max/Pro subscription)."""
+        claude_path = self._find_cli_binary("claude")
         proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt,
+            claude_path, "-p", prompt,
             "--model", model,
             "--output-format", "text",
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=self._get_node_env()
         )
         stdout, stderr = await proc.communicate()
 
@@ -1133,7 +1180,7 @@ class KTalkBridge:
             lines_count = data.get("lines_count", 0)
             question = data.get("question", "")
             previous_summary = data.get("previous_summary", "")
-            model = data.get("model", "gemini-2.5-flash")
+            model = data.get("model", "codex")
             meeting_title = data.get("meeting_title", "")
             print(f"[KTalk Bridge] Summarize request ({summary_type}): {lines_count} lines, model: {model}, meeting: {meeting_title[:50]}", file=sys.stderr)
 
