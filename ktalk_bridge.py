@@ -7,7 +7,7 @@ KTalk Bridge - WebSocket server для приёма данных о спикер
 
 Использование:
     # Standalone (для тестирования)
-    python ktalk_bridge.py --port 8765
+    python ktalk_bridge.py --port 8766
 
     # Как модуль из mp4_notes.py
     from ktalk_bridge import KTalkBridge
@@ -259,7 +259,7 @@ class KTalkBridge:
     # Максимальная длительность сегмента (сек) - если спикер говорит дольше, разбиваем на части
     MAX_SEGMENT_DURATION = 20.0
 
-    def __init__(self, host: str = "localhost", port: int = 8765):
+    def __init__(self, host: str = "localhost", port: int = 8766):
         self.host = host
         self.port = port
         self._current_speaker: Optional[str] = None
@@ -1141,7 +1141,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="KTalk Bridge WebSocket server")
     parser.add_argument("--host", default="localhost", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
+    parser.add_argument("--port", type=int, default=8766, help="Port to listen on")
     args = parser.parse_args()
 
     print(f"Starting KTalk Bridge on ws://{args.host}:{args.port}")
