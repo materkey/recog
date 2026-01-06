@@ -4,6 +4,7 @@
  * Supports:
  * - KTalk (ktalk.ru) - uses custom $conf wrapper with RxJS observables
  * - vas3k.cloud - uses standard Jitsi Meet APP object
+ * - vkkovalev.work - uses standard Jitsi Meet APP object
  */
 
 import { KTalkAdapter } from './ktalk.js';
@@ -23,6 +24,9 @@ export function detectPlatform() {
   }
   if (hostname.includes('vas3k.cloud')) {
     return 'vas3k';
+  }
+  if (hostname.includes('vkkovalev.work')) {
+    return 'vkkovalev';
   }
 
   return null;
@@ -51,6 +55,7 @@ export function getPlatformAdapter() {
         currentAdapter = new KTalkAdapter();
         break;
       case 'vas3k':
+      case 'vkkovalev':
         currentAdapter = new Vas3kAdapter();
         break;
       default:
@@ -82,7 +87,17 @@ export function getPlatformDisplayName() {
       return 'KTalk';
     case 'vas3k':
       return 'Вастрик Мит';
+    case 'vkkovalev':
+      return 'VK Meet';
     default:
       return 'Unknown';
   }
+}
+
+/**
+ * Check if platform uses standard Jitsi Meet (not KTalk)
+ */
+export function isJitsiPlatform() {
+  const platform = getPlatform();
+  return platform === 'vas3k' || platform === 'vkkovalev';
 }

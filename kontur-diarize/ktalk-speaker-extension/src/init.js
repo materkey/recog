@@ -5,7 +5,7 @@ import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from
 import { sendMeetingLeave } from './meeting.js';
 import { sendWsConnectionStatus } from './ws_api.js';
 import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
-import { getPlatformAdapter, getPlatform, getPlatformDisplayName } from './platforms/index.js';
+import { getPlatformAdapter, getPlatform, getPlatformDisplayName, isJitsiPlatform } from './platforms/index.js';
 import { showVas3kPrejoinState, showVas3kWaitingState } from './ui-vas3k.js';
 
 function sendConnectionStatus(connected) {
@@ -26,8 +26,8 @@ function waitForConference(callback, maxAttempts = 100) {
   console.log(`[${platformName} Transcript] Waiting for conference...`);
 
   if (adapter) {
-    // For vas3k.cloud: Check if in prejoin and update UI accordingly
-    if (platform === 'vas3k' && adapter.isInPrejoin?.()) {
+    // For Jitsi platforms: Check if in prejoin and update UI accordingly
+    if (isJitsiPlatform() && adapter.isInPrejoin?.()) {
       console.log(`[${platformName} Transcript] User is in prejoin screen`);
       showVas3kPrejoinState();
     }
@@ -39,8 +39,8 @@ function waitForConference(callback, maxAttempts = 100) {
       })
       .catch(() => {
         console.log(`[${platformName} Transcript] Conference not found after ${maxAttempts} attempts`);
-        // For vas3k: keep retrying until conference is found
-        if (platform === 'vas3k') {
+        // For Jitsi platforms: keep retrying until conference is found
+        if (isJitsiPlatform()) {
           if (adapter.isInPrejoin?.()) {
             console.log(`[${platformName} Transcript] Still in prejoin, retrying...`);
             showVas3kPrejoinState();
@@ -88,7 +88,7 @@ function tryAttachConference() {
         state.activeJitsiConf = null;
       }
       // Update UI based on prejoin state
-      if (platform === 'vas3k') {
+      if (isJitsiPlatform()) {
         if (adapter.isInPrejoin?.()) {
           showVas3kPrejoinState();
         } else {
