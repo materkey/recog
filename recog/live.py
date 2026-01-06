@@ -592,6 +592,7 @@ class LiveTranscriber:
                 self.last_speech_time = 0
                 self.segment_start_time = 0  # Время начала текущего сегмента
                 self.last_text_time = time.time()
+                self.audio_offset = 0  # Offset in WAV file where current chunk starts
 
         mic_state = SourceState()
         sys_state = SourceState()
@@ -656,10 +657,13 @@ class LiveTranscriber:
             if chunk is None or len(chunk) < 1000:
                 return
 
-            # Write audio to WAV file (before VAD - record everything for diarization)
+            # Capture audio offset BEFORE writing chunk (for segment playback)
+            # This offset points to where this chunk's audio STARTS in the WAV file
             if is_mic and self._wav_writer_mic:
+                state.audio_offset = self._wav_writer_mic.get_offset_ms()
                 self._wav_writer_mic.write_chunk(chunk)
             elif not is_mic and self._wav_writer_system:
+                state.audio_offset = self._wav_writer_system.get_offset_ms()
                 self._wav_writer_system.write_chunk(chunk)
 
             # VAD: пропускаем тишину (не тратим CPU на inference)
@@ -717,7 +721,6 @@ class LiveTranscriber:
 
                 # Сохраняем в MeetingStorage
                 if self._meeting_storage:
-                    audio_offset = self._wav_writer_mic.get_offset_ms() if self._wav_writer_mic else 0
                     self._meeting_storage.append_segment(
                         speaker=mic_speaker_name,
                         speaker_id="local",
@@ -726,7 +729,7 @@ class LiveTranscriber:
                         is_continuation=is_continuation,
                         uncertain=False,
                         uncertain_reason="",
-                        audio_offset_ms=audio_offset
+                        audio_offset_ms=state.audio_offset
                     )
 
             # Системный звук: диаризация
@@ -783,7 +786,6 @@ class LiveTranscriber:
 
                     # Сохраняем в MeetingStorage
                     if self._meeting_storage:
-                        audio_offset = self._wav_writer_system.get_offset_ms() if self._wav_writer_system else 0
                         self._meeting_storage.append_segment(
                             speaker=speaker,
                             speaker_id=speaker,  # Используем имя как ID для KTalk
@@ -792,7 +794,7 @@ class LiveTranscriber:
                             is_continuation=is_continuation,
                             uncertain=uncertain,
                             uncertain_reason=uncertain_reason,
-                            audio_offset_ms=audio_offset
+                            audio_offset_ms=state.audio_offset
                         )
 
             elif self.no_diarization:
