@@ -2483,6 +2483,22 @@ function injectVas3kStyles() {
       font-size: 12px;
     }
 
+    .jitsi-model-selector {
+      flex: 1;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .jitsi-model-selector option {
+      background: #1a1a2e;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
     .jitsi-summary-question-wrapper {
       display: none;
       padding: 12px 16px;
@@ -2918,6 +2934,14 @@ function createVas3kSummaryModal() {
       <input type="text" class="jitsi-summary-question-input" placeholder="Задайте вопрос по транскрипту...">
     </div>
     <div class="jitsi-summary-footer">
+      <select class="jitsi-model-selector">
+        <option value="codex">Codex (GPT-5.2)</option>
+        <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
+        <option value="claude:opus">Claude Opus</option>
+        <option value="claude:sonnet">Claude Sonnet</option>
+        <option value="gemini-2.5-flash">Gemini Flash</option>
+        <option value="gemini-2.5-pro">Gemini Pro</option>
+      </select>
       <button class="jitsi-summary-copy-btn">Copy</button>
     </div>
   `;
@@ -2970,6 +2994,14 @@ function createVas3kSummaryModal() {
     if (e.key === 'Enter') {
       askVas3kFollowUp();
     }
+  });
+
+  // Model selector handler
+  const modelSelector = modal.querySelector('.jitsi-model-selector');
+  const currentModel = localStorage.getItem('ktalk-ai-model') || 'codex';
+  modelSelector.value = currentModel;
+  modelSelector.addEventListener('change', () => {
+    localStorage.setItem('ktalk-ai-model', modelSelector.value);
   });
 
   // Setup drag for modal

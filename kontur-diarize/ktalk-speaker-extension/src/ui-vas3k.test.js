@@ -392,3 +392,65 @@ describe('Highlight Feature', () => {
     });
   });
 });
+
+describe('Model Selector Feature', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    localStorage.clear();
+  });
+
+  describe('Model selector in Summary Modal', () => {
+    let createVas3kSummaryModal, createFloatingPanel;
+
+    beforeAll(async () => {
+      const module = await import('./ui-vas3k.js');
+      createVas3kSummaryModal = module.createVas3kSummaryModal;
+      createFloatingPanel = module.createFloatingPanel;
+    });
+
+    test('modal has model selector dropdown', () => {
+      createFloatingPanel();
+      createVas3kSummaryModal();
+
+      const selector = document.querySelector('.jitsi-model-selector');
+      expect(selector).not.toBeNull();
+      expect(selector.tagName).toBe('SELECT');
+    });
+
+    test('selector has model options', () => {
+      createFloatingPanel();
+      createVas3kSummaryModal();
+
+      const selector = document.querySelector('.jitsi-model-selector');
+      const options = selector.querySelectorAll('option');
+
+      // Should have Codex, Claude, Gemini options
+      expect(options.length).toBeGreaterThanOrEqual(3);
+
+      const values = Array.from(options).map(o => o.value);
+      expect(values).toContain('codex');
+      expect(values).toContain('claude:opus');
+    });
+
+    test('selector shows current model from localStorage', () => {
+      localStorage.setItem('ktalk-ai-model', 'claude:opus');
+
+      createFloatingPanel();
+      createVas3kSummaryModal();
+
+      const selector = document.querySelector('.jitsi-model-selector');
+      expect(selector.value).toBe('claude:opus');
+    });
+
+    test('changing selector updates localStorage', () => {
+      createFloatingPanel();
+      createVas3kSummaryModal();
+
+      const selector = document.querySelector('.jitsi-model-selector');
+      selector.value = 'gemini-2.5-flash';
+      selector.dispatchEvent(new Event('change'));
+
+      expect(localStorage.getItem('ktalk-ai-model')).toBe('gemini-2.5-flash');
+    });
+  });
+});

@@ -9,12 +9,13 @@ Object.defineProperty(navigator, 'clipboard', {
   writable: true,
 });
 
-// Mock localStorage
+// Mock localStorage with actual storage
+const localStorageStore = {};
 const localStorageMock = {
-  getItem: jest.fn(),
-  setItem: jest.fn(),
-  removeItem: jest.fn(),
-  clear: jest.fn(),
+  getItem: jest.fn((key) => localStorageStore[key] ?? null),
+  setItem: jest.fn((key, value) => { localStorageStore[key] = value; }),
+  removeItem: jest.fn((key) => { delete localStorageStore[key]; }),
+  clear: jest.fn(() => { Object.keys(localStorageStore).forEach(k => delete localStorageStore[k]); }),
 };
 Object.defineProperty(window, 'localStorage', { value: localStorageMock });
 
