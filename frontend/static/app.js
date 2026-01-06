@@ -127,6 +127,7 @@ const views = {
         filterTitle: localStorage.getItem('filterTitle') ?? '',
         searchMode: localStorage.getItem('searchMode') ?? 'title',
         searchTimeout: null,
+        _listenersInitialized: false,
 
         async load() {
             const container = document.getElementById('meetings-list');
@@ -150,28 +151,33 @@ const views = {
                 container.innerHTML = `<div class="error">Error: ${e.message}</div>`;
             }
 
-            // Setup source filter
-            sourceSelect.addEventListener('change', (e) => {
-                this.filterSource = e.target.value;
-                localStorage.setItem('filterSource', this.filterSource);
-                this.render();
-            });
+            // Setup filter listeners only once (prevents duplicates on view re-entry)
+            if (!this._listenersInitialized) {
+                this._listenersInitialized = true;
 
-            // Setup search mode
-            searchModeSelect.addEventListener('change', (e) => {
-                this.searchMode = e.target.value;
-                localStorage.setItem('searchMode', this.searchMode);
-                this.handleSearch();
-            });
+                // Setup source filter
+                sourceSelect.addEventListener('change', (e) => {
+                    this.filterSource = e.target.value;
+                    localStorage.setItem('filterSource', this.filterSource);
+                    this.render();
+                });
 
-            // Setup title/content filter with debounce
-            titleInput.addEventListener('input', (e) => {
-                this.filterTitle = e.target.value;
-                localStorage.setItem('filterTitle', this.filterTitle);
+                // Setup search mode
+                searchModeSelect.addEventListener('change', (e) => {
+                    this.searchMode = e.target.value;
+                    localStorage.setItem('searchMode', this.searchMode);
+                    this.handleSearch();
+                });
 
-                clearTimeout(this.searchTimeout);
-                this.searchTimeout = setTimeout(() => this.handleSearch(), 300);
-            });
+                // Setup title/content filter with debounce
+                titleInput.addEventListener('input', (e) => {
+                    this.filterTitle = e.target.value;
+                    localStorage.setItem('filterTitle', this.filterTitle);
+
+                    clearTimeout(this.searchTimeout);
+                    this.searchTimeout = setTimeout(() => this.handleSearch(), 300);
+                });
+            }
         },
 
         handleSearch() {
@@ -319,6 +325,7 @@ const views = {
         id: null,
         meta: null,
         segments: [],
+        _searchListenerInitialized: false,
 
         async load(id) {
             this.id = id;
@@ -343,10 +350,13 @@ const views = {
                 this.renderMeta(meta, metaEl);
                 this.renderTranscript(segments, transcriptEl);
 
-                // Setup search
-                document.getElementById('transcript-search').addEventListener('input', (e) => {
-                    this.filterTranscript(e.target.value);
-                });
+                // Setup search (only once)
+                if (!this._searchListenerInitialized) {
+                    this._searchListenerInitialized = true;
+                    document.getElementById('transcript-search').addEventListener('input', (e) => {
+                        this.filterTranscript(e.target.value);
+                    });
+                }
             } catch (e) {
                 transcriptEl.innerHTML = `<div class="error">Error: ${e.message}</div>`;
             }

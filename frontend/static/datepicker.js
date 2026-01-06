@@ -7,6 +7,7 @@ const DatePicker = {
     filterDate: localStorage.getItem('filterDate') || '',
     onChange: null,
     input: null,
+    _initialized: false,
 
     init(inputId, onChange) {
         this.onChange = onChange;
@@ -15,6 +16,10 @@ const DatePicker = {
 
         // Restore saved date
         this.input.value = this.filterDate;
+
+        // Skip adding listeners if already initialized (prevents duplicates on view re-entry)
+        if (this._initialized) return;
+        this._initialized = true;
 
         // Handle change
         this.input.addEventListener('change', (e) => {
