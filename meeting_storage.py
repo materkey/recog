@@ -36,6 +36,7 @@ class TranscriptSegment:
     cont: bool                   # is_continuation
     uncertain: bool
     uncertain_reason: str = ""
+    audio_offset_ms: int = 0     # Offset from audio recording start in milliseconds
 
 
 class MeetingStorage:
@@ -74,6 +75,9 @@ class MeetingStorage:
         """
         # Закрыть все предыдущие незавершённые сессии
         self._close_stale_sessions()
+
+        # Cleanup old audio files (7-day retention)
+        self.cleanup_old_audio()
 
         self._mode = {
             "mic": mic,
@@ -521,7 +525,8 @@ class MeetingStorage:
         is_local: bool = False,
         is_continuation: bool = False,
         uncertain: bool = False,
-        uncertain_reason: str = ""
+        uncertain_reason: str = "",
+        audio_offset_ms: int = 0
     ):
         """
         Добавить сегмент в текущую встречу.
@@ -534,6 +539,7 @@ class MeetingStorage:
             is_continuation: True если продолжение предыдущей реплики
             uncertain: True если неуверены в спикере
             uncertain_reason: Причина неуверенности ("local", "mics_off")
+            audio_offset_ms: Offset from audio recording start in milliseconds
         """
         if not self.current_meeting_path:
             # Нет активной встречи - создать orphan
@@ -552,7 +558,8 @@ class MeetingStorage:
             is_local=is_local,
             cont=is_continuation,
             uncertain=uncertain,
-            uncertain_reason=uncertain_reason
+            uncertain_reason=uncertain_reason,
+            audio_offset_ms=audio_offset_ms
         )
 
         # Append to JSONL (эффективнее чем перезапись всего файла)
@@ -891,3 +898,204 @@ class MeetingStorage:
         index["meetings"].sort(key=lambda m: m["created_at"], reverse=True)
 
         self._save_json(index_path, index)
+
+    # ========== Audio & Diarization Methods ==========
+
+    def set_audio_paths(
+        self,
+        mic_path: Optional[str] = None,
+        system_path: Optional[str] = None
+    ):
+        """
+        Store audio file paths in meeting meta.
+
+        Args:
+            mic_path: Path to mic audio WAV file
+            system_path: Path to system audio WAV file
+        """
+        if not self.current_meeting_path:
+            return
+
+        meta = self._load_meta()
+        if mic_path:
+            meta["audio_mic_path"] = mic_path
+        if system_path:
+            meta["audio_system_path"] = system_path
+        meta["updated_at"] = datetime.now(UTC).isoformat()
+        self._save_meta(meta)
+
+    def get_audio_paths(self, meeting_id: str) -> tuple[Optional[Path], Optional[Path]]:
+        """
+        Get audio file paths for a meeting.
+
+        Args:
+            meeting_id: Meeting ID
+
+        Returns:
+            Tuple of (mic_path, system_path), each can be None
+        """
+        meeting_path = self.base_path / meeting_id
+        meta_path = meeting_path / "meta.json"
+
+        if not meta_path.exists():
+            return (None, None)
+
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+        mic_path = meta.get("audio_mic_path")
+        system_path = meta.get("audio_system_path")
+
+        return (
+            Path(mic_path) if mic_path and Path(mic_path).exists() else None,
+            Path(system_path) if system_path and Path(system_path).exists() else None
+        )
+
+    def create_transcript_backup(self, meeting_id: str) -> Optional[Path]:
+        """
+        Create backup of transcript.jsonl before diarization.
+
+        Args:
+            meeting_id: Meeting ID
+
+        Returns:
+            Path to backup file, or None if failed
+        """
+        meeting_path = self.base_path / meeting_id
+        transcript_path = meeting_path / "transcript.jsonl"
+        backup_path = meeting_path / "transcript.jsonl.backup"
+
+        if not transcript_path.exists():
+            return None
+
+        # Don't overwrite existing backup
+        if backup_path.exists():
+            return backup_path
+
+        shutil.copy2(transcript_path, backup_path)
+
+        # Store backup path in meta
+        meta_path = meeting_path / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["transcript_backup_path"] = str(backup_path)
+        meta["updated_at"] = datetime.now(UTC).isoformat()
+        self._save_json(meta_path, meta)
+
+        return backup_path
+
+    def restore_transcript_backup(self, meeting_id: str) -> bool:
+        """
+        Restore transcript from backup (undo diarization).
+
+        Args:
+            meeting_id: Meeting ID
+
+        Returns:
+            True if restored, False if no backup found
+        """
+        meeting_path = self.base_path / meeting_id
+        transcript_path = meeting_path / "transcript.jsonl"
+        backup_path = meeting_path / "transcript.jsonl.backup"
+
+        if not backup_path.exists():
+            return False
+
+        shutil.copy2(backup_path, transcript_path)
+        backup_path.unlink()
+
+        # Remove diarization info from meta
+        meta_path = meeting_path / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta.pop("diarization_mic", None)
+        meta.pop("diarization_system", None)
+        meta.pop("transcript_backup_path", None)
+        meta["updated_at"] = datetime.now(UTC).isoformat()
+        self._save_json(meta_path, meta)
+
+        return True
+
+    def cleanup_old_audio(self, retention_days: int = 7) -> int:
+        """
+        Delete audio files older than retention period.
+
+        Args:
+            retention_days: Number of days to keep audio files
+
+        Returns:
+            Number of files deleted
+        """
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        deleted_count = 0
+
+        for meeting_dir in self.base_path.iterdir():
+            if not meeting_dir.is_dir():
+                continue
+
+            meta_path = meeting_dir / "meta.json"
+            if not meta_path.exists():
+                continue
+
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+                # Check creation date
+                created_at = datetime.fromisoformat(meta["created_at"])
+                if created_at >= cutoff:
+                    continue  # Too recent, keep audio
+
+                # Delete mic audio if exists
+                mic_path = meta.get("audio_mic_path")
+                if mic_path and Path(mic_path).exists():
+                    Path(mic_path).unlink()
+                    meta["audio_mic_path"] = None
+                    deleted_count += 1
+
+                # Delete system audio if exists
+                system_path = meta.get("audio_system_path")
+                if system_path and Path(system_path).exists():
+                    Path(system_path).unlink()
+                    meta["audio_system_path"] = None
+                    deleted_count += 1
+
+                if deleted_count > 0:
+                    meta["audio_deleted_at"] = datetime.now(UTC).isoformat()
+                    self._save_json(meta_path, meta)
+
+            except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
+                print(f"Warning: Cleanup error for {meeting_dir.name}: {e}")
+                continue
+
+        if deleted_count > 0:
+            print(f"Cleaned up {deleted_count} audio file(s) older than {retention_days} days")
+
+        return deleted_count
+
+    def set_diarization_result(
+        self,
+        meeting_id: str,
+        track: str,  # "mic" or "system"
+        speakers_found: int
+    ):
+        """
+        Store diarization result in meeting meta.
+
+        Args:
+            meeting_id: Meeting ID
+            track: "mic" or "system"
+            speakers_found: Number of speakers found
+        """
+        meeting_path = self.base_path / meeting_id
+        meta_path = meeting_path / "meta.json"
+
+        if not meta_path.exists():
+            return
+
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+        diarization_key = f"diarization_{track}"
+        meta[diarization_key] = {
+            "performed_at": datetime.now(UTC).isoformat(),
+            "speakers_found": speakers_found
+        }
+        meta["updated_at"] = datetime.now(UTC).isoformat()
+
+        self._save_json(meta_path, meta)
