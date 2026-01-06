@@ -21,15 +21,20 @@ class IncrementalWavWriter:
     """
     Writes WAV file incrementally during live capture.
     Supports streaming write of audio chunks without loading entire file in memory.
+    Handles overlap by skipping duplicate samples at chunk boundaries.
     """
 
-    def __init__(self, path: Path, sample_rate: int = 16000, channels: int = 1):
+    def __init__(self, path: Path, sample_rate: int = 16000, channels: int = 1, overlap_seconds: float = 0.5):
         self.path = Path(path)
         self.sample_rate = sample_rate
         self.channels = channels
         self._file = None
         self._samples_written = 0
         self._start_time: Optional[float] = None
+        # Overlap handling: chunks from get_chunk() include overlap for ASR quality,
+        # but we should only write non-overlapping samples to avoid duplication
+        self._overlap_samples = int(overlap_seconds * sample_rate)
+        self._first_chunk = True
 
     def open(self):
         """Opens file and writes WAV header placeholder."""
@@ -40,7 +45,7 @@ class IncrementalWavWriter:
 
     def write_chunk(self, chunk: np.ndarray):
         """
-        Appends audio chunk to file.
+        Appends audio chunk to file, skipping overlap samples to avoid duplication.
 
         Args:
             chunk: Audio samples as float32 array (values in [-1, 1])
@@ -48,10 +53,23 @@ class IncrementalWavWriter:
         if self._file is None:
             return
 
+        # Skip overlap samples (except for first chunk) to avoid audio duplication
+        # Chunks from get_chunk() include 0.5s overlap for ASR quality,
+        # but we only write non-overlapping portion to WAV
+        if self._first_chunk:
+            self._first_chunk = False
+            samples_to_write = chunk
+        else:
+            # Skip first overlap_samples - they were already written in previous chunk
+            samples_to_write = chunk[self._overlap_samples:]
+
+        if len(samples_to_write) == 0:
+            return
+
         # Convert float32 [-1, 1] to int16
-        chunk_int16 = (chunk * 32767).astype(np.int16)
+        chunk_int16 = (samples_to_write * 32767).astype(np.int16)
         self._file.write(chunk_int16.tobytes())
-        self._samples_written += len(chunk)
+        self._samples_written += len(samples_to_write)
 
     def get_offset_ms(self) -> int:
         """Returns current offset in milliseconds from recording start."""
