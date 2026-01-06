@@ -30,7 +30,6 @@ class IncrementalWavWriter:
         self.channels = channels
         self._file = None
         self._samples_written = 0
-        self._start_time: Optional[float] = None
         # Overlap handling: chunks from get_chunk() include overlap for ASR quality,
         # but we should only write non-overlapping samples to avoid duplication
         self._overlap_samples = int(overlap_seconds * sample_rate)
@@ -41,7 +40,6 @@ class IncrementalWavWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, 'wb')
         self._write_header(0)  # Placeholder with 0 data size
-        self._start_time = time.time()
 
     def write_chunk(self, chunk: np.ndarray):
         """
@@ -72,10 +70,10 @@ class IncrementalWavWriter:
         self._samples_written += len(samples_to_write)
 
     def get_offset_ms(self) -> int:
-        """Returns current offset in milliseconds from recording start."""
-        if self._start_time is None:
-            return 0
-        return int((time.time() - self._start_time) * 1000)
+        """Returns current offset in milliseconds based on actual samples written."""
+        # Use samples_written instead of wall-clock time to account for
+        # skipped overlap samples - wall-clock would drift by 0.5s per chunk
+        return int(self._samples_written / self.sample_rate * 1000)
 
     def finalize(self):
         """Updates header with final size and closes file."""
