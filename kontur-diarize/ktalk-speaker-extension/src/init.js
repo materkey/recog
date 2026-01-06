@@ -1,10 +1,11 @@
 import { state } from './state.js';
-import { injectStyles, addTranscriptTab, addContextTab, createTranscriptContent, createContextContent, watchTabChanges, updateWsIndicator } from './ui.js';
+import { injectStyles, addTranscriptTab, addContextTab, createTranscriptContent, createContextContent, watchTabChanges, updateWsIndicator, initPlatformUI } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
 import { sendWsConnectionStatus } from './ws_api.js';
 import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
+import { getPlatformAdapter, getPlatform, getPlatformDisplayName } from './platforms/index.js';
 
 function sendConnectionStatus(connected) {
   window.dispatchEvent(new CustomEvent('ktalk-connection-status', { detail: { connected } }));
@@ -17,45 +18,100 @@ function sendConnectionStatus(connected) {
 }
 
 function waitForConference(callback, maxAttempts = 100) {
-  let attempts = 0;
-  const check = () => {
-    attempts++;
-    if (window.$conf && window.$conf._dominantSpeakerId$ && window.$conf.jitsiConf) {
-      console.log('[KTalk Transcript] Conference found');
-      callback(window.$conf);
-      return;
-    }
-    if (attempts < maxAttempts) {
-      setTimeout(check, 500);
-    } else {
-      console.log('[KTalk Transcript] Conference not found');
-      sendConnectionStatus(false);
-    }
-  };
-  check();
+  const platform = getPlatform();
+  const adapter = getPlatformAdapter();
+  const platformName = getPlatformDisplayName();
+
+  console.log(`[${platformName} Transcript] Waiting for conference...`);
+
+  if (adapter) {
+    adapter.waitForConference(maxAttempts)
+      .then((conf) => {
+        console.log(`[${platformName} Transcript] Conference found`);
+        callback(conf);
+      })
+      .catch(() => {
+        console.log(`[${platformName} Transcript] Conference not found`);
+        sendConnectionStatus(false);
+      });
+  } else {
+    // Legacy fallback for KTalk
+    let attempts = 0;
+    const check = () => {
+      attempts++;
+      if (window.$conf && window.$conf._dominantSpeakerId$ && window.$conf.jitsiConf) {
+        console.log('[KTalk Transcript] Conference found');
+        callback(window.$conf);
+        return;
+      }
+      if (attempts < maxAttempts) {
+        setTimeout(check, 500);
+      } else {
+        console.log('[KTalk Transcript] Conference not found');
+        sendConnectionStatus(false);
+      }
+    };
+    check();
+  }
 }
 
 function tryAttachConference() {
-  if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
-    if (state.activeConfRef || state.activeJitsiConf) {
-      state.conferenceReady = false;
-      state.activeConfRef = null;
-      state.activeJitsiConf = null;
-    }
-    return;
-  }
+  const adapter = getPlatformAdapter();
 
-  if (window.$conf !== state.activeConfRef || window.$conf.jitsiConf !== state.activeJitsiConf) {
-    state.activeConfRef = window.$conf;
-    state.activeJitsiConf = window.$conf.jitsiConf;
-    console.log('[KTalk Transcript] Conference reattached');
-    subscribeToDominantSpeaker(window.$conf);
+  if (adapter) {
+    // Use adapter to check conference availability
+    if (!adapter.isConferenceAvailable()) {
+      if (state.activeConfRef || state.activeJitsiConf) {
+        state.conferenceReady = false;
+        state.activeConfRef = null;
+        state.activeJitsiConf = null;
+      }
+      return;
+    }
+
+    const conf = adapter.getConference();
+    const jitsiConf = adapter.getJitsiConference();
+
+    if (conf !== state.activeConfRef || jitsiConf !== state.activeJitsiConf) {
+      state.activeConfRef = conf;
+      state.activeJitsiConf = jitsiConf;
+      console.log(`[${getPlatformDisplayName()} Transcript] Conference reattached`);
+      subscribeToDominantSpeaker(conf);
+    }
+  } else {
+    // Legacy fallback for KTalk
+    if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
+      if (state.activeConfRef || state.activeJitsiConf) {
+        state.conferenceReady = false;
+        state.activeConfRef = null;
+        state.activeJitsiConf = null;
+      }
+      return;
+    }
+
+    if (window.$conf !== state.activeConfRef || window.$conf.jitsiConf !== state.activeJitsiConf) {
+      state.activeConfRef = window.$conf;
+      state.activeJitsiConf = window.$conf.jitsiConf;
+      console.log('[KTalk Transcript] Conference reattached');
+      subscribeToDominantSpeaker(window.$conf);
+    }
   }
 }
 
 function setupUI() {
+  const adapter = getPlatformAdapter();
+
   injectStyles();
 
+  // Use platform-specific UI initialization
+  if (adapter && !adapter.supportsTabInjection()) {
+    // For platforms without native tab support (vas3k.cloud), use floating panel
+    const uiReady = initPlatformUI();
+    ensureDebugPanel();
+    return uiReady;
+  }
+
+  // KTalk: Use tab injection
   const transcriptTabAdded = addTranscriptTab();
   const contextTabAdded = addContextTab();
   if (transcriptTabAdded || contextTabAdded) {
@@ -70,6 +126,9 @@ function setupUI() {
 }
 
 function subscribeToDominantSpeaker(conf) {
+  const adapter = getPlatformAdapter();
+  const platformName = getPlatformDisplayName();
+
   sendConnectionStatus(true);
   sendParticipantsUpdate(conf);
   startParticipantsRefresh(conf, 'conference_ready');
@@ -78,97 +137,121 @@ function subscribeToDominantSpeaker(conf) {
   if (state.conferenceReadyTimeout) clearTimeout(state.conferenceReadyTimeout);
 
   const checkAndMarkReady = () => {
-    const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
-    const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
-    const hasAnyTrack = jitsiParticipants.some(jp => {
-      const tracks = jp.getTracks?.() || jp._tracks || [];
-      return tracks.some(t => (t.getType?.() || t.type) === 'audio');
-    }) || localTracks.some(t => t.getType?.() === 'audio');
+    if (adapter) {
+      if (adapter.isConferenceReady()) {
+        state.conferenceReady = true;
+        console.log(`[${platformName} Transcript] Conference ready - tracks loaded`);
+      }
+    } else {
+      // Legacy KTalk check
+      const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
+      const localTracks = conf?.jitsiConf?.getLocalTracks?.() || [];
+      const hasAnyTrack = jitsiParticipants.some(jp => {
+        const tracks = jp.getTracks?.() || jp._tracks || [];
+        return tracks.some(t => (t.getType?.() || t.type) === 'audio');
+      }) || localTracks.some(t => t.getType?.() === 'audio');
 
-    if (hasAnyTrack) {
-      state.conferenceReady = true;
-      console.log('[KTalk Transcript] Conference ready - tracks loaded');
+      if (hasAnyTrack) {
+        state.conferenceReady = true;
+        console.log('[KTalk Transcript] Conference ready - tracks loaded');
+      }
     }
   };
 
   checkAndMarkReady();
   state.conferenceReadyTimeout = setTimeout(() => {
     state.conferenceReady = true;
-    console.log('[KTalk Transcript] Conference ready - timeout');
+    console.log(`[${platformName} Transcript] Conference ready - timeout`);
     updateSpeakerStatus(conf);
   }, 5000);
 
-  console.log('[KTalk Transcript] Subscribing to speaker events');
+  console.log(`[${platformName} Transcript] Subscribing to speaker events`);
   updateSpeakerStatus(conf);
 
-  conf._participantsMap?.forEach((p, key) => {
-    if (p._activeSpeaker$?.subscribe) {
-      p._activeSpeaker$.subscribe(() => updateSpeakerStatus(conf));
-    }
-  });
-
-  if (conf._dominantSpeakerId$?.subscribe) {
-    conf._dominantSpeakerId$.subscribe(() => {
-      console.log('[KTalk Transcript] Dominant speaker changed:', conf._dominantSpeakerId$?.value);
-      updateSpeakerStatus(conf);
-    });
-  }
-
-  conf.jitsiConf.on('conference.dominantSpeaker', (id) => {
-    console.log('[KTalk Transcript] Jitsi dominant speaker event:', id);
-    updateSpeakerStatus(conf);
-  });
-
-  conf.jitsiConf.on('conference.trackAdded', (track) => {
-    if (track.getType?.() === 'audio') {
+  // Use adapter for event subscription
+  if (adapter) {
+    adapter.subscribeToSpeakerChanges(() => {
       checkAndMarkReady();
       updateSpeakerStatus(conf);
       sendParticipantsUpdate(conf);
-      const participantId = track.getParticipantId?.();
-      if (participantId) {
-        const p = conf._participantsMap?.get(participantId);
-        if (p?._activeSpeaker$?.subscribe) {
-          p._activeSpeaker$.subscribe(() => updateSpeakerStatus(conf));
-        }
-      }
-    }
-  });
+    });
 
-  conf.jitsiConf.on('conference.trackRemoved', (track) => {
-    if (track.getType?.() === 'audio') {
-      updateSpeakerStatus(conf);
-      sendParticipantsUpdate(conf);
-    }
-  });
-
-  conf.jitsiConf.on('conference.trackMuteChanged', (track) => {
-    if (track.getType?.() === 'audio') {
-      updateSpeakerStatus(conf);
-      sendParticipantsUpdate(conf);
-    }
-  });
-
-  conf.jitsiConf.on('conference.userJoined', (id) => {
-    setTimeout(() => {
-      const p = conf._participantsMap?.get(id);
-      if (p?._activeSpeaker$?.subscribe) {
-        p._activeSpeaker$.subscribe(() => updateSpeakerStatus(conf));
-      }
+    adapter.onParticipantJoined?.((id) => {
       updateSpeakerStatus(conf);
       sendParticipantsUpdate(conf);
       startParticipantsRefresh(conf, 'user_joined');
-    }, 1000);
-  });
+    });
+  } else {
+    // Legacy KTalk event subscription
+    conf?._participantsMap?.forEach((p, key) => {
+      if (p._activeSpeaker$?.subscribe) {
+        p._activeSpeaker$.subscribe(() => updateSpeakerStatus(conf));
+      }
+    });
 
-  conf.jitsiConf.on('conference.userLeft', () => {
-    setTimeout(() => {
+    if (conf?._dominantSpeakerId$?.subscribe) {
+      conf._dominantSpeakerId$.subscribe(() => {
+        console.log('[KTalk Transcript] Dominant speaker changed:', conf._dominantSpeakerId$?.value);
+        updateSpeakerStatus(conf);
+      });
+    }
+
+    conf?.jitsiConf?.on('conference.dominantSpeaker', (id) => {
+      console.log('[KTalk Transcript] Jitsi dominant speaker event:', id);
       updateSpeakerStatus(conf);
-      sendParticipantsUpdate(conf);
-      startParticipantsRefresh(conf, 'user_left');
-    }, 500);
-  });
+    });
 
-  console.log('[KTalk Transcript] Ready');
+    conf?.jitsiConf?.on('conference.trackAdded', (track) => {
+      if (track.getType?.() === 'audio') {
+        checkAndMarkReady();
+        updateSpeakerStatus(conf);
+        sendParticipantsUpdate(conf);
+        const participantId = track.getParticipantId?.();
+        if (participantId) {
+          const p = conf._participantsMap?.get(participantId);
+          if (p?._activeSpeaker$?.subscribe) {
+            p._activeSpeaker$.subscribe(() => updateSpeakerStatus(conf));
+          }
+        }
+      }
+    });
+
+    conf?.jitsiConf?.on('conference.trackRemoved', (track) => {
+      if (track.getType?.() === 'audio') {
+        updateSpeakerStatus(conf);
+        sendParticipantsUpdate(conf);
+      }
+    });
+
+    conf?.jitsiConf?.on('conference.trackMuteChanged', (track) => {
+      if (track.getType?.() === 'audio') {
+        updateSpeakerStatus(conf);
+        sendParticipantsUpdate(conf);
+      }
+    });
+
+    conf?.jitsiConf?.on('conference.userJoined', (id) => {
+      setTimeout(() => {
+        const p = conf._participantsMap?.get(id);
+        if (p?._activeSpeaker$?.subscribe) {
+          p._activeSpeaker$.subscribe(() => updateSpeakerStatus(conf));
+        }
+        updateSpeakerStatus(conf);
+        sendParticipantsUpdate(conf);
+        startParticipantsRefresh(conf, 'user_joined');
+      }, 1000);
+    });
+
+    conf?.jitsiConf?.on('conference.userLeft', () => {
+      setTimeout(() => {
+        updateSpeakerStatus(conf);
+        sendParticipantsUpdate(conf);
+        startParticipantsRefresh(conf, 'user_left');
+      }, 500);
+    });
+  }
+
+  console.log(`[${platformName} Transcript] Ready`);
 }
 
 function startParticipantsRefresh(conf, reason) {
@@ -191,30 +274,41 @@ function startParticipantsRefresh(conf, reason) {
     }
   };
 
-  console.log('[KTalk Transcript] Participants refresh start:', reason);
+  console.log(`[${getPlatformDisplayName()} Transcript] Participants refresh start:`, reason);
   tick();
   state.participantsRefreshTimer = setInterval(tick, intervalMs);
 }
 
 export function init() {
-  console.log('[KTalk Transcript] Script loaded');
+  const platformName = getPlatformDisplayName();
+  const adapter = getPlatformAdapter();
+
+  console.log(`[${platformName} Transcript] Script loaded on platform: ${getPlatform()}`);
 
   setTimeout(connectWebSocket, 1000);
 
   setInterval(() => {
-    if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab')) {
-      state.transcriptTabAdded = false;
-      setupUI();
-    }
-    if (!document.querySelector('.ktalk-transcript-content')) {
-      state.transcriptContentElement = null;
-      state.originalChatContent = null;
-      createTranscriptContent();
-    }
-    if (!document.querySelector('.ktalk-context-content')) {
-      state.contextContentElement = null;
-      state.originalChatContent = null;
-      createContextContent();
+    if (adapter && !adapter.supportsTabInjection()) {
+      // For vas3k.cloud: check floating panel exists
+      if (!document.querySelector('.jitsi-transcript-panel')) {
+        setupUI();
+      }
+    } else {
+      // For KTalk: check tabs exist
+      if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab')) {
+        state.transcriptTabAdded = false;
+        setupUI();
+      }
+      if (!document.querySelector('.ktalk-transcript-content')) {
+        state.transcriptContentElement = null;
+        state.originalChatContent = null;
+        createTranscriptContent();
+      }
+      if (!document.querySelector('.ktalk-context-content')) {
+        state.contextContentElement = null;
+        state.originalChatContent = null;
+        createContextContent();
+      }
     }
     tryAttachConference();
     updateDebugPanel();

@@ -2,6 +2,8 @@ import { state, constants } from './state.js';
 import { formatBioReadText, normalizeBioReadSettings, BIOREAD_LIMITS, BIOREAD_SETTINGS_KEY } from './bioread.js';
 import { getUncertainSuffix, renderMarkdown, escapeHtml } from './utils.js';
 import { sendWsMessage } from './ws_api.js';
+import { getPlatform } from './platforms/index.js';
+import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine } from './ui-vas3k.js';
 
 let selectedModel = localStorage.getItem('ktalk-ai-model') || 'gemini-2.5-flash';
 let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'gemini-3-pro-preview';
@@ -1872,5 +1874,47 @@ export function handleSummaryResponse(data) {
     updateSummaryContent('Ошибка: ' + data.error, true);
   } else if (data.summary) {
     updateSummaryContent(data.summary);
+  }
+}
+
+/**
+ * Initialize platform-specific UI
+ * For vas3k.cloud: creates floating panel
+ * For KTalk: uses existing tab injection (handled separately)
+ */
+export function initPlatformUI() {
+  const platform = getPlatform();
+
+  if (platform === 'vas3k') {
+    return initVas3kUI();
+  }
+
+  // For KTalk, return false - tabs are handled by addTranscriptTab/addContextTab
+  return false;
+}
+
+/**
+ * Platform-aware WebSocket indicator update
+ */
+export function updateWsIndicatorPlatform(connected) {
+  const platform = getPlatform();
+
+  if (platform === 'vas3k') {
+    updateVas3kWsIndicator(connected);
+  } else {
+    updateWsIndicator(connected);
+  }
+}
+
+/**
+ * Platform-aware transcript line addition
+ */
+export function addTranscriptLinePlatform(line) {
+  const platform = getPlatform();
+
+  if (platform === 'vas3k') {
+    addVas3kTranscriptLine(line);
+  } else {
+    addTranscriptLine(line);
   }
 }

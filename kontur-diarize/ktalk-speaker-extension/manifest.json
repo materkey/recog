@@ -1,18 +1,19 @@
 {
   "manifest_version": 3,
-  "name": "KTalk Speaker Detector",
-  "version": "1.0.0",
-  "description": "Detects and displays the current active speaker in KTalk video conferences",
+  "name": "Jitsi Speaker Detector",
+  "version": "1.1.0",
+  "description": "Detects and displays the current active speaker in Jitsi-based video conferences (KTalk, vas3k.cloud)",
   "permissions": [
     "activeTab",
     "storage"
   ],
   "host_permissions": [
-    "https://*.ktalk.ru/*"
+    "https://*.ktalk.ru/*",
+    "https://meet.vas3k.cloud/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://*.ktalk.ru/*"],
+      "matches": ["https://*.ktalk.ru/*", "https://meet.vas3k.cloud/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
@@ -33,7 +34,7 @@
   "web_accessible_resources": [
     {
       "resources": ["injected.js"],
-      "matches": ["https://*.ktalk.ru/*"]
+      "matches": ["https://*.ktalk.ru/*", "https://meet.vas3k.cloud/*"]
     }
   ]
 }
