@@ -525,22 +525,56 @@ class KTalkBridge:
             except Exception:
                 pass  # Клиент может отключиться
 
+    async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.2") -> str:
+        """Call Codex CLI (uses ChatGPT Pro subscription)."""
+        proc = await asyncio.create_subprocess_exec(
+            "codex", "exec",
+            "-m", model,
+            "--json",
+            "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate(input=prompt.encode())
+
+        if proc.returncode != 0:
+            raise Exception(f"Codex CLI error: {stderr.decode().strip()}")
+
+        for line in stdout.decode().strip().split('\n'):
+            if not line:
+                continue
+            event = json.loads(line)
+            if event.get("type") == "item.completed":
+                item = event.get("item", {})
+                if item.get("type") == "agent_message":
+                    return item.get("text", "")
+
+        raise Exception("No response from Codex")
+
+    async def _call_claude_cli(self, prompt: str, model: str = "opus") -> str:
+        """Call Claude CLI (uses Max/Pro subscription)."""
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "-p", prompt,
+            "--model", model,
+            "--output-format", "text",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            raise Exception(f"Claude CLI error: {stderr.decode().strip()}")
+
+        return stdout.decode().strip()
+
     async def _handle_summarize(self, transcript: str, summary_type: str = "catchup", question: str = "", previous_summary: str = "", model: str = "gemini-2.5-flash", meeting_title: str = ""):
-        """Обрабатывает запрос на AI summarize через Google Gemini API."""
+        """Обрабатывает запрос на AI summarize через Gemini API, Codex CLI или Claude CLI."""
         try:
             if not transcript.strip():
                 await self._broadcast_message({
                     "type": "summarize_response",
                     "error": "Нет транскрипта для анализа"
-                })
-                return
-
-            # Check for API key (try both names)
-            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                await self._broadcast_message({
-                    "type": "summarize_response",
-                    "error": "GEMINI_API_KEY не установлен"
                 })
                 return
 
@@ -637,68 +671,91 @@ class KTalkBridge:
                 f.write(f"Type: {summary_type}\n")
                 f.write(f"---\n{prompt}\n")
 
-            # Call Google Gemini API
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            # Route to appropriate provider based on model prefix
+            summary = None
 
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                # Pro models use thinking tokens, need higher limit
-                max_tokens = 8192 if "pro" in model else 2048
+            if model.startswith("codex"):
+                # Codex CLI (uses ChatGPT Pro subscription)
+                codex_model = model.split(":")[1] if ":" in model else "gpt-5.2"
+                print(f"[KTalk Bridge] Using Codex CLI with model: {codex_model}", file=sys.stderr)
+                summary = await self._call_codex_cli(prompt, codex_model)
 
-                async with session.post(
-                    url,
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {
-                            "temperature": 0.3,
-                            "maxOutputTokens": max_tokens
-                        }
-                    },
-                    headers={"Content-Type": "application/json"},
-                    timeout=aiohttp.ClientTimeout(total=60 if "pro" in model else 30)
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        print(f"[KTalk Bridge] Gemini error: {error_text}", file=sys.stderr)
-                        await self._broadcast_message({
-                            "type": "summarize_response",
-                            "error": f"Gemini API error: {response.status}"
-                        })
-                        return
+            elif model.startswith("claude"):
+                # Claude CLI (uses Max/Pro subscription)
+                claude_model = model.split(":")[1] if ":" in model else "opus"
+                print(f"[KTalk Bridge] Using Claude CLI with model: {claude_model}", file=sys.stderr)
+                summary = await self._call_claude_cli(prompt, claude_model)
 
-                    data = await response.json()
+            else:
+                # Gemini API (default)
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                if not api_key:
+                    await self._broadcast_message({
+                        "type": "summarize_response",
+                        "error": "GEMINI_API_KEY не установлен"
+                    })
+                    return
 
-            # Extract text from response
-            candidates = data.get("candidates", [])
-            if not candidates:
-                print(f"[KTalk Bridge] No candidates in response: {data}", file=sys.stderr)
-                await self._broadcast_message({
-                    "type": "summarize_response",
-                    "error": f"No candidates: {data.get('error', data.get('promptFeedback', 'unknown'))}"
-                })
-                return
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
-            # Check finish reason
-            finish_reason = candidates[0].get("finishReason", "")
-            if finish_reason and finish_reason not in ["STOP", "MAX_TOKENS"]:
-                print(f"[KTalk Bridge] Unexpected finish reason: {finish_reason}", file=sys.stderr)
-                await self._broadcast_message({
-                    "type": "summarize_response",
-                    "error": f"Gemini blocked: {finish_reason}"
-                })
-                return
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    # Pro models use thinking tokens, need higher limit
+                    max_tokens = 8192 if "pro" in model else 2048
 
-            summary = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                    async with session.post(
+                        url,
+                        json={
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {
+                                "temperature": 0.3,
+                                "maxOutputTokens": max_tokens
+                            }
+                        },
+                        headers={"Content-Type": "application/json"},
+                        timeout=aiohttp.ClientTimeout(total=60 if "pro" in model else 30)
+                    ) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            print(f"[KTalk Bridge] Gemini error: {error_text}", file=sys.stderr)
+                            await self._broadcast_message({
+                                "type": "summarize_response",
+                                "error": f"Gemini API error: {response.status}"
+                            })
+                            return
+
+                        data = await response.json()
+
+                # Extract text from response
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    print(f"[KTalk Bridge] No candidates in response: {data}", file=sys.stderr)
+                    await self._broadcast_message({
+                        "type": "summarize_response",
+                        "error": f"No candidates: {data.get('error', data.get('promptFeedback', 'unknown'))}"
+                    })
+                    return
+
+                # Check finish reason
+                finish_reason = candidates[0].get("finishReason", "")
+                if finish_reason and finish_reason not in ["STOP", "MAX_TOKENS"]:
+                    print(f"[KTalk Bridge] Unexpected finish reason: {finish_reason}", file=sys.stderr)
+                    await self._broadcast_message({
+                        "type": "summarize_response",
+                        "error": f"Gemini blocked: {finish_reason}"
+                    })
+                    return
+
+                summary = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
 
             if not summary:
-                print(f"[KTalk Bridge] Empty text in response: {candidates[0]}", file=sys.stderr)
                 await self._broadcast_message({
                     "type": "summarize_response",
-                    "error": "Пустой ответ от Gemini"
+                    "error": "Пустой ответ от модели"
                 })
                 return
 
-            print(f"[KTalk Bridge] Summary generated: {len(summary)} chars", file=sys.stderr)
+            print(f"[KTalk Bridge] Summary generated ({model}): {len(summary)} chars", file=sys.stderr)
 
             await self._broadcast_message({
                 "type": "summarize_response",

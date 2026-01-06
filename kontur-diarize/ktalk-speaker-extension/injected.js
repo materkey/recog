@@ -2258,22 +2258,29 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   addVas3kTranscriptLine: () => (/* binding */ addVas3kTranscriptLine),
 /* harmony export */   clearVas3kTranscript: () => (/* binding */ clearVas3kTranscript),
+/* harmony export */   copyVas3kTranscript: () => (/* binding */ copyVas3kTranscript),
 /* harmony export */   createFloatingPanel: () => (/* binding */ createFloatingPanel),
+/* harmony export */   createVas3kSummaryModal: () => (/* binding */ createVas3kSummaryModal),
+/* harmony export */   handleVas3kSummaryResponse: () => (/* binding */ handleVas3kSummaryResponse),
+/* harmony export */   highlightVas3kLine: () => (/* binding */ highlightVas3kLine),
 /* harmony export */   initVas3kUI: () => (/* binding */ initVas3kUI),
 /* harmony export */   injectVas3kStyles: () => (/* binding */ injectVas3kStyles),
 /* harmony export */   showVas3kPrejoinState: () => (/* binding */ showVas3kPrejoinState),
 /* harmony export */   showVas3kWaitingState: () => (/* binding */ showVas3kWaitingState),
+/* harmony export */   toggleVas3kFollow: () => (/* binding */ toggleVas3kFollow),
 /* harmony export */   updateVas3kSpeakerStatus: () => (/* binding */ updateVas3kSpeakerStatus),
 /* harmony export */   updateVas3kWsIndicator: () => (/* binding */ updateVas3kWsIndicator)
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 /* harmony import */ var _utils_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./utils.js */ "./src/utils.js");
+/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
 /**
  * Floating Panel UI for vas3k.cloud (Standard Jitsi Meet)
  *
  * Creates a draggable floating panel for transcript display
  * since vas3k.cloud doesn't have KTalk's tab system.
  */
+
 
 
 
@@ -2360,6 +2367,144 @@ function injectVas3kStyles() {
     .jitsi-transcript-header button:hover {
       background: rgba(255, 255, 255, 0.1);
       color: rgba(255, 255, 255, 0.95);
+    }
+
+    .jitsi-transcript-header button.copied {
+      background: rgba(76, 175, 80, 0.3);
+      color: #4CAF50;
+    }
+
+    .jitsi-transcript-header button.active {
+      background: rgba(100, 181, 246, 0.3);
+      color: #64B5F6;
+    }
+
+    /* Highlighted transcript line */
+    .jitsi-transcript-line.highlighted {
+      background: rgba(255, 235, 59, 0.2);
+      border-left: 3px solid #FFEB3B;
+    }
+
+    /* Summary Modal */
+    .jitsi-summary-modal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 450px;
+      max-height: 500px;
+      background: rgba(30, 30, 30, 0.98);
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      z-index: 10001;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: rgba(255, 255, 255, 0.9);
+      overflow: hidden;
+    }
+
+    .jitsi-summary-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: rgba(50, 50, 50, 0.9);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      cursor: move;
+    }
+
+    .jitsi-summary-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .jitsi-summary-close {
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.7);
+      cursor: pointer;
+      font-size: 18px;
+      padding: 4px 8px;
+    }
+
+    .jitsi-summary-types {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .jitsi-summary-btn {
+      flex: 1;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.8);
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.15s;
+    }
+
+    .jitsi-summary-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .jitsi-summary-btn.active {
+      background: rgba(100, 181, 246, 0.3);
+      color: #64B5F6;
+    }
+
+    .jitsi-summary-content {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      max-height: 300px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .jitsi-summary-footer {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .jitsi-summary-copy-btn {
+      padding: 8px 16px;
+      background: rgba(76, 175, 80, 0.2);
+      border: none;
+      border-radius: 6px;
+      color: #4CAF50;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .jitsi-summary-question-wrapper {
+      display: none;
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .jitsi-summary-question-wrapper.visible {
+      display: block;
+    }
+
+    .jitsi-summary-question-input {
+      width: 100%;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 13px;
+    }
+
+    .jitsi-summary-question-input::placeholder {
+      color: rgba(255, 255, 255, 0.4);
     }
 
     /* Connection indicator */
@@ -2518,6 +2663,11 @@ function createFloatingPanel() {
         Транскрипт
       </h3>
       <div class="jitsi-transcript-header-controls">
+        <button class="jitsi-copy-btn" title="Копировать">Copy</button>
+        <button class="jitsi-ai-btn" title="AI Summary">AI</button>
+        <button class="jitsi-follow-btn" title="Автоскролл">Follow</button>
+        <button class="jitsi-scroll-up-btn" title="В начало">⬆</button>
+        <button class="jitsi-scroll-down-btn" title="В конец">⬇</button>
         <button class="jitsi-collapse-btn" title="Свернуть">−</button>
         <button class="jitsi-close-btn" title="Скрыть">×</button>
       </div>
@@ -2557,6 +2707,38 @@ function createFloatingPanel() {
   collapseBtn.addEventListener('click', () => {
     panel.classList.toggle('collapsed');
     collapseBtn.textContent = panel.classList.contains('collapsed') ? '+' : '−';
+  });
+
+  const copyBtn = panel.querySelector('.jitsi-copy-btn');
+  copyBtn.addEventListener('click', () => {
+    copyVas3kTranscript();
+  });
+
+  const aiBtn = panel.querySelector('.jitsi-ai-btn');
+  aiBtn.addEventListener('click', () => {
+    createVas3kSummaryModal();
+  });
+
+  const followBtn = panel.querySelector('.jitsi-follow-btn');
+  // Initialize follow state
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.vas3kFollowEnabled === undefined) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.vas3kFollowEnabled = true;
+  }
+  updateFollowButtonState(followBtn);
+  followBtn.addEventListener('click', () => {
+    toggleVas3kFollow();
+  });
+
+  const scrollUpBtn = panel.querySelector('.jitsi-scroll-up-btn');
+  scrollUpBtn.addEventListener('click', () => {
+    const content = panel.querySelector('.jitsi-transcript-content');
+    if (content) content.scrollTop = 0;
+  });
+
+  const scrollDownBtn = panel.querySelector('.jitsi-scroll-down-btn');
+  scrollDownBtn.addEventListener('click', () => {
+    const content = panel.querySelector('.jitsi-transcript-content');
+    if (content) content.scrollTop = content.scrollHeight - content.clientHeight;
   });
 
   closeBtn.addEventListener('click', () => {
@@ -2685,6 +2867,9 @@ function addVas3kTranscriptLine(line) {
 
   const lineEl = document.createElement('div');
   lineEl.className = 'jitsi-transcript-line';
+  if (line.id) {
+    lineEl.dataset.lineId = line.id;
+  }
 
   const uncertainSuffix = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
 
@@ -2700,8 +2885,305 @@ function addVas3kTranscriptLine(line) {
 
   content.appendChild(lineEl);
 
-  // Auto-scroll to bottom
-  content.scrollTop = content.scrollHeight;
+  // Auto-scroll to bottom only if follow is enabled (default true)
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.vas3kFollowEnabled !== false) {
+    content.scrollTop = content.scrollHeight;
+  }
+}
+
+/**
+ * Create AI Summary modal
+ */
+function createVas3kSummaryModal() {
+  // Remove existing modal if any
+  const existing = document.querySelector('.jitsi-summary-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.className = 'jitsi-summary-modal';
+  modal.innerHTML = `
+    <div class="jitsi-summary-header">
+      <h3>AI Summary</h3>
+      <button class="jitsi-summary-close">×</button>
+    </div>
+    <div class="jitsi-summary-types">
+      <button class="jitsi-summary-btn" data-type="catchup">Catch-up (1 мин)</button>
+      <button class="jitsi-summary-btn" data-type="brief">Кратко (2 мин)</button>
+      <button class="jitsi-summary-btn" data-type="full">Полный</button>
+    </div>
+    <div class="jitsi-summary-content">
+      <p style="color: rgba(255,255,255,0.5)">Выберите тип summary выше</p>
+    </div>
+    <div class="jitsi-summary-question-wrapper">
+      <input type="text" class="jitsi-summary-question-input" placeholder="Задайте вопрос по транскрипту...">
+    </div>
+    <div class="jitsi-summary-footer">
+      <button class="jitsi-summary-copy-btn">Copy</button>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  // Close button handler
+  const closeBtn = modal.querySelector('.jitsi-summary-close');
+  closeBtn.addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Summary type buttons
+  const typeButtons = modal.querySelectorAll('.jitsi-summary-btn');
+  typeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Remove active from all
+      typeButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const type = btn.dataset.type;
+      const questionWrapper = modal.querySelector('.jitsi-summary-question-wrapper');
+
+      // Show question input only for "full" type
+      if (type === 'full') {
+        questionWrapper.classList.add('visible');
+      } else {
+        questionWrapper.classList.remove('visible');
+      }
+
+      // TODO: Request summary via WebSocket
+      requestVas3kSummary(type);
+    });
+  });
+
+  // Copy button handler
+  const copyBtn = modal.querySelector('.jitsi-summary-copy-btn');
+  copyBtn.addEventListener('click', () => {
+    const content = modal.querySelector('.jitsi-summary-content');
+    navigator.clipboard.writeText(content.textContent || '');
+    copyBtn.textContent = '✓';
+    setTimeout(() => {
+      copyBtn.textContent = 'Copy';
+    }, 2000);
+  });
+
+  // Question input Enter handler
+  const questionInput = modal.querySelector('.jitsi-summary-question-input');
+  questionInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      askVas3kFollowUp();
+    }
+  });
+
+  // Setup drag for modal
+  setupModalDrag(modal);
+
+  return modal;
+}
+
+/**
+ * Setup drag functionality for modal
+ */
+function setupModalDrag(modal) {
+  const header = modal.querySelector('.jitsi-summary-header');
+  let modalDragging = false;
+  let modalDragOffset = { x: 0, y: 0 };
+
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+
+    modalDragging = true;
+    const rect = modal.getBoundingClientRect();
+    modalDragOffset.x = e.clientX - rect.left;
+    modalDragOffset.y = e.clientY - rect.top;
+
+    // Remove transform to use absolute positioning
+    modal.style.transform = 'none';
+    modal.style.left = rect.left + 'px';
+    modal.style.top = rect.top + 'px';
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e) {
+    if (!modalDragging) return;
+
+    const x = e.clientX - modalDragOffset.x;
+    const y = e.clientY - modalDragOffset.y;
+
+    // Keep modal within viewport
+    const maxX = window.innerWidth - modal.offsetWidth;
+    const maxY = window.innerHeight - modal.offsetHeight;
+
+    modal.style.left = Math.max(0, Math.min(x, maxX)) + 'px';
+    modal.style.top = Math.max(0, Math.min(y, maxY)) + 'px';
+  }
+
+  function onMouseUp() {
+    modalDragging = false;
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+/**
+ * Request summary from backend
+ */
+function requestVas3kSummary(type) {
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) {
+    const content = document.querySelector('.jitsi-summary-content');
+    if (content) {
+      content.innerHTML = '<p style="color: #ff6b6b">Нет транскрипта для анализа</p>';
+    }
+    return;
+  }
+
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryType = type;
+  let linesToSend;
+
+  if (type === 'catchup') {
+    const oneMinuteAgo = Date.now() - 60000;
+    const recentLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.filter(line => line.createdAt && line.createdAt >= oneMinuteAgo);
+    linesToSend = recentLines.length > 0 ? recentLines : _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-10);
+  } else if (type === 'brief') {
+    const twoMinutesAgo = Date.now() - 120000;
+    const recentLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.filter(line => line.createdAt && line.createdAt >= twoMinutesAgo);
+    linesToSend = recentLines.length > 0 ? recentLines : _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-20);
+  } else {
+    linesToSend = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines;
+  }
+
+  const transcriptText = linesToSend.map(line => {
+    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
+    return `[${line.time}] ${speaker}: ${line.text}`;
+  }).join('\n');
+
+  const content = document.querySelector('.jitsi-summary-content');
+  if (content) {
+    content.innerHTML = '<p style="color: rgba(255,255,255,0.5)">⏳ Генерация summary...</p>';
+  }
+
+  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsMessage)({
+    type: 'summarize_request',
+    summary_type: type,
+    transcript: transcriptText,
+    lines_count: linesToSend.length,
+    model: localStorage.getItem('ktalk-ai-model') || 'codex',
+    meeting_title: document.title || ''
+  });
+}
+
+/**
+ * Ask follow-up question
+ */
+function askVas3kFollowUp() {
+  const input = document.querySelector('.jitsi-summary-question-input');
+  const question = input?.value?.trim();
+  if (!question) return;
+
+  const transcriptText = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map(line => {
+    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
+    return `[${line.time}] ${speaker}: ${line.text}`;
+  }).join('\n');
+
+  const content = document.querySelector('.jitsi-summary-content');
+  if (content) {
+    content.innerHTML = '<p style="color: rgba(255,255,255,0.5)">⏳ Отвечаю на вопрос...</p>';
+  }
+
+  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsMessage)({
+    type: 'summarize_request',
+    summary_type: 'question',
+    transcript: transcriptText,
+    question: question,
+    previous_summary: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText || '',
+    model: localStorage.getItem('ktalk-ai-model') || 'codex',
+    meeting_title: document.title || ''
+  });
+
+  input.value = '';
+}
+
+/**
+ * Handle summary response from backend
+ */
+function handleVas3kSummaryResponse(data) {
+  const content = document.querySelector('.jitsi-summary-content');
+  if (!content) return;
+
+  if (data.error) {
+    content.innerHTML = `<p style="color: #ff6b6b">Ошибка: ${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(data.error)}</p>`;
+    return;
+  }
+
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText = data.summary || '';
+  content.innerHTML = `<div style="white-space: pre-wrap">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(data.summary || 'Нет данных')}</div>`;
+}
+
+/**
+ * Update follow button visual state
+ */
+function updateFollowButtonState(btn) {
+  if (!btn) btn = document.querySelector('.jitsi-follow-btn');
+  if (!btn) return;
+
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.vas3kFollowEnabled) {
+    btn.classList.add('active');
+  } else {
+    btn.classList.remove('active');
+  }
+}
+
+/**
+ * Toggle follow/auto-scroll mode
+ */
+function toggleVas3kFollow() {
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.vas3kFollowEnabled = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.vas3kFollowEnabled;
+  updateFollowButtonState();
+}
+
+/**
+ * Highlight a specific transcript line by ID
+ */
+function highlightVas3kLine(lineId) {
+  const lines = document.querySelectorAll('.jitsi-transcript-line');
+  lines.forEach((line, index) => {
+    const dataId = line.dataset.lineId;
+    if (dataId == lineId || index + 1 == lineId) {
+      line.classList.add('highlighted');
+      line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Remove highlight after 2 seconds
+      setTimeout(() => {
+        line.classList.remove('highlighted');
+      }, 2000);
+    }
+  });
+}
+
+/**
+ * Copy all transcript to clipboard
+ */
+async function copyVas3kTranscript() {
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) return;
+
+  const text = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map(line => {
+    const speaker = line.speaker || 'Unknown';
+    const time = line.time || '';
+    const content = line.text || '';
+    return `[${time}] ${speaker}: ${content}`;
+  }).join('\n');
+
+  await navigator.clipboard.writeText(text);
+
+  // Show visual feedback
+  const copyBtn = document.querySelector('.jitsi-copy-btn');
+  if (copyBtn) {
+    copyBtn.classList.add('copied');
+    copyBtn.textContent = '✓';
+    setTimeout(() => {
+      copyBtn.classList.remove('copied');
+      copyBtn.textContent = 'Copy';
+    }, 2000);
+  }
 }
 
 /**
@@ -2766,7 +3248,7 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
-let selectedModel = localStorage.getItem('ktalk-ai-model') || 'gemini-2.5-flash';
+let selectedModel = localStorage.getItem('ktalk-ai-model') || 'codex';
 let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'gemini-3-pro-preview';
 let meetingTitle = document.title || '';
 let bioReadHotkeyBound = false;
@@ -4791,10 +5273,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 /* harmony import */ var _ui_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./ui.js */ "./src/ui.js");
-/* harmony import */ var _speaker_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./speaker.js */ "./src/speaker.js");
-/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
-/* harmony import */ var _meeting_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./meeting.js */ "./src/meeting.js");
-/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+/* harmony import */ var _ui_vas3k_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./ui-vas3k.js */ "./src/ui-vas3k.js");
+/* harmony import */ var _speaker_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./speaker.js */ "./src/speaker.js");
+/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+/* harmony import */ var _meeting_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./meeting.js */ "./src/meeting.js");
+/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+
 
 
 
@@ -4816,23 +5300,23 @@ function connectWebSocket() {
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicatorPlatform)(true);
 
       // Send participants for both KTalk and vas3k
-      const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_5__.getPlatformAdapter)();
+      const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_6__.getPlatformAdapter)();
       if (adapter) {
         const conf = adapter.getConference();
         if (conf) {
-          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_2__.sendParticipantsUpdate)(conf);
-          const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_2__.getActiveSpeaker)(conf);
-          (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsSpeakerUpdate)(activeSpeaker);
-          (0,_meeting_js__WEBPACK_IMPORTED_MODULE_4__.sendMeetingJoin)();
+          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+          const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getActiveSpeaker)(conf);
+          (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsSpeakerUpdate)(activeSpeaker);
+          (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.sendMeetingJoin)();
         }
       } else if (window.$conf) {
-        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_2__.sendParticipantsUpdate)(window.$conf);
-        const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_2__.getActiveSpeaker)(window.$conf);
-        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsSpeakerUpdate)(activeSpeaker);
-        (0,_meeting_js__WEBPACK_IMPORTED_MODULE_4__.sendMeetingJoin)();
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(window.$conf);
+        const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getActiveSpeaker)(window.$conf);
+        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsSpeakerUpdate)(activeSpeaker);
+        (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.sendMeetingJoin)();
       }
 
-      (0,_meeting_js__WEBPACK_IMPORTED_MODULE_4__.startMeetingCheck)();
+      (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.startMeetingCheck)();
     };
 
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.onclose = () => {
@@ -4863,6 +5347,7 @@ function connectWebSocket() {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleNewMeeting)(data);
         } else if (data.type === 'summarize_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleSummaryResponse)(data);
+          (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_2__.handleVas3kSummaryResponse)(data);
         } else if (data.type === 'anchor_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
         }
