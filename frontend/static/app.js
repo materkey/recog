@@ -46,6 +46,17 @@ const api = {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         if (!res.ok) throw new Error('Search failed');
         return res.json();
+    },
+
+    async generateTitle(id) {
+        const res = await fetch(`/api/meetings/${id}/generate-title`, {
+            method: 'POST'
+        });
+        if (!res.ok) {
+            const error = await res.json().catch(() => ({}));
+            throw new Error(error.detail || 'Failed to generate title');
+        }
+        return res.json();
     }
 };
 
@@ -362,6 +373,9 @@ const views = {
                 ? Object.values(meta.participants).map(p => p.name).join(', ')
                 : '-';
 
+            // Show generate title button for orphan meetings without title
+            const showGenerateTitle = !meta.title && meta.source === 'orphan';
+
             container.innerHTML = `
                 <div class="meta-grid">
                     <div class="meta-block">
@@ -393,6 +407,13 @@ const views = {
                     <div class="meta-participants">
                         <span class="meta-label">Participants:</span>
                         <span class="meta-value">${escapeHtml(participants)}</span>
+                    </div>
+                ` : ''}
+                ${showGenerateTitle ? `
+                    <div class="meta-title-actions">
+                        <button class="btn btn-generate-title" onclick="generateTitle()">
+                            Generate Title (Codex)
+                        </button>
                     </div>
                 ` : ''}
             `;
@@ -848,6 +869,43 @@ function exportMarkdown() {
     a.download = `${meeting.id}.md`;
     a.click();
     URL.revokeObjectURL(url);
+}
+
+async function generateTitle() {
+    const meeting = views.meeting;
+    if (!meeting.id) return;
+
+    const btn = document.querySelector('.btn-generate-title');
+    if (!btn) return;
+
+    const originalText = btn.textContent;
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+
+    try {
+        const result = await api.generateTitle(meeting.id);
+
+        // Update title in UI
+        const titleEl = document.getElementById('meeting-title');
+        if (titleEl) {
+            titleEl.textContent = result.title;
+        }
+
+        // Update meta
+        meeting.meta.title = result.title;
+        meeting.meta.title_source = result.title_source;
+
+        // Re-render meta (button will disappear)
+        const metaEl = document.getElementById('meeting-meta');
+        views.meeting.renderMeta(meeting.meta, metaEl);
+
+    } catch (e) {
+        btn.textContent = 'Error: ' + e.message;
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.disabled = false;
+        }, 3000);
+    }
 }
 
 

@@ -471,6 +471,28 @@ a:hover {
     border-top: 1px solid var(--border);
 }
 
+.meta-title-actions {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.btn-generate-title {
+    background: linear-gradient(135deg, #10b981, #059669);
+    border: none;
+    color: white;
+}
+
+.btn-generate-title:hover {
+    background: linear-gradient(135deg, #34d399, #10b981);
+}
+
+.btn-generate-title:disabled {
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    cursor: wait;
+}
+
 /* --- Transcript --- */
 .transcript-search {
     margin-bottom: 16px;
