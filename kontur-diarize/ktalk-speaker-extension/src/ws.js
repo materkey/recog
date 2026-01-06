@@ -1,8 +1,9 @@
 import { state, constants } from './state.js';
-import { updateWsIndicator, handleTranscript, handleTranscriptHistory, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
+import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
 import { getActiveSpeaker, sendParticipantsUpdate } from './speaker.js';
 import { sendWsSpeakerUpdate } from './ws_api.js';
 import { sendMeetingJoin, startMeetingCheck } from './meeting.js';
+import { getPlatformAdapter } from './platforms/index.js';
 
 export function connectWebSocket() {
   if (state.wsConnection && state.wsConnection.readyState === WebSocket.OPEN) {
@@ -15,9 +16,19 @@ export function connectWebSocket() {
     state.wsConnection.onopen = () => {
       console.log('[KTalk Transcript] WebSocket connected');
       state.wsConnected = true;
-      updateWsIndicator(true);
+      updateWsIndicatorPlatform(true);
 
-      if (window.$conf) {
+      // Send participants for both KTalk and vas3k
+      const adapter = getPlatformAdapter();
+      if (adapter) {
+        const conf = adapter.getConference();
+        if (conf) {
+          sendParticipantsUpdate(conf);
+          const activeSpeaker = getActiveSpeaker(conf);
+          sendWsSpeakerUpdate(activeSpeaker);
+          sendMeetingJoin();
+        }
+      } else if (window.$conf) {
         sendParticipantsUpdate(window.$conf);
         const activeSpeaker = getActiveSpeaker(window.$conf);
         sendWsSpeakerUpdate(activeSpeaker);
@@ -30,7 +41,7 @@ export function connectWebSocket() {
     state.wsConnection.onclose = () => {
       console.log('[KTalk Transcript] WebSocket disconnected');
       state.wsConnected = false;
-      updateWsIndicator(false);
+      updateWsIndicatorPlatform(false);
 
       if (!state.wsReconnectTimer) {
         state.wsReconnectTimer = setTimeout(() => {

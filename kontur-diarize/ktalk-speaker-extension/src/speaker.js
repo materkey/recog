@@ -1,7 +1,8 @@
 import { state, constants } from './state.js';
 import { sendUpdate } from './utils.js';
 import { sendWsSpeakerUpdate, sendWsParticipants } from './ws_api.js';
-import { getPlatformAdapter } from './platforms/index.js';
+import { getPlatformAdapter, getPlatform } from './platforms/index.js';
+import { updateVas3kSpeakerStatus } from './ui-vas3k.js';
 
 export function getActiveSpeaker(conf) {
   const adapter = getPlatformAdapter();
@@ -260,7 +261,14 @@ function getParticipantName(conf, participantId) {
 export function updateSpeakerStatus(conf) {
   const activeSpeaker = getActiveSpeaker(conf);
   const hasMicsOn = anyMicOn(conf);
+  const platform = getPlatform();
 
+  // Update platform-specific UI
+  if (platform === 'vas3k') {
+    updateVas3kSpeakerStatus(activeSpeaker, hasMicsOn);
+  }
+
+  // KTalk UI elements
   const dot = document.querySelector('.ktalk-speaker-dot');
   const nameEl = document.querySelector('.ktalk-speaker-name');
 

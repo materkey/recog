@@ -1117,28 +1117,36 @@ export function handleNewMeeting(data) {
 export function handleTranscript(data) {
   const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason } = data;
 
+  const newLine = {
+    speaker,
+    text,
+    timestamp,
+    is_local: is_local || false,
+    uncertain: uncertain || false,
+    uncertain_reason: uncertain_reason || '',
+    time: new Date().toLocaleTimeString('ru-RU', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }),
+    createdAt: Date.now()
+  };
+
   if (is_continuation && state.transcriptLines.length > 0) {
     state.transcriptLines[state.transcriptLines.length - 1].text += ' ' + text;
   } else {
-    state.transcriptLines.push({
-      speaker,
-      text,
-      timestamp,
-      is_local: is_local || false,
-      uncertain: uncertain || false,
-      uncertain_reason: uncertain_reason || '',
-      time: new Date().toLocaleTimeString('ru-RU', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
-      }),
-      createdAt: Date.now()
-    });
+    state.transcriptLines.push(newLine);
 
     if (state.transcriptLines.length > constants.MAX_TRANSCRIPT_LINES) {
       state.transcriptLines.shift();
     }
   }
 
-  updateTranscriptUI();
+  // Update platform-specific UI
+  const platform = getPlatform();
+  if (platform === 'vas3k') {
+    addVas3kTranscriptLine(newLine);
+  } else {
+    updateTranscriptUI();
+  }
 
   window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
     detail: { transcriptLines: state.transcriptLines.slice() }

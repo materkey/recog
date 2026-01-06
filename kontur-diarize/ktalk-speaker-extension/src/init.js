@@ -6,6 +6,7 @@ import { sendMeetingLeave } from './meeting.js';
 import { sendWsConnectionStatus } from './ws_api.js';
 import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
 import { getPlatformAdapter, getPlatform, getPlatformDisplayName } from './platforms/index.js';
+import { showVas3kPrejoinState, showVas3kWaitingState } from './ui-vas3k.js';
 
 function sendConnectionStatus(connected) {
   window.dispatchEvent(new CustomEvent('ktalk-connection-status', { detail: { connected } }));
@@ -25,14 +26,33 @@ function waitForConference(callback, maxAttempts = 100) {
   console.log(`[${platformName} Transcript] Waiting for conference...`);
 
   if (adapter) {
+    // For vas3k.cloud: Check if in prejoin and update UI accordingly
+    if (platform === 'vas3k' && adapter.isInPrejoin?.()) {
+      console.log(`[${platformName} Transcript] User is in prejoin screen`);
+      showVas3kPrejoinState();
+    }
+
     adapter.waitForConference(maxAttempts)
       .then((conf) => {
         console.log(`[${platformName} Transcript] Conference found`);
         callback(conf);
       })
       .catch(() => {
-        console.log(`[${platformName} Transcript] Conference not found`);
-        sendConnectionStatus(false);
+        console.log(`[${platformName} Transcript] Conference not found after ${maxAttempts} attempts`);
+        // For vas3k: keep retrying until conference is found
+        if (platform === 'vas3k') {
+          if (adapter.isInPrejoin?.()) {
+            console.log(`[${platformName} Transcript] Still in prejoin, retrying...`);
+            showVas3kPrejoinState();
+          } else {
+            console.log(`[${platformName} Transcript] Not in prejoin, retrying...`);
+            showVas3kWaitingState();
+          }
+          // Retry after a delay
+          setTimeout(() => waitForConference(callback, maxAttempts), 2000);
+        } else {
+          sendConnectionStatus(false);
+        }
       });
   } else {
     // Legacy fallback for KTalk
@@ -57,6 +77,7 @@ function waitForConference(callback, maxAttempts = 100) {
 
 function tryAttachConference() {
   const adapter = getPlatformAdapter();
+  const platform = getPlatform();
 
   if (adapter) {
     // Use adapter to check conference availability
@@ -65,6 +86,14 @@ function tryAttachConference() {
         state.conferenceReady = false;
         state.activeConfRef = null;
         state.activeJitsiConf = null;
+      }
+      // Update UI based on prejoin state
+      if (platform === 'vas3k') {
+        if (adapter.isInPrejoin?.()) {
+          showVas3kPrejoinState();
+        } else {
+          showVas3kWaitingState();
+        }
       }
       return;
     }
