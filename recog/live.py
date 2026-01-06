@@ -10,7 +10,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD
+from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
 
@@ -472,6 +472,7 @@ class LiveTranscriber:
                 self.last_speaker = None
                 self.last_speech_time = 0
                 self.segment_start_time = 0  # Время начала текущего сегмента
+                self.last_text_time = time.time()
 
         mic_state = SourceState()
         sys_state = SourceState()
@@ -550,8 +551,15 @@ class LiveTranscriber:
                 return
             state.last_words = text.split()[-5:]
 
+            current_time = time.time()
+            if self._meeting_storage:
+                silence_duration = current_time - state.last_text_time
+                if silence_duration >= SILENCE_SPLIT_TIMEOUT:
+                    self._meeting_storage.split_on_silence_timeout()
+                state.last_text_time = current_time
+
             timestamp = datetime.now().strftime("%H:%M:%S")
-            chunk_time = time.time()
+            chunk_time = current_time
 
             if self.transcript_lines:
                 sys.stdout.write("\n")

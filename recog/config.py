@@ -44,6 +44,10 @@ SPEAKER_SIMILARITY_THRESHOLD = 0.30
 # Аудио с RMS ниже этого порога считается тишиной и не отправляется на inference
 VAD_RMS_THRESHOLD = 0.005
 
+# Таймаут тишины для автоматического split orphan-митингов (в секундах)
+# Если 10 минут без распознанного текста — при следующей реплике создаётся новый митинг
+SILENCE_SPLIT_TIMEOUT = 10 * 60  # 10 minutes
+
 # Путь к venv для pyannote 4.x
 PYANNOTE4_VENV = Path(__file__).parent.parent / "venv-pyannote"
 DIARIZE_WORKER = Path(__file__).parent.parent / "diarize_worker.py"
