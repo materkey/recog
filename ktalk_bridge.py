@@ -986,6 +986,12 @@ class KTalkBridge:
         finally:
             self._connected_clients.discard(websocket)
             print(f"[KTalk Bridge] Client disconnected", file=sys.stderr)
+            # End meeting if this was the last client and meeting is active
+            if self._meeting_storage and not self._connected_clients:
+                meta = self._meeting_storage._load_meta()
+                if meta and meta.get("source") == "ktalk":
+                    self._meeting_storage.on_ktalk_leave("disconnected")
+                    print("[KTalk Bridge] Ended KTalk meeting due to client disconnect", file=sys.stderr)
 
     async def _process_message(self, data: dict):
         """Обрабатывает сообщение от extension."""
