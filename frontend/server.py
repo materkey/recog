@@ -25,9 +25,14 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from ai_provider import get_provider, get_all_providers, build_prompt
+from dotenv import load_dotenv
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Load .env from project root
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 from meeting_storage import MeetingStorage, get_external_paths
 
 # Configuration
