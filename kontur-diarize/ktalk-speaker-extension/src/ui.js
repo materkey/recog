@@ -6,7 +6,7 @@ import { getPlatform, isJitsiPlatform } from './platforms/index.js';
 import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine } from './ui-vas3k.js';
 
 let selectedModel = localStorage.getItem('ktalk-ai-model') || 'codex';
-let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'gemini-3-pro-preview';
+let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'codex';
 let meetingTitle = document.title || '';
 let bioReadHotkeyBound = false;
 let bioReadPanelListenerBound = false;
@@ -977,7 +977,7 @@ export function createContextContent() {
   const modelSelect = state.contextContentElement.querySelector('.ktalk-context-model-select');
   modelSelect.value = anchorModel;
   if (modelSelect.value !== anchorModel) {
-    anchorModel = 'gemini-3-pro-preview';
+    anchorModel = 'codex';
     modelSelect.value = anchorModel;
     localStorage.setItem('ktalk-anchor-model', anchorModel);
   }
@@ -1297,13 +1297,14 @@ function setupSummaryMenu(container) {
 
 function getAnchorModelOptions() {
   return [
-    { value: 'gemini-3-pro-preview', label: '3.0 Pro' },
-    { value: 'gemini-3-flash-preview', label: '3.0 Flash' },
-    { value: 'gemini-2.5-pro', label: '2.5 Pro' },
-    { value: 'gemini-2.5-flash', label: '2.5 Flash' },
-    { value: 'gemini-2.5-flash-lite', label: '2.5 Flash Lite' },
-    { value: 'gemini-2.0-flash', label: '2.0 Flash' },
-    { value: 'gemini-2.0-flash-lite', label: '2.0 Lite' }
+    { value: 'codex', label: 'Codex (GPT-5.2)' },
+    { value: 'codex:gpt-4.1', label: 'Codex (GPT-4.1)' },
+    { value: 'claude:opus', label: 'Claude Opus' },
+    { value: 'claude:sonnet', label: 'Claude Sonnet' },
+    { value: 'gemini-3-pro-preview', label: 'Gemini 3.0 Pro' },
+    { value: 'gemini-3-flash-preview', label: 'Gemini 3.0 Flash' },
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }
   ].map(option => `<option value="${option.value}">${option.label}</option>`).join('');
 }
 
@@ -1649,13 +1650,14 @@ function createSummaryModal() {
         <div class="ktalk-summary-modal-header">
           <span class="ktalk-summary-modal-title">✨ Catch Up</span>
           <select class="ktalk-model-select">
-            <option value="gemini-2.5-flash">2.5 Flash</option>
-            <option value="gemini-2.5-flash-lite">2.5 Flash Lite</option>
-            <option value="gemini-2.5-pro">2.5 Pro</option>
-            <option value="gemini-2.0-flash">2.0 Flash</option>
-            <option value="gemini-2.0-flash-lite">2.0 Lite</option>
-            <option value="gemini-3-flash-preview">3.0 Flash</option>
-            <option value="gemini-3-pro-preview">3.0 Pro</option>
+            <option value="codex">Codex (GPT-5.2)</option>
+            <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
+            <option value="claude:opus">Claude Opus</option>
+            <option value="claude:sonnet">Claude Sonnet</option>
+            <option value="gemini-3-pro-preview">Gemini 3.0 Pro</option>
+            <option value="gemini-3-flash-preview">Gemini 3.0 Flash</option>
+            <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
           </select>
           <button class="ktalk-summary-modal-close">×</button>
         </div>
