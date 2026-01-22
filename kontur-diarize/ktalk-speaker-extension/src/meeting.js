@@ -29,6 +29,7 @@ export function sendMeetingJoin() {
     sendWsMessage({
       type: 'meeting_join',
       url: url,
+      platform: platform,
       title: ''  // Title отправим позже когда страница загрузится
     });
     console.log(`[${platform} Transcript] Sent meeting_join:`, url);
