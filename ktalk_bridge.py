@@ -549,12 +549,16 @@ class KTalkBridge:
         return env
 
     def _find_cli_binary(self, name: str) -> str:
-        """Find CLI binary path, checking common nvm locations."""
+        """Find CLI binary path, checking common locations."""
         import shutil
         # Try PATH first
         path = shutil.which(name)
         if path:
             return path
+        # Check ~/.local/bin (standard location for CLI tools like claude)
+        local_bin = Path.home() / ".local/bin" / name
+        if local_bin.exists():
+            return str(local_bin)
         # Check common nvm locations
         nvm_locations = [
             Path.home() / ".local/share/nvm",
@@ -566,7 +570,7 @@ class KTalkBridge:
                     candidate = version_dir / "bin" / name
                     if candidate.exists():
                         return str(candidate)
-        raise FileNotFoundError(f"{name} not found in PATH or nvm")
+        raise FileNotFoundError(f"{name} not found in PATH, ~/.local/bin, or nvm")
 
     async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.2") -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
@@ -574,6 +578,7 @@ class KTalkBridge:
         proc = await asyncio.create_subprocess_exec(
             codex_path, "exec",
             "-m", model,
+            "-c", "model_reasoning_effort=xhigh",
             "--json",
             "-",
             stdin=asyncio.subprocess.PIPE,
@@ -821,8 +826,8 @@ class KTalkBridge:
                 "error": str(e)
             })
 
-    async def _handle_anchor(self, transcript: str, user_name: str = "User", model: str = "gemini-3-pro-preview", meeting_title: str = ""):
-        """Обрабатывает запрос на WDIM/Context через Google Gemini API."""
+    async def _handle_anchor(self, transcript: str, user_name: str = "User", model: str = "codex", meeting_title: str = ""):
+        """Обрабатывает запрос на WDIM/Context через Codex CLI, Claude CLI или Gemini API."""
         try:
             if not transcript.strip():
                 await self._broadcast_message({
@@ -830,18 +835,6 @@ class KTalkBridge:
                     "error": "Нет транскрипта для анализа"
                 })
                 return
-
-            # Check for API key (try both names)
-            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                await self._broadcast_message({
-                    "type": "anchor_response",
-                    "error": "GEMINI_API_KEY не установлен"
-                })
-                return
-
-            if not model or not model.startswith("gemini-"):
-                model = "gemini-3-pro-preview"
 
             if not user_name:
                 user_name = "User"
@@ -886,58 +879,87 @@ class KTalkBridge:
                 f.write(f"Meeting: {meeting_title}\n")
                 f.write(f"---\n{prompt}\n")
 
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            # Route to appropriate provider based on model prefix
+            raw_text = None
 
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                max_tokens = 2048 if "pro" in model else 1024
+            if model.startswith("codex"):
+                # Codex CLI (uses ChatGPT Pro subscription)
+                codex_model = model.split(":")[1] if ":" in model else "gpt-5.2"
+                print(f"[KTalk Bridge] Anchor using Codex CLI with model: {codex_model}", file=sys.stderr)
+                raw_text = await self._call_codex_cli(prompt, codex_model)
 
-                async with session.post(
-                    url,
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {
-                            "temperature": 0.2,
-                            "maxOutputTokens": max_tokens
-                        }
-                    },
-                    headers={"Content-Type": "application/json"},
-                    timeout=aiohttp.ClientTimeout(total=60 if "pro" in model else 30)
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        print(f"[KTalk Bridge] Gemini anchor error: {error_text}", file=sys.stderr)
-                        await self._broadcast_message({
-                            "type": "anchor_response",
-                            "error": f"Gemini API error: {response.status}"
-                        })
-                        return
+            elif model.startswith("claude"):
+                # Claude CLI (uses Max/Pro subscription)
+                claude_model = model.split(":")[1] if ":" in model else "opus"
+                print(f"[KTalk Bridge] Anchor using Claude CLI with model: {claude_model}", file=sys.stderr)
+                raw_text = await self._call_claude_cli(prompt, claude_model)
 
-                    data = await response.json()
+            else:
+                # Gemini API (default for gemini-* models)
+                if not model.startswith("gemini-"):
+                    model = "gemini-3-pro-preview"
 
-            candidates = data.get("candidates", [])
-            if not candidates:
-                print(f"[KTalk Bridge] Anchor no candidates: {data}", file=sys.stderr)
-                await self._broadcast_message({
-                    "type": "anchor_response",
-                    "error": "No candidates from Gemini"
-                })
-                return
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                if not api_key:
+                    await self._broadcast_message({
+                        "type": "anchor_response",
+                        "error": "GEMINI_API_KEY не установлен"
+                    })
+                    return
 
-            finish_reason = candidates[0].get("finishReason", "")
-            if finish_reason and finish_reason not in ["STOP", "MAX_TOKENS"]:
-                print(f"[KTalk Bridge] Anchor finish reason: {finish_reason}", file=sys.stderr)
-                await self._broadcast_message({
-                    "type": "anchor_response",
-                    "error": f"Gemini blocked: {finish_reason}"
-                })
-                return
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
-            raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    max_tokens = 2048 if "pro" in model else 1024
+
+                    async with session.post(
+                        url,
+                        json={
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {
+                                "temperature": 0.2,
+                                "maxOutputTokens": max_tokens
+                            }
+                        },
+                        headers={"Content-Type": "application/json"},
+                        timeout=aiohttp.ClientTimeout(total=60 if "pro" in model else 30)
+                    ) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            print(f"[KTalk Bridge] Gemini anchor error: {error_text}", file=sys.stderr)
+                            await self._broadcast_message({
+                                "type": "anchor_response",
+                                "error": f"Gemini API error: {response.status}"
+                            })
+                            return
+
+                        data = await response.json()
+
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    print(f"[KTalk Bridge] Anchor no candidates: {data}", file=sys.stderr)
+                    await self._broadcast_message({
+                        "type": "anchor_response",
+                        "error": "No candidates from Gemini"
+                    })
+                    return
+
+                finish_reason = candidates[0].get("finishReason", "")
+                if finish_reason and finish_reason not in ["STOP", "MAX_TOKENS"]:
+                    print(f"[KTalk Bridge] Anchor finish reason: {finish_reason}", file=sys.stderr)
+                    await self._broadcast_message({
+                        "type": "anchor_response",
+                        "error": f"Gemini blocked: {finish_reason}"
+                    })
+                    return
+
+                raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+
             if not raw_text:
                 await self._broadcast_message({
                     "type": "anchor_response",
-                    "error": "Пустой ответ от Gemini"
+                    "error": "Пустой ответ от AI"
                 })
                 return
 
@@ -1135,12 +1157,13 @@ class KTalkBridge:
                 print("[KTalk Bridge] Conference connected", file=sys.stderr)
 
         elif msg_type == "meeting_join":
-            # Extension сообщает о входе во встречу KTalk
+            # Extension сообщает о входе во встречу (KTalk, Jitsi, etc.)
             url = data.get("url")
             title = data.get("title")
+            platform = data.get("platform", "ktalk")
             if self._meeting_storage and url:
-                meeting_id = self._meeting_storage.on_ktalk_join(url, title)
-                print(f"[KTalk Bridge] Joined meeting: {url}", file=sys.stderr)
+                meeting_id = self._meeting_storage.on_meeting_join(url, title, platform)
+                print(f"[KTalk Bridge] Joined {platform} meeting: {url}", file=sys.stderr)
                 # Notify about meeting change for audio recording
                 if self._on_meeting_change:
                     meeting_path = self._meeting_storage.current_meeting_path
