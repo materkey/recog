@@ -27,12 +27,33 @@ UTC = timezone.utc
 EXTERNAL_INDEX_CACHE_DIR = Path.home() / ".cache" / "recog" / "external_indexes"
 
 
-def get_external_paths() -> list[Path]:
-    """Get external meeting paths from environment variable."""
+def get_external_paths() -> list[tuple[Path, Optional[str]]]:
+    """Get external meeting paths from environment variable.
+
+    Format: path1:source1,path2:source2 or just path1,path2
+    If source not specified, uses parent directory name.
+
+    Returns:
+        List of (path, source_override) tuples
+    """
     paths_str = os.getenv("EXTERNAL_MEETINGS_PATHS", "")
     if not paths_str:
         return []
-    return [Path(p.strip()) for p in paths_str.split(",") if p.strip()]
+
+    result = []
+    for entry in paths_str.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" in entry:
+            path, source = entry.rsplit(":", 1)
+            result.append((Path(path.strip()), source.strip()))
+        else:
+            # Use parent directory name as source
+            path = Path(entry)
+            source = path.parent.name if path.parent.name else None
+            result.append((path, source))
+    return result
 
 
 @dataclass
@@ -63,10 +84,11 @@ class MeetingStorage:
     5. end_session() - при завершении (Ctrl+C)
     """
 
-    def __init__(self, base_path: Path = None, external_paths: list[Path] = None):
+    def __init__(self, base_path: Path = None, external_paths: list[tuple[Path, Optional[str]]] = None):
         self.base_path = base_path or Path(__file__).parent / "meetings"
         self.base_path.mkdir(exist_ok=True)
         # External paths are read-only (for federated access)
+        # Format: list of (path, source_override) tuples
         self.external_paths = external_paths or []
 
         self.current_meeting_id: Optional[str] = None
@@ -774,9 +796,9 @@ class MeetingStorage:
             meetings = data.get("meetings", [])
 
         # 2. External directories (cached)
-        for ext_path in self.external_paths:
+        for ext_path, source_override in self.external_paths:
             if ext_path.exists():
-                meetings.extend(self._get_external_index(ext_path, refresh_cache))
+                meetings.extend(self._get_external_index(ext_path, source_override, refresh_cache))
 
         # 3. Active meetings (only from base_path)
         if include_active:
@@ -788,10 +810,10 @@ class MeetingStorage:
 
         return meetings
 
-    def _get_external_index(self, ext_path: Path, refresh: bool = False) -> list[dict]:
+    def _get_external_index(self, ext_path: Path, source_override: Optional[str], refresh: bool = False) -> list[dict]:
         """Get or create cached index for external path."""
-        # Cache key = hash of path
-        cache_key = hashlib.md5(str(ext_path).encode()).hexdigest()[:8]
+        # Cache key = hash of path + source_override
+        cache_key = hashlib.md5(f"{ext_path}:{source_override}".encode()).hexdigest()[:8]
         cache_file = EXTERNAL_INDEX_CACHE_DIR / f"{cache_key}.json"
 
         # Check if cache is fresh (compare mtime of directory)
@@ -806,17 +828,18 @@ class MeetingStorage:
                 pass  # Rebuild cache on error
 
         # Rebuild cache
-        meetings = self._scan_external_meetings(ext_path)
+        meetings = self._scan_external_meetings(ext_path, source_override)
         EXTERNAL_INDEX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps({
             "path": str(ext_path),
+            "source_override": source_override,
             "meetings": meetings,
             "updated_at": datetime.now(UTC).isoformat()
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
         return meetings
 
-    def _scan_external_meetings(self, path: Path) -> list[dict]:
+    def _scan_external_meetings(self, path: Path, source_override: Optional[str] = None) -> list[dict]:
         """Scan external directory for meetings (read-only)."""
         meetings = []
         for meeting_dir in path.iterdir():
@@ -827,6 +850,8 @@ class MeetingStorage:
                 continue
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                # Use source_override if provided, otherwise use original source
+                source = source_override if source_override else meta.get("source", "unknown")
                 # Convert meta to index entry format
                 entry = {
                     "id": meta["id"],
@@ -834,7 +859,7 @@ class MeetingStorage:
                     "ended_at": meta.get("ended_at"),
                     "duration_seconds": meta.get("stats", {}).get("duration_seconds", 0),
                     "title": meta.get("title"),
-                    "source": meta.get("source", "unknown"),
+                    "source": source,
                     "end_reason": meta.get("end_reason"),
                     "conference_url": meta.get("conference", meta.get("ktalk", {})).get("live_url"),
                     "segment_count": meta.get("stats", {}).get("segment_count", 0),
@@ -920,7 +945,7 @@ class MeetingStorage:
             return self._load_meeting_from_path(meeting_path)
 
         # 2. Try external paths
-        for ext_path in self.external_paths:
+        for ext_path, _ in self.external_paths:
             meeting_path = ext_path / meeting_id
             if meeting_path.exists():
                 return self._load_meeting_from_path(meeting_path)
