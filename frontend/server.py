@@ -28,7 +28,7 @@ from ai_provider import get_provider, get_all_providers, build_prompt
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from meeting_storage import MeetingStorage
+from meeting_storage import MeetingStorage, get_external_paths
 
 # Configuration
 HOST = "127.0.0.1"
@@ -37,8 +37,8 @@ MEETINGS_DIR = Path(__file__).parent.parent / "meetings"
 
 
 def get_storage() -> MeetingStorage:
-    """Get MeetingStorage instance."""
-    return MeetingStorage(MEETINGS_DIR)
+    """Get MeetingStorage instance with external paths."""
+    return MeetingStorage(MEETINGS_DIR, external_paths=get_external_paths())
 
 
 class TranscriptWatcher(FileSystemEventHandler):
@@ -648,7 +648,7 @@ app = FastAPI(title="Recog Transcripts", lifespan=lifespan)
 async def list_meetings():
     """Get list of all meetings."""
     try:
-        storage = MeetingStorage(MEETINGS_DIR)
+        storage = get_storage()
         meetings = storage.list_meetings()
         return JSONResponse(content=meetings)
     except Exception as e:
@@ -662,7 +662,7 @@ async def search_transcripts(q: str = ""):
         return JSONResponse(content=[])
 
     try:
-        storage = MeetingStorage(MEETINGS_DIR)
+        storage = get_storage()
         meetings = storage.list_meetings()
         results = []
         query_lower = q.lower()
@@ -702,7 +702,7 @@ async def search_transcripts(q: str = ""):
 async def get_meeting(meeting_id: str):
     """Get meeting metadata."""
     try:
-        storage = MeetingStorage(MEETINGS_DIR)
+        storage = get_storage()
         meeting = storage.get_meeting(meeting_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
@@ -717,7 +717,7 @@ async def get_meeting(meeting_id: str):
 async def get_transcript(meeting_id: str):
     """Get meeting transcript."""
     try:
-        storage = MeetingStorage(MEETINGS_DIR)
+        storage = get_storage()
         meeting = storage.get_meeting(meeting_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
@@ -736,7 +736,7 @@ async def generate_meeting_title(meeting_id: str):
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from recog.title_generator import generate_title_async
 
-        storage = MeetingStorage(MEETINGS_DIR)
+        storage = get_storage()
         meeting = storage.get_meeting(meeting_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")

@@ -18,9 +18,21 @@ from urllib.parse import urlparse
 import json
 import uuid
 import shutil
+import hashlib
+import os
+import sys
 
 
 UTC = timezone.utc
+EXTERNAL_INDEX_CACHE_DIR = Path.home() / ".cache" / "recog" / "external_indexes"
+
+
+def get_external_paths() -> list[Path]:
+    """Get external meeting paths from environment variable."""
+    paths_str = os.getenv("EXTERNAL_MEETINGS_PATHS", "")
+    if not paths_str:
+        return []
+    return [Path(p.strip()) for p in paths_str.split(",") if p.strip()]
 
 
 @dataclass
@@ -51,9 +63,11 @@ class MeetingStorage:
     5. end_session() - при завершении (Ctrl+C)
     """
 
-    def __init__(self, base_path: Path = None):
+    def __init__(self, base_path: Path = None, external_paths: list[Path] = None):
         self.base_path = base_path or Path(__file__).parent / "meetings"
         self.base_path.mkdir(exist_ok=True)
+        # External paths are read-only (for federated access)
+        self.external_paths = external_paths or []
 
         self.current_meeting_id: Optional[str] = None
         self.current_meeting_path: Optional[Path] = None
@@ -160,7 +174,7 @@ class MeetingStorage:
             "source": source,
             "end_reason": None,
             "mode": self._mode.copy(),
-            "ktalk": {
+            "conference": {
                 "live_url": None,
                 "live_id": None,
                 "host": None
@@ -194,14 +208,15 @@ class MeetingStorage:
 
         return meeting_id
 
-    def _find_same_day_ktalk_meeting(self, live_id: str) -> Optional[str]:
+    def _find_same_day_meeting(self, live_id: str, platform: str) -> Optional[str]:
         """
-        Найти завершённую KTalk встречу с тем же live_id за сегодня.
+        Найти завершённую встречу с тем же live_id и platform за сегодня.
 
         Используется для группировки встреч одной комнаты в один день.
 
         Args:
-            live_id: ID KTalk комнаты (например, abcd1234wxyz)
+            live_id: ID комнаты (например, abcd1234wxyz)
+            platform: Платформа встречи (ktalk, vas3k, vkkovalev)
 
         Returns:
             meeting_id если найдена, иначе None
@@ -222,14 +237,14 @@ class MeetingStorage:
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
-                # Только завершённые KTalk встречи
+                # Только завершённые встречи с той же платформой
                 if meta.get("ended_at") is None:
                     continue
-                if meta.get("source") != "ktalk":
+                if meta.get("source") != platform:
                     continue
 
                 # Тот же live_id
-                if meta.get("ktalk", {}).get("live_id") != live_id:
+                if meta.get("conference", {}).get("live_id") != live_id:
                     continue
 
                 # Тот же день (по локальному времени)
@@ -293,13 +308,14 @@ class MeetingStorage:
 
         return True
 
-    def on_ktalk_join(self, url: str, title: Optional[str] = None) -> str:
+    def on_meeting_join(self, url: str, title: Optional[str] = None, platform: str = "ktalk") -> str:
         """
-        Extension сообщает о входе в KTalk встречу.
+        Extension сообщает о входе во встречу (KTalk, Jitsi, etc.).
 
         Args:
             url: URL встречи (https://example.ktalk.ru/abcd1234wxyz)
             title: Заголовок страницы (опционально)
+            platform: Платформа встречи (ktalk, vas3k, vkkovalev)
 
         Returns:
             meeting_id текущей встречи
@@ -315,23 +331,23 @@ class MeetingStorage:
             need_new_or_reopen = True
         else:
             meta = self._load_meta()
-            current_live_id = meta.get("ktalk", {}).get("live_id")
+            current_live_id = meta.get("conference", {}).get("live_id")
 
-            # Случай 1: другая KTalk комната
+            # Случай 1: другая комната
             if current_live_id and current_live_id != live_id:
                 self._end_current_meeting(end_reason="changed_meeting")
                 need_new_or_reopen = True
 
-            # Случай 2: orphan с сегментами -> новая KTalk встреча
-            # Не склеивать orphan-сегменты с KTalk встречей
+            # Случай 2: orphan с сегментами -> новая встреча
+            # Не склеивать orphan-сегменты с conference встречей
             elif meta["source"] == "orphan" and meta["stats"]["segment_count"] > 0:
-                self._end_current_meeting(end_reason="ktalk_join")
+                self._end_current_meeting(end_reason="meeting_join")
                 need_new_or_reopen = True
 
-            # Случай 3: пустой orphan -> ищем существующую или обновляем на ktalk
+            # Случай 3: пустой orphan -> ищем существующую или обновляем source
             elif meta["source"] == "orphan" and meta["stats"]["segment_count"] == 0:
                 # Сначала проверим, есть ли существующая встреча за сегодня
-                existing_meeting_id = self._find_same_day_ktalk_meeting(live_id)
+                existing_meeting_id = self._find_same_day_meeting(live_id, platform)
                 if existing_meeting_id:
                     # Удалить пустой orphan и переоткрыть существующую
                     orphan_path = self.current_meeting_path
@@ -341,34 +357,39 @@ class MeetingStorage:
                         shutil.rmtree(orphan_path, ignore_errors=True)
                     print(f"Reopened same-day meeting: {existing_meeting_id}")
                 else:
-                    meta["source"] = "ktalk"
+                    meta["source"] = platform
                     self._save_meta(meta)
 
         if need_new_or_reopen:
             # Попробовать найти существующую встречу с тем же live_id за сегодня
-            existing_meeting_id = self._find_same_day_ktalk_meeting(live_id)
+            existing_meeting_id = self._find_same_day_meeting(live_id, platform)
             if existing_meeting_id:
                 # Переоткрыть существующую встречу (группировка)
                 self._reopen_meeting(existing_meeting_id)
                 print(f"Reopened same-day meeting: {existing_meeting_id}")
             else:
-                self._create_meeting(source="ktalk")
+                self._create_meeting(source=platform)
 
         meta = self._load_meta()
 
-        meta["ktalk"]["live_url"] = url
-        meta["ktalk"]["live_id"] = live_id
-        meta["ktalk"]["host"] = parsed.netloc
+        meta["conference"]["live_url"] = url
+        meta["conference"]["live_id"] = live_id
+        meta["conference"]["host"] = parsed.netloc
 
         # Не перезаписывать title если уже есть (при reopen)
         if title and not meta.get("title"):
             meta["title"] = title
-            meta["title_source"] = "ktalk"
+            meta["title_source"] = platform
 
         meta["updated_at"] = datetime.now(UTC).isoformat()
         self._save_meta(meta)
 
         return self.current_meeting_id
+
+    # Backward compatibility alias
+    def on_ktalk_join(self, url: str, title: Optional[str] = None) -> str:
+        """Deprecated: use on_meeting_join instead."""
+        return self.on_meeting_join(url, title, platform="ktalk")
 
     def on_ktalk_leave(self, reason: str = "user_left") -> str:
         """
@@ -733,30 +754,98 @@ class MeetingStorage:
         """Получить ID текущей встречи."""
         return self.current_meeting_id
 
-    def list_meetings(self, include_active: bool = True) -> list[dict]:
+    def list_meetings(self, include_active: bool = True, refresh_cache: bool = False) -> list[dict]:
         """
         Список всех встреч для UI.
 
         Args:
             include_active: Включать ли активные (незавершённые) встречи
+            refresh_cache: Принудительно пересканировать external paths
 
         Returns:
-            Список метаданных встреч (из index.json + активные)
+            Список метаданных встреч (из index.json + external + активные)
         """
         meetings = []
 
-        # Завершённые встречи из index.json
+        # 1. Завершённые встречи из index.json (основная директория)
         index_path = self.base_path / "index.json"
         if index_path.exists():
             data = json.loads(index_path.read_text(encoding="utf-8"))
             meetings = data.get("meetings", [])
 
+        # 2. External directories (cached)
+        for ext_path in self.external_paths:
+            if ext_path.exists():
+                meetings.extend(self._get_external_index(ext_path, refresh_cache))
+
+        # 3. Active meetings (only from base_path)
         if include_active:
-            # Добавить активные (незавершённые) встречи
             active = self.list_active_meetings()
-            # Добавить в начало (они самые свежие)
             meetings = active + meetings
 
+        # Sort by created_at descending
+        meetings.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+
+        return meetings
+
+    def _get_external_index(self, ext_path: Path, refresh: bool = False) -> list[dict]:
+        """Get or create cached index for external path."""
+        # Cache key = hash of path
+        cache_key = hashlib.md5(str(ext_path).encode()).hexdigest()[:8]
+        cache_file = EXTERNAL_INDEX_CACHE_DIR / f"{cache_key}.json"
+
+        # Check if cache is fresh (compare mtime of directory)
+        if not refresh and cache_file.exists():
+            try:
+                cache_mtime = cache_file.stat().st_mtime
+                dir_mtime = ext_path.stat().st_mtime
+                if cache_mtime >= dir_mtime:
+                    data = json.loads(cache_file.read_text(encoding="utf-8"))
+                    return data.get("meetings", [])
+            except (OSError, json.JSONDecodeError):
+                pass  # Rebuild cache on error
+
+        # Rebuild cache
+        meetings = self._scan_external_meetings(ext_path)
+        EXTERNAL_INDEX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps({
+            "path": str(ext_path),
+            "meetings": meetings,
+            "updated_at": datetime.now(UTC).isoformat()
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        return meetings
+
+    def _scan_external_meetings(self, path: Path) -> list[dict]:
+        """Scan external directory for meetings (read-only)."""
+        meetings = []
+        for meeting_dir in path.iterdir():
+            if not meeting_dir.is_dir():
+                continue
+            meta_path = meeting_dir / "meta.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                # Convert meta to index entry format
+                entry = {
+                    "id": meta["id"],
+                    "created_at": meta.get("created_at"),
+                    "ended_at": meta.get("ended_at"),
+                    "duration_seconds": meta.get("stats", {}).get("duration_seconds", 0),
+                    "title": meta.get("title"),
+                    "source": meta.get("source", "unknown"),
+                    "end_reason": meta.get("end_reason"),
+                    "conference_url": meta.get("conference", meta.get("ktalk", {})).get("live_url"),
+                    "segment_count": meta.get("stats", {}).get("segment_count", 0),
+                    "participants": [p.get("name", k) for k, p in meta.get("participants", {}).items()],
+                    "_external": True,
+                    "_external_path": str(path)
+                }
+                meetings.append(entry)
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"Warning: Failed to load {meta_path}: {e}", file=sys.stderr)
+                continue
         return meetings
 
     def list_active_meetings(self) -> list[dict]:
@@ -794,7 +883,7 @@ class MeetingStorage:
                     "title": meta.get("title"),
                     "source": meta.get("source"),
                     "end_reason": None,
-                    "ktalk_live_url": meta.get("ktalk", {}).get("live_url"),
+                    "ktalk_live_url": meta.get("conference", meta.get("ktalk", {})).get("live_url"),
                     "segment_count": meta.get("stats", {}).get("segment_count", 0),
                     "participants": [p["name"] for p in meta.get("participants", {}).values()],
                     "is_active": True  # Маркер активной встречи
@@ -825,10 +914,21 @@ class MeetingStorage:
         Returns:
             {"meta": {...}, "segments": [...]} или None
         """
+        # 1. Try base_path first
         meeting_path = self.base_path / meeting_id
-        if not meeting_path.exists():
-            return None
+        if meeting_path.exists():
+            return self._load_meeting_from_path(meeting_path)
 
+        # 2. Try external paths
+        for ext_path in self.external_paths:
+            meeting_path = ext_path / meeting_id
+            if meeting_path.exists():
+                return self._load_meeting_from_path(meeting_path)
+
+        return None
+
+    def _load_meeting_from_path(self, meeting_path: Path) -> dict:
+        """Load meeting data from a specific path."""
         meta = json.loads((meeting_path / "meta.json").read_text(encoding="utf-8"))
 
         segments = []
@@ -889,7 +989,7 @@ class MeetingStorage:
             "title": meta["title"],
             "source": meta["source"],
             "end_reason": meta["end_reason"],
-            "ktalk_live_url": meta["ktalk"]["live_url"],
+            "ktalk_live_url": meta.get("conference", meta.get("ktalk", {})).get("live_url"),
             "segment_count": meta["stats"]["segment_count"],
             "participants": [p["name"] for p in meta["participants"].values()]
         })

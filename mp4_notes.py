@@ -151,6 +151,11 @@ def main():
         action="store_true",
         help="Вывести в JSON формате"
     )
+    meetings_parser.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="Пересканировать внешние директории (обновить кэш)"
+    )
 
     # Команда: enroll-speaker
     enroll_parser = subparsers.add_parser(
@@ -243,8 +248,8 @@ def main():
         )
 
     elif args.command == "meetings":
-        from meeting_storage import MeetingStorage
-        storage = MeetingStorage()
+        from meeting_storage import MeetingStorage, get_external_paths
+        storage = MeetingStorage(external_paths=get_external_paths())
 
         if args.meeting_id:
             # Показать конкретный митинг
@@ -265,8 +270,9 @@ def main():
                 print(f" Source: {meta['source']}")
                 if meta.get("title"):
                     print(f" Title: {meta['title']}")
-                if meta["ktalk"].get("live_url"):
-                    print(f" KTalk URL: {meta['ktalk']['live_url']}")
+                conf = meta.get("conference", meta.get("ktalk", {}))
+                if conf.get("live_url"):
+                    print(f" Conference URL: {conf['live_url']}")
                 print(f" Created: {meta['created_at']}")
                 print(f" Duration: {meta['stats']['duration_seconds']}s")
                 print(f" Segments: {meta['stats']['segment_count']}")
@@ -300,7 +306,7 @@ def main():
                 print("\n\n".join(lines))
         else:
             # Показать список всех митингов
-            meetings = storage.list_meetings()
+            meetings = storage.list_meetings(refresh_cache=args.refresh_cache)
 
             if args.json:
                 print(json.dumps(meetings, ensure_ascii=False, indent=2))
@@ -308,14 +314,17 @@ def main():
                 if not meetings:
                     print("No meetings found.")
                 else:
-                    print(f"{'ID':<35} {'Source':<8} {'Segments':>8}  {'Duration':>10}  Title")
-                    print("-" * 80)
+                    print(f"{'ID':<35} {'Source':<12} {'Segments':>8}  {'Duration':>10}  Title")
+                    print("-" * 85)
                     for m in meetings:
                         duration = f"{m['duration_seconds']}s" if m['duration_seconds'] else "-"
                         title = m.get('title') or "(untitled)"
                         if len(title) > 25:
                             title = title[:22] + "..."
-                        print(f"{m['id']:<35} {m['source']:<8} {m['segment_count']:>8}  {duration:>10}  {title}")
+                        source = m['source']
+                        if m.get('_external'):
+                            source = f"{source}*"  # Mark external with *
+                        print(f"{m['id']:<35} {source:<12} {m['segment_count']:>8}  {duration:>10}  {title}")
 
     elif args.command == "enroll-speaker":
         from recog.pipeline import enroll_speaker_pipeline
