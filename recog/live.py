@@ -237,7 +237,7 @@ class LiveTranscriber:
         no_diarization=False,
         use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
         use_screencapture=False,  # Использовать ScreenCaptureKit вместо BlackHole
-        save_audio=True  # Сохранять аудио для последующей диаризации
+        save_audio=False  # Сохранять аудио для последующей диаризации
     ):
         self.mic_device = mic_device
         self.system_device = system_device
