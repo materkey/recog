@@ -35,3 +35,8 @@ meetings/
 
 # Git worktrees
 .worktrees/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
