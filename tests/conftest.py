@@ -85,3 +85,37 @@ def diarization_segments() -> list[DiarizationSegment]:
         DiarizationSegment(start=0.0, end=2.0, speaker_id="SPEAKER_00"),
         DiarizationSegment(start=2.0, end=5.0, speaker_id="SPEAKER_01"),
     ]
+
+
+@pytest_asyncio.fixture
+async def mock_websocket():
+    """
+    Async fixture for WebSocket testing.
+
+    Following datasette-enrichments pattern of using
+    pytest_asyncio.fixture for async setup/teardown.
+    """
+    class MockWebSocket:
+        def __init__(self):
+            self.messages_sent = []
+            self.messages_received = []
+            self.closed = False
+
+        async def send(self, message):
+            self.messages_sent.append(message)
+
+        async def recv(self):
+            if not self.messages_received:
+                raise StopAsyncIteration
+            return self.messages_received.pop(0)
+
+        async def close(self):
+            self.closed = True
+
+        def add_message(self, msg):
+            self.messages_received.append(msg)
+
+    ws = MockWebSocket()
+    yield ws
+    if not ws.closed:
+        await ws.close()
