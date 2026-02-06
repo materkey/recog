@@ -35,7 +35,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/Users/vkkovalev/.local/share/nvm/v22.21.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/Users/vkkovalev/.local/bin:/Users/vkkovalev/.local/share/nvm/v22.21.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>
         <string>/Users/vkkovalev</string>
         <key>PYTHONUNBUFFERED</key>
