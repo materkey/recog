@@ -8,9 +8,25 @@ Supports:
 """
 
 import os
+import shutil
 import asyncio
 from abc import ABC, abstractmethod
 from typing import Optional
+
+
+def _resolve_cli(name: str) -> str:
+    """Resolve full path to CLI binary (needed for launchd which has limited PATH)."""
+    path = shutil.which(name)
+    if path:
+        return path
+    # Fallback: check common locations
+    for candidate in [
+        os.path.expanduser(f"~/.local/bin/{name}"),
+        f"/usr/local/bin/{name}",
+    ]:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return name  # last resort: hope PATH has it
 
 
 # Prompts
@@ -116,7 +132,8 @@ class ClaudeCliProvider(AIProvider):
     """Claude CLI - uses Max/Pro subscription."""
 
     def __init__(self):
-        self.model = os.getenv("CLAUDE_MODEL", "haiku")
+        self.model = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
+        self._cli = _resolve_cli("claude")
 
     @property
     def key(self) -> str:
@@ -128,7 +145,7 @@ class ClaudeCliProvider(AIProvider):
 
     async def complete(self, prompt: str) -> str:
         proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt,
+            self._cli, "-p", prompt,
             "--model", self.model,
             "--output-format", "text",
             stdout=asyncio.subprocess.PIPE,
@@ -147,7 +164,7 @@ class ClaudeCliProvider(AIProvider):
         import json as json_module
 
         proc = await asyncio.create_subprocess_exec(
-            "claude", "-p", prompt,
+            self._cli, "-p", prompt,
             "--model", self.model,
             "--output-format", "stream-json",
             "--verbose",
@@ -195,7 +212,9 @@ class CodexCliProvider(AIProvider):
     """Codex CLI - uses ChatGPT Pro subscription."""
 
     def __init__(self):
-        self.model = os.getenv("CODEX_MODEL", "gpt-5.2")
+        self.model = os.getenv("CODEX_MODEL", "gpt-5.3-codex")
+        self.reasoning_effort = os.getenv("CODEX_REASONING_EFFORT", "xhigh")
+        self._cli = _resolve_cli("codex")
 
     @property
     def key(self) -> str:
@@ -203,15 +222,16 @@ class CodexCliProvider(AIProvider):
 
     @property
     def name(self) -> str:
-        return f"Codex ({self.model})"
+        return f"Codex ({self.model} {self.reasoning_effort})"
 
     async def complete(self, prompt: str) -> str:
         import json as json_module
 
         # Codex exec expects prompt via stdin when using "-"
         proc = await asyncio.create_subprocess_exec(
-            "codex", "exec",
+            self._cli, "exec",
             "-m", self.model,
+            "-c", f"model_reasoning_effort=\"{self.reasoning_effort}\"",
             "--json",
             "-",
             stdin=asyncio.subprocess.PIPE,
@@ -250,8 +270,9 @@ class CodexCliProvider(AIProvider):
         import json as json_module
 
         proc = await asyncio.create_subprocess_exec(
-            "codex", "exec",
+            self._cli, "exec",
             "-m", self.model,
+            "-c", f"model_reasoning_effort=\"{self.reasoning_effort}\"",
             "--json",
             "-",
             stdin=asyncio.subprocess.PIPE,
