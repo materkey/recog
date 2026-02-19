@@ -2,7 +2,7 @@ import { state, constants } from './state.js';
 import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
 import { handleVas3kSummaryResponse } from './ui-vas3k.js';
 import { getActiveSpeaker, sendParticipantsUpdate } from './speaker.js';
-import { sendWsSpeakerUpdate } from './ws_api.js';
+import { sendWsSpeakerUpdate, sendWsMessage } from './ws_api.js';
 import { sendMeetingJoin, startMeetingCheck } from './meeting.js';
 import { getPlatformAdapter } from './platforms/index.js';
 
@@ -37,12 +37,25 @@ export function connectWebSocket() {
       }
 
       startMeetingCheck();
+
+      // Clock sync for accurate timestamp correlation
+      sendWsMessage({ type: 'clock_sync', browser_time: Date.now() });
+
+      // Re-sync clock every 30 seconds
+      state.clockSyncTimer = setInterval(() => {
+        sendWsMessage({ type: 'clock_sync', browser_time: Date.now() });
+      }, 30000);
     };
 
     state.wsConnection.onclose = () => {
       console.log('[KTalk Transcript] WebSocket disconnected');
       state.wsConnected = false;
       updateWsIndicatorPlatform(false);
+
+      if (state.clockSyncTimer) {
+        clearInterval(state.clockSyncTimer);
+        state.clockSyncTimer = null;
+      }
 
       if (!state.wsReconnectTimer) {
         state.wsReconnectTimer = setTimeout(() => {
