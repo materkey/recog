@@ -653,9 +653,11 @@ class LiveTranscriber:
 
         def process_chunk(capture, state, is_mic=False):
             """Обрабатывает чанк из источника."""
+            chunk_start_time = time.time()
             chunk = capture.get_chunk(self.chunk_duration)
             if chunk is None or len(chunk) < 1000:
                 return
+            chunk_end_time = time.time()
 
             # Capture audio offset BEFORE writing chunk (for segment playback)
             # This offset points to where this chunk's audio STARTS in the WAV file
@@ -735,7 +737,16 @@ class LiveTranscriber:
             # Системный звук: диаризация
             elif self.use_ktalk:
                 # KTalk mode: используем данные от Chrome extension
-                ktalk_speaker = self._get_ktalk_speaker()
+                # Используем time-window dominant speaker вместо point-in-time запроса
+                ktalk_speaker = None
+                if self._ktalk_bridge:
+                    ktalk_speaker = self._ktalk_bridge.get_dominant_speaker_for_period(
+                        chunk_start_time, chunk_end_time
+                    )
+                    if not ktalk_speaker:
+                        ktalk_speaker = self._ktalk_bridge.get_current_speaker()
+                else:
+                    ktalk_speaker = self._ktalk_current_speaker
 
                 # Используем спикера от extension, или последнего известного из транскрипции
                 speaker = ktalk_speaker or state.last_speaker
