@@ -293,6 +293,9 @@ class KTalkBridge:
         # Sequence number для обнаружения out-of-order сообщений
         self._last_seq: int = 0
 
+        # Clock offset для синхронизации JS и Python часов
+        self._clock_offset: float = 0.0
+
         # Callbacks для уведомления о событиях
         self._on_speaker_change: Optional[Callable[[Optional[str], bool], None]] = None
         self._on_segment_complete: Optional[Callable[[SpeakerSegment], None]] = None
@@ -1114,7 +1117,8 @@ class KTalkBridge:
 
             # Основное событие: обновление текущего спикера
             speaker = data.get("speaker")  # {name, id, isLocal} или null
-            event_time = data.get("timestamp", time.time() * 1000) / 1000  # JS timestamp в мс -> секунды
+            raw_ts = data.get("timestamp", time.time() * 1000) / 1000  # JS timestamp в мс -> секунды
+            event_time = raw_ts + self._clock_offset if self._clock_offset else raw_ts
 
             completed_segments = []
 
@@ -1296,6 +1300,13 @@ class KTalkBridge:
         elif msg_type == "ping":
             # Heartbeat
             pass
+
+        elif msg_type == "clock_sync":
+            # Синхронизация часов между браузером и Python
+            browser_time = data.get("browser_time", 0)
+            if browser_time:
+                self._clock_offset = time.time() - browser_time / 1000
+                print(f"[KTalk Bridge] Clock sync: offset={self._clock_offset:.3f}s", file=sys.stderr)
 
         elif msg_type == "summarize_request":
             # AI summary request from extension
