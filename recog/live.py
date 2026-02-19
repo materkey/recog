@@ -666,6 +666,11 @@ class LiveTranscriber:
                 state.audio_offset = self._wav_writer_system.get_offset_ms()
                 self._wav_writer_system.write_chunk(chunk)
 
+            # Пропускаем запись микрофона если на KTalk встрече и mic замьючен
+            # Проверяем ДО ASR inference чтобы не тратить CPU на muted chunks
+            if is_mic and self._ktalk_bridge and self._ktalk_bridge.is_local_mic_muted():
+                return
+
             # VAD: пропускаем тишину (не тратим CPU на inference)
             rms = np.sqrt(np.mean(chunk ** 2))
             if rms < VAD_RMS_THRESHOLD:
@@ -695,11 +700,6 @@ class LiveTranscriber:
 
             # Микрофон: без диаризации, фиксированное имя
             if is_mic:
-                # Пропускаем запись микрофона если на KTalk встрече и mic замьючен
-                # (то что говорится при mute не слышат другие участники)
-                if self._ktalk_bridge and self._ktalk_bridge.is_local_mic_muted():
-                    return
-
                 time_gap = chunk_time - state.last_speech_time
                 segment_duration = chunk_time - state.segment_start_time
                 is_continuation = (state.last_speaker == mic_speaker_name and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
