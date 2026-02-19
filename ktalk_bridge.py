@@ -290,6 +290,9 @@ class KTalkBridge:
         # Флаг для логирования первого спикера
         self._first_speaker_logged = False
 
+        # Sequence number для обнаружения out-of-order сообщений
+        self._last_seq: int = 0
+
         # Callbacks для уведомления о событиях
         self._on_speaker_change: Optional[Callable[[Optional[str], bool], None]] = None
         self._on_segment_complete: Optional[Callable[[SpeakerSegment], None]] = None
@@ -1101,6 +1104,14 @@ class KTalkBridge:
         msg_type = data.get("type")
 
         if msg_type == "speaker_update":
+            # Проверяем sequence number для обнаружения out-of-order сообщений
+            seq = data.get("seq")
+            if seq is not None:
+                if seq <= self._last_seq:
+                    print(f"[KTalk Bridge] Dropping out-of-order speaker_update: seq={seq}, last={self._last_seq}", file=sys.stderr)
+                    return
+                self._last_seq = seq
+
             # Основное событие: обновление текущего спикера
             speaker = data.get("speaker")  # {name, id, isLocal} или null
             event_time = data.get("timestamp", time.time() * 1000) / 1000  # JS timestamp в мс -> секунды
