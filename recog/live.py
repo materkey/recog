@@ -752,9 +752,12 @@ class LiveTranscriber:
                 speaker = ktalk_speaker or state.last_speaker
                 no_speaker_yet = False
                 if not speaker:
-                    # Совсем никого не знаем - используем Unknown и помечаем как uncertain
-                    speaker = "Unknown"
-                    no_speaker_yet = True
+                    if state.last_speaker:
+                        speaker = state.last_speaker  # Use last known speaker as best guess
+                        no_speaker_yet = False
+                    else:
+                        speaker = "Unknown"
+                        no_speaker_yet = True
 
                 time_gap = chunk_time - state.last_speech_time
                 segment_duration = chunk_time - state.segment_start_time
