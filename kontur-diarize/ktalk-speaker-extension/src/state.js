@@ -46,6 +46,7 @@ export const state = {
   lastJitsiParticipantsMapCount: 0,
   autoScrollEnabled: true,
   participantsRefreshTimer: null,
+  clockSyncTimer: null,
   activeConfRef: null,
   activeJitsiConf: null,
   bioRead: {

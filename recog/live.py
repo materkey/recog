@@ -653,11 +653,12 @@ class LiveTranscriber:
 
         def process_chunk(capture, state, is_mic=False):
             """Обрабатывает чанк из источника."""
-            chunk_start_time = time.time()
             chunk = capture.get_chunk(self.chunk_duration)
             if chunk is None or len(chunk) < 1000:
                 return
+            # Audio was captured during the PREVIOUS chunk_duration seconds
             chunk_end_time = time.time()
+            chunk_start_time = chunk_end_time - self.chunk_duration
 
             # Capture audio offset BEFORE writing chunk (for segment playback)
             # This offset points to where this chunk's audio STARTS in the WAV file
@@ -752,12 +753,8 @@ class LiveTranscriber:
                 speaker = ktalk_speaker or state.last_speaker
                 no_speaker_yet = False
                 if not speaker:
-                    if state.last_speaker:
-                        speaker = state.last_speaker  # Use last known speaker as best guess
-                        no_speaker_yet = False
-                    else:
-                        speaker = "Unknown"
-                        no_speaker_yet = True
+                    speaker = "Unknown"
+                    no_speaker_yet = True
 
                 time_gap = chunk_time - state.last_speech_time
                 segment_duration = chunk_time - state.segment_start_time

@@ -1079,6 +1079,11 @@ class KTalkBridge:
     async def _handle_client(self, websocket):
         """Обрабатывает подключение клиента (Chrome extension)."""
         self._connected_clients.add(websocket)
+        # Reset sequence counter on new client connect — extension resets its counter
+        # on page reload, so we must accept seq=1 again
+        with self._lock:
+            self._last_seq = 0
+            self._clock_offset = 0.0
         print(f"[KTalk Bridge] Client connected from {websocket.remote_address}", file=sys.stderr)
 
         try:
@@ -1185,6 +1190,11 @@ class KTalkBridge:
                         is_local=new_is_local
                     )
                     self._speaker_history.append(event)
+
+                    # Trim old history entries (keep last 5 minutes max)
+                    cutoff = event_time - 300  # 5 minutes
+                    while self._speaker_history and self._speaker_history[0].timestamp < cutoff:
+                        self._speaker_history.pop(0)
                 else:
                     # Спикер замолчал - завершаем сегмент
                     if self._segment_start_time is not None and self._segment_speaker_name:
