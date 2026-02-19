@@ -529,6 +529,33 @@ class KTalkBridge:
         except Exception as e:
             print(f"[KTalk Bridge] Debug write error: {e}", file=sys.stderr)
 
+    def _check_segment_timeout(self):
+        """Проверяет и завершает сегмент если он превысил MAX_SEGMENT_DURATION."""
+        completed_segment = None
+        now = time.time()
+
+        with self._lock:
+            if (self._segment_start_time is not None
+                    and self._segment_speaker_name
+                    and (now - self._segment_start_time) >= self.MAX_SEGMENT_DURATION):
+                duration_ms = int((now - self._segment_start_time) * 1000)
+                if duration_ms > 100:
+                    completed_segment = SpeakerSegment(
+                        speaker_name=self._segment_speaker_name,
+                        speaker_id=self._segment_speaker_id or "",
+                        start_time=self._segment_start_time,
+                        end_time=now,
+                        duration_ms=duration_ms,
+                        is_local=self._segment_is_local
+                    )
+                    self._completed_segments.append(completed_segment)
+
+                # Начинаем новый сегмент с того же спикера
+                self._segment_start_time = now
+
+        if completed_segment and self._on_segment_complete:
+            self._on_segment_complete(completed_segment)
+
     def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False, uncertain_reason: str = ""):
         """Отправляет транскрипт всем подключённым клиентам."""
         message = json.dumps({
@@ -1297,8 +1324,15 @@ class KTalkBridge:
                 print(f"[KTalk Bridge] WebSocket server started on ws://{self.host}:{self.port}", file=sys.stderr)
                 self._running = True
 
+                _flush_counter = 0
                 while self._running:
                     await asyncio.sleep(0.1)
+                    _flush_counter += 1
+
+                    # Каждую ~1 секунду проверяем таймаут сегмента
+                    if _flush_counter % 10 == 0:
+                        self._check_segment_timeout()
+
                     # Периодически обновляем debug state даже без событий
                     self._write_debug_state()
 
