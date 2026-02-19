@@ -1168,14 +1168,17 @@ class KTalkBridge:
                     self._current_speaker = None
                     self._current_speaker_id = None
 
-                # Вызываем callback
-                if self._on_speaker_change:
-                    self._on_speaker_change(self._current_speaker, self._is_speaking)
+                # Захватываем данные для callback внутри lock
+                speaker_change_name = self._current_speaker
+                speaker_change_is_speaking = self._is_speaking
 
             # Обновляем debug state
             self._write_debug_state()
 
-            # Вызываем segment callback вне lock
+            # Вызываем callbacks вне lock
+            if self._on_speaker_change:
+                self._on_speaker_change(speaker_change_name, speaker_change_is_speaking)
+
             if self._on_segment_complete:
                 for segment in completed_segments:
                     self._on_segment_complete(segment)
