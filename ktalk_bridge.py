@@ -353,6 +353,23 @@ class KTalkBridge:
             self._completed_segments.clear()
             return segments
 
+    def _get_current_speaker_unlocked(self) -> Optional[str]:
+        """
+        Возвращает имя текущего говорящего (без захвата lock).
+
+        Должна вызываться только когда self._lock уже захвачен.
+        """
+        if self._is_speaking and self._current_speaker:
+            return self._current_speaker
+
+        # Если никто не говорит, проверяем "память" о последнем спикере
+        if self._last_speaker:
+            elapsed = time.time() - self._last_speaker_time
+            if elapsed < self.SPEAKER_MEMORY_SECONDS:
+                return self._last_speaker
+
+        return None
+
     def get_current_speaker(self) -> Optional[str]:
         """
         Возвращает имя текущего говорящего.
@@ -362,16 +379,53 @@ class KTalkBridge:
         между аудио capture и WebSocket событиями.
         """
         with self._lock:
-            if self._is_speaking and self._current_speaker:
-                return self._current_speaker
+            return self._get_current_speaker_unlocked()
 
-            # Если никто не говорит, проверяем "память" о последнем спикере
-            if self._last_speaker:
-                elapsed = time.time() - self._last_speaker_time
-                if elapsed < self.SPEAKER_MEMORY_SECONDS:
-                    return self._last_speaker
+    def get_dominant_speaker_for_period(self, start_time: float, end_time: float) -> Optional[str]:
+        """
+        Возвращает спикера, который говорил больше всего в заданном временном окне.
 
-            return None
+        Args:
+            start_time: начало окна (Unix timestamp в секундах)
+            end_time: конец окна (Unix timestamp в секундах)
+
+        Returns:
+            Имя спикера с наибольшим временем речи в окне, или None
+        """
+        with self._lock:
+            # Находим события, которые могли влиять на окно
+            # (включая последнее событие до start_time, т.к. оно задаёт начального спикера)
+            relevant_events = [e for e in self._speaker_history
+                               if e.timestamp <= end_time]
+
+            if not relevant_events:
+                return self._get_current_speaker_unlocked()
+
+            # Считаем длительность речи каждого спикера в окне
+            speaker_durations: Dict[str, float] = {}
+
+            for i, event in enumerate(relevant_events):
+                if event.speaker_name is None:
+                    continue
+
+                event_start = max(event.timestamp, start_time)
+                # Событие заканчивается при следующем событии или в конце окна
+                if i + 1 < len(relevant_events):
+                    event_end = min(relevant_events[i + 1].timestamp, end_time)
+                else:
+                    event_end = end_time
+
+                if event_end > event_start:
+                    duration = event_end - event_start
+                    speaker_durations[event.speaker_name] = (
+                        speaker_durations.get(event.speaker_name, 0) + duration
+                    )
+
+            if not speaker_durations:
+                return self._get_current_speaker_unlocked()
+
+            # Возвращаем спикера с наибольшим временем речи
+            return max(speaker_durations, key=speaker_durations.get)
 
     def is_someone_speaking(self) -> bool:
         """Возвращает True если кто-то говорит."""
