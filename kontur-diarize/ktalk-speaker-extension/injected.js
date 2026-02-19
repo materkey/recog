@@ -5355,12 +5355,25 @@ function connectWebSocket() {
       }
 
       (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.startMeetingCheck)();
+
+      // Clock sync for accurate timestamp correlation
+      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
+
+      // Re-sync clock every 30 seconds
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer = setInterval(() => {
+        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
+      }, 30000);
     };
 
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.onclose = () => {
       console.log('[KTalk Transcript] WebSocket disconnected');
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected = false;
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicatorPlatform)(false);
+
+      if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer) {
+        clearInterval(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer);
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer = null;
+      }
 
       if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsReconnectTimer) {
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsReconnectTimer = setTimeout(() => {
@@ -5418,6 +5431,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 
 
+let messageSeq = 0;
+
 function sendWsMessage(data) {
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.readyState === WebSocket.OPEN) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.send(JSON.stringify(data));
@@ -5428,7 +5443,8 @@ function sendWsSpeakerUpdate(speaker) {
   sendWsMessage({
     type: 'speaker_update',
     speaker: speaker,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    seq: ++messageSeq
   });
 }
 
