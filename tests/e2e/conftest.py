@@ -1,7 +1,14 @@
 """Pytest configuration and fixtures for e2e diarization tests."""
+import sys
 from pathlib import Path
 
 import pytest
+
+# Load .env from project root so SSO_* vars are available
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+from recog.config import load_dotenv
+load_dotenv(_PROJECT_ROOT / ".env")
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
