@@ -64,57 +64,51 @@ def launch_guest_browser(playwright: Playwright, fake_audio_path: str) -> tuple[
 
 
 def kontur_login(page: Page, login: str, password: str, timeout: int = 30_000) -> None:
-    """Authenticate via Kontur SSO.
+    """Authenticate via the conference SSO (Keycloak).
 
-    Fills the username form, submits, then fills the password form and submits.
-    Waits for a redirect back to ktalk.ru after successful authentication.
+    example.ktalk.ru redirects to sso.example.org which shows a single-page
+    login form with username + password fields and a "Sign In" submit input.
 
     Args:
-        page: Playwright Page already navigated to a Kontur SSO page or KTalk URL
-              that triggers an SSO redirect.
-        login: Kontur account login (email or phone).
+        page: Playwright Page that has been redirected to SSO login
+              (typically after navigating to example.ktalk.ru).
+        login: conference SSO account login (email or username).
         password: Account password.
         timeout: Maximum wait time in ms for each step.
     """
-    # Step 1: fill and submit the login (username/email) field
-    page.wait_for_selector("input[name='login'], input[type='email'], input[name='email']", timeout=timeout)
-    login_input = page.locator("input[name='login'], input[type='email'], input[name='email']").first
-    login_input.fill(login)
+    # Wait for SSO Keycloak login form
+    page.wait_for_selector("input[name='username']", timeout=timeout)
+    page.locator("input[name='username']").fill(login)
+    page.locator("input[name='password']").fill(password)
 
-    # Submit login form (button or Enter key)
-    submit = page.locator("button[type='submit']").first
-    submit.click()
+    # Submit — SSO uses input[type=submit][name=login], not a button
+    page.locator("input[name='login'][type='submit']").click()
 
-    # Step 2: fill and submit the password field
-    page.wait_for_selector("input[type='password']", timeout=timeout)
-    page.locator("input[type='password']").first.fill(password)
-    page.locator("button[type='submit']").first.click()
-
-    # Wait until we land back on ktalk.ru
-    page.wait_for_url("**/ktalk.ru/**", timeout=timeout)
+    # Wait until we land back on example.ktalk.ru
+    page.wait_for_url("**/example.ktalk.ru/**", timeout=timeout)
 
 
 def create_public_room(page: Page, timeout: int = 15_000) -> str:
     """Create a new public KTalk room and return its URL.
 
-    Navigates to ktalk.ru, clicks the "create room" button, handles a pre-join
-    screen if one appears, and returns the final room URL.
+    Navigates to example.ktalk.ru and clicks "Start quick call" to create a room.
+    Handles a pre-join screen if one appears.
 
     Args:
-        page: Playwright Page authenticated with a Kontur account.
+        page: Playwright Page authenticated via SSO.
         timeout: Maximum wait time in ms for each interaction.
 
     Returns:
-        The full URL of the newly created room (e.g. ``https://ktalk.ru/rooms/abc123``).
+        The full URL of the newly created room (e.g. ``https://example.ktalk.ru/abcdef123``).
     """
-    page.goto("https://ktalk.ru", wait_until="domcontentloaded", timeout=timeout)
+    page.goto("https://example.ktalk.ru", wait_until="domcontentloaded", timeout=timeout)
 
-    # Click the button that creates / starts a new room
+    # Click "Start quick call" button (visible on the example.ktalk.ru dashboard)
     create_btn = page.locator(
+        "button:has-text('Start quick call'), "
+        "button:has-text('Начать быстрый звонок'), "
         "button:has-text('Создать'), "
-        "button:has-text('Начать'), "
-        "a:has-text('Создать'), "
-        "[data-testid='create-room']"
+        "button:has-text('Create event')"
     ).first
     create_btn.click()
 
@@ -131,8 +125,8 @@ def create_public_room(page: Page, timeout: int = 15_000) -> str:
     except Exception:
         pass  # No pre-join screen; already in the room
 
-    # Wait for the URL to contain the room path
-    page.wait_for_url("**/ktalk.ru/**", timeout=timeout)
+    # Wait for room URL (contains a hash/slug after the domain)
+    page.wait_for_url("**/example.ktalk.ru/**", timeout=timeout)
     return page.url
 
 
@@ -169,7 +163,7 @@ def guest_join_room(page: Page, room_url: str, guest_name: str, timeout: int = 2
     join_btn.click()
 
     # Confirm we are inside the room
-    page.wait_for_url("**/ktalk.ru/**", timeout=timeout)
+    page.wait_for_url("**/example.ktalk.ru/**", timeout=timeout)
 
 
 def toggle_mic(page: Page, mute: bool) -> None:

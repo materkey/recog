@@ -69,8 +69,8 @@ class KTalkOrchestrator:
         self.schedule = sorted(schedule, key=lambda e: e.time_offset)
         self.test_duration = test_duration
 
-        self._login = os.environ["KONTUR_LOGIN"]
-        self._password = os.environ["KONTUR_PASSWORD"]
+        self._login = os.environ["SSO_LOGIN"]
+        self._password = os.environ["SSO_PASSWORD"]
 
         self._transcriber = None
         self._transcriber_thread: Optional[threading.Thread] = None
@@ -91,7 +91,7 @@ class KTalkOrchestrator:
 
             # --- Login and create room ---
             try:
-                host_page.goto("https://ktalk.ru", wait_until="domcontentloaded", timeout=20_000)
+                host_page.goto("https://example.ktalk.ru", wait_until="domcontentloaded", timeout=20_000)
                 kontur_login(host_page, self._login, self._password)
                 room_url = create_public_room(host_page)
             except Exception as exc:
