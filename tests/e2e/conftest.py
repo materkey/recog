@@ -132,24 +132,3 @@ def stop_recog_services():
 @pytest.fixture(scope="session")
 def fixtures_dir() -> Path:
     return _FIXTURES_DIR
-
-
-@pytest.fixture(scope="session")
-def speaker_a_wav(fixtures_dir: Path) -> Path:
-    path = fixtures_dir / "speaker_a.wav"
-    assert path.exists(), f"Fixture not found: {path}. Run tests/e2e/prepare_fixtures.py first."
-    return path
-
-
-@pytest.fixture(scope="session")
-def speaker_b_wav(fixtures_dir: Path) -> Path:
-    path = fixtures_dir / "speaker_b.wav"
-    assert path.exists(), f"Fixture not found: {path}. Run tests/e2e/prepare_fixtures.py first."
-    return path
-
-
-@pytest.fixture(scope="session")
-def speaker_c_wav(fixtures_dir: Path) -> Path:
-    path = fixtures_dir / "speaker_c.wav"
-    assert path.exists(), f"Fixture not found: {path}. Run tests/e2e/prepare_fixtures.py first."
-    return path
