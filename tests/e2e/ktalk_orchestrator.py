@@ -171,30 +171,62 @@ class KTalkOrchestrator:
 
     def _start_transcriber(self) -> None:
         """Import LiveTranscriber, find BlackHole device, start in daemon thread."""
+        import traceback
         import sys
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
         from recog.live import LiveTranscriber, SingleDeviceCapture
 
         blackhole_device = SingleDeviceCapture.find_blackhole()
+        print(f"[e2e] BlackHole device: {blackhole_device}")
 
         self._transcriber = LiveTranscriber(
             system_device=blackhole_device,
             use_ktalk=True,
         )
 
+        self._transcriber_error: Optional[str] = None
+
         def _run():
             try:
                 self._transcriber.run()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._transcriber_error = f"{exc}\n{traceback.format_exc()}"
+                print(f"[e2e] Transcriber error: {self._transcriber_error}", file=sys.stderr)
 
         self._transcriber_thread = threading.Thread(target=_run, daemon=True)
         self._transcriber_thread.start()
 
+        # Wait for model to load and transcriber to start
+        import numpy as np
+        for i in range(30):
+            time.sleep(1)
+            if self._transcriber.running:
+                print(f"[e2e] Transcriber ready after {i+1}s")
+                break
+        else:
+            print("[e2e] WARNING: Transcriber not ready after 30s")
+
+        # Diagnostic: check if BlackHole receives any audio
+        try:
+            import sounddevice as sd
+            recording = sd.rec(
+                frames=16000 * 2,  # 2 seconds
+                samplerate=16000,
+                channels=1,
+                device=blackhole_device,
+                dtype='float32',
+            )
+            sd.wait()
+            rms = float(np.sqrt(np.mean(recording ** 2)))
+            print(f"[e2e] BlackHole audio RMS (2s sample): {rms:.6f} {'(silence)' if rms < 0.001 else '(has audio)'}")
+        except Exception as e:
+            print(f"[e2e] BlackHole diagnostic failed: {e}")
+
     def _stop_transcriber(self) -> None:
         """Signal the transcriber to stop and collect transcript_lines."""
         if self._transcriber is not None:
+            print(f"[e2e] Stopping transcriber. Lines so far: {len(self._transcriber.transcript_lines)}")
             self._transcriber.running = False
 
         if self._transcriber_thread is not None:
@@ -202,6 +234,9 @@ class KTalkOrchestrator:
 
         if self._transcriber is not None:
             self._transcript_lines = list(self._transcriber.transcript_lines)
+            print(f"[e2e] Final transcript lines: {len(self._transcript_lines)}")
+            if hasattr(self, '_transcriber_error') and self._transcriber_error:
+                print(f"[e2e] Transcriber had error: {self._transcriber_error}")
 
 
 # ------------------------------------------------------------------
