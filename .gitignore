@@ -5,6 +5,7 @@
 *.m4a
 
 # Test outputs
+tests/e2e/fixtures/*.wav
 test_*.md
 full_result*.md
 *_result.md
