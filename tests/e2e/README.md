@@ -4,7 +4,7 @@ Tests speaker attribution through the full pipeline: real KTalk conference → C
 
 ## Prerequisites
 
-1. **Kontur account** with KTalk access
+1. **conference SSO account** with KTalk access (example.ktalk.ru)
 2. **BlackHole** virtual audio device installed
 3. **Chrome extension** built: `cd kontur-diarize/ktalk-speaker-extension && npm run build`
 4. **Playwright**: `./venv-gigaam/bin/pip install playwright pytest-playwright && ./venv-gigaam/bin/playwright install chromium`
@@ -13,8 +13,8 @@ Tests speaker attribution through the full pipeline: real KTalk conference → C
 ## Running
 
 ```bash
-export KONTUR_LOGIN="your_login"
-export KONTUR_PASSWORD="your_password"
+export SSO_LOGIN="your_login"
+export SSO_PASSWORD="your_password"
 ./venv-gigaam/bin/python -m pytest tests/e2e/ -m e2e -v -s --timeout=120
 ```
 
