@@ -2,6 +2,151 @@
 /******/ 	"use strict";
 /******/ 	var __webpack_modules__ = ({
 
+/***/ "./src/audio-analyzer.js"
+/*!*******************************!*\
+  !*** ./src/audio-analyzer.js ***!
+  \*******************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   attachAllFromConf: () => (/* binding */ attachAllFromConf),
+/* harmony export */   attachParticipant: () => (/* binding */ attachParticipant),
+/* harmony export */   detachParticipant: () => (/* binding */ detachParticipant),
+/* harmony export */   dispose: () => (/* binding */ dispose),
+/* harmony export */   getFlatness: () => (/* binding */ getFlatness),
+/* harmony export */   isSpeech: () => (/* binding */ isSpeech)
+/* harmony export */ });
+/* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
+
+
+let audioCtx = null;
+const analysers = new Map(); // participantId → { source, analyser, freqData, history[] }
+
+const HISTORY_SIZE = 3;
+
+function ensureAudioContext() {
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new AudioContext();
+  }
+  return audioCtx;
+}
+
+function computeFlatness(analyser) {
+  const data = new Float32Array(analyser.frequencyBinCount);
+  analyser.getFloatFrequencyData(data);
+  const power = [];
+  for (let i = 1; i < 256; i++) {
+    const db = data[i];
+    power.push(db > -100 ? Math.pow(10, db / 10) : 0);
+  }
+  const totalEnergy = power.reduce((a, b) => a + b, 0);
+  if (totalEnergy < 1e-10) return -1; // no signal
+  const nonZero = power.filter(p => p > 1e-15);
+  if (nonZero.length < 10) return -1;
+  const geoMean = Math.exp(nonZero.reduce((a, b) => a + Math.log(b), 0) / nonZero.length);
+  const ariMean = nonZero.reduce((a, b) => a + b, 0) / nonZero.length;
+  return ariMean > 0 ? geoMean / ariMean : 0;
+}
+
+function attachParticipant(participantId, mediaStream) {
+  if (!participantId || !mediaStream) return;
+  if (analysers.has(participantId)) return;
+
+  try {
+    const ctx = ensureAudioContext();
+    const source = ctx.createMediaStreamSource(mediaStream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.3;
+    source.connect(analyser);
+    analysers.set(participantId, { source, analyser, history: [] });
+    console.log('[AudioAnalyzer] Attached participant:', participantId);
+  } catch (e) {
+    console.warn('[AudioAnalyzer] Failed to attach participant:', participantId, e);
+  }
+}
+
+function detachParticipant(participantId) {
+  const entry = analysers.get(participantId);
+  if (!entry) return;
+  try {
+    entry.source.disconnect();
+  } catch (e) { /* already disconnected */ }
+  analysers.delete(participantId);
+  console.log('[AudioAnalyzer] Detached participant:', participantId);
+}
+
+function getFlatness(participantId) {
+  const entry = analysers.get(participantId);
+  if (!entry) return null;
+  return computeFlatness(entry.analyser);
+}
+
+function isSpeech(participantId) {
+  const entry = analysers.get(participantId);
+  if (!entry) return { speech: true, reason: 'no_analyser' };
+
+  if (audioCtx?.state === 'suspended') return { speech: true, reason: 'ctx_suspended' };
+
+  const flatness = computeFlatness(entry.analyser);
+
+  if (flatness === -1) return { speech: true, reason: 'silence' };
+
+  // Maintain sliding window
+  entry.history.push(flatness);
+  if (entry.history.length > HISTORY_SIZE) entry.history.shift();
+
+  if (entry.history.length < 2) return { speech: true, reason: 'warmup' };
+
+  // Median vote
+  const sorted = [...entry.history].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+
+  if (median < _state_js__WEBPACK_IMPORTED_MODULE_0__.constants.FLATNESS_THRESHOLD) {
+    return { speech: true, reason: 'speech' };
+  }
+  return { speech: false, reason: 'noise' };
+}
+
+function attachAllFromConf(conf) {
+  if (!conf) return;
+
+  // Scan KTalk _participantsMap
+  conf._participantsMap?.forEach((p) => {
+    const pid = p._id;
+    if (!pid || p.local) return;
+    const stream = p._audioTrack$?.value?.jitsiTrack?.stream;
+    if (stream) attachParticipant(pid, stream);
+  });
+
+  // Scan Jitsi participants
+  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  for (const jp of jitsiParticipants) {
+    const pid = jp._id || jp.getId?.() || jp.id;
+    if (!pid || analysers.has(pid)) continue;
+    const tracks = jp.getTracks?.() || [];
+    const audioTrack = tracks.find(t => t.getType?.() === 'audio');
+    const stream = audioTrack?.stream || audioTrack?.getOriginalStream?.();
+    if (stream) attachParticipant(pid, stream);
+  }
+}
+
+function dispose() {
+  for (const [pid, entry] of analysers) {
+    try { entry.source.disconnect(); } catch (e) { /* ok */ }
+  }
+  analysers.clear();
+  if (audioCtx && audioCtx.state !== 'closed') {
+    audioCtx.close().catch(() => {});
+  }
+  audioCtx = null;
+  console.log('[AudioAnalyzer] Disposed');
+}
+
+
+/***/ },
+
 /***/ "./src/bioread.js"
 /*!************************!*\
   !*** ./src/bioread.js ***!
@@ -183,7 +328,10 @@ function updateDebugPanel() {
     ['jitsiParticipants', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsCount],
     ['jitsiParticipantsMap', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastJitsiParticipantsMapCount],
     ['transcriptLines', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length],
-    ['speakerHistory', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakerHistory.length]
+    ['speakerHistory', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.speakerHistory.length],
+    ['noiseFilter', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.audioFilterSuppressCount + ' suppressed'],
+    ['flatness', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.audioFilterLastFlatness?.toFixed(3) ?? '—'],
+    ['filterReason', _state_js__WEBPACK_IMPORTED_MODULE_0__.state.audioFilterLastReason ?? '—']
   ];
 
   const rowsHtml = rows.map(([key, value]) => {
@@ -464,6 +612,8 @@ function tryAttachConference() {
     const jitsiConf = adapter.getJitsiConference();
 
     if (conf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef || jitsiConf !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf) {
+      // Dispose old subscriptions and analysers before reattach
+      adapter.dispose();
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeConfRef = conf;
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.activeJitsiConf = jitsiConf;
       console.log(`[${(0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformDisplayName)()} Transcript] Conference reattached`);
@@ -711,6 +861,8 @@ function init() {
     if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl) {
       (0,_meeting_js__WEBPACK_IMPORTED_MODULE_4__.sendMeetingLeave)('page_closed');
     }
+    const beforeUnloadAdapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_7__.getPlatformAdapter)();
+    beforeUnloadAdapter?.dispose();
   });
 }
 
@@ -951,6 +1103,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   KTalkAdapter: () => (/* binding */ KTalkAdapter)
 /* harmony export */ });
+/* harmony import */ var _audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../audio-analyzer.js */ "./src/audio-analyzer.js");
 /**
  * KTalk Platform Adapter
  *
@@ -961,11 +1114,14 @@ __webpack_require__.r(__webpack_exports__);
  * - $conf.jitsiConf - underlying Jitsi conference
  */
 
+
+
 class KTalkAdapter {
   constructor() {
     this.name = 'ktalk';
     this.conf = null;
     this.subscriptions = [];
+    this._jitsiHandlers = [];
   }
 
   /**
@@ -1234,23 +1390,41 @@ class KTalkAdapter {
       }
     });
 
+    // Attach audio analysers for existing participants
+    (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.attachAllFromConf)(conf);
+
     // Also subscribe to Jitsi events
     const jitsiConf = conf.jitsiConf;
     if (jitsiConf) {
-      jitsiConf.on('conference.dominantSpeaker', () => callback());
-      jitsiConf.on('conference.trackAdded', (track) => {
+      this._onJitsi(jitsiConf, 'conference.dominantSpeaker', () => callback());
+
+      this._onJitsi(jitsiConf, 'conference.trackAdded', (track) => {
+        if (track.getType?.() === 'audio') {
+          callback();
+          const pid = track.getParticipantId?.();
+          const stream = track.stream || track.getOriginalStream?.();
+          if (pid && stream) (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.attachParticipant)(pid, stream);
+        }
+      });
+
+      this._onJitsi(jitsiConf, 'conference.trackRemoved', (track) => {
+        if (track.getType?.() === 'audio') {
+          callback();
+          const pid = track.getParticipantId?.();
+          if (pid) (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.detachParticipant)(pid);
+        }
+      });
+
+      this._onJitsi(jitsiConf, 'conference.trackMuteChanged', (track) => {
         if (track.getType?.() === 'audio') callback();
       });
-      jitsiConf.on('conference.trackRemoved', (track) => {
-        if (track.getType?.() === 'audio') callback();
-      });
-      jitsiConf.on('conference.trackMuteChanged', (track) => {
-        if (track.getType?.() === 'audio') callback();
-      });
-      jitsiConf.on('conference.userJoined', () => {
+
+      this._onJitsi(jitsiConf, 'conference.userJoined', () => {
         setTimeout(callback, 1000);
       });
-      jitsiConf.on('conference.userLeft', () => {
+
+      this._onJitsi(jitsiConf, 'conference.userLeft', (id) => {
+        (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.detachParticipant)(id);
         setTimeout(callback, 500);
       });
     }
@@ -1324,6 +1498,16 @@ class KTalkAdapter {
       if (sub.unsubscribe) sub.unsubscribe();
     });
     this.subscriptions = [];
+    this._jitsiHandlers.forEach(({ jitsiConf, event, handler }) => {
+      jitsiConf.off?.(event, handler);
+    });
+    this._jitsiHandlers = [];
+    (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.dispose)();
+  }
+
+  _onJitsi(jitsiConf, event, handler) {
+    jitsiConf.on(event, handler);
+    this._jitsiHandlers.push({ jitsiConf, event, handler });
   }
 
   // Private helper methods
@@ -1798,6 +1982,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   getActiveSpeaker: () => (/* binding */ getActiveSpeaker),
 /* harmony export */   getParticipantsList: () => (/* binding */ getParticipantsList),
 /* harmony export */   isMicMuted: () => (/* binding */ isMicMuted),
+/* harmony export */   sendFilteredSpeakerUpdate: () => (/* binding */ sendFilteredSpeakerUpdate),
 /* harmony export */   sendParticipantsUpdate: () => (/* binding */ sendParticipantsUpdate),
 /* harmony export */   updateSpeakerStatus: () => (/* binding */ updateSpeakerStatus)
 /* harmony export */ });
@@ -1806,6 +1991,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
 /* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
 /* harmony import */ var _ui_vas3k_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./ui-vas3k.js */ "./src/ui-vas3k.js");
+/* harmony import */ var _audio_analyzer_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./audio-analyzer.js */ "./src/audio-analyzer.js");
+
 
 
 
@@ -2154,7 +2341,21 @@ function updateSpeakerStatus(conf) {
     participants: participants
   });
 
-  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsSpeakerUpdate)(activeSpeaker);
+  sendFilteredSpeakerUpdate(activeSpeaker);
+}
+
+function sendFilteredSpeakerUpdate(speaker) {
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.constants.AUDIO_FILTER_ENABLED && speaker) {
+    const result = (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_5__.isSpeech)(speaker.id);
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.audioFilterLastFlatness = (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_5__.getFlatness)(speaker.id);
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.audioFilterLastReason = result.reason;
+    if (!result.speech) {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.audioFilterSuppressCount++;
+      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsSpeakerUpdate)(null);
+      return;
+    }
+  }
+  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsSpeakerUpdate)(speaker);
 }
 
 function addToHistory(name, speakerId, durationMs) {
@@ -2189,7 +2390,9 @@ const constants = {
   MAX_HISTORY: 100,
   SPEAKING_THRESHOLD_MS: 500,
   MAX_TRANSCRIPT_LINES: 100,
-  WS_URL: 'ws://localhost:8766'
+  WS_URL: 'ws://localhost:8766',
+  FLATNESS_THRESHOLD: 0.15,
+  AUDIO_FILTER_ENABLED: true
 };
 
 const state = {
@@ -2236,6 +2439,10 @@ const state = {
   clockSyncTimer: null,
   activeConfRef: null,
   activeJitsiConf: null,
+  audioFilterSuppressCount: 0,
+  audioFilterLastFlatness: null,
+  audioFilterLastReason: null,
+
   bioRead: {
     enabled: false,
     fixation: 40,
@@ -5345,13 +5552,13 @@ function connectWebSocket() {
         if (conf) {
           (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
           const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getActiveSpeaker)(conf);
-          (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsSpeakerUpdate)(activeSpeaker);
+          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendFilteredSpeakerUpdate)(activeSpeaker);
           (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.sendMeetingJoin)();
         }
       } else if (window.$conf) {
         (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(window.$conf);
         const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getActiveSpeaker)(window.$conf);
-        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsSpeakerUpdate)(activeSpeaker);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendFilteredSpeakerUpdate)(activeSpeaker);
         (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.sendMeetingJoin)();
       }
 

@@ -3,6 +3,7 @@ import { sendUpdate } from './utils.js';
 import { sendWsSpeakerUpdate, sendWsParticipants } from './ws_api.js';
 import { getPlatformAdapter, getPlatform, isJitsiPlatform } from './platforms/index.js';
 import { updateVas3kSpeakerStatus } from './ui-vas3k.js';
+import { isSpeech, getFlatness } from './audio-analyzer.js';
 
 export function getActiveSpeaker(conf) {
   const adapter = getPlatformAdapter();
@@ -346,7 +347,21 @@ export function updateSpeakerStatus(conf) {
     participants: participants
   });
 
-  sendWsSpeakerUpdate(activeSpeaker);
+  sendFilteredSpeakerUpdate(activeSpeaker);
+}
+
+export function sendFilteredSpeakerUpdate(speaker) {
+  if (constants.AUDIO_FILTER_ENABLED && speaker) {
+    const result = isSpeech(speaker.id);
+    state.audioFilterLastFlatness = getFlatness(speaker.id);
+    state.audioFilterLastReason = result.reason;
+    if (!result.speech) {
+      state.audioFilterSuppressCount++;
+      sendWsSpeakerUpdate(null);
+      return;
+    }
+  }
+  sendWsSpeakerUpdate(speaker);
 }
 
 function addToHistory(name, speakerId, durationMs) {
