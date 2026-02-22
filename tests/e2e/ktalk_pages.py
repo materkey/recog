@@ -63,11 +63,12 @@ def launch_guest_browser(playwright: Playwright, fake_audio_path: str) -> tuple[
     return browser, context, page
 
 
-def kontur_login(page: Page, login: str, password: str, timeout: int = 30_000) -> None:
+def kontur_login(page: Page, login: str, password: str,
+                 timeout: int = 30_000) -> None:
     """Authenticate via the conference SSO (Keycloak).
 
-    example.ktalk.ru redirects to sso.example.org which shows a single-page
-    login form with username + password fields and a "Sign In" submit input.
+    example.ktalk.ru redirects to sso.example.org which shows
+    a login form (username + password).
 
     Args:
         page: Playwright Page that has been redirected to SSO login
@@ -76,12 +77,10 @@ def kontur_login(page: Page, login: str, password: str, timeout: int = 30_000) -
         password: Account password.
         timeout: Maximum wait time in ms for each step.
     """
-    # Wait for SSO Keycloak login form
+    # Step 1: Username + Password
     page.wait_for_selector("input[name='username']", timeout=timeout)
     page.locator("input[name='username']").fill(login)
     page.locator("input[name='password']").fill(password)
-
-    # Submit — SSO uses input[type=submit][name=login], not a button
     page.locator("input[name='login'][type='submit']").click()
 
     # Wait until we land back on example.ktalk.ru
