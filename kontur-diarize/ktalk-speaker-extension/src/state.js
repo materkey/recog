@@ -2,7 +2,9 @@ export const constants = {
   MAX_HISTORY: 100,
   SPEAKING_THRESHOLD_MS: 500,
   MAX_TRANSCRIPT_LINES: 100,
-  WS_URL: 'ws://localhost:8766'
+  WS_URL: 'ws://localhost:8766',
+  FLATNESS_THRESHOLD: 0.15,
+  AUDIO_FILTER_ENABLED: true
 };
 
 export const state = {
@@ -49,6 +51,10 @@ export const state = {
   clockSyncTimer: null,
   activeConfRef: null,
   activeJitsiConf: null,
+  audioFilterSuppressCount: 0,
+  audioFilterLastFlatness: null,
+  audioFilterLastReason: null,
+
   bioRead: {
     enabled: false,
     fixation: 40,

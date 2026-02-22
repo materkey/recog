@@ -46,7 +46,10 @@ export function updateDebugPanel() {
     ['jitsiParticipants', state.lastJitsiParticipantsCount],
     ['jitsiParticipantsMap', state.lastJitsiParticipantsMapCount],
     ['transcriptLines', state.transcriptLines.length],
-    ['speakerHistory', state.speakerHistory.length]
+    ['speakerHistory', state.speakerHistory.length],
+    ['noiseFilter', state.audioFilterSuppressCount + ' suppressed'],
+    ['flatness', state.audioFilterLastFlatness?.toFixed(3) ?? '—'],
+    ['filterReason', state.audioFilterLastReason ?? '—']
   ];
 
   const rowsHtml = rows.map(([key, value]) => {

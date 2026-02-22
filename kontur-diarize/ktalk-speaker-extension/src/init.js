@@ -102,6 +102,8 @@ function tryAttachConference() {
     const jitsiConf = adapter.getJitsiConference();
 
     if (conf !== state.activeConfRef || jitsiConf !== state.activeJitsiConf) {
+      // Dispose old subscriptions and analysers before reattach
+      adapter.dispose();
       state.activeConfRef = conf;
       state.activeJitsiConf = jitsiConf;
       console.log(`[${getPlatformDisplayName()} Transcript] Conference reattached`);
@@ -349,5 +351,7 @@ export function init() {
     if (state.currentMeetingUrl) {
       sendMeetingLeave('page_closed');
     }
+    const beforeUnloadAdapter = getPlatformAdapter();
+    beforeUnloadAdapter?.dispose();
   });
 }

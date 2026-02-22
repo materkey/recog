@@ -8,11 +8,14 @@
  * - $conf.jitsiConf - underlying Jitsi conference
  */
 
+import { attachParticipant, detachParticipant, attachAllFromConf, dispose as audioAnalyzerDispose } from '../audio-analyzer.js';
+
 export class KTalkAdapter {
   constructor() {
     this.name = 'ktalk';
     this.conf = null;
     this.subscriptions = [];
+    this._jitsiHandlers = [];
   }
 
   /**
@@ -281,23 +284,41 @@ export class KTalkAdapter {
       }
     });
 
+    // Attach audio analysers for existing participants
+    attachAllFromConf(conf);
+
     // Also subscribe to Jitsi events
     const jitsiConf = conf.jitsiConf;
     if (jitsiConf) {
-      jitsiConf.on('conference.dominantSpeaker', () => callback());
-      jitsiConf.on('conference.trackAdded', (track) => {
+      this._onJitsi(jitsiConf, 'conference.dominantSpeaker', () => callback());
+
+      this._onJitsi(jitsiConf, 'conference.trackAdded', (track) => {
+        if (track.getType?.() === 'audio') {
+          callback();
+          const pid = track.getParticipantId?.();
+          const stream = track.stream || track.getOriginalStream?.();
+          if (pid && stream) attachParticipant(pid, stream);
+        }
+      });
+
+      this._onJitsi(jitsiConf, 'conference.trackRemoved', (track) => {
+        if (track.getType?.() === 'audio') {
+          callback();
+          const pid = track.getParticipantId?.();
+          if (pid) detachParticipant(pid);
+        }
+      });
+
+      this._onJitsi(jitsiConf, 'conference.trackMuteChanged', (track) => {
         if (track.getType?.() === 'audio') callback();
       });
-      jitsiConf.on('conference.trackRemoved', (track) => {
-        if (track.getType?.() === 'audio') callback();
-      });
-      jitsiConf.on('conference.trackMuteChanged', (track) => {
-        if (track.getType?.() === 'audio') callback();
-      });
-      jitsiConf.on('conference.userJoined', () => {
+
+      this._onJitsi(jitsiConf, 'conference.userJoined', () => {
         setTimeout(callback, 1000);
       });
-      jitsiConf.on('conference.userLeft', () => {
+
+      this._onJitsi(jitsiConf, 'conference.userLeft', (id) => {
+        detachParticipant(id);
         setTimeout(callback, 500);
       });
     }
@@ -371,6 +392,16 @@ export class KTalkAdapter {
       if (sub.unsubscribe) sub.unsubscribe();
     });
     this.subscriptions = [];
+    this._jitsiHandlers.forEach(({ jitsiConf, event, handler }) => {
+      jitsiConf.off?.(event, handler);
+    });
+    this._jitsiHandlers = [];
+    audioAnalyzerDispose();
+  }
+
+  _onJitsi(jitsiConf, event, handler) {
+    jitsiConf.on(event, handler);
+    this._jitsiHandlers.push({ jitsiConf, event, handler });
   }
 
   // Private helper methods
