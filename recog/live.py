@@ -12,7 +12,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT
+from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT, LAST_SPEAKER_TTL
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
 
@@ -750,9 +750,15 @@ class LiveTranscriber:
                     ktalk_speaker = self._ktalk_current_speaker
 
                 # Используем спикера от extension, или последнего известного из транскрипции
-                speaker = ktalk_speaker or state.last_speaker
-                no_speaker_yet = False
-                if not speaker:
+                # TTL: last_speaker используется только если речь была недавно,
+                # иначе сбрасываем на Unknown чтобы избежать каскадной ошибочной атрибуции
+                if ktalk_speaker:
+                    speaker = ktalk_speaker
+                    no_speaker_yet = False
+                elif state.last_speaker and (chunk_time - state.last_speech_time) < LAST_SPEAKER_TTL:
+                    speaker = state.last_speaker
+                    no_speaker_yet = False
+                else:
                     speaker = "Unknown"
                     no_speaker_yet = True
 
