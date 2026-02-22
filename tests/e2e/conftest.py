@@ -1,0 +1,39 @@
+"""Pytest configuration and fixtures for e2e diarization tests."""
+from pathlib import Path
+
+import pytest
+
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "e2e: end-to-end tests requiring KTalk, browser, and audio hardware",
+    )
+
+
+@pytest.fixture(scope="session")
+def fixtures_dir() -> Path:
+    return _FIXTURES_DIR
+
+
+@pytest.fixture(scope="session")
+def speaker_a_wav(fixtures_dir: Path) -> Path:
+    path = fixtures_dir / "speaker_a.wav"
+    assert path.exists(), f"Fixture not found: {path}. Run tests/e2e/prepare_fixtures.py first."
+    return path
+
+
+@pytest.fixture(scope="session")
+def speaker_b_wav(fixtures_dir: Path) -> Path:
+    path = fixtures_dir / "speaker_b.wav"
+    assert path.exists(), f"Fixture not found: {path}. Run tests/e2e/prepare_fixtures.py first."
+    return path
+
+
+@pytest.fixture(scope="session")
+def speaker_c_wav(fixtures_dir: Path) -> Path:
+    path = fixtures_dir / "speaker_c.wav"
+    assert path.exists(), f"Fixture not found: {path}. Run tests/e2e/prepare_fixtures.py first."
+    return path
