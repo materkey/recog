@@ -90,8 +90,8 @@ def kontur_login(page: Page, login: str, password: str,
 def create_public_room(page: Page, timeout: int = 15_000) -> str:
     """Create a new public KTalk room and return its URL.
 
-    Navigates to example.ktalk.ru and clicks "Start quick call" to create a room.
-    Handles a pre-join screen if one appears.
+    Navigates to example.ktalk.ru, clicks "Start quick call" to create a room,
+    and enables "Public room" so external guests can join without auth.
 
     Args:
         page: Playwright Page authenticated via SSO.
@@ -126,7 +126,47 @@ def create_public_room(page: Page, timeout: int = 15_000) -> str:
 
     # Wait for room URL (contains a hash/slug after the domain)
     page.wait_for_url("**/example.ktalk.ru/**", timeout=timeout)
+
+    # Enable "Public room" so external guests can join without auth.
+    # Open the shield/security menu (bottom-left toolbar icon)
+    _enable_public_room(page, timeout)
+
     return page.url
+
+
+def _enable_public_room(page: Page, timeout: int = 10_000) -> None:
+    """Toggle 'Public room' on in the meeting permissions panel.
+
+    Opens the shield icon menu → finds the 'Public room' toggle → enables it
+    if not already enabled.
+    """
+    import time
+
+    # Click the "Meeting settings" shield button (conference-island component)
+    shield_btn = page.locator(
+        "[aria-label='Meeting settings'], "
+        "[aria-label='Настройки встречи']"
+    ).first
+
+    shield_btn.wait_for(state="visible", timeout=timeout)
+    shield_btn.click()
+
+    time.sleep(1)
+
+    # Find the "Public room" toggle (div[role=checkbox]) and enable it
+    public_toggle = page.locator(
+        "[role='checkbox'][title='Public room'], "
+        "[role='checkbox'][title='Публичная комната']"
+    ).first
+
+    public_toggle.wait_for(state="visible", timeout=5_000)
+    if public_toggle.get_attribute("aria-checked") == "false":
+        public_toggle.click()
+
+    time.sleep(1)
+
+    # Close the menu by clicking elsewhere or pressing Escape
+    page.keyboard.press("Escape")
 
 
 def guest_join_room(page: Page, room_url: str, guest_name: str, timeout: int = 20_000) -> None:
@@ -143,25 +183,33 @@ def guest_join_room(page: Page, room_url: str, guest_name: str, timeout: int = 2
     """
     page.goto(room_url, wait_until="domcontentloaded", timeout=timeout)
 
-    # Guest name input may appear on a pre-join / lobby screen
+    # Guest name input: "Please type your name" with placeholder "Example: Adam Smith"
     name_input = page.locator(
+        "input[placeholder*='Adam Smith' i], "
         "input[placeholder*='имя' i], "
         "input[placeholder*='name' i], "
-        "input[name='displayName'], "
-        "input[data-testid='prejoin-display-name']"
+        "input[name='displayName']"
     ).first
     name_input.wait_for(state="visible", timeout=timeout)
     name_input.fill(guest_name)
 
-    join_btn = page.locator(
-        "button:has-text('Войти'), "
-        "button:has-text('Присоединиться'), "
-        "button:has-text('Join'), "
-        "[data-testid='prejoin-join-button']"
+    # Click "Continue" button to proceed to pre-join screen
+    continue_btn = page.locator(
+        "button:has-text('Continue'), "
+        "button:has-text('Продолжить')"
     ).first
+    continue_btn.click()
+
+    # Pre-join screen: camera/mic preview with "Join the conference" button
+    join_btn = page.locator(
+        "button:has-text('Join the conference'), "
+        "button:has-text('Присоединиться к конференции'), "
+        "button:has-text('Присоединиться')"
+    ).first
+    join_btn.wait_for(state="visible", timeout=timeout)
     join_btn.click()
 
-    # Confirm we are inside the room
+    # Wait until we are inside the room
     page.wait_for_url("**/example.ktalk.ru/**", timeout=timeout)
 
 
