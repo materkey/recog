@@ -2345,6 +2345,17 @@ function updateSpeakerStatus(conf) {
 }
 
 function sendFilteredSpeakerUpdate(speaker) {
+  if (speaker) {
+    // Jitsi keeps _activeSpeaker$ pointing at the last dominant speaker even after
+    // they mute.  If the reported speaker's mic is muted, suppress the update so
+    // the bridge doesn't attribute audio to a silent participant.
+    const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_3__.getPlatformAdapter)();
+    const conf = adapter?.getConference?.() || window.$conf;
+    if (conf && isMicMuted(conf, speaker.id)) {
+      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsSpeakerUpdate)(null);
+      return;
+    }
+  }
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.constants.AUDIO_FILTER_ENABLED && speaker) {
     const result = (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_5__.isSpeech)(speaker.id);
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.audioFilterLastFlatness = (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_5__.getFlatness)(speaker.id);
