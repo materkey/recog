@@ -62,7 +62,7 @@ const { state, constants } = await import('./state.js');
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeSpeaker({ id = 'p1', name = 'Kostya Zaikin', isLocal = false } = {}) {
+function makeSpeaker({ id = 'p1', name = 'Speaker 1', isLocal = false } = {}) {
   return { id, name, isLocal };
 }
 
@@ -155,12 +155,12 @@ describe('sendFilteredSpeakerUpdate', () => {
 
   test('given muted speaker — sends null instead of speaker', () => {
     const conf = makeConf([
-      { id: 'kostya', name: 'Kostya Zaikin', micMuted: true, isSpeaking: true },
-      { id: 'vlad', name: 'Vlad', micMuted: false, isSpeaking: false },
+      { id: 'p1', name: 'Speaker 1', micMuted: true, isSpeaking: true },
+      { id: 'p2', name: 'Speaker 2', micMuted: false, isSpeaking: false },
     ]);
     mockAdapter = makeAdapterForConf(conf);
 
-    sendFilteredSpeakerUpdate(makeSpeaker({ id: 'kostya', name: 'Kostya Zaikin' }));
+    sendFilteredSpeakerUpdate(makeSpeaker({ id: 'p1', name: 'Speaker 1' }));
 
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledTimes(1);
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledWith(null);
@@ -168,11 +168,11 @@ describe('sendFilteredSpeakerUpdate', () => {
 
   test('given unmuted speaker — sends speaker through', () => {
     const conf = makeConf([
-      { id: 'vlad', name: 'Vlad', micMuted: false, isSpeaking: true },
+      { id: 'p1', name: 'Speaker 1', micMuted: false, isSpeaking: true },
     ]);
     mockAdapter = makeAdapterForConf(conf);
 
-    const speaker = makeSpeaker({ id: 'vlad', name: 'Vlad' });
+    const speaker = makeSpeaker({ id: 'p1', name: 'Speaker 1' });
     sendFilteredSpeakerUpdate(speaker);
 
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledTimes(1);
@@ -188,12 +188,12 @@ describe('sendFilteredSpeakerUpdate', () => {
 
   test('given unmuted speaker with noise — audio filter suppresses', () => {
     const conf = makeConf([
-      { id: 'vlad', name: 'Vlad', micMuted: false, isSpeaking: true },
+      { id: 'p1', name: 'Speaker 1', micMuted: false, isSpeaking: true },
     ]);
     mockAdapter = makeAdapterForConf(conf);
     mockIsSpeech.mockReturnValueOnce({ speech: false, reason: 'noise' });
 
-    sendFilteredSpeakerUpdate(makeSpeaker({ id: 'vlad', name: 'Vlad' }));
+    sendFilteredSpeakerUpdate(makeSpeaker({ id: 'p1', name: 'Speaker 1' }));
 
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledWith(null);
     expect(state.audioFilterSuppressCount).toBe(1);
@@ -201,11 +201,11 @@ describe('sendFilteredSpeakerUpdate', () => {
 
   test('given unmuted speaker with speech — audio filter passes through', () => {
     const conf = makeConf([
-      { id: 'vlad', name: 'Vlad', micMuted: false, isSpeaking: true },
+      { id: 'p1', name: 'Speaker 1', micMuted: false, isSpeaking: true },
     ]);
     mockAdapter = makeAdapterForConf(conf);
 
-    const speaker = makeSpeaker({ id: 'vlad', name: 'Vlad' });
+    const speaker = makeSpeaker({ id: 'p1', name: 'Speaker 1' });
     sendFilteredSpeakerUpdate(speaker);
 
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledWith(speaker);
@@ -213,12 +213,12 @@ describe('sendFilteredSpeakerUpdate', () => {
 
   test('given audio filter disabled — sends unmuted speaker without isSpeech check', () => {
     const conf = makeConf([
-      { id: 'vlad', name: 'Vlad', micMuted: false, isSpeaking: true },
+      { id: 'p1', name: 'Speaker 1', micMuted: false, isSpeaking: true },
     ]);
     mockAdapter = makeAdapterForConf(conf);
     constants.AUDIO_FILTER_ENABLED = false;
 
-    const speaker = makeSpeaker({ id: 'vlad', name: 'Vlad' });
+    const speaker = makeSpeaker({ id: 'p1', name: 'Speaker 1' });
     sendFilteredSpeakerUpdate(speaker);
 
     expect(mockIsSpeech).not.toHaveBeenCalled();
@@ -229,11 +229,11 @@ describe('sendFilteredSpeakerUpdate', () => {
     mockAdapter = null;
 
     const conf = makeConf([
-      { id: 'kostya', name: 'Kostya Zaikin', micMuted: true, isSpeaking: true },
+      { id: 'p1', name: 'Speaker 1', micMuted: true, isSpeaking: true },
     ]);
     window.$conf = conf;
 
-    sendFilteredSpeakerUpdate(makeSpeaker({ id: 'kostya', name: 'Kostya Zaikin' }));
+    sendFilteredSpeakerUpdate(makeSpeaker({ id: 'p1', name: 'Speaker 1' }));
 
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledWith(null);
   });
@@ -241,7 +241,7 @@ describe('sendFilteredSpeakerUpdate', () => {
   test('given no adapter and no window.$conf — sends speaker (no conf to check mute)', () => {
     mockAdapter = null;
 
-    const speaker = makeSpeaker({ id: 'vlad', name: 'Vlad' });
+    const speaker = makeSpeaker({ id: 'p1', name: 'Speaker 1' });
     sendFilteredSpeakerUpdate(speaker);
 
     // No conf → can't check mute → falls through to audio filter → speech:true → sends speaker
@@ -250,11 +250,11 @@ describe('sendFilteredSpeakerUpdate', () => {
 
   test('mute check runs before audio filter — muted speaker never reaches isSpeech', () => {
     const conf = makeConf([
-      { id: 'kostya', name: 'Kostya Zaikin', micMuted: true, isSpeaking: true },
+      { id: 'p1', name: 'Speaker 1', micMuted: true, isSpeaking: true },
     ]);
     mockAdapter = makeAdapterForConf(conf);
 
-    sendFilteredSpeakerUpdate(makeSpeaker({ id: 'kostya' }));
+    sendFilteredSpeakerUpdate(makeSpeaker({ id: 'p1' }));
 
     expect(mockIsSpeech).not.toHaveBeenCalled();
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledWith(null);
@@ -297,7 +297,7 @@ describe('getActiveSpeaker', () => {
   });
 
   test('given adapter — delegates to adapter.getActiveSpeaker', () => {
-    const expected = { id: 'p1', name: 'Vlad', isLocal: false };
+    const expected = { id: 'p1', name: 'Speaker 1', isLocal: false };
     mockAdapter = { getActiveSpeaker: jest.fn(() => expected) };
 
     const result = getActiveSpeaker({});
@@ -309,8 +309,8 @@ describe('getActiveSpeaker', () => {
   test('given no adapter — finds active speaker from _participantsMap', () => {
     mockAdapter = null;
     const conf = makeConf([
-      { id: 'p1', name: 'Kostya', isSpeaking: false },
-      { id: 'p2', name: 'Vlad', isSpeaking: true },
+      { id: 'p1', name: 'Speaker 1', isSpeaking: false },
+      { id: 'p2', name: 'Speaker 2', isSpeaking: true },
     ]);
 
     const result = getActiveSpeaker(conf);
@@ -322,7 +322,7 @@ describe('getActiveSpeaker', () => {
   test('given no active speaker — returns null', () => {
     mockAdapter = null;
     const conf = makeConf([
-      { id: 'p1', name: 'Kostya', isSpeaking: false },
+      { id: 'p1', name: 'Speaker 1', isSpeaking: false },
     ]);
 
     const result = getActiveSpeaker(conf);
@@ -372,7 +372,7 @@ describe('anyMicOn', () => {
   });
 });
 
-describe('Scenario: muted Kostya shown as speaker while Vlad talks', () => {
+describe('Scenario: muted ghost speaker attributed instead of real speaker', () => {
   beforeEach(() => {
     mockSendWsSpeakerUpdate.mockClear();
     mockIsSpeech.mockReset();
@@ -384,27 +384,30 @@ describe('Scenario: muted Kostya shown as speaker while Vlad talks', () => {
     delete window.$conf;
   });
 
-  test('Jitsi reports muted Kostya as active — sendFilteredSpeakerUpdate sends null', () => {
+  test('Jitsi reports muted participant as active — sendFilteredSpeakerUpdate sends null', () => {
+    // Jitsi's _activeSpeaker$ still points at the last dominant speaker (muted_remote)
+    // even though they muted. Another participant is speaking but Jitsi hasn't switched yet.
     const conf = makeConf([
-      { id: 'kostya', name: 'Kostya Zaikin', micMuted: true, isSpeaking: true },
-      { id: 'vlad_k', name: 'Vlad Kovalev', micMuted: false, isLocal: true, isSpeaking: false },
-      { id: 'vlad_v', name: 'Vlad Vorobev', micMuted: false, isSpeaking: false },
+      { id: 'muted_remote', name: 'Muted Remote', micMuted: true, isSpeaking: true },
+      { id: 'local_user', name: 'Local User', micMuted: false, isLocal: true, isSpeaking: false },
+      { id: 'real_speaker', name: 'Real Speaker', micMuted: false, isSpeaking: false },
     ]);
     mockAdapter = makeAdapterForConf(conf);
 
-    sendFilteredSpeakerUpdate({ id: 'kostya', name: 'Kostya Zaikin', isLocal: false });
+    sendFilteredSpeakerUpdate({ id: 'muted_remote', name: 'Muted Remote', isLocal: false });
 
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledWith(null);
   });
 
-  test('Jitsi switches to Vlad Vorobev — sendFilteredSpeakerUpdate sends him', () => {
+  test('Jitsi switches to real speaker — sendFilteredSpeakerUpdate sends them', () => {
+    // The real speaker speaks loudly enough → Jitsi switches dominant speaker
     const conf = makeConf([
-      { id: 'kostya', name: 'Kostya Zaikin', micMuted: true, isSpeaking: false },
-      { id: 'vlad_v', name: 'Vlad Vorobev', micMuted: false, isSpeaking: true },
+      { id: 'muted_remote', name: 'Muted Remote', micMuted: true, isSpeaking: false },
+      { id: 'real_speaker', name: 'Real Speaker', micMuted: false, isSpeaking: true },
     ]);
     mockAdapter = makeAdapterForConf(conf);
 
-    const speaker = { id: 'vlad_v', name: 'Vlad Vorobev', isLocal: false };
+    const speaker = { id: 'real_speaker', name: 'Real Speaker', isLocal: false };
     sendFilteredSpeakerUpdate(speaker);
 
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledWith(speaker);
@@ -412,12 +415,12 @@ describe('Scenario: muted Kostya shown as speaker while Vlad talks', () => {
 
   test('all mics off — even active speaker is suppressed', () => {
     const conf = makeConf([
-      { id: 'kostya', name: 'Kostya Zaikin', micMuted: true, isSpeaking: true },
-      { id: 'vlad_k', name: 'Vlad Kovalev', micMuted: true, isLocal: true, isSpeaking: false },
+      { id: 'muted_remote', name: 'Muted Remote', micMuted: true, isSpeaking: true },
+      { id: 'local_user', name: 'Local User', micMuted: true, isLocal: true, isSpeaking: false },
     ]);
     mockAdapter = makeAdapterForConf(conf);
 
-    sendFilteredSpeakerUpdate({ id: 'kostya', name: 'Kostya Zaikin', isLocal: false });
+    sendFilteredSpeakerUpdate({ id: 'muted_remote', name: 'Muted Remote', isLocal: false });
 
     expect(mockSendWsSpeakerUpdate).toHaveBeenCalledWith(null);
   });
