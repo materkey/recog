@@ -212,7 +212,7 @@ class CodexCliProvider(AIProvider):
     """Codex CLI - uses ChatGPT Pro subscription."""
 
     def __init__(self):
-        self.model = os.getenv("CODEX_MODEL", "gpt-5.3-codex")
+        self.model = os.getenv("CODEX_MODEL", "gpt-5.4")
         self.reasoning_effort = os.getenv("CODEX_REASONING_EFFORT", "xhigh")
         self._cli = _resolve_cli("codex")
 

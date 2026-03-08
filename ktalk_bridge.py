@@ -659,7 +659,7 @@ class KTalkBridge:
                         return str(candidate)
         raise FileNotFoundError(f"{name} not found in PATH, ~/.local/bin, or nvm")
 
-    async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.2") -> str:
+    async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.4") -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
         codex_path = self._find_cli_binary("codex")
         proc = await asyncio.create_subprocess_exec(
@@ -815,7 +815,7 @@ class KTalkBridge:
 
             if model.startswith("codex"):
                 # Codex CLI (uses ChatGPT Pro subscription)
-                codex_model = model.split(":")[1] if ":" in model else "gpt-5.2"
+                codex_model = model.split(":")[1] if ":" in model else "gpt-5.4"
                 print(f"[KTalk Bridge] Using Codex CLI with model: {codex_model}", file=sys.stderr)
                 summary = await self._call_codex_cli(prompt, codex_model)
 
@@ -971,7 +971,7 @@ class KTalkBridge:
 
             if model.startswith("codex"):
                 # Codex CLI (uses ChatGPT Pro subscription)
-                codex_model = model.split(":")[1] if ":" in model else "gpt-5.2"
+                codex_model = model.split(":")[1] if ":" in model else "gpt-5.4"
                 print(f"[KTalk Bridge] Anchor using Codex CLI with model: {codex_model}", file=sys.stderr)
                 raw_text = await self._call_codex_cli(prompt, codex_model)
 

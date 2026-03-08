@@ -30,7 +30,7 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
 
     Args:
         transcript: Meeting transcript text
-        model: Codex model to use (default from CODEX_MODEL env or gpt-5.2)
+        model: Codex model to use (default from CODEX_MODEL env or gpt-5.4)
 
     Returns:
         Generated title or None if generation failed
@@ -42,7 +42,7 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
     if len(transcript) > 2000:
         transcript = transcript[:2000] + "\n..."
 
-    model = model or os.getenv("CODEX_MODEL", "gpt-5.2")
+    model = model or os.getenv("CODEX_MODEL", "gpt-5.4")
     prompt = TITLE_PROMPT.format(transcript=transcript)
 
     try:
