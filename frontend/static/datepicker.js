@@ -41,6 +41,11 @@ const DatePicker = {
         if (nextBtn) {
             nextBtn.addEventListener('click', () => this.navigate(1));
         }
+
+        const todayBtn = document.getElementById('date-today');
+        if (todayBtn) {
+            todayBtn.addEventListener('click', () => this.goToday());
+        }
     },
 
     setDate(dateStr) {
@@ -65,6 +70,14 @@ const DatePicker = {
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const day = String(date.getDate()).padStart(2, '0');
+        this.setDate(`${year}-${month}-${day}`);
+    },
+
+    goToday() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
         this.setDate(`${year}-${month}-${day}`);
     },
 
