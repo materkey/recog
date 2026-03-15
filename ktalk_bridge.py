@@ -525,7 +525,7 @@ class KTalkBridge:
                     "conference": {
                         "participants": participants,
                         "participant_count": len(participants),
-                        "all_mics_muted": all(p.mic_muted for p in self._participants.values()) if self._participants else True
+                        "all_mics_muted": all(p.mic_muted for p in self._participants.values()) if self._participants else False
                     },
                     "speaker": {
                         "current": self._current_speaker,
@@ -1118,7 +1118,7 @@ class KTalkBridge:
             self._connected_clients.discard(websocket)
             print(f"[KTalk Bridge] Client disconnected", file=sys.stderr)
             # End meeting if this was the last client and meeting is active
-            if self._meeting_storage and not self._connected_clients:
+            if self._meeting_storage and not self._connected_clients and self._meeting_storage.current_meeting_path:
                 meta = self._meeting_storage._load_meta()
                 if meta and meta.get("source") == "ktalk":
                     # Use the same pre/post switch flow as meeting_join/leave
