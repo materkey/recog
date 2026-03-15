@@ -670,6 +670,16 @@ class LiveTranscriber:
                         sys.stdout.write(f"\r\033[K{final_line}")
                         sys.stdout.flush()
 
+                if self._meeting_storage:
+                    self._meeting_storage.append_segment(
+                        speaker=speaker,
+                        speaker_id=speaker,
+                        text=txt,
+                        is_local=is_mic,
+                        is_continuation=is_continuation,
+                        audio_offset_ms=state.audio_offset
+                    )
+
             state.pending_updates = still_pending
 
         def process_chunk(capture, state, is_mic=False):
@@ -850,6 +860,17 @@ class LiveTranscriber:
                 sys.stdout.write(line)
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
+
+                if self._meeting_storage:
+                    self._meeting_storage.append_segment(
+                        speaker="speaker",
+                        speaker_id="speaker",
+                        text=text,
+                        is_local=is_mic,
+                        uncertain=True,
+                        uncertain_reason="no_diarization",
+                        audio_offset_ms=state.audio_offset
+                    )
             else:
                 # Placeholder для async diarization
                 draft = f"\n**...** *[{timestamp}]*: {text}\n"
