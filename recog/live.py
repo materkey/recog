@@ -672,12 +672,15 @@ class LiveTranscriber:
                         sys.stdout.flush()
 
                 if self._meeting_storage:
+                    uncertain = speaker == "???"
                     self._meeting_storage.append_segment(
                         speaker=speaker,
                         speaker_id=speaker,
                         text=txt,
                         is_local=is_mic,
                         is_continuation=is_continuation,
+                        uncertain=uncertain,
+                        uncertain_reason="embedding_error" if uncertain else None,
                         audio_offset_ms=pending_audio_offset
                     )
 
@@ -969,6 +972,7 @@ class LiveTranscriber:
             state.last_speaker = None
             state.last_words = []
             state.segment_start_time = 0
+            state.pending_updates = []
 
         if not self.save_audio:
             return
