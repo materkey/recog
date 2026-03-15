@@ -101,7 +101,8 @@ class MeetingStorage:
         mic: bool = False,
         system_audio: bool = False,
         ktalk: bool = False,
-        screencapture: bool = False
+        screencapture: bool = False,
+        chunk_duration_ms: int = 3000
     ) -> str:
         """
         Начать сессию записи. Создаёт первую встречу.
@@ -121,6 +122,7 @@ class MeetingStorage:
             "ktalk": ktalk,
             "screencapture": screencapture
         }
+        self._chunk_duration_ms = chunk_duration_ms
 
         # Определяем начальный source
         if ktalk:
@@ -196,6 +198,7 @@ class MeetingStorage:
             "source": source,
             "end_reason": None,
             "mode": self._mode.copy(),
+            "chunk_duration_ms": getattr(self, '_chunk_duration_ms', 3000),
             "conference": {
                 "live_url": None,
                 "live_id": None,
@@ -303,6 +306,11 @@ class MeetingStorage:
         meta["ended_at"] = None
         meta["end_reason"] = None
         meta["updated_at"] = datetime.now(UTC).isoformat()
+
+        # Preserve original chunk_duration_ms so offline diarization aligns
+        # old segments correctly; only set if not already present.
+        if "chunk_duration_ms" not in meta and hasattr(self, '_chunk_duration_ms'):
+            meta["chunk_duration_ms"] = self._chunk_duration_ms
 
         self._save_json(meta_path, meta)
 
@@ -588,11 +596,17 @@ class MeetingStorage:
             # Нет активной встречи - создать orphan
             self._create_meeting(source="orphan")
 
+        # Snapshot meeting path and segment counter so that a concurrent meeting
+        # switch from the KTalk thread doesn't cause us to write transcript JSONL
+        # into one meeting and stats/meta into another, or use a reset counter.
+        meeting_path = self.current_meeting_path
+
         self._segment_counter += 1
+        segment_id = self._segment_counter
         now = datetime.now(UTC)
 
         segment = TranscriptSegment(
-            id=self._segment_counter,
+            id=segment_id,
             ts=now.isoformat(),
             ts_display=now.astimezone().strftime("%H:%M:%S"),
             speaker=speaker,
@@ -606,12 +620,13 @@ class MeetingStorage:
         )
 
         # Append to JSONL (эффективнее чем перезапись всего файла)
-        with open(self.current_meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
+        with open(meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(segment), ensure_ascii=False) + "\n")
 
         # Update stats
-        meta = self._load_meta()
-        meta["stats"]["segment_count"] = self._segment_counter
+        meta_path = meeting_path / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["stats"]["segment_count"] = segment_id
         meta["stats"]["words_count"] += len(text.split())
         meta["updated_at"] = now.isoformat()
 
@@ -644,7 +659,7 @@ class MeetingStorage:
             if meta["participants"][speaker_id]["name"] != speaker:
                 meta["participants"][speaker_id]["name"] = speaker
 
-        self._save_meta(meta)
+        self._save_json(meta_path, meta)
 
     def _append_system_event(self, event_type: str, message: str):
         """
