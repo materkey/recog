@@ -24,6 +24,12 @@
     border-color: var(--accent);
 }
 
+.date-today-btn {
+    font-size: 12px;
+    padding: 8px 10px;
+    margin-left: 2px;
+}
+
 .filter-date {
     padding: 8px 12px;
     background: var(--bg-tertiary);
