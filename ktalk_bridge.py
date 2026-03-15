@@ -1214,6 +1214,11 @@ class KTalkBridge:
                     )
                     self._speaker_history.append(silence_event)
 
+                    # Trim old history entries (keep last 5 minutes max)
+                    cutoff = time.time() - 300
+                    while self._speaker_history and self._speaker_history[0].timestamp < cutoff:
+                        self._speaker_history.pop(0)
+
                     # Спикер замолчал - завершаем сегмент
                     if self._segment_start_time is not None and self._segment_speaker_name:
                         duration_ms = int((event_time - self._segment_start_time) * 1000)

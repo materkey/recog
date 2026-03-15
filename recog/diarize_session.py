@@ -75,16 +75,31 @@ def diarize_track(
 
     print(f"Diarization found {len(set(s.speaker_id for s in segments))} speakers, {len(segments)} segments")
 
-    # Match embeddings to speaker database
+    # Match embeddings to speaker database (greedy 1:1 assignment)
     speaker_labels = {}
     if speaker_db_path and speaker_db_path.exists():
         speaker_db = SpeakerDatabase(str(speaker_db_path))
+        # Build all candidates above threshold
+        candidates = []
         for speaker_id, emb in embeddings.items():
             match = speaker_db.match_speaker(emb, SPEAKER_SIMILARITY_THRESHOLD)
             if match:
-                speaker_labels[speaker_id] = match[1]  # display_name
-                print(f"  {speaker_id} -> {match[1]} (similarity: {match[2]:.2f})")
-            else:
+                db_id, display_name, similarity = match
+                candidates.append((speaker_id, db_id, display_name, similarity))
+        # Sort by similarity descending for greedy 1:1 assignment
+        candidates.sort(key=lambda c: c[3], reverse=True)
+        assigned_db_ids = set()
+        for speaker_id, db_id, display_name, similarity in candidates:
+            if speaker_id in speaker_labels:
+                continue
+            if db_id in assigned_db_ids:
+                continue
+            speaker_labels[speaker_id] = display_name
+            assigned_db_ids.add(db_id)
+            print(f"  {speaker_id} -> {display_name} (similarity: {similarity:.2f})")
+        # Assign remaining unmatched speakers to their raw IDs
+        for speaker_id in embeddings:
+            if speaker_id not in speaker_labels:
                 speaker_labels[speaker_id] = speaker_id
     else:
         speaker_labels = {sid: sid for sid in embeddings.keys()}
