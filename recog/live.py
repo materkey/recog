@@ -586,7 +586,7 @@ class LiveTranscriber:
         # Отдельные состояния для каждого источника
         class SourceState:
             def __init__(self):
-                self.pending_update = None
+                self.pending_updates = []
                 self.last_words = []
                 self.last_speaker = None
                 self.last_speech_time = 0
@@ -619,37 +619,42 @@ class LiveTranscriber:
             return text
 
         def process_pending(state, is_mic=False):
-            """Обрабатывает pending update для источника."""
-            if state.pending_update is None:
+            """Обрабатывает все pending updates для источника."""
+            if not state.pending_updates:
                 return
 
-            line_idx, ts, txt, future, chunk_time = state.pending_update
-            if not future.done():
-                return
+            still_pending = []
+            for pending in state.pending_updates:
+                line_idx, ts, txt, future, chunk_time = pending
+                if not future.done():
+                    still_pending.append(pending)
+                    continue
 
-            try:
-                speaker = future.result(timeout=0)
-            except:
-                speaker = "???"
+                try:
+                    speaker = future.result(timeout=0)
+                except:
+                    speaker = "???"
 
-            time_gap = chunk_time - state.last_speech_time
-            segment_duration = chunk_time - state.segment_start_time
-            is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
+                time_gap = chunk_time - state.last_speech_time
+                segment_duration = chunk_time - state.segment_start_time
+                is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
 
-            state.last_speaker = speaker
-            state.last_speech_time = chunk_time
-            if not is_continuation:
-                state.segment_start_time = chunk_time
+                state.last_speaker = speaker
+                state.last_speech_time = chunk_time
+                if not is_continuation:
+                    state.segment_start_time = chunk_time
 
-            # Markdown формат: **Speaker** *[HH:MM:SS]*: text
-            final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
+                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+                final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
 
-            if line_idx == len(self.transcript_lines) - 1:
-                # Clear draft line and write final
-                sys.stdout.write(f"\r\033[K{final_line}")
-                sys.stdout.flush()
-                self.transcript_lines[line_idx] = final_line
-            state.pending_update = None
+                if line_idx < len(self.transcript_lines):
+                    self.transcript_lines[line_idx] = final_line
+                    # Rewrite line on terminal if it's the last one
+                    if line_idx == len(self.transcript_lines) - 1:
+                        sys.stdout.write(f"\r\033[K{final_line}")
+                        sys.stdout.flush()
+
+            state.pending_updates = still_pending
 
         def process_chunk(capture, state, is_mic=False):
             """Обрабатывает чанк из источника."""
@@ -836,7 +841,7 @@ class LiveTranscriber:
                     return self._identify_speaker(emb)
 
                 future = executor.submit(get_speaker, chunk_copy)
-                state.pending_update = (len(self.transcript_lines) - 1, timestamp, text, future, chunk_time)
+                state.pending_updates.append((len(self.transcript_lines) - 1, timestamp, text, future, chunk_time))
 
         try:
             while self.running:
