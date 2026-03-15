@@ -21,6 +21,7 @@ import shutil
 import hashlib
 import os
 import sys
+import threading
 
 
 UTC = timezone.utc
@@ -94,6 +95,7 @@ class MeetingStorage:
         self.current_meeting_id: Optional[str] = None
         self.current_meeting_path: Optional[Path] = None
         self._segment_counter = 0
+        self._segment_lock = threading.Lock()
         self._mode: dict = {}
 
     def start_session(
@@ -227,9 +229,10 @@ class MeetingStorage:
                 prev_meta["next_meeting_id"] = meeting_id
                 self._save_json(prev_path, prev_meta)
 
-        self.current_meeting_id = meeting_id
-        self.current_meeting_path = meeting_path
-        self._segment_counter = 0
+        with self._segment_lock:
+            self.current_meeting_id = meeting_id
+            self.current_meeting_path = meeting_path
+            self._segment_counter = 0
 
         return meeting_id
 
@@ -321,17 +324,16 @@ class MeetingStorage:
             index["meetings"] = [m for m in index["meetings"] if m["id"] != meeting_id]
             self._save_json(index_path, index)
 
-        # Установить как текущую
-        self.current_meeting_id = meeting_id
-        self.current_meeting_path = meeting_path
-
-        # Восстановить счётчик сегментов
+        # Установить как текущую и восстановить счётчик сегментов
         transcript_path = meeting_path / "transcript.jsonl"
-        if transcript_path.exists():
-            content = transcript_path.read_text(encoding="utf-8").strip()
-            self._segment_counter = len(content.split("\n")) if content else 0
-        else:
-            self._segment_counter = 0
+        with self._segment_lock:
+            self.current_meeting_id = meeting_id
+            self.current_meeting_path = meeting_path
+            if transcript_path.exists():
+                content = transcript_path.read_text(encoding="utf-8").strip()
+                self._segment_counter = len(content.split("\n")) if content else 0
+            else:
+                self._segment_counter = 0
 
         # Добавить маркер возобновления сессии
         self._append_system_event("session_resume", "Сессия возобновлена")
@@ -599,10 +601,10 @@ class MeetingStorage:
         # Snapshot meeting path and segment counter so that a concurrent meeting
         # switch from the KTalk thread doesn't cause us to write transcript JSONL
         # into one meeting and stats/meta into another, or use a reset counter.
-        meeting_path = self.current_meeting_path
-
-        self._segment_counter += 1
-        segment_id = self._segment_counter
+        with self._segment_lock:
+            meeting_path = self.current_meeting_path
+            self._segment_counter += 1
+            segment_id = self._segment_counter
         now = datetime.now(UTC)
 
         segment = TranscriptSegment(
@@ -674,11 +676,15 @@ class MeetingStorage:
         if not self.current_meeting_path:
             return
 
-        self._segment_counter += 1
+        with self._segment_lock:
+            meeting_path = self.current_meeting_path
+            self._segment_counter += 1
+            segment_id = self._segment_counter
+
         now = datetime.now(UTC)
 
         event = {
-            "id": self._segment_counter,
+            "id": segment_id,
             "ts": now.isoformat(),
             "ts_display": now.astimezone().strftime("%H:%M:%S"),
             "speaker": "Система",
@@ -691,14 +697,15 @@ class MeetingStorage:
             "event_type": event_type
         }
 
-        with open(self.current_meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
+        with open(meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
         # Update stats
-        meta = self._load_meta()
-        meta["stats"]["segment_count"] = self._segment_counter
+        meta_path = meeting_path / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["stats"]["segment_count"] = segment_id
         meta["updated_at"] = now.isoformat()
-        self._save_meta(meta)
+        self._save_json(meta_path, meta)
 
     def update_title(self, title: str):
         """

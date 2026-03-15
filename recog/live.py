@@ -177,7 +177,11 @@ class SingleDeviceCapture:
 
     def clear_buffer(self):
         """Discard all buffered audio (used on meeting boundary)."""
-        self.buffer = []
+        if self._lock:
+            with self._lock:
+                self.buffer = []
+        else:
+            self.buffer = []
 
     def get_chunk(self, duration: float) -> Optional[np.ndarray]:
         """Возвращает накопленный аудио чанк (моно)."""

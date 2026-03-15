@@ -45,7 +45,7 @@ def _load_dotenv():
                 continue
             if '=' in line:
                 key, value = line.split('=', 1)
-                os.environ.setdefault(key.strip(), value.strip())
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 _load_dotenv()
 
