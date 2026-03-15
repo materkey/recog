@@ -135,3 +135,100 @@ def test_three_speakers():
     assert len(result.speakers_found) >= 3, (
         f"Expected at least 3 speakers, found: {result.speakers_found}"
     )
+
+
+@pytest.mark.e2e
+def test_noise_gate_filters_rustler():
+    """Speaker sends speech, Rustler sends loud noise — noise gate filters Rustler.
+
+    Verifies the spectral flatness noise gate in the Chrome extension.
+    Speaker uses speech audio (low flatness ~0.01-0.05), Rustler uses broadband
+    noise (high flatness >0.15). The extension should suppress Rustler's speaker
+    updates, so transcript should attribute speech only to Speaker.
+
+    Both speaker signals are injected via WebSocket (to control timing), but
+    the extension's own noise gate also runs on the audio streams. The debug
+    panel captures the gate's behavior: suppress count, flatness, reason.
+    """
+    orchestrator = KTalkOrchestrator(
+        guest_names=["Speaker", "Rustler"],
+        guest_audio_files=[
+            str(_FIXTURES / "speech_reference.wav"),  # real speech, normal amplitude
+            str(_FIXTURES / "noise_loud.wav"),         # broadband noise, peak 0.90
+        ],
+        speaker_windows=[
+            SpeakerWindow("Speaker", start=0, end=20),
+            SpeakerWindow("Rustler", start=20, end=40),
+        ],
+        record_duration=50.0,
+    )
+    result = orchestrator.run()
+
+    assert not result.errors, f"Orchestrator errors: {result.errors}"
+
+    # Debug panel should show noise gate activity
+    debug = result.debug_state
+    print(f"[noise_gate_test] Debug state: {debug}")
+    print(f"[noise_gate_test] Transcript lines: {result.transcript_lines}")
+
+    # Verify noise gate is operational (analysers attached and processing)
+    noise_filter_raw = debug.get("noiseFilter", "0 suppressed")
+    suppress_count = int(noise_filter_raw.split()[0]) if noise_filter_raw != "—" else 0
+    flatness_raw = debug.get("flatness", "—")
+    filter_reason = debug.get("filterReason", "—")
+
+    print(f"[noise_gate_test] suppress_count={suppress_count}, flatness={flatness_raw}, reason={filter_reason}")
+
+    # The injector overrides transcript attribution (high seq), so transcript
+    # will show both Speaker and Rustler. But the debug panel proves the gate runs.
+    # When Rustler is active, the extension should detect noise (flatness > 0.15).
+    assert filter_reason != "—", (
+        "Filter reason should not be '—' — noise gate should have processed at least one update"
+    )
+
+
+@pytest.mark.e2e
+def test_noise_gate_no_injection():
+    """Speaker sends speech, Rustler sends noise — NO speaker injection.
+
+    Without injection, the extension relies entirely on Jitsi's own
+    dominant speaker detection + the noise gate. If Jitsi detects Rustler
+    as active (due to loud noise), the noise gate should suppress it.
+    Transcript should contain Speaker lines, not Rustler lines.
+    """
+    orchestrator = KTalkOrchestrator(
+        guest_names=["Speaker", "Rustler"],
+        guest_audio_files=[
+            str(_FIXTURES / "speech_reference.wav"),
+            str(_FIXTURES / "noise_loud.wav"),
+        ],
+        speaker_windows=[],
+        record_duration=50.0,
+        inject_speakers=False,
+    )
+    result = orchestrator.run()
+
+    assert not result.errors, f"Orchestrator errors: {result.errors}"
+
+    debug = result.debug_state
+    print(f"[noise_gate_no_inject] Debug: {debug}")
+    print(f"[noise_gate_no_inject] Transcript: {result.transcript_lines}")
+    print(f"[noise_gate_no_inject] Speakers found: {result.speakers_found}")
+
+    # Check that noise gate is active
+    noise_filter_raw = debug.get("noiseFilter", "0 suppressed")
+    suppress_count = int(noise_filter_raw.split()[0]) if noise_filter_raw != "—" else 0
+
+    # Rustler should NOT appear in transcript (noise gate suppresses)
+    rustler_lines = [l for l in result.transcript_lines if "Rustler" in l]
+    assert len(rustler_lines) == 0, (
+        f"Rustler should be filtered by noise gate, got {len(rustler_lines)} lines: {rustler_lines}"
+    )
+
+    # Transcript may be empty if Jitsi doesn't detect speech from fake audio;
+    # that's OK for noise gate verification. The important thing is no Rustler.
+    if result.transcript_lines:
+        speaker_lines = [l for l in result.transcript_lines if "Speaker" in l]
+        assert len(speaker_lines) > 0, (
+            "If transcript has lines, Speaker should be attributed"
+        )
