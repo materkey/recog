@@ -22,7 +22,7 @@ def align_segments_with_speakers(
     aligned = []
 
     for asr_seg in asr_segments:
-        best_speaker = "speaker_0"
+        best_speaker = "unknown"
         best_overlap = 0.0
 
         for diar_seg in diarization_segments:
@@ -54,19 +54,35 @@ def resolve_speaker_labels(
     """
     Заменяет speaker_id на известные имена из базы, если возможно.
     """
-    # Создаём маппинг speaker_id -> display_name
-    speaker_labels = {}
-
+    # Build all (speaker_id, db_id, display_name, similarity) candidates above threshold
+    candidates = []
     for speaker_id, embedding in speaker_embeddings.items():
         match = speaker_db.match_speaker(embedding)
         if match:
             db_id, display_name, similarity = match
-            speaker_labels[speaker_id] = display_name
-            print(f"Спикер {speaker_id} идентифицирован как '{display_name}' (сходство: {similarity:.2f})",
-                  file=sys.stderr)
-        else:
-            # Логируем лучший матч даже если не прошёл порог
-            best_match = speaker_db.match_speaker(embedding, threshold=0.0)
+            candidates.append((speaker_id, db_id, display_name, similarity))
+
+    # Sort by similarity descending for greedy 1:1 assignment
+    candidates.sort(key=lambda c: c[3], reverse=True)
+
+    speaker_labels = {}
+    assigned_db_ids = set()
+
+    for speaker_id, db_id, display_name, similarity in candidates:
+        if speaker_id in speaker_labels:
+            continue  # already assigned
+        if db_id in assigned_db_ids:
+            continue  # db speaker already taken
+        speaker_labels[speaker_id] = display_name
+        assigned_db_ids.add(db_id)
+        print(f"Спикер {speaker_id} идентифицирован как '{display_name}' (сходство: {similarity:.2f})",
+              file=sys.stderr)
+
+    # Assign remaining unmatched speakers
+    for speaker_id in speaker_embeddings:
+        if speaker_id not in speaker_labels:
+            # Log best match even if not assigned
+            best_match = speaker_db.match_speaker(speaker_embeddings[speaker_id], threshold=0.0)
             if best_match:
                 _, best_name, best_sim = best_match
                 print(f"Спикер {speaker_id} не идентифицирован (лучший: '{best_name}' = {best_sim:.2f})",
