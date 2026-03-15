@@ -53,6 +53,7 @@ class E2ETestResult:
     speakers_found: set[str] = field(default_factory=set)
     duration_seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
+    debug_state: dict = field(default_factory=dict)
 
 
 class KTalkOrchestrator:
@@ -73,6 +74,7 @@ class KTalkOrchestrator:
         guest_audio_files: list[str],
         speaker_windows: list[SpeakerWindow],
         record_duration: float = 45.0,
+        inject_speakers: bool = True,
     ):
         if len(guest_names) != len(guest_audio_files):
             raise ValueError("guest_names and guest_audio_files must have the same length")
@@ -81,6 +83,7 @@ class KTalkOrchestrator:
         self.guest_audio_files = guest_audio_files
         self.speaker_windows = sorted(speaker_windows, key=lambda w: w.start)
         self.record_duration = record_duration
+        self.inject_speakers = inject_speakers
 
         self._login = os.environ["SSO_LOGIN"]
         self._password = os.environ["SSO_PASSWORD"]
@@ -88,6 +91,7 @@ class KTalkOrchestrator:
         self._transcriber = None
         self._transcriber_thread: Optional[threading.Thread] = None
         self._transcript_lines: list[str] = []
+        self._debug_state: dict = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -131,13 +135,17 @@ class KTalkOrchestrator:
             # --- Inject speaker signals via WebSocket ---
             # Jitsi dominant speaker detection doesn't work with Chromium fake
             # audio, so we inject speaker identity directly into the bridge.
-            self._speaker_injector_thread = threading.Thread(
-                target=self._run_speaker_injector, daemon=True,
-            )
-            self._speaker_injector_thread.start()
+            if self.inject_speakers and self.speaker_windows:
+                self._speaker_injector_thread = threading.Thread(
+                    target=self._run_speaker_injector, daemon=True,
+                )
+                self._speaker_injector_thread.start()
 
             print(f"[e2e] All guests joined. Recording for {self.record_duration}s...")
             time.sleep(self.record_duration)
+
+            # --- Collect extension debug state from host page ---
+            self._debug_state = self._collect_debug_state(host_page)
 
             # --- Stop transcriber ---
             self._stop_transcriber()
@@ -162,6 +170,7 @@ class KTalkOrchestrator:
             speakers_found=speakers_found,
             duration_seconds=duration_seconds,
             errors=errors,
+            debug_state=self._debug_state,
         )
 
     # ------------------------------------------------------------------
@@ -225,6 +234,27 @@ class KTalkOrchestrator:
         finally:
             ws.close()
             print("[e2e] Speaker injector done")
+
+    def _collect_debug_state(self, host_page) -> dict:
+        """Read noise gate debug state from the extension's debug panel."""
+        try:
+            state = host_page.evaluate("""() => {
+                const panel = document.querySelector('.ktalk-debug-panel');
+                if (!panel) return {};
+                const rows = {};
+                panel.querySelectorAll('.ktalk-debug-row').forEach(row => {
+                    const key = row.querySelector('.ktalk-debug-key')?.textContent;
+                    const value = row.querySelector('.ktalk-debug-value')?.textContent;
+                    if (key) rows[key] = value;
+                });
+                return rows;
+            }""")
+            if state:
+                print(f"[e2e] Debug state: {state}")
+            return state or {}
+        except Exception as exc:
+            print(f"[e2e] Failed to collect debug state: {exc}")
+            return {}
 
     def _start_transcriber(self) -> None:
         """Import LiveTranscriber, find BlackHole device, start in daemon thread."""
