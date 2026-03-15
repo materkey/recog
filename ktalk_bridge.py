@@ -461,7 +461,7 @@ class KTalkBridge:
         """Возвращает True если у всех участников выключены микрофоны."""
         with self._lock:
             if not self._participants:
-                return True
+                return False
             return all(p.mic_muted for p in self._participants.values())
 
     def is_local_mic_muted(self) -> bool:
@@ -1125,8 +1125,7 @@ class KTalkBridge:
             seq = data.get("seq")
             if seq is not None:
                 if seq <= self._last_seq:
-                    print(f"[KTalk Bridge] Dropping out-of-order speaker_update: seq={seq}, last={self._last_seq}", file=sys.stderr)
-                    return
+                    print(f"[KTalk Bridge] Out-of-order speaker_update: seq={seq}, last={self._last_seq}", file=sys.stderr)
                 self._last_seq = seq
 
             # Основное событие: обновление текущего спикера
@@ -1191,20 +1190,30 @@ class KTalkBridge:
                     self._last_speaker_time = time.time()
                     self._last_is_local = new_is_local
 
-                    # Добавляем в историю
+                    # Добавляем в историю (wall-clock time для consistency с live.py)
+                    now = time.time()
                     event = SpeakerEvent(
                         speaker_name=self._current_speaker,
                         speaker_id=self._current_speaker_id or "",
-                        timestamp=event_time,
+                        timestamp=now,
                         is_local=new_is_local
                     )
                     self._speaker_history.append(event)
 
                     # Trim old history entries (keep last 5 minutes max)
-                    cutoff = event_time - 300  # 5 minutes
+                    cutoff = now - 300  # 5 minutes
                     while self._speaker_history and self._speaker_history[0].timestamp < cutoff:
                         self._speaker_history.pop(0)
                 else:
+                    # Записываем silence event в историю
+                    silence_event = SpeakerEvent(
+                        speaker_name=None,
+                        speaker_id="",
+                        timestamp=time.time(),
+                        is_local=False
+                    )
+                    self._speaker_history.append(silence_event)
+
                     # Спикер замолчал - завершаем сегмент
                     if self._segment_start_time is not None and self._segment_speaker_name:
                         duration_ms = int((event_time - self._segment_start_time) * 1000)
@@ -1269,6 +1278,14 @@ class KTalkBridge:
                 with self._lock:
                     self._is_speaking = False
                     self._current_speaker = None
+                    self._current_speaker_id = None
+                    self._last_speaker = None
+                    self._last_speaker_time = 0
+                    self._last_is_local = False
+                    self._speaker_history.clear()
+                    self._segment_start_time = None
+                    self._segment_speaker_name = None
+                    self._segment_speaker_id = None
                     self._participants = {}
                 print("[KTalk Bridge] Conference disconnected", file=sys.stderr)
             else:
