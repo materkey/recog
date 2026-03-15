@@ -148,7 +148,11 @@ class SingleDeviceCapture:
     def _callback(self, indata, frames, time, status):
         if status:
             print(f"Audio status ({self.name}): {status}", file=sys.stderr)
-        self.buffer.append(indata.copy())
+        if self._lock:
+            with self._lock:
+                self.buffer.append(indata.copy())
+        else:
+            self.buffer.append(indata.copy())
 
     def start(self):
         import threading
