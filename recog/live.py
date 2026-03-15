@@ -641,21 +641,22 @@ class LiveTranscriber:
 
             still_pending = []
             for pending in state.pending_updates:
-                line_idx, ts, txt, future, chunk_time = pending
+                line_idx, ts, txt, future, chunk_time, pending_audio_offset = pending
                 if not future.done():
                     still_pending.append(pending)
                     continue
 
                 try:
                     speaker = future.result(timeout=0)
-                except:
+                except Exception:
                     speaker = "???"
 
                 time_gap = chunk_time - state.last_speech_time
                 segment_duration = chunk_time - state.segment_start_time
                 is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
 
-                state.last_speaker = speaker
+                if speaker not in ("???", "speaker"):
+                    state.last_speaker = speaker
                 state.last_speech_time = chunk_time
                 if not is_continuation:
                     state.segment_start_time = chunk_time
@@ -677,7 +678,7 @@ class LiveTranscriber:
                         text=txt,
                         is_local=is_mic,
                         is_continuation=is_continuation,
-                        audio_offset_ms=state.audio_offset
+                        audio_offset_ms=pending_audio_offset
                     )
 
             state.pending_updates = still_pending
@@ -885,7 +886,7 @@ class LiveTranscriber:
                     return self._identify_speaker(emb)
 
                 future = executor.submit(get_speaker, chunk_copy)
-                state.pending_updates.append((len(self.transcript_lines) - 1, timestamp, text, future, chunk_time))
+                state.pending_updates.append((len(self.transcript_lines) - 1, timestamp, text, future, chunk_time, state.audio_offset))
 
         try:
             while self.running:
@@ -960,6 +961,10 @@ class LiveTranscriber:
     def _on_meeting_change(self, meeting_id: str, meeting_path: Path):
         """Called when meeting changes via KTalk bridge to reinitialize audio recording."""
         # Reset speaker state to prevent bleeding across meetings
+        # Guard: _mic_state/_sys_state are created in run(), not __init__,
+        # so they may not exist if KTalk fires during startup
+        if not hasattr(self, '_mic_state'):
+            return
         for state in (self._mic_state, self._sys_state):
             state.last_speaker = None
             state.last_words = []

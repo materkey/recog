@@ -83,7 +83,7 @@ def diarize_track(
             match = speaker_db.match_speaker(emb, SPEAKER_SIMILARITY_THRESHOLD)
             if match:
                 speaker_labels[speaker_id] = match[1]  # display_name
-                print(f"  {speaker_id} -> {match[1]} (similarity: {match[0]:.2f})")
+                print(f"  {speaker_id} -> {match[1]} (similarity: {match[2]:.2f})")
             else:
                 speaker_labels[speaker_id] = speaker_id
     else:
