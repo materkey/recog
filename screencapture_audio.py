@@ -236,6 +236,11 @@ class ScreenCaptureAudio:
 
         print("[ScreenCaptureAudio] Stopped", file=sys.stderr)
 
+    def clear_buffer(self):
+        """Discard all buffered audio (used on meeting boundary)."""
+        with self._lock:
+            self.buffer = []
+
     def get_chunk(self, duration: float) -> Optional[np.ndarray]:
         """Get audio chunk of specified duration."""
         if not self.running:

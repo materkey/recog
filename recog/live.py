@@ -36,11 +36,29 @@ class IncrementalWavWriter:
         self._overlap_samples = int(overlap_seconds * sample_rate)
         self._first_chunk = True
 
-    def open(self):
-        """Opens file and writes WAV header placeholder."""
+    def open(self, continuation=False):
+        """Opens file and writes WAV header placeholder. Appends if file exists.
+
+        Args:
+            continuation: If True, audio capture is still running (overlap in buffer).
+                         Skips overlap on first chunk to avoid duplication at boundary.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(self.path, 'wb')
-        self._write_header(0)  # Placeholder with 0 data size
+        if self.path.exists() and self.path.stat().st_size >= 44:
+            # Reopen existing WAV: restore sample count from file size and append
+            existing_data_size = self.path.stat().st_size - 44  # 44-byte WAV header
+            self._samples_written = existing_data_size // 2  # 2 bytes per int16 sample
+            self._file = open(self.path, 'r+b')
+            self._file.seek(0, 2)  # Seek to end for appending
+            # If capture is still running (meeting change), the buffer has overlap
+            # from the previous chunk — skip it. On program restart, buffer is fresh.
+            self._first_chunk = not continuation
+        else:
+            self._file = open(self.path, 'wb')
+            self._write_header(0)  # Placeholder with 0 data size
+            # Respect continuation for new files too: if capture is still running
+            # (meeting change), skip overlap to avoid leaking old-meeting audio.
+            self._first_chunk = not continuation
 
     def write_chunk(self, chunk: np.ndarray):
         """
@@ -156,6 +174,10 @@ class SingleDeviceCapture:
             self.stream.stop()
             self.stream.close()
             self.running = False
+
+    def clear_buffer(self):
+        """Discard all buffered audio (used on meeting boundary)."""
+        self.buffer = []
 
     def get_chunk(self, duration: float) -> Optional[np.ndarray]:
         """Возвращает накопленный аудио чанк (моно)."""
@@ -300,6 +322,9 @@ class LiveTranscriber:
         # Audio recording for on-demand diarization
         self._wav_writer_mic: Optional[IncrementalWavWriter] = None
         self._wav_writer_system: Optional[IncrementalWavWriter] = None
+        self._wav_lock = threading.Lock()  # Guards _wav_writer_mic/_wav_writer_system
+        self._state_lock = threading.Lock()  # Guards per-source state during meeting transitions
+        self._meeting_generation = 0  # Incremented on meeting change; used to discard stale chunks
 
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Транскрибирует напрямую через tensor без temp файлов."""
@@ -535,7 +560,8 @@ class LiveTranscriber:
                 mic=self.mic_capture is not None,
                 system_audio=self.system_capture is not None,
                 ktalk=self.use_ktalk,
-                screencapture=self.use_screencapture
+                screencapture=self.use_screencapture,
+                chunk_duration_ms=int(self.chunk_duration * 1000)
             )
             print(f"Meeting started: {meeting_id}")
 
@@ -568,7 +594,10 @@ class LiveTranscriber:
                 # Connect MeetingStorage to KTalk bridge
                 if self._meeting_storage:
                     self._ktalk_bridge.set_meeting_storage(self._meeting_storage)
-                # Register callback for meeting changes to reinitialize audio recording
+                # Register callbacks for meeting changes:
+                # pre-switch invalidates in-flight chunks after path changes
+                self._ktalk_bridge.set_pre_meeting_switch_callback(self._invalidate_pending_chunks)
+                # post-switch reinitializes audio recording at new path
                 self._ktalk_bridge.set_meeting_change_callback(self._on_meeting_change)
                 self._ktalk_bridge.start()
                 print("KTalk bridge started, waiting for Chrome extension...")
@@ -636,58 +665,71 @@ class LiveTranscriber:
 
         def process_pending(state, is_mic=False):
             """Обрабатывает все pending updates для источника."""
-            if not state.pending_updates:
-                return
+            # Lock prevents _on_meeting_change from clearing state mid-iteration,
+            # which would cause segments committed to the wrong meeting or
+            # the pending_updates clear being overwritten by still_pending.
+            with self._state_lock:
+                if not state.pending_updates:
+                    return
 
-            still_pending = []
-            for pending in state.pending_updates:
-                line_idx, ts, txt, future, chunk_time, pending_audio_offset = pending
-                if not future.done():
-                    still_pending.append(pending)
-                    continue
+                still_pending = []
+                for i, pending in enumerate(state.pending_updates):
+                    line_idx, ts, txt, future, chunk_time, pending_audio_offset, pending_gen = pending
+                    if not future.done():
+                        # Stop at first incomplete future to preserve commit order
+                        still_pending = state.pending_updates[i:]
+                        break
 
-                try:
-                    speaker = future.result(timeout=0)
-                except Exception:
-                    speaker = "???"
+                    try:
+                        speaker = future.result(timeout=0)
+                    except Exception:
+                        speaker = "???"
 
-                time_gap = chunk_time - state.last_speech_time
-                segment_duration = chunk_time - state.segment_start_time
-                is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
+                    # Skip if meeting changed since this chunk was captured
+                    if self._meeting_generation != pending_gen:
+                        continue
 
-                if speaker not in ("???", "speaker"):
-                    state.last_speaker = speaker
-                state.last_speech_time = chunk_time
-                if not is_continuation:
-                    state.segment_start_time = chunk_time
+                    time_gap = chunk_time - state.last_speech_time
+                    segment_duration = chunk_time - state.segment_start_time
+                    is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
 
-                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
-                final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
+                    if speaker not in ("???", "speaker"):
+                        state.last_speaker = speaker
+                    state.last_speech_time = chunk_time
+                    if not is_continuation:
+                        state.segment_start_time = chunk_time
 
-                if line_idx < len(self.transcript_lines):
-                    self.transcript_lines[line_idx] = final_line
-                    # Rewrite line on terminal if it's the last one
-                    if line_idx == len(self.transcript_lines) - 1:
-                        sys.stdout.write(f"\r\033[K{final_line}")
-                        sys.stdout.flush()
+                    # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+                    final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
 
-                if self._meeting_storage:
-                    uncertain = speaker == "???"
-                    self._meeting_storage.append_segment(
-                        speaker=speaker,
-                        speaker_id=speaker,
-                        text=txt,
-                        is_local=is_mic,
-                        is_continuation=is_continuation,
-                        uncertain=uncertain,
-                        uncertain_reason="embedding_error" if uncertain else None,
-                        audio_offset_ms=pending_audio_offset
-                    )
+                    if line_idx < len(self.transcript_lines):
+                        self.transcript_lines[line_idx] = final_line
+                        # Rewrite line on terminal if it's the last one
+                        if line_idx == len(self.transcript_lines) - 1:
+                            sys.stdout.write(f"\r\033[K{final_line}")
+                            sys.stdout.flush()
 
-            state.pending_updates = still_pending
+                    if self._meeting_storage:
+                        uncertain = speaker == "???"
+                        self._meeting_storage.append_segment(
+                            speaker=speaker,
+                            speaker_id=speaker,
+                            text=txt,
+                            is_local=is_mic,
+                            is_continuation=is_continuation,
+                            uncertain=uncertain,
+                            uncertain_reason="embedding_error" if uncertain else None,
+                            audio_offset_ms=pending_audio_offset
+                        )
+
+                state.pending_updates = still_pending
 
         def process_chunk(capture, state, is_mic=False):
             """Обрабатывает чанк из источника."""
+            # Snapshot meeting generation BEFORE reading buffer so that audio
+            # captured before a meeting switch is tagged with the old generation
+            # and discarded by the generation check downstream.
+            chunk_gen = self._meeting_generation
             chunk = capture.get_chunk(self.chunk_duration)
             if chunk is None or len(chunk) < 1000:
                 return
@@ -697,12 +739,20 @@ class LiveTranscriber:
 
             # Capture audio offset BEFORE writing chunk (for segment playback)
             # This offset points to where this chunk's audio STARTS in the WAV file
-            if is_mic and self._wav_writer_mic:
-                state.audio_offset = self._wav_writer_mic.get_offset_ms()
-                self._wav_writer_mic.write_chunk(chunk)
-            elif not is_mic and self._wav_writer_system:
-                state.audio_offset = self._wav_writer_system.get_offset_ms()
-                self._wav_writer_system.write_chunk(chunk)
+            # Lock protects against _on_meeting_change swapping writers from KTalk thread.
+            # Generation check inside the lock prevents writing old-meeting audio to the
+            # new meeting's WAV: _invalidate_pending_chunks bumps generation BEFORE
+            # _on_meeting_change swaps writers under this same lock, so by the time we
+            # acquire _wav_lock after a swap, the generation will already differ.
+            with self._wav_lock:
+                if self._meeting_generation != chunk_gen:
+                    return
+                if is_mic and self._wav_writer_mic:
+                    state.audio_offset = self._wav_writer_mic.get_offset_ms()
+                    self._wav_writer_mic.write_chunk(chunk)
+                elif not is_mic and self._wav_writer_system:
+                    state.audio_offset = self._wav_writer_system.get_offset_ms()
+                    self._wav_writer_system.write_chunk(chunk)
 
             # Пропускаем запись микрофона если на KTalk встрече и mic замьючен
             # Проверяем ДО ASR inference чтобы не тратить CPU на muted chunks
@@ -721,6 +771,13 @@ class LiveTranscriber:
             text = deduplicate(text, state.last_words)
             if not text:
                 return
+
+            # Bail out if meeting changed during ASR — prevents stale
+            # state updates (last_words/last_speaker) and transcript sends
+            # from leaking across meeting boundaries
+            if self._meeting_generation != chunk_gen:
+                return
+
             state.last_words = text.split()[-5:]
 
             current_time = time.time()
@@ -761,8 +818,8 @@ class LiveTranscriber:
                 if self._ktalk_bridge:
                     self._ktalk_bridge.send_transcript(mic_speaker_name, text, timestamp, is_continuation, is_local=True)
 
-                # Сохраняем в MeetingStorage
-                if self._meeting_storage:
+                # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
+                if self._meeting_storage and self._meeting_generation == chunk_gen:
                     self._meeting_storage.append_segment(
                         speaker=mic_speaker_name,
                         speaker_id="local",
@@ -845,8 +902,8 @@ class LiveTranscriber:
 
                     self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation, is_local=is_local, uncertain=uncertain, uncertain_reason=uncertain_reason)
 
-                    # Сохраняем в MeetingStorage
-                    if self._meeting_storage:
+                    # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
+                    if self._meeting_storage and self._meeting_generation == chunk_gen:
                         self._meeting_storage.append_segment(
                             speaker=speaker,
                             speaker_id=speaker,  # Используем имя как ID для KTalk
@@ -865,7 +922,7 @@ class LiveTranscriber:
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
 
-                if self._meeting_storage:
+                if self._meeting_storage and self._meeting_generation == chunk_gen:
                     self._meeting_storage.append_segment(
                         speaker="speaker",
                         speaker_id="speaker",
@@ -889,7 +946,8 @@ class LiveTranscriber:
                     return self._identify_speaker(emb)
 
                 future = executor.submit(get_speaker, chunk_copy)
-                state.pending_updates.append((len(self.transcript_lines) - 1, timestamp, text, future, chunk_time, state.audio_offset))
+                with self._state_lock:
+                    state.pending_updates.append((len(self.transcript_lines) - 1, timestamp, text, future, chunk_time, state.audio_offset, chunk_gen))
 
         try:
             while self.running:
@@ -929,14 +987,15 @@ class LiveTranscriber:
             # Finalize audio recordings
             mic_audio_path = None
             system_audio_path = None
-            if self._wav_writer_mic:
-                self._wav_writer_mic.finalize()
-                mic_audio_path = str(self._wav_writer_mic.path)
-                print(f"Mic audio saved: {mic_audio_path}")
-            if self._wav_writer_system:
-                self._wav_writer_system.finalize()
-                system_audio_path = str(self._wav_writer_system.path)
-                print(f"System audio saved: {system_audio_path}")
+            with self._wav_lock:
+                if self._wav_writer_mic:
+                    self._wav_writer_mic.finalize()
+                    mic_audio_path = str(self._wav_writer_mic.path)
+                    print(f"Mic audio saved: {mic_audio_path}")
+                if self._wav_writer_system:
+                    self._wav_writer_system.finalize()
+                    system_audio_path = str(self._wav_writer_system.path)
+                    print(f"System audio saved: {system_audio_path}")
 
             # Store audio paths in meeting meta
             if self._meeting_storage and (mic_audio_path or system_audio_path):
@@ -961,43 +1020,90 @@ class LiveTranscriber:
                 import os
                 os._exit(0)
 
-    def _on_meeting_change(self, meeting_id: str, meeting_path: Path):
-        """Called when meeting changes via KTalk bridge to reinitialize audio recording."""
-        # Reset speaker state to prevent bleeding across meetings
-        # Guard: _mic_state/_sys_state are created in run(), not __init__,
-        # so they may not exist if KTalk fires during startup
-        if not hasattr(self, '_mic_state'):
-            return
-        for state in (self._mic_state, self._sys_state):
-            state.last_speaker = None
-            state.last_words = []
-            state.segment_start_time = 0
-            state.pending_updates = []
+    def _invalidate_pending_chunks(self):
+        """Bump generation and clear pending state on meeting boundary.
 
+        Called from KTalk bridge thread via pre_meeting_switch callback,
+        BEFORE MeetingStorage changes current_meeting_path.
+        This ensures process_pending and direct paths discard in-flight chunks
+        that were captured for the old meeting.
+
+        Also clears capture buffers so that stale audio accumulated since the
+        last get_chunk() call does not leak into the new meeting.
+        """
+        with self._state_lock:
+            self._meeting_generation += 1
+            if hasattr(self, '_mic_state'):
+                for state in (self._mic_state, self._sys_state):
+                    for pending in state.pending_updates:
+                        pending[3].cancel()  # pending[3] is the Future
+                    state.last_speaker = None
+                    state.last_words = []
+                    state.segment_start_time = 0
+                    state.pending_updates = []
+        # Clear capture buffers so the next get_chunk() returns only
+        # audio recorded AFTER the meeting switch, not stale old-meeting
+        # samples that accumulated since the last drain.
+        if self.mic_capture:
+            self.mic_capture.clear_buffer()
+        if self.system_capture:
+            self.system_capture.clear_buffer()
+
+    def _on_meeting_change(self, meeting_id: str, meeting_path: Path):
+        """Called after meeting switch to reinitialize audio recording."""
         if not self.save_audio:
             return
 
-        # Finalize current wav writers
-        if self._wav_writer_mic:
-            self._wav_writer_mic.finalize()
-            print(f"Mic audio saved: {self._wav_writer_mic.path}")
-            self._wav_writer_mic = None
-        if self._wav_writer_system:
-            self._wav_writer_system.finalize()
-            print(f"System audio saved: {self._wav_writer_system.path}")
-            self._wav_writer_system = None
+        with self._wav_lock:
+            # Finalize current wav writers and persist audio paths for outgoing meeting
+            mic_audio_path_old = None
+            system_audio_path_old = None
+            if self._wav_writer_mic:
+                self._wav_writer_mic.finalize()
+                mic_audio_path_old = str(self._wav_writer_mic.path)
+                print(f"Mic audio saved: {mic_audio_path_old}")
+                self._wav_writer_mic = None
+            if self._wav_writer_system:
+                self._wav_writer_system.finalize()
+                system_audio_path_old = str(self._wav_writer_system.path)
+                print(f"System audio saved: {system_audio_path_old}")
+                self._wav_writer_system = None
 
-        # Open new wav writers for new meeting
-        if self.mic_capture:
-            mic_audio_path = meeting_path / "audio_mic.wav"
-            self._wav_writer_mic = IncrementalWavWriter(mic_audio_path, self.sample_rate)
-            self._wav_writer_mic.open()
-            print(f"Recording mic audio: {mic_audio_path}")
-        if self.system_capture:
-            system_audio_path = meeting_path / "audio_system.wav"
-            self._wav_writer_system = IncrementalWavWriter(system_audio_path, self.sample_rate)
-            self._wav_writer_system.open()
-            print(f"Recording system audio: {system_audio_path}")
+            # Persist audio paths for the outgoing meeting.
+            # Note: MeetingStorage.current_meeting_path already points to the NEW meeting
+            # (switched by on_meeting_join before this callback), so we write meta directly
+            # using the WAV file's parent directory which IS the old meeting's directory.
+            old_meeting_path = None
+            if mic_audio_path_old:
+                old_meeting_path = Path(mic_audio_path_old).parent
+            elif system_audio_path_old:
+                old_meeting_path = Path(system_audio_path_old).parent
+            if old_meeting_path:
+                import json
+                meta_path = old_meeting_path / "meta.json"
+                if meta_path.exists():
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    if mic_audio_path_old:
+                        meta["audio_mic_path"] = mic_audio_path_old
+                    if system_audio_path_old:
+                        meta["audio_system_path"] = system_audio_path_old
+                    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            # Open new wav writers for new meeting.
+            # continuation=False: _invalidate_pending_chunks() already cleared the
+            # capture buffers, so there is no overlap from the previous chunk.
+            # Using continuation=True here would incorrectly skip the first 0.5s
+            # of fresh audio (the overlap that no longer exists after clear_buffer).
+            if self.mic_capture:
+                mic_audio_path = meeting_path / "audio_mic.wav"
+                self._wav_writer_mic = IncrementalWavWriter(mic_audio_path, self.sample_rate)
+                self._wav_writer_mic.open(continuation=False)
+                print(f"Recording mic audio: {mic_audio_path}")
+            if self.system_capture:
+                system_audio_path = meeting_path / "audio_system.wav"
+                self._wav_writer_system = IncrementalWavWriter(system_audio_path, self.sample_rate)
+                self._wav_writer_system.open(continuation=False)
+                print(f"Recording system audio: {system_audio_path}")
 
 
 def live_pipeline(

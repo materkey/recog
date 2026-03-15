@@ -300,6 +300,7 @@ class KTalkBridge:
         self._on_speaker_change: Optional[Callable[[Optional[str], bool], None]] = None
         self._on_segment_complete: Optional[Callable[[SpeakerSegment], None]] = None
         self._on_meeting_change: Optional[Callable[[str, Path], None]] = None
+        self._on_pre_meeting_switch: Optional[Callable[[], None]] = None
 
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
@@ -335,6 +336,13 @@ class KTalkBridge:
             callback: функция (meeting_id: str, meeting_path: Path)
         """
         self._on_meeting_change = callback
+
+    def set_pre_meeting_switch_callback(self, callback: Callable[[], None]):
+        """
+        Устанавливает callback, вызываемый ДО переключения встречи в MeetingStorage.
+        Используется для инвалидации in-flight чанков перед сменой meeting path.
+        """
+        self._on_pre_meeting_switch = callback
 
     def set_meeting_storage(self, storage: 'MeetingStorage'):
         """
@@ -1113,7 +1121,14 @@ class KTalkBridge:
             if self._meeting_storage and not self._connected_clients:
                 meta = self._meeting_storage._load_meta()
                 if meta and meta.get("source") == "ktalk":
-                    self._meeting_storage.on_ktalk_leave("disconnected")
+                    # Use the same pre/post switch flow as meeting_join/leave
+                    # so that _meeting_generation is bumped and WAV writers are swapped.
+                    if self._on_pre_meeting_switch:
+                        self._on_pre_meeting_switch()
+                    new_meeting_id = self._meeting_storage.on_ktalk_leave("disconnected")
+                    if self._on_meeting_change:
+                        meeting_path = self._meeting_storage.current_meeting_path
+                        self._on_meeting_change(new_meeting_id, meeting_path)
                     print("[KTalk Bridge] Ended KTalk meeting due to client disconnect", file=sys.stderr)
 
     async def _process_message(self, data: dict):
@@ -1302,12 +1317,21 @@ class KTalkBridge:
             title = data.get("title")
             platform = data.get("platform", "ktalk")
             if self._meeting_storage and url:
+                old_meeting_path = self._meeting_storage.current_meeting_path
+                # Invalidate in-flight chunks BEFORE on_meeting_join changes
+                # current_meeting_path, so that process_chunk/process_pending
+                # generation checks discard stale data before the path switches.
+                # For reconnects (same live_id) on_meeting_join won't change the
+                # path, so at most a few chunks are harmlessly discarded.
+                if self._on_pre_meeting_switch:
+                    self._on_pre_meeting_switch()
                 meeting_id = self._meeting_storage.on_meeting_join(url, title, platform)
                 print(f"[KTalk Bridge] Joined {platform} meeting: {url}", file=sys.stderr)
-                # Notify about meeting change for audio recording
-                if self._on_meeting_change:
-                    meeting_path = self._meeting_storage.current_meeting_path
-                    self._on_meeting_change(meeting_id, meeting_path)
+                # Reinit audio recording only on real meeting changes
+                if self._meeting_storage.current_meeting_path != old_meeting_path:
+                    if self._on_meeting_change:
+                        meeting_path = self._meeting_storage.current_meeting_path
+                        self._on_meeting_change(meeting_id, meeting_path)
                 # Отправляем историю транскрипта в extension
                 await self._send_transcript_history()
 
@@ -1315,9 +1339,12 @@ class KTalkBridge:
             # Extension сообщает о выходе из встречи
             reason = data.get("reason", "user_left")
             if self._meeting_storage:
+                # Invalidate in-flight chunks BEFORE on_ktalk_leave changes
+                # current_meeting_path (same rationale as meeting_join above)
+                if self._on_pre_meeting_switch:
+                    self._on_pre_meeting_switch()
                 new_meeting_id = self._meeting_storage.on_ktalk_leave(reason)
                 print(f"[KTalk Bridge] Left meeting (reason: {reason}), new meeting: {new_meeting_id}", file=sys.stderr)
-                # Notify about meeting change for audio recording
                 if self._on_meeting_change:
                     meeting_path = self._meeting_storage.current_meeting_path
                     self._on_meeting_change(new_meeting_id, meeting_path)
