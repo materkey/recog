@@ -1650,14 +1650,7 @@ function createSummaryModal() {
         <div class="ktalk-summary-modal-header">
           <span class="ktalk-summary-modal-title">✨ Catch Up</span>
           <select class="ktalk-model-select">
-            <option value="codex">Codex (GPT-5.4)</option>
-            <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
-            <option value="claude:opus">Claude Opus</option>
-            <option value="claude:sonnet">Claude Sonnet</option>
-            <option value="gemini-3-pro-preview">Gemini 3.0 Pro</option>
-            <option value="gemini-3-flash-preview">Gemini 3.0 Flash</option>
-            <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+            ${getAnchorModelOptions()}
           </select>
           <button class="ktalk-summary-modal-close">×</button>
         </div>
