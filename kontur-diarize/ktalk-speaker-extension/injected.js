@@ -3158,7 +3158,7 @@ function createVas3kSummaryModal() {
     </div>
     <div class="jitsi-summary-footer">
       <select class="jitsi-model-selector">
-        <option value="codex">Codex (GPT-5.2)</option>
+        <option value="codex">Codex (GPT-5.4)</option>
         <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
         <option value="claude:opus">Claude Opus</option>
         <option value="claude:sonnet">Claude Sonnet</option>
@@ -4795,7 +4795,7 @@ function setupSummaryMenu(container) {
 
 function getAnchorModelOptions() {
   return [
-    { value: 'codex', label: 'Codex (GPT-5.2)' },
+    { value: 'codex', label: 'Codex (GPT-5.4)' },
     { value: 'codex:gpt-4.1', label: 'Codex (GPT-4.1)' },
     { value: 'claude:opus', label: 'Claude Opus' },
     { value: 'claude:sonnet', label: 'Claude Sonnet' },
@@ -5148,7 +5148,7 @@ function createSummaryModal() {
         <div class="ktalk-summary-modal-header">
           <span class="ktalk-summary-modal-title">✨ Catch Up</span>
           <select class="ktalk-model-select">
-            <option value="codex">Codex (GPT-5.2)</option>
+            <option value="codex">Codex (GPT-5.4)</option>
             <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
             <option value="claude:opus">Claude Opus</option>
             <option value="claude:sonnet">Claude Sonnet</option>

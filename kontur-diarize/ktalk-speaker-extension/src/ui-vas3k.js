@@ -662,7 +662,7 @@ export function createVas3kSummaryModal() {
     </div>
     <div class="jitsi-summary-footer">
       <select class="jitsi-model-selector">
-        <option value="codex">Codex (GPT-5.2)</option>
+        <option value="codex">Codex (GPT-5.4)</option>
         <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
         <option value="claude:opus">Claude Opus</option>
         <option value="claude:sonnet">Claude Sonnet</option>
