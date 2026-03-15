@@ -189,14 +189,22 @@ class SingleDeviceCapture:
         if not self.buffer:
             return None
 
-        audio = np.concatenate(self.buffer, axis=0)
-        if len(audio) < samples_needed:
-            return None
+        if self._lock:
+            self._lock.acquire()
+        try:
+            if not self.buffer:
+                return None
+            audio = np.concatenate(self.buffer, axis=0)
+            if len(audio) < samples_needed:
+                return None
 
-        chunk = audio[:samples_needed]
-        overlap_samples = int(0.5 * self.sample_rate)  # 0.5 сек overlap для лучшего распознавания на границах
-        overlap_start = max(0, samples_needed - overlap_samples)
-        self.buffer = [audio[overlap_start:]]
+            chunk = audio[:samples_needed]
+            overlap_samples = int(0.5 * self.sample_rate)  # 0.5 сек overlap для лучшего распознавания на границах
+            overlap_start = max(0, samples_needed - overlap_samples)
+            self.buffer = [audio[overlap_start:]]
+        finally:
+            if self._lock:
+                self._lock.release()
 
         # Конвертируем стерео в моно если нужно
         if chunk.ndim > 1 and chunk.shape[1] > 1:
