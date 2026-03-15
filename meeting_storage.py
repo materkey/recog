@@ -1191,20 +1191,22 @@ class MeetingStorage:
                     continue  # Too recent, keep audio
 
                 # Delete mic audio if exists
+                meeting_deleted = 0
                 mic_path = meta.get("audio_mic_path")
                 if mic_path and Path(mic_path).exists():
                     Path(mic_path).unlink()
                     meta["audio_mic_path"] = None
-                    deleted_count += 1
+                    meeting_deleted += 1
 
                 # Delete system audio if exists
                 system_path = meta.get("audio_system_path")
                 if system_path and Path(system_path).exists():
                     Path(system_path).unlink()
                     meta["audio_system_path"] = None
-                    deleted_count += 1
+                    meeting_deleted += 1
 
-                if deleted_count > 0:
+                deleted_count += meeting_deleted
+                if meeting_deleted > 0:
                     meta["audio_deleted_at"] = datetime.now(UTC).isoformat()
                     self._save_json(meta_path, meta)
 
