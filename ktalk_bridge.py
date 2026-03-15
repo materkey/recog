@@ -1126,7 +1126,7 @@ class KTalkBridge:
             if seq is not None:
                 if seq <= self._last_seq:
                     print(f"[KTalk Bridge] Out-of-order speaker_update: seq={seq}, last={self._last_seq}", file=sys.stderr)
-                self._last_seq = seq
+                self._last_seq = max(self._last_seq, seq)
 
             # Основное событие: обновление текущего спикера
             speaker = data.get("speaker")  # {name, id, isLocal} или null

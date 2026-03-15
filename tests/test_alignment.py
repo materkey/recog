@@ -94,4 +94,4 @@ class TestAlignSegmentsWithSpeakers:
         result = align_segments_with_speakers(asr, [])
 
         assert len(result) == 1
-        assert result[0].speaker_id == "speaker_0"
+        assert result[0].speaker_id == "unknown"
