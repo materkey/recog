@@ -5,6 +5,7 @@
 import struct
 import sys
 import time
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -276,6 +277,7 @@ class LiveTranscriber:
         self.mic_speaker_name = mic_speaker_name
         self.running = False
         self.session_speakers = {}  # embedding -> speaker_label
+        self._session_lock = threading.Lock()
         self.speaker_counter = 0
         self.transcript_lines = []
         self._model_device = None
@@ -325,6 +327,7 @@ class LiveTranscriber:
 
     # Кэш для модели embedding (загружается один раз)
     _ecapa_classifier = None
+    _ecapa_lock = threading.Lock()
 
     def _get_embedding(self, audio_chunk: np.ndarray) -> Optional[np.ndarray]:
         """Извлекает embedding из аудио чанка используя SpeechBrain ECAPA-TDNN."""
@@ -334,16 +337,18 @@ class LiveTranscriber:
         try:
             import warnings
 
-            # Ленивая загрузка модели (один раз)
+            # Ленивая загрузка модели (один раз) с double-checked locking
             if LiveTranscriber._ecapa_classifier is None:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=UserWarning)
-                    warnings.filterwarnings("ignore", category=FutureWarning)
-                    from speechbrain.inference.speaker import EncoderClassifier
-                    LiveTranscriber._ecapa_classifier = EncoderClassifier.from_hparams(
-                        source="speechbrain/spkrec-ecapa-voxceleb",
-                        savedir="/tmp/speechbrain_ecapa"
-                    )
+                with LiveTranscriber._ecapa_lock:
+                    if LiveTranscriber._ecapa_classifier is None:
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", category=UserWarning)
+                            warnings.filterwarnings("ignore", category=FutureWarning)
+                            from speechbrain.inference.speaker import EncoderClassifier
+                            LiveTranscriber._ecapa_classifier = EncoderClassifier.from_hparams(
+                                source="speechbrain/spkrec-ecapa-voxceleb",
+                                savedir="/tmp/speechbrain_ecapa"
+                            )
 
             # Прямое извлечение embedding без temp файлов
             with warnings.catch_warnings():
@@ -371,18 +376,25 @@ class LiveTranscriber:
             if match:
                 return match[1]  # display_name
 
-        # Проверяем среди спикеров сессии
-        for emb_key, label in self.session_speakers.items():
-            db_emb = np.frombuffer(emb_key, dtype=np.float32)
-            similarity = SpeakerDatabase._cosine_similarity(embedding, db_emb)
-            if similarity >= SPEAKER_SIMILARITY_THRESHOLD:
-                return label
+        # Проверяем среди спикеров сессии (best match, not first match)
+        with self._session_lock:
+            best_label = None
+            best_similarity = -1.0
+            for emb_key, label in self.session_speakers.items():
+                db_emb = np.frombuffer(emb_key, dtype=np.float32)
+                similarity = SpeakerDatabase._cosine_similarity(embedding, db_emb)
+                if similarity >= SPEAKER_SIMILARITY_THRESHOLD and similarity > best_similarity:
+                    best_similarity = similarity
+                    best_label = label
 
-        # Новый спикер
-        self.speaker_counter += 1
-        label = f"speaker_{self.speaker_counter}"
-        self.session_speakers[embedding.astype(np.float32).tobytes()] = label
-        return label
+            if best_label is not None:
+                return best_label
+
+            # Новый спикер
+            self.speaker_counter += 1
+            label = f"speaker_{self.speaker_counter}"
+            self.session_speakers[embedding.astype(np.float32).tobytes()] = label
+            return label
 
     def _ktalk_speaker_callback(self, speaker_name: Optional[str], is_speaking: bool):
         """Callback для обновления текущего спикера из KTalk."""
