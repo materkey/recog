@@ -598,70 +598,71 @@ class MeetingStorage:
             # Нет активной встречи - создать orphan
             self._create_meeting(source="orphan")
 
-        # Snapshot meeting path and segment counter so that a concurrent meeting
-        # switch from the KTalk thread doesn't cause us to write transcript JSONL
-        # into one meeting and stats/meta into another, or use a reset counter.
+        # Hold _segment_lock for the entire read-modify-write cycle (counter,
+        # JSONL append, meta.json update) so concurrent mic/system threads don't
+        # overwrite each other's words_count or segment_count increments.
         with self._segment_lock:
             meeting_path = self.current_meeting_path
             self._segment_counter += 1
             segment_id = self._segment_counter
-        now = datetime.now(UTC)
 
-        segment = TranscriptSegment(
-            id=segment_id,
-            ts=now.isoformat(),
-            ts_display=now.astimezone().strftime("%H:%M:%S"),
-            speaker=speaker,
-            speaker_id=speaker_id,
-            text=text,
-            is_local=is_local,
-            cont=is_continuation,
-            uncertain=uncertain,
-            uncertain_reason=uncertain_reason,
-            audio_offset_ms=audio_offset_ms
-        )
+            now = datetime.now(UTC)
 
-        # Append to JSONL (эффективнее чем перезапись всего файла)
-        with open(meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(segment), ensure_ascii=False) + "\n")
-
-        # Update stats
-        meta_path = meeting_path / "meta.json"
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["stats"]["segment_count"] = segment_id
-        meta["stats"]["words_count"] += len(text.split())
-        meta["updated_at"] = now.isoformat()
-
-        # Track participants
-        # Для локальных участников: если уже есть другой локальный — не дублируем
-        if is_local and speaker_id not in meta["participants"]:
-            existing_local = next(
-                (pid for pid, p in meta["participants"].items() if p.get("is_local")),
-                None
+            segment = TranscriptSegment(
+                id=segment_id,
+                ts=now.isoformat(),
+                ts_display=now.astimezone().strftime("%H:%M:%S"),
+                speaker=speaker,
+                speaker_id=speaker_id,
+                text=text,
+                is_local=is_local,
+                cont=is_continuation,
+                uncertain=uncertain,
+                uncertain_reason=uncertain_reason,
+                audio_offset_ms=audio_offset_ms
             )
-            if existing_local:
-                # Уже есть локальный участник — пропускаем добавление нового
-                # (KTalk имя обычно точнее чем speaker_db)
-                if speaker and meta["participants"][existing_local]["name"] != speaker:
-                    meta["participants"][existing_local]["name"] = speaker
-            else:
+
+            # Append to JSONL (эффективнее чем перезапись всего файла)
+            with open(meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(asdict(segment), ensure_ascii=False) + "\n")
+
+            # Update stats
+            meta_path = meeting_path / "meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["stats"]["segment_count"] = segment_id
+            meta["stats"]["words_count"] += len(text.split())
+            meta["updated_at"] = now.isoformat()
+
+            # Track participants
+            # Для локальных участников: если уже есть другой локальный — не дублируем
+            if is_local and speaker_id not in meta["participants"]:
+                existing_local = next(
+                    (pid for pid, p in meta["participants"].items() if p.get("is_local")),
+                    None
+                )
+                if existing_local:
+                    # Уже есть локальный участник — пропускаем добавление нового
+                    # (KTalk имя обычно точнее чем speaker_db)
+                    if speaker and meta["participants"][existing_local]["name"] != speaker:
+                        meta["participants"][existing_local]["name"] = speaker
+                else:
+                    meta["participants"][speaker_id] = {
+                        "name": speaker,
+                        "is_local": is_local,
+                        "first_seen": now.isoformat()
+                    }
+            elif speaker_id not in meta["participants"]:
                 meta["participants"][speaker_id] = {
                     "name": speaker,
                     "is_local": is_local,
                     "first_seen": now.isoformat()
                 }
-        elif speaker_id not in meta["participants"]:
-            meta["participants"][speaker_id] = {
-                "name": speaker,
-                "is_local": is_local,
-                "first_seen": now.isoformat()
-            }
-        else:
-            # Обновить имя если изменилось
-            if meta["participants"][speaker_id]["name"] != speaker:
-                meta["participants"][speaker_id]["name"] = speaker
+            else:
+                # Обновить имя если изменилось
+                if meta["participants"][speaker_id]["name"] != speaker:
+                    meta["participants"][speaker_id]["name"] = speaker
 
-        self._save_json(meta_path, meta)
+            self._save_json(meta_path, meta)
 
     def _append_system_event(self, event_type: str, message: str):
         """
@@ -681,31 +682,31 @@ class MeetingStorage:
             self._segment_counter += 1
             segment_id = self._segment_counter
 
-        now = datetime.now(UTC)
+            now = datetime.now(UTC)
 
-        event = {
-            "id": segment_id,
-            "ts": now.isoformat(),
-            "ts_display": now.astimezone().strftime("%H:%M:%S"),
-            "speaker": "Система",
-            "speaker_id": "__system__",
-            "text": message,
-            "is_local": False,
-            "cont": False,
-            "uncertain": False,
-            "uncertain_reason": "",
-            "event_type": event_type
-        }
+            event = {
+                "id": segment_id,
+                "ts": now.isoformat(),
+                "ts_display": now.astimezone().strftime("%H:%M:%S"),
+                "speaker": "Система",
+                "speaker_id": "__system__",
+                "text": message,
+                "is_local": False,
+                "cont": False,
+                "uncertain": False,
+                "uncertain_reason": "",
+                "event_type": event_type
+            }
 
-        with open(meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+            with open(meeting_path / "transcript.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
-        # Update stats
-        meta_path = meeting_path / "meta.json"
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["stats"]["segment_count"] = segment_id
-        meta["updated_at"] = now.isoformat()
-        self._save_json(meta_path, meta)
+            # Update stats
+            meta_path = meeting_path / "meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["stats"]["segment_count"] = segment_id
+            meta["updated_at"] = now.isoformat()
+            self._save_json(meta_path, meta)
 
     def update_title(self, title: str):
         """
