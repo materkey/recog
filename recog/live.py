@@ -734,7 +734,7 @@ class LiveTranscriber:
                             is_local=is_mic,
                             is_continuation=is_continuation,
                             uncertain=uncertain,
-                            uncertain_reason="embedding_error" if uncertain else None,
+                            uncertain_reason="embedding_error" if uncertain else "",
                             audio_offset_ms=pending_audio_offset
                         )
 

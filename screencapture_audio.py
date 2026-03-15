@@ -158,10 +158,10 @@ class ScreenCaptureAudio:
             try:
                 self.process.terminate()
                 self.process.wait(timeout=1.0)
-            except:
+            except Exception:
                 try:
                     self.process.kill()
-                except:
+                except Exception:
                     pass
 
         # Start new process
