@@ -135,6 +135,11 @@ def main():
         action="store_true",
         help="Использовать ScreenCaptureKit для захвата системного звука (не нужен BlackHole, громкость работает)"
     )
+    live_parser.add_argument(
+        "--mic-speaker-name",
+        default="Me",
+        help="Имя спикера для микрофонного ввода (по умолчанию: Me)"
+    )
 
     # Команда: meetings (просмотр сохранённых митингов)
     meetings_parser = subparsers.add_parser(
@@ -244,7 +249,8 @@ def main():
             no_diarization=args.no_diarization,
             list_devices=args.list_devices,
             use_ktalk=args.ktalk,
-            use_screencapture=args.screencapture
+            use_screencapture=args.screencapture,
+            mic_speaker_name=args.mic_speaker_name
         )
 
     elif args.command == "meetings":

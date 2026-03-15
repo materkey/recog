@@ -237,7 +237,8 @@ class LiveTranscriber:
         no_diarization=False,
         use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
         use_screencapture=False,  # Использовать ScreenCaptureKit вместо BlackHole
-        save_audio=False  # Сохранять аудио для последующей диаризации
+        save_audio=False,  # Сохранять аудио для последующей диаризации
+        mic_speaker_name="Me"  # Имя для микрофонного спикера
     ):
         self.mic_device = mic_device
         self.system_device = system_device
@@ -272,6 +273,7 @@ class LiveTranscriber:
         self.output_file = output_file
         self.no_diarization = no_diarization
         self.use_ktalk = use_ktalk
+        self.mic_speaker_name = mic_speaker_name
         self.running = False
         self.session_speakers = {}  # embedding -> speaker_label
         self.speaker_counter = 0
@@ -581,7 +583,7 @@ class LiveTranscriber:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         speaker_width = 24  # Для полных имён (имя + фамилия)
-        mic_speaker_name = "Vyacheslav Kovalev"  # Имя для микрофона (без диаризации)
+        mic_speaker_name = self.mic_speaker_name
 
         # Отдельные состояния для каждого источника
         class SourceState:
@@ -594,8 +596,10 @@ class LiveTranscriber:
                 self.last_text_time = time.time()
                 self.audio_offset = 0  # Offset in WAV file where current chunk starts
 
-        mic_state = SourceState()
-        sys_state = SourceState()
+        self._mic_state = SourceState()
+        self._sys_state = SourceState()
+        mic_state = self._mic_state
+        sys_state = self._sys_state
 
         speaker_turn_gap = 3.0
         max_segment_duration = 20.0  # Принудительный разрыв сегмента после N секунд
@@ -698,6 +702,10 @@ class LiveTranscriber:
                 silence_duration = current_time - state.last_text_time
                 if silence_duration >= SILENCE_SPLIT_TIMEOUT:
                     self._meeting_storage.split_on_silence_timeout()
+                    # Reset speaker state after silence split to prevent
+                    # stale speaker from being reused in new meeting segment
+                    state.last_speaker = None
+                    state.last_words = []
                 state.last_text_time = current_time
 
             timestamp = datetime.now().strftime("%H:%M:%S")
@@ -775,7 +783,10 @@ class LiveTranscriber:
                 segment_duration = chunk_time - state.segment_start_time
                 is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
 
-                state.last_speaker = speaker
+                # Only update last_speaker with identified speakers;
+                # "Unknown" would poison the TTL fallback window
+                if speaker != "Unknown":
+                    state.last_speaker = speaker
                 state.last_speech_time = chunk_time
                 if not is_continuation:
                     state.segment_start_time = chunk_time
@@ -915,6 +926,12 @@ class LiveTranscriber:
 
     def _on_meeting_change(self, meeting_id: str, meeting_path: Path):
         """Called when meeting changes via KTalk bridge to reinitialize audio recording."""
+        # Reset speaker state to prevent bleeding across meetings
+        for state in (self._mic_state, self._sys_state):
+            state.last_speaker = None
+            state.last_words = []
+            state.segment_start_time = 0
+
         if not self.save_audio:
             return
 
@@ -950,7 +967,8 @@ def live_pipeline(
     no_diarization=False,
     list_devices=False,
     use_ktalk=False,
-    use_screencapture=False
+    use_screencapture=False,
+    mic_speaker_name="Me"
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
@@ -984,6 +1002,7 @@ def live_pipeline(
         output_file=output_file,
         no_diarization=no_diarization,
         use_ktalk=use_ktalk,
-        use_screencapture=use_screencapture
+        use_screencapture=use_screencapture,
+        mic_speaker_name=mic_speaker_name
     )
     transcriber.run(force_exit=True)
