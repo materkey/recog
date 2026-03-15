@@ -38,7 +38,7 @@ DEFAULT_MODEL = "v3_e2e_rnnt"
 DEFAULT_CHUNK_DURATION = 20.0
 DEFAULT_OVERLAP = 1.0
 # Порог косинусного сходства для идентификации спикеров
-SPEAKER_SIMILARITY_THRESHOLD = 0.30
+SPEAKER_SIMILARITY_THRESHOLD = 0.50
 
 # VAD (Voice Activity Detection) - порог RMS для определения тишины
 # Аудио с RMS ниже этого порога считается тишиной и не отправляется на inference

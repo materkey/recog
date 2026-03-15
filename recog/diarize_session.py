@@ -26,7 +26,8 @@ class DiarizeResult:
 def diarize_track(
     meeting_path: Path,
     track: Literal["mic", "system"],
-    speaker_db_path: Optional[Path] = None
+    speaker_db_path: Optional[Path] = None,
+    chunk_duration_ms: int = 3000
 ) -> DiarizeResult:
     """
     Diarize a single audio track (mic or system) for an existing meeting.
@@ -51,6 +52,11 @@ def diarize_track(
 
     # Load meta
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    # Read chunk_duration_ms from meeting meta if available
+    meta_chunk = meta.get("chunk_duration_ms")
+    if meta_chunk is not None:
+        chunk_duration_ms = int(meta_chunk)
 
     # Get audio path for track
     audio_key = f"audio_{track}_path"
@@ -95,7 +101,8 @@ def diarize_track(
         transcript_path,
         segments,
         speaker_labels,
-        track
+        track,
+        chunk_duration_ms
     )
 
     # Update meta with diarization info
@@ -123,7 +130,8 @@ def _update_transcript_segments(
     transcript_path: Path,
     diarization_segments: List,
     speaker_labels: Dict[str, str],
-    track: Literal["mic", "system"]
+    track: Literal["mic", "system"],
+    chunk_duration_ms: int = 3000
 ) -> int:
     """
     Update transcript.jsonl with diarization results.
@@ -186,8 +194,7 @@ def _update_transcript_segments(
         best_speaker = None
         best_overlap = 0
 
-        # Assume segment duration is ~3 seconds (chunk_duration from live.py)
-        seg_duration_ms = 3000
+        seg_duration_ms = chunk_duration_ms
         seg_end = audio_offset + seg_duration_ms
 
         for diar_seg in diar_timeline:
