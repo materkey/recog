@@ -751,11 +751,15 @@ class LiveTranscriber:
 
                 # Используем спикера от extension, или последнего известного из транскрипции
                 # TTL: last_speaker используется только если речь была недавно,
-                # иначе сбрасываем на Unknown чтобы избежать каскадной ошибочной атрибуции
+                # иначе сбрасываем на Unknown чтобы избежать каскадной ошибочной атрибуции.
+                # Дополнительно: если last_speaker замьютил микрофон — не переиспользуем его,
+                # т.к. скорее всего говорит уже кто-то другой.
                 if ktalk_speaker:
                     speaker = ktalk_speaker
                     no_speaker_yet = False
-                elif state.last_speaker and (chunk_time - state.last_speech_time) < LAST_SPEAKER_TTL:
+                elif (state.last_speaker
+                      and (chunk_time - state.last_speech_time) < LAST_SPEAKER_TTL
+                      and not (self._ktalk_bridge and self._ktalk_bridge.is_speaker_muted(state.last_speaker))):
                     speaker = state.last_speaker
                     no_speaker_yet = False
                 else:
