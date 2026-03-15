@@ -473,6 +473,15 @@ class KTalkBridge:
             # Нет локального участника - считаем что не замьючен
             return False
 
+    def is_speaker_muted(self, speaker_name: str) -> bool:
+        """Возвращает True если микрофон спикера с указанным именем замьючен."""
+        with self._lock:
+            for p in self._participants.values():
+                if p.name == speaker_name:
+                    return p.mic_muted
+            # Спикер не найден среди участников — не можем определить
+            return False
+
     def get_speaker_history(self) -> List[SpeakerEvent]:
         """Возвращает историю спикеров."""
         with self._lock:
