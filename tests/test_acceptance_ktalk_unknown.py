@@ -14,6 +14,7 @@ import pytest
 from pathlib import Path
 from collections import deque
 from unittest.mock import Mock, MagicMock, patch
+import threading
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -163,6 +164,7 @@ def test_retroactive_correction_end_to_end(tmp_path):
 
     # Setup mock transcriber with real data
     transcriber = Mock()
+    transcriber._state_lock = threading.Lock()
     transcriber.transcript_lines = [
         f"\n**{s}** *[12:00:{i*3:02d}]*: text by {s}\n"
         for i, s in enumerate(speakers)

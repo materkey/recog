@@ -613,6 +613,9 @@ export function addVas3kTranscriptLine(line) {
   if (line.id) {
     lineEl.dataset.lineId = line.id;
   }
+  if (line.timestamp) {
+    lineEl.dataset.timestamp = line.timestamp;
+  }
 
   const uncertainSuffix = getUncertainSuffix(line);
 

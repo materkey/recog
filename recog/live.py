@@ -468,14 +468,34 @@ class LiveTranscriber:
             return self._ktalk_bridge.get_current_speaker()
         return self._ktalk_current_speaker
 
-    def _retroactive_correct_unknown_run(self, identified_speaker: str, current_time: float):
+    def _retroactive_correct_unknown_run(
+        self,
+        identified_speaker: str,
+        current_time: float,
+        *,
+        correction_snapshot=None,
+    ):
         """
         Scan backwards through recent system-audio segments and re-attribute
         consecutive Unknown segments to the newly identified speaker.
 
         Stops at: named speaker, is_local=True, max segments, or max time window.
+
+        If correction_snapshot is provided (segments, generation, meeting_path),
+        uses that instead of re-acquiring the lock — eliminates a race where
+        _invalidate_pending_chunks clears the deque between the caller's lock
+        release and this method's lock acquisition.
         """
-        segments = list(self._recent_system_segments)
+        if correction_snapshot is not None:
+            segments, snapshot_gen, snapshot_meeting_path = correction_snapshot
+        else:
+            with self._state_lock:
+                segments = list(self._recent_system_segments)
+                snapshot_gen = self._meeting_generation
+                snapshot_meeting_path = (
+                    self._meeting_storage.current_meeting_path
+                    if self._meeting_storage else None
+                )
         # Last element is the current (already identified) segment — skip it
         to_correct = []
         for seg in reversed(segments[:-1]):
@@ -490,7 +510,8 @@ class LiveTranscriber:
         if not to_correct:
             return
 
-        # Update in-memory transcript_lines
+        # Update in-memory transcript_lines (session-wide, safe regardless of
+        # meeting switch since line_idx is absolute within the session).
         for seg in to_correct:
             if seg.line_idx < len(self.transcript_lines):
                 old_line = self.transcript_lines[seg.line_idx]
@@ -499,6 +520,16 @@ class LiveTranscriber:
 
             # Update the segment record itself
             seg.speaker = identified_speaker
+
+        # Check if a meeting switch occurred.  Even if it did, we still
+        # update the JSONL using snapshot_meeting_path (captured above)
+        # so corrections land in the old meeting where the segments live.
+        # Only skip the Chrome extension notification on switch, since
+        # the extension has already moved to the new meeting context.
+        meeting_switched = False
+        with self._state_lock:
+            if self._meeting_generation != snapshot_gen:
+                meeting_switched = True
 
         # Update MeetingStorage JSONL
         if self._meeting_storage:
@@ -513,10 +544,13 @@ class LiveTranscriber:
                 if seg.meeting_segment_id > 0
             ]
             if updates:
-                self._meeting_storage.update_segments(updates)
+                self._meeting_storage.update_segments(
+                    updates, meeting_path=snapshot_meeting_path
+                )
 
-        # Send corrections to Chrome extension
-        if self._ktalk_bridge:
+        # Send corrections to Chrome extension (skip if meeting switched —
+        # the extension has already moved to the new meeting context).
+        if self._ktalk_bridge and not meeting_switched:
             for seg in to_correct:
                 self._ktalk_bridge.send_transcript(
                     identified_speaker,
@@ -1029,23 +1063,48 @@ class LiveTranscriber:
                             audio_offset_ms=state.audio_offset
                         )
 
-                    # Track segment for retroactive correction
-                    self._recent_system_segments.append(RecentSegment(
-                        speaker=speaker,
-                        chunk_time=chunk_time,
-                        line_idx=transcript_line_idx,
-                        meeting_segment_id=meeting_seg_id,
-                        is_local=False,
-                        timestamp_display=timestamp,
-                        text=text,
-                    ))
+                    # Track segment for retroactive correction.
+                    # Lock guards against _invalidate_pending_chunks racing
+                    # between the generation check and the deque append;
+                    # without the lock a meeting switch can clear the deque
+                    # after we read the generation but before we append.
+                    needs_correction = False
+                    correction_snapshot = None
+                    with self._state_lock:
+                        if self._meeting_generation == chunk_gen:
+                            self._recent_system_segments.append(RecentSegment(
+                                speaker=speaker,
+                                chunk_time=chunk_time,
+                                line_idx=transcript_line_idx,
+                                meeting_segment_id=meeting_seg_id,
+                                is_local=False,
+                                timestamp_display=timestamp,
+                                text=text,
+                            ))
 
-                    # Retroactive correction: if we just identified a speaker
-                    # after a run of Unknown segments, correct them backwards
-                    if (speaker != "Unknown"
-                            and len(self._recent_system_segments) >= 2
-                            and self._recent_system_segments[-2].speaker == "Unknown"):
-                        self._retroactive_correct_unknown_run(speaker, chunk_time)
+                            # Retroactive correction: if we just identified a speaker
+                            # after a run of Unknown segments, correct them backwards
+                            needs_correction = (
+                                speaker != "Unknown"
+                                and len(self._recent_system_segments) >= 2
+                                and self._recent_system_segments[-2].speaker == "Unknown"
+                            )
+                            # Snapshot segments and generation inside the lock so
+                            # a concurrent _invalidate_pending_chunks cannot clear
+                            # the deque between here and the correction method.
+                            if needs_correction:
+                                correction_snapshot = (
+                                    list(self._recent_system_segments),
+                                    self._meeting_generation,
+                                    self._meeting_storage.current_meeting_path
+                                    if self._meeting_storage else None,
+                                )
+
+                    if needs_correction:
+                        self._retroactive_correct_unknown_run(
+                            speaker, chunk_time,
+                            correction_snapshot=correction_snapshot,
+                        )
 
             elif self.no_diarization:
                 # Markdown формат: **Speaker** *[HH:MM:SS]*: text

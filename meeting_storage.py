@@ -672,6 +672,7 @@ class MeetingStorage:
     def update_segments(
         self,
         updates: list[dict],
+        meeting_path: Optional[Path] = None,
     ):
         """
         Update speaker attribution for existing segments in JSONL.
@@ -685,12 +686,18 @@ class MeetingStorage:
                 - speaker (str): New speaker name
                 - uncertain (bool): New uncertain flag
                 - uncertain_reason (str): New reason (empty if corrected)
+            meeting_path: Explicit meeting directory. When provided, the update
+                targets this path regardless of current_meeting_path. This
+                prevents a TOCTOU race where a meeting switch between the
+                caller's generation check and this call would redirect
+                corrections to the wrong JSONL.
         """
-        if not self.current_meeting_path or not updates:
+        target_path = meeting_path or self.current_meeting_path
+        if not target_path or not updates:
             return
 
         with self._segment_lock:
-            transcript_path = self.current_meeting_path / "transcript.jsonl"
+            transcript_path = target_path / "transcript.jsonl"
             if not transcript_path.exists():
                 return
 
