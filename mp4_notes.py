@@ -20,7 +20,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from recog import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP
+from recog import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP, MIC_SPEAKER_NAME
 
 
 def main():
@@ -137,8 +137,8 @@ def main():
     )
     live_parser.add_argument(
         "--mic-speaker-name",
-        default="Me",
-        help="Имя спикера для микрофонного ввода (по умолчанию: Me)"
+        default=MIC_SPEAKER_NAME,
+        help=f"Имя спикера для микрофонного ввода (по умолчанию: {MIC_SPEAKER_NAME})"
     )
 
     # Команда: meetings (просмотр сохранённых митингов)

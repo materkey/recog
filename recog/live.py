@@ -13,7 +13,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT, LAST_SPEAKER_TTL
+from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT, LAST_SPEAKER_TTL, MIC_SPEAKER_NAME
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
 
@@ -277,7 +277,7 @@ class LiveTranscriber:
         use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
         use_screencapture=False,  # Использовать ScreenCaptureKit вместо BlackHole
         save_audio=False,  # Сохранять аудио для последующей диаризации
-        mic_speaker_name="Me"  # Имя для микрофонного спикера
+        mic_speaker_name=None  # Имя для микрофонного спикера (None → MIC_SPEAKER_NAME из config)
     ):
         self.mic_device = mic_device
         self.system_device = system_device
@@ -312,7 +312,7 @@ class LiveTranscriber:
         self.output_file = output_file
         self.no_diarization = no_diarization
         self.use_ktalk = use_ktalk
-        self.mic_speaker_name = mic_speaker_name
+        self.mic_speaker_name = mic_speaker_name if mic_speaker_name is not None else MIC_SPEAKER_NAME
         self.running = False
         self.session_speakers = {}  # embedding -> speaker_label
         self._session_lock = threading.Lock()
@@ -1132,7 +1132,7 @@ def live_pipeline(
     list_devices=False,
     use_ktalk=False,
     use_screencapture=False,
-    mic_speaker_name="Me"
+    mic_speaker_name=None
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
@@ -1157,6 +1157,9 @@ def live_pipeline(
             print(f"Auto-detected system audio: {name} (device {system_device})", file=sys.stderr)
         else:
             print("Warning: Could not find BlackHole device", file=sys.stderr)
+
+    if mic_speaker_name is None:
+        mic_speaker_name = MIC_SPEAKER_NAME
 
     transcriber = LiveTranscriber(
         mic_device=mic_device,
