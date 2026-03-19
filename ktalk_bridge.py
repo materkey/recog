@@ -490,6 +490,23 @@ class KTalkBridge:
             # Спикер не найден среди участников — не можем определить
             return False
 
+    def get_sole_unmuted_remote_participant(self) -> Optional[str]:
+        """
+        Возвращает имя единственного удалённого участника с включённым микрофоном.
+
+        Используется как fallback когда dominant speaker detection отстаёт:
+        если ровно один remote участник unmuted, скорее всего говорит именно он.
+        Возвращает None если 0 или 2+ remote участников unmuted (чтобы не угадывать).
+        """
+        with self._lock:
+            unmuted_remote = [
+                p for p in self._participants.values()
+                if not p.is_local and not p.mic_muted
+            ]
+            if len(unmuted_remote) == 1:
+                return unmuted_remote[0].name
+            return None
+
     def get_speaker_history(self) -> List[SpeakerEvent]:
         """Возвращает историю спикеров."""
         with self._lock:
