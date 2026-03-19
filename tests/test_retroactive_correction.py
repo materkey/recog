@@ -1,6 +1,7 @@
 """Tests for retroactive correction of Unknown speaker runs."""
 import json
 import time
+import threading
 import pytest
 from pathlib import Path
 from collections import deque
@@ -122,6 +123,7 @@ def test_retroactive_correction_fixes_unknown_run():
     """
     # Build a mock LiveTranscriber with minimal attributes
     transcriber = Mock()
+    transcriber._state_lock = threading.Lock()
     transcriber.transcript_lines = [
         "\n**Alice** *[12:00:00]*: hello\n",
         "\n**Unknown** *[12:00:03]*: world\n",
@@ -176,6 +178,7 @@ def test_retroactive_correction_stops_at_named_speaker():
     then: only the 2 Unknown segments after Bob are corrected (not the one before Bob)
     """
     transcriber = Mock()
+    transcriber._state_lock = threading.Lock()
     transcriber.transcript_lines = [
         "\n**Alice** *[12:00:00]*: a\n",
         "\n**Unknown** *[12:00:03]*: b\n",
@@ -221,6 +224,7 @@ def test_retroactive_correction_respects_max_time_window():
     then: old Unknown segments are NOT corrected
     """
     transcriber = Mock()
+    transcriber._state_lock = threading.Lock()
     transcriber.transcript_lines = [
         "\n**Unknown** *[11:58:00]*: old\n",
         "\n**Unknown** *[12:00:55]*: recent\n",
@@ -263,6 +267,7 @@ def test_retroactive_correction_no_op_when_no_unknown_run():
     then: no corrections made
     """
     transcriber = Mock()
+    transcriber._state_lock = threading.Lock()
     transcriber.transcript_lines = [
         "\n**Alice** *[12:00:00]*: a\n",
         "\n**Bob** *[12:00:03]*: b\n",

@@ -1135,6 +1135,20 @@ class KTalkBridge:
         finally:
             self._connected_clients.discard(websocket)
             print(f"[KTalk Bridge] Client disconnected", file=sys.stderr)
+            # Clear stale participant state BEFORE bumping the generation
+            # (same order as meeting_leave) so that the live thread's next
+            # chunk cannot read old-meeting speaker data through
+            # get_current_speaker / get_sole_unmuted_remote_participant.
+            if not self._connected_clients:
+                with self._lock:
+                    self._participants = {}
+                    self._is_speaking = False
+                    self._current_speaker = None
+                    self._current_speaker_id = None
+                    self._last_speaker = None
+                    self._last_speaker_time = 0
+                    self._last_is_local = False
+                    self._speaker_history.clear()
             # End meeting if this was the last client and meeting is active
             if self._meeting_storage and not self._connected_clients and self._meeting_storage.current_meeting_path:
                 meta = self._meeting_storage._load_meta()
@@ -1356,6 +1370,22 @@ class KTalkBridge:
         elif msg_type == "meeting_leave":
             # Extension сообщает о выходе из встречи
             reason = data.get("reason", "user_left")
+            # Clear stale speaker state BEFORE bumping the generation.
+            # _on_pre_meeting_switch() increments _meeting_generation; after
+            # that, the live thread's next chunk will carry the new generation
+            # and pass all generation checks.  If speaker state is still
+            # populated at that point, the chunk would be attributed to the
+            # old meeting's speaker.  Clearing first guarantees
+            # get_current_speaker() returns None for any such chunk.
+            with self._lock:
+                self._participants = {}
+                self._is_speaking = False
+                self._current_speaker = None
+                self._current_speaker_id = None
+                self._last_speaker = None
+                self._last_speaker_time = 0
+                self._last_is_local = False
+                self._speaker_history.clear()
             if self._meeting_storage:
                 # Invalidate in-flight chunks BEFORE on_ktalk_leave changes
                 # current_meeting_path (same rationale as meeting_join above)
@@ -1366,7 +1396,8 @@ class KTalkBridge:
                 if self._on_meeting_change:
                     meeting_path = self._meeting_storage.current_meeting_path
                     self._on_meeting_change(new_meeting_id, meeting_path)
-                # Оповестить extension о новой встрече
+                # Notify extension about new meeting (safe to await here —
+                # speaker state is already clean).
                 await self._broadcast_message({
                     "type": "new_meeting",
                     "meeting_id": new_meeting_id

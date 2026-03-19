@@ -3109,6 +3109,9 @@ function addVas3kTranscriptLine(line) {
   if (line.id) {
     lineEl.dataset.lineId = line.id;
   }
+  if (line.timestamp) {
+    lineEl.dataset.timestamp = line.timestamp;
+  }
 
   const uncertainSuffix = (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
 
@@ -4580,7 +4583,7 @@ function handleTranscriptHistory(data) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.push({
       speaker: seg.speaker,
       text: seg.text,
-      timestamp: seg.timestamp,
+      timestamp: seg.timestamp || seg.ts_display,
       is_local: seg.is_local || false,
       uncertain: seg.uncertain || false,
       uncertain_reason: seg.uncertain_reason || "",
@@ -4595,7 +4598,15 @@ function handleTranscriptHistory(data) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-_state_js__WEBPACK_IMPORTED_MODULE_0__.constants.MAX_TRANSCRIPT_LINES);
   }
 
-  updateTranscriptUI();
+  // Re-render using the appropriate platform renderer
+  if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
+    (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.clearVas3kTranscript)();
+    for (const line of _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines) {
+      (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.addVas3kTranscriptLine)(line);
+    }
+  } else {
+    updateTranscriptUI();
+  }
 
   window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
     detail: { transcriptLines: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice() }
@@ -4606,7 +4617,11 @@ function handleNewMeeting(data) {
   console.log('[KTalk Transcript] New meeting:', data.meeting_id);
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines = [];
-  updateTranscriptUI();
+  if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
+    (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.clearVas3kTranscript)();
+  } else {
+    updateTranscriptUI();
+  }
 
   window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
     detail: { transcriptLines: [] }
@@ -4647,9 +4662,14 @@ function handleTranscript(data) {
         for (const lineEl of content.querySelectorAll('.jitsi-transcript-line')) {
           const speakerEl = lineEl.querySelector('.jitsi-transcript-speaker');
           const textEl = lineEl.querySelector('.jitsi-transcript-text');
+          const rawText = textEl ? textEl.textContent.replace(/ \(\?\)$/, '').replace(/ \(🔇\?\)$/, '').trim() : '';
           if (speakerEl && speakerEl.textContent === 'Unknown' &&
-              textEl && textEl.textContent.trim() === text) {
+              textEl && rawText === text &&
+              (!timestamp || lineEl.dataset.timestamp === timestamp)) {
             speakerEl.textContent = speaker;
+            // Remove uncertainty markers from corrected line
+            textEl.classList.remove('jitsi-transcript-uncertain');
+            textEl.textContent = rawText;
             break;
           }
         }

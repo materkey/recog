@@ -3,7 +3,7 @@ import { formatBioReadText, normalizeBioReadSettings, BIOREAD_LIMITS, BIOREAD_SE
 import { getUncertainSuffix, renderMarkdown, escapeHtml } from './utils.js';
 import { sendWsMessage } from './ws_api.js';
 import { getPlatform, isJitsiPlatform } from './platforms/index.js';
-import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine } from './ui-vas3k.js';
+import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine, clearVas3kTranscript } from './ui-vas3k.js';
 
 let selectedModel = localStorage.getItem('ktalk-ai-model') || 'codex';
 let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'codex';
@@ -1081,7 +1081,7 @@ export function handleTranscriptHistory(data) {
     state.transcriptLines.push({
       speaker: seg.speaker,
       text: seg.text,
-      timestamp: seg.timestamp,
+      timestamp: seg.timestamp || seg.ts_display,
       is_local: seg.is_local || false,
       uncertain: seg.uncertain || false,
       uncertain_reason: seg.uncertain_reason || "",
@@ -1096,7 +1096,15 @@ export function handleTranscriptHistory(data) {
     state.transcriptLines = state.transcriptLines.slice(-constants.MAX_TRANSCRIPT_LINES);
   }
 
-  updateTranscriptUI();
+  // Re-render using the appropriate platform renderer
+  if (isJitsiPlatform()) {
+    clearVas3kTranscript();
+    for (const line of state.transcriptLines) {
+      addVas3kTranscriptLine(line);
+    }
+  } else {
+    updateTranscriptUI();
+  }
 
   window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
     detail: { transcriptLines: state.transcriptLines.slice() }
@@ -1107,7 +1115,11 @@ export function handleNewMeeting(data) {
   console.log('[KTalk Transcript] New meeting:', data.meeting_id);
 
   state.transcriptLines = [];
-  updateTranscriptUI();
+  if (isJitsiPlatform()) {
+    clearVas3kTranscript();
+  } else {
+    updateTranscriptUI();
+  }
 
   window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
     detail: { transcriptLines: [] }
@@ -1148,9 +1160,14 @@ export function handleTranscript(data) {
         for (const lineEl of content.querySelectorAll('.jitsi-transcript-line')) {
           const speakerEl = lineEl.querySelector('.jitsi-transcript-speaker');
           const textEl = lineEl.querySelector('.jitsi-transcript-text');
+          const rawText = textEl ? textEl.textContent.replace(/ \(\?\)$/, '').replace(/ \(🔇\?\)$/, '').trim() : '';
           if (speakerEl && speakerEl.textContent === 'Unknown' &&
-              textEl && textEl.textContent.trim() === text) {
+              textEl && rawText === text &&
+              (!timestamp || lineEl.dataset.timestamp === timestamp)) {
             speakerEl.textContent = speaker;
+            // Remove uncertainty markers from corrected line
+            textEl.classList.remove('jitsi-transcript-uncertain');
+            textEl.textContent = rawText;
             break;
           }
         }
