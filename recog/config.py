@@ -54,7 +54,7 @@ LAST_SPEAKER_TTL = 10.0
 SILENCE_SPLIT_TIMEOUT = 10 * 60  # 10 minutes
 
 # Имя спикера для микрофонного входа (live transcription)
-MIC_SPEAKER_NAME = os.environ.get("MIC_SPEAKER_NAME", "Me")
+MIC_SPEAKER_NAME = os.environ.get("MIC_SPEAKER_NAME", "").strip() or "Me"
 
 # Путь к venv для pyannote 4.x
 PYANNOTE4_VENV = Path(__file__).parent.parent / "venv-pyannote"
