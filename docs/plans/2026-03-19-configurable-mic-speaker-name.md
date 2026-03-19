@@ -37,10 +37,10 @@
 - [x] Run `python mp4_notes.py --help` — verify `--mic-speaker-name` help shows new default
 
 ### Task 3: Verify acceptance criteria
-- [ ] Verify `--mic-speaker-name` CLI arg still overrides the env var
-- [ ] Verify existing meetings with "Me" are unaffected (read-only data)
-- [ ] Run `python -m compileall recog frontend` — must pass
-- [ ] Run `python mp4_notes.py --help` — CLI smoke test
+- [x] Verify `--mic-speaker-name` CLI arg still overrides the env var
+- [x] Verify existing meetings with "Me" are unaffected (read-only data)
+- [x] Run `python -m compileall recog frontend` — must pass
+- [x] Run `python mp4_notes.py --help` — CLI smoke test
 
 ## Technical Details
 - `MIC_SPEAKER_NAME` env var → `recog/config.py` constant → used as default in CLI and pipeline
