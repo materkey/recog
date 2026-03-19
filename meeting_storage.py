@@ -580,7 +580,7 @@ class MeetingStorage:
         uncertain: bool = False,
         uncertain_reason: str = "",
         audio_offset_ms: int = 0
-    ):
+    ) -> int:
         """
         Добавить сегмент в текущую встречу.
 
@@ -593,6 +593,9 @@ class MeetingStorage:
             uncertain: True если неуверены в спикере
             uncertain_reason: Причина неуверенности ("local", "mics_off")
             audio_offset_ms: Offset from audio recording start in milliseconds
+
+        Returns:
+            Segment ID of the appended segment
         """
         if not self.current_meeting_path:
             # Нет активной встречи - создать orphan
@@ -663,6 +666,57 @@ class MeetingStorage:
                     meta["participants"][speaker_id]["name"] = speaker
 
             self._save_json(meta_path, meta)
+
+        return segment_id
+
+    def update_segments(
+        self,
+        updates: list[dict],
+    ):
+        """
+        Update speaker attribution for existing segments in JSONL.
+
+        Rewrites transcript.jsonl lines matching segment IDs with new speaker info.
+        Used by retroactive correction to fix Unknown runs.
+
+        Args:
+            updates: List of dicts with keys:
+                - segment_id (int): ID of the segment to update
+                - speaker (str): New speaker name
+                - uncertain (bool): New uncertain flag
+                - uncertain_reason (str): New reason (empty if corrected)
+        """
+        if not self.current_meeting_path or not updates:
+            return
+
+        with self._segment_lock:
+            transcript_path = self.current_meeting_path / "transcript.jsonl"
+            if not transcript_path.exists():
+                return
+
+            # Build lookup: segment_id -> update
+            update_map = {u["segment_id"]: u for u in updates}
+
+            # Rewrite JSONL with corrections
+            lines = transcript_path.read_text(encoding="utf-8").strip().split("\n")
+            new_lines = []
+            for line in lines:
+                if not line:
+                    continue
+                try:
+                    segment = json.loads(line)
+                    seg_id = segment.get("id")
+                    if seg_id in update_map:
+                        upd = update_map[seg_id]
+                        segment["speaker"] = upd["speaker"]
+                        segment["speaker_id"] = upd["speaker"]
+                        segment["uncertain"] = upd.get("uncertain", False)
+                        segment["uncertain_reason"] = upd.get("uncertain_reason", "")
+                    new_lines.append(json.dumps(segment, ensure_ascii=False))
+                except json.JSONDecodeError:
+                    new_lines.append(line)
+
+            transcript_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
     def _append_system_event(self, event_type: str, message: str):
         """

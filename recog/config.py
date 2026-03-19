@@ -53,6 +53,11 @@ LAST_SPEAKER_TTL = 10.0
 # Если 10 минут без распознанного текста — при следующей реплике создаётся новый митинг
 SILENCE_SPLIT_TIMEOUT = 10 * 60  # 10 minutes
 
+# Retroactive correction: when a speaker is identified after an Unknown run,
+# scan backwards and re-attribute Unknown segments to the identified speaker.
+RETROACTIVE_MAX_SEGMENTS = 20   # Max segments to scan backwards
+RETROACTIVE_MAX_SECONDS = 60.0  # Max time window for retroactive correction
+
 # Имя спикера для микрофонного входа (live transcription)
 MIC_SPEAKER_NAME = os.environ.get("MIC_SPEAKER_NAME", "").strip() or "Me"
 

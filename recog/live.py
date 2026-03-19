@@ -13,7 +13,12 @@ from typing import Optional
 import numpy as np
 import torch
 
-from .config import SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT, LAST_SPEAKER_TTL, MIC_SPEAKER_NAME
+from collections import deque
+from dataclasses import dataclass
+
+from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
+                     LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
+                     RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS)
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
 
@@ -263,6 +268,18 @@ class LiveAudioCapture:
         SingleDeviceCapture.list_devices()
 
 
+@dataclass
+class RecentSegment:
+    """Tracks a recent system-audio segment for retroactive correction."""
+    speaker: str
+    chunk_time: float
+    line_idx: int                # Index in transcript_lines
+    meeting_segment_id: int      # Segment ID in MeetingStorage JSONL
+    is_local: bool
+    timestamp_display: str       # HH:MM:SS for extension correction
+    text: str                    # Original text for extension correction
+
+
 class LiveTranscriber:
     """Координатор live транскрипции."""
 
@@ -334,6 +351,9 @@ class LiveTranscriber:
         self._draft_segments = {}  # segment_id -> {'lines': [...], 'speaker': str, 'start_time': float, 'chunks': [...]}
         self._current_segment_id = None
         self._current_segment_start_time = None  # Python timestamp начала текущего сегмента
+
+        # Recent system-audio segments for retroactive correction of Unknown runs
+        self._recent_system_segments: deque[RecentSegment] = deque(maxlen=RETROACTIVE_MAX_SEGMENTS)
 
         # Audio recording for on-demand diarization
         self._wav_writer_mic: Optional[IncrementalWavWriter] = None
@@ -447,6 +467,67 @@ class LiveTranscriber:
             # get_current_speaker уже включает "память" о последнем спикере (3 сек)
             return self._ktalk_bridge.get_current_speaker()
         return self._ktalk_current_speaker
+
+    def _retroactive_correct_unknown_run(self, identified_speaker: str, current_time: float):
+        """
+        Scan backwards through recent system-audio segments and re-attribute
+        consecutive Unknown segments to the newly identified speaker.
+
+        Stops at: named speaker, is_local=True, max segments, or max time window.
+        """
+        segments = list(self._recent_system_segments)
+        # Last element is the current (already identified) segment — skip it
+        to_correct = []
+        for seg in reversed(segments[:-1]):
+            if seg.speaker != "Unknown":
+                break
+            if seg.is_local:
+                break
+            if (current_time - seg.chunk_time) > RETROACTIVE_MAX_SECONDS:
+                break
+            to_correct.append(seg)
+
+        if not to_correct:
+            return
+
+        # Update in-memory transcript_lines
+        for seg in to_correct:
+            if seg.line_idx < len(self.transcript_lines):
+                old_line = self.transcript_lines[seg.line_idx]
+                new_line = old_line.replace("**Unknown**", f"**{identified_speaker}**", 1)
+                self.transcript_lines[seg.line_idx] = new_line
+
+            # Update the segment record itself
+            seg.speaker = identified_speaker
+
+        # Update MeetingStorage JSONL
+        if self._meeting_storage:
+            updates = [
+                {
+                    "segment_id": seg.meeting_segment_id,
+                    "speaker": identified_speaker,
+                    "uncertain": False,
+                    "uncertain_reason": "",
+                }
+                for seg in to_correct
+                if seg.meeting_segment_id > 0
+            ]
+            if updates:
+                self._meeting_storage.update_segments(updates)
+
+        # Send corrections to Chrome extension
+        if self._ktalk_bridge:
+            for seg in to_correct:
+                self._ktalk_bridge.send_transcript(
+                    identified_speaker,
+                    seg.text,
+                    seg.timestamp_display,
+                    is_continuation=False,
+                    is_local=False,
+                    uncertain=False,
+                    uncertain_reason="",
+                    correction=True,
+                )
 
     def _add_to_audio_buffer(self, timestamp: float, audio_chunk: np.ndarray):
         """Добавляет аудио в буфер для последующей перетранскрипции."""
@@ -928,8 +1009,9 @@ class LiveTranscriber:
                     self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation, is_local=is_local, uncertain=uncertain, uncertain_reason=uncertain_reason)
 
                     # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
+                    meeting_seg_id = 0
                     if self._meeting_storage and self._meeting_generation == chunk_gen:
-                        self._meeting_storage.append_segment(
+                        meeting_seg_id = self._meeting_storage.append_segment(
                             speaker=speaker,
                             speaker_id=speaker,  # Используем имя как ID для KTalk
                             text=text,
@@ -939,6 +1021,22 @@ class LiveTranscriber:
                             uncertain_reason=uncertain_reason,
                             audio_offset_ms=state.audio_offset
                         )
+
+                    # Track segment for retroactive correction
+                    self._recent_system_segments.append(RecentSegment(
+                        speaker=speaker,
+                        chunk_time=chunk_time,
+                        line_idx=len(self.transcript_lines) - 1,
+                        meeting_segment_id=meeting_seg_id,
+                        is_local=False,
+                        timestamp_display=timestamp,
+                        text=text,
+                    ))
+
+                    # Retroactive correction: if we just identified a speaker
+                    # after a run of Unknown segments, correct them backwards
+                    if speaker != "Unknown" and len(self._recent_system_segments) >= 2:
+                        self._retroactive_correct_unknown_run(speaker, chunk_time)
 
             elif self.no_diarization:
                 # Markdown формат: **Speaker** *[HH:MM:SS]*: text
@@ -1058,6 +1156,7 @@ class LiveTranscriber:
         """
         with self._state_lock:
             self._meeting_generation += 1
+            self._recent_system_segments.clear()
             if hasattr(self, '_mic_state'):
                 for state in (self._mic_state, self._sys_state):
                     for pending in state.pending_updates:
