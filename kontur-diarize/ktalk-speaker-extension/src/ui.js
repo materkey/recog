@@ -1140,8 +1140,31 @@ export function handleTranscript(data) {
       state.transcriptLines[idx].uncertain = uncertain || false;
       state.transcriptLines[idx].uncertain_reason = uncertain_reason || '';
     }
-    // If not found (already scrolled out), just ignore
-  } else if (is_continuation && state.transcriptLines.length > 0) {
+    // Re-render UI for correction (don't fall through to append which would duplicate)
+    if (isJitsiPlatform()) {
+      // Find the DOM element with Unknown speaker matching this text and update in place
+      const content = document.querySelector('.jitsi-transcript-content');
+      if (content) {
+        for (const lineEl of content.querySelectorAll('.jitsi-transcript-line')) {
+          const speakerEl = lineEl.querySelector('.jitsi-transcript-speaker');
+          const textEl = lineEl.querySelector('.jitsi-transcript-text');
+          if (speakerEl && speakerEl.textContent === 'Unknown' &&
+              textEl && textEl.textContent.trim() === text) {
+            speakerEl.textContent = speaker;
+            break;
+          }
+        }
+      }
+    } else {
+      updateTranscriptUI();
+    }
+    window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
+      detail: { transcriptLines: state.transcriptLines.slice() }
+    }));
+    return;
+  }
+
+  if (is_continuation && state.transcriptLines.length > 0) {
     state.transcriptLines[state.transcriptLines.length - 1].text += ' ' + text;
   } else {
     state.transcriptLines.push(newLine);
