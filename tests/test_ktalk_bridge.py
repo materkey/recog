@@ -6,7 +6,7 @@ from unittest.mock import Mock, AsyncMock
 import sys
 sys.path.insert(0, '/Users/vkkovalev/projects/recog')
 
-from ktalk_bridge import KTalkBridge
+from ktalk_bridge import KTalkBridge, Participant
 
 
 class FakeWebSocket:
@@ -112,3 +112,63 @@ async def test_meeting_not_ended_if_other_clients_connected():
 
     # Cleanup
     bridge._connected_clients.discard(other_client)
+
+
+# --- get_sole_unmuted_remote_participant tests ---
+
+def test_sole_unmuted_remote_participant_one_unmuted_returns_name():
+    """
+    given: 3 remote participants, exactly 1 with mic unmuted
+    when: get_sole_unmuted_remote_participant called
+    then: returns that participant's name
+    """
+    bridge = KTalkBridge()
+    bridge._participants = {
+        "p1": Participant(id="p1", name="Alice", is_local=False, mic_muted=True),
+        "p2": Participant(id="p2", name="Bob", is_local=False, mic_muted=False),
+        "p3": Participant(id="p3", name="Carol", is_local=False, mic_muted=True),
+    }
+    assert bridge.get_sole_unmuted_remote_participant() == "Bob"
+
+
+def test_sole_unmuted_remote_participant_zero_unmuted_returns_none():
+    """
+    given: 2 remote participants, all muted
+    when: get_sole_unmuted_remote_participant called
+    then: returns None
+    """
+    bridge = KTalkBridge()
+    bridge._participants = {
+        "p1": Participant(id="p1", name="Alice", is_local=False, mic_muted=True),
+        "p2": Participant(id="p2", name="Bob", is_local=False, mic_muted=True),
+    }
+    assert bridge.get_sole_unmuted_remote_participant() is None
+
+
+def test_sole_unmuted_remote_participant_two_unmuted_returns_none():
+    """
+    given: 3 remote participants, 2 with mic unmuted
+    when: get_sole_unmuted_remote_participant called
+    then: returns None (ambiguous - can't determine who is speaking)
+    """
+    bridge = KTalkBridge()
+    bridge._participants = {
+        "p1": Participant(id="p1", name="Alice", is_local=False, mic_muted=False),
+        "p2": Participant(id="p2", name="Bob", is_local=False, mic_muted=False),
+        "p3": Participant(id="p3", name="Carol", is_local=False, mic_muted=True),
+    }
+    assert bridge.get_sole_unmuted_remote_participant() is None
+
+
+def test_sole_unmuted_remote_participant_local_excluded():
+    """
+    given: 1 local participant unmuted + 0 remote unmuted
+    when: get_sole_unmuted_remote_participant called
+    then: returns None (local participant is excluded)
+    """
+    bridge = KTalkBridge()
+    bridge._participants = {
+        "p1": Participant(id="p1", name="Me", is_local=True, mic_muted=False),
+        "p2": Participant(id="p2", name="Alice", is_local=False, mic_muted=True),
+    }
+    assert bridge.get_sole_unmuted_remote_participant() is None
