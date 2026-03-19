@@ -222,6 +222,8 @@ class CodexCliProvider(AIProvider):
 
     @property
     def name(self) -> str:
+        if "spark" in self.model:
+            return f"Codex ({self.model})"
         return f"Codex ({self.model} {self.reasoning_effort})"
 
     async def complete(self, prompt: str) -> str:
