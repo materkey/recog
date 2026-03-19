@@ -49,13 +49,13 @@
 - [x] Run `python -m compileall recog ktalk_bridge.py` — must pass
 
 ### Task 2: Wire unmuted fallback into live.py speaker assignment
-- [ ] In `recog/live.py:854-878`, after `get_dominant_speaker_for_period` and `get_current_speaker` both return None, add new fallback tier: call `self._ktalk_bridge.get_sole_unmuted_remote_participant()`
-- [ ] Only use this fallback when `self.use_ktalk` is True and bridge is connected
-- [ ] Mark segments from this fallback with `uncertain=True, uncertain_reason="sole_unmuted_fallback"` for transparency
-- [ ] Update speaker assignment to: ktalk_speaker → last_speaker TTL → sole_unmuted → "Unknown"
-- [ ] Add test: sole unmuted fallback is used when dominant/current/TTL all fail
-- [ ] Add test: sole unmuted fallback is NOT used when 2+ unmuted (still Unknown)
-- [ ] Run `python -m compileall recog` — must pass
+- [x] In `recog/live.py:854-878`, after `get_dominant_speaker_for_period` and `get_current_speaker` both return None, add new fallback tier: call `self._ktalk_bridge.get_sole_unmuted_remote_participant()`
+- [x] Only use this fallback when `self.use_ktalk` is True and bridge is connected
+- [x] Mark segments from this fallback with `uncertain=True, uncertain_reason="sole_unmuted_fallback"` for transparency
+- [x] Update speaker assignment to: ktalk_speaker → last_speaker TTL → sole_unmuted → "Unknown"
+- [x] Add test: sole unmuted fallback is used when dominant/current/TTL all fail
+- [x] Add test: sole unmuted fallback is NOT used when 2+ unmuted (still Unknown)
+- [x] Run `python -m compileall recog` — must pass
 
 ### Task 3: Retroactive correction of Unknown runs
 - [ ] In `recog/live.py`, when a system-audio chunk gets a positive speaker identification after an Unknown run, scan backwards through recent transcript/meeting segments
