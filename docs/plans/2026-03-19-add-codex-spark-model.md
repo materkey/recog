@@ -36,8 +36,8 @@
 - [x] Add `<option value="codex:gpt-5.3-codex-spark">Codex Spark</option>` to summary modal `<select>` in `src/ui-vas3k.js` (~line 666, after GPT-4.1)
 
 ### Task 3: Fix ktalk_bridge.py — skip reasoning effort for spark
-- [ ] In `_call_codex_cli()`, conditionally skip `-c model_reasoning_effort=xhigh` when model contains "spark"
-- [ ] Verify other codex models still get reasoning effort flag
+- [x] In `_call_codex_cli()`, conditionally skip `-c model_reasoning_effort=xhigh` when model contains "spark"
+- [x] Verify other codex models still get reasoning effort flag
 
 ### Task 4: Update tests
 - [ ] Update `ui-vas3k.test.js` — add assertion for spark option in model selector
