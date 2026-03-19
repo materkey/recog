@@ -40,8 +40,8 @@
 - [x] Verify other codex models still get reasoning effort flag
 
 ### Task 4: Update tests
-- [ ] Update `ui-vas3k.test.js` — add assertion for spark option in model selector
-- [ ] Run `npm test` in extension directory — must pass
+- [x] Update `ui-vas3k.test.js` — add assertion for spark option in model selector
+- [x] Run `npm test` in extension directory — must pass
 
 ### Task 5: Build and verify
 - [ ] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension/`
