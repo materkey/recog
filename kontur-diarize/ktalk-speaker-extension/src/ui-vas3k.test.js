@@ -429,6 +429,7 @@ describe('Model Selector Feature', () => {
 
       const values = Array.from(options).map(o => o.value);
       expect(values).toContain('codex');
+      expect(values).toContain('codex:gpt-5.3-codex-spark');
       expect(values).toContain('claude:opus');
     });
 
