@@ -866,6 +866,8 @@ class LiveTranscriber:
                 # иначе сбрасываем на Unknown чтобы избежать каскадной ошибочной атрибуции.
                 # Дополнительно: если last_speaker замьютил микрофон — не переиспользуем его,
                 # т.к. скорее всего говорит уже кто-то другой.
+                # Fallback chain: ktalk_speaker → last_speaker TTL → sole_unmuted → Unknown
+                sole_unmuted_fallback = False
                 if ktalk_speaker:
                     speaker = ktalk_speaker
                     no_speaker_yet = False
@@ -874,6 +876,10 @@ class LiveTranscriber:
                       and not (self._ktalk_bridge and self._ktalk_bridge.is_speaker_muted(state.last_speaker))):
                     speaker = state.last_speaker
                     no_speaker_yet = False
+                elif self._ktalk_bridge and (sole_unmuted := self._ktalk_bridge.get_sole_unmuted_remote_participant()):
+                    speaker = sole_unmuted
+                    no_speaker_yet = False
+                    sole_unmuted_fallback = True
                 else:
                     speaker = "Unknown"
                     no_speaker_yet = True
@@ -903,18 +909,21 @@ class LiveTranscriber:
                     all_mics_muted = self._ktalk_bridge.are_all_mics_muted()
 
                     # Определяем неопределённость и её причину
-                    # Приоритет: no_speaker > all_mics_muted > is_local
+                    # Приоритет: no_speaker > sole_unmuted_fallback > all_mics_muted
                     uncertain = False
                     uncertain_reason = ""
                     if no_speaker_yet:
                         # Ещё не было информации о спикере от extension
                         uncertain = True
                         uncertain_reason = "no_speaker"
+                    elif sole_unmuted_fallback:
+                        # Speaker inferred from sole unmuted participant, not confirmed by Jitsi
+                        uncertain = True
+                        uncertain_reason = "sole_unmuted_fallback"
                     elif all_mics_muted:
                         # Все микрофоны выключены - непонятно кто говорит
                         uncertain = True
                         uncertain_reason = "mics_off"
-                    # Removed: elif is_local - system audio is always remote
 
                     self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation, is_local=is_local, uncertain=uncertain, uncertain_reason=uncertain_reason)
 
