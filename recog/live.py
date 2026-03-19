@@ -928,10 +928,23 @@ class LiveTranscriber:
                         audio_offset_ms=state.audio_offset
                     )
 
-            # Системный звук: диаризация
+            # System audio: speaker attribution via KTalk extension
             elif self.use_ktalk:
-                # KTalk mode: используем данные от Chrome extension
-                # Используем time-window dominant speaker вместо point-in-time запроса
+                # Speaker assignment fallback chain (see ADR / plan for rationale):
+                #
+                #   1. dominant_speaker_for_period — time-window voting from Jitsi events
+                #   2. get_current_speaker — point-in-time with 3 s memory
+                #   3. last_speaker TTL — reuse recent speaker if <10 s and not muted
+                #   4. sole_unmuted_remote — exactly 1 remote mic on → likely speaker
+                #      (marked uncertain; avoids false attribution when 2+ are unmuted)
+                #   5. "Unknown" — no attribution possible
+                #
+                # Why sole_unmuted fallback exists: Jitsi's _activeSpeaker$ event lags
+                # 1-5 s behind actual speech. When Speaker A mutes and Speaker B starts,
+                # the extension filters out stale A (muted) but Jitsi hasn't switched to
+                # B yet, leaving a gap with no positive signal. If only B is unmuted, we
+                # can safely attribute speech to B. Remaining edge cases are caught by
+                # retroactive correction (see _retroactive_correct_unknown_run).
                 ktalk_speaker = None
                 if self._ktalk_bridge:
                     ktalk_speaker = self._ktalk_bridge.get_dominant_speaker_for_period(
@@ -941,13 +954,6 @@ class LiveTranscriber:
                         ktalk_speaker = self._ktalk_bridge.get_current_speaker()
                 else:
                     ktalk_speaker = self._ktalk_current_speaker
-
-                # Используем спикера от extension, или последнего известного из транскрипции
-                # TTL: last_speaker используется только если речь была недавно,
-                # иначе сбрасываем на Unknown чтобы избежать каскадной ошибочной атрибуции.
-                # Дополнительно: если last_speaker замьютил микрофон — не переиспользуем его,
-                # т.к. скорее всего говорит уже кто-то другой.
-                # Fallback chain: ktalk_speaker → last_speaker TTL → sole_unmuted → Unknown
                 sole_unmuted_fallback = False
                 if ktalk_speaker:
                     speaker = ktalk_speaker

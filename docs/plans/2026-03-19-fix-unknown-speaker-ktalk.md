@@ -79,8 +79,8 @@
 - [x] Run `python mp4_notes.py --help` — CLI smoke test
 
 ### Task 5: [Final] Update documentation
-- [ ] Update CLAUDE.md if new patterns discovered
-- [ ] Add inline code comments explaining the fallback chain
+- [x] Update CLAUDE.md if new patterns discovered
+- [x] Add inline code comments explaining the fallback chain
 
 *Note: ralphex automatically moves completed plans to `docs/plans/completed/`*
 
