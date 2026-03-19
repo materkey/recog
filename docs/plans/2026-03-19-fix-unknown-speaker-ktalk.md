@@ -58,16 +58,16 @@
 - [x] Run `python -m compileall recog` — must pass
 
 ### Task 3: Retroactive correction of Unknown runs
-- [ ] In `recog/live.py`, when a system-audio chunk gets a positive speaker identification after an Unknown run, scan backwards through recent transcript/meeting segments
-- [ ] Re-attribute preceding consecutive "Unknown" segments (same `is_local=False`) to the newly identified speaker
-- [ ] Limit retroactive window: max 20 segments or 60 seconds, whichever is smaller
-- [ ] Update meeting storage (JSONL) for corrected segments via `MeetingStorage` update method
-- [ ] Update in-memory `transcript_lines` for corrected segments
-- [ ] Send correction to Chrome extension via `_ktalk_bridge.send_transcript()` with a correction flag
-- [ ] Add test: Unknown run followed by identified speaker → all Unknown segments corrected
-- [ ] Add test: retroactive correction respects max window limit
-- [ ] Add test: correction doesn't cross meeting boundaries
-- [ ] Run `python -m compileall recog` — must pass
+- [x] In `recog/live.py`, when a system-audio chunk gets a positive speaker identification after an Unknown run, scan backwards through recent transcript/meeting segments
+- [x] Re-attribute preceding consecutive "Unknown" segments (same `is_local=False`) to the newly identified speaker
+- [x] Limit retroactive window: max 20 segments or 60 seconds, whichever is smaller
+- [x] Update meeting storage (JSONL) for corrected segments via `MeetingStorage` update method
+- [x] Update in-memory `transcript_lines` for corrected segments
+- [x] Send correction to Chrome extension via `_ktalk_bridge.send_transcript()` with a correction flag
+- [x] Add test: Unknown run followed by identified speaker → all Unknown segments corrected
+- [x] Add test: retroactive correction respects max window limit
+- [x] Add test: correction doesn't cross meeting boundaries
+- [x] Run `python -m compileall recog` — must pass
 
 ### Task 4: Verify acceptance criteria
 - [ ] Verify KTalk meeting scenario: speaker switch with mute → no Unknown run (sole unmuted fallback)
