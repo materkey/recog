@@ -228,12 +228,12 @@ class CodexCliProvider(AIProvider):
         import json as json_module
 
         # Codex exec expects prompt via stdin when using "-"
+        cmd = [self._cli, "exec", "-m", self.model]
+        if "spark" not in self.model:
+            cmd += ["-c", f"model_reasoning_effort=\"{self.reasoning_effort}\""]
+        cmd += ["--json", "-"]
         proc = await asyncio.create_subprocess_exec(
-            self._cli, "exec",
-            "-m", self.model,
-            "-c", f"model_reasoning_effort=\"{self.reasoning_effort}\"",
-            "--json",
-            "-",
+            *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
@@ -269,12 +269,12 @@ class CodexCliProvider(AIProvider):
         """Stream Codex CLI response."""
         import json as json_module
 
+        cmd = [self._cli, "exec", "-m", self.model]
+        if "spark" not in self.model:
+            cmd += ["-c", f"model_reasoning_effort=\"{self.reasoning_effort}\""]
+        cmd += ["--json", "-"]
         proc = await asyncio.create_subprocess_exec(
-            self._cli, "exec",
-            "-m", self.model,
-            "-c", f"model_reasoning_effort=\"{self.reasoning_effort}\"",
-            "--json",
-            "-",
+            *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
