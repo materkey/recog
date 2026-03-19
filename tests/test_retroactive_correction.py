@@ -7,7 +7,7 @@ from collections import deque
 from unittest.mock import Mock, MagicMock, patch, call
 
 import sys
-sys.path.insert(0, '/Users/vkkovalev/projects/recog')
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recog.live import RecentSegment, RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS
 from meeting_storage import MeetingStorage
@@ -296,7 +296,7 @@ def test_retroactive_correction_clears_on_meeting_change():
     then: _recent_system_segments is empty (correction doesn't cross meetings)
     """
     # Verify that the source code clears _recent_system_segments on meeting change
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
 
     # The clearing must happen where _meeting_generation is incremented

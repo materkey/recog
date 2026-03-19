@@ -3,7 +3,7 @@ import pytest
 from pathlib import Path
 import sys
 
-sys.path.insert(0, '/Users/vkkovalev/projects/recog')
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from unittest.mock import Mock
 from ktalk_bridge import KTalkBridge, Participant
@@ -17,7 +17,7 @@ def test_system_audio_uses_is_local_false():
     1. The buggy pattern is NOT present
     2. The fix is in place
     """
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
 
     # The bug was: is_local = self._ktalk_bridge.is_current_speaker_local()
@@ -35,7 +35,7 @@ def test_no_uncertain_local_reason_for_system_audio():
     The old code marked system audio as uncertain when is_local was True.
     Since system audio is always remote, this logic is no longer needed.
     """
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
 
     # The old buggy pattern that marked system audio as uncertain
@@ -54,7 +54,7 @@ def test_sole_unmuted_fallback_in_speaker_assignment_chain():
     when: source code is examined
     then: sole_unmuted fallback tier exists between last_speaker TTL and Unknown
     """
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
 
     # The fallback chain must include sole unmuted participant check

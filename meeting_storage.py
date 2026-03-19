@@ -716,7 +716,9 @@ class MeetingStorage:
                 except json.JSONDecodeError:
                     new_lines.append(line)
 
-            transcript_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            tmp_path = transcript_path.with_suffix(".jsonl.tmp")
+            tmp_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            os.replace(str(tmp_path), str(transcript_path))
 
     def _append_system_event(self, event_type: str, message: str):
         """

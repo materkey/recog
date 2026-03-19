@@ -16,7 +16,7 @@ from collections import deque
 from unittest.mock import Mock, MagicMock, patch
 
 import sys
-sys.path.insert(0, '/Users/vkkovalev/projects/recog')
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ktalk_bridge import KTalkBridge, Participant
 from recog.live import RecentSegment, RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS
@@ -222,7 +222,7 @@ def test_orphan_meeting_no_sole_unmuted_check():
     when: examining the system audio path
     then: sole_unmuted fallback only fires in KTalk mode (self.use_ktalk)
     """
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
     lines = source.split('\n')
 
@@ -259,7 +259,7 @@ def test_orphan_meeting_no_retroactive_correction():
     when: examining retroactive correction trigger
     then: it only fires in the KTalk system audio block (not in orphan/async diarization path)
     """
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
     lines = source.split('\n')
 
@@ -298,7 +298,7 @@ def test_mic_speaker_path_unchanged():
     when: examining the mic (is_mic=True) path
     then: mic speaker is always mic_speaker_name, no sole_unmuted or retroactive correction
     """
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
 
     # The mic path is `if is_mic:` — verify sole_unmuted is NOT in mic path
@@ -345,13 +345,15 @@ def test_local_participant_excluded_from_sole_unmuted():
 
 def test_correction_flag_in_send_transcript():
     """
-    given: send_transcript method signature
-    when: correction=True is passed
-    then: the JSON message includes correction: true
+    given: KTalkBridge with a connected client
+    when: send_transcript is called with correction=True
+    then: the actual JSON message sent to the client includes correction: true
     """
+    import asyncio
+
     bridge = KTalkBridge()
-    # Capture the message without actual WebSocket
-    bridge._loop = Mock()
+    loop = Mock()
+    bridge._loop = loop
     mock_client = Mock()
     bridge._connected_clients = {mock_client}
 
@@ -362,25 +364,36 @@ def test_correction_flag_in_send_transcript():
         correction=True
     )
 
-    # The message should have been sent
-    # Since we mocked the loop, check run_coroutine_threadsafe was called
-    assert bridge._loop.call_count >= 0  # Loop is mocked
+    # Capture the actual message that was passed to asyncio.run_coroutine_threadsafe
+    assert loop.call_count == 0  # loop itself isn't called, run_coroutine_threadsafe is
 
-    # Verify message content by checking the method directly
-    import asyncio
-    msg = json.dumps({
-        "type": "transcript",
-        "speaker": "Alice",
-        "text": "hello",
-        "timestamp": "12:00:00",
-        "is_continuation": False,
-        "is_local": False,
-        "uncertain": False,
-        "uncertain_reason": "",
-        "correction": True
-    })
-    parsed = json.loads(msg)
-    assert parsed["correction"] is True
+    # The bridge calls asyncio.run_coroutine_threadsafe(client.send(message), loop)
+    # Since we mocked the loop, the coroutine was created but not awaited.
+    # Verify by checking that client.send was prepared with the correct message.
+    # asyncio.run_coroutine_threadsafe is a module-level function, so let's
+    # verify the message directly by inspecting what json.dumps produced
+    # via the bridge's internal logic.
+    #
+    # Re-invoke with a patched json.dumps to capture the actual message:
+    captured_messages = []
+    original_dumps = json.dumps
+    def capturing_dumps(obj, **kwargs):
+        captured_messages.append(obj)
+        return original_dumps(obj, **kwargs)
+
+    with patch('ktalk_bridge.json.dumps', side_effect=capturing_dumps):
+        bridge.send_transcript(
+            "Alice", "hello", "12:00:00",
+            is_continuation=False, is_local=False,
+            uncertain=False, uncertain_reason="",
+            correction=True
+        )
+
+    assert len(captured_messages) == 1
+    msg = captured_messages[0]
+    assert msg["type"] == "transcript"
+    assert msg["speaker"] == "Alice"
+    assert msg["correction"] is True
 
 
 def test_fallback_chain_order_in_source():
@@ -389,7 +402,7 @@ def test_fallback_chain_order_in_source():
     when: examining the speaker assignment chain in KTalk mode
     then: order is: dominant → current → last_speaker TTL → sole_unmuted → Unknown
     """
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
 
     # Find the KTalk speaker assignment block (starts with the comment about fallback chain)
@@ -414,7 +427,7 @@ def test_meeting_boundary_clears_recent_segments():
     when: meeting changes (_meeting_generation incremented)
     then: _recent_system_segments is cleared (prevents cross-meeting correction)
     """
-    live_py_path = Path('/Users/vkkovalev/projects/recog/recog/live.py')
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
     source = live_py_path.read_text()
 
     # Both must be present
