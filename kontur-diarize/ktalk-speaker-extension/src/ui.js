@@ -1299,6 +1299,7 @@ function getAnchorModelOptions() {
   return [
     { value: 'codex', label: 'Codex (GPT-5.4)' },
     { value: 'codex:gpt-4.1', label: 'Codex (GPT-4.1)' },
+    { value: 'codex:gpt-5.3-codex-spark', label: 'Codex Spark' },
     { value: 'claude:opus', label: 'Claude Opus' },
     { value: 'claude:sonnet', label: 'Claude Sonnet' },
     { value: 'gemini-3-pro-preview', label: 'Gemini 3.0 Pro' },

@@ -28,9 +28,9 @@
 ## Implementation Steps
 
 ### Task 1: Add Codex Spark to ui.js model lists
-- [ ] Add `{ value: 'codex:gpt-5.3-codex-spark', label: 'Codex Spark' }` to `getAnchorModelOptions()` in `src/ui.js` (after the GPT-4.1 entry)
-- [ ] Add matching `<option>` to summary modal `<select>` HTML in `src/ui.js` (~line 1652)
-- [ ] Verify both selectors render the new option
+- [x] Add `{ value: 'codex:gpt-5.3-codex-spark', label: 'Codex Spark' }` to `getAnchorModelOptions()` in `src/ui.js` (after the GPT-4.1 entry)
+- [x] Add matching `<option>` to summary modal `<select>` HTML in `src/ui.js` (~line 1652)
+- [x] Verify both selectors render the new option
 
 ### Task 2: Add Codex Spark to ui-vas3k.js model list
 - [ ] Add `<option value="codex:gpt-5.3-codex-spark">Codex Spark</option>` to summary modal `<select>` in `src/ui-vas3k.js` (~line 666, after GPT-4.1)
