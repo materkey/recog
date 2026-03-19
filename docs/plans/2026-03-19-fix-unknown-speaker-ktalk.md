@@ -70,13 +70,13 @@
 - [x] Run `python -m compileall recog` — must pass
 
 ### Task 4: Verify acceptance criteria
-- [ ] Verify KTalk meeting scenario: speaker switch with mute → no Unknown run (sole unmuted fallback)
-- [ ] Verify multi-speaker scenario: 2+ unmuted → Unknown preserved (no false attribution)
-- [ ] Verify retroactive correction works end-to-end
-- [ ] Verify orphan meetings (no extension) behavior unchanged
-- [ ] Verify mic/local speaker ("Me"/configured name) unaffected
-- [ ] Run `python -m compileall recog frontend ktalk_bridge.py`
-- [ ] Run `python mp4_notes.py --help` — CLI smoke test
+- [x] Verify KTalk meeting scenario: speaker switch with mute → no Unknown run (sole unmuted fallback)
+- [x] Verify multi-speaker scenario: 2+ unmuted → Unknown preserved (no false attribution)
+- [x] Verify retroactive correction works end-to-end
+- [x] Verify orphan meetings (no extension) behavior unchanged
+- [x] Verify mic/local speaker ("Me"/configured name) unaffected
+- [x] Run `python -m compileall recog frontend ktalk_bridge.py`
+- [x] Run `python mp4_notes.py --help` — CLI smoke test
 
 ### Task 5: [Final] Update documentation
 - [ ] Update CLAUDE.md if new patterns discovered
