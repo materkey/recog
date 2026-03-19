@@ -44,8 +44,8 @@
 - [x] Run `npm test` in extension directory — must pass
 
 ### Task 5: Build and verify
-- [ ] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension/`
-- [ ] Verify `injected.js` bundle is regenerated
+- [x] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension/`
+- [x] Verify `injected.js` bundle is regenerated
 
 ## Technical Details
 - Value format: `codex:gpt-5.3-codex-spark` — ktalk_bridge.py splits on `:` and passes `gpt-5.3-codex-spark` to codex CLI
