@@ -679,12 +679,12 @@ class KTalkBridge:
     async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.4") -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
         codex_path = self._find_cli_binary("codex")
+        cmd = [codex_path, "exec", "-m", model]
+        if "spark" not in model:
+            cmd += ["-c", "model_reasoning_effort=xhigh"]
+        cmd += ["--json", "-"]
         proc = await asyncio.create_subprocess_exec(
-            codex_path, "exec",
-            "-m", model,
-            "-c", "model_reasoning_effort=xhigh",
-            "--json",
-            "-",
+            *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
