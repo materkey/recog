@@ -30,11 +30,11 @@
 - [x] Run `python -m compileall recog` — must pass
 
 ### Task 2: Wire config into CLI and live pipeline
-- [ ] In `mp4_notes.py:140`, change default from `"Me"` to `MIC_SPEAKER_NAME` (import from recog)
-- [ ] In `recog/live.py:280`, change `LiveAudioCapture.__init__` default to `None`, use `MIC_SPEAKER_NAME` inside
-- [ ] In `recog/live.py:1135`, change `live_pipeline()` default to `None`, use `MIC_SPEAKER_NAME` inside
-- [ ] Run `python -m compileall recog mp4_notes.py` — must pass
-- [ ] Run `python mp4_notes.py --help` — verify `--mic-speaker-name` help shows new default
+- [x] In `mp4_notes.py:140`, change default from `"Me"` to `MIC_SPEAKER_NAME` (import from recog)
+- [x] In `recog/live.py:280`, change `LiveAudioCapture.__init__` default to `None`, use `MIC_SPEAKER_NAME` inside
+- [x] In `recog/live.py:1135`, change `live_pipeline()` default to `None`, use `MIC_SPEAKER_NAME` inside
+- [x] Run `python -m compileall recog mp4_notes.py` — must pass
+- [x] Run `python mp4_notes.py --help` — verify `--mic-speaker-name` help shows new default
 
 ### Task 3: Verify acceptance criteria
 - [ ] Verify `--mic-speaker-name` CLI arg still overrides the env var
