@@ -988,6 +988,7 @@ class LiveTranscriber:
                 sys.stdout.write(line)
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
+                transcript_line_idx = len(self.transcript_lines) - 1
 
                 # Отправляем транскрипт в Chrome extension
                 # System audio = всегда remote speaker (is_local=False)
@@ -1032,7 +1033,7 @@ class LiveTranscriber:
                     self._recent_system_segments.append(RecentSegment(
                         speaker=speaker,
                         chunk_time=chunk_time,
-                        line_idx=len(self.transcript_lines) - 1,
+                        line_idx=transcript_line_idx,
                         meeting_segment_id=meeting_seg_id,
                         is_local=False,
                         timestamp_display=timestamp,
@@ -1041,7 +1042,9 @@ class LiveTranscriber:
 
                     # Retroactive correction: if we just identified a speaker
                     # after a run of Unknown segments, correct them backwards
-                    if speaker != "Unknown" and len(self._recent_system_segments) >= 2:
+                    if (speaker != "Unknown"
+                            and len(self._recent_system_segments) >= 2
+                            and self._recent_system_segments[-2].speaker == "Unknown"):
                         self._retroactive_correct_unknown_run(speaker, chunk_time)
 
             elif self.no_diarization:

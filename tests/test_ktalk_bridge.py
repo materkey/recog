@@ -1,10 +1,11 @@
 """Tests for ktalk_bridge.py."""
 import asyncio
 import pytest
+from pathlib import Path
 from unittest.mock import Mock, AsyncMock
 
 import sys
-sys.path.insert(0, '/Users/vkkovalev/projects/recog')
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ktalk_bridge import KTalkBridge, Participant
 

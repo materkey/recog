@@ -1115,7 +1115,7 @@ export function handleNewMeeting(data) {
 }
 
 export function handleTranscript(data) {
-  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason } = data;
+  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction } = data;
 
   const newLine = {
     speaker,
@@ -1130,7 +1130,18 @@ export function handleTranscript(data) {
     createdAt: Date.now()
   };
 
-  if (is_continuation && state.transcriptLines.length > 0) {
+  if (correction) {
+    // Retroactive correction: find and update existing Unknown line by timestamp+text
+    const idx = state.transcriptLines.findIndex(
+      line => line.text === text && line.timestamp === timestamp && line.speaker === 'Unknown'
+    );
+    if (idx !== -1) {
+      state.transcriptLines[idx].speaker = speaker;
+      state.transcriptLines[idx].uncertain = uncertain || false;
+      state.transcriptLines[idx].uncertain_reason = uncertain_reason || '';
+    }
+    // If not found (already scrolled out), just ignore
+  } else if (is_continuation && state.transcriptLines.length > 0) {
     state.transcriptLines[state.transcriptLines.length - 1].text += ' ' + text;
   } else {
     state.transcriptLines.push(newLine);

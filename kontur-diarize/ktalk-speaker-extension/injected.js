@@ -4614,7 +4614,7 @@ function handleNewMeeting(data) {
 }
 
 function handleTranscript(data) {
-  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason } = data;
+  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction } = data;
 
   const newLine = {
     speaker,
@@ -4629,7 +4629,18 @@ function handleTranscript(data) {
     createdAt: Date.now()
   };
 
-  if (is_continuation && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length > 0) {
+  if (correction) {
+    // Retroactive correction: find and update existing Unknown line by timestamp+text
+    const idx = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.findIndex(
+      line => line.text === text && line.timestamp === timestamp && line.speaker === 'Unknown'
+    );
+    if (idx !== -1) {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[idx].speaker = speaker;
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[idx].uncertain = uncertain || false;
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[idx].uncertain_reason = uncertain_reason || '';
+    }
+    // If not found (already scrolled out), just ignore
+  } else if (is_continuation && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length > 0) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length - 1].text += ' ' + text;
   } else {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.push(newLine);
