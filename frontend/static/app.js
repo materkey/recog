@@ -59,14 +59,20 @@ const api = {
         return res.json();
     },
 
-    async getIncrements(meetingId) {
-        const res = await fetch(`/api/meetings/${meetingId}/increments`);
+    async getPrompts() {
+        const res = await fetch('/api/prompts');
         if (!res.ok) return [];
         return res.json();
     },
 
-    async getIncrement(meetingId, version) {
-        const res = await fetch(`/api/meetings/${meetingId}/increments/${version}`);
+    async getIncrements(meetingId) {
+        const res = await fetch(`/api/meetings/${meetingId}/increments`);
+        if (!res.ok) return {};
+        return res.json();
+    },
+
+    async getIncrement(meetingId, promptId, version) {
+        const res = await fetch(`/api/meetings/${meetingId}/increments/${encodeURIComponent(promptId)}/${version}`);
         if (!res.ok) return null;
         return res.json();
     }
@@ -1371,16 +1377,22 @@ let aiProviderNames = {};  // Store provider display names
 let activeAiTab = 'claude';
 let aiEventSource = null;
 let incrementPollTimer = null;
+let _incrementState = null;  // {meetingId, incrementsByPrompt, promptNames, currentPromptId, currentVersion}
 
 async function analyzeIncrement() {
     const meeting = views.meeting;
     if (!meeting.id) return;
 
-    // Check for stored increments first
+    // Fetch prompts and stored increments in parallel
     try {
-        const increments = await api.getIncrements(meeting.id);
-        if (increments.length > 0) {
-            showStoredIncrements(meeting.id, increments);
+        const [prompts, increments] = await Promise.all([
+            api.getPrompts(),
+            api.getIncrements(meeting.id)
+        ]);
+
+        const promptIds = Object.keys(increments);
+        if (promptIds.length > 0) {
+            showStoredIncrements(meeting.id, increments, prompts);
             return;
         }
     } catch (e) {
@@ -1450,7 +1462,7 @@ function generateIncrementSSE(meetingId) {
     };
 }
 
-function showStoredIncrements(meetingId, increments) {
+function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
@@ -1460,47 +1472,108 @@ function showStoredIncrements(meetingId, increments) {
         aiEventSource = null;
     }
 
+    // Build prompt name lookup
+    const promptNames = {};
+    (prompts || []).forEach(function(p) { promptNames[p.id] = p.name; });
+
+    const promptIds = Object.keys(incrementsByPrompt);
+    if (promptIds.length === 0) return;
+
     const modal = document.getElementById('ai-modal');
     modal.style.display = 'flex';
 
-    modal.querySelector('.modal-header h3').textContent = 'My Increment';
+    modal.querySelector('.modal-header h3').textContent = 'AI Analysis';
 
-    // Build version tabs — latest version active
-    const latestVersion = increments[increments.length - 1].version;
-    const tabsHtml = increments.map(inc => {
-        const date = new Date(inc.generated_at);
-        const timeStr = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-        const isActive = inc.version === latestVersion ? ' active' : '';
-        const statusIcon = inc.status === 'failed' ? ' !' : inc.status === 'generating' ? ' ...' : '';
-        return '<button class="tab-btn' + isActive + '" data-version="' + inc.version +
-            '" onclick="switchIncrementVersion(\'' + meetingId + '\', ' + inc.version +
-            ')">v' + inc.version + ' <small style="opacity:.6">' + timeStr + '</small>' +
-            statusIcon + '</button>';
+    // Level 1: prompt tabs
+    const promptTabsHtml = promptIds.map(function(pid, i) {
+        var name = promptNames[pid] || pid;
+        var isActive = i === 0 ? ' active' : '';
+        return '<button class="tab-btn' + isActive + '" data-prompt-id="' + pid +
+            '" onclick="switchPromptTab(\'' + meetingId + '\', \'' + pid + '\')">' +
+            escapeHtml(name) + '</button>';
     }).join('');
-    modal.querySelector('.modal-tabs').innerHTML = tabsHtml;
+    modal.querySelector('.modal-tabs').innerHTML = promptTabsHtml;
 
+    // Body: version sub-tabs + content area
     modal.querySelector('.modal-body').innerHTML =
+        '<div class="increment-version-tabs" id="version-tabs"></div>' +
         '<div id="increment-content" class="ai-tab-content active"><div class="loading">Loading...</div></div>';
 
     modal.querySelector('.modal-footer').innerHTML =
         '<button class="btn" onclick="copyAiResponse()">Copy</button>' +
-        '<button class="btn" onclick="regenerateIncrement(\'' + meetingId + '\')">Regenerate</button>' +
+        '<button class="btn" onclick="regeneratePrompt()">Regenerate</button>' +
         '<button class="btn" onclick="closeAiModal()">Close</button>';
 
-    loadIncrementContent(meetingId, latestVersion);
+    // Store state
+    _incrementState = {
+        meetingId: meetingId,
+        incrementsByPrompt: incrementsByPrompt,
+        promptNames: promptNames,
+        currentPromptId: promptIds[0],
+        currentVersion: null
+    };
+
+    // Load first prompt
+    switchPromptTab(meetingId, promptIds[0]);
 }
 
-function switchIncrementVersion(meetingId, version) {
+function switchPromptTab(meetingId, promptId) {
+    // Update Level 1 prompt tab active state
+    document.querySelectorAll('#ai-modal .modal-tabs .tab-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.promptId === promptId);
+    });
+
+    if (_incrementState) {
+        _incrementState.currentPromptId = promptId;
+    }
+
+    var metas = (_incrementState && _incrementState.incrementsByPrompt[promptId]) || [];
+    var versionTabsContainer = document.getElementById('version-tabs');
+
+    if (metas.length === 0) {
+        if (versionTabsContainer) versionTabsContainer.innerHTML = '';
+        document.getElementById('increment-content').innerHTML =
+            '<div class="empty">No versions generated yet</div>';
+        return;
+    }
+
+    // Build Level 2 version tabs
+    var latestVersion = metas[metas.length - 1].version;
+    if (_incrementState) {
+        _incrementState.currentVersion = latestVersion;
+    }
+
+    if (versionTabsContainer) {
+        versionTabsContainer.innerHTML = metas.map(function(inc) {
+            var date = new Date(inc.generated_at);
+            var timeStr = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            var isActive = inc.version === latestVersion ? ' active' : '';
+            var statusIcon = inc.status === 'failed' ? ' !' : inc.status === 'generating' ? ' ...' : '';
+            return '<button class="version-tab-btn' + isActive + '" data-version="' + inc.version +
+                '" onclick="switchIncrementVersion(\'' + meetingId + '\', \'' + promptId + '\', ' + inc.version +
+                ')">v' + inc.version + ' <small style="opacity:.6">' + timeStr + '</small>' +
+                statusIcon + '</button>';
+        }).join('');
+    }
+
+    loadIncrementContent(meetingId, promptId, latestVersion);
+}
+
+function switchIncrementVersion(meetingId, promptId, version) {
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
     }
 
-    document.querySelectorAll('#ai-modal .modal-tabs .tab-btn').forEach(btn => {
+    if (_incrementState) {
+        _incrementState.currentVersion = version;
+    }
+
+    document.querySelectorAll('#version-tabs .version-tab-btn').forEach(function(btn) {
         btn.classList.toggle('active', parseInt(btn.dataset.version) === version);
     });
 
-    loadIncrementContent(meetingId, version);
+    loadIncrementContent(meetingId, promptId, version);
 }
 
 function stripYamlFrontmatter(text) {
@@ -1510,7 +1583,7 @@ function stripYamlFrontmatter(text) {
     return text.substring(endIdx + 3).trim();
 }
 
-async function loadIncrementContent(meetingId, version) {
+async function loadIncrementContent(meetingId, promptId, version) {
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
@@ -1522,7 +1595,7 @@ async function loadIncrementContent(meetingId, version) {
     container.innerHTML = '<div class="loading">Loading...</div>';
 
     try {
-        const result = await api.getIncrement(meetingId, version);
+        const result = await api.getIncrement(meetingId, promptId, version);
         if (!result) {
             container.innerHTML = '<div class="error">Version not found</div>';
             return;
@@ -1542,7 +1615,8 @@ async function loadIncrementContent(meetingId, version) {
         const strippedContent = stripYamlFrontmatter(content);
         const rendered = renderMarkdown(strippedContent);
         const durationStr = meta.duration_seconds != null ? meta.duration_seconds.toFixed(1) + 's' : '';
-        const infoStr = 'v' + meta.version + ' · ' + meta.segment_count + ' segments' +
+        const promptName = (_incrementState && _incrementState.promptNames[promptId]) || promptId;
+        const infoStr = promptName + ' · v' + meta.version + ' · ' + meta.segment_count + ' segments' +
             (durationStr ? ' · ' + durationStr : '');
 
         container.innerHTML =
@@ -1556,12 +1630,15 @@ async function loadIncrementContent(meetingId, version) {
     }
 }
 
-function regenerateIncrement(meetingId) {
+function regeneratePrompt() {
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
     }
-    generateIncrementSSE(meetingId);
+    var meetingId = _incrementState ? _incrementState.meetingId : (views.meeting && views.meeting.id);
+    if (meetingId) {
+        generateIncrementSSE(meetingId);
+    }
 }
 
 function handleAiStreamEvent(data) {

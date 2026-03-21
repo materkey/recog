@@ -1063,6 +1063,39 @@ a:hover {
     display: block;
 }
 
+.increment-version-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 16px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-tertiary);
+}
+
+.version-tab-btn {
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all var(--transition);
+}
+
+.version-tab-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+}
+
+.version-tab-btn.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--bg-secondary);
+}
+
 .modal-close {
     background: none;
     border: none;
