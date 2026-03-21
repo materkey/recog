@@ -38,13 +38,14 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     if not text.startswith("---"):
         return {}, text
 
-    # Find closing ---
-    end_idx = text.index("---", 3) if "---" in text[3:] else -1
-    if end_idx == -1:
+    # Find closing --- on its own line
+    rest = text[3:]
+    match = re.search(r'(?:^|\n)---\s*(?:\n|$)', rest)
+    if not match:
         return {}, text
 
-    header = text[3:end_idx].strip()
-    body = text[end_idx + 3:].strip()
+    header = rest[:match.start()].strip()
+    body = rest[match.end():].strip()
 
     result: dict = {}
     for line in header.split("\n"):
