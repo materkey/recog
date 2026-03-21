@@ -296,6 +296,22 @@ class IncrementGenerator:
         tasks = [self.generate(meeting_id, meeting_path, p) for p in prompts]
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    def list_all_increments(self, meeting_id: str) -> dict[str, list[dict]]:
+        """Return {prompt_id: [metas]} for all prompts that have increments."""
+        base = self._meetings_base / meeting_id / "increments"
+        if not base.exists():
+            return {}
+
+        result: dict[str, list[dict]] = {}
+        for subdir in sorted(base.iterdir()):
+            if not subdir.is_dir():
+                continue
+            prompt_id = subdir.name
+            metas = self.list_increments(meeting_id, prompt_id)
+            if metas:
+                result[prompt_id] = metas
+        return result
+
     def list_increments(self, meeting_id: str, prompt_id: str) -> list[dict]:
         """Return sorted list of increment meta dicts for a meeting prompt."""
         inc_dir = self._increments_dir(meeting_id, prompt_id)

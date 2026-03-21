@@ -733,9 +733,26 @@ async def get_transcript(meeting_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/prompts")
+async def list_prompts():
+    """List all available prompt definitions."""
+    try:
+        from recog.prompt_registry import PromptRegistry
+
+        prompts_dir = Path(__file__).parent.parent / "prompts"
+        registry = PromptRegistry(prompts_dir)
+        prompts = registry.load_all()
+        return JSONResponse(content=[
+            {"id": p.id, "name": p.name, "filter": p.filter}
+            for p in prompts
+        ])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/meetings/{meeting_id}/increments")
 async def list_increments(meeting_id: str):
-    """List all increment versions for a meeting."""
+    """List all increments for a meeting, grouped by prompt_id."""
     if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
         raise HTTPException(status_code=400, detail="Invalid meeting ID")
     try:
@@ -747,8 +764,8 @@ async def list_increments(meeting_id: str):
             raise HTTPException(status_code=404, detail="Meeting not found")
 
         gen = IncrementGenerator(MEETINGS_DIR)
-        increments = gen.list_increments(meeting_id)
-        return JSONResponse(content=increments)
+        result = gen.list_all_increments(meeting_id)
+        return JSONResponse(content=result)
 
     except HTTPException:
         raise
@@ -756,11 +773,13 @@ async def list_increments(meeting_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/meetings/{meeting_id}/increments/{version}")
-async def get_increment(meeting_id: str, version: int):
-    """Get a specific increment version (meta + content)."""
+@app.get("/api/meetings/{meeting_id}/increments/{prompt_id}")
+async def list_prompt_increments(meeting_id: str, prompt_id: str):
+    """List increment versions for a specific prompt in a meeting."""
     if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
         raise HTTPException(status_code=400, detail="Invalid meeting ID")
+    if '..' in prompt_id or '/' in prompt_id or '\\' in prompt_id:
+        raise HTTPException(status_code=400, detail="Invalid prompt ID")
     try:
         from recog.increment import IncrementGenerator
 
@@ -770,9 +789,34 @@ async def get_increment(meeting_id: str, version: int):
             raise HTTPException(status_code=404, detail="Meeting not found")
 
         gen = IncrementGenerator(MEETINGS_DIR)
-        result = gen.get_increment(meeting_id, version)
+        metas = gen.list_increments(meeting_id, prompt_id)
+        return JSONResponse(content=metas)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/meetings/{meeting_id}/increments/{prompt_id}/{version}")
+async def get_increment(meeting_id: str, prompt_id: str, version: int):
+    """Get a specific increment version (meta + content) for a prompt."""
+    if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
+        raise HTTPException(status_code=400, detail="Invalid meeting ID")
+    if '..' in prompt_id or '/' in prompt_id or '\\' in prompt_id:
+        raise HTTPException(status_code=400, detail="Invalid prompt ID")
+    try:
+        from recog.increment import IncrementGenerator
+
+        storage = get_storage()
+        meeting = storage.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        gen = IncrementGenerator(MEETINGS_DIR)
+        result = gen.get_increment(meeting_id, prompt_id, version)
         if result is None:
-            raise HTTPException(status_code=404, detail=f"Increment v{version} not found")
+            raise HTTPException(status_code=404, detail=f"Increment {prompt_id}/v{version} not found")
 
         return JSONResponse(content=result)
 
