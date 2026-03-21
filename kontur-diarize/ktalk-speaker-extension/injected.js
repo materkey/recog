@@ -4647,7 +4647,7 @@ function handleTranscript(data) {
   if (correction) {
     // Retroactive correction: find and update existing Unknown line by timestamp+text
     const idx = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.findIndex(
-      line => line.text === text && line.timestamp === timestamp && line.speaker === 'Unknown'
+      line => line.speaker === 'Unknown' && line.text.startsWith(text) && line.timestamp === timestamp
     );
     if (idx !== -1) {
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[idx].speaker = speaker;
@@ -4664,7 +4664,7 @@ function handleTranscript(data) {
           const textEl = lineEl.querySelector('.jitsi-transcript-text');
           const rawText = textEl ? textEl.textContent.replace(/ \(\?\)$/, '').replace(/ \(🔇\?\)$/, '').trim() : '';
           if (speakerEl && speakerEl.textContent === 'Unknown' &&
-              textEl && rawText === text &&
+              textEl && rawText.startsWith(text) &&
               (!timestamp || lineEl.dataset.timestamp === timestamp)) {
             speakerEl.textContent = speaker;
             // Remove uncertainty markers from corrected line

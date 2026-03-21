@@ -1071,6 +1071,11 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function escapeJsString(str) {
+    return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+        .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
 function formatDate(isoString) {
     if (!isoString) return '';
     const date = new Date(isoString);
@@ -1492,7 +1497,7 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
         var name = promptNames[pid] || pid;
         var isActive = i === 0 ? ' active' : '';
         return '<button class="tab-btn' + isActive + '" data-prompt-id="' + escapeHtml(pid) +
-            '" onclick="switchPromptTab(\'' + escapeHtml(meetingId) + '\', \'' + escapeHtml(pid) + '\')">' +
+            '" onclick="switchPromptTab(\'' + escapeJsString(meetingId) + '\', \'' + escapeJsString(pid) + '\')">' +
             escapeHtml(name) + '</button>';
     }).join('');
     modal.querySelector('.modal-tabs').innerHTML = promptTabsHtml;
@@ -1553,7 +1558,7 @@ function switchPromptTab(meetingId, promptId) {
             var isActive = inc.version === latestVersion ? ' active' : '';
             var statusIcon = inc.status === 'failed' ? ' !' : inc.status === 'generating' ? ' ...' : '';
             return '<button class="version-tab-btn' + isActive + '" data-version="' + inc.version +
-                '" onclick="switchIncrementVersion(\'' + escapeHtml(meetingId) + '\', \'' + escapeHtml(promptId) + '\', ' + inc.version +
+                '" onclick="switchIncrementVersion(\'' + escapeJsString(meetingId) + '\', \'' + escapeJsString(promptId) + '\', ' + inc.version +
                 ')">v' + inc.version + ' <small style="opacity:.6">' + timeStr + '</small>' +
                 statusIcon + '</button>';
         }).join('');
