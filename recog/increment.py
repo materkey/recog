@@ -81,13 +81,19 @@ class IncrementGenerator:
 
         return max_version + 1, last_segment_id
 
+    @staticmethod
+    def _escape_yaml_str(s: str) -> str:
+        return s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
+
     def _build_frontmatter(
         self, meta: dict, meeting_id: str, version: int,
         seg_start: int, seg_end: int, participants: list[str]
     ) -> str:
-        title = (meta.get("title") or "Untitled meeting").replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
+        title = self._escape_yaml_str(meta.get("title") or "Untitled meeting")
         date = meta.get("created_at", "")[:10]
-        quoted_participants = ', '.join(f'"{p}"' for p in participants)
+        quoted_participants = ', '.join(
+            f'"{self._escape_yaml_str(p)}"' for p in participants
+        )
         return (
             "---\n"
             f'meeting: "{title}"\n'
