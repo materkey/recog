@@ -1018,9 +1018,11 @@ class LiveTranscriber:
                 segment_duration = chunk_time - state.segment_start_time
                 is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
 
-                # Only update last_speaker with identified speakers;
-                # "Unknown" would poison the TTL fallback window
-                if speaker != "Unknown":
+                # Only update last_speaker with confidently identified speakers;
+                # "Unknown" would poison the TTL fallback window, and
+                # sole_unmuted is uncertain — propagating it via TTL would
+                # lose the uncertainty flag and cascade into retroactive rewrites.
+                if speaker != "Unknown" and not sole_unmuted_fallback:
                     state.last_speaker = speaker
                 state.last_speech_time = chunk_time
                 if not is_continuation:

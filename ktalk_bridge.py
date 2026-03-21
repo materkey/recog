@@ -1504,6 +1504,25 @@ class KTalkBridge:
 
         except Exception as e:
             print(f"[KTalk Bridge] Server error: {e}", file=sys.stderr)
+        finally:
+            # Drain background tasks (e.g. in-flight increment generation)
+            # so they are not silently cancelled when the loop closes.
+            await self._drain_background_tasks()
+
+    async def _drain_background_tasks(self, timeout: float = 30.0):
+        """Await all background tasks with a timeout so in-flight work completes."""
+        if not self._background_tasks:
+            return
+        pending = list(self._background_tasks)
+        print(f"[KTalk Bridge] Draining {len(pending)} background task(s)…", file=sys.stderr)
+        done, not_done = await asyncio.wait(pending, timeout=timeout)
+        for t in not_done:
+            t.cancel()
+        if not_done:
+            # Await cancelled tasks so their CancellationError handlers run
+            # before the event loop closes.
+            await asyncio.gather(*not_done, return_exceptions=True)
+            print(f"[KTalk Bridge] {len(not_done)} background task(s) cancelled after {timeout}s timeout", file=sys.stderr)
 
     def _thread_main(self):
         """Главная функция фонового потока."""
@@ -1532,7 +1551,9 @@ class KTalkBridge:
         self._running = False
 
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            # Must wait at least as long as _drain_background_tasks timeout (30s)
+            # so in-flight work (e.g. increment generation) completes before exit.
+            self._thread.join(timeout=35.0)
             self._thread = None
 
     def __enter__(self):
