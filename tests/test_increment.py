@@ -443,3 +443,146 @@ async def test_callback_receives_prompt_id(tmp_path):
         await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     callback.assert_called_once_with(meeting_id, 1, "my-increment")
+
+
+# --- Migration tests ---
+
+
+def test_migrate_flat_increments_moves_files(tmp_path):
+    """
+    given: meeting with old flat increments/v1.md and v1_meta.json
+    when: migrate_flat_increments() called
+    then: files moved to increments/my-increment/v1.md and v1_meta.json
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = tmp_path / meeting_id
+    inc_dir = meeting_path / "increments"
+    inc_dir.mkdir(parents=True)
+
+    # Create old flat files
+    (inc_dir / "v1.md").write_text("# Old v1", encoding="utf-8")
+    (inc_dir / "v1_meta.json").write_text('{"version": 1, "status": "completed"}', encoding="utf-8")
+    (inc_dir / "v2.md").write_text("# Old v2", encoding="utf-8")
+    (inc_dir / "v2_meta.json").write_text('{"version": 2, "status": "completed"}', encoding="utf-8")
+
+    gen = IncrementGenerator(tmp_path)
+    gen.migrate_flat_increments(meeting_path)
+
+    # Old flat files should be gone
+    assert not (inc_dir / "v1.md").exists()
+    assert not (inc_dir / "v1_meta.json").exists()
+    assert not (inc_dir / "v2.md").exists()
+    assert not (inc_dir / "v2_meta.json").exists()
+
+    # Files should be in my-increment subdirectory
+    target = inc_dir / "my-increment"
+    assert target.exists()
+    assert (target / "v1.md").read_text(encoding="utf-8") == "# Old v1"
+    assert (target / "v1_meta.json").read_text(encoding="utf-8") == '{"version": 1, "status": "completed"}'
+    assert (target / "v2.md").read_text(encoding="utf-8") == "# Old v2"
+    assert (target / "v2_meta.json").read_text(encoding="utf-8") == '{"version": 2, "status": "completed"}'
+
+
+def test_migrate_flat_increments_noop_when_no_flat_files(tmp_path):
+    """
+    given: meeting with increments/ containing only subdirectories (already migrated)
+    when: migrate_flat_increments() called
+    then: nothing changes
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = tmp_path / meeting_id
+    inc_dir = meeting_path / "increments" / "my-increment"
+    inc_dir.mkdir(parents=True)
+    (inc_dir / "v1.md").write_text("# Already migrated", encoding="utf-8")
+
+    gen = IncrementGenerator(tmp_path)
+    gen.migrate_flat_increments(meeting_path)
+
+    # File should still be in subdirectory, untouched
+    assert (inc_dir / "v1.md").read_text(encoding="utf-8") == "# Already migrated"
+
+
+def test_migrate_flat_increments_noop_when_no_increments_dir(tmp_path):
+    """
+    given: meeting with no increments/ directory at all
+    when: migrate_flat_increments() called
+    then: no error, nothing created
+    """
+    meeting_path = tmp_path / "2026-03-21_test"
+    meeting_path.mkdir(parents=True)
+
+    gen = IncrementGenerator(tmp_path)
+    gen.migrate_flat_increments(meeting_path)
+
+    assert not (meeting_path / "increments").exists()
+
+
+def test_migrate_flat_increments_idempotent(tmp_path):
+    """
+    given: meeting where migration already ran (files in subdirectory)
+    when: migrate_flat_increments() called again
+    then: no error, no duplicate files
+    """
+    meeting_path = tmp_path / "2026-03-21_test"
+    inc_dir = meeting_path / "increments"
+    target = inc_dir / "my-increment"
+    target.mkdir(parents=True)
+    (target / "v1.md").write_text("# Migrated", encoding="utf-8")
+
+    gen = IncrementGenerator(tmp_path)
+    gen.migrate_flat_increments(meeting_path)
+
+    # Still just the one file in subdirectory
+    assert (target / "v1.md").read_text(encoding="utf-8") == "# Migrated"
+
+
+@pytest.mark.asyncio
+async def test_generate_all_runs_migration_before_generating(tmp_path):
+    """
+    given: meeting with old flat increments/v1.md and a prompts dir
+    when: generate_all() called
+    then: migration runs first, then generation proceeds with new layout
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = _make_meeting(tmp_path, meeting_id)
+
+    # Create old flat increment files
+    inc_dir = meeting_path / "increments"
+    inc_dir.mkdir(parents=True)
+    (inc_dir / "v1.md").write_text("# Old", encoding="utf-8")
+    (inc_dir / "v1_meta.json").write_text(
+        json.dumps({"version": 1, "status": "completed", "segment_range": [1, 3]}),
+        encoding="utf-8",
+    )
+
+    # Create prompts
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "my-increment.md").write_text(
+        "---\nname: My increment\nfilter: null\n---\n\nUser: {user_name}\n{transcript}",
+        encoding="utf-8",
+    )
+
+    gen = IncrementGenerator(tmp_path, prompts_dir=prompts_dir)
+
+    mock_provider = MagicMock()
+    mock_provider.key = "codex"
+    mock_provider.model = "gpt-5.4"
+    mock_provider.reasoning_effort = "xhigh"
+    mock_provider.complete = AsyncMock(return_value="New content")
+
+    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+        await gen.generate_all(meeting_id, meeting_path)
+
+    # Old flat files should be migrated
+    assert not (inc_dir / "v1.md").exists()
+    assert not (inc_dir / "v1_meta.json").exists()
+
+    # Migrated v1 should be in subdirectory
+    migrated = inc_dir / "my-increment" / "v1.md"
+    assert migrated.exists()
+    assert migrated.read_text(encoding="utf-8") == "# Old"
+
+    # Provider should NOT have been called since all segments [1,3] are covered by v1
+    # (the meeting has segments 1-3 and v1 covers [1,3])
+    mock_provider.complete.assert_not_called()
