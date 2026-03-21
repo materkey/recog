@@ -109,83 +109,87 @@ class IncrementGenerator:
         """Generate next increment version for a meeting.
 
         Returns version number on success, None if skipped (zero delta).
-        Raises nothing — on Codex failure writes failed meta.
+        Raises nothing — on any failure writes failed meta.
         """
 
-        # Load meta
+        # File existence checks — legitimate skips, not failures
         meta_path = meeting_path / "meta.json"
         if not meta_path.exists():
             return None
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-
-        # Load segments
         transcript_path = meeting_path / "transcript.jsonl"
         if not transcript_path.exists():
             return None
-        segments = []
-        content = transcript_path.read_text(encoding="utf-8").strip()
-        if content:
-            for line in content.split("\n"):
-                if line.strip():
-                    segments.append(json.loads(line))
 
-        if not segments:
-            return None
-
-        # Determine version and delta range
+        # Determine version early so we can write failed meta on any error
+        # (including malformed JSON in meta.json / transcript.jsonl).
         version, last_segment_id = self._next_version(meeting_id)
-
-        # Filter to delta segments
-        if last_segment_id is not None:
-            delta_segments = [s for s in segments if s.get("id", 0) > last_segment_id]
-        else:
-            delta_segments = segments
-
-        # Skip if zero delta
-        if not delta_segments:
-            print(f"[increment] v{version} skipped: 0 delta segments", file=sys.stderr)
-            return None
-
-        # Determine segment range
-        seg_ids = [s.get("id", 0) for s in delta_segments]
-        seg_start = min(seg_ids)
-        seg_end = max(seg_ids)
-
-        # Build transcript text (filters out event_type segments and empty text)
-        transcript_text = _segments_to_transcript(delta_segments)
-        if not transcript_text.strip():
-            print(f"[increment] v{version} skipped: no text in delta segments", file=sys.stderr)
-            return None
-
-        # Determine user name
-        local_names = _local_participant_names(meta)
-        user_name = ", ".join(local_names) if local_names else "User"
-
-        # All participant names
-        participants = [
-            info.get("name", pid)
-            for pid, info in meta.get("participants", {}).items()
-        ]
-
-        # Build prompt
-        prompt = INCREMENT_PROMPT.format(user_name=user_name, transcript=transcript_text)
-
-        # Ensure increments directory exists
         inc_dir = self._increments_dir(meeting_id)
-        inc_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate
         t0 = time.monotonic()
-        provider = CodexCliProvider()
-        version_meta = {
-            "version": version,
-            "provider": provider.key,
-            "model": provider.model,
-            "reasoning_effort": provider.reasoning_effort,
-            "segment_range": [seg_start, seg_end],
-            "segment_count": len(delta_segments),
-        }
         try:
+            # Load meta
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+            # Load segments
+            segments = []
+            content = transcript_path.read_text(encoding="utf-8").strip()
+            if content:
+                for line in content.split("\n"):
+                    if line.strip():
+                        segments.append(json.loads(line))
+
+            if not segments:
+                return None
+
+            # Filter to delta segments
+            if last_segment_id is not None:
+                delta_segments = [s for s in segments if s.get("id", 0) > last_segment_id]
+            else:
+                delta_segments = segments
+
+            # Skip if zero delta
+            if not delta_segments:
+                print(f"[increment] v{version} skipped: 0 delta segments", file=sys.stderr)
+                return None
+
+            # Determine segment range
+            seg_ids = [s.get("id", 0) for s in delta_segments]
+            seg_start = min(seg_ids)
+            seg_end = max(seg_ids)
+
+            # Build transcript text (filters out event_type segments and empty text)
+            transcript_text = _segments_to_transcript(delta_segments)
+            if not transcript_text.strip():
+                print(f"[increment] v{version} skipped: no text in delta segments", file=sys.stderr)
+                return None
+
+            # Determine user name
+            local_names = _local_participant_names(meta)
+            user_name = ", ".join(local_names) if local_names else "User"
+
+            # All participant names
+            participants = [
+                info.get("name", pid)
+                for pid, info in meta.get("participants", {}).items()
+            ]
+
+            # Build prompt
+            prompt = INCREMENT_PROMPT.format(user_name=user_name, transcript=transcript_text)
+
+            # Ensure increments directory exists
+            inc_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generate
+            provider = CodexCliProvider()
+            version_meta = {
+                "version": version,
+                "provider": provider.key,
+                "model": provider.model,
+                "reasoning_effort": provider.reasoning_effort,
+                "segment_range": [seg_start, seg_end],
+                "segment_count": len(delta_segments),
+            }
+
             result = await provider.complete(prompt)
             duration = time.monotonic() - t0
 
@@ -221,12 +225,14 @@ class IncrementGenerator:
         except Exception as exc:
             duration = time.monotonic() - t0
             # Write failed meta, no .md
-            version_meta.update(
-                generated_at=datetime.now(timezone.utc).isoformat(),
-                status="failed",
-                duration_seconds=round(duration, 1),
-                error=str(exc),
-            )
+            inc_dir.mkdir(parents=True, exist_ok=True)
+            version_meta = {
+                "version": version,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "status": "failed",
+                "duration_seconds": round(duration, 1),
+                "error": str(exc),
+            }
             self._save_json(inc_dir / f"v{version}_meta.json", version_meta)
 
             print(f"[increment] v{version} FAILED: {exc}", file=sys.stderr)
