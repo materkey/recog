@@ -198,7 +198,7 @@ Remove the hardcoded INCREMENT_PROMPT from ai_provider.py.
 
 ### Task 5: Frontend UI for multi-prompt display
 
-- [ ] Update app.js to show prompt-level tabs (level 1) and version tabs (level 2)
-- [ ] Update analyzeIncrement() to handle multi-prompt response
-- [ ] Add per-prompt regenerate button
-- [ ] Validate: syntax check passes
+- [x] Update app.js to show prompt-level tabs (level 1) and version tabs (level 2)
+- [x] Update analyzeIncrement() to handle multi-prompt response
+- [x] Add per-prompt regenerate button
+- [x] Validate: syntax check passes
