@@ -174,12 +174,12 @@ Remove the hardcoded INCREMENT_PROMPT from ai_provider.py.
 
 ### Task 2: Update IncrementGenerator for multi-prompt support
 
-- [ ] Add `prompt_id` parameter to `_increments_dir()` and `_next_version()`
-- [ ] Modify `generate()` to accept `PromptConfig` instead of hardcoded prompt
-- [ ] Add `generate_all()` method with parallel execution
-- [ ] Add `prompts_dir` parameter to constructor (default: `prompts/`)
-- [ ] Update existing tests in `tests/test_increment.py`
-- [ ] Validate: `python -m pytest tests/test_increment.py -v` passes
+- [x] Add `prompt_id` parameter to `_increments_dir()` and `_next_version()`
+- [x] Modify `generate()` to accept `PromptConfig` instead of hardcoded prompt
+- [x] Add `generate_all()` method with parallel execution
+- [x] Add `prompts_dir` parameter to constructor (default: `prompts/`)
+- [x] Update existing tests in `tests/test_increment.py`
+- [x] Validate: `python -m pytest tests/test_increment.py -v` passes
 
 ### Task 3: Migration + ktalk_bridge update
 
