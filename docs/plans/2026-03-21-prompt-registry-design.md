@@ -190,11 +190,11 @@ Remove the hardcoded INCREMENT_PROMPT from ai_provider.py.
 
 ### Task 4: REST API endpoints
 
-- [ ] Add `GET /api/prompts` endpoint returning available prompts
-- [ ] Restructure `GET /api/meetings/{id}/increments` to return `{prompt_id: [metas]}`
-- [ ] Add `GET /api/meetings/{id}/increments/{prompt_id}` endpoint
-- [ ] Add `GET /api/meetings/{id}/increments/{prompt_id}/{version}` endpoint
-- [ ] Validate: `python -m compileall frontend/server.py`
+- [x] Add `GET /api/prompts` endpoint returning available prompts
+- [x] Restructure `GET /api/meetings/{id}/increments` to return `{prompt_id: [metas]}`
+- [x] Add `GET /api/meetings/{id}/increments/{prompt_id}` endpoint
+- [x] Add `GET /api/meetings/{id}/increments/{prompt_id}/{version}` endpoint
+- [x] Validate: `python -m compileall frontend/server.py`
 
 ### Task 5: Frontend UI for multi-prompt display
 
