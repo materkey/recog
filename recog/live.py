@@ -725,6 +725,15 @@ class LiveTranscriber:
                 # Connect MeetingStorage to KTalk bridge
                 if self._meeting_storage:
                     self._ktalk_bridge.set_meeting_storage(self._meeting_storage)
+                    # Wire IncrementGenerator for auto-summaries on ktalk_leave
+                    from recog.increment import IncrementGenerator
+                    self._increment_generator = IncrementGenerator(self._meeting_storage.base_path)
+                    self._increment_generator.set_callback(
+                        lambda mid, ver: print(
+                            f"[increment] ready: {mid} v{ver}", file=sys.stderr
+                        )
+                    )
+                    self._ktalk_bridge.set_increment_generator(self._increment_generator)
                 # Register callbacks for meeting changes:
                 # pre-switch invalidates in-flight chunks after path changes
                 self._ktalk_bridge.set_pre_meeting_switch_callback(self._invalidate_pending_chunks)
