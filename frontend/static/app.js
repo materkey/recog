@@ -1586,9 +1586,9 @@ function switchIncrementVersion(meetingId, promptId, version) {
 
 function stripYamlFrontmatter(text) {
     if (!text || !text.startsWith('---')) return text;
-    const endIdx = text.indexOf('---', 3);
-    if (endIdx === -1) return text;
-    return text.substring(endIdx + 3).trim();
+    const match = text.substring(3).match(/\n---\s*\n/);
+    if (!match) return text;
+    return text.substring(3 + match.index + match[0].length).trim();
 }
 
 async function loadIncrementContent(meetingId, promptId, version) {

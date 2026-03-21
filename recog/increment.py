@@ -474,7 +474,7 @@ class IncrementGenerator:
             return
 
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        title = meta.get("title", "")
+        title = meta.get("title") or ""
         prompts = registry.matching(title)
 
         if not prompts:
