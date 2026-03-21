@@ -68,12 +68,12 @@
 - [x] run existing tests: `./venv-gigaam/bin/python -m pytest tests/test_ktalk_bridge.py -v` — all must pass
 
 ### Task 3: Wire IncrementGenerator in live.py startup
-- [ ] find where `bridge.set_meeting_storage(storage)` is called in `recog/live.py`
-- [ ] add `from recog.increment import IncrementGenerator` and create instance with `storage.base_path`
-- [ ] call `bridge.set_increment_generator(increment_gen)`
-- [ ] add `on_increment_ready` callback that logs to stderr
-- [ ] smoke test: `./venv-gigaam/bin/python mp4_notes.py --help` — no import errors
-- [ ] run all tests: `./venv-gigaam/bin/python -m pytest tests/ -v` — all must pass
+- [x] find where `bridge.set_meeting_storage(storage)` is called in `recog/live.py`
+- [x] add `from recog.increment import IncrementGenerator` and create instance with `storage.base_path`
+- [x] call `bridge.set_increment_generator(increment_gen)`
+- [x] add `on_increment_ready` callback that logs to stderr
+- [x] smoke test: `./venv-gigaam/bin/python mp4_notes.py --help` — no import errors
+- [x] run all tests: `./venv-gigaam/bin/python -m pytest tests/ -v` — all must pass
 
 ### Task 4: REST API endpoints for increments
 - [ ] add `GET /api/meetings/{meeting_id}/increments` endpoint in `frontend/server.py` — returns list of increment meta dicts
