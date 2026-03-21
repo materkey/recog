@@ -1383,6 +1383,9 @@ async function analyzeIncrement() {
     const meeting = views.meeting;
     if (!meeting.id) return;
 
+    // Clear stale state from previous meeting
+    _incrementState = null;
+
     // Fetch prompts and stored increments in parallel
     try {
         const [prompts, increments] = await Promise.all([
@@ -1488,8 +1491,8 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
     const promptTabsHtml = promptIds.map(function(pid, i) {
         var name = promptNames[pid] || pid;
         var isActive = i === 0 ? ' active' : '';
-        return '<button class="tab-btn' + isActive + '" data-prompt-id="' + pid +
-            '" onclick="switchPromptTab(\'' + meetingId + '\', \'' + pid + '\')">' +
+        return '<button class="tab-btn' + isActive + '" data-prompt-id="' + escapeHtml(pid) +
+            '" onclick="switchPromptTab(\'' + escapeHtml(meetingId) + '\', \'' + escapeHtml(pid) + '\')">' +
             escapeHtml(name) + '</button>';
     }).join('');
     modal.querySelector('.modal-tabs').innerHTML = promptTabsHtml;
@@ -1550,7 +1553,7 @@ function switchPromptTab(meetingId, promptId) {
             var isActive = inc.version === latestVersion ? ' active' : '';
             var statusIcon = inc.status === 'failed' ? ' !' : inc.status === 'generating' ? ' ...' : '';
             return '<button class="version-tab-btn' + isActive + '" data-version="' + inc.version +
-                '" onclick="switchIncrementVersion(\'' + meetingId + '\', \'' + promptId + '\', ' + inc.version +
+                '" onclick="switchIncrementVersion(\'' + escapeHtml(meetingId) + '\', \'' + escapeHtml(promptId) + '\', ' + inc.version +
                 ')">v' + inc.version + ' <small style="opacity:.6">' + timeStr + '</small>' +
                 statusIcon + '</button>';
         }).join('');
@@ -1630,14 +1633,46 @@ async function loadIncrementContent(meetingId, promptId, version) {
     }
 }
 
-function regeneratePrompt() {
+async function regeneratePrompt() {
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
     }
     var meetingId = _incrementState ? _incrementState.meetingId : (views.meeting && views.meeting.id);
-    if (meetingId) {
-        generateIncrementSSE(meetingId);
+    var promptId = _incrementState ? _incrementState.currentPromptId : null;
+
+    if (!meetingId || !promptId) {
+        // Fall back to SSE if no prompt context
+        if (meetingId) generateIncrementSSE(meetingId);
+        return;
+    }
+
+    // Show generating state
+    var container = document.getElementById('increment-content');
+    if (container) container.innerHTML = '<div class="loading">Generating...</div>';
+
+    try {
+        var res = await fetch('/api/meetings/' + encodeURIComponent(meetingId) +
+            '/increments/' + encodeURIComponent(promptId) + '/generate', { method: 'POST' });
+        if (!res.ok) {
+            var err = await res.json().catch(function() { return {}; });
+            throw new Error(err.detail || 'Generation failed');
+        }
+        var result = await res.json();
+        if (result.status === 'skipped') {
+            if (container) container.innerHTML = '<div class="empty">' + escapeHtml(result.message || 'No new segments') + '</div>';
+            return;
+        }
+        // Refresh the stored increments view
+        var [prompts, increments] = await Promise.all([
+            api.getPrompts(),
+            api.getIncrements(meetingId)
+        ]);
+        showStoredIncrements(meetingId, increments, prompts);
+        // Switch to the prompt that was regenerated
+        switchPromptTab(meetingId, promptId);
+    } catch (e) {
+        if (container) container.innerHTML = '<div class="error">Regeneration failed: ' + escapeHtml(e.message) + '</div>';
     }
 }
 
