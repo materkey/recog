@@ -11,6 +11,8 @@
 3. При reconnect в ту же встречу (coalescence) — генерировать новую версию
 4. UI: кнопка "My increment" показывает сохранённые версии; если нет — генерирует
 5. Генерация async, не блокирует leave flow
+6. Каждый `vN.md` self-contained с YAML frontmatter (meeting context) — готов для RAG
+7. Delta-генерация: vN строится только из сегментов после v(N-1), не из полного транскрипта
 
 ## Architecture
 
@@ -51,6 +53,29 @@ meetings/2026-03-21_143025_abc12def/
     v1_meta.json            ← generation metadata
     v2.md                   ← after reconnect + second leave
     v2_meta.json
+```
+
+### vN.md format (self-contained for RAG)
+
+Каждый инкремент содержит YAML frontmatter с контекстом встречи,
+чтобы быть полезным при retrieval без загрузки meta.json:
+
+```markdown
+---
+meeting: Daily sync
+meeting_id: 2026-03-21_143025_abc12def
+date: "2026-03-21"
+participants: [Вася, Петя, Маша]
+version: 1
+segment_range: [0, 41]
+---
+
+## Задачи
+- Задача 1
+- Задача 2
+
+## Дедлайны
+- ...
 ```
 
 ### vN_meta.json
@@ -120,17 +145,38 @@ class IncrementGenerator:
 - Next version = max existing + 1
 - If no `increments/` dir — create it, version = 1
 
+### Delta-генерация (RAG-friendly)
+
+v1 генерируется из полного транскрипта. vN (N>1) — только из сегментов
+после предыдущей версии. Это даёт:
+
+- **Чистые инкременты** — каждая версия отвечает на "что нового после reconnect"
+- **Нет дупликации** — RAG не получит одни и те же задачи из v1 и v2
+- **Segment range** в frontmatter + meta позволяет восстановить полную картину
+
+Определение диапазона:
+```python
+prev_meta = load latest vN_meta.json
+start_segment = prev_meta["segment_range"][1] + 1  # after previous range
+end_segment = last segment in transcript.jsonl
+```
+
+Если новых сегментов нет (0) — не генерировать версию.
+
 ### Generation flow
 
 1. Create `increments/` dir if needed
-2. Write `vN_meta.json` with `status: "generating"`
-3. Read `transcript.jsonl`, build transcript text
-4. Build INCREMENT_PROMPT with user_name from meta.json
-5. Call `CodexCliProvider().complete(prompt)`
-6. Write `vN.md` with result
-7. Update `vN_meta.json` with `status: "completed"`, timing
-8. Update `meta.json` increments summary
-9. Fire callback to notify frontend
+2. Determine segment range (delta from previous version, or full for v1)
+3. Skip if delta has 0 segments
+4. Write `vN_meta.json` with `status: "generating"`
+5. Read `transcript.jsonl`, extract segments in range
+6. Build INCREMENT_PROMPT with user_name from meta.json
+7. Call `CodexCliProvider().complete(prompt)`
+8. Prepend YAML frontmatter (meeting title, date, participants, version, segment_range)
+9. Write `vN.md` with frontmatter + result
+10. Update `vN_meta.json` with `status: "completed"`, timing
+11. Update `meta.json` increments summary
+12. Fire callback to notify frontend
 
 ### Error handling
 
@@ -222,11 +268,24 @@ UI для версий:
 2. **Очень короткая встреча (<3 сегментов):** генерировать, но Codex сам напишет "конкретных задач не назначено"
 3. **Codex недоступен:** запишем failed meta, UI покажет ошибку + кнопку Retry
 4. **Параллельные leave:** маловероятно, но version scan + atomic write защитит
-5. **Meeting coalescence:** при reconnect в ту же комнату `on_meeting_join` возвращает тот же meeting_id → при следующем leave будет v2 с полным (расширенным) транскриптом
+5. **Meeting coalescence:** при reconnect в ту же комнату `on_meeting_join` возвращает тот же meeting_id → при следующем leave будет v2 с delta-сегментами (только новые после reconnect)
+6. **Delta = 0 сегментов:** если пользователь зашёл и сразу вышел — не генерировать пустую версию
+
+## RAG Readiness
+
+Дизайн готов к будущему RAG без изменений:
+
+1. **Frontmatter** — meeting context в каждом файле, парсится trivially (`yaml.safe_load`)
+2. **Delta-генерация** — нет дупликации между версиями, каждый файл уникален
+3. **Structured JSON (future)** — можно добавить `v1.json` позже, парся markdown или вторым вызовом LLM. Не требует изменений в текущей архитектуре
+4. **Global index (future)** — можно построить сканом `meetings/*/increments/v*_meta.json`
+5. **Embeddings (future)** — вычисляются из `vN.md` файлов, хранятся рядом как `vN.embedding`
 
 ## Testing
 
-1. **Unit test:** `IncrementGenerator` с mock Codex provider — проверить version numbering, file layout, meta.json
-2. **Unit test:** Error handling — Codex failure записывает `status: "failed"`
-3. **Integration test:** ktalk_leave → increment appears in meeting dir
-4. **Frontend test:** кнопка показывает версии, WebSocket обновляет UI
+1. **Unit test:** `IncrementGenerator` с mock Codex provider — проверить version numbering, file layout, frontmatter, meta.json
+2. **Unit test:** Delta segment range — v2 берёт только сегменты после v1
+3. **Unit test:** Skip generation if delta = 0 segments
+4. **Unit test:** Error handling — Codex failure записывает `status: "failed"`
+5. **Integration test:** ktalk_leave → increment appears in meeting dir
+6. **Frontend test:** кнопка показывает версии, WebSocket обновляет UI
