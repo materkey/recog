@@ -44,21 +44,21 @@
 ## Implementation Steps
 
 ### Task 1: IncrementGenerator core module
-- [ ] create `recog/increment.py` with `IncrementGenerator` class: `__init__(meetings_base: Path)`, `set_callback()`, `generate()`, `list_increments()`, `get_increment()`
-- [ ] implement `_next_version()`: scan `increments/v*_meta.json`, return `(next_version, last_segment_id)`
-- [ ] implement `generate()`: determine delta range, skip if 0 segments, call `CodexCliProvider().complete()`, write `vN.md` with YAML frontmatter + `vN_meta.json`, update `meta.json`
-- [ ] implement `_build_frontmatter()`: YAML header with meeting title, meeting_id, date, participants, version, segment_range
-- [ ] implement error handling: on Codex failure write `vN_meta.json` with `status: "failed"`, no `vN.md`
-- [ ] implement `list_increments()`: scan `increments/v*_meta.json`, return sorted by version
-- [ ] implement `get_increment()`: return `{meta, content}` for a specific version
-- [ ] write test: `test_generate_v1_creates_increment_files` — mock CodexCliProvider, verify v1.md frontmatter + v1_meta.json fields
-- [ ] write test: `test_generate_v2_uses_delta_segments` — pre-create v1 with segment_range [1,5], verify v2 prompt contains only segments 6+
-- [ ] write test: `test_skip_generation_when_zero_delta` — v1 covers all segments, verify no v2 created and CodexCliProvider not called
-- [ ] write test: `test_generate_handles_codex_failure` — mock exception, verify status=failed meta, no .md file
-- [ ] write test: `test_list_increments` — two versions exist, verify sorted list
-- [ ] write test: `test_get_increment` — verify returns meta + content
-- [ ] write test: `test_get_increment_returns_none_for_missing`
-- [ ] run tests: `./venv-gigaam/bin/python -m pytest tests/test_increment.py -v` — all must pass
+- [x] create `recog/increment.py` with `IncrementGenerator` class: `__init__(meetings_base: Path)`, `set_callback()`, `generate()`, `list_increments()`, `get_increment()`
+- [x] implement `_next_version()`: scan `increments/v*_meta.json`, return `(next_version, last_segment_id)`
+- [x] implement `generate()`: determine delta range, skip if 0 segments, call `CodexCliProvider().complete()`, write `vN.md` with YAML frontmatter + `vN_meta.json`, update `meta.json`
+- [x] implement `_build_frontmatter()`: YAML header with meeting title, meeting_id, date, participants, version, segment_range
+- [x] implement error handling: on Codex failure write `vN_meta.json` with `status: "failed"`, no `vN.md`
+- [x] implement `list_increments()`: scan `increments/v*_meta.json`, return sorted by version
+- [x] implement `get_increment()`: return `{meta, content}` for a specific version
+- [x] write test: `test_generate_v1_creates_increment_files` — mock CodexCliProvider, verify v1.md frontmatter + v1_meta.json fields
+- [x] write test: `test_generate_v2_uses_delta_segments` — pre-create v1 with segment_range [1,5], verify v2 prompt contains only segments 6+
+- [x] write test: `test_skip_generation_when_zero_delta` — v1 covers all segments, verify no v2 created and CodexCliProvider not called
+- [x] write test: `test_generate_handles_codex_failure` — mock exception, verify status=failed meta, no .md file
+- [x] write test: `test_list_increments` — two versions exist, verify sorted list
+- [x] write test: `test_get_increment` — verify returns meta + content
+- [x] write test: `test_get_increment_returns_none_for_missing`
+- [x] run tests: `./venv-gigaam/bin/python -m pytest tests/test_increment.py -v` — all must pass
 
 ### Task 2: Integrate IncrementGenerator into KTalkBridge
 - [ ] add `self._increment_generator` field in `KTalkBridge.__init__()` (after `self._on_pre_meeting_switch`, line ~303)
