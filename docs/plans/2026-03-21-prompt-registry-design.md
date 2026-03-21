@@ -162,3 +162,43 @@ Remove the hardcoded INCREMENT_PROMPT from ai_provider.py.
 4. **New prompt added**: next ktalk_leave will pick it up automatically
 5. **Prompt deleted**: existing results in increments/ stay, just no new generations
 6. **Multiple prompts fail**: gather(return_exceptions=True) — each failure independent
+
+## Tasks
+
+### Task 1: PromptRegistry module + default prompt file
+
+- [x] Create `recog/prompt_registry.py` with `PromptConfig` dataclass and `PromptRegistry` class
+- [x] Create `prompts/my-increment.md` with current INCREMENT_PROMPT extracted from ai_provider.py
+- [x] Write tests in `tests/test_prompt_registry.py`
+- [x] Validate: `python -m pytest tests/test_prompt_registry.py -v` passes
+
+### Task 2: Update IncrementGenerator for multi-prompt support
+
+- [ ] Add `prompt_id` parameter to `_increments_dir()` and `_next_version()`
+- [ ] Modify `generate()` to accept `PromptConfig` instead of hardcoded prompt
+- [ ] Add `generate_all()` method with parallel execution
+- [ ] Add `prompts_dir` parameter to constructor (default: `prompts/`)
+- [ ] Update existing tests in `tests/test_increment.py`
+- [ ] Validate: `python -m pytest tests/test_increment.py -v` passes
+
+### Task 3: Migration + ktalk_bridge update
+
+- [ ] Add migration logic in IncrementGenerator to move old flat `increments/v*.md` to `increments/my-increment/v*.md`
+- [ ] Update `ktalk_bridge.py` to call `generate_all()` instead of `generate()`
+- [ ] Update `_safe_generate_increment` to call `generate_all`
+- [ ] Validate: `python -m pytest tests/ -v` passes
+
+### Task 4: REST API endpoints
+
+- [ ] Add `GET /api/prompts` endpoint returning available prompts
+- [ ] Restructure `GET /api/meetings/{id}/increments` to return `{prompt_id: [metas]}`
+- [ ] Add `GET /api/meetings/{id}/increments/{prompt_id}` endpoint
+- [ ] Add `GET /api/meetings/{id}/increments/{prompt_id}/{version}` endpoint
+- [ ] Validate: `python -m compileall frontend/server.py`
+
+### Task 5: Frontend UI for multi-prompt display
+
+- [ ] Update app.js to show prompt-level tabs (level 1) and version tabs (level 2)
+- [ ] Update analyzeIncrement() to handle multi-prompt response
+- [ ] Add per-prompt regenerate button
+- [ ] Validate: syntax check passes
