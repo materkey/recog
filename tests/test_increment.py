@@ -9,6 +9,16 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recog.increment import IncrementGenerator
+from recog.prompt_registry import PromptConfig
+
+
+# Default prompt config used across tests
+DEFAULT_PROMPT = PromptConfig(
+    id="my-increment",
+    name="My increment",
+    filter=None,
+    template="Участник: {user_name}\nТранскрипт:\n{transcript}",
+)
 
 
 def _make_meeting(tmp_path: Path, meeting_id: str = "2026-03-21_test",
@@ -72,8 +82,8 @@ def _make_v1_meta(inc_dir: Path, segment_range: list[int]):
 async def test_generate_v1_creates_increment_files(tmp_path):
     """
     given: meeting with 3 segments, no prior increments
-    when: generate() called
-    then: v1.md with YAML frontmatter and v1_meta.json with correct fields created
+    when: generate() called with PromptConfig
+    then: v1.md with YAML frontmatter and v1_meta.json in prompt_id subdirectory
     """
     meeting_id = "2026-03-21_test"
     meeting_path = _make_meeting(tmp_path, meeting_id)
@@ -86,11 +96,12 @@ async def test_generate_v1_creates_increment_files(tmp_path):
     mock_provider.complete = AsyncMock(return_value="## Задачи\n- Сделать ревью\n")
 
     with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
-        version = await gen.generate(meeting_id, meeting_path)
+        version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version == 1
 
-    inc_dir = meeting_path / "increments"
+    # Files are now in increments/<prompt_id>/ subdirectory
+    inc_dir = meeting_path / "increments" / "my-increment"
     assert inc_dir.exists()
 
     # Check v1.md
@@ -112,6 +123,8 @@ async def test_generate_v1_creates_increment_files(tmp_path):
     assert v1_meta["segment_count"] == 3
     assert v1_meta["error"] is None
     assert v1_meta["provider"] == "codex"
+    assert v1_meta["prompt_id"] == "my-increment"
+    assert v1_meta["prompt_name"] == "My increment"
 
     # Verify prompt contained all segments
     call_args = mock_provider.complete.call_args[0][0]
@@ -133,8 +146,8 @@ async def test_generate_v2_uses_delta_segments(tmp_path):
     ]
     meeting_path = _make_meeting(tmp_path, meeting_id, segments=segments)
 
-    # Pre-create v1 covering segments 1-5
-    inc_dir = meeting_path / "increments"
+    # Pre-create v1 covering segments 1-5 in prompt_id subdirectory
+    inc_dir = meeting_path / "increments" / "my-increment"
     _make_v1_meta(inc_dir, [1, 5])
 
     gen = IncrementGenerator(tmp_path)
@@ -146,7 +159,7 @@ async def test_generate_v2_uses_delta_segments(tmp_path):
     mock_provider.complete = AsyncMock(return_value="## Задачи\n- Delta task\n")
 
     with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
-        version = await gen.generate(meeting_id, meeting_path)
+        version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version == 2
 
@@ -180,8 +193,8 @@ async def test_skip_generation_when_zero_delta(tmp_path):
     ]
     meeting_path = _make_meeting(tmp_path, meeting_id, segments=segments)
 
-    # Pre-create v1 covering ALL segments
-    inc_dir = meeting_path / "increments"
+    # Pre-create v1 covering ALL segments in prompt_id subdirectory
+    inc_dir = meeting_path / "increments" / "my-increment"
     _make_v1_meta(inc_dir, [1, 5])
 
     gen = IncrementGenerator(tmp_path)
@@ -190,7 +203,7 @@ async def test_skip_generation_when_zero_delta(tmp_path):
     mock_provider.complete = AsyncMock()
 
     with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
-        version = await gen.generate(meeting_id, meeting_path)
+        version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version is None
     mock_provider.complete.assert_not_called()
@@ -216,15 +229,16 @@ async def test_generate_handles_codex_failure(tmp_path):
     mock_provider.complete = AsyncMock(side_effect=Exception("Codex CLI error: timeout"))
 
     with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
-        version = await gen.generate(meeting_id, meeting_path)
+        version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version is None
 
-    inc_dir = meeting_path / "increments"
+    inc_dir = meeting_path / "increments" / "my-increment"
     # Meta should exist with failed status
     v1_meta = json.loads((inc_dir / "v1_meta.json").read_text(encoding="utf-8"))
     assert v1_meta["status"] == "failed"
     assert "timeout" in v1_meta["error"]
+    assert v1_meta["prompt_id"] == "my-increment"
 
     # No .md file
     assert not (inc_dir / "v1.md").exists()
@@ -232,12 +246,12 @@ async def test_generate_handles_codex_failure(tmp_path):
 
 def test_list_increments(tmp_path):
     """
-    given: meeting with two increment versions
-    when: list_increments() called
+    given: meeting with two increment versions for a prompt
+    when: list_increments() called with prompt_id
     then: returns sorted list of meta dicts
     """
     meeting_id = "2026-03-21_test"
-    inc_dir = tmp_path / meeting_id / "increments"
+    inc_dir = tmp_path / meeting_id / "increments" / "my-increment"
     inc_dir.mkdir(parents=True)
 
     for v in [1, 2]:
@@ -247,7 +261,7 @@ def test_list_increments(tmp_path):
         )
 
     gen = IncrementGenerator(tmp_path)
-    result = gen.list_increments(meeting_id)
+    result = gen.list_increments(meeting_id, "my-increment")
 
     assert len(result) == 2
     assert result[0]["version"] == 1
@@ -256,12 +270,12 @@ def test_list_increments(tmp_path):
 
 def test_get_increment(tmp_path):
     """
-    given: meeting with v1 increment (meta + md)
-    when: get_increment(meeting_id, 1) called
+    given: meeting with v1 increment (meta + md) for a prompt
+    when: get_increment(meeting_id, prompt_id, 1) called
     then: returns dict with meta and content
     """
     meeting_id = "2026-03-21_test"
-    inc_dir = tmp_path / meeting_id / "increments"
+    inc_dir = tmp_path / meeting_id / "increments" / "my-increment"
     inc_dir.mkdir(parents=True)
 
     meta = {"version": 1, "status": "completed"}
@@ -269,7 +283,7 @@ def test_get_increment(tmp_path):
     (inc_dir / "v1.md").write_text("---\nversion: 1\n---\n\n## Задачи\n- Task\n", encoding="utf-8")
 
     gen = IncrementGenerator(tmp_path)
-    result = gen.get_increment(meeting_id, 1)
+    result = gen.get_increment(meeting_id, "my-increment", 1)
 
     assert result is not None
     assert result["meta"]["version"] == 1
@@ -280,12 +294,152 @@ def test_get_increment(tmp_path):
 def test_get_increment_returns_none_for_missing(tmp_path):
     """
     given: meeting with no increments
-    when: get_increment(meeting_id, 1) called
+    when: get_increment(meeting_id, prompt_id, 1) called
     then: returns None
     """
     meeting_id = "2026-03-21_test"
     (tmp_path / meeting_id).mkdir(parents=True)
 
     gen = IncrementGenerator(tmp_path)
-    result = gen.get_increment(meeting_id, 1)
+    result = gen.get_increment(meeting_id, "my-increment", 1)
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_prompt_template(tmp_path):
+    """
+    given: meeting with segments and a custom PromptConfig
+    when: generate() called with that prompt
+    then: AI provider receives the rendered template with {user_name}, {transcript},
+          {participants}, {meeting_title} substituted
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = _make_meeting(tmp_path, meeting_id)
+    gen = IncrementGenerator(tmp_path)
+
+    custom_prompt = PromptConfig(
+        id="team-facts",
+        name="Team facts",
+        filter=None,
+        template="Title: {meeting_title}\nParticipants: {participants}\nUser: {user_name}\n{transcript}",
+    )
+
+    mock_provider = MagicMock()
+    mock_provider.key = "codex"
+    mock_provider.model = "gpt-5.4"
+    mock_provider.reasoning_effort = "xhigh"
+    mock_provider.complete = AsyncMock(return_value="Facts here")
+
+    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+        version = await gen.generate(meeting_id, meeting_path, custom_prompt)
+
+    assert version == 1
+
+    # Verify rendered prompt has all variables substituted
+    call_args = mock_provider.complete.call_args[0][0]
+    assert "Title: Daily sync" in call_args
+    assert "Вася" in call_args
+    assert "Петя" in call_args
+    assert "User: Вася" in call_args
+
+    # Files stored in team-facts subdirectory
+    inc_dir = meeting_path / "increments" / "team-facts"
+    assert (inc_dir / "v1.md").exists()
+    assert (inc_dir / "v1_meta.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_generate_all_runs_matching_prompts_in_parallel(tmp_path):
+    """
+    given: prompts dir with 2 prompts (one filtered, one universal), meeting title matches filter
+    when: generate_all() called
+    then: both prompts generate increments in their respective subdirectories
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = _make_meeting(tmp_path, meeting_id)
+
+    # Create prompts directory with two prompts
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "my-increment.md").write_text(
+        "---\nname: My increment\nfilter: null\n---\n\nUser: {user_name}\n{transcript}",
+        encoding="utf-8",
+    )
+    (prompts_dir / "sync-only.md").write_text(
+        "---\nname: Sync only\nfilter: sync\n---\n\nSync report for {user_name}\n{transcript}",
+        encoding="utf-8",
+    )
+
+    gen = IncrementGenerator(tmp_path, prompts_dir=prompts_dir)
+
+    mock_provider = MagicMock()
+    mock_provider.key = "codex"
+    mock_provider.model = "gpt-5.4"
+    mock_provider.reasoning_effort = "xhigh"
+    mock_provider.complete = AsyncMock(return_value="Generated content")
+
+    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+        await gen.generate_all(meeting_id, meeting_path)
+
+    # Both prompts should have generated v1
+    assert (meeting_path / "increments" / "my-increment" / "v1.md").exists()
+    assert (meeting_path / "increments" / "sync-only" / "v1.md").exists()
+
+    # Provider should have been called twice (once per prompt)
+    assert mock_provider.complete.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_all_skips_non_matching_prompts(tmp_path):
+    """
+    given: prompts dir with a filtered prompt that doesn't match meeting title
+    when: generate_all() called
+    then: non-matching prompt does not generate
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = _make_meeting(tmp_path, meeting_id)  # title is "Daily sync"
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "retro-only.md").write_text(
+        "---\nname: Retro only\nfilter: retro\n---\n\n{transcript}",
+        encoding="utf-8",
+    )
+
+    gen = IncrementGenerator(tmp_path, prompts_dir=prompts_dir)
+
+    mock_provider = MagicMock()
+    mock_provider.complete = AsyncMock()
+
+    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+        await gen.generate_all(meeting_id, meeting_path)
+
+    # No prompts matched, so no generation
+    mock_provider.complete.assert_not_called()
+    assert not (meeting_path / "increments" / "retro-only").exists()
+
+
+@pytest.mark.asyncio
+async def test_callback_receives_prompt_id(tmp_path):
+    """
+    given: IncrementGenerator with callback set
+    when: generate() succeeds
+    then: callback receives (meeting_id, version, prompt_id)
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = _make_meeting(tmp_path, meeting_id)
+    gen = IncrementGenerator(tmp_path)
+
+    callback = MagicMock()
+    gen.set_callback(callback)
+
+    mock_provider = MagicMock()
+    mock_provider.key = "codex"
+    mock_provider.model = "gpt-5.4"
+    mock_provider.reasoning_effort = "xhigh"
+    mock_provider.complete = AsyncMock(return_value="Result")
+
+    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+        await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
+
+    callback.assert_called_once_with(meeting_id, 1, "my-increment")

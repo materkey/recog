@@ -1,10 +1,12 @@
 """
 IncrementGenerator — auto-generate versioned AI task summaries on ktalk_leave.
 
-Stores outputs in meetings/<id>/increments/v1.md, v2.md with YAML frontmatter.
+Stores outputs in meetings/<id>/increments/<prompt_id>/v1.md, v2.md with YAML frontmatter.
 Delta-generation: vN uses only segments after v(N-1), no duplication.
+Multiple prompts run in parallel via generate_all().
 """
 
+import asyncio
 import json
 import sys
 import time
@@ -12,7 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Callable
 
-from frontend.ai_provider import CodexCliProvider, INCREMENT_PROMPT
+from frontend.ai_provider import CodexCliProvider
+from recog.prompt_registry import PromptConfig, PromptRegistry
 
 
 def _segments_to_transcript(segments: list[dict]) -> str:
@@ -40,25 +43,26 @@ def _local_participant_names(meta: dict) -> list[str]:
 class IncrementGenerator:
     """Generate and store versioned AI increment summaries for meetings."""
 
-    def __init__(self, meetings_base: Path):
+    def __init__(self, meetings_base: Path, prompts_dir: Path = Path("prompts")):
         self._meetings_base = meetings_base
+        self._prompts_dir = prompts_dir
         self._callback: Optional[Callable] = None
 
     def set_callback(self, callback: Callable):
-        """Set callback invoked after successful generation: callback(meeting_id, version)."""
+        """Set callback invoked after successful generation: callback(meeting_id, version, prompt_id)."""
         self._callback = callback
 
-    def _increments_dir(self, meeting_id: str) -> Path:
-        return self._meetings_base / meeting_id / "increments"
+    def _increments_dir(self, meeting_id: str, prompt_id: str) -> Path:
+        return self._meetings_base / meeting_id / "increments" / prompt_id
 
-    def _next_version(self, meeting_id: str) -> tuple[int, Optional[int]]:
-        """Scan increments/v*_meta.json, return (next_version, last_segment_id).
+    def _next_version(self, meeting_id: str, prompt_id: str) -> tuple[int, Optional[int]]:
+        """Scan increments/<prompt_id>/v*_meta.json, return (next_version, last_segment_id).
 
         last_segment_id is the upper bound of segment_range from the latest
         *completed* version, or None if no completed versions exist.
         Version counter increments past failed versions to avoid reuse.
         """
-        inc_dir = self._increments_dir(meeting_id)
+        inc_dir = self._increments_dir(meeting_id, prompt_id)
         if not inc_dir.exists():
             return 1, None
 
@@ -105,12 +109,13 @@ class IncrementGenerator:
             "---\n\n"
         )
 
-    async def generate(self, meeting_id: str, meeting_path: Path) -> Optional[int]:
-        """Generate next increment version for a meeting.
+    async def generate(self, meeting_id: str, meeting_path: Path, prompt: PromptConfig) -> Optional[int]:
+        """Generate next increment version for a meeting using the given prompt.
 
         Returns version number on success, None if skipped (zero delta).
         Raises nothing — on any failure writes failed meta.
         """
+        prompt_id = prompt.id
 
         # File existence checks — legitimate skips, not failures
         meta_path = meeting_path / "meta.json"
@@ -122,8 +127,8 @@ class IncrementGenerator:
 
         # Determine version early so we can write failed meta on any error
         # (including malformed JSON in meta.json / transcript.jsonl).
-        version, last_segment_id = self._next_version(meeting_id)
-        inc_dir = self._increments_dir(meeting_id)
+        version, last_segment_id = self._next_version(meeting_id, prompt_id)
+        inc_dir = self._increments_dir(meeting_id, prompt_id)
 
         t0 = time.monotonic()
         try:
@@ -149,7 +154,7 @@ class IncrementGenerator:
 
             # Skip if zero delta
             if not delta_segments:
-                print(f"[increment] v{version} skipped: 0 delta segments", file=sys.stderr)
+                print(f"[increment] {prompt_id} v{version} skipped: 0 delta segments", file=sys.stderr)
                 return None
 
             # Determine segment range
@@ -160,7 +165,7 @@ class IncrementGenerator:
             # Build transcript text (filters out event_type segments and empty text)
             transcript_text = _segments_to_transcript(delta_segments)
             if not transcript_text.strip():
-                print(f"[increment] v{version} skipped: no text in delta segments", file=sys.stderr)
+                print(f"[increment] {prompt_id} v{version} skipped: no text in delta segments", file=sys.stderr)
                 return None
 
             # Determine user name
@@ -173,8 +178,13 @@ class IncrementGenerator:
                 for pid, info in meta.get("participants", {}).items()
             ]
 
-            # Build prompt
-            prompt = INCREMENT_PROMPT.format(user_name=user_name, transcript=transcript_text)
+            # Build prompt from template
+            rendered_prompt = prompt.template.format(
+                user_name=user_name,
+                transcript=transcript_text,
+                participants=", ".join(participants),
+                meeting_title=meta.get("title", ""),
+            )
 
             # Ensure increments directory exists
             inc_dir.mkdir(parents=True, exist_ok=True)
@@ -183,6 +193,8 @@ class IncrementGenerator:
             provider = CodexCliProvider()
             version_meta = {
                 "version": version,
+                "prompt_id": prompt_id,
+                "prompt_name": prompt.name,
                 "provider": provider.key,
                 "model": provider.model,
                 "reasoning_effort": provider.reasoning_effort,
@@ -190,7 +202,7 @@ class IncrementGenerator:
                 "segment_count": len(delta_segments),
             }
 
-            result = await provider.complete(prompt)
+            result = await provider.complete(rendered_prompt)
             duration = time.monotonic() - t0
 
             # Build frontmatter + content
@@ -212,13 +224,13 @@ class IncrementGenerator:
             self._save_json(inc_dir / f"v{version}_meta.json", version_meta)
 
             print(
-                f"[increment] v{version} generated ({len(delta_segments)} segments, "
+                f"[increment] {prompt_id} v{version} generated ({len(delta_segments)} segments, "
                 f"{duration:.1f}s)",
                 file=sys.stderr,
             )
 
             if self._callback:
-                self._callback(meeting_id, version)
+                self._callback(meeting_id, version, prompt_id)
 
             return version
 
@@ -228,6 +240,7 @@ class IncrementGenerator:
             inc_dir.mkdir(parents=True, exist_ok=True)
             version_meta = {
                 "version": version,
+                "prompt_id": prompt_id,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",
                 "duration_seconds": round(duration, 1),
@@ -235,12 +248,31 @@ class IncrementGenerator:
             }
             self._save_json(inc_dir / f"v{version}_meta.json", version_meta)
 
-            print(f"[increment] v{version} FAILED: {exc}", file=sys.stderr)
+            print(f"[increment] {prompt_id} v{version} FAILED: {exc}", file=sys.stderr)
             return None
 
-    def list_increments(self, meeting_id: str) -> list[dict]:
-        """Return sorted list of increment meta dicts for a meeting."""
-        inc_dir = self._increments_dir(meeting_id)
+    async def generate_all(self, meeting_id: str, meeting_path: Path):
+        """Load matching prompts, run generate() for each in parallel."""
+        registry = PromptRegistry(self._prompts_dir)
+
+        meta_path = meeting_path / "meta.json"
+        if not meta_path.exists():
+            return
+
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        title = meta.get("title", "")
+        prompts = registry.matching(title)
+
+        if not prompts:
+            print("[increment] no matching prompts found", file=sys.stderr)
+            return
+
+        tasks = [self.generate(meeting_id, meeting_path, p) for p in prompts]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def list_increments(self, meeting_id: str, prompt_id: str) -> list[dict]:
+        """Return sorted list of increment meta dicts for a meeting prompt."""
+        inc_dir = self._increments_dir(meeting_id, prompt_id)
         if not inc_dir.exists():
             return []
 
@@ -255,9 +287,9 @@ class IncrementGenerator:
         result.sort(key=lambda m: m.get("version", 0))
         return result
 
-    def get_increment(self, meeting_id: str, version: int) -> Optional[dict]:
+    def get_increment(self, meeting_id: str, prompt_id: str, version: int) -> Optional[dict]:
         """Return {meta, content} for a specific version, or None if not found."""
-        inc_dir = self._increments_dir(meeting_id)
+        inc_dir = self._increments_dir(meeting_id, prompt_id)
         meta_path = inc_dir / f"v{version}_meta.json"
         if not meta_path.exists():
             return None
