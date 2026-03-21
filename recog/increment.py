@@ -484,6 +484,9 @@ class IncrementGenerator:
         tasks = [self.generate(meeting_id, meeting_path, p) for p in prompts]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for i, result in enumerate(results):
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                # CancelledError, KeyboardInterrupt, SystemExit — must propagate
+                raise result
             if isinstance(result, Exception):
                 print(
                     f"[increment] {prompts[i].id} unexpected error: {result}",
