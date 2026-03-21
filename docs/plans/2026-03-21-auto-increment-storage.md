@@ -76,10 +76,10 @@
 - [x] run all tests: `./venv-gigaam/bin/python -m pytest tests/ -v` — all must pass
 
 ### Task 4: REST API endpoints for increments
-- [ ] add `GET /api/meetings/{meeting_id}/increments` endpoint in `frontend/server.py` — returns list of increment meta dicts
-- [ ] add `GET /api/meetings/{meeting_id}/increments/{version}` endpoint — returns `{meta, content}` or 404
-- [ ] run: `./venv-gigaam/bin/python -m compileall frontend/server.py` — no syntax errors
-- [ ] run all tests: `./venv-gigaam/bin/python -m pytest tests/ -v` — all must pass
+- [x] add `GET /api/meetings/{meeting_id}/increments` endpoint in `frontend/server.py` — returns list of increment meta dicts
+- [x] add `GET /api/meetings/{meeting_id}/increments/{version}` endpoint — returns `{meta, content}` or 404
+- [x] run: `./venv-gigaam/bin/python -m compileall frontend/server.py` — no syntax errors
+- [x] run all tests: `./venv-gigaam/bin/python -m pytest tests/ -v` — all must pass
 
 ### Task 5: Frontend UI — show stored increments
 - [ ] refactor `analyzeIncrement()` in `app.js`: fetch `/api/meetings/{id}/increments` first; if versions exist call `showStoredIncrements()`, else fall back to SSE generation
