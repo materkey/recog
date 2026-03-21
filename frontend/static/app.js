@@ -1619,6 +1619,11 @@ async function loadIncrementContent(meetingId, promptId, version) {
             return;
         }
 
+        if (meta.status === 'generating') {
+            container.innerHTML = '<div class="loading">Generation in progress...</div>';
+            return;
+        }
+
         // status === 'completed'
         const strippedContent = stripYamlFrontmatter(content);
         const rendered = renderMarkdown(strippedContent);
