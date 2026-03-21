@@ -91,15 +91,15 @@
 - [x] run: `./venv-gigaam/bin/python -m compileall recog frontend` — no syntax errors
 
 ### Task 6: Verify acceptance criteria
-- [ ] verify: ktalk_leave triggers async increment generation (check stderr logs with `./recog-service.sh logs`)
-- [ ] verify: increment files created in `meetings/<id>/increments/v1.md` + `v1_meta.json`
-- [ ] verify: v1.md contains YAML frontmatter with meeting title, date, participants
-- [ ] verify: reconnect + second leave creates v2 with delta segments only
-- [ ] verify: zero-delta (join + immediate leave) skips generation
-- [ ] verify: UI button shows stored versions with tabs
-- [ ] verify: Regenerate button works via SSE fallback
-- [ ] run full test suite: `./venv-gigaam/bin/python -m pytest tests/ -v`
-- [ ] run linter: `./venv-gigaam/bin/python -m compileall recog frontend`
+- [x] verify: ktalk_leave triggers async increment generation (check stderr logs with `./recog-service.sh logs`)
+- [x] verify: increment files created in `meetings/<id>/increments/v1.md` + `v1_meta.json`
+- [x] verify: v1.md contains YAML frontmatter with meeting title, date, participants
+- [x] verify: reconnect + second leave creates v2 with delta segments only
+- [x] verify: zero-delta (join + immediate leave) skips generation
+- [x] verify: UI button shows stored versions with tabs
+- [x] verify: Regenerate button works via SSE fallback
+- [x] run full test suite: `./venv-gigaam/bin/python -m pytest tests/ -v`
+- [x] run linter: `./venv-gigaam/bin/python -m compileall recog frontend`
 
 ## Technical Details
 
