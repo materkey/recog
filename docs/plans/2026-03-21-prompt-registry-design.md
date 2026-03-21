@@ -183,10 +183,10 @@ Remove the hardcoded INCREMENT_PROMPT from ai_provider.py.
 
 ### Task 3: Migration + ktalk_bridge update
 
-- [ ] Add migration logic in IncrementGenerator to move old flat `increments/v*.md` to `increments/my-increment/v*.md`
-- [ ] Update `ktalk_bridge.py` to call `generate_all()` instead of `generate()`
-- [ ] Update `_safe_generate_increment` to call `generate_all`
-- [ ] Validate: `python -m pytest tests/ -v` passes
+- [x] Add migration logic in IncrementGenerator to move old flat `increments/v*.md` to `increments/my-increment/v*.md`
+- [x] Update `ktalk_bridge.py` to call `generate_all()` instead of `generate()`
+- [x] Update `_safe_generate_increment` to call `generate_all`
+- [x] Validate: `python -m pytest tests/ -v` passes
 
 ### Task 4: REST API endpoints
 

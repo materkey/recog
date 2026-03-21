@@ -52,6 +52,29 @@ class IncrementGenerator:
         """Set callback invoked after successful generation: callback(meeting_id, version, prompt_id)."""
         self._callback = callback
 
+    def migrate_flat_increments(self, meeting_path: Path, default_prompt_id: str = "my-increment"):
+        """Move old flat increments/v*.md|json to increments/<default_prompt_id>/v*.md|json.
+
+        Idempotent: skips if subdirectory already exists or no flat files found.
+        """
+        inc_dir = meeting_path / "increments"
+        if not inc_dir.exists():
+            return
+
+        # Detect flat v*.md or v*_meta.json files directly in increments/
+        flat_files = list(inc_dir.glob("v*.md")) + list(inc_dir.glob("v*_meta.json"))
+        if not flat_files:
+            return
+
+        target_dir = inc_dir / default_prompt_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        for f in flat_files:
+            dest = target_dir / f.name
+            if not dest.exists():
+                f.rename(dest)
+            # If dest already exists, leave the flat file (shouldn't happen in practice)
+
     def _increments_dir(self, meeting_id: str, prompt_id: str) -> Path:
         return self._meetings_base / meeting_id / "increments" / prompt_id
 
@@ -253,6 +276,9 @@ class IncrementGenerator:
 
     async def generate_all(self, meeting_id: str, meeting_path: Path):
         """Load matching prompts, run generate() for each in parallel."""
+        # Migrate old flat increments layout before generating
+        self.migrate_flat_increments(meeting_path)
+
         registry = PromptRegistry(self._prompts_dir)
 
         meta_path = meeting_path / "meta.json"

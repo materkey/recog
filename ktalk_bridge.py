@@ -383,7 +383,7 @@ class KTalkBridge:
     async def _safe_generate_increment(self, meeting_id: str, meeting_path):
         """Wrapper for increment generation that logs unexpected errors."""
         try:
-            await self._increment_generator.generate(meeting_id, meeting_path)
+            await self._increment_generator.generate_all(meeting_id, meeting_path)
         except Exception as e:
             print(f"[KTalk Bridge] increment generation error: {e}", file=sys.stderr)
 
