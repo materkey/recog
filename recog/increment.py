@@ -85,14 +85,15 @@ class IncrementGenerator:
         self, meta: dict, meeting_id: str, version: int,
         seg_start: int, seg_end: int, participants: list[str]
     ) -> str:
-        title = (meta.get("title") or "Untitled meeting").replace('"', '\\"')
+        title = (meta.get("title") or "Untitled meeting").replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
         date = meta.get("created_at", "")[:10]
+        quoted_participants = ', '.join(f'"{p}"' for p in participants)
         return (
             "---\n"
             f'meeting: "{title}"\n'
             f"meeting_id: {meeting_id}\n"
             f'date: "{date}"\n'
-            f"participants: [{', '.join(participants)}]\n"
+            f"participants: [{quoted_participants}]\n"
             f"version: {version}\n"
             f"segment_range: [{seg_start}, {seg_end}]\n"
             "---\n\n"
@@ -144,8 +145,11 @@ class IncrementGenerator:
         seg_start = min(seg_ids)
         seg_end = max(seg_ids)
 
-        # Build transcript text
+        # Build transcript text (filters out event_type segments and empty text)
         transcript_text = _segments_to_transcript(delta_segments)
+        if not transcript_text.strip():
+            print(f"[increment] v{version} skipped: no text in delta segments", file=sys.stderr)
+            return None
 
         # Determine user name
         local_names = _local_participant_names(meta)
