@@ -297,7 +297,7 @@ class IncrementGenerator:
             return
 
         tasks = [self.generate(meeting_id, meeting_path, p) for p in prompts]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def list_all_increments(self, meeting_id: str) -> dict[str, list[dict]]:
         """Return {prompt_id: [metas]} for all prompts that have increments."""

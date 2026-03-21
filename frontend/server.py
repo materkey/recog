@@ -857,6 +857,11 @@ async def generate_prompt_increment(meeting_id: str, prompt_id: str):
         version = await gen.generate(meeting_id, meeting_path, prompt)
 
         if version is None:
+            # Check if a failed meta was written (generate returns None for both skip and failure)
+            latest_metas = gen.list_increments(meeting_id, prompt_id)
+            if latest_metas and latest_metas[-1].get("status") == "failed":
+                error_msg = latest_metas[-1].get("error", "Generation failed")
+                raise HTTPException(status_code=500, detail=error_msg)
             return JSONResponse(content={"status": "skipped", "message": "No new segments to process"})
 
         result = gen.get_increment(meeting_id, prompt_id, version)
