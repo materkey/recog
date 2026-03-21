@@ -61,11 +61,11 @@
 - [x] run tests: `./venv-gigaam/bin/python -m pytest tests/test_increment.py -v` — all must pass
 
 ### Task 2: Integrate IncrementGenerator into KTalkBridge
-- [ ] add `self._increment_generator` field in `KTalkBridge.__init__()` (after `self._on_pre_meeting_switch`, line ~303)
-- [ ] add `set_increment_generator(generator)` method (after `set_meeting_storage()`, line ~369)
-- [ ] modify `meeting_leave` handler (line ~1374): capture `prev_meeting_id` and `prev_meeting_path` BEFORE `on_ktalk_leave()`, then `asyncio.create_task(self._increment_generator.generate(...))`
-- [ ] modify client disconnect handler (line ~1161): same pattern — capture prev meeting before leave, trigger async generation
-- [ ] run existing tests: `./venv-gigaam/bin/python -m pytest tests/test_ktalk_bridge.py -v` — all must pass
+- [x] add `self._increment_generator` field in `KTalkBridge.__init__()` (after `self._on_pre_meeting_switch`, line ~303)
+- [x] add `set_increment_generator(generator)` method (after `set_meeting_storage()`, line ~369)
+- [x] modify `meeting_leave` handler (line ~1374): capture `prev_meeting_id` and `prev_meeting_path` BEFORE `on_ktalk_leave()`, then `asyncio.create_task(self._increment_generator.generate(...))`
+- [x] modify client disconnect handler (line ~1161): same pattern — capture prev meeting before leave, trigger async generation
+- [x] run existing tests: `./venv-gigaam/bin/python -m pytest tests/test_ktalk_bridge.py -v` — all must pass
 
 ### Task 3: Wire IncrementGenerator in live.py startup
 - [ ] find where `bridge.set_meeting_storage(storage)` is called in `recog/live.py`

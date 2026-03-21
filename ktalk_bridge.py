@@ -305,6 +305,9 @@ class KTalkBridge:
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
 
+        # IncrementGenerator для автогенерации инкрементов при выходе из встречи
+        self._increment_generator = None
+
         # Debug state file
         self._debug_file = Path("/tmp/ktalk_debug.json")
         self._debug_update_interval = 1.0  # seconds
@@ -371,6 +374,10 @@ class KTalkBridge:
             storage: экземпляр MeetingStorage
         """
         self._meeting_storage = storage
+
+    def set_increment_generator(self, generator):
+        """Set IncrementGenerator for auto-generating increments on meeting leave."""
+        self._increment_generator = generator
 
     def get_completed_segment(self) -> Optional['SpeakerSegment']:
         """Возвращает и удаляет первый завершённый сегмент из очереди."""
@@ -1164,6 +1171,9 @@ class KTalkBridge:
             if self._meeting_storage and not self._connected_clients and self._meeting_storage.current_meeting_path:
                 meta = self._meeting_storage._load_meta()
                 if meta and meta.get("source") == "ktalk":
+                    # Capture prev meeting context BEFORE on_ktalk_leave switches it
+                    prev_meeting_id = self._meeting_storage.current_meeting_id
+                    prev_meeting_path = self._meeting_storage.current_meeting_path
                     # Use the same pre/post switch flow as meeting_join/leave
                     # so that _meeting_generation is bumped and WAV writers are swapped.
                     if self._on_pre_meeting_switch:
@@ -1172,6 +1182,9 @@ class KTalkBridge:
                     if self._on_meeting_change:
                         meeting_path = self._meeting_storage.current_meeting_path
                         self._on_meeting_change(new_meeting_id, meeting_path)
+                    # Trigger async increment generation for the meeting we just left
+                    if self._increment_generator and prev_meeting_id and prev_meeting_path:
+                        asyncio.create_task(self._increment_generator.generate(prev_meeting_id, prev_meeting_path))
                     print("[KTalk Bridge] Ended KTalk meeting due to client disconnect", file=sys.stderr)
 
     async def _process_message(self, data: dict):
@@ -1383,12 +1396,18 @@ class KTalkBridge:
             # get_current_speaker() returns None for any such chunk.
             self._clear_speaker_state()
             if self._meeting_storage:
+                # Capture prev meeting context BEFORE on_ktalk_leave switches it
+                prev_meeting_id = self._meeting_storage.current_meeting_id
+                prev_meeting_path = self._meeting_storage.current_meeting_path
                 # Invalidate in-flight chunks BEFORE on_ktalk_leave changes
                 # current_meeting_path (same rationale as meeting_join above)
                 if self._on_pre_meeting_switch:
                     self._on_pre_meeting_switch()
                 new_meeting_id = self._meeting_storage.on_ktalk_leave(reason)
                 print(f"[KTalk Bridge] Left meeting (reason: {reason}), new meeting: {new_meeting_id}", file=sys.stderr)
+                # Trigger async increment generation for the meeting we just left
+                if self._increment_generator and prev_meeting_id and prev_meeting_path:
+                    asyncio.create_task(self._increment_generator.generate(prev_meeting_id, prev_meeting_path))
                 if self._on_meeting_change:
                     meeting_path = self._meeting_storage.current_meeting_path
                     self._on_meeting_change(new_meeting_id, meeting_path)
