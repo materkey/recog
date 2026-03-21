@@ -6,6 +6,7 @@ Delta-generation: vN uses only segments after v(N-1), no duplication.
 """
 
 import json
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,8 +54,9 @@ class IncrementGenerator:
     def _next_version(self, meeting_id: str) -> tuple[int, Optional[int]]:
         """Scan increments/v*_meta.json, return (next_version, last_segment_id).
 
-        last_segment_id is the upper bound of segment_range from the latest version,
-        or None if no previous versions exist.
+        last_segment_id is the upper bound of segment_range from the latest
+        *completed* version, or None if no completed versions exist.
+        Version counter increments past failed versions to avoid reuse.
         """
         inc_dir = self._increments_dir(meeting_id)
         if not inc_dir.exists():
@@ -68,8 +70,11 @@ class IncrementGenerator:
                 v = meta.get("version", 0)
                 if v > max_version:
                     max_version = v
+                # Only use segment_range from completed versions for delta base,
+                # so failed segments are retried in the next generation.
+                if meta.get("status") == "completed":
                     sr = meta.get("segment_range")
-                    if sr and len(sr) == 2:
+                    if sr and len(sr) == 2 and (last_segment_id is None or sr[1] > last_segment_id):
                         last_segment_id = sr[1]
             except (json.JSONDecodeError, OSError):
                 continue
@@ -80,11 +85,11 @@ class IncrementGenerator:
         self, meta: dict, meeting_id: str, version: int,
         seg_start: int, seg_end: int, participants: list[str]
     ) -> str:
-        title = meta.get("title") or "Untitled meeting"
+        title = (meta.get("title") or "Untitled meeting").replace('"', '\\"')
         date = meta.get("created_at", "")[:10]
         return (
             "---\n"
-            f"meeting: {title}\n"
+            f'meeting: "{title}"\n'
             f"meeting_id: {meeting_id}\n"
             f'date: "{date}"\n'
             f"participants: [{', '.join(participants)}]\n"
@@ -99,7 +104,6 @@ class IncrementGenerator:
         Returns version number on success, None if skipped (zero delta).
         Raises nothing — on Codex failure writes failed meta.
         """
-        import sys
 
         # Load meta
         meta_path = meeting_path / "meta.json"
@@ -163,6 +167,14 @@ class IncrementGenerator:
         # Generate
         t0 = time.monotonic()
         provider = CodexCliProvider()
+        version_meta = {
+            "version": version,
+            "provider": provider.key,
+            "model": provider.model,
+            "reasoning_effort": provider.reasoning_effort,
+            "segment_range": [seg_start, seg_end],
+            "segment_count": len(delta_segments),
+        }
         try:
             result = await provider.complete(prompt)
             duration = time.monotonic() - t0
@@ -177,18 +189,12 @@ class IncrementGenerator:
             (inc_dir / f"v{version}.md").write_text(md_content, encoding="utf-8")
 
             # Write vN_meta.json
-            version_meta = {
-                "version": version,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "provider": provider.key,
-                "model": provider.model,
-                "reasoning_effort": provider.reasoning_effort,
-                "segment_range": [seg_start, seg_end],
-                "segment_count": len(delta_segments),
-                "status": "completed",
-                "duration_seconds": round(duration, 1),
-                "error": None,
-            }
+            version_meta.update(
+                generated_at=datetime.now(timezone.utc).isoformat(),
+                status="completed",
+                duration_seconds=round(duration, 1),
+                error=None,
+            )
             self._save_json(inc_dir / f"v{version}_meta.json", version_meta)
 
             print(
@@ -205,18 +211,12 @@ class IncrementGenerator:
         except Exception as exc:
             duration = time.monotonic() - t0
             # Write failed meta, no .md
-            version_meta = {
-                "version": version,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "provider": provider.key,
-                "model": provider.model,
-                "reasoning_effort": provider.reasoning_effort,
-                "segment_range": [seg_start, seg_end],
-                "segment_count": len(delta_segments),
-                "status": "failed",
-                "duration_seconds": round(duration, 1),
-                "error": str(exc),
-            }
+            version_meta.update(
+                generated_at=datetime.now(timezone.utc).isoformat(),
+                status="failed",
+                duration_seconds=round(duration, 1),
+                error=str(exc),
+            )
             self._save_json(inc_dir / f"v{version}_meta.json", version_meta)
 
             print(f"[increment] v{version} FAILED: {exc}", file=sys.stderr)

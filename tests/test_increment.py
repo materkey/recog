@@ -96,7 +96,7 @@ async def test_generate_v1_creates_increment_files(tmp_path):
     # Check v1.md
     v1_md = (inc_dir / "v1.md").read_text(encoding="utf-8")
     assert "---" in v1_md
-    assert "meeting: Daily sync" in v1_md
+    assert 'meeting: "Daily sync"' in v1_md
     assert f"meeting_id: {meeting_id}" in v1_md
     assert 'date: "2026-03-21"' in v1_md
     assert "version: 1" in v1_md
