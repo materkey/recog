@@ -826,6 +826,47 @@ async def get_increment(meeting_id: str, prompt_id: str, version: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/meetings/{meeting_id}/increments/{prompt_id}/generate")
+async def generate_prompt_increment(meeting_id: str, prompt_id: str):
+    """Trigger generation for a specific prompt in a meeting."""
+    if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
+        raise HTTPException(status_code=400, detail="Invalid meeting ID")
+    if '..' in prompt_id or '/' in prompt_id or '\\' in prompt_id:
+        raise HTTPException(status_code=400, detail="Invalid prompt ID")
+    try:
+        from recog.increment import IncrementGenerator
+        from recog.prompt_registry import PromptRegistry
+
+        storage = get_storage()
+        meeting = storage.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        meeting_path = MEETINGS_DIR / meeting_id
+        if not meeting_path.exists():
+            raise HTTPException(status_code=404, detail="Meeting directory not found")
+
+        prompts_dir = Path(__file__).parent.parent / "prompts"
+        registry = PromptRegistry(prompts_dir)
+        prompt = registry.get(prompt_id)
+        if not prompt:
+            raise HTTPException(status_code=404, detail=f"Prompt '{prompt_id}' not found")
+
+        gen = IncrementGenerator(MEETINGS_DIR, prompts_dir=prompts_dir)
+        version = await gen.generate(meeting_id, meeting_path, prompt)
+
+        if version is None:
+            return JSONResponse(content={"status": "skipped", "message": "No new segments to process"})
+
+        result = gen.get_increment(meeting_id, prompt_id, version)
+        return JSONResponse(content={"status": "generated", "version": version, "data": result})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/meetings/{meeting_id}/generate-title")
 async def generate_meeting_title(meeting_id: str):
     """Generate title for a meeting using Codex."""

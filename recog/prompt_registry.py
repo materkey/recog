@@ -43,8 +43,6 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     if end_idx == -1:
         return {}, text
 
-    # Adjust end_idx relative to full string (search started at pos 3)
-    end_idx = text.index("---", 3)
     header = text[3:end_idx].strip()
     body = text[end_idx + 3:].strip()
 

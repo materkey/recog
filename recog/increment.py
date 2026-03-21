@@ -201,12 +201,14 @@ class IncrementGenerator:
                 for pid, info in meta.get("participants", {}).items()
             ]
 
-            # Build prompt from template
-            rendered_prompt = prompt.template.format(
-                user_name=user_name,
-                transcript=transcript_text,
-                participants=", ".join(participants),
-                meeting_title=meta.get("title", ""),
+            # Build prompt from template (use replace instead of str.format
+            # to avoid KeyError on literal curly braces in transcript text)
+            rendered_prompt = (
+                prompt.template
+                .replace("{user_name}", user_name)
+                .replace("{transcript}", transcript_text)
+                .replace("{participants}", ", ".join(participants))
+                .replace("{meeting_title}", meta.get("title", ""))
             )
 
             # Ensure increments directory exists
@@ -264,6 +266,7 @@ class IncrementGenerator:
             version_meta = {
                 "version": version,
                 "prompt_id": prompt_id,
+                "prompt_name": prompt.name,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",
                 "duration_seconds": round(duration, 1),
@@ -294,11 +297,15 @@ class IncrementGenerator:
             return
 
         tasks = [self.generate(meeting_id, meeting_path, p) for p in prompts]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks)
 
     def list_all_increments(self, meeting_id: str) -> dict[str, list[dict]]:
         """Return {prompt_id: [metas]} for all prompts that have increments."""
-        base = self._meetings_base / meeting_id / "increments"
+        meeting_path = self._meetings_base / meeting_id
+        # Migrate old flat layout so reads see them in subdirectories
+        self.migrate_flat_increments(meeting_path)
+
+        base = meeting_path / "increments"
         if not base.exists():
             return {}
 
