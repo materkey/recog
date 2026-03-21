@@ -1530,14 +1530,6 @@ async function loadIncrementContent(meetingId, version) {
 
         const { meta, content } = result;
 
-        if (meta.status === 'generating') {
-            container.innerHTML = '<div class="loading">Generating increment...</div>';
-            incrementPollTimer = setInterval(() => {
-                loadIncrementContent(meetingId, version);
-            }, 3000);
-            return;
-        }
-
         if (meta.status === 'failed') {
             const errorMsg = meta.error || 'Generation failed';
             container.innerHTML = '<div class="error">Generation failed: ' + escapeHtml(errorMsg) + '</div>';

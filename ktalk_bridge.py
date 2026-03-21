@@ -307,6 +307,7 @@ class KTalkBridge:
 
         # IncrementGenerator для автогенерации инкрементов при выходе из встречи
         self._increment_generator = None
+        self._background_tasks: set = set()
 
         # Debug state file
         self._debug_file = Path("/tmp/ktalk_debug.json")
@@ -1191,7 +1192,9 @@ class KTalkBridge:
                         self._on_meeting_change(new_meeting_id, meeting_path)
                     # Trigger async increment generation for the meeting we just left
                     if self._increment_generator and prev_meeting_id and prev_meeting_path:
-                        asyncio.create_task(self._safe_generate_increment(prev_meeting_id, prev_meeting_path))
+                        task = asyncio.create_task(self._safe_generate_increment(prev_meeting_id, prev_meeting_path))
+                        self._background_tasks.add(task)
+                        task.add_done_callback(self._background_tasks.discard)
                     print("[KTalk Bridge] Ended KTalk meeting due to client disconnect", file=sys.stderr)
 
     async def _process_message(self, data: dict):
@@ -1414,7 +1417,9 @@ class KTalkBridge:
                 print(f"[KTalk Bridge] Left meeting (reason: {reason}), new meeting: {new_meeting_id}", file=sys.stderr)
                 # Trigger async increment generation for the meeting we just left
                 if self._increment_generator and prev_meeting_id and prev_meeting_path:
-                    asyncio.create_task(self._safe_generate_increment(prev_meeting_id, prev_meeting_path))
+                    task = asyncio.create_task(self._safe_generate_increment(prev_meeting_id, prev_meeting_path))
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
                 if self._on_meeting_change:
                     meeting_path = self._meeting_storage.current_meeting_path
                     self._on_meeting_change(new_meeting_id, meeting_path)

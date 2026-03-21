@@ -736,6 +736,8 @@ async def get_transcript(meeting_id: str):
 @app.get("/api/meetings/{meeting_id}/increments")
 async def list_increments(meeting_id: str):
     """List all increment versions for a meeting."""
+    if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
+        raise HTTPException(status_code=400, detail="Invalid meeting ID")
     try:
         from recog.increment import IncrementGenerator
 
@@ -757,6 +759,8 @@ async def list_increments(meeting_id: str):
 @app.get("/api/meetings/{meeting_id}/increments/{version}")
 async def get_increment(meeting_id: str, version: int):
     """Get a specific increment version (meta + content)."""
+    if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
+        raise HTTPException(status_code=400, detail="Invalid meeting ID")
     try:
         from recog.increment import IncrementGenerator
 
