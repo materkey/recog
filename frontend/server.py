@@ -853,6 +853,7 @@ async def generate_prompt_increment(meeting_id: str, prompt_id: str):
             raise HTTPException(status_code=404, detail=f"Prompt '{prompt_id}' not found")
 
         gen = IncrementGenerator(MEETINGS_DIR, prompts_dir=prompts_dir)
+        gen.migrate_flat_increments(meeting_path)
         version = await gen.generate(meeting_id, meeting_path, prompt)
 
         if version is None:
