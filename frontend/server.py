@@ -733,6 +733,51 @@ async def get_transcript(meeting_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/meetings/{meeting_id}/increments")
+async def list_increments(meeting_id: str):
+    """List all increment versions for a meeting."""
+    try:
+        from recog.increment import IncrementGenerator
+
+        storage = get_storage()
+        meeting = storage.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        gen = IncrementGenerator(MEETINGS_DIR)
+        increments = gen.list_increments(meeting_id)
+        return JSONResponse(content=increments)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/meetings/{meeting_id}/increments/{version}")
+async def get_increment(meeting_id: str, version: int):
+    """Get a specific increment version (meta + content)."""
+    try:
+        from recog.increment import IncrementGenerator
+
+        storage = get_storage()
+        meeting = storage.get_meeting(meeting_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        gen = IncrementGenerator(MEETINGS_DIR)
+        result = gen.get_increment(meeting_id, version)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Increment v{version} not found")
+
+        return JSONResponse(content=result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/meetings/{meeting_id}/generate-title")
 async def generate_meeting_title(meeting_id: str):
     """Generate title for a meeting using Codex."""
