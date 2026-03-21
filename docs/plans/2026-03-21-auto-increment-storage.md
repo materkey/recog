@@ -82,13 +82,13 @@
 - [x] run all tests: `./venv-gigaam/bin/python -m pytest tests/ -v` — all must pass
 
 ### Task 5: Frontend UI — show stored increments
-- [ ] refactor `analyzeIncrement()` in `app.js`: fetch `/api/meetings/{id}/increments` first; if versions exist call `showStoredIncrements()`, else fall back to SSE generation
-- [ ] implement `showStoredIncrements(meetingId, increments)`: render version tabs in modal with timestamps, load latest version content
-- [ ] implement `switchIncrementVersion(meetingId, version)`: switch active tab and load content
-- [ ] implement `loadIncrementContent(meetingId, version)`: fetch from REST API, strip YAML frontmatter, render markdown; handle `generating` status with polling, `failed` status with error message
-- [ ] implement `regenerateIncrement(meetingId)`: trigger SSE generation (existing flow)
-- [ ] extract existing SSE logic into `generateIncrementSSE(meetingId)` so both paths (fresh generate and regenerate) reuse it
-- [ ] run: `./venv-gigaam/bin/python -m compileall recog frontend` — no syntax errors
+- [x] refactor `analyzeIncrement()` in `app.js`: fetch `/api/meetings/{id}/increments` first; if versions exist call `showStoredIncrements()`, else fall back to SSE generation
+- [x] implement `showStoredIncrements(meetingId, increments)`: render version tabs in modal with timestamps, load latest version content
+- [x] implement `switchIncrementVersion(meetingId, version)`: switch active tab and load content
+- [x] implement `loadIncrementContent(meetingId, version)`: fetch from REST API, strip YAML frontmatter, render markdown; handle `generating` status with polling, `failed` status with error message
+- [x] implement `regenerateIncrement(meetingId)`: trigger SSE generation (existing flow)
+- [x] extract existing SSE logic into `generateIncrementSSE(meetingId)` so both paths (fresh generate and regenerate) reuse it
+- [x] run: `./venv-gigaam/bin/python -m compileall recog frontend` — no syntax errors
 
 ### Task 6: Verify acceptance criteria
 - [ ] verify: ktalk_leave triggers async increment generation (check stderr logs with `./recog-service.sh logs`)

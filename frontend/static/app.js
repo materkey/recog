@@ -57,6 +57,18 @@ const api = {
             throw new Error(error.detail || 'Failed to generate title');
         }
         return res.json();
+    },
+
+    async getIncrements(meetingId) {
+        const res = await fetch(`/api/meetings/${meetingId}/increments`);
+        if (!res.ok) return [];
+        return res.json();
+    },
+
+    async getIncrement(meetingId, version) {
+        const res = await fetch(`/api/meetings/${meetingId}/increments/${version}`);
+        if (!res.ok) return null;
+        return res.json();
     }
 };
 
@@ -1358,15 +1370,36 @@ let aiResponses = {};  // Store responses for each provider
 let aiProviderNames = {};  // Store provider display names
 let activeAiTab = 'claude';
 let aiEventSource = null;
+let incrementPollTimer = null;
 
 async function analyzeIncrement() {
     const meeting = views.meeting;
     if (!meeting.id) return;
 
+    // Check for stored increments first
+    try {
+        const increments = await api.getIncrements(meeting.id);
+        if (increments.length > 0) {
+            showStoredIncrements(meeting.id, increments);
+            return;
+        }
+    } catch (e) {
+        console.error('Failed to fetch stored increments:', e);
+    }
+
+    // Fall back to SSE generation
+    generateIncrementSSE(meeting.id);
+}
+
+function generateIncrementSSE(meetingId) {
     // Close any existing connection
     if (aiEventSource) {
         aiEventSource.close();
         aiEventSource = null;
+    }
+    if (incrementPollTimer) {
+        clearInterval(incrementPollTimer);
+        incrementPollTimer = null;
     }
 
     // Reset state
@@ -1374,21 +1407,23 @@ async function analyzeIncrement() {
     aiProviderNames = {};
     activeAiTab = 'claude';
 
-    // Show modal with loading states
-    document.getElementById('ai-modal').style.display = 'flex';
-    document.getElementById('ai-response-claude').innerHTML =
-        '<div class="loading">Connecting to Claude...</div>';
-    document.getElementById('ai-response-codex').innerHTML =
-        '<div class="loading">Connecting to Codex...</div>';
+    // Show modal with SSE UI
+    const modal = document.getElementById('ai-modal');
+    modal.style.display = 'flex';
 
-    // Reset tabs
-    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelector('.tab-btn[data-provider="claude"]').classList.add('active');
-    document.querySelectorAll('.ai-tab-content').forEach(c => c.classList.remove('active'));
-    document.getElementById('ai-response-claude').classList.add('active');
+    modal.querySelector('.modal-header h3').textContent = 'AI Analysis';
+    modal.querySelector('.modal-tabs').innerHTML =
+        '<button class="tab-btn active" data-provider="claude" onclick="switchAiTab(\'claude\')">Claude</button>' +
+        '<button class="tab-btn" data-provider="codex" onclick="switchAiTab(\'codex\')">Codex</button>';
+    modal.querySelector('.modal-body').innerHTML =
+        '<div id="ai-response-claude" class="ai-tab-content active"><div class="loading">Connecting to Claude...</div></div>' +
+        '<div id="ai-response-codex" class="ai-tab-content"><div class="loading">Connecting to Codex...</div></div>';
+    modal.querySelector('.modal-footer').innerHTML =
+        '<button class="btn" onclick="copyAiResponse()">Copy</button>' +
+        '<button class="btn" onclick="closeAiModal()">Close</button>';
 
     // Use SSE for streaming
-    const url = `/api/meetings/${meeting.id}/analyze-stream?question=increment`;
+    const url = `/api/meetings/${meetingId}/analyze-stream?question=increment`;
     aiEventSource = new EventSource(url);
 
     aiEventSource.onmessage = (event) => {
@@ -1413,6 +1448,128 @@ async function analyzeIncrement() {
                 '<div class="error">Connection error</div>';
         }
     };
+}
+
+function showStoredIncrements(meetingId, increments) {
+    if (incrementPollTimer) {
+        clearInterval(incrementPollTimer);
+        incrementPollTimer = null;
+    }
+    if (aiEventSource) {
+        aiEventSource.close();
+        aiEventSource = null;
+    }
+
+    const modal = document.getElementById('ai-modal');
+    modal.style.display = 'flex';
+
+    modal.querySelector('.modal-header h3').textContent = 'My Increment';
+
+    // Build version tabs — latest version active
+    const latestVersion = increments[increments.length - 1].version;
+    const tabsHtml = increments.map(inc => {
+        const date = new Date(inc.generated_at);
+        const timeStr = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const isActive = inc.version === latestVersion ? ' active' : '';
+        const statusIcon = inc.status === 'failed' ? ' !' : inc.status === 'generating' ? ' ...' : '';
+        return '<button class="tab-btn' + isActive + '" data-version="' + inc.version +
+            '" onclick="switchIncrementVersion(\'' + meetingId + '\', ' + inc.version +
+            ')">v' + inc.version + ' <small style="opacity:.6">' + timeStr + '</small>' +
+            statusIcon + '</button>';
+    }).join('');
+    modal.querySelector('.modal-tabs').innerHTML = tabsHtml;
+
+    modal.querySelector('.modal-body').innerHTML =
+        '<div id="increment-content" class="ai-tab-content active"><div class="loading">Loading...</div></div>';
+
+    modal.querySelector('.modal-footer').innerHTML =
+        '<button class="btn" onclick="copyAiResponse()">Copy</button>' +
+        '<button class="btn" onclick="regenerateIncrement(\'' + meetingId + '\')">Regenerate</button>' +
+        '<button class="btn" onclick="closeAiModal()">Close</button>';
+
+    loadIncrementContent(meetingId, latestVersion);
+}
+
+function switchIncrementVersion(meetingId, version) {
+    if (incrementPollTimer) {
+        clearInterval(incrementPollTimer);
+        incrementPollTimer = null;
+    }
+
+    document.querySelectorAll('#ai-modal .modal-tabs .tab-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.version) === version);
+    });
+
+    loadIncrementContent(meetingId, version);
+}
+
+function stripYamlFrontmatter(text) {
+    if (!text || !text.startsWith('---')) return text;
+    const endIdx = text.indexOf('---', 3);
+    if (endIdx === -1) return text;
+    return text.substring(endIdx + 3).trim();
+}
+
+async function loadIncrementContent(meetingId, version) {
+    if (incrementPollTimer) {
+        clearInterval(incrementPollTimer);
+        incrementPollTimer = null;
+    }
+
+    const container = document.getElementById('increment-content');
+    if (!container) return;
+
+    container.innerHTML = '<div class="loading">Loading...</div>';
+
+    try {
+        const result = await api.getIncrement(meetingId, version);
+        if (!result) {
+            container.innerHTML = '<div class="error">Version not found</div>';
+            return;
+        }
+
+        const { meta, content } = result;
+
+        if (meta.status === 'generating') {
+            container.innerHTML = '<div class="loading">Generating increment...</div>';
+            incrementPollTimer = setInterval(() => {
+                loadIncrementContent(meetingId, version);
+            }, 3000);
+            return;
+        }
+
+        if (meta.status === 'failed') {
+            const errorMsg = meta.error || 'Generation failed';
+            container.innerHTML = '<div class="error">Generation failed: ' + escapeHtml(errorMsg) + '</div>';
+            aiResponses['increment'] = '';
+            activeAiTab = 'increment';
+            return;
+        }
+
+        // status === 'completed'
+        const strippedContent = stripYamlFrontmatter(content);
+        const rendered = renderMarkdown(strippedContent);
+        const durationStr = meta.duration_seconds != null ? meta.duration_seconds.toFixed(1) + 's' : '';
+        const infoStr = 'v' + meta.version + ' · ' + meta.segment_count + ' segments' +
+            (durationStr ? ' · ' + durationStr : '');
+
+        container.innerHTML =
+            '<div class="ai-answer">' + rendered + '</div>' +
+            '<div class="ai-provider">' + escapeHtml(infoStr) + '</div>';
+
+        aiResponses['increment'] = strippedContent;
+        activeAiTab = 'increment';
+    } catch (e) {
+        container.innerHTML = '<div class="error">Failed to load: ' + escapeHtml(e.message) + '</div>';
+    }
+}
+
+function regenerateIncrement(meetingId) {
+    if (incrementPollTimer) {
+        clearInterval(incrementPollTimer);
+        incrementPollTimer = null;
+    }
+    generateIncrementSSE(meetingId);
 }
 
 function handleAiStreamEvent(data) {
@@ -1536,6 +1693,11 @@ function closeAiModal() {
     if (aiEventSource) {
         aiEventSource.close();
         aiEventSource = null;
+    }
+    // Clear increment polling if active
+    if (incrementPollTimer) {
+        clearInterval(incrementPollTimer);
+        incrementPollTimer = null;
     }
     document.getElementById('ai-modal').style.display = 'none';
 }
