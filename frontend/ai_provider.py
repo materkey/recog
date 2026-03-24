@@ -20,10 +20,16 @@ def _resolve_cli(name: str) -> str:
     if path:
         return path
     # Fallback: check common locations
-    for candidate in [
+    import glob as glob_module
+    candidates = [
         os.path.expanduser(f"~/.local/bin/{name}"),
         f"/usr/local/bin/{name}",
-    ]:
+    ]
+    # nvm-installed binaries (codex, etc.)
+    candidates.extend(
+        sorted(glob_module.glob(os.path.expanduser(f"~/.local/share/nvm/*/bin/{name}")), reverse=True)
+    )
+    for candidate in candidates:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return name  # last resort: hope PATH has it

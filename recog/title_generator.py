@@ -9,6 +9,8 @@ import json
 import os
 from typing import Optional
 
+from frontend.ai_provider import _resolve_cli
+
 
 TITLE_PROMPT = """Придумай короткое название (3-7 слов) для этого разговора.
 
@@ -47,7 +49,7 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            "codex", "exec",
+            _resolve_cli("codex"), "exec",
             "-m", model,
             "--json",
             "-",
