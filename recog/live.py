@@ -18,7 +18,8 @@ from dataclasses import dataclass
 
 from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
                      LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
-                     RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS)
+                     RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
+                     SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION)
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
 
@@ -280,6 +281,51 @@ class RecentSegment:
     text: str                    # Original text for extension correction
 
 
+@dataclass
+class SourceState:
+    """Tracks per-source (mic / system) state during live transcription."""
+    pending_updates: list = None
+    last_words: list = None
+    last_speaker: str = None
+    last_speech_time: float = 0
+    segment_start_time: float = 0
+    last_text_time: float = 0
+    audio_offset: int = 0
+
+    def __post_init__(self):
+        if self.pending_updates is None:
+            self.pending_updates = []
+        if self.last_words is None:
+            self.last_words = []
+        if self.last_text_time == 0:
+            self.last_text_time = time.time()
+
+
+def normalize_word(w: str) -> str:
+    """Strip punctuation and lowercase a word for deduplication comparison."""
+    return ''.join(c.lower() for c in w if c.isalnum())
+
+
+def deduplicate(text: str, prev_words: list) -> str | None:
+    """Remove leading overlap between *text* and *prev_words*.
+
+    Returns ``None`` when the entire text is a duplicate.
+    """
+    if not prev_words or not text:
+        return text
+    words = text.split()
+    if not words:
+        return text
+    norm_words = [normalize_word(w) for w in words]
+    norm_prev = [normalize_word(w) for w in prev_words]
+    max_overlap = min(len(words), len(prev_words), 6)
+    for overlap_len in range(max_overlap, 0, -1):
+        if norm_words[:overlap_len] == norm_prev[-overlap_len:]:
+            result = ' '.join(words[overlap_len:])
+            return result if result.strip() else None
+    return text
+
+
 class LiveTranscriber:
     """Координатор live транскрипции."""
 
@@ -345,13 +391,6 @@ class LiveTranscriber:
         # Meeting storage для сохранения транскриптов
         self._meeting_storage = None
 
-        # Буфер аудио для двухпроходной транскрипции (KTalk mode)
-        self._audio_buffer = []  # [(timestamp, audio_chunk), ...]
-        self._audio_buffer_max_seconds = 60  # Максимум 60 сек в буфере
-        self._draft_segments = {}  # segment_id -> {'lines': [...], 'speaker': str, 'start_time': float, 'chunks': [...]}
-        self._current_segment_id = None
-        self._current_segment_start_time = None  # Python timestamp начала текущего сегмента
-
         # Recent system-audio segments for retroactive correction of Unknown runs
         self._recent_system_segments: deque[RecentSegment] = deque(maxlen=RETROACTIVE_MAX_SEGMENTS)
 
@@ -361,6 +400,8 @@ class LiveTranscriber:
         self._wav_lock = threading.Lock()  # Guards _wav_writer_mic/_wav_writer_system
         self._state_lock = threading.Lock()  # Guards per-source state during meeting transitions
         self._meeting_generation = 0  # Incremented on meeting change; used to discard stale chunks
+        self._mic_state: Optional[SourceState] = None
+        self._sys_state: Optional[SourceState] = None
 
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Транскрибирует напрямую через tensor без temp файлов."""
@@ -443,7 +484,7 @@ class LiveTranscriber:
             best_similarity = -1.0
             for emb_key, label in self.session_speakers.items():
                 db_emb = np.frombuffer(emb_key, dtype=np.float32)
-                similarity = SpeakerDatabase._cosine_similarity(embedding, db_emb)
+                similarity = SpeakerDatabase.cosine_similarity(embedding, db_emb)
                 if similarity >= SPEAKER_SIMILARITY_THRESHOLD and similarity > best_similarity:
                     best_similarity = similarity
                     best_label = label
@@ -457,16 +498,14 @@ class LiveTranscriber:
             self.session_speakers[embedding.astype(np.float32).tobytes()] = label
             return label
 
+    def _resolve_speaker_embedding(self, chunk: np.ndarray) -> str:
+        """Get embedding for *chunk* and identify speaker (runs in executor thread)."""
+        emb = self._get_embedding(chunk)
+        return self._identify_speaker(emb)
+
     def _ktalk_speaker_callback(self, speaker_name: Optional[str], is_speaking: bool):
         """Callback для обновления текущего спикера из KTalk."""
         self._ktalk_current_speaker = speaker_name if is_speaking else None
-
-    def _get_ktalk_speaker(self) -> Optional[str]:
-        """Возвращает текущего спикера из KTalk bridge (только реальные данные от extension)."""
-        if self._ktalk_bridge:
-            # get_current_speaker уже включает "память" о последнем спикере (3 сек)
-            return self._ktalk_bridge.get_current_speaker()
-        return self._ktalk_current_speaker
 
     def _retroactive_correct_unknown_run(
         self,
@@ -563,93 +602,519 @@ class LiveTranscriber:
                     correction=True,
                 )
 
-    def _add_to_audio_buffer(self, timestamp: float, audio_chunk: np.ndarray):
-        """Добавляет аудио в буфер для последующей перетранскрипции."""
-        self._audio_buffer.append((timestamp, audio_chunk.copy()))
+    def _setup_meeting_storage(self):
+        """Initialize MeetingStorage and audio recording writers."""
+        try:
+            from meeting_storage import MeetingStorage
+            self._meeting_storage = MeetingStorage()
+            meeting_id = self._meeting_storage.start_session(
+                mic=self.mic_capture is not None,
+                system_audio=self.system_capture is not None,
+                ktalk=self.use_ktalk,
+                screencapture=self.use_screencapture,
+                chunk_duration_ms=int(self.chunk_duration * 1000)
+            )
+            print(f"Meeting started: {meeting_id}")
 
-        # Удаляем старые данные
-        cutoff_time = timestamp - self._audio_buffer_max_seconds
-        while self._audio_buffer and self._audio_buffer[0][0] < cutoff_time:
-            self._audio_buffer.pop(0)
+            # Initialize audio recording if enabled
+            if self.save_audio:
+                meeting_path = self._meeting_storage.base_path / meeting_id
+                if self.mic_capture:
+                    mic_audio_path = meeting_path / "audio_mic.wav"
+                    self._wav_writer_mic = IncrementalWavWriter(mic_audio_path, self.sample_rate)
+                    self._wav_writer_mic.open()
+                    print(f"Recording mic audio: {mic_audio_path}")
+                if self.system_capture:
+                    system_audio_path = meeting_path / "audio_system.wav"
+                    self._wav_writer_system = IncrementalWavWriter(system_audio_path, self.sample_rate)
+                    self._wav_writer_system.open()
+                    print(f"Recording system audio: {system_audio_path}")
+        except ImportError:
+            print("Warning: meeting_storage module not found, transcripts won't be saved", file=sys.stderr)
+            self._meeting_storage = None
+        except Exception as e:
+            print(f"Warning: MeetingStorage error: {e}, transcripts won't be saved", file=sys.stderr)
+            self._meeting_storage = None
 
-    def _get_audio_for_segment(self, start_time: float, end_time: float) -> Optional[np.ndarray]:
-        """Извлекает аудио для заданного временного диапазона."""
-        chunks = []
-        for ts, chunk in self._audio_buffer:
-            chunk_end = ts + len(chunk) / self.sample_rate
-            # Проверяем пересечение с запрошенным диапазоном
-            if chunk_end >= start_time and ts <= end_time:
-                chunks.append(chunk)
-
-        if not chunks:
-            return None
-
-        return np.concatenate(chunks)
-
-    def _handle_segment_complete(self, segment, speaker_width: int):
-        """Обрабатывает завершённый сегмент - перетранскрибирует и заменяет черновики."""
-        # Ищем сегмент по speaker_id с суффиксом _active
-        matching_segment_id = f"{segment.speaker_id}_active"
-
-        if matching_segment_id not in self._draft_segments:
-            # Это нормально если сегмент уже был обработан (например, по MAX_SEGMENT_DURATION)
-            # Не выводим ошибку для коротких сегментов
-            if segment.duration_ms > 500:
-                pass  # Тихо пропускаем - возможно дубликат
+    def _setup_ktalk_bridge(self):
+        """Wire up KTalk bridge, IncrementGenerator, and meeting-change callbacks."""
+        if not self.use_ktalk:
             return
+        try:
+            from ktalk_bridge import KTalkBridge
+            self._ktalk_bridge = KTalkBridge()
+            self._ktalk_bridge.set_speaker_callback(self._ktalk_speaker_callback)
+            # Connect MeetingStorage to KTalk bridge
+            if self._meeting_storage:
+                self._ktalk_bridge.set_meeting_storage(self._meeting_storage)
+                # Wire IncrementGenerator for auto-summaries on ktalk_leave
+                from recog.increment import IncrementGenerator
+                self._increment_generator = IncrementGenerator(
+                    self._meeting_storage.base_path,
+                    prompts_dir=Path(__file__).parent.parent / "prompts",
+                )
+                self._increment_generator.set_callback(
+                    lambda mid, ver, pid: print(
+                        f"[increment] ready: {mid} v{ver} ({pid})", file=sys.stderr
+                    )
+                )
+                self._ktalk_bridge.set_increment_generator(self._increment_generator)
+            # Register callbacks for meeting changes:
+            # pre-switch invalidates in-flight chunks after path changes
+            self._ktalk_bridge.set_pre_meeting_switch_callback(self._invalidate_pending_chunks)
+            # post-switch reinitializes audio recording at new path
+            self._ktalk_bridge.set_meeting_change_callback(self._on_meeting_change)
+            self._ktalk_bridge.start()
+            print("KTalk bridge started, waiting for Chrome extension...")
+            time.sleep(1)
+        except ImportError:
+            print("Warning: ktalk_bridge module not found, falling back to embedding-based", file=sys.stderr)
+            self.use_ktalk = False
+        except Exception as e:
+            print(f"Warning: KTalk bridge error: {e}, falling back to embedding-based", file=sys.stderr)
+            self.use_ktalk = False
 
-        draft_info = self._draft_segments[matching_segment_id]
-        audio_chunks = draft_info.get('chunks', [])
+    def _start_audio_captures(self):
+        """Start mic and system audio capture devices."""
+        if self.mic_capture:
+            self.mic_capture.start()
+        if self.system_capture:
+            self.system_capture.start()
 
-        if not audio_chunks:
-            print(f"\n[SEGMENT] No audio chunks for {segment.speaker_name}", file=sys.stderr)
-            del self._draft_segments[matching_segment_id]
-            return
+    def _teardown_session(self, executor, force_exit: bool):
+        """Stop captures, finalize audio, close meeting, write transcript."""
+        print("\n" + "-" * 60)
+        print("Остановлено.")
 
-        # Склеиваем все чанки аудио
-        audio = np.concatenate(audio_chunks)
-        if len(audio) < 1000:
-            del self._draft_segments[matching_segment_id]
-            return
+        self.running = False
+        executor.shutdown(wait=False, cancel_futures=True)
 
-        # Перетранскрибируем весь сегмент
-        final_text = self._transcribe_direct(audio)
-        if not final_text:
-            del self._draft_segments[matching_segment_id]
-            return
+        if self.mic_capture:
+            self.mic_capture.stop()
+        if self.system_capture:
+            self.system_capture.stop()
 
-        # Форматируем время (используем Python timestamp из draft_info)
-        import time as time_module
-        start_time = draft_info.get('start_time', time_module.time())
-        start_dt = datetime.fromtimestamp(start_time)
-        timestamp = start_dt.strftime("%H:%M:%S")
+        # Finalize audio recordings
+        mic_audio_path = None
+        system_audio_path = None
+        with self._wav_lock:
+            if self._wav_writer_mic:
+                self._wav_writer_mic.finalize()
+                mic_audio_path = str(self._wav_writer_mic.path)
+                print(f"Mic audio saved: {mic_audio_path}")
+            if self._wav_writer_system:
+                self._wav_writer_system.finalize()
+                system_audio_path = str(self._wav_writer_system.path)
+                print(f"System audio saved: {system_audio_path}")
 
-        # Формируем финальную строку
-        speaker = segment.speaker_name
-        duration_sec = len(audio) / self.sample_rate
+        # Store audio paths in meeting meta
+        if self._meeting_storage and (mic_audio_path or system_audio_path):
+            self._meeting_storage.set_audio_paths(mic_audio_path, system_audio_path)
 
-        # Находим черновые строки
-        draft_lines = []
-        line_indices = draft_info.get('lines', [])
-        for idx in line_indices:
-            if idx < len(self.transcript_lines) and self.transcript_lines[idx]:
-                draft_lines.append(self.transcript_lines[idx])
+        # Stop KTalk bridge
+        if self._ktalk_bridge:
+            self._ktalk_bridge.stop()
 
-        del self._draft_segments[matching_segment_id]
+        # End meeting session
+        if self._meeting_storage:
+            meeting_id = self._meeting_storage.end_session()
+            if meeting_id:
+                print(f"Meeting saved: {meeting_id}")
 
-        # Выводим финальную транскрипцию
-        sys.stdout.write(f"\n")
-        sys.stdout.write(f"{'─' * 60}\n")
-        sys.stdout.write(f"[FINAL {timestamp}] {speaker:{speaker_width}s} ({duration_sec:.1f}s):\n")
-        sys.stdout.write(f"  {final_text}\n")
-        if draft_lines:
-            sys.stdout.write(f"  (черновик: {len(draft_lines)} строк)\n")
-        sys.stdout.write(f"{'─' * 60}\n")
+        if self.output_file and self.transcript_lines:
+            with open(self.output_file, 'w', encoding='utf-8') as f:
+                f.write("\n".join(self.transcript_lines))
+            print(f"Транскрипт сохранён в {self.output_file}")
+
+        if force_exit:
+            import os
+            os._exit(0)
+
+    def _process_pending(self, state, is_mic=False):
+        """Process all pending embedding updates for a source."""
+        with self._state_lock:
+            if not state.pending_updates:
+                return
+
+            still_pending = []
+            for i, pending in enumerate(state.pending_updates):
+                line_idx, ts, txt, future, chunk_time, pending_audio_offset, pending_gen = pending
+                if not future.done():
+                    # Stop at first incomplete future to preserve commit order
+                    still_pending = state.pending_updates[i:]
+                    break
+
+                try:
+                    speaker = future.result(timeout=0)
+                except Exception:
+                    speaker = "???"
+
+                # Skip if meeting changed since this chunk was captured
+                if self._meeting_generation != pending_gen:
+                    continue
+
+                time_gap = chunk_time - state.last_speech_time
+                segment_duration = chunk_time - state.segment_start_time
+                is_continuation = (speaker == state.last_speaker
+                                   and time_gap < SPEAKER_TURN_GAP
+                                   and segment_duration < MAX_SEGMENT_DURATION)
+
+                if speaker not in ("???", "speaker"):
+                    state.last_speaker = speaker
+                state.last_speech_time = chunk_time
+                if not is_continuation:
+                    state.segment_start_time = chunk_time
+
+                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+                final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
+
+                if line_idx < len(self.transcript_lines):
+                    self.transcript_lines[line_idx] = final_line
+                    # Rewrite line on terminal if it's the last one
+                    if line_idx == len(self.transcript_lines) - 1:
+                        sys.stdout.write(f"\r\033[K{final_line}")
+                        sys.stdout.flush()
+
+                if self._meeting_storage:
+                    uncertain = speaker == "???"
+                    self._meeting_storage.append_segment(
+                        speaker=speaker,
+                        speaker_id=speaker,
+                        text=txt,
+                        is_local=is_mic,
+                        is_continuation=is_continuation,
+                        uncertain=uncertain,
+                        uncertain_reason="embedding_error" if uncertain else "",
+                        audio_offset_ms=pending_audio_offset
+                    )
+
+            state.pending_updates = still_pending
+
+    def _check_silence_split(self, state, current_time):
+        """Check silence duration and split meeting session if threshold exceeded."""
+        if self._meeting_storage:
+            silence_duration = current_time - state.last_text_time
+            if silence_duration >= SILENCE_SPLIT_TIMEOUT:
+                self._meeting_storage.split_on_silence_timeout()
+                state.last_speaker = None
+                state.last_words = []
+            state.last_text_time = current_time
+
+    def _handle_mic_chunk(self, text, timestamp, chunk_time, chunk_gen, state):
+        """Handle a transcribed mic chunk: fixed speaker name, is_local=True."""
+        mic_speaker_name = self.mic_speaker_name
+        time_gap = chunk_time - state.last_speech_time
+        segment_duration = chunk_time - state.segment_start_time
+        is_continuation = (state.last_speaker == mic_speaker_name
+                           and time_gap < SPEAKER_TURN_GAP
+                           and segment_duration < MAX_SEGMENT_DURATION)
+
+        state.last_speaker = mic_speaker_name
+        state.last_speech_time = chunk_time
+        if not is_continuation:
+            state.segment_start_time = chunk_time
+
+        # Микрофон: без диаризации, фиксированное имя
+        line = f"\n**{mic_speaker_name}** *[{timestamp}]*: {text}\n"
+        sys.stdout.write(line)
         sys.stdout.flush()
+        self.transcript_lines.append(line)
 
-        # Обновляем transcript_lines (markdown формат)
-        final_line = f"\n**{speaker}** *[{timestamp}]*: {final_text}\n"
-        self.transcript_lines.append(final_line)
+        # Отправляем транскрипт микрофона в Chrome extension (is_local=True)
+        if self._ktalk_bridge:
+            self._ktalk_bridge.send_transcript(
+                mic_speaker_name, text, timestamp, is_continuation, is_local=True)
+
+        # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
+        if self._meeting_storage and self._meeting_generation == chunk_gen:
+            self._meeting_storage.append_segment(
+                speaker=mic_speaker_name,
+                speaker_id="local",
+                text=text,
+                is_local=True,
+                is_continuation=is_continuation,
+                uncertain=False,
+                uncertain_reason="",
+                audio_offset_ms=state.audio_offset
+            )
+
+    def _handle_ktalk_chunk(self, text, timestamp, chunk_start_time, chunk_end_time,
+                            chunk_time, chunk_gen, state):
+        """Handle a transcribed system-audio chunk with KTalk speaker attribution.
+
+        Speaker assignment fallback chain (see ADR / plan for rationale):
+
+          1. dominant_speaker_for_period -- time-window voting from Jitsi events
+          2. get_current_speaker -- point-in-time with 3 s memory
+          3. last_speaker TTL -- reuse recent speaker if <10 s and not muted
+          4. sole_unmuted_remote -- exactly 1 remote mic on -> likely speaker
+             (marked uncertain; avoids false attribution when 2+ are unmuted)
+          5. "Unknown" -- no attribution possible
+
+        Why sole_unmuted fallback exists: Jitsi's _activeSpeaker$ event lags
+        1-5 s behind actual speech. When Speaker A mutes and Speaker B starts,
+        the extension filters out stale A (muted) but Jitsi hasn't switched to
+        B yet, leaving a gap with no positive signal. If only B is unmuted, we
+        can safely attribute speech to B. Remaining edge cases are caught by
+        retroactive correction (see _retroactive_correct_unknown_run).
+        """
+        ktalk_speaker = None
+        if self._ktalk_bridge:
+            ktalk_speaker = self._ktalk_bridge.get_dominant_speaker_for_period(
+                chunk_start_time, chunk_end_time
+            )
+            if not ktalk_speaker:
+                ktalk_speaker = self._ktalk_bridge.get_current_speaker()
+        else:
+            ktalk_speaker = self._ktalk_current_speaker
+        sole_unmuted_fallback = False
+        if ktalk_speaker:
+            speaker = ktalk_speaker
+            no_speaker_yet = False
+        elif (state.last_speaker
+              and (chunk_time - state.last_speech_time) < LAST_SPEAKER_TTL
+              and not (self._ktalk_bridge and self._ktalk_bridge.is_speaker_muted(state.last_speaker))):
+            speaker = state.last_speaker
+            no_speaker_yet = False
+        elif self._ktalk_bridge and (sole_unmuted := self._ktalk_bridge.get_sole_unmuted_remote_participant()):
+            speaker = sole_unmuted
+            no_speaker_yet = False
+            sole_unmuted_fallback = True
+        else:
+            speaker = "Unknown"
+            no_speaker_yet = True
+
+        time_gap = chunk_time - state.last_speech_time
+        segment_duration = chunk_time - state.segment_start_time
+        is_continuation = (speaker == state.last_speaker
+                           and time_gap < SPEAKER_TURN_GAP
+                           and segment_duration < MAX_SEGMENT_DURATION)
+
+        # Only update last_speaker with confidently identified speakers;
+        # "Unknown" would poison the TTL fallback window, and
+        # sole_unmuted is uncertain -- propagating it via TTL would
+        # lose the uncertainty flag and cascade into retroactive rewrites.
+        if speaker != "Unknown" and not sole_unmuted_fallback:
+            state.last_speaker = speaker
+        state.last_speech_time = chunk_time
+        if not is_continuation:
+            state.segment_start_time = chunk_time
+
+        # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+        line = f"\n**{speaker}** *[{timestamp}]*: {text}\n"
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        self.transcript_lines.append(line)
+        transcript_line_idx = len(self.transcript_lines) - 1
+
+        # Отправляем транскрипт в Chrome extension
+        # System audio = всегда remote speaker (is_local=False)
+        if self._ktalk_bridge:
+            is_local = False  # System audio always from remote speaker
+            all_mics_muted = self._ktalk_bridge.are_all_mics_muted()
+
+            # Определяем неопределённость и её причину
+            # Приоритет: no_speaker > sole_unmuted_fallback > all_mics_muted
+            uncertain = False
+            uncertain_reason = ""
+            if no_speaker_yet:
+                # Ещё не было информации о спикере от extension
+                uncertain = True
+                uncertain_reason = "no_speaker"
+            elif sole_unmuted_fallback:
+                # Speaker inferred from sole unmuted participant, not confirmed by Jitsi
+                uncertain = True
+                uncertain_reason = "sole_unmuted_fallback"
+            elif all_mics_muted:
+                # Все микрофоны выключены - непонятно кто говорит
+                uncertain = True
+                uncertain_reason = "mics_off"
+
+            self._ktalk_bridge.send_transcript(
+                speaker, text, timestamp, is_continuation,
+                is_local=is_local, uncertain=uncertain,
+                uncertain_reason=uncertain_reason)
+
+            # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
+            meeting_seg_id = 0
+            if self._meeting_storage and self._meeting_generation == chunk_gen:
+                meeting_seg_id = self._meeting_storage.append_segment(
+                    speaker=speaker,
+                    speaker_id=speaker,  # Используем имя как ID для KTalk
+                    text=text,
+                    is_local=is_local,
+                    is_continuation=is_continuation,
+                    uncertain=uncertain,
+                    uncertain_reason=uncertain_reason,
+                    audio_offset_ms=state.audio_offset
+                )
+
+            # Track segment for retroactive correction.
+            # Lock guards against _invalidate_pending_chunks racing
+            # between the generation check and the deque append;
+            # without the lock a meeting switch can clear the deque
+            # after we read the generation but before we append.
+            needs_correction = False
+            correction_snapshot = None
+            with self._state_lock:
+                if self._meeting_generation == chunk_gen:
+                    self._recent_system_segments.append(RecentSegment(
+                        speaker=speaker,
+                        chunk_time=chunk_time,
+                        line_idx=transcript_line_idx,
+                        meeting_segment_id=meeting_seg_id,
+                        is_local=False,
+                        timestamp_display=timestamp,
+                        text=text,
+                    ))
+
+                    # Retroactive correction: if we just identified a speaker
+                    # after a run of Unknown segments, correct them backwards
+                    needs_correction = (
+                        speaker != "Unknown"
+                        and len(self._recent_system_segments) >= 2
+                        and self._recent_system_segments[-2].speaker == "Unknown"
+                    )
+                    # Snapshot segments and generation inside the lock so
+                    # a concurrent _invalidate_pending_chunks cannot clear
+                    # the deque between here and the correction method.
+                    if needs_correction:
+                        correction_snapshot = (
+                            list(self._recent_system_segments),
+                            self._meeting_generation,
+                            self._meeting_storage.current_meeting_path
+                            if self._meeting_storage else None,
+                        )
+
+            if needs_correction:
+                self._retroactive_correct_unknown_run(
+                    speaker, chunk_time,
+                    correction_snapshot=correction_snapshot,
+                )
+
+    def _handle_embedding_chunk(self, text, timestamp, chunk_time, chunk_gen, state,
+                                chunk, executor, is_mic=False):
+        """Handle transcribed chunk via no-diarization or async embedding."""
+        if self.no_diarization:
+            time_gap = chunk_time - state.last_speech_time
+            segment_duration = chunk_time - state.segment_start_time
+            is_continuation = (state.last_speaker == "speaker"
+                               and time_gap < SPEAKER_TURN_GAP
+                               and segment_duration < MAX_SEGMENT_DURATION)
+
+            state.last_speaker = "speaker"
+            state.last_speech_time = chunk_time
+            if not is_continuation:
+                state.segment_start_time = chunk_time
+
+            # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+            line = f"\n**speaker** *[{timestamp}]*: {text}\n"
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            self.transcript_lines.append(line)
+
+            if self._meeting_storage and self._meeting_generation == chunk_gen:
+                self._meeting_storage.append_segment(
+                    speaker="speaker",
+                    speaker_id="speaker",
+                    text=text,
+                    is_local=is_mic,
+                    is_continuation=is_continuation,
+                    uncertain=True,
+                    uncertain_reason="no_diarization",
+                    audio_offset_ms=state.audio_offset
+                )
+        else:
+            # Placeholder для async diarization
+            draft = f"\n**...** *[{timestamp}]*: {text}\n"
+            sys.stdout.write(draft)
+            sys.stdout.flush()
+            self.transcript_lines.append(draft)
+
+            chunk_copy = chunk.copy()
+
+            future = executor.submit(self._resolve_speaker_embedding, chunk_copy)
+            with self._state_lock:
+                state.pending_updates.append(
+                    (len(self.transcript_lines) - 1, timestamp, text, future,
+                     chunk_time, state.audio_offset, chunk_gen))
+
+    def _process_chunk(self, capture, state, executor, is_mic=False):
+        """Read audio chunk, run ASR, and dispatch to appropriate handler."""
+        # Snapshot meeting generation BEFORE reading buffer so that audio
+        # captured before a meeting switch is tagged with the old generation
+        # and discarded by the generation check downstream.
+        chunk_gen = self._meeting_generation
+        chunk = capture.get_chunk(self.chunk_duration)
+        if chunk is None or len(chunk) < 1000:
+            return
+        # Audio was captured during the PREVIOUS chunk_duration seconds
+        chunk_end_time = time.time()
+        chunk_start_time = chunk_end_time - self.chunk_duration
+
+        # Capture audio offset BEFORE writing chunk (for segment playback)
+        # This offset points to where this chunk's audio STARTS in the WAV file
+        # Lock protects against _on_meeting_change swapping writers from KTalk thread.
+        # Generation check inside the lock prevents writing old-meeting audio to the
+        # new meeting's WAV: _invalidate_pending_chunks bumps generation BEFORE
+        # _on_meeting_change swaps writers under this same lock, so by the time we
+        # acquire _wav_lock after a swap, the generation will already differ.
+        with self._wav_lock:
+            if self._meeting_generation != chunk_gen:
+                return
+            if is_mic and self._wav_writer_mic:
+                state.audio_offset = self._wav_writer_mic.get_offset_ms()
+                self._wav_writer_mic.write_chunk(chunk)
+            elif not is_mic and self._wav_writer_system:
+                state.audio_offset = self._wav_writer_system.get_offset_ms()
+                self._wav_writer_system.write_chunk(chunk)
+
+        # Пропускаем запись микрофона если на KTalk встрече и mic замьючен
+        # Проверяем ДО ASR inference чтобы не тратить CPU на muted chunks
+        if is_mic and self._ktalk_bridge and self._ktalk_bridge.is_local_mic_muted():
+            return
+
+        # VAD: пропускаем тишину (не тратим CPU на inference)
+        rms = np.sqrt(np.mean(chunk ** 2))
+        if rms < VAD_RMS_THRESHOLD:
+            return
+
+        text = self._transcribe_direct(chunk)
+        if not text:
+            return
+
+        text = deduplicate(text, state.last_words)
+        if not text:
+            return
+
+        # Bail out if meeting changed during ASR -- prevents stale
+        # state updates (last_words/last_speaker) and transcript sends
+        # from leaking across meeting boundaries
+        if self._meeting_generation != chunk_gen:
+            return
+
+        state.last_words = text.split()[-5:]
+
+        current_time = time.time()
+        self._check_silence_split(state, current_time)
+
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        chunk_time = current_time
+
+        if self.transcript_lines:
+            sys.stdout.write("\n")
+
+        if is_mic:
+            self._handle_mic_chunk(text, timestamp, chunk_time, chunk_gen, state)
+        elif self.use_ktalk:
+            self._handle_ktalk_chunk(
+                text, timestamp, chunk_start_time, chunk_end_time,
+                chunk_time, chunk_gen, state)
+        else:
+            self._handle_embedding_chunk(
+                text, timestamp, chunk_time, chunk_gen, state,
+                chunk, executor, is_mic=is_mic)
+
 
     def run(self, force_exit: bool = False):
         """Основной цикл live транскрипции."""
@@ -683,492 +1148,33 @@ class LiveTranscriber:
         print("-" * 60)
         print()
 
-        # Initialize Meeting Storage
-        try:
-            from meeting_storage import MeetingStorage
-            self._meeting_storage = MeetingStorage()
-            meeting_id = self._meeting_storage.start_session(
-                mic=self.mic_capture is not None,
-                system_audio=self.system_capture is not None,
-                ktalk=self.use_ktalk,
-                screencapture=self.use_screencapture,
-                chunk_duration_ms=int(self.chunk_duration * 1000)
-            )
-            print(f"Meeting started: {meeting_id}")
-
-            # Initialize audio recording if enabled
-            if self.save_audio:
-                meeting_path = self._meeting_storage.base_path / meeting_id
-                if self.mic_capture:
-                    mic_audio_path = meeting_path / "audio_mic.wav"
-                    self._wav_writer_mic = IncrementalWavWriter(mic_audio_path, self.sample_rate)
-                    self._wav_writer_mic.open()
-                    print(f"Recording mic audio: {mic_audio_path}")
-                if self.system_capture:
-                    system_audio_path = meeting_path / "audio_system.wav"
-                    self._wav_writer_system = IncrementalWavWriter(system_audio_path, self.sample_rate)
-                    self._wav_writer_system.open()
-                    print(f"Recording system audio: {system_audio_path}")
-        except ImportError:
-            print("Warning: meeting_storage module not found, transcripts won't be saved", file=sys.stderr)
-            self._meeting_storage = None
-        except Exception as e:
-            print(f"Warning: MeetingStorage error: {e}, transcripts won't be saved", file=sys.stderr)
-            self._meeting_storage = None
-
-        # Initialize KTalk bridge if needed
-        if self.use_ktalk:
-            try:
-                from ktalk_bridge import KTalkBridge
-                self._ktalk_bridge = KTalkBridge()
-                self._ktalk_bridge.set_speaker_callback(self._ktalk_speaker_callback)
-                # Connect MeetingStorage to KTalk bridge
-                if self._meeting_storage:
-                    self._ktalk_bridge.set_meeting_storage(self._meeting_storage)
-                    # Wire IncrementGenerator for auto-summaries on ktalk_leave
-                    from recog.increment import IncrementGenerator
-                    self._increment_generator = IncrementGenerator(
-                        self._meeting_storage.base_path,
-                        prompts_dir=Path(__file__).parent.parent / "prompts",
-                    )
-                    self._increment_generator.set_callback(
-                        lambda mid, ver, pid: print(
-                            f"[increment] ready: {mid} v{ver} ({pid})", file=sys.stderr
-                        )
-                    )
-                    self._ktalk_bridge.set_increment_generator(self._increment_generator)
-                # Register callbacks for meeting changes:
-                # pre-switch invalidates in-flight chunks after path changes
-                self._ktalk_bridge.set_pre_meeting_switch_callback(self._invalidate_pending_chunks)
-                # post-switch reinitializes audio recording at new path
-                self._ktalk_bridge.set_meeting_change_callback(self._on_meeting_change)
-                self._ktalk_bridge.start()
-                print("KTalk bridge started, waiting for Chrome extension...")
-                time.sleep(1)
-            except ImportError:
-                print("Warning: ktalk_bridge module not found, falling back to embedding-based", file=sys.stderr)
-                self.use_ktalk = False
-            except Exception as e:
-                print(f"Warning: KTalk bridge error: {e}, falling back to embedding-based", file=sys.stderr)
-                self.use_ktalk = False
+        self._setup_meeting_storage()
+        self._setup_ktalk_bridge()
 
         self.asr.load_model(quiet=True)
 
-        # Запускаем capture устройства
-        if self.mic_capture:
-            self.mic_capture.start()
-        if self.system_capture:
-            self.system_capture.start()
+        self._start_audio_captures()
 
         self.running = True
-        self._is_tty = sys.stdout.isatty()
 
-        # Executor для фоновой диаризации
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-
-        speaker_width = 24  # Для полных имён (имя + фамилия)
-        mic_speaker_name = self.mic_speaker_name
-
-        # Отдельные состояния для каждого источника
-        class SourceState:
-            def __init__(self):
-                self.pending_updates = []
-                self.last_words = []
-                self.last_speaker = None
-                self.last_speech_time = 0
-                self.segment_start_time = 0  # Время начала текущего сегмента
-                self.last_text_time = time.time()
-                self.audio_offset = 0  # Offset in WAV file where current chunk starts
 
         self._mic_state = SourceState()
         self._sys_state = SourceState()
-        mic_state = self._mic_state
-        sys_state = self._sys_state
-
-        speaker_turn_gap = 3.0
-        max_segment_duration = 20.0  # Принудительный разрыв сегмента после N секунд
-
-        def normalize_word(w: str) -> str:
-            return ''.join(c.lower() for c in w if c.isalnum())
-
-        def deduplicate(text: str, prev_words: list) -> str:
-            if not prev_words or not text:
-                return text
-            words = text.split()
-            if not words:
-                return text
-            norm_words = [normalize_word(w) for w in words]
-            norm_prev = [normalize_word(w) for w in prev_words]
-            max_overlap = min(len(words), len(prev_words), 6)
-            for overlap_len in range(max_overlap, 0, -1):
-                if norm_words[:overlap_len] == norm_prev[-overlap_len:]:
-                    result = ' '.join(words[overlap_len:])
-                    return result if result.strip() else None
-            return text
-
-        def process_pending(state, is_mic=False):
-            """Обрабатывает все pending updates для источника."""
-            # Lock prevents _on_meeting_change from clearing state mid-iteration,
-            # which would cause segments committed to the wrong meeting or
-            # the pending_updates clear being overwritten by still_pending.
-            with self._state_lock:
-                if not state.pending_updates:
-                    return
-
-                still_pending = []
-                for i, pending in enumerate(state.pending_updates):
-                    line_idx, ts, txt, future, chunk_time, pending_audio_offset, pending_gen = pending
-                    if not future.done():
-                        # Stop at first incomplete future to preserve commit order
-                        still_pending = state.pending_updates[i:]
-                        break
-
-                    try:
-                        speaker = future.result(timeout=0)
-                    except Exception:
-                        speaker = "???"
-
-                    # Skip if meeting changed since this chunk was captured
-                    if self._meeting_generation != pending_gen:
-                        continue
-
-                    time_gap = chunk_time - state.last_speech_time
-                    segment_duration = chunk_time - state.segment_start_time
-                    is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
-
-                    if speaker not in ("???", "speaker"):
-                        state.last_speaker = speaker
-                    state.last_speech_time = chunk_time
-                    if not is_continuation:
-                        state.segment_start_time = chunk_time
-
-                    # Markdown формат: **Speaker** *[HH:MM:SS]*: text
-                    final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
-
-                    if line_idx < len(self.transcript_lines):
-                        self.transcript_lines[line_idx] = final_line
-                        # Rewrite line on terminal if it's the last one
-                        if line_idx == len(self.transcript_lines) - 1:
-                            sys.stdout.write(f"\r\033[K{final_line}")
-                            sys.stdout.flush()
-
-                    if self._meeting_storage:
-                        uncertain = speaker == "???"
-                        self._meeting_storage.append_segment(
-                            speaker=speaker,
-                            speaker_id=speaker,
-                            text=txt,
-                            is_local=is_mic,
-                            is_continuation=is_continuation,
-                            uncertain=uncertain,
-                            uncertain_reason="embedding_error" if uncertain else "",
-                            audio_offset_ms=pending_audio_offset
-                        )
-
-                state.pending_updates = still_pending
-
-        def process_chunk(capture, state, is_mic=False):
-            """Обрабатывает чанк из источника."""
-            # Snapshot meeting generation BEFORE reading buffer so that audio
-            # captured before a meeting switch is tagged with the old generation
-            # and discarded by the generation check downstream.
-            chunk_gen = self._meeting_generation
-            chunk = capture.get_chunk(self.chunk_duration)
-            if chunk is None or len(chunk) < 1000:
-                return
-            # Audio was captured during the PREVIOUS chunk_duration seconds
-            chunk_end_time = time.time()
-            chunk_start_time = chunk_end_time - self.chunk_duration
-
-            # Capture audio offset BEFORE writing chunk (for segment playback)
-            # This offset points to where this chunk's audio STARTS in the WAV file
-            # Lock protects against _on_meeting_change swapping writers from KTalk thread.
-            # Generation check inside the lock prevents writing old-meeting audio to the
-            # new meeting's WAV: _invalidate_pending_chunks bumps generation BEFORE
-            # _on_meeting_change swaps writers under this same lock, so by the time we
-            # acquire _wav_lock after a swap, the generation will already differ.
-            with self._wav_lock:
-                if self._meeting_generation != chunk_gen:
-                    return
-                if is_mic and self._wav_writer_mic:
-                    state.audio_offset = self._wav_writer_mic.get_offset_ms()
-                    self._wav_writer_mic.write_chunk(chunk)
-                elif not is_mic and self._wav_writer_system:
-                    state.audio_offset = self._wav_writer_system.get_offset_ms()
-                    self._wav_writer_system.write_chunk(chunk)
-
-            # Пропускаем запись микрофона если на KTalk встрече и mic замьючен
-            # Проверяем ДО ASR inference чтобы не тратить CPU на muted chunks
-            if is_mic and self._ktalk_bridge and self._ktalk_bridge.is_local_mic_muted():
-                return
-
-            # VAD: пропускаем тишину (не тратим CPU на inference)
-            rms = np.sqrt(np.mean(chunk ** 2))
-            if rms < VAD_RMS_THRESHOLD:
-                return
-
-            text = self._transcribe_direct(chunk)
-            if not text:
-                return
-
-            text = deduplicate(text, state.last_words)
-            if not text:
-                return
-
-            # Bail out if meeting changed during ASR — prevents stale
-            # state updates (last_words/last_speaker) and transcript sends
-            # from leaking across meeting boundaries
-            if self._meeting_generation != chunk_gen:
-                return
-
-            state.last_words = text.split()[-5:]
-
-            current_time = time.time()
-            if self._meeting_storage:
-                silence_duration = current_time - state.last_text_time
-                if silence_duration >= SILENCE_SPLIT_TIMEOUT:
-                    self._meeting_storage.split_on_silence_timeout()
-                    # Reset speaker state after silence split to prevent
-                    # stale speaker from being reused in new meeting segment
-                    state.last_speaker = None
-                    state.last_words = []
-                state.last_text_time = current_time
-
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            chunk_time = current_time
-
-            if self.transcript_lines:
-                sys.stdout.write("\n")
-
-            # Микрофон: без диаризации, фиксированное имя
-            if is_mic:
-                time_gap = chunk_time - state.last_speech_time
-                segment_duration = chunk_time - state.segment_start_time
-                is_continuation = (state.last_speaker == mic_speaker_name and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
-
-                state.last_speaker = mic_speaker_name
-                state.last_speech_time = chunk_time
-                if not is_continuation:
-                    state.segment_start_time = chunk_time
-
-                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
-                line = f"\n**{mic_speaker_name}** *[{timestamp}]*: {text}\n"
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                self.transcript_lines.append(line)
-
-                # Отправляем транскрипт микрофона в Chrome extension (is_local=True)
-                if self._ktalk_bridge:
-                    self._ktalk_bridge.send_transcript(mic_speaker_name, text, timestamp, is_continuation, is_local=True)
-
-                # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
-                if self._meeting_storage and self._meeting_generation == chunk_gen:
-                    self._meeting_storage.append_segment(
-                        speaker=mic_speaker_name,
-                        speaker_id="local",
-                        text=text,
-                        is_local=True,
-                        is_continuation=is_continuation,
-                        uncertain=False,
-                        uncertain_reason="",
-                        audio_offset_ms=state.audio_offset
-                    )
-
-            # System audio: speaker attribution via KTalk extension
-            elif self.use_ktalk:
-                # Speaker assignment fallback chain (see ADR / plan for rationale):
-                #
-                #   1. dominant_speaker_for_period — time-window voting from Jitsi events
-                #   2. get_current_speaker — point-in-time with 3 s memory
-                #   3. last_speaker TTL — reuse recent speaker if <10 s and not muted
-                #   4. sole_unmuted_remote — exactly 1 remote mic on → likely speaker
-                #      (marked uncertain; avoids false attribution when 2+ are unmuted)
-                #   5. "Unknown" — no attribution possible
-                #
-                # Why sole_unmuted fallback exists: Jitsi's _activeSpeaker$ event lags
-                # 1-5 s behind actual speech. When Speaker A mutes and Speaker B starts,
-                # the extension filters out stale A (muted) but Jitsi hasn't switched to
-                # B yet, leaving a gap with no positive signal. If only B is unmuted, we
-                # can safely attribute speech to B. Remaining edge cases are caught by
-                # retroactive correction (see _retroactive_correct_unknown_run).
-                ktalk_speaker = None
-                if self._ktalk_bridge:
-                    ktalk_speaker = self._ktalk_bridge.get_dominant_speaker_for_period(
-                        chunk_start_time, chunk_end_time
-                    )
-                    if not ktalk_speaker:
-                        ktalk_speaker = self._ktalk_bridge.get_current_speaker()
-                else:
-                    ktalk_speaker = self._ktalk_current_speaker
-                sole_unmuted_fallback = False
-                if ktalk_speaker:
-                    speaker = ktalk_speaker
-                    no_speaker_yet = False
-                elif (state.last_speaker
-                      and (chunk_time - state.last_speech_time) < LAST_SPEAKER_TTL
-                      and not (self._ktalk_bridge and self._ktalk_bridge.is_speaker_muted(state.last_speaker))):
-                    speaker = state.last_speaker
-                    no_speaker_yet = False
-                elif self._ktalk_bridge and (sole_unmuted := self._ktalk_bridge.get_sole_unmuted_remote_participant()):
-                    speaker = sole_unmuted
-                    no_speaker_yet = False
-                    sole_unmuted_fallback = True
-                else:
-                    speaker = "Unknown"
-                    no_speaker_yet = True
-
-                time_gap = chunk_time - state.last_speech_time
-                segment_duration = chunk_time - state.segment_start_time
-                is_continuation = (speaker == state.last_speaker and time_gap < speaker_turn_gap and segment_duration < max_segment_duration)
-
-                # Only update last_speaker with confidently identified speakers;
-                # "Unknown" would poison the TTL fallback window, and
-                # sole_unmuted is uncertain — propagating it via TTL would
-                # lose the uncertainty flag and cascade into retroactive rewrites.
-                if speaker != "Unknown" and not sole_unmuted_fallback:
-                    state.last_speaker = speaker
-                state.last_speech_time = chunk_time
-                if not is_continuation:
-                    state.segment_start_time = chunk_time
-
-                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
-                line = f"\n**{speaker}** *[{timestamp}]*: {text}\n"
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                self.transcript_lines.append(line)
-                transcript_line_idx = len(self.transcript_lines) - 1
-
-                # Отправляем транскрипт в Chrome extension
-                # System audio = всегда remote speaker (is_local=False)
-                if self._ktalk_bridge:
-                    is_local = False  # System audio always from remote speaker
-                    all_mics_muted = self._ktalk_bridge.are_all_mics_muted()
-
-                    # Определяем неопределённость и её причину
-                    # Приоритет: no_speaker > sole_unmuted_fallback > all_mics_muted
-                    uncertain = False
-                    uncertain_reason = ""
-                    if no_speaker_yet:
-                        # Ещё не было информации о спикере от extension
-                        uncertain = True
-                        uncertain_reason = "no_speaker"
-                    elif sole_unmuted_fallback:
-                        # Speaker inferred from sole unmuted participant, not confirmed by Jitsi
-                        uncertain = True
-                        uncertain_reason = "sole_unmuted_fallback"
-                    elif all_mics_muted:
-                        # Все микрофоны выключены - непонятно кто говорит
-                        uncertain = True
-                        uncertain_reason = "mics_off"
-
-                    self._ktalk_bridge.send_transcript(speaker, text, timestamp, is_continuation, is_local=is_local, uncertain=uncertain, uncertain_reason=uncertain_reason)
-
-                    # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
-                    meeting_seg_id = 0
-                    if self._meeting_storage and self._meeting_generation == chunk_gen:
-                        meeting_seg_id = self._meeting_storage.append_segment(
-                            speaker=speaker,
-                            speaker_id=speaker,  # Используем имя как ID для KTalk
-                            text=text,
-                            is_local=is_local,
-                            is_continuation=is_continuation,
-                            uncertain=uncertain,
-                            uncertain_reason=uncertain_reason,
-                            audio_offset_ms=state.audio_offset
-                        )
-
-                    # Track segment for retroactive correction.
-                    # Lock guards against _invalidate_pending_chunks racing
-                    # between the generation check and the deque append;
-                    # without the lock a meeting switch can clear the deque
-                    # after we read the generation but before we append.
-                    needs_correction = False
-                    correction_snapshot = None
-                    with self._state_lock:
-                        if self._meeting_generation == chunk_gen:
-                            self._recent_system_segments.append(RecentSegment(
-                                speaker=speaker,
-                                chunk_time=chunk_time,
-                                line_idx=transcript_line_idx,
-                                meeting_segment_id=meeting_seg_id,
-                                is_local=False,
-                                timestamp_display=timestamp,
-                                text=text,
-                            ))
-
-                            # Retroactive correction: if we just identified a speaker
-                            # after a run of Unknown segments, correct them backwards
-                            needs_correction = (
-                                speaker != "Unknown"
-                                and len(self._recent_system_segments) >= 2
-                                and self._recent_system_segments[-2].speaker == "Unknown"
-                            )
-                            # Snapshot segments and generation inside the lock so
-                            # a concurrent _invalidate_pending_chunks cannot clear
-                            # the deque between here and the correction method.
-                            if needs_correction:
-                                correction_snapshot = (
-                                    list(self._recent_system_segments),
-                                    self._meeting_generation,
-                                    self._meeting_storage.current_meeting_path
-                                    if self._meeting_storage else None,
-                                )
-
-                    if needs_correction:
-                        self._retroactive_correct_unknown_run(
-                            speaker, chunk_time,
-                            correction_snapshot=correction_snapshot,
-                        )
-
-            elif self.no_diarization:
-                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
-                line = f"\n**speaker** *[{timestamp}]*: {text}\n"
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                self.transcript_lines.append(line)
-
-                if self._meeting_storage and self._meeting_generation == chunk_gen:
-                    self._meeting_storage.append_segment(
-                        speaker="speaker",
-                        speaker_id="speaker",
-                        text=text,
-                        is_local=is_mic,
-                        uncertain=True,
-                        uncertain_reason="no_diarization",
-                        audio_offset_ms=state.audio_offset
-                    )
-            else:
-                # Placeholder для async diarization
-                draft = f"\n**...** *[{timestamp}]*: {text}\n"
-                sys.stdout.write(draft)
-                sys.stdout.flush()
-                self.transcript_lines.append(draft)
-
-                chunk_copy = chunk.copy()
-
-                def get_speaker(c):
-                    emb = self._get_embedding(c)
-                    return self._identify_speaker(emb)
-
-                future = executor.submit(get_speaker, chunk_copy)
-                with self._state_lock:
-                    state.pending_updates.append((len(self.transcript_lines) - 1, timestamp, text, future, chunk_time, state.audio_offset, chunk_gen))
 
         try:
             while self.running:
                 time.sleep(0.1)
 
-                # Обрабатываем pending updates
                 if self.mic_capture:
-                    process_pending(mic_state, is_mic=True)
+                    self._process_pending(self._mic_state, is_mic=True)
                 if self.system_capture:
-                    process_pending(sys_state, is_mic=False)
+                    self._process_pending(self._sys_state, is_mic=False)
 
-                # Обрабатываем новые чанки
                 if self.mic_capture:
-                    process_chunk(self.mic_capture, mic_state, is_mic=True)
+                    self._process_chunk(self.mic_capture, self._mic_state, executor, is_mic=True)
                 if self.system_capture:
-                    process_chunk(self.system_capture, sys_state, is_mic=False)
+                    self._process_chunk(self.system_capture, self._sys_state, executor, is_mic=False)
 
         except KeyboardInterrupt:
             pass
@@ -1178,52 +1184,8 @@ class LiveTranscriber:
             traceback.print_exc()
 
         finally:
-            print("\n" + "-" * 60)
-            print("Остановлено.")
+            self._teardown_session(executor, force_exit)
 
-            self.running = False
-            executor.shutdown(wait=False, cancel_futures=True)
-
-            if self.mic_capture:
-                self.mic_capture.stop()
-            if self.system_capture:
-                self.system_capture.stop()
-
-            # Finalize audio recordings
-            mic_audio_path = None
-            system_audio_path = None
-            with self._wav_lock:
-                if self._wav_writer_mic:
-                    self._wav_writer_mic.finalize()
-                    mic_audio_path = str(self._wav_writer_mic.path)
-                    print(f"Mic audio saved: {mic_audio_path}")
-                if self._wav_writer_system:
-                    self._wav_writer_system.finalize()
-                    system_audio_path = str(self._wav_writer_system.path)
-                    print(f"System audio saved: {system_audio_path}")
-
-            # Store audio paths in meeting meta
-            if self._meeting_storage and (mic_audio_path or system_audio_path):
-                self._meeting_storage.set_audio_paths(mic_audio_path, system_audio_path)
-
-            # Stop KTalk bridge
-            if self._ktalk_bridge:
-                self._ktalk_bridge.stop()
-
-            # End meeting session
-            if self._meeting_storage:
-                meeting_id = self._meeting_storage.end_session()
-                if meeting_id:
-                    print(f"Meeting saved: {meeting_id}")
-
-            if self.output_file and self.transcript_lines:
-                with open(self.output_file, 'w', encoding='utf-8') as f:
-                    f.write("\n".join(self.transcript_lines))
-                print(f"Транскрипт сохранён в {self.output_file}")
-
-            if force_exit:
-                import os
-                os._exit(0)
 
     def _invalidate_pending_chunks(self):
         """Bump generation and clear pending state on meeting boundary.
@@ -1239,7 +1201,7 @@ class LiveTranscriber:
         with self._state_lock:
             self._meeting_generation += 1
             self._recent_system_segments.clear()
-            if hasattr(self, '_mic_state'):
+            if self._mic_state is not None:
                 for state in (self._mic_state, self._sys_state):
                     for pending in state.pending_updates:
                         pending[3].cancel()  # pending[3] is the Future

@@ -158,7 +158,7 @@ class SpeakerDatabase:
                 if not sample.embedding:
                     continue
                 db_embedding = np.array(sample.embedding)
-                similarity = self._cosine_similarity(embedding, db_embedding)
+                similarity = self.cosine_similarity(embedding, db_embedding)
                 if similarity > max_sim_for_speaker:
                     max_sim_for_speaker = similarity
 
@@ -217,7 +217,7 @@ class SpeakerDatabase:
         return result
 
     @staticmethod
-    def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
         """Вычисляет косинусное сходство между векторами."""
         a = a.flatten()
         b = b.flatten()

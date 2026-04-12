@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Embedding extraction worker for speaker enrollment.
-Runs in venv-pyannote to use ECAPA-TDNN.
+Runs in venv-gigaam to use ECAPA-TDNN.
 
 Usage:
-    echo '{"audio_path": "/path/to/audio.wav"}' | ./venv-pyannote/bin/python embedding_worker.py
+    echo '{"audio_path": "/path/to/audio.wav"}' | ./venv-gigaam/bin/python embedding_worker.py
 
 Input JSON:
     {"audio_path": "/path/to/audio.wav"}

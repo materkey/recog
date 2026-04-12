@@ -33,7 +33,7 @@ if [ ! -d "venv-gigaam" ]; then
     echo "Installing GigaAM dependencies..."
     ./venv-gigaam/bin/pip install --upgrade pip
     ./venv-gigaam/bin/pip install torch torchaudio
-    ./venv-gigaam/bin/pip install soundfile sounddevice tqdm scikit-learn numpy
+    ./venv-gigaam/bin/pip install soundfile sounddevice tqdm scikit-learn numpy speechbrain
 
     # Install GigaAM
     if [ -d "../GigaAM" ]; then
@@ -45,24 +45,12 @@ if [ ! -d "venv-gigaam" ]; then
         echo "Then run: ./venv-gigaam/bin/pip install -e ../GigaAM"
     fi
 else
-    echo "venv-gigaam already exists"
-fi
-
-# === venv-pyannote (pyannote.audio 4.x) ===
-echo ""
-echo "=== Setting up venv-pyannote ==="
-
-if [ ! -d "venv-pyannote" ]; then
-    echo "Creating venv-pyannote..."
-    $PYTHON312 -m venv venv-pyannote
-
-    echo "Installing pyannote.audio 4.x and SpeechBrain..."
-    ./venv-pyannote/bin/pip install --upgrade pip
-    ./venv-pyannote/bin/pip install "pyannote.audio>=4.0"
-    ./venv-pyannote/bin/pip install speechbrain
-    ./venv-pyannote/bin/pip install soundfile tqdm scikit-learn
-else
-    echo "venv-pyannote already exists"
+    echo "venv-gigaam already exists, checking dependencies..."
+    if ! ./venv-gigaam/bin/pip install --quiet speechbrain 2>&1; then
+        echo "WARNING: Failed to install speechbrain into existing venv-gigaam."
+        echo "Speaker identification will not work without it."
+        echo "To fix: ./venv-gigaam/bin/pip install speechbrain"
+    fi
 fi
 
 # === .env file ===
@@ -87,9 +75,5 @@ echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "Usage:"
-echo "  ./venv-gigaam/bin/python mp4_notes.py transcribe input.mp4"
 echo "  ./venv-gigaam/bin/python mp4_notes.py live --list-devices"
-echo ""
-echo "Required HuggingFace models (need to accept terms):"
-echo "  - https://huggingface.co/pyannote/speaker-diarization-community-1"
-echo "  - https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM"
+echo "  ./venv-gigaam/bin/python mp4_notes.py live --system-device 0 --speaker-db speakers_ecapa.json"

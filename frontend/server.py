@@ -24,11 +24,11 @@ from pydantic import BaseModel
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+# Add parent directory to path for imports (must be before ai_provider which imports recog.node_env)
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from ai_provider import get_provider, get_all_providers, build_prompt
 from dotenv import load_dotenv
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Load .env from project root
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -938,104 +938,6 @@ async def generate_meeting_title(meeting_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class DiarizeRequest(BaseModel):
-    track: str  # "mic" or "system"
-
-
-@app.post("/api/meetings/{meeting_id}/diarize")
-async def diarize_meeting(meeting_id: str, request: DiarizeRequest):
-    """
-    Run diarization on specified audio track (mic or system).
-
-    Creates a backup of the transcript before modifying.
-    """
-    try:
-        if request.track not in ("mic", "system"):
-            raise HTTPException(status_code=400, detail="Track must be 'mic' or 'system'")
-
-        meeting_path = MEETINGS_DIR / meeting_id
-
-        if not meeting_path.exists():
-            raise HTTPException(status_code=404, detail="Meeting not found")
-
-        # Check if audio file exists
-        meta_path = meeting_path / "meta.json"
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-
-        audio_key = f"audio_{request.track}_path"
-        audio_path = meta.get(audio_key)
-
-        if not audio_path:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No {request.track} audio file available for this meeting"
-            )
-
-        if not Path(audio_path).exists():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Audio file no longer exists (may have been cleaned up)"
-            )
-
-        # Get speaker database path
-        speaker_db_path = Path(__file__).parent.parent / "speakers_ecapa.json"
-        if not speaker_db_path.exists():
-            speaker_db_path = None
-
-        # Run diarization
-        from recog.diarize_session import diarize_track
-
-        result = diarize_track(
-            meeting_path=meeting_path,
-            track=request.track,
-            speaker_db_path=speaker_db_path
-        )
-
-        return JSONResponse(content={
-            "meeting_id": meeting_id,
-            "track": request.track,
-            "speakers_found": result.speakers_found,
-            "segments_updated": result.segments_updated,
-            "speaker_labels": result.speaker_labels
-        })
-
-    except HTTPException:
-        raise
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/meetings/{meeting_id}/undo-diarize")
-async def undo_diarization(meeting_id: str):
-    """
-    Restore transcript from backup, undoing all diarization.
-    """
-    try:
-        storage = get_storage()
-
-        if not storage.restore_transcript_backup(meeting_id):
-            raise HTTPException(
-                status_code=404,
-                detail="No backup found. Meeting may not have been diarized."
-            )
-
-        return JSONResponse(content={
-            "meeting_id": meeting_id,
-            "restored": True
-        })
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/live/status")
 async def get_live_status():
     """Get current live transcription status."""
@@ -1874,7 +1776,7 @@ async def enroll_from_segments(request: EnrollFromSegmentsRequest):
 
         # Extract embeddings for each segment
         embeddings = []
-        venv_python = Path(__file__).parent.parent / "venv-pyannote" / "bin" / "python"
+        venv_python = Path(__file__).parent.parent / "venv-gigaam" / "bin" / "python"
         worker_path = Path(__file__).parent.parent / "embedding_worker.py"
 
         # Assume ~3 second segments (chunk_duration from live.py)

@@ -9,7 +9,8 @@ import json
 import os
 from typing import Optional
 
-from frontend.ai_provider import _resolve_cli
+from recog.ai_provider import resolve_cli
+from recog.node_env import get_node_env
 
 
 TITLE_PROMPT = """Придумай короткое название (3-7 слов) для этого разговора.
@@ -49,13 +50,14 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            _resolve_cli("codex"), "exec",
+            resolve_cli("codex"), "exec",
             "-m", model,
             "--json",
             "-",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=get_node_env()
         )
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(input=prompt.encode()),

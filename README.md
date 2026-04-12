@@ -5,10 +5,8 @@ Russian speech recognition with speaker diarization and identification.
 ## Features
 
 - **ASR**: GigaAM (v3_e2e_rnnt) for Russian speech recognition
-- **Speaker Diarization**: pyannote.audio 4.x (speaker-diarization-community-1)
-- **Speaker Identification**: SpeechBrain ECAPA-TDNN embeddings with known speaker database
+- **Speaker Identification**: KTalk Chrome extension (real-time) + SpeechBrain ECAPA-TDNN embeddings (enrollment)
 - **Live Mode**: Real-time transcription from microphone/system audio
-- **File Processing**: Transcribe audio/video files with speaker labels
 
 ## Requirements
 
@@ -23,13 +21,11 @@ Russian speech recognition with speaker diarization and identification.
 git clone <repo>
 cd recog
 
-# Create symlink to GigaAM venv (must exist at ../GigaAM/venv)
-ln -s ../GigaAM/venv venv-gigaam
+# Full setup (creates venv and .env)
+./setup_venvs.sh
 
-# Create pyannote venv
-python3.12 -m venv venv-pyannote
-source venv-pyannote/bin/activate
-pip install pyannote.audio soundfile speechbrain "huggingface_hub>=0.28.1,<0.30"
+# Or manual setup:
+ln -s ../GigaAM/venv venv-gigaam
 ```
 
 ## System Audio Setup (macOS)
@@ -73,21 +69,6 @@ Now system audio will be routed to both speakers and BlackHole for capture.
 
 ## Usage
 
-### Process audio/video file
-
-```bash
-source venv-gigaam/bin/activate
-
-# Basic transcription
-python mp4_notes.py input.mp4
-
-# With speaker identification
-python mp4_notes.py input.mp4 --speaker-db speakers_ecapa.json
-
-# Output to file
-python mp4_notes.py input.mp4 --speaker-db speakers_ecapa.json -o output.md
-```
-
 ### Live transcription
 
 ```bash
@@ -119,13 +100,6 @@ python add_speaker_live.py "Speaker Name"
 python add_speaker_live.py "Speaker Name" 10
 ```
 
-### Build speaker database from file
-
-```bash
-source venv-gigaam/bin/activate
-python build_speaker_db.py input.mp4 speakers_ecapa.json
-```
-
 ## Output Format
 
 ```
@@ -145,22 +119,21 @@ python build_speaker_db.py input.mp4 speakers_ecapa.json
 See [ADR documents](adr/) for architecture decisions:
 
 - ADR-0001: GigaAM as ASR engine
-- ADR-0002: pyannote.audio for diarization
-- ADR-0003: Parallel diarization pipeline
+- ADR-0002: pyannote.audio for diarization (obsolete — replaced by KTalk extension)
+- ADR-0003: Parallel diarization pipeline (obsolete)
 - ADR-0004: Speaker database with embeddings
 - ADR-0005: Speaker post-clustering
-- ADR-0006: Dual venv subprocess architecture
-- ADR-0007: Unified diarization pipeline
+- ADR-0006: Dual venv subprocess architecture (obsolete — single venv now)
+- ADR-0007: Unified diarization pipeline (obsolete)
 - ADR-0008: SpeechBrain ECAPA-TDNN embeddings
 - ADR-0009: Remove double clustering
 - ADR-0010: Live transcription mode
 
 ## Files
 
-- `mp4_notes.py` - Main CLI tool
-- `diarize_worker.py` - pyannote diarization subprocess worker
+- `mp4_notes.py` - Main CLI tool (commands: live, meetings)
+- `ktalk_bridge.py` - WebSocket server for KTalk Chrome extension
 - `add_speaker_live.py` - Add speakers via microphone
-- `build_speaker_db.py` - Build speaker DB from audio files
 - `speakers_ecapa.json` - Speaker embedding database
 
 ## License

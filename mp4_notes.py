@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-MP4 Notes - CLI-утилита для транскрибирования аудио/видео с диаризацией спикеров.
+MP4 Notes - CLI-утилита для live-транскрибирования и управления митингами.
 
-Использует GigaAM для ASR и pyannote.audio для диаризации.
-Выход: Markdown-файл с разметкой по спикерам.
+Использует GigaAM для ASR и KTalk Chrome extension для определения спикеров.
 
 Основные команды:
-- transcribe: транскрибирование файла с диаризацией
-- enroll-speaker: добавление известного спикера в базу
+- live: live-транскрипция с микрофона/системного звука
+- meetings: просмотр сохранённых митингов
 
 Пример:
-    python mp4_notes.py transcribe example.mp4 --out example_result.md
-    python mp4_notes.py enroll-speaker slava sample1.wav --display-name "Слава"
+    python mp4_notes.py live --ktalk --screencapture
+    python mp4_notes.py meetings
 """
 
 import argparse
@@ -20,72 +19,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from recog import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP, MIC_SPEAKER_NAME
+from recog import MIC_SPEAKER_NAME
 
 
 def main():
     parser = argparse.ArgumentParser(
         prog="mp4-notes",
-        description="CLI-утилита для транскрибирования аудио/видео с диаризацией спикеров"
+        description="CLI-утилита для live-транскрибирования и управления митингами"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Доступные команды")
-
-    # Команда: transcribe
-    transcribe_parser = subparsers.add_parser(
-        "transcribe",
-        help="Транскрибирование файла с диаризацией"
-    )
-    transcribe_parser.add_argument(
-        "input",
-        help="Путь к аудио/видео файлу (mp4, mp3, wav и др.)"
-    )
-    transcribe_parser.add_argument(
-        "-o", "--out",
-        help="Путь к выходному .md файлу (по умолчанию: input.md)"
-    )
-    transcribe_parser.add_argument(
-        "-m", "--model",
-        default=DEFAULT_MODEL,
-        help=f"Модель GigaAM (по умолчанию: {DEFAULT_MODEL})"
-    )
-    transcribe_parser.add_argument(
-        "--mode",
-        choices=["longform", "simple"],
-        default="simple",
-        help="Режим транскрибирования (по умолчанию: simple)"
-    )
-    transcribe_parser.add_argument(
-        "--device",
-        help="Устройство (cuda/cpu/auto)"
-    )
-    transcribe_parser.add_argument(
-        "--speaker-db",
-        help="Путь к файлу базы спикеров (JSON)"
-    )
-    transcribe_parser.add_argument(
-        "--no-timestamps",
-        action="store_true",
-        help="Не включать таймкоды в вывод"
-    )
-    transcribe_parser.add_argument(
-        "--no-diarization",
-        action="store_true",
-        help="Отключить диаризацию (один спикер)"
-    )
-    # ADR-0007: удалён --pyannote3, унификация на pyannote 4.x
-    transcribe_parser.add_argument(
-        "--chunk-duration",
-        type=float,
-        default=DEFAULT_CHUNK_DURATION,
-        help=f"Длительность чанка (сек) для режима simple (по умолчанию: {DEFAULT_CHUNK_DURATION})"
-    )
-    transcribe_parser.add_argument(
-        "--overlap",
-        type=float,
-        default=DEFAULT_OVERLAP,
-        help=f"Перекрытие чанков (сек) для режима simple (по умолчанию: {DEFAULT_OVERLAP})"
-    )
 
     # Команда: live (ADR-0010)
     live_parser = subparsers.add_parser(
@@ -162,73 +105,9 @@ def main():
         help="Пересканировать внешние директории (обновить кэш)"
     )
 
-    # Команда: enroll-speaker
-    enroll_parser = subparsers.add_parser(
-        "enroll-speaker",
-        help="Добавление известного спикера в базу"
-    )
-    enroll_parser.add_argument(
-        "speaker_id",
-        help="Идентификатор спикера (например: slava)"
-    )
-    enroll_parser.add_argument(
-        "audio_files",
-        nargs="+",
-        help="Аудио/видео файлы с речью спикера"
-    )
-    enroll_parser.add_argument(
-        "--display-name",
-        required=True,
-        help="Отображаемое имя спикера (например: 'Слава')"
-    )
-    enroll_parser.add_argument(
-        "--speaker-db",
-        default="speakers.json",
-        help="Путь к файлу базы спикеров (по умолчанию: speakers.json)"
-    )
-
-    # Команда: build-speaker-db
-    build_db_parser = subparsers.add_parser(
-        "build-speaker-db",
-        help="Создание базы спикеров из файла (диаризация + эмбеддинги)"
-    )
-    build_db_parser.add_argument(
-        "input",
-        help="Путь к аудио/видео файлу"
-    )
-    build_db_parser.add_argument(
-        "--speaker-db",
-        default="speakers.json",
-        help="Путь к файлу базы спикеров (по умолчанию: speakers.json)"
-    )
-    build_db_parser.add_argument(
-        "--mapping",
-        nargs="*",
-        help="Маппинг speaker_id:display_name (например: speaker_0:Руслан speaker_1:Вячеслав)"
-    )
-
     args = parser.parse_args()
 
-    if args.command == "transcribe":
-        from recog.pipeline import transcribe_pipeline
-
-        input_path = args.input
-        output_path = args.out or str(Path(input_path).with_suffix(".md"))
-
-        transcribe_pipeline(
-            input_path=input_path,
-            output_path=output_path,
-            model_name=args.model,
-            mode=args.mode,
-            device=args.device,
-            speaker_db_path=args.speaker_db,
-            include_timestamps=not args.no_timestamps,
-            no_diarization=args.no_diarization,
-            chunk_duration=args.chunk_duration,
-            overlap=args.overlap
-        )
-
-    elif args.command == "live":
+    if args.command == "live":
         from recog.live import live_pipeline
 
         # Convert device ID to int if it's a number
@@ -331,34 +210,6 @@ def main():
                         if m.get('_external'):
                             source = f"{source}*"  # Mark external with *
                         print(f"{m['id']:<35} {source:<12} {m['segment_count']:>8}  {duration:>10}  {title}")
-
-    elif args.command == "enroll-speaker":
-        from recog.pipeline import enroll_speaker_pipeline
-
-        enroll_speaker_pipeline(
-            speaker_id=args.speaker_id,
-            audio_files=args.audio_files,
-            display_name=args.display_name,
-            speaker_db_path=args.speaker_db
-        )
-
-    elif args.command == "build-speaker-db":
-        from recog.pipeline import build_speaker_db_pipeline
-
-        # Парсим маппинг
-        speaker_mapping = None
-        if args.mapping:
-            speaker_mapping = {}
-            for m in args.mapping:
-                if ":" in m:
-                    sid, name = m.split(":", 1)
-                    speaker_mapping[sid] = name
-
-        build_speaker_db_pipeline(
-            input_path=args.input,
-            speaker_db_path=args.speaker_db,
-            speaker_mapping=speaker_mapping
-        )
 
     else:
         parser.print_help()
