@@ -541,57 +541,6 @@ a:hover {
     flex: 1;
 }
 
-.track-status.diarized {
-    color: var(--accent);
-}
-
-.btn-diarize {
-    padding: 6px 12px;
-    font-size: 12px;
-    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
-    border: none;
-    color: white;
-    border-radius: var(--radius);
-    cursor: pointer;
-    transition: all 0.2s;
-    white-space: nowrap;
-}
-
-.btn-diarize:hover {
-    background: linear-gradient(135deg, #a78bfa, #8b5cf6);
-    transform: translateY(-1px);
-}
-
-.btn-diarize:disabled {
-    background: var(--bg-secondary);
-    color: var(--text-muted);
-    cursor: wait;
-    transform: none;
-}
-
-.btn-undo-diarize {
-    margin-top: 12px;
-    padding: 8px 16px;
-    font-size: 13px;
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-    border-radius: var(--radius);
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.btn-undo-diarize:hover {
-    border-color: #ef4444;
-    color: #ef4444;
-    background: rgba(239, 68, 68, 0.1);
-}
-
-.btn-undo-diarize:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
 /* --- Notifications --- */
 .notification {
     position: fixed;

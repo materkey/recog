@@ -413,12 +413,9 @@ const views = {
             // Show generate title button for orphan meetings without title
             const showGenerateTitle = !meta.title && meta.source === 'orphan';
 
-            // Audio tracks and diarization
+            // Audio tracks
             const hasMicAudio = meta.audio_mic_path && !meta.audio_deleted_at;
             const hasSystemAudio = meta.audio_system_path && !meta.audio_deleted_at;
-            const hasDiarizationMic = meta.diarization_mic;
-            const hasDiarizationSystem = meta.diarization_system;
-            const hasBackup = meta.transcript_backup_path;
 
             container.innerHTML = `
                 <div class="meta-grid">
@@ -468,26 +465,15 @@ const views = {
                                 <div class="audio-track">
                                     <span class="track-icon">🎤</span>
                                     <span class="track-name">Mic</span>
-                                    ${hasDiarizationMic
-                                        ? `<span class="track-status diarized">✓ ${meta.diarization_mic.speakers_found} speakers</span>`
-                                        : `<button class="btn btn-diarize" onclick="diarizeTrack('mic')">Diarize</button>`
-                                    }
                                 </div>
                             ` : ''}
                             ${hasSystemAudio ? `
                                 <div class="audio-track">
                                     <span class="track-icon">🔊</span>
                                     <span class="track-name">System</span>
-                                    ${hasDiarizationSystem
-                                        ? `<span class="track-status diarized">✓ ${meta.diarization_system.speakers_found} speakers</span>`
-                                        : `<button class="btn btn-diarize" onclick="diarizeTrack('system')">Diarize</button>`
-                                    }
                                 </div>
                             ` : ''}
                         </div>
-                        ${(hasDiarizationMic || hasDiarizationSystem) && hasBackup ? `
-                            <button class="btn btn-undo-diarize" onclick="undoDiarization()">Undo All Diarization</button>
-                        ` : ''}
                     </div>
                 ` : ''}
             `;
@@ -1267,87 +1253,6 @@ async function generateTitle() {
     }
 }
 
-
-// --- Diarization ---
-
-async function diarizeTrack(track) {
-    const meeting = views.meeting;
-    if (!meeting.id) return;
-
-    const btn = document.querySelector(`.audio-track button[onclick="diarizeTrack('${track}')"]`);
-    if (!btn) return;
-
-    const originalText = btn.textContent;
-    btn.textContent = 'Diarizing...';
-    btn.disabled = true;
-
-    try {
-        const response = await fetch(`/api/meetings/${meeting.id}/diarize`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ track })
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Diarization failed');
-        }
-
-        const result = await response.json();
-
-        // Reload meeting to show updated transcript
-        await meeting.load(meeting.id);
-
-        // Show success briefly
-        showNotification(`Diarization complete: ${result.speakers_found} speakers, ${result.segments_updated} segments updated`);
-
-    } catch (e) {
-        btn.textContent = 'Error';
-        showNotification('Error: ' + e.message, 'error');
-        setTimeout(() => {
-            btn.textContent = originalText;
-            btn.disabled = false;
-        }, 3000);
-    }
-}
-
-async function undoDiarization() {
-    const meeting = views.meeting;
-    if (!meeting.id) return;
-
-    if (!confirm('Undo all diarization? Both mic and system tracks will be reset to original.')) {
-        return;
-    }
-
-    const btn = document.querySelector('.btn-undo-diarize');
-    if (btn) {
-        btn.textContent = 'Restoring...';
-        btn.disabled = true;
-    }
-
-    try {
-        const response = await fetch(`/api/meetings/${meeting.id}/undo-diarize`, {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Undo failed');
-        }
-
-        // Reload meeting to show restored transcript
-        await meeting.load(meeting.id);
-
-        showNotification('Diarization undone, original transcript restored');
-
-    } catch (e) {
-        showNotification('Error: ' + e.message, 'error');
-        if (btn) {
-            btn.textContent = 'Undo All Diarization';
-            btn.disabled = false;
-        }
-    }
-}
 
 function showNotification(message, type = 'success') {
     // Simple notification - could be enhanced with a toast library

@@ -1,7 +1,7 @@
 # ADR-0006: Двойной venv с subprocess для совместимости версий
 
 ## Status
-Accepted
+Obsolete (2026-04-12) — pyannote diarization removed; speakers now identified via KTalk extension only. Single venv-gigaam remains.
 
 ## Context
 Существует конфликт версий PyTorch между компонентами:

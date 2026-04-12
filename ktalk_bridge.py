@@ -29,25 +29,14 @@ from datetime import datetime
 from typing import Optional, Dict, List, Callable, TYPE_CHECKING
 import sys
 from pathlib import Path
+from recog.node_env import get_node_env
+from recog.ai_provider import resolve_cli
+from recog.config import load_dotenv
 
 if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
 
-# Load .env file
-def _load_dotenv():
-    env_path = Path(__file__).parent / ".env"
-    if not env_path.exists():
-        return
-    with open(env_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if '=' in line:
-                key, value = line.split('=', 1)
-                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-_load_dotenv()
+load_dotenv()
 
 
 def _truncate_text(text: str, max_len: int) -> str:
@@ -681,56 +670,9 @@ class KTalkBridge:
             except Exception:
                 pass  # Клиент может отключиться
 
-    def _get_node_env(self) -> dict:
-        """Get environment with node/nvm paths for subprocess."""
-        import shutil
-        env = os.environ.copy()
-
-        # If node already in PATH, use current env
-        if shutil.which("node"):
-            return env
-
-        # Find nvm node directory and add to PATH
-        nvm_locations = [
-            Path.home() / ".local/share/nvm",
-            Path.home() / ".nvm/versions/node",
-        ]
-        for nvm_base in nvm_locations:
-            if nvm_base.exists():
-                for version_dir in sorted(nvm_base.iterdir(), reverse=True):
-                    node_bin = version_dir / "bin"
-                    if (node_bin / "node").exists():
-                        env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
-                        return env
-        return env
-
-    def _find_cli_binary(self, name: str) -> str:
-        """Find CLI binary path, checking common locations."""
-        import shutil
-        # Try PATH first
-        path = shutil.which(name)
-        if path:
-            return path
-        # Check ~/.local/bin (standard location for CLI tools like claude)
-        local_bin = Path.home() / ".local/bin" / name
-        if local_bin.exists():
-            return str(local_bin)
-        # Check common nvm locations
-        nvm_locations = [
-            Path.home() / ".local/share/nvm",
-            Path.home() / ".nvm/versions/node",
-        ]
-        for nvm_base in nvm_locations:
-            if nvm_base.exists():
-                for version_dir in sorted(nvm_base.iterdir(), reverse=True):
-                    candidate = version_dir / "bin" / name
-                    if candidate.exists():
-                        return str(candidate)
-        raise FileNotFoundError(f"{name} not found in PATH, ~/.local/bin, or nvm")
-
     async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.4") -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
-        codex_path = self._find_cli_binary("codex")
+        codex_path = resolve_cli("codex")
         cmd = [codex_path, "exec", "-m", model]
         if "spark" not in model:
             cmd += ["-c", "model_reasoning_effort=xhigh"]
@@ -740,7 +682,7 @@ class KTalkBridge:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=self._get_node_env()
+            env=get_node_env()
         )
         stdout, stderr = await proc.communicate(input=prompt.encode())
 
@@ -750,7 +692,10 @@ class KTalkBridge:
         for line in stdout.decode().strip().split('\n'):
             if not line:
                 continue
-            event = json.loads(line)
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
             if event.get("type") == "item.completed":
                 item = event.get("item", {})
                 if item.get("type") == "agent_message":
@@ -760,14 +705,14 @@ class KTalkBridge:
 
     async def _call_claude_cli(self, prompt: str, model: str = "opus") -> str:
         """Call Claude CLI (uses Max/Pro subscription)."""
-        claude_path = self._find_cli_binary("claude")
+        claude_path = resolve_cli("claude")
         proc = await asyncio.create_subprocess_exec(
             claude_path, "-p", prompt,
             "--model", model,
             "--output-format", "text",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=self._get_node_env()
+            env=get_node_env()
         )
         stdout, stderr = await proc.communicate()
 

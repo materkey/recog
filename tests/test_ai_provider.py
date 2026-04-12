@@ -1,0 +1,115 @@
+"""Tests for recog.ai_provider module."""
+import os
+import sys
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from recog.ai_provider import CodexCliProvider, resolve_cli, AIProvider
+
+
+# ---------------------------------------------------------------------------
+# resolve_cli
+# ---------------------------------------------------------------------------
+
+class TestResolveCli:
+
+    def test_returns_path_from_shutil_which(self):
+        """given: binary on PATH - when: resolve_cli - then: returns shutil.which result"""
+        with patch("shutil.which", return_value="/usr/local/bin/codex"):
+            result = resolve_cli("codex")
+        assert result == "/usr/local/bin/codex"
+
+    def test_falls_back_to_common_locations(self, tmp_path):
+        """given: binary not on PATH but in ~/.local/bin - when: resolve_cli - then: returns that path"""
+        fake_bin = tmp_path / "codex"
+        fake_bin.write_text("#!/bin/sh\n")
+        fake_bin.chmod(0o755)
+
+        with patch("shutil.which", return_value=None), \
+             patch("os.path.expanduser", return_value=str(fake_bin)):
+            result = resolve_cli("codex")
+        assert result == str(fake_bin)
+
+    def test_nonexistent_binary_raises_file_not_found(self):
+        """given: binary not found anywhere - when: resolve_cli - then: raises FileNotFoundError"""
+        with patch("shutil.which", return_value=None), \
+             patch("os.path.expanduser", side_effect=lambda p: p.replace("~", "/nonexistent_home_xyz")):
+            with pytest.raises(FileNotFoundError, match="nonexistent_binary_xyz_12345"):
+                resolve_cli("nonexistent_binary_xyz_12345")
+
+    def test_nvm_candidates_sorted_by_version(self, tmp_path):
+        """given: multiple nvm versions - when: resolve_cli - then: picks highest version"""
+        # Create fake nvm structure: v18.0.0/bin/codex and v20.0.0/bin/codex
+        nvm_base = tmp_path / ".nvm" / "versions" / "node"
+        for ver in ["v18.0.0", "v20.0.0"]:
+            bin_dir = nvm_base / ver / "bin"
+            bin_dir.mkdir(parents=True)
+            codex = bin_dir / "codex"
+            codex.write_text("#!/bin/sh\n")
+            codex.chmod(0o755)
+
+        with patch("shutil.which", return_value=None), \
+             patch("os.path.expanduser", side_effect=lambda p: str(tmp_path / p.lstrip("~/"))):
+            import glob as glob_module
+            original_glob = glob_module.glob
+
+            def patched_glob(pattern):
+                # Redirect nvm glob to tmp_path
+                if ".nvm" in pattern:
+                    return original_glob(str(nvm_base / "*/bin/codex"))
+                return []
+
+            with patch("glob.glob", side_effect=patched_glob):
+                result = resolve_cli("codex")
+
+        # Should pick v20 (higher version)
+        assert "v20.0.0" in result
+
+
+# ---------------------------------------------------------------------------
+# CodexCliProvider
+# ---------------------------------------------------------------------------
+
+class TestCodexCliProvider:
+
+    def test_importable_from_recog(self):
+        """given: recog.ai_provider - when: import CodexCliProvider - then: no error"""
+        from recog.ai_provider import CodexCliProvider
+        assert CodexCliProvider is not None
+
+    def test_key_is_codex(self):
+        """given: CodexCliProvider - when: .key - then: returns 'codex'"""
+        with patch("recog.ai_provider.resolve_cli", return_value="/usr/bin/codex"):
+            provider = CodexCliProvider()
+        assert provider.key == "codex"
+
+    def test_name_includes_model(self):
+        """given: CodexCliProvider - when: .name - then: includes model name"""
+        with patch("recog.ai_provider.resolve_cli", return_value="/usr/bin/codex"), \
+             patch.dict(os.environ, {"CODEX_MODEL": "gpt-5.4", "CODEX_REASONING_EFFORT": "xhigh"}):
+            provider = CodexCliProvider()
+        assert "gpt-5.4" in provider.name
+        assert "xhigh" in provider.name
+
+    def test_name_spark_model_no_reasoning(self):
+        """given: spark model - when: .name - then: no reasoning effort shown"""
+        with patch("recog.ai_provider.resolve_cli", return_value="/usr/bin/codex"), \
+             patch.dict(os.environ, {"CODEX_MODEL": "o4-mini-spark"}):
+            provider = CodexCliProvider()
+        assert "spark" in provider.name
+        assert "xhigh" not in provider.name
+
+    def test_is_subclass_of_ai_provider(self):
+        """given: CodexCliProvider - when: check inheritance - then: is AIProvider subclass"""
+        assert issubclass(CodexCliProvider, AIProvider)
+
+    def test_resolve_cli_called_on_init(self):
+        """given: CodexCliProvider() - when: init - then: resolve_cli("codex") is called"""
+        with patch("recog.ai_provider.resolve_cli", return_value="/mock/codex") as mock_resolve:
+            provider = CodexCliProvider()
+        mock_resolve.assert_called_once_with("codex")
+        assert provider._cli == "/mock/codex"

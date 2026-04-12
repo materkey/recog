@@ -58,9 +58,12 @@ SILENCE_SPLIT_TIMEOUT = 10 * 60  # 10 minutes
 RETROACTIVE_MAX_SEGMENTS = 20   # Max segments to scan backwards
 RETROACTIVE_MAX_SECONDS = 60.0  # Max time window for retroactive correction
 
+# Порог смены спикера: если пауза между репликами больше этого значения (секунды),
+# следующая реплика считается новым сегментом (новый speaker turn)
+SPEAKER_TURN_GAP = 3.0
+
+# Принудительный разрыв сегмента после N секунд непрерывной речи одного спикера
+MAX_SEGMENT_DURATION = 20.0
+
 # Имя спикера для микрофонного входа (live transcription)
 MIC_SPEAKER_NAME = os.environ.get("MIC_SPEAKER_NAME", "").strip() or "Me"
-
-# Путь к venv для pyannote 4.x
-PYANNOTE4_VENV = Path(__file__).parent.parent / "venv-pyannote"
-DIARIZE_WORKER = Path(__file__).parent.parent / "diarize_worker.py"

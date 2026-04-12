@@ -17,14 +17,6 @@ class Segment:
 
 
 @dataclass
-class DiarizationSegment:
-    """Сегмент диаризации (интервал спикера)."""
-    start: float
-    end: float
-    speaker_id: str
-
-
-@dataclass
 class EmbeddingSample:
     """Один образец embedding с метаданными."""
     embedding: List[float]

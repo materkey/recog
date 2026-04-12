@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Callable
 
-from frontend.ai_provider import CodexCliProvider
+from recog.ai_provider import CodexCliProvider
 from recog.prompt_registry import PromptConfig, PromptRegistry
 
 STALE_GENERATING_TIMEOUT_SECONDS = 600  # 10 minutes

@@ -1,12 +1,16 @@
 """Tests for speaker attribution in live transcription."""
 import pytest
+import time
+import threading
 from pathlib import Path
 import sys
+from collections import deque
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from unittest.mock import Mock
 from ktalk_bridge import KTalkBridge, Participant
+from recog.live import LiveTranscriber, SourceState, RETROACTIVE_MAX_SEGMENTS
 
 
 def test_system_audio_uses_is_local_false():
@@ -50,32 +54,42 @@ def test_no_uncertain_local_reason_for_system_audio():
 
 def test_sole_unmuted_fallback_in_speaker_assignment_chain():
     """
-    given: live.py speaker assignment code in KTalk mode
-    when: source code is examined
-    then: sole_unmuted fallback tier exists between last_speaker TTL and Unknown
+    given: KTalk mode, dominant/current speaker both None, TTL expired, one unmuted remote
+    when: _handle_ktalk_chunk runs
+    then: sole unmuted participant is attributed with uncertain_reason="sole_unmuted_fallback"
     """
-    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
-    source = live_py_path.read_text()
+    transcriber = Mock()
+    transcriber._ktalk_bridge = Mock()
+    transcriber._ktalk_bridge.get_dominant_speaker_for_period.return_value = None
+    transcriber._ktalk_bridge.get_current_speaker.return_value = None
+    transcriber._ktalk_bridge.get_sole_unmuted_remote_participant.return_value = "Bob"
+    transcriber._ktalk_bridge.are_all_mics_muted.return_value = False
+    transcriber._meeting_storage = None
+    transcriber._state_lock = threading.Lock()
+    transcriber._meeting_generation = 0
+    transcriber.transcript_lines = []
+    transcriber._recent_system_segments = deque(maxlen=RETROACTIVE_MAX_SEGMENTS)
+    transcriber._ktalk_current_speaker = None
 
-    # The fallback chain must include sole unmuted participant check
-    assert "get_sole_unmuted_remote_participant()" in source, \
-        "sole unmuted fallback not wired into live.py"
+    state = SourceState()
+    state.last_speaker = None  # No last speaker -> TTL path skipped
+    now = time.time()
 
-    # It must set uncertain flag
-    assert 'uncertain_reason = "sole_unmuted_fallback"' in source, \
-        "sole_unmuted_fallback uncertain reason not set"
+    LiveTranscriber._handle_ktalk_chunk(
+        transcriber, "hello", "12:00:00", now - 3, now, now, 0, state)
 
-    # sole_unmuted_fallback flag must be initialized
-    assert "sole_unmuted_fallback = False" in source, \
-        "sole_unmuted_fallback flag not initialized"
+    # Speaker attributed to sole unmuted
+    assert "**Bob**" in transcriber.transcript_lines[0]
 
-    # Verify ordering: sole_unmuted check comes after last_speaker TTL
-    # and before Unknown assignment
-    sole_unmuted_pos = source.index("get_sole_unmuted_remote_participant()")
-    last_speaker_ttl_pos = source.index("LAST_SPEAKER_TTL")
-    unknown_pos = source.index('speaker = "Unknown"')
-    assert last_speaker_ttl_pos < sole_unmuted_pos < unknown_pos, \
-        "Fallback chain order wrong: must be last_speaker TTL → sole_unmuted → Unknown"
+    # send_transcript called with sole_unmuted_fallback uncertainty
+    call_kwargs = transcriber._ktalk_bridge.send_transcript.call_args
+    assert call_kwargs[1]['uncertain'] is True
+    assert call_kwargs[1]['uncertain_reason'] == "sole_unmuted_fallback"
+
+    # Dominant and current were checked first (chain order preserved)
+    transcriber._ktalk_bridge.get_dominant_speaker_for_period.assert_called_once()
+    transcriber._ktalk_bridge.get_current_speaker.assert_called_once()
+    transcriber._ktalk_bridge.get_sole_unmuted_remote_participant.assert_called_once()
 
 
 def test_sole_unmuted_fallback_used_when_all_other_signals_fail():

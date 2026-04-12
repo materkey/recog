@@ -16,7 +16,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from recog.speaker_db import SpeakerDatabase
-from recog.models import Segment, DiarizationSegment
+from recog.models import Segment
 
 
 @pytest.fixture
@@ -75,15 +75,6 @@ def asr_segments() -> list[Segment]:
         Segment(text="Привет", start=0.0, end=1.0),
         Segment(text="Как дела", start=1.5, end=2.5),
         Segment(text="Отлично", start=3.0, end=4.0),
-    ]
-
-
-@pytest.fixture
-def diarization_segments() -> list[DiarizationSegment]:
-    """Returns sample diarization segments for alignment tests."""
-    return [
-        DiarizationSegment(start=0.0, end=2.0, speaker_id="SPEAKER_00"),
-        DiarizationSegment(start=2.0, end=5.0, speaker_id="SPEAKER_01"),
     ]
 
 
