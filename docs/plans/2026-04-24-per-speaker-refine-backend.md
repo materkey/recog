@@ -46,14 +46,14 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 2: Spike on cooperative abort hook in upstream decoder
 
-- [ ] 2.1 Read `/Users/vkkovalev/projects/GigaAM/gigaam/decoding.py` — the greedy RNN-T decoder's `decode()` step loop (post-upstream, `6e4b027`). Identify whether there's a natural poll point per decoder step (e.g., an iteration over frames/timesteps).
-- [ ] 2.2 Prototype a monkey-patched `step_callback` approach: wrap the decoder's inner loop with a hook that returns early if a `should_abort()` callable returns True. Try it on a short wav, measure abort latency.
-- [ ] 2.3 Record outcome in `experiments/2026-04-24-refine-abort-spike.md`:
+- [x] 2.1 Read `/Users/vkkovalev/projects/GigaAM/gigaam/decoding.py` — the greedy RNN-T decoder's `decode()` step loop (post-upstream, `6e4b027`). Identify whether there's a natural poll point per decoder step (e.g., an iteration over frames/timesteps).
+- [x] 2.2 Prototype a monkey-patched `step_callback` approach: wrap the decoder's inner loop with a hook that returns early if a `should_abort()` callable returns True. Try it on a short wav, measure abort latency.
+- [x] 2.3 Record outcome in `experiments/2026-04-24-refine-abort-spike.md`:
   - Section "Can we hook the decoder step loop?" — yes/no with evidence.
   - If yes: expected abort latency (ms), code snippet of the monkey-patch.
   - If no: justification (upstream API shape), recommend `coarse` mode.
-- [ ] 2.4 Choose `abort_mode` default for `RefineWorker`. Update `docs/plans/2026-04-24-per-speaker-refine-backend.md` (this file, task 4.1 below) to reflect the chosen default.
-- [ ] 2.5 Commit: `exp: spike on cooperative-abort hook for RefineWorker (mode=<cooperative|coarse>)`
+- [x] 2.4 Choose `abort_mode` default for `RefineWorker`. Update `docs/plans/2026-04-24-per-speaker-refine-backend.md` (this file, task 4.1 below) to reflect the chosen default.
+- [x] 2.5 Commit: `exp: spike on cooperative-abort hook for RefineWorker (mode=<cooperative|coarse>)`
 
 ### Task 3: RefineTask dataclass and recog/refine.py module scaffold
 
@@ -67,7 +67,7 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 ### Task 4: RefineWorker implementation
 
 - [ ] 4.1 Implement `RefineWorker`:
-  - Constructor stores `model_lock: threading.Lock`, `transcribe_fn: Callable[[np.ndarray], TranscriptionResult]`, `apply_fn: Callable[[RefineResult], None]`, `abort_mode: Literal["cooperative","coarse"]` (default from 2.4), internal `_queue: queue.Queue`, `_paused: bool`, `_live_pending: threading.Event`, `_stopped: threading.Event`, `_thread: threading.Thread`.
+  - Constructor stores `model_lock: threading.Lock`, `transcribe_fn: Callable[[np.ndarray], TranscriptionResult]`, `apply_fn: Callable[[RefineResult], None]`, `abort_mode: Literal["cooperative","coarse"] = "cooperative"` (decision from Task 2 spike: decoder loop is ~80% of inference cost on MPS — ~767ms saved per aborted call; see `experiments/2026-04-24-refine-abort-spike.md`), internal `_queue: queue.Queue`, `_paused: bool`, `_live_pending: threading.Event`, `_stopped: threading.Event`, `_thread: threading.Thread`.
   - `start()` spawns daemon worker thread.
   - `submit(task)` puts onto queue; no-op if paused or stopped.
   - `pause()` sets `_paused=True`, drains queue (drop pending tasks — they'll be re-triggered on next gap).
