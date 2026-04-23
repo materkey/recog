@@ -83,11 +83,15 @@ MIC_SPEAKER_NAME = os.environ.get("MIC_SPEAKER_NAME", "").strip() or "Me"
 # `--chunk-duration` default 3 s, чтобы UI-latency не деградировал.
 PCM_CHUNK_DURATION_S = 3.0
 
-# Длина PCM payload в одном чанке = stride + overlap (300 ms).
-# Worklet держит ring-буфер на 3300 ms; каждые 3000 ms эмитит последние
-# 3300 ms — последние 300 ms предыдущего чанка повторяются в начале
+# Длина PCM payload в одном чанке = stride + overlap (600 ms).
+# Worklet держит ring-буфер на 3600 ms; каждые 3000 ms эмитит последние
+# 3600 ms — последние 600 ms предыдущего чанка повторяются в начале
 # следующего для _remove_duplicate_words на границах.
-PCM_CHUNK_PAYLOAD_S = 3.3
+# Bumped from 300 → 600 ms to give dedup more sub-second context — at
+# 300 ms overlap the word right on the chunk boundary could be
+# transcribed slightly differently on each side, and dedup would drop
+# the wrong copy. +10 % ASR work, safe at 60× realtime batched forward.
+PCM_CHUNK_PAYLOAD_S = 3.6
 
 # Окно batch-коллектора в Python-side ingest. До 200 ms собираем чанки
 # с разных pid'ов, после чего вызываем GigaAM.forward() один раз на весь
@@ -100,7 +104,7 @@ PCM_MAX_BATCH_SIZE = 8
 
 # Overlap между соседними чанками (производная от D5: payload − stride).
 # Явная константа для _remove_duplicate_words и тестов на границах.
-PCM_CHUNK_OVERLAP_MS = 300
+PCM_CHUNK_OVERLAP_MS = 600
 
 # Silence watchdog: если в активной KTalk-встрече PCM-чанков нет дольше
 # этого окна, PerSpeakerIngest переходит в degraded-mode и отдаёт

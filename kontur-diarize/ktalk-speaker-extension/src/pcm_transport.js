@@ -3,7 +3,7 @@
 // Per decision D4/D9 in docs/plans/2026-04-22-per-speaker-asr-pipeline.md:
 // each remote KTalk participant's audio track is routed through an
 // AudioWorkletNode (see src/audio-worklet/downsampler.js) that emits
-// 16 kHz Int16 PCM chunks every 3.0 s stride with 3.3 s payload. Chunks
+// 16 kHz Int16 PCM chunks every 3.0 s stride with 3.6 s payload. Chunks
 // are base64-encoded and shipped to ktalk_bridge via sendWsPcmChunk().
 //
 // Gating is server-authoritative (decision D2): the bridge broadcasts

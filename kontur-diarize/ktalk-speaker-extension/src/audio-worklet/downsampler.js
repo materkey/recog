@@ -2,10 +2,10 @@
 //
 // Runs in AudioWorkletGlobalScope. Receives Float32 samples at 48 kHz,
 // applies a 3-tap low-pass (coefs [0.25, 0.5, 0.25]) and decimates ×3 →
-// 16 kHz Int16. Holds a ring buffer of PCM_CHUNK_PAYLOAD_S = 3.3 s
-// (52800 samples @ 16 kHz) and emits a full payload every
+// 16 kHz Int16. Holds a ring buffer of PCM_CHUNK_PAYLOAD_S = 3.6 s
+// (57600 samples @ 16 kHz) and emits a full payload every
 // PCM_CHUNK_DURATION_S = 3.0 s (stride 48000 samples @ 16 kHz). The
-// 300 ms overlap between consecutive chunks is required by
+// 600 ms overlap between consecutive chunks is required by
 // `asr.py::_remove_duplicate_words` on chunk boundaries.
 //
 // Emits via port.postMessage({type: 'pcm_chunk', int16Pcm, sampleCount}),
@@ -21,7 +21,7 @@ const TARGET_SAMPLE_RATE = 16000;
 const SOURCE_SAMPLE_RATE = 48000;
 const DECIMATION = SOURCE_SAMPLE_RATE / TARGET_SAMPLE_RATE; // 3
 
-const PAYLOAD_SAMPLES = Math.round((TARGET_SAMPLE_RATE * 3300) / 1000); // 52800
+const PAYLOAD_SAMPLES = Math.round((TARGET_SAMPLE_RATE * 3600) / 1000); // 57600
 const STRIDE_SAMPLES = Math.round((TARGET_SAMPLE_RATE * 3000) / 1000);  // 48000
 
 class PcmDownsamplerProcessor extends AudioWorkletProcessor {
