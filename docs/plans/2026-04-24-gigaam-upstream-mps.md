@@ -121,9 +121,9 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ### Task 8: Update tasks.md progress in openspec change
 
-- [ ] 8.1 In `/Users/vkkovalev/projects/recog/openspec/changes/per-speaker-stream-refine/tasks.md`, mark §0 (0.1–0.4) and §1 (1.1–1.4) as `[x]` — these are covered by the tasks above. Don't modify task bodies.
-- [ ] 8.2 Run `openspec validate per-speaker-stream-refine` — must still say "is valid".
-- [ ] 8.3 Commit: `plan(openspec): mark stream-refine §0 and §1 complete (upstream GigaAM + MPS)`
+- [x] 8.1 In `/Users/vkkovalev/projects/recog/openspec/changes/per-speaker-stream-refine/tasks.md`, mark §0 (0.1–0.4) and §1 (1.1–1.4) as `[x]` — these are covered by the tasks above. Don't modify task bodies. *(Eight checkboxes flipped; task bodies untouched, verified by targeted `- [ ] 0.` / `- [x] 0.` substring edits rather than any prose rewrite.)*
+- [x] 8.2 Run `openspec validate per-speaker-stream-refine` — must still say "is valid". *(Output: `Change 'per-speaker-stream-refine' is valid` — clean exit 0.)*
+- [x] 8.3 Commit: `plan(openspec): mark stream-refine §0 and §1 complete (upstream GigaAM + MPS)`
 
 ### Task 9: Push
 
