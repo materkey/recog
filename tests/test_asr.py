@@ -318,3 +318,38 @@ def test_transcribe_with_timestamps_accepts_torch_tensor():
     tmp_path = model.transcribe.call_args[0][0]
     assert tmp_path.endswith(".wav")
     assert not os.path.exists(tmp_path)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(),
+    reason="MPS backend not available on this machine",
+)
+def test_asrmodule_autodetects_mps_device_when_device_none():
+    """
+    given: a host with torch.backends.mps.is_available() == True
+    when: ASRModule is instantiated with the default device=None
+    then: self.device is auto-resolved to "mps"
+    """
+    asr = ASRModule(device=None)
+    assert asr.device == "mps"
+
+
+def test_asrmodule_explicit_cpu_overrides_mps_autodetect():
+    """
+    given: an explicit device="cpu" kwarg
+    when: ASRModule is instantiated
+    then: self.device stays "cpu" regardless of MPS availability on the host
+    """
+    asr = ASRModule(device="cpu")
+    assert asr.device == "cpu"
+
+
+def test_asrmodule_falls_back_to_cpu_when_mps_unavailable(monkeypatch):
+    """
+    given: torch.backends.mps.is_available() returns False
+    when: ASRModule is instantiated with device=None
+    then: self.device falls back to "cpu"
+    """
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    asr = ASRModule(device=None)
+    assert asr.device == "cpu"

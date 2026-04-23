@@ -26,6 +26,11 @@ class ASRModule:
         self.gigaam = gigaam
         self.SAMPLE_RATE = SAMPLE_RATE
         self.model_name = model_name
+        # Upstream gigaam.load_model treats device=None as "cuda" if available
+        # else "cpu" — it does not probe MPS. Resolve here so Apple-Silicon
+        # hosts default to MPS without the caller opting in explicitly.
+        if device is None:
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.device = device
         self.model = None
         # Serializes model load and model.forward across threads: live
@@ -40,7 +45,10 @@ class ASRModule:
             with self._model_lock:
                 if self.model is None:
                     if not quiet:
-                        print(f"Загрузка модели {self.model_name}...", file=sys.stderr)
+                        print(
+                            f"Загрузка модели {self.model_name} (device={self.device})...",
+                            file=sys.stderr,
+                        )
                     self.model = self.gigaam.load_model(self.model_name, device=self.device)
         return self.model
 
