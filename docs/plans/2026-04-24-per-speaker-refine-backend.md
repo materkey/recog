@@ -66,7 +66,7 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 4: RefineWorker implementation
 
-- [ ] 4.1 Implement `RefineWorker`:
+- [x] 4.1 Implement `RefineWorker`:
   - Constructor stores `model_lock: threading.Lock`, `transcribe_fn: Callable[[np.ndarray], TranscriptionResult]`, `apply_fn: Callable[[RefineResult], None]`, `abort_mode: Literal["cooperative","coarse"] = "cooperative"` (decision from Task 2 spike: decoder loop is ~80% of inference cost on MPS — ~767ms saved per aborted call; see `experiments/2026-04-24-refine-abort-spike.md`), internal `_queue: queue.Queue`, `_paused: bool`, `_live_pending: threading.Event`, `_stopped: threading.Event`, `_thread: threading.Thread`.
   - `start()` spawns daemon worker thread.
   - `submit(task)` puts onto queue; no-op if paused or stopped.
@@ -74,11 +74,11 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
   - `resume()` clears `_paused`.
   - `stop()` sets `_stopped`, waits for thread to join.
   - `set_live_pending()` / `clear_live_pending()` flip the Event — exposed for `LiveTranscriber` to signal priority.
-- [ ] 4.2 Worker loop: pop task, acquire `model_lock` (blocking), call `transcribe_fn`. In `cooperative` mode, pass a `should_abort=lambda: self._live_pending.is_set()` closure (the concrete hook-patching lives behind the `transcribe_fn` caller). In `coarse` mode, just run to completion.
-- [ ] 4.3 On abort: release lock, re-enqueue the task.
-- [ ] 4.4 On success: release lock, call `apply_fn(result)` (outside lock).
-- [ ] 4.5 Swallow + log exceptions in worker loop — do NOT kill the thread.
-- [ ] 4.6 Commit: `feat(refine): implement RefineWorker with cooperative/coarse abort`
+- [x] 4.2 Worker loop: pop task, acquire `model_lock` (blocking), call `transcribe_fn`. In `cooperative` mode, pass a `should_abort=lambda: self._live_pending.is_set()` closure (the concrete hook-patching lives behind the `transcribe_fn` caller). In `coarse` mode, just run to completion.
+- [x] 4.3 On abort: release lock, re-enqueue the task.
+- [x] 4.4 On success: release lock, call `apply_fn(result)` (outside lock).
+- [x] 4.5 Swallow + log exceptions in worker loop — do NOT kill the thread.
+- [x] 4.6 Commit: `feat(refine): implement RefineWorker with cooperative/coarse abort`
 
 ### Task 5: RefineWorker unit tests
 
