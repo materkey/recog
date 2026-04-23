@@ -1092,16 +1092,19 @@ class LiveTranscriber:
                     "text": new_text,
                     "refined": True,
                 })
-                # Update the cache so a follow-up refine on the same segment
-                # compares against the most recent value — avoids redundant
-                # writes on stable transcriptions.
-                self._pcm_segment_texts[segment_id] = new_text
 
         if not updates:
             return
         self._meeting_storage.update_segments(
             updates, meeting_path=target_meeting_path
         )
+        # Cache AFTER successful update_segments — if the JSONL rewrite
+        # fails (I/O error, permissions), the cache stays in sync with
+        # disk so a subsequent refine with the same text retries instead
+        # of silently skipping.
+        with self._state_lock:
+            for upd in updates:
+                self._pcm_segment_texts[upd["segment_id"]] = upd["text"]
 
     def _emit_pcm_transition_marker(self, degraded: bool, marker_gen: int):
         """Write a gap marker to the transcript on PCM ↔ mixed fallback flip.
