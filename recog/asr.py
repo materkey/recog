@@ -2,10 +2,12 @@
 Модуль ASR (Automatic Speech Recognition) на базе GigaAM.
 """
 
+import os
 import re
 import sys
+import tempfile
 import threading
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -195,6 +197,76 @@ class ASRModule:
             decoded = model.decoding.decode(model.head, encoded, encoded_len)
 
         return [entry[0] for entry in decoded]
+
+    def transcribe_with_timestamps(
+        self,
+        audio: Union[np.ndarray, torch.Tensor, str],
+        sample_rate: int = 16000,
+        quiet: bool = False,
+    ) -> Any:
+        """Transcribe audio and return word-level timestamps.
+
+        Wraps upstream ``model.transcribe(path, word_timestamps=True)``
+        (GigaAM PR #65). Word ``start``/``end`` are normalized in-place to
+        integer milliseconds; upstream emits floats in seconds.
+
+        Args:
+            audio: file path, or 1-D mono audio as ``np.ndarray`` /
+                ``torch.Tensor``. Int16 PCM is auto-normalized to float32.
+            sample_rate: sample rate of array/tensor input, written into the
+                temp WAV header. Ignored for path input. Upstream resamples
+                via ffmpeg on load, so mismatched rates still work.
+            quiet: suppress the "Загрузка модели ..." print on first load.
+
+        Returns:
+            ``gigaam.TranscriptionResult`` with ``text: str`` and
+            ``words: list[Word(text, start_ms, end_ms)]``; ``words`` may be
+            empty or ``None`` for silent/very short clips.
+        """
+        model = self.load_model(quiet=quiet)
+
+        if isinstance(audio, str):
+            with self._model_lock:
+                result = model.transcribe(audio, word_timestamps=True)
+        else:
+            import soundfile as sf
+
+            if isinstance(audio, torch.Tensor):
+                arr = audio.detach().cpu().numpy()
+            else:
+                arr = np.asarray(audio)
+
+            if arr.ndim > 1:
+                arr = np.squeeze(arr)
+            if arr.ndim != 1:
+                raise ValueError(
+                    f"audio must be 1-D mono; got shape {arr.shape}"
+                )
+
+            if arr.dtype == np.int16:
+                arr = arr.astype(np.float32) / 32768.0
+            elif arr.dtype != np.float32:
+                arr = arr.astype(np.float32)
+
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+            os.close(tmp_fd)
+            try:
+                sf.write(tmp_path, arr, sample_rate, subtype="FLOAT")
+                with self._model_lock:
+                    result = model.transcribe(tmp_path, word_timestamps=True)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        words = getattr(result, "words", None)
+        if words:
+            for w in words:
+                w.start = int(round(float(w.start) * 1000))
+                w.end = int(round(float(w.end) * 1000))
+
+        return result
 
     def _remove_duplicate_words(
         self,
