@@ -24,15 +24,19 @@ import bisect
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
 from .config import (
     PCM_BATCH_INTERVAL_MS,
+    PCM_CHUNK_DURATION_S,
     PCM_MAX_BATCH_SIZE,
+    PCM_REFINE_WINDOW_S,
     PCM_SILENCE_WATCHDOG_S,
+    SPEAKER_TURN_GAP,
 )
 
 # The PcmChunk dataclass lives in `ktalk_bridge`; importing lazily inside
@@ -112,6 +116,32 @@ class PerSpeakerIngest:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+
+        # ----- refine state (§3 of per-speaker-stream-refine) ----------------
+        # Per-pid rolling PCM ring: deque of Int16 np.ndarray chunks. Capacity
+        # in seconds = PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S + head_room;
+        # enforced per-pid at enqueue time by dropping oldest entries.
+        self._pcm_rings: Dict[str, Deque[np.ndarray]] = {}
+        # Per-pid monotonic audio counter (ms), D1 timeline contract. Advances
+        # by chunk_ms on each enqueue; never reset except on meeting drain.
+        self._pid_audio_ms: Dict[str, float] = {}
+        # Per-pid pid_audio_ms of the oldest un-refined sample. Starts at 0 on
+        # the first chunk; advanced by get_refine_candidate when a window is
+        # handed off to the RefineWorker.
+        self._refine_watermark_ms: Dict[str, float] = {}
+        # Per-pid silence counter (ms). Reset to 0 on enqueue; advanced by
+        # PCM_BATCH_INTERVAL_MS each tick the pid saw no new chunk.
+        self._silence_ms: Dict[str, float] = {}
+        # Per-pid continuous-speech counter (ms). Bumped by chunk_ms on
+        # enqueue; reset to 0 when silence crosses SPEAKER_TURN_GAP.
+        self._continuous_speech_ms: Dict[str, float] = {}
+        # Which pids saw at least one chunk since the last tick — used to
+        # decide which pids get silence-incremented by the tick loop.
+        self._pids_had_chunk_since_last_tick: Set[str] = set()
+        # Ring capacity (ms) — derived from config once at construction.
+        self._pid_ring_capacity_ms: float = (
+            (PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S + 3.0) * 1000.0
+        )
 
     # ----- public API -----------------------------------------------------
 
@@ -233,6 +263,29 @@ class PerSpeakerIngest:
             self._last_chunk_ts = now
             self._pcm_ever_seen = True
 
+            # ----- refine per-pid bookkeeping (§3) ---------------------------
+            # Decode once here so the refine ring and drain path can share it;
+            # np.frombuffer is zero-copy so a second decode in _drain_batch_
+            # locked is cheap, but keeping one authoritative decode is cleaner.
+            samples = _decode_pcm_int16(chunk.pcm)
+            sample_rate = chunk.sample_rate or 16000
+            chunk_ms = (samples.size / sample_rate) * 1000.0 if sample_rate else 0.0
+            if samples.size > 0 and chunk_ms > 0.0:
+                ring = self._pcm_rings.setdefault(chunk.pid, deque())
+                ring.append(samples)
+                self._pid_audio_ms[chunk.pid] = (
+                    self._pid_audio_ms.get(chunk.pid, 0.0) + chunk_ms
+                )
+                # Watermark is initialised to 0 on the first chunk; advanced by
+                # get_refine_candidate (Task 7) when a window is handed off.
+                self._refine_watermark_ms.setdefault(chunk.pid, 0.0)
+                self._silence_ms[chunk.pid] = 0.0
+                self._continuous_speech_ms[chunk.pid] = (
+                    self._continuous_speech_ms.get(chunk.pid, 0.0) + chunk_ms
+                )
+                self._enforce_ring_capacity_locked(chunk.pid, sample_rate)
+                self._pids_had_chunk_since_last_tick.add(chunk.pid)
+
             total = sum(len(b) for b in self._buffers.values())
             if total >= self._max_batch_size:
                 wake = True
@@ -262,6 +315,15 @@ class PerSpeakerIngest:
             # against the bumped `self._meeting_generation` and correctly
             # discard the batch.
 
+            # Refine state: pid frames are per-meeting, so wipe all per-pid
+            # rings and counters together with the live buffers.
+            self._pcm_rings.clear()
+            self._pid_audio_ms.clear()
+            self._refine_watermark_ms.clear()
+            self._silence_ms.clear()
+            self._continuous_speech_ms.clear()
+            self._pids_had_chunk_since_last_tick.clear()
+
     def tick(self, now: Optional[float] = None) -> List[BatchedChunk]:
         """Advance state by one tick: check watchdog, drain up to one batch,
         dispatch to callback.
@@ -274,6 +336,11 @@ class PerSpeakerIngest:
         with self._lock:
             self._check_watchdog_locked(now)
             batch = self._drain_batch_locked()
+            # Advance per-pid silence counter for pids that did not see a new
+            # chunk this interval. Runs unconditionally so Task 7's trigger
+            # logic has fresh `_silence_ms` / `_continuous_speech_ms` numbers
+            # even when the drain itself was a no-op.
+            self._update_per_pid_silence_locked()
         if batch:
             try:
                 self._transcribe_callback(batch)
@@ -305,7 +372,55 @@ class PerSpeakerIngest:
             self._thread.join(timeout=timeout)
             self._thread = None
 
+    def get_pid_audio_ms(self, pid: str) -> float:
+        """Return the per-pid monotonic audio counter in milliseconds.
+
+        Used by LiveTranscriber._on_pcm_batch (Task 8) to stamp live segments
+        with pid-frame bounds. Reads self._lock to observe a consistent value
+        against concurrent enqueue updates.
+        """
+        with self._lock:
+            return self._pid_audio_ms.get(pid, 0.0)
+
     # ----- internal -------------------------------------------------------
+
+    def _enforce_ring_capacity_locked(self, pid: str, sample_rate: int) -> None:
+        """Drop oldest ring entries for `pid` until total samples <= capacity.
+
+        Assumes self._lock is held. Rings hold whole chunks (deque entries are
+        np.ndarray slices of size ~= PCM_CHUNK_PAYLOAD_S * sr), so we drop at
+        chunk granularity — the `+3.0` head-room in capacity absorbs up to one
+        over-cap chunk.
+        """
+        ring = self._pcm_rings.get(pid)
+        if not ring or sample_rate <= 0:
+            return
+        cap_samples = int(self._pid_ring_capacity_ms * sample_rate / 1000.0)
+        if cap_samples <= 0:
+            return
+        total = sum(int(entry.size) for entry in ring)
+        while total > cap_samples and len(ring) > 1:
+            oldest = ring.popleft()
+            total -= int(oldest.size)
+
+    def _update_per_pid_silence_locked(self) -> None:
+        """Advance `_silence_ms` for pids idle this tick; reset continuous
+        speech when silence crosses SPEAKER_TURN_GAP.
+
+        Assumes self._lock is held. Pids that saw at least one chunk since the
+        previous tick keep `_silence_ms=0` (reset by enqueue) and do not get
+        bumped here.
+        """
+        touched = self._pids_had_chunk_since_last_tick
+        self._pids_had_chunk_since_last_tick = set()
+        turn_gap_ms = SPEAKER_TURN_GAP * 1000.0
+        for pid in list(self._pid_audio_ms.keys()):
+            if pid in touched:
+                continue
+            new_silence = self._silence_ms.get(pid, 0.0) + float(PCM_BATCH_INTERVAL_MS)
+            self._silence_ms[pid] = new_silence
+            if new_silence >= turn_gap_ms:
+                self._continuous_speech_ms[pid] = 0.0
 
     def _check_watchdog_locked(self, now: float) -> None:
         """Must be called with self._lock held."""
