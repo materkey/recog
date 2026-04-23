@@ -661,4 +661,223 @@ def test_refine_state_cleared_on_drain():
     assert ingest._silence_ms == {}
     assert ingest._continuous_speech_ms == {}
     assert ingest._pids_had_chunk_since_last_tick == set()
+    assert ingest._pid_sample_rate == {}
     assert ingest.get_pid_audio_ms("p1") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Task 7: get_refine_candidate trigger logic (per-speaker-stream-refine §3.5)
+# ---------------------------------------------------------------------------
+
+
+def _advance_silence_past_turn_gap(ingest: PerSpeakerIngest, clock: "_Clock") -> None:
+    """Drive enough idle ticks so `_silence_ms[pid] >= SPEAKER_TURN_GAP * 1000`
+    for every pid seen so far.
+
+    The first tick only *consumes* the touched-pids set carried over from the
+    enqueue phase (it sets silence to 0 for those pids), subsequent ticks bump
+    silence by `PCM_BATCH_INTERVAL_MS` each.
+    """
+    from recog.config import PCM_BATCH_INTERVAL_MS, SPEAKER_TURN_GAP
+
+    turn_gap_ms = SPEAKER_TURN_GAP * 1000.0
+    # +2 slack: one tick for consuming `touched`, one for rounding.
+    ticks_needed = int(turn_gap_ms // PCM_BATCH_INTERVAL_MS) + 2
+    for _ in range(ticks_needed):
+        ingest.tick(now=clock.now)
+
+
+def test_gap_trigger_returns_window_and_advances_watermark():
+    """
+    given: 5 one-second chunks on one pid followed by enough idle ticks to
+           cross SPEAKER_TURN_GAP of silence
+    when: get_refine_candidate("p1") is called
+    then: returns a RefineTask covering the full 5 s trailing window with
+          offset_base_ms=0 (ring starts at the pid origin), watermark advances
+          to pid_audio_ms=5000 and the next call returns None
+    """
+    from recog.refine import RefineTask
+
+    clock = _Clock(start=100.0)
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        time_fn=clock,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+    for s in range(1, 6):
+        ingest.enqueue(_make_chunk(
+            seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
+        ))
+
+    _advance_silence_past_turn_gap(ingest, clock)
+
+    task = ingest.get_refine_candidate("p1")
+    assert isinstance(task, RefineTask)
+    assert task.pid == "p1"
+    assert task.pcm_samples.dtype == np.int16
+    # 5 s of audio — the full trailing window fits inside PCM_REFINE_WINDOW_S.
+    assert task.pcm_samples.size == 5 * sample_rate
+    # Window begins at the pid origin (watermark was 0) — offset_base_ms = 0.
+    assert task.offset_base_ms == pytest.approx(0.0)
+    assert task.submitted_at == pytest.approx(clock.now)
+    # Watermark advanced to pid_audio_ms, preventing a second gap-fire on the
+    # same un-refined audio.
+    assert ingest._refine_watermark_ms["p1"] == pytest.approx(5_000.0)
+    assert ingest.get_refine_candidate("p1") is None
+
+
+def test_monolog_trigger_fires_at_cap():
+    """
+    given: 15 s of continuous speech on one pid (no silence gap, no ticks
+           between enqueues)
+    when: get_refine_candidate("p1") is called
+    then: monolog fallback fires (continuous_speech >= PCM_REFINE_MONOLOG_CAP_S
+          * 1000), returns a RefineTask for the 15 s window, and
+          _continuous_speech_ms is reset to 0 so the trigger does not re-fire
+          on the next tick without fresh speech
+    """
+    from recog.config import PCM_REFINE_MONOLOG_CAP_S
+    from recog.refine import RefineTask
+
+    clock = _Clock(start=100.0)
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        time_fn=clock,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+
+    monolog_seconds = int(PCM_REFINE_MONOLOG_CAP_S)
+    for s in range(1, monolog_seconds + 1):
+        ingest.enqueue(_make_chunk(
+            seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
+        ))
+    # Monolog trigger precondition, gap trigger should NOT be active.
+    assert (
+        ingest._continuous_speech_ms["p1"]
+        >= PCM_REFINE_MONOLOG_CAP_S * 1000.0
+    )
+    assert ingest._silence_ms["p1"] == 0.0
+
+    task = ingest.get_refine_candidate("p1")
+    assert isinstance(task, RefineTask)
+    assert task.pid == "p1"
+    assert task.pcm_samples.size == monolog_seconds * sample_rate
+    assert task.offset_base_ms == pytest.approx(0.0)
+    # Continuous-speech counter reset so next enqueue starts from zero.
+    assert ingest._continuous_speech_ms["p1"] == 0.0
+    assert ingest._refine_watermark_ms["p1"] == pytest.approx(
+        float(monolog_seconds) * 1_000.0
+    )
+
+
+def test_no_candidate_when_no_unrefined_audio():
+    """
+    given: a pid that either (a) has never received a chunk, or (b) has had
+           its watermark advanced to match pid_audio_ms (all audio already
+           handed off for refine)
+    when: get_refine_candidate is called
+    then: returns None — the trigger check is short-circuited before any
+          window assembly happens, and no triggers (gap/monolog) can fire on
+          zero un-refined audio
+    """
+    clock = _Clock(start=100.0)
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        time_fn=clock,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+
+    # Case (a): pid never seen.
+    assert ingest.get_refine_candidate("never_seen") is None
+
+    # Case (b): pid saw audio + gap, then refine drained it; now another idle
+    # tick or two keep silence high but un-refined audio is zero.
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+    ingest.enqueue(_make_chunk(seq=1, sample_rate=sample_rate, pcm=pcm_one_second))
+    _advance_silence_past_turn_gap(ingest, clock)
+    assert ingest.get_refine_candidate("p1") is not None
+    # No new chunks → still silent, still triggers check, but unrefined == 0.
+    for _ in range(3):
+        ingest.tick(now=clock.now)
+    assert ingest.get_refine_candidate("p1") is None
+
+
+def test_watermark_advance_prevents_double_fire():
+    """
+    given: a pid with buffered audio and silence past SPEAKER_TURN_GAP
+    when: get_refine_candidate is called twice in a row without any new
+          chunks arriving between the calls
+    then: the first call returns a RefineTask; the second returns None
+          because the watermark advance (performed atomically with task
+          creation) leaves no un-refined audio for the second call
+    """
+    clock = _Clock(start=100.0)
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        time_fn=clock,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+    for s in range(1, 4):  # 3 s of audio
+        ingest.enqueue(_make_chunk(
+            seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
+        ))
+    _advance_silence_past_turn_gap(ingest, clock)
+
+    first = ingest.get_refine_candidate("p1")
+    assert first is not None
+    # Watermark sits at pid_audio_ms, so a second call on identical state
+    # short-circuits at the unrefined_ms<=0 guard.
+    second = ingest.get_refine_candidate("p1")
+    assert second is None
+
+
+def test_refine_candidate_caps_at_refine_window():
+    """
+    given: 30 s of continuous speech on one pid (exceeds PCM_REFINE_WINDOW_S)
+    when: get_refine_candidate fires via monolog trigger
+    then: the RefineTask's pcm_samples are capped at PCM_REFINE_WINDOW_S and
+          offset_base_ms reflects the trailing window start inside the pid
+          frame (pid_audio_ms - window_ms)
+    """
+    from recog.config import PCM_REFINE_WINDOW_S
+
+    clock = _Clock(start=100.0)
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        time_fn=clock,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+    total_seconds = 30
+    for s in range(1, total_seconds + 1):
+        ingest.enqueue(_make_chunk(
+            seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
+        ))
+
+    task = ingest.get_refine_candidate("p1")
+    assert task is not None
+    window_samples = int(PCM_REFINE_WINDOW_S * sample_rate)
+    assert task.pcm_samples.size == window_samples
+    # Trailing window: offset_base_ms = pid_audio_ms - window_ms = 30000-20000.
+    assert task.offset_base_ms == pytest.approx(
+        float(total_seconds) * 1_000.0 - PCM_REFINE_WINDOW_S * 1_000.0
+    )
+    # Watermark advanced to full pid_audio_ms (not the window start): the
+    # remaining pre-window audio is considered "skipped" — refine operates on
+    # the trailing window only and does not loop back.
+    assert ingest._refine_watermark_ms["p1"] == pytest.approx(
+        float(total_seconds) * 1_000.0
+    )
