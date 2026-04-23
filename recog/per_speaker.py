@@ -88,6 +88,9 @@ class PerSpeakerIngest:
         # Per-pid list kept sorted by seq; bisect.insort is O(log n) lookup +
         # O(n) insert — fine for n ≤ max_chunks_per_pid (24 by default).
         self._buffers: Dict[str, List[_BufferedChunk]] = {}
+        # Per-pid lightweight counters for diagnostics/observability. Grows
+        # only with distinct participant count, not chunks — bounded.
+        self._stats: Dict[str, dict] = {}
         self._last_chunk_ts: Optional[float] = None
         self._degraded = False
         # Whether any PCM chunk has been seen for the current meeting. Stays
@@ -116,6 +119,42 @@ class PerSpeakerIngest:
     def degraded(self) -> bool:
         with self._lock:
             return self._degraded
+
+    def get_stats(self) -> dict:
+        """Snapshot per-pid counters + top-level flags for live diagnostics.
+
+        Safe to call from any thread. Returned dict is a deep copy.
+        """
+        now = self._time_fn()
+        with self._lock:
+            per_pid = {}
+            for pid, s in self._stats.items():
+                chunks = s["chunks_seen"]
+                duration = max(now - s["first_seen_ts"], 0.001)
+                per_pid[pid] = {
+                    "speaker_name": s["speaker_name"],
+                    "is_local": s["is_local"],
+                    "chunks_seen": chunks,
+                    "last_seq": s["last_seq"],
+                    "gaps_count": s["gaps_count"],
+                    "out_of_order_count": s["out_of_order_count"],
+                    "first_seen_ts": s["first_seen_ts"],
+                    "last_seen_ts": s["last_seen_ts"],
+                    "age_s": round(now - s["first_seen_ts"], 2),
+                    "since_last_chunk_s": round(now - s["last_seen_ts"], 2),
+                    "chunks_per_sec": round(chunks / duration, 2),
+                }
+            return {
+                "pcm_ever_seen": self._pcm_ever_seen,
+                "degraded": self._degraded,
+                "meeting_active_since": self._meeting_active_since,
+                "last_chunk_ts": self._last_chunk_ts,
+                "now": now,
+                "pending_buffer_sizes": {
+                    pid: len(buf) for pid, buf in self._buffers.items()
+                },
+                "per_pid": per_pid,
+            }
 
     @property
     def pcm_ever_seen(self) -> bool:
@@ -162,6 +201,28 @@ class PerSpeakerIngest:
             while len(buf) > self._max_chunks_per_pid:
                 buf.pop(0)
 
+            stats = self._stats.setdefault(chunk.pid, {
+                "speaker_name": chunk.speaker_name,
+                "is_local": chunk.is_local,
+                "chunks_seen": 0,
+                "first_seen_ts": now,
+                "last_seen_ts": now,
+                "last_seq": None,
+                "gaps_count": 0,
+                "out_of_order_count": 0,
+            })
+            stats["speaker_name"] = chunk.speaker_name or stats["speaker_name"]
+            stats["chunks_seen"] += 1
+            stats["last_seen_ts"] = now
+            prev_seq = stats["last_seq"]
+            if prev_seq is not None:
+                if chunk.seq > prev_seq + 1:
+                    stats["gaps_count"] += chunk.seq - prev_seq - 1
+                elif chunk.seq <= prev_seq:
+                    stats["out_of_order_count"] += 1
+            if prev_seq is None or chunk.seq > prev_seq:
+                stats["last_seq"] = chunk.seq
+
             # Watchdog: new chunk → exit degraded mode if we were in it.
             if self._degraded:
                 print(
@@ -185,6 +246,7 @@ class PerSpeakerIngest:
         on meeting boundary before `_meeting_generation` is bumped."""
         with self._lock:
             self._buffers.clear()
+            self._stats.clear()
             # Leave watchdog state untouched — a new meeting has a fresh
             # `_last_chunk_ts` on the first enqueue.
             self._last_chunk_ts = None
