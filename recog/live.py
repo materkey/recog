@@ -724,6 +724,7 @@ class LiveTranscriber:
             ),
         )
         self._ktalk_bridge.set_pcm_chunk_callback(self._per_speaker_ingest.enqueue)
+        self._ktalk_bridge.set_pcm_stats_getter(self._per_speaker_ingest.get_stats)
         self._per_speaker_ingest.start()
         print("Per-speaker PCM ingest started (RECOG_PCM_TRANSPORT=1)")
 

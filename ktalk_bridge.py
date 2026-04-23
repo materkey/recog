@@ -311,6 +311,10 @@ class KTalkBridge:
         self._on_meeting_change: Optional[Callable[[str, Path], None]] = None
         self._on_pre_meeting_switch: Optional[Callable[[], None]] = None
         self._on_pcm_chunk: Optional[Callable[[PcmChunk], None]] = None
+        # Optional callback returning a snapshot of PerSpeakerIngest stats.
+        # LiveTranscriber wires it; bridge surfaces the result through the
+        # debug file so frontend /api/pcm-diagnostics can read it.
+        self._pcm_stats_getter: Optional[Callable[[], dict]] = None
 
         # Snapshot RECOG_PCM_TRANSPORT на старте bridge; отправляется extension'у
         # handshake'ом на WS-connect. Перечитывание при reconnect'е не делаем —
@@ -381,6 +385,10 @@ class KTalkBridge:
         Используется для инвалидации in-flight чанков перед сменой meeting path.
         """
         self._on_pre_meeting_switch = callback
+
+    def set_pcm_stats_getter(self, getter: Optional[Callable[[], dict]]) -> None:
+        """Wire a getter returning PerSpeakerIngest.get_stats() for debug."""
+        self._pcm_stats_getter = getter
 
     def set_pcm_chunk_callback(self, callback: Optional[Callable[['PcmChunk'], None]]):
         """
@@ -631,8 +639,16 @@ class KTalkBridge:
                     },
                     "meeting": {
                         "id": self._meeting_storage.get_current_meeting_id() if self._meeting_storage else None
-                    }
+                    },
+                    "pcm": {
+                        "transport_enabled": self._pcm_transport_enabled,
+                    },
                 }
+            if self._pcm_stats_getter is not None:
+                try:
+                    state["pcm"].update(self._pcm_stats_getter())
+                except Exception as e:
+                    state["pcm"]["error"] = str(e)
 
             with open(self._debug_file, 'w') as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)

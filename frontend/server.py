@@ -954,6 +954,38 @@ async def get_live_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/pcm-diagnostics")
+async def get_pcm_diagnostics():
+    """Live per-speaker PCM transport diagnostics.
+
+    Reads the KTalk bridge debug file (written every ~1s) and extracts
+    the `pcm` subtree: per-pid chunk counts, seq gaps, chunks_per_sec,
+    degraded flag, `pcm_ever_seen`. Used by the assistant during real
+    meetings to confirm PCM flow without DevTools access.
+    """
+    import time
+
+    debug_file = Path("/tmp/ktalk_debug.json")
+    if not debug_file.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="ktalk_debug.json missing — is com.recog.live running?",
+        )
+    try:
+        with open(debug_file, "r") as f:
+            state = json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"read failed: {e}")
+    age = time.time() - state.get("timestamp", 0.0)
+    return JSONResponse(content={
+        "state_age_s": round(age, 2),
+        "stale": age > 5.0,
+        "meeting_id": state.get("meeting", {}).get("id"),
+        "participants": state.get("conference", {}).get("participants", []),
+        "pcm": state.get("pcm") or {"transport_enabled": False},
+    })
+
+
 @app.get("/api/debug")
 async def get_debug_status():
     """Get debug status from KTalk bridge and live transcription."""
