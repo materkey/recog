@@ -79,6 +79,17 @@ swiftc -o sck_audio_capture sck_audio_capture.swift \
 ### Single-venv Architecture
 The project uses a single `venv-gigaam` virtual environment. Speaker identification is handled via the KTalk Chrome extension (real-time) and SpeechBrain ECAPA-TDNN embeddings (enrollment). The former dual-venv pyannote subprocess architecture (ADR-0006) is obsolete.
 
+### Per-speaker ASR path (ADR-0018)
+When `RECOG_PCM_TRANSPORT=1` and a KTalk meeting is active, the pipeline switches from mixed-audio ASR (BlackHole/ScreenCaptureKit) to per-participant PCM streams:
+
+- Chrome extension attaches `AudioWorkletNode` to each remote `MediaStream` (`kontur-diarize/ktalk-speaker-extension/src/audio-worklet/downsampler.js`, `src/pcm_transport.js`), downsamples 48 kHz → 16 kHz Int16 PCM and sends chunks via WS (`type: "pcm_chunk"`) to `ktalk_bridge.py`.
+- Bridge dispatches chunks to `PerSpeakerIngest` (`recog/per_speaker.py`) which per-pid reorders by `seq`, batches across speakers (200 ms window, max 8), and calls `ASRModule.transcribe_batch()` (`recog/asr.py`). Attribution comes from `speaker_name` already in the frame — no `get_dominant_speaker_for_period()` call.
+- Gate is server-authoritative: `recog/config.py:pcm_transport_enabled()` reads the env once, bridge sends `{"type": "pcm_transport_enabled"}` to extension on WS-handshake; extension emits PCM only when `enabled: true`.
+- Watchdog: if PCM is silent for `PCM_SILENCE_WATCHDOG_S` (30 s) during an active meeting, `PerSpeakerIngest._degraded` flips true, `LiveTranscriber._process_chunk` falls back to the existing mixed-path with `source="fallback_mixed"` and a gap-marker written to the transcript. Recovery marker is inserted when PCM returns.
+- Local mic (`MIC_SPEAKER_NAME`) stays on `sounddevice` — it is not routed through the worklet (D9).
+
+See `docs/plans/2026-04-22-per-speaker-asr-pipeline.md` for the decisions table and task breakdown.
+
 ### Module Organization
 - `recog/` - Core Python package
   - `ai_provider.py` - AIProvider ABC, CodexCliProvider, resolve_cli() — shared AI provider interface used by increment.py and title_generator.py
@@ -113,6 +124,7 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env`:
 - `CLAUDE_MODEL` - `haiku` | `sonnet` | `opus`
 - `OPENROUTER_API_KEY` - Required if using OpenRouter
 - `MIC_SPEAKER_NAME` - Speaker label for microphone input in live mode (default: `Me`)
+- `RECOG_PCM_TRANSPORT` - `1` enables per-speaker PCM transport from the KTalk extension (ADR-0018); default `0`. Requires extension rebuild + `./recog-service.sh restart` to apply.
 
 ## Data Files
 
@@ -136,3 +148,4 @@ Architecture Decision Records in `adr/`:
 - **ADR-0010**: Live transcription mode
 - **ADR-0011**: Meeting storage
 - **ADR-0013**: AI transcript analysis
+- **ADR-0018**: Per-speaker ASR pipeline (PCM transport from Chrome extension, gated by `RECOG_PCM_TRANSPORT`)

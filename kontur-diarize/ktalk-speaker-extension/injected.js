@@ -969,6 +969,383 @@ function startMeetingCheck() {
 
 /***/ },
 
+/***/ "./src/pcm_transport.js"
+/*!******************************!*\
+  !*** ./src/pcm_transport.js ***!
+  \******************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   pcmAttachAllFromConf: () => (/* binding */ pcmAttachAllFromConf),
+/* harmony export */   pcmAttachParticipant: () => (/* binding */ pcmAttachParticipant),
+/* harmony export */   pcmDetachParticipant: () => (/* binding */ pcmDetachParticipant),
+/* harmony export */   pcmTransportDispose: () => (/* binding */ pcmTransportDispose),
+/* harmony export */   pcmUpdateParticipantName: () => (/* binding */ pcmUpdateParticipantName)
+/* harmony export */ });
+/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+// Per-speaker PCM transport.
+//
+// Per decision D4/D9 in docs/plans/2026-04-22-per-speaker-asr-pipeline.md:
+// each remote KTalk participant's audio track is routed through an
+// AudioWorkletNode (see src/audio-worklet/downsampler.js) that emits
+// 16 kHz Int16 PCM chunks every 3.0 s stride with 3.3 s payload. Chunks
+// are base64-encoded and shipped to ktalk_bridge via sendWsPcmChunk().
+//
+// Gating is server-authoritative (decision D2): the bridge broadcasts
+// `pcm_transport_enabled` on each WS connect; we subscribe to state
+// transitions via ws_api.js and materialize/teardown worklet nodes when
+// the gate flips. Attaching participants before the gate is on is fine —
+// we keep their metadata pending and materialize as soon as the gate
+// opens.
+//
+// Local-mic participant is intentionally skipped (decision D9): the host
+// tab does not expose its own mic as a remote track and unifying paths
+// would add risk without benefit; the sounddevice path stays the source
+// of truth for the local mic.
+
+
+
+let audioContext = null;
+let workletLoadPromise = null;
+
+const pending = new Map(); // pid → {speakerName, isLocal, mediaStream}
+const active = new Map();  // pid → {source, node, seq}
+
+function getWorkletUrl() {
+  if (typeof window !== 'undefined' && window.__PCM_WORKLET_URL__) {
+    return window.__PCM_WORKLET_URL__;
+  }
+  // content.js stashes the URL on <html> via setAttribute because
+  // inline-script injection is blocked by KTalk's CSP. Reading a DOM
+  // attribute from the page world is always allowed.
+  if (typeof document !== 'undefined' && document.documentElement) {
+    const attr = document.documentElement.getAttribute('data-pcm-worklet-url');
+    if (attr) return attr;
+  }
+  return null;
+}
+
+function ensureAudioContext() {
+  if (!audioContext || audioContext.state === 'closed') {
+    try {
+      audioContext = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+      console.log(
+        '[PcmTransport] AudioContext created, state=', audioContext.state,
+        'baseLatency=', audioContext.baseLatency,
+        'sampleRate=', audioContext.sampleRate
+      );
+      // Without this resume() the context stays suspended under
+      // autoplay-policy (Playwright + headful Chromium in particular) —
+      // worklet addModule succeeds and the graph builds but process()
+      // never runs, so no pcm_chunk is ever emitted. Safe no-op when
+      // ctx is already running.
+      audioContext.resume().then(
+        () => console.log('[PcmTransport] AudioContext resumed, state=', audioContext?.state),
+        (e) => console.warn('[PcmTransport] AudioContext resume failed:', e?.message || e)
+      );
+    } catch (e) {
+      console.error('[PcmTransport] AudioContext creation failed:', e);
+      audioContext = null;
+    }
+  }
+  return audioContext;
+}
+
+async function ensureWorkletModule(ctx) {
+  if (!ctx || !ctx.audioWorklet) {
+    console.warn('[PcmTransport] ensureWorkletModule: no ctx or no audioWorklet API');
+    return false;
+  }
+  if (workletLoadPromise) {
+    return workletLoadPromise;
+  }
+  const url = getWorkletUrl();
+  if (!url) {
+    console.warn('[PcmTransport] window.__PCM_WORKLET_URL__ not set; worklet cannot be loaded');
+    return false;
+  }
+  console.log('[PcmTransport] Loading worklet module from', url);
+  workletLoadPromise = ctx.audioWorklet
+    .addModule(url)
+    .then(() => {
+      console.log('[PcmTransport] Worklet module loaded OK');
+      return true;
+    })
+    .catch((e) => {
+      console.error('[PcmTransport] Worklet module load failed:', e?.message || e);
+      workletLoadPromise = null;
+      return false;
+    });
+  return workletLoadPromise;
+}
+
+function int16ToBase64(int16) {
+  const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode.apply(null, slice);
+  }
+  return btoa(binary);
+}
+
+function logMaterializeSkip(pid, reason, warn = false) {
+  const fn = warn ? console.warn : console.log;
+  fn('[PcmTransport] materialize skip pid=', pid, 'reason:', reason);
+}
+
+async function materialize(pid, info) {
+  if (active.has(pid)) return logMaterializeSkip(pid, 'already active');
+  const ctx = ensureAudioContext();
+  if (!ctx) return logMaterializeSkip(pid, 'no AudioContext', true);
+  const loaded = await ensureWorkletModule(ctx);
+  if (!loaded) return logMaterializeSkip(pid, 'worklet not loaded', true);
+
+  // By the time addModule resolves, attach may have been cancelled.
+  if (!pending.has(pid)) return logMaterializeSkip(pid, 'pending cleared during await');
+  // Two concurrent materialize(pid) calls can both pass the top-of-function
+  // active.has(pid) check (gate flip + pcmAttachParticipant both dispatch),
+  // then both await, then both fall through to create a node/source — the
+  // second active.set overwrites the first entry and leaks its nodes.
+  // Re-check after the await so only one wins.
+  if (active.has(pid)) return logMaterializeSkip(pid, 'raced another materialize');
+
+  try {
+    const source = ctx.createMediaStreamSource(info.mediaStream);
+    const node = new AudioWorkletNode(ctx, 'pcm-downsampler', {
+      numberOfInputs: 1,
+      numberOfOutputs: 0,
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      channelInterpretation: 'discrete',
+    });
+
+    const entry = { source, node, seq: 0, chunksLogged: 0 };
+
+    node.port.onmessage = (ev) => {
+      const data = ev.data;
+      if (!data) return;
+      if (data.type === 'error') {
+        if (data.reason === 'sample_rate_mismatch') {
+          console.error(
+            '[PcmTransport] Worklet reported sample_rate_mismatch for pid',
+            pid,
+            'actualSampleRate=',
+            data.sampleRate
+          );
+          pcmDetachParticipant(pid);
+        }
+        return;
+      }
+      if (data.type !== 'pcm_chunk') return;
+      if (!(0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.isPcmTransportEnabled)()) return;
+      const int16 = data.int16Pcm;
+      if (!int16 || !int16.length) return;
+
+      const nowMs = Date.now();
+      const payloadMs = (data.sampleCount / 16000) * 1000;
+      const chunkEndMs = nowMs;
+      const chunkStartMs = nowMs - payloadMs;
+
+      const pcmBase64 = int16ToBase64(int16);
+      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.sendWsPcmChunk)(
+        pid,
+        info.speakerName,
+        info.isLocal,
+        entry.seq++,
+        chunkStartMs,
+        chunkEndMs,
+        pcmBase64
+      );
+
+      if (entry.chunksLogged < 3) {
+        entry.chunksLogged++;
+        console.log(
+          '[PcmTransport] chunk sent pid=', pid,
+          'seq=', entry.seq - 1,
+          'samples=', data.sampleCount,
+          'payloadMs=', payloadMs.toFixed(0)
+        );
+      }
+    };
+
+    source.connect(node);
+    // Pump the graph. AudioWorkletNode with numberOfOutputs:0 can be
+    // treated as disconnected by Chromium and never get process() ticks
+    // unless something downstream drives it. Connecting to destination
+    // here is a no-op signal-wise (worklet has no outputs) but keeps
+    // the graph alive. See docs/plans/rippling-mixing-giraffe.md POF-5.
+    try {
+      node.connect(ctx.destination);
+    } catch (e) {
+      console.warn('[PcmTransport] node.connect(destination) failed:', e?.message || e);
+    }
+    active.set(pid, entry);
+    console.log('[PcmTransport] Attached participant:', pid, info.speakerName);
+  } catch (e) {
+    console.warn('[PcmTransport] Failed to materialize pid', pid, e);
+  }
+}
+
+function teardown(pid) {
+  const entry = active.get(pid);
+  if (!entry) return;
+  try {
+    entry.source.disconnect();
+  } catch (_) {
+    /* already disconnected */
+  }
+  try {
+    entry.node.port.onmessage = null;
+    if (audioContext && audioContext.destination) {
+      try { entry.node.disconnect(audioContext.destination); } catch (_) { /* not connected */ }
+    }
+    entry.node.disconnect();
+  } catch (_) {
+    /* already disconnected */
+  }
+  active.delete(pid);
+  console.log('[PcmTransport] Detached participant:', pid);
+}
+
+function pcmAttachParticipant(pid, speakerName, isLocal, mediaStream) {
+  if (!pid || !mediaStream) return;
+  // Local mic stays on sounddevice path (D9).
+  if (isLocal) return;
+  if (pending.has(pid)) return;
+  pending.set(pid, { speakerName: speakerName || pid, isLocal: !!isLocal, mediaStream });
+  if ((0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.isPcmTransportEnabled)()) {
+    void materialize(pid, pending.get(pid));
+  }
+}
+
+// Update the cached display name for a pid whose PCM transport is already
+// attached.  The onmessage closure in `materialize` reads `info.speakerName`
+// on every chunk, and `info` is the same object stored in `pending`, so
+// mutating the field here propagates to future chunks without re-attaching.
+// Safe to call for unknown pids (no-op).
+function pcmUpdateParticipantName(pid, newName) {
+  if (!pid || !newName) return;
+  const entry = pending.get(pid);
+  if (!entry) return;
+  if (entry.speakerName === newName) return;
+  entry.speakerName = newName;
+}
+
+function pcmDetachParticipant(pid) {
+  if (!pid) return;
+  pending.delete(pid);
+  teardown(pid);
+}
+
+function pcmAttachAllFromConf(conf) {
+  if (!conf) {
+    console.warn('[PcmTransport] attachAll: no conf');
+    return;
+  }
+  const localId = conf.localParticipant?.id;
+
+  let inspected = 0;
+  let skippedLocal = 0;
+  let skippedNoStream = 0;
+  let attached = 0;
+
+  conf._participantsMap?.forEach((p) => {
+    inspected++;
+    const pid = p._id;
+    if (!pid || p.local) { skippedLocal++; return; }
+    const stream = p._audioTrack$?.value?.jitsiTrack?.stream;
+    if (!stream) { skippedNoStream++; return; }
+    const speakerName = resolveSpeakerName(p, pid);
+    pcmAttachParticipant(pid, speakerName, false, stream);
+    attached++;
+  });
+
+  let jitsiInspected = 0;
+  let jitsiSkippedNoStream = 0;
+  let jitsiAttached = 0;
+  const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
+  for (const jp of jitsiParticipants) {
+    jitsiInspected++;
+    const pid = jp._id || jp.getId?.() || jp.id;
+    if (!pid || pid === localId || pending.has(pid)) continue;
+    const tracks = jp.getTracks?.() || [];
+    const audioTrack = tracks.find((t) => t.getType?.() === 'audio');
+    const stream = audioTrack?.stream || audioTrack?.getOriginalStream?.();
+    if (!stream) { jitsiSkippedNoStream++; continue; }
+    const speakerName =
+      jp.getDisplayName?.() || jp._displayName || jp.displayName || jp._name || pid;
+    pcmAttachParticipant(pid, speakerName, false, stream);
+    jitsiAttached++;
+  }
+
+  console.log(
+    '[PcmTransport] attachAll summary:',
+    'participantsMap inspected=', inspected,
+    'skippedLocal=', skippedLocal,
+    'skippedNoStream=', skippedNoStream,
+    'attached=', attached,
+    '| jitsiConf inspected=', jitsiInspected,
+    'skippedNoStream=', jitsiSkippedNoStream,
+    'attached=', jitsiAttached
+  );
+}
+
+function pcmTransportDispose() {
+  for (const pid of Array.from(active.keys())) {
+    teardown(pid);
+  }
+  active.clear();
+  pending.clear();
+  if (audioContext && audioContext.state !== 'closed') {
+    audioContext.close().catch(() => {});
+  }
+  audioContext = null;
+  workletLoadPromise = null;
+  console.log('[PcmTransport] Disposed');
+}
+
+function resolveSpeakerName(p, fallback) {
+  const userInfo = p?._userInfo$?.value;
+  if (userInfo) {
+    const first = userInfo.firstName || '';
+    const last = userInfo.lastName || '';
+    if (first && last) return `${first} ${last}`;
+    if (first) return first;
+  }
+  const info = p?._participantInfo$?.value;
+  if (info) {
+    const first = info.firstName || '';
+    const last = info.lastName || '';
+    if (first && last) return `${first} ${last}`;
+    if (first) return first;
+  }
+  return p?.name || p?.displayName || fallback;
+}
+
+// Handle server gate transitions. When the gate flips to true we
+// materialize any participants accumulated in `pending` while the gate
+// was off. When it flips to false we tear down active worklet nodes but
+// keep metadata so we can re-materialize on a later re-enable.
+(0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.subscribePcmTransport)((enabled) => {
+  if (enabled) {
+    for (const [pid, info] of pending) {
+      if (!active.has(pid)) {
+        void materialize(pid, info);
+      }
+    }
+  } else {
+    for (const pid of Array.from(active.keys())) {
+      teardown(pid);
+    }
+  }
+});
+
+
+/***/ },
+
 /***/ "./src/platforms/index.js"
 /*!********************************!*\
   !*** ./src/platforms/index.js ***!
@@ -1104,6 +1481,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   KTalkAdapter: () => (/* binding */ KTalkAdapter)
 /* harmony export */ });
 /* harmony import */ var _audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../audio-analyzer.js */ "./src/audio-analyzer.js");
+/* harmony import */ var _pcm_transport_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../pcm_transport.js */ "./src/pcm_transport.js");
 /**
  * KTalk Platform Adapter
  *
@@ -1116,12 +1494,16 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+
 class KTalkAdapter {
   constructor() {
     this.name = 'ktalk';
     this.conf = null;
     this.subscriptions = [];
     this._jitsiHandlers = [];
+    // Pids for which we've already subscribed to user/participant info
+    // observables for display-name refresh (Finding 3 / speaker name freeze).
+    this._pcmNameSubscribedPids = new Set();
   }
 
   /**
@@ -1388,10 +1770,14 @@ class KTalkAdapter {
         const sub = p._activeSpeaker$.subscribe(() => callback());
         this.subscriptions.push(sub);
       }
+      if (!p.local) {
+        this._subscribePcmNameRefresh(p);
+      }
     });
 
     // Attach audio analysers for existing participants
     (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.attachAllFromConf)(conf);
+    (0,_pcm_transport_js__WEBPACK_IMPORTED_MODULE_1__.pcmAttachAllFromConf)(conf);
 
     // Also subscribe to Jitsi events
     const jitsiConf = conf.jitsiConf;
@@ -1403,7 +1789,19 @@ class KTalkAdapter {
           callback();
           const pid = track.getParticipantId?.();
           const stream = track.stream || track.getOriginalStream?.();
-          if (pid && stream) (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.attachParticipant)(pid, stream);
+          if (pid && stream) {
+            (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.attachParticipant)(pid, stream);
+            const isLocal = this._isLocalParticipant(pid);
+            if (!isLocal) {
+              const speakerName = this.getParticipantName(pid);
+              (0,_pcm_transport_js__WEBPACK_IMPORTED_MODULE_1__.pcmAttachParticipant)(pid, speakerName, false, stream);
+              // User info often populates after trackAdded fires; wire a
+              // name refresher so the first chunks' fallback pid is
+              // replaced once real metadata lands.
+              const p = conf._participantsMap?.get(pid);
+              if (p) this._subscribePcmNameRefresh(p);
+            }
+          }
         }
       });
 
@@ -1411,7 +1809,10 @@ class KTalkAdapter {
         if (track.getType?.() === 'audio') {
           callback();
           const pid = track.getParticipantId?.();
-          if (pid) (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.detachParticipant)(pid);
+          if (pid) {
+            (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.detachParticipant)(pid);
+            (0,_pcm_transport_js__WEBPACK_IMPORTED_MODULE_1__.pcmDetachParticipant)(pid);
+          }
         }
       });
 
@@ -1419,14 +1820,51 @@ class KTalkAdapter {
         if (track.getType?.() === 'audio') callback();
       });
 
-      this._onJitsi(jitsiConf, 'conference.userJoined', () => {
-        setTimeout(callback, 1000);
+      this._onJitsi(jitsiConf, 'conference.userJoined', (id) => {
+        setTimeout(() => {
+          // Re-subscribe for late joiners: their participant object is
+          // populated on userJoined, but _userInfo$ / _participantInfo$
+          // typically emit a frame or two later.
+          const p = id && conf._participantsMap?.get(id);
+          if (p && !p.local) this._subscribePcmNameRefresh(p);
+          callback();
+        }, 1000);
       });
 
       this._onJitsi(jitsiConf, 'conference.userLeft', (id) => {
         (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.detachParticipant)(id);
+        (0,_pcm_transport_js__WEBPACK_IMPORTED_MODULE_1__.pcmDetachParticipant)(id);
+        this._pcmNameSubscribedPids.delete(id);
         setTimeout(callback, 500);
       });
+    }
+  }
+
+  /**
+   * Subscribe to _userInfo$ / _participantInfo$ so the PCM transport's
+   * cached display name follows metadata updates instead of freezing on
+   * the first value (typically the pid fallback when userJoined lands
+   * before userInfo). Idempotent per pid.
+   */
+  _subscribePcmNameRefresh(p) {
+    const pid = p?._id;
+    if (!pid) return;
+    if (this._pcmNameSubscribedPids.has(pid)) return;
+    const refresh = () => {
+      const newName = this.getParticipantName(pid);
+      if (newName) (0,_pcm_transport_js__WEBPACK_IMPORTED_MODULE_1__.pcmUpdateParticipantName)(pid, newName);
+    };
+    let anySubscribed = false;
+    if (p._userInfo$?.subscribe) {
+      this.subscriptions.push(p._userInfo$.subscribe(refresh));
+      anySubscribed = true;
+    }
+    if (p._participantInfo$?.subscribe) {
+      this.subscriptions.push(p._participantInfo$.subscribe(refresh));
+      anySubscribed = true;
+    }
+    if (anySubscribed) {
+      this._pcmNameSubscribedPids.add(pid);
     }
   }
 
@@ -1502,7 +1940,17 @@ class KTalkAdapter {
       jitsiConf.off?.(event, handler);
     });
     this._jitsiHandlers = [];
+    this._pcmNameSubscribedPids.clear();
+    (0,_pcm_transport_js__WEBPACK_IMPORTED_MODULE_1__.pcmTransportDispose)();
     (0,_audio_analyzer_js__WEBPACK_IMPORTED_MODULE_0__.dispose)();
+  }
+
+  _isLocalParticipant(pid) {
+    const conf = this.getConference();
+    if (!conf || !pid) return false;
+    if (conf.localParticipant?.id === pid) return true;
+    const p = conf._participantsMap?.get(pid);
+    return !!p?.local;
   }
 
   _onJitsi(jitsiConf, event, handler) {
@@ -5637,6 +6085,7 @@ function connectWebSocket() {
       console.log('[KTalk Transcript] WebSocket disconnected');
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected = false;
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicatorPlatform)(false);
+      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.resetPcmTransportOnDisconnect)();
 
       if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer) {
         clearInterval(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer);
@@ -5669,6 +6118,8 @@ function connectWebSocket() {
           (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_2__.handleVas3kSummaryResponse)(data);
         } else if (data.type === 'anchor_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
+        } else if (data.type === 'pcm_transport_enabled') {
+          (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.handlePcmTransportEnabledMessage)(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);
@@ -5691,15 +6142,27 @@ function connectWebSocket() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   handlePcmTransportEnabledMessage: () => (/* binding */ handlePcmTransportEnabledMessage),
+/* harmony export */   isPcmTransportEnabled: () => (/* binding */ isPcmTransportEnabled),
+/* harmony export */   resetPcmTransportOnDisconnect: () => (/* binding */ resetPcmTransportOnDisconnect),
 /* harmony export */   sendWsConnectionStatus: () => (/* binding */ sendWsConnectionStatus),
 /* harmony export */   sendWsMessage: () => (/* binding */ sendWsMessage),
 /* harmony export */   sendWsParticipants: () => (/* binding */ sendWsParticipants),
-/* harmony export */   sendWsSpeakerUpdate: () => (/* binding */ sendWsSpeakerUpdate)
+/* harmony export */   sendWsPcmChunk: () => (/* binding */ sendWsPcmChunk),
+/* harmony export */   sendWsSpeakerUpdate: () => (/* binding */ sendWsSpeakerUpdate),
+/* harmony export */   subscribePcmTransport: () => (/* binding */ subscribePcmTransport)
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 
 
 let messageSeq = 0;
+
+// Server-authoritative PCM transport gate. Bridge sends
+// {type: 'pcm_transport_enabled', enabled: bool} on each WS connect.
+// Extension must not send pcm_chunk frames unless this flag is true.
+// See docs/plans/2026-04-22-per-speaker-asr-pipeline.md decision D2.
+let pcmTransportEnabled = false;
+const pcmTransportListeners = new Set();
 
 function sendWsMessage(data) {
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.readyState === WebSocket.OPEN) {
@@ -5728,6 +6191,62 @@ function sendWsConnectionStatus(connected) {
     type: 'connection_status',
     connected: connected
   });
+}
+
+function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, pcmBase64) {
+  sendWsMessage({
+    type: 'pcm_chunk',
+    pid: pid,
+    speaker_name: speakerName,
+    is_local: !!isLocal,
+    seq: seq,
+    chunk_start_ms: startMs,
+    chunk_end_ms: endMs,
+    sample_rate: 16000,
+    pcm_base64: pcmBase64,
+  });
+}
+
+function isPcmTransportEnabled() {
+  return pcmTransportEnabled;
+}
+
+function subscribePcmTransport(listener) {
+  pcmTransportListeners.add(listener);
+  return () => {
+    pcmTransportListeners.delete(listener);
+  };
+}
+
+function handlePcmTransportEnabledMessage(data) {
+  const next = !!data?.enabled;
+  if (next === pcmTransportEnabled) return;
+  pcmTransportEnabled = next;
+  console.log('[PcmTransport] Server gate:', pcmTransportEnabled ? 'ENABLED' : 'DISABLED');
+  for (const listener of pcmTransportListeners) {
+    try {
+      listener(pcmTransportEnabled);
+    } catch (e) {
+      console.warn('[PcmTransport] Listener error:', e);
+    }
+  }
+}
+
+// Reset gate to default-off when WS disconnects so we don't keep the
+// stale positive flag when the server is gone. The next connect will
+// re-assert the server's value.
+function resetPcmTransportOnDisconnect() {
+  if (pcmTransportEnabled) {
+    pcmTransportEnabled = false;
+    console.log('[PcmTransport] Server gate: DISABLED (ws disconnect)');
+    for (const listener of pcmTransportListeners) {
+      try {
+        listener(false);
+      } catch (e) {
+        console.warn('[PcmTransport] Listener error:', e);
+      }
+    }
+  }
 }
 
 

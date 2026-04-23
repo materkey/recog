@@ -6,6 +6,14 @@
 
   // Inject script into page context
   function injectScript() {
+    // Publish the PCM worklet URL so injected.js (page world, no
+    // chrome.runtime access) can load the AudioWorklet module. Inline
+    // `<script textContent=...>` is blocked by KTalk's CSP, so we stash
+    // the URL on a DOM attribute instead — DOM attribute writes are not
+    // gated by script-src. See docs/plans/rippling-mixing-giraffe.md.
+    const workletUrl = chrome.runtime.getURL('src/audio-worklet/downsampler.js');
+    document.documentElement.setAttribute('data-pcm-worklet-url', workletUrl);
+
     const script = document.createElement('script');
     script.src = chrome.runtime.getURL('injected.js');
     script.onload = function() {

@@ -9,6 +9,13 @@
  */
 
 import { attachParticipant, detachParticipant, attachAllFromConf, dispose as audioAnalyzerDispose } from '../audio-analyzer.js';
+import {
+  pcmAttachParticipant,
+  pcmDetachParticipant,
+  pcmAttachAllFromConf,
+  pcmTransportDispose,
+  pcmUpdateParticipantName,
+} from '../pcm_transport.js';
 
 export class KTalkAdapter {
   constructor() {
@@ -16,6 +23,9 @@ export class KTalkAdapter {
     this.conf = null;
     this.subscriptions = [];
     this._jitsiHandlers = [];
+    // Pids for which we've already subscribed to user/participant info
+    // observables for display-name refresh (Finding 3 / speaker name freeze).
+    this._pcmNameSubscribedPids = new Set();
   }
 
   /**
@@ -282,10 +292,14 @@ export class KTalkAdapter {
         const sub = p._activeSpeaker$.subscribe(() => callback());
         this.subscriptions.push(sub);
       }
+      if (!p.local) {
+        this._subscribePcmNameRefresh(p);
+      }
     });
 
     // Attach audio analysers for existing participants
     attachAllFromConf(conf);
+    pcmAttachAllFromConf(conf);
 
     // Also subscribe to Jitsi events
     const jitsiConf = conf.jitsiConf;
@@ -297,7 +311,19 @@ export class KTalkAdapter {
           callback();
           const pid = track.getParticipantId?.();
           const stream = track.stream || track.getOriginalStream?.();
-          if (pid && stream) attachParticipant(pid, stream);
+          if (pid && stream) {
+            attachParticipant(pid, stream);
+            const isLocal = this._isLocalParticipant(pid);
+            if (!isLocal) {
+              const speakerName = this.getParticipantName(pid);
+              pcmAttachParticipant(pid, speakerName, false, stream);
+              // User info often populates after trackAdded fires; wire a
+              // name refresher so the first chunks' fallback pid is
+              // replaced once real metadata lands.
+              const p = conf._participantsMap?.get(pid);
+              if (p) this._subscribePcmNameRefresh(p);
+            }
+          }
         }
       });
 
@@ -305,7 +331,10 @@ export class KTalkAdapter {
         if (track.getType?.() === 'audio') {
           callback();
           const pid = track.getParticipantId?.();
-          if (pid) detachParticipant(pid);
+          if (pid) {
+            detachParticipant(pid);
+            pcmDetachParticipant(pid);
+          }
         }
       });
 
@@ -313,14 +342,51 @@ export class KTalkAdapter {
         if (track.getType?.() === 'audio') callback();
       });
 
-      this._onJitsi(jitsiConf, 'conference.userJoined', () => {
-        setTimeout(callback, 1000);
+      this._onJitsi(jitsiConf, 'conference.userJoined', (id) => {
+        setTimeout(() => {
+          // Re-subscribe for late joiners: their participant object is
+          // populated on userJoined, but _userInfo$ / _participantInfo$
+          // typically emit a frame or two later.
+          const p = id && conf._participantsMap?.get(id);
+          if (p && !p.local) this._subscribePcmNameRefresh(p);
+          callback();
+        }, 1000);
       });
 
       this._onJitsi(jitsiConf, 'conference.userLeft', (id) => {
         detachParticipant(id);
+        pcmDetachParticipant(id);
+        this._pcmNameSubscribedPids.delete(id);
         setTimeout(callback, 500);
       });
+    }
+  }
+
+  /**
+   * Subscribe to _userInfo$ / _participantInfo$ so the PCM transport's
+   * cached display name follows metadata updates instead of freezing on
+   * the first value (typically the pid fallback when userJoined lands
+   * before userInfo). Idempotent per pid.
+   */
+  _subscribePcmNameRefresh(p) {
+    const pid = p?._id;
+    if (!pid) return;
+    if (this._pcmNameSubscribedPids.has(pid)) return;
+    const refresh = () => {
+      const newName = this.getParticipantName(pid);
+      if (newName) pcmUpdateParticipantName(pid, newName);
+    };
+    let anySubscribed = false;
+    if (p._userInfo$?.subscribe) {
+      this.subscriptions.push(p._userInfo$.subscribe(refresh));
+      anySubscribed = true;
+    }
+    if (p._participantInfo$?.subscribe) {
+      this.subscriptions.push(p._participantInfo$.subscribe(refresh));
+      anySubscribed = true;
+    }
+    if (anySubscribed) {
+      this._pcmNameSubscribedPids.add(pid);
     }
   }
 
@@ -396,7 +462,17 @@ export class KTalkAdapter {
       jitsiConf.off?.(event, handler);
     });
     this._jitsiHandlers = [];
+    this._pcmNameSubscribedPids.clear();
+    pcmTransportDispose();
     audioAnalyzerDispose();
+  }
+
+  _isLocalParticipant(pid) {
+    const conf = this.getConference();
+    if (!conf || !pid) return false;
+    if (conf.localParticipant?.id === pid) return true;
+    const p = conf._participantsMap?.get(pid);
+    return !!p?.local;
   }
 
   _onJitsi(jitsiConf, event, handler) {

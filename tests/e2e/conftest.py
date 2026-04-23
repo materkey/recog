@@ -1,4 +1,5 @@
 """Pytest configuration and fixtures for e2e diarization tests."""
+import os
 import subprocess
 import sys
 import time
@@ -85,7 +86,7 @@ def _set_audio_output(device_name: str) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def stop_recog_services():
+def stop_recog_services(request):
     """Stop recog launchd services and switch audio output before tests."""
     live_was_running = _service_is_running(_LIVE_SERVICE)
     frontend_was_running = _service_is_running(_FRONTEND_SERVICE)
@@ -104,18 +105,35 @@ def stop_recog_services():
     _wait_ports_free([8765, 8766])
     print("[e2e] Ports free, proceeding with tests")
 
-    # Switch audio output to Multi-Output Device so BlackHole receives audio
+    # Switch audio output to Multi-Output Device only when at least one
+    # selected test is tagged ``@pytest.mark.needs_audio_loopback`` — that
+    # marker signals "this test needs the browser audio to reach BlackHole
+    # via system output". Otherwise, leave the user's output alone so
+    # they can keep listening to music/YouTube while tests run.
+    needs_loopback = any(
+        it.get_closest_marker("needs_audio_loopback") is not None
+        for it in request.session.items
+    )
+    os.environ["E2E_MUTE_AUDIO"] = "0" if needs_loopback else "1"
+
     original_output = _get_audio_output()
-    if original_output != "Multi-Output Device":
+    switched = False
+    if not needs_loopback:
+        print(
+            f"[e2e] No test requires audio loopback — leaving output at "
+            f"'{original_output}' (browser audio muted via --mute-audio)"
+        )
+    elif original_output != "Multi-Output Device":
         print(f"[e2e] Switching audio output: '{original_output}' -> 'Multi-Output Device'")
         _set_audio_output("Multi-Output Device")
+        switched = True
     else:
         print("[e2e] Audio output already set to Multi-Output Device")
 
     yield
 
-    # Restore original audio output
-    if original_output != "Multi-Output Device":
+    # Restore original audio output (only if we actually changed it)
+    if switched:
         print(f"\n[e2e] Restoring audio output to '{original_output}'")
         _set_audio_output(original_output)
 

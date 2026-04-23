@@ -3,16 +3,88 @@
 Provides helper functions to launch browsers, authenticate via Kontur SSO,
 create/join KTalk rooms, and control microphone state using the sync Playwright API.
 """
+import os
 from pathlib import Path
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright
 
 EXTENSION_PATH = str(Path(__file__).parent.parent.parent / "kontur-diarize" / "ktalk-speaker-extension")
 
-_FAKE_AUDIO_FLAGS = [
-    "--use-fake-device-for-media-stream",
-    "--use-fake-ui-for-media-stream",
-]
+
+def _fake_audio_flags() -> list[str]:
+    """Build Chromium launch flags for fake-audio e2e tests.
+
+    ``--mute-audio`` is included by default so tests do not leak audio
+    into the user's speakers. conftest.py sets ``E2E_MUTE_AUDIO=0`` for
+    tests tagged ``@pytest.mark.needs_audio_loopback`` — those tests need
+    the browser's audio to actually reach the system output so BlackHole
+    can record it for the mixed-path fallback.
+    """
+    flags = [
+        "--use-fake-device-for-media-stream",
+        "--use-fake-ui-for-media-stream",
+        # Programmatic page.click() in Playwright is not always treated as a
+        # "real" user gesture by Chromium's autoplay policy. Without this
+        # flag AudioContext stays suspended and AudioWorklet.process()
+        # never runs, so pcm_chunk frames never reach the bridge.
+        "--autoplay-policy=no-user-gesture-required",
+    ]
+    if os.environ.get("E2E_MUTE_AUDIO", "1") != "0":
+        # Silence all audio output from the Playwright Chromium tabs. SFU
+        # audio is relayed over MediaStream/WebRTC, so this does not break
+        # PCM transport — it only stops remote audio from being played
+        # into the host's speakers during the test.
+        flags.append("--mute-audio")
+    return flags
+
+
+# ``--mute-audio`` only suppresses HTMLMediaElement autoplay; Jitsi
+# plays remote WebRTC audio through dynamically-created <audio> tags
+# whose .volume/.muted attributes ignore the flag. This init-script
+# runs in every new page/frame before page scripts, forces every
+# current and future <audio>/<video> element to muted+0-volume, and
+# intercepts programmatic `.volume=` / `.play()` / `.srcObject=`
+# assignments so there is no audible path to speakers. MediaStream
+# data stays intact — the AudioWorklet reads it directly and PCM
+# transport is unaffected.
+_MUTE_MEDIA_SCRIPT = """
+(() => {
+  const silence = (el) => {
+    try { el.muted = true; el.volume = 0; } catch (_) {}
+  };
+  const silenceAll = (root) => {
+    (root.querySelectorAll ? root.querySelectorAll('audio,video') : []).forEach(silence);
+  };
+  silenceAll(document);
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      m.addedNodes.forEach((n) => {
+        if (n.nodeType !== 1) return;
+        if (n.matches && n.matches('audio,video')) silence(n);
+        silenceAll(n);
+      });
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  const proto = HTMLMediaElement.prototype;
+  const volDesc = Object.getOwnPropertyDescriptor(proto, 'volume');
+  if (volDesc && volDesc.configurable) {
+    Object.defineProperty(proto, 'volume', {
+      get() { return 0; },
+      set() { /* swallow any attempt to raise volume */ },
+      configurable: true,
+    });
+  }
+})();
+"""
+
+
+def _install_media_mute(context: BrowserContext) -> None:
+    """Silence all `<audio>`/`<video>` in the context unless the test opted
+    into audio loopback via ``E2E_MUTE_AUDIO=0``.
+    """
+    if os.environ.get("E2E_MUTE_AUDIO", "1") == "0":
+        return
+    context.add_init_script(_MUTE_MEDIA_SCRIPT)
 
 
 def launch_host_browser(playwright: Playwright, fake_audio_path: str) -> tuple[BrowserContext, Page]:
@@ -29,7 +101,7 @@ def launch_host_browser(playwright: Playwright, fake_audio_path: str) -> tuple[B
         A (context, page) tuple. The context owns the extension and must be
         closed by the caller when done.
     """
-    args = _FAKE_AUDIO_FLAGS + [
+    args = _fake_audio_flags() + [
         f"--use-file-for-fake-audio-capture={fake_audio_path}",
         f"--disable-extensions-except={EXTENSION_PATH}",
         f"--load-extension={EXTENSION_PATH}",
@@ -39,6 +111,7 @@ def launch_host_browser(playwright: Playwright, fake_audio_path: str) -> tuple[B
         headless=False,
         args=args,
     )
+    _install_media_mute(context)
     page = context.pages[0] if context.pages else context.new_page()
     return context, page
 
@@ -54,11 +127,12 @@ def launch_guest_browser(playwright: Playwright, fake_audio_path: str) -> tuple[
         A (browser, context, page) tuple. Both browser and context must be
         closed by the caller when done.
     """
-    args = _FAKE_AUDIO_FLAGS + [
+    args = _fake_audio_flags() + [
         f"--use-file-for-fake-audio-capture={fake_audio_path}",
     ]
     browser = playwright.chromium.launch(headless=False, args=args)
     context = browser.new_context()
+    _install_media_mute(context)
     page = context.new_page()
     return browser, context, page
 
@@ -209,8 +283,10 @@ def guest_join_room(page: Page, room_url: str, guest_name: str, timeout: int = 2
     join_btn.wait_for(state="visible", timeout=timeout)
     join_btn.click()
 
-    # Wait until we are inside the room
-    page.wait_for_url("**/example.ktalk.ru/**", timeout=timeout)
+    # Wait until we are inside the room. Match any KTalk subdomain so
+    # this helper works for example.ktalk.ru as well as personal workspaces
+    # (e.g. uoqrh0lo.ktalk.ru) reached via KTALK_ROOM_URL override.
+    page.wait_for_url("**/*.ktalk.ru/**", timeout=timeout)
 
 
 def toggle_mic(page: Page, mute: bool) -> None:

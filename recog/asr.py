@@ -4,8 +4,10 @@
 
 import re
 import sys
+import threading
 from typing import Dict, List, Optional
 
+import numpy as np
 import torch
 
 from .config import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP
@@ -24,6 +26,10 @@ class ASRModule:
         self.model_name = model_name
         self.device = device
         self.model = None
+        # Serializes model.forward across threads: live mic/system ASR runs on
+        # the main loop, PerSpeakerIngest batches run on a worker thread, and
+        # PyTorch modules are not safe for concurrent forward on a shared instance.
+        self._model_lock = threading.Lock()
 
     def load_model(self, quiet: bool = False):
         """Загружает модель GigaAM."""
@@ -134,6 +140,54 @@ class ASRModule:
                 end=end
             ))
         return segments
+
+    def transcribe_batch(self, pcm_list: List[np.ndarray]) -> List[str]:
+        """Batched forward pass for per-speaker PCM chunks.
+
+        Pads inputs to the max-length in the batch, runs a single
+        `model.forward` + `model.decoding.decode`, and returns decoded texts
+        in the same order as the input list.
+
+        Args:
+            pcm_list: list of 1-D numpy arrays containing audio at
+                `SAMPLE_RATE`.  Accepts either Int16 (LE) or float32 in
+                [-1, 1]; Int16 is auto-normalized.
+
+        Returns:
+            List of transcribed texts, one per input, in input order.
+        """
+        if not pcm_list:
+            return []
+
+        model = self.load_model(quiet=True)
+        device = model._device
+        dtype = model._dtype
+
+        float_list: List[np.ndarray] = []
+        for pcm in pcm_list:
+            if pcm.dtype == np.int16:
+                f = pcm.astype(np.float32) / 32768.0
+            elif pcm.dtype == np.float32:
+                f = pcm
+            else:
+                f = pcm.astype(np.float32)
+            float_list.append(f)
+
+        lengths = [len(f) for f in float_list]
+        max_len = max(lengths)
+        padded = np.zeros((len(float_list), max_len), dtype=np.float32)
+        for i, f in enumerate(float_list):
+            if len(f) > 0:
+                padded[i, :len(f)] = f
+
+        wav_batch = torch.from_numpy(padded).to(device).to(dtype)
+        length_batch = torch.tensor(lengths, dtype=torch.long, device=device)
+
+        with self._model_lock, torch.inference_mode():
+            encoded, encoded_len = model.forward(wav_batch, length_batch)
+            texts = model.decoding.decode(model.head, encoded, encoded_len)
+
+        return list(texts)
 
     def _remove_duplicate_words(
         self,

@@ -94,6 +94,30 @@ def main():
     _make_timed(raw_segments["speaker_b.wav"][:int(15 * sr)], 15.0, "timed_b_seq.wav")
     _make_timed(raw_segments["speaker_c.wav"][:int(15 * sr)], 30.0, "timed_c_seq.wav")
 
+    # test_per_speaker_overlap (Task 5.1): Alice speaks 0-20s, Bob 5-25s
+    # (15 s overlap). Different source segments guarantee non-overlapping
+    # word sets so the test can detect cross-contamination.
+    _make_timed(raw_segments["speaker_a.wav"], 0.0, "timed_alice_overlap.wav")
+    _make_timed(raw_segments["speaker_b.wav"], 5.0, "timed_bob_overlap.wav")
+
+    # Alt speech reference distinct from speech_reference.wav (derived from
+    # speaker_a). Used by overlap tests as Bob's "what-should-not-leak"
+    # reference transcript source. Generated from speaker_b so the voice is
+    # different from speech_reference; if vlad_sample.wav is available in the
+    # project root, prefer that (longer and unambiguously a different speaker).
+    vlad_src = Path(__file__).parent.parent.parent / "vlad_sample.wav"
+    if vlad_src.exists():
+        vlad_data, vlad_sr = sf.read(str(vlad_src))
+        clip = vlad_data[:int(20 * vlad_sr)]
+        clip = _normalize(clip)
+        sf.write(str(FIXTURES_DIR / "speech_reference_alt.wav"), clip, vlad_sr)
+        print(f"  speech_reference_alt.wav: 20s (from vlad_sample.wav)")
+    else:
+        sf.write(str(FIXTURES_DIR / "speech_reference_alt.wav"),
+                 raw_segments["speaker_b.wav"], sr)
+        print(f"  speech_reference_alt.wav: 20s (fallback from speaker_b.wav — "
+              f"vlad_sample.wav not found)")
+
     print(f"\nAll fixtures saved to {FIXTURES_DIR}")
 
 
