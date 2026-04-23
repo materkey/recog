@@ -93,21 +93,21 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 6: Per-pid rolling PCM ring in PerSpeakerIngest
 
-- [ ] 6.1 In `recog/per_speaker.py::PerSpeakerIngest.__init__`, add:
+- [x] 6.1 In `recog/per_speaker.py::PerSpeakerIngest.__init__`, add:
   - `self._pcm_rings: Dict[str, deque[np.ndarray]] = {}` — ring of Int16 sample arrays per pid. Ring capacity in seconds: `PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S + 3.0` (small head room); enforce size on append.
   - `self._silence_ms: Dict[str, float] = {}` — per-pid silence counter.
   - `self._continuous_speech_ms: Dict[str, float] = {}` — per-pid continuous-speech counter.
   - `self._pid_audio_ms: Dict[str, float] = {}` — per-pid monotonic audio counter (D1 timeline contract).
   - `self._refine_watermark_ms: Dict[str, float] = {}` — per-pid pid_audio_ms of the oldest un-refined sample. Starts at 0 on first chunk.
-- [ ] 6.2 In `enqueue(...)` (or the drain path — wherever samples are first committed to shared state), append raw samples to `_pcm_rings[pid]`, increment `_pid_audio_ms[pid]` by `len(samples) / sample_rate * 1000`, enforce ring capacity (drop-oldest). Reset `_silence_ms[pid]=0`, bump `_continuous_speech_ms[pid]` by chunk ms.
-- [ ] 6.3 Add `tick()` method (or inline into `_worker` drain loop) that on every `PCM_BATCH_INTERVAL_MS` iteration with no new chunks for a pid: increment `_silence_ms[pid]` by `PCM_BATCH_INTERVAL_MS`; if `_silence_ms[pid] >= SPEAKER_TURN_GAP * 1000`, reset `_continuous_speech_ms[pid]=0`.
-- [ ] 6.4 Add accessor `get_pid_audio_ms(pid: str) -> float` — returns current `_pid_audio_ms.get(pid, 0.0)` (used by `LiveTranscriber._on_pcm_batch` to stamp live segments with per-pid bounds).
-- [ ] 6.5 Thread safety: all reads/writes under `self._lock` (same lock that guards `_pending` today). Do NOT introduce a second lock.
-- [ ] 6.6 Unit test in `tests/test_per_speaker.py`:
+- [x] 6.2 In `enqueue(...)` (or the drain path — wherever samples are first committed to shared state), append raw samples to `_pcm_rings[pid]`, increment `_pid_audio_ms[pid]` by `len(samples) / sample_rate * 1000`, enforce ring capacity (drop-oldest). Reset `_silence_ms[pid]=0`, bump `_continuous_speech_ms[pid]` by chunk ms.
+- [x] 6.3 Add `tick()` method (or inline into `_worker` drain loop) that on every `PCM_BATCH_INTERVAL_MS` iteration with no new chunks for a pid: increment `_silence_ms[pid]` by `PCM_BATCH_INTERVAL_MS`; if `_silence_ms[pid] >= SPEAKER_TURN_GAP * 1000`, reset `_continuous_speech_ms[pid]=0`.
+- [x] 6.4 Add accessor `get_pid_audio_ms(pid: str) -> float` — returns current `_pid_audio_ms.get(pid, 0.0)` (used by `LiveTranscriber._on_pcm_batch` to stamp live segments with per-pid bounds).
+- [x] 6.5 Thread safety: all reads/writes under `self._lock` (same lock that guards `_pending` today). Do NOT introduce a second lock.
+- [x] 6.6 Unit test in `tests/test_per_speaker.py`:
   - `test_ring_caps_at_window_plus_head_room`: feed 30 s worth of samples; ring size <= capacity.
   - `test_pid_audio_ms_monotonic_per_pid`: two pids increment independently.
   - `test_silence_ms_resets_on_new_chunk`: counter increments under idle, resets on chunk.
-- [ ] 6.7 Commit: `feat(per_speaker): per-pid rolling PCM ring + silence/speech/audio counters`
+- [x] 6.7 Commit: `feat(per_speaker): per-pid rolling PCM ring + silence/speech/audio counters`
 
 ### Task 7: get_refine_candidate trigger logic
 

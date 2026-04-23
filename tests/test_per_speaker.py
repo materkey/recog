@@ -494,3 +494,171 @@ def test_stop_joins_worker_thread():
     assert ingest._thread.is_alive()
     ingest.stop(timeout=1.0)
     assert ingest._thread is None
+
+
+# ---------------------------------------------------------------------------
+# Task 6: per-pid rolling PCM ring + counters (per-speaker-stream-refine §3)
+# ---------------------------------------------------------------------------
+
+
+def test_ring_caps_at_window_plus_head_room():
+    """
+    given: 30 one-second PCM chunks enqueued for a single pid
+    when: all chunks are appended
+    then: ring holds <= (PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S + 3.0) s
+          of samples — oldest entries are dropped beyond capacity, while
+          pid_audio_ms keeps counting raw input monotonically
+    """
+    from recog.config import PCM_CHUNK_DURATION_S, PCM_REFINE_WINDOW_S
+
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+    for s in range(1, 31):  # 30 s of audio
+        ingest.enqueue(_make_chunk(
+            seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
+        ))
+
+    cap_seconds = PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S + 3.0
+    cap_samples = int(cap_seconds * sample_rate)
+    ring = ingest._pcm_rings["p1"]
+    total_samples = sum(int(entry.size) for entry in ring)
+    assert total_samples <= cap_samples
+    # Head-room is ≥ one chunk (1 s at 16 kHz = 16000 samples), so we should
+    # retain at least (cap_seconds - 1) s worth; guards against over-trimming.
+    assert total_samples >= int((cap_seconds - 1) * sample_rate)
+    # pid_audio_ms tracks total input regardless of ring trimming.
+    assert ingest.get_pid_audio_ms("p1") == pytest.approx(30_000.0)
+
+
+def test_pid_audio_ms_monotonic_per_pid():
+    """
+    given: two pids receive different numbers of chunks
+    when: pid_audio_ms is read for each
+    then: counters increment independently and start at 0 for unknown pids
+    """
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+
+    assert ingest.get_pid_audio_ms("p1") == 0.0
+    for s in range(1, 6):  # p1: 5 s
+        ingest.enqueue(_make_chunk(
+            pid="p1", seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
+        ))
+    for s in range(1, 4):  # p2: 3 s
+        ingest.enqueue(_make_chunk(
+            pid="p2", seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
+        ))
+
+    assert ingest.get_pid_audio_ms("p1") == pytest.approx(5_000.0)
+    assert ingest.get_pid_audio_ms("p2") == pytest.approx(3_000.0)
+    assert ingest.get_pid_audio_ms("never_seen") == 0.0
+
+
+def test_silence_ms_resets_on_new_chunk():
+    """
+    given: a chunk enqueued, then several idle ticks, then another chunk
+    when: silence counter is advanced by tick() for pids without new chunks
+    then: _silence_ms[pid] increments by PCM_BATCH_INTERVAL_MS each idle tick
+          and snaps back to 0 on the next enqueue
+    """
+    from recog.config import PCM_BATCH_INTERVAL_MS
+
+    clock = _Clock(start=100.0)
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        time_fn=clock,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+
+    ingest.enqueue(_make_chunk(seq=1, sample_rate=sample_rate, pcm=pcm_one_second))
+    assert ingest._silence_ms["p1"] == 0.0
+
+    # First tick right after enqueue consumes the "touched" flag; silence
+    # stays 0 because the pid was active during the previous interval.
+    ingest.tick(now=clock.now)
+    assert ingest._silence_ms["p1"] == 0.0
+
+    # Subsequent idle ticks bump the counter by PCM_BATCH_INTERVAL_MS each.
+    ingest.tick(now=clock.now)
+    assert ingest._silence_ms["p1"] == pytest.approx(float(PCM_BATCH_INTERVAL_MS))
+    ingest.tick(now=clock.now)
+    assert ingest._silence_ms["p1"] == pytest.approx(2 * float(PCM_BATCH_INTERVAL_MS))
+
+    # A new chunk for the same pid resets the counter immediately.
+    ingest.enqueue(_make_chunk(seq=2, sample_rate=sample_rate, pcm=pcm_one_second))
+    assert ingest._silence_ms["p1"] == 0.0
+
+
+def test_continuous_speech_resets_after_turn_gap():
+    """
+    given: active speech on a pid, then silence crossing SPEAKER_TURN_GAP
+    when: idle ticks accumulate past the turn-gap threshold
+    then: _continuous_speech_ms[pid] is reset to 0 — prevents the monolog
+          trigger in Task 7 from re-firing stale counters after a pause
+    """
+    from recog.config import PCM_BATCH_INTERVAL_MS, SPEAKER_TURN_GAP
+
+    clock = _Clock(start=100.0)
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        time_fn=clock,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+
+    # Two chunks of continuous speech.
+    ingest.enqueue(_make_chunk(seq=1, sample_rate=sample_rate, pcm=pcm_one_second))
+    ingest.enqueue(_make_chunk(seq=2, sample_rate=sample_rate, pcm=pcm_one_second))
+    assert ingest._continuous_speech_ms["p1"] == pytest.approx(2_000.0)
+
+    # Enough idle ticks to cross SPEAKER_TURN_GAP (3 s by default).
+    turn_gap_ms = SPEAKER_TURN_GAP * 1000.0
+    ticks_needed = int(turn_gap_ms // PCM_BATCH_INTERVAL_MS) + 2  # +2 for slack
+    for _ in range(ticks_needed):
+        ingest.tick(now=clock.now)
+
+    assert ingest._silence_ms["p1"] >= turn_gap_ms
+    assert ingest._continuous_speech_ms["p1"] == 0.0
+
+
+def test_refine_state_cleared_on_drain():
+    """
+    given: ring, pid_audio_ms and silence counters populated by enqueue
+    when: drain() is called on the meeting boundary
+    then: all per-pid refine state is wiped so the next meeting starts clean
+    """
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+    ingest.enqueue(_make_chunk(seq=1, sample_rate=sample_rate, pcm=pcm_one_second))
+    assert ingest._pcm_rings
+    assert ingest._pid_audio_ms["p1"] > 0.0
+
+    ingest.drain()
+
+    assert ingest._pcm_rings == {}
+    assert ingest._pid_audio_ms == {}
+    assert ingest._refine_watermark_ms == {}
+    assert ingest._silence_ms == {}
+    assert ingest._continuous_speech_ms == {}
+    assert ingest._pids_had_chunk_since_last_tick == set()
+    assert ingest.get_pid_audio_ms("p1") == 0.0
