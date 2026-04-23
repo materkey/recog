@@ -35,12 +35,9 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 ### Task 1: Upgrade upstream GigaAM checkout
 
 - [x] 1.1 In `/Users/vkkovalev/projects/GigaAM`: `git fetch origin` then `git log --oneline 0a3f103..origin/main` — verify the 9 expected commits (cfef5e7, 33be2c4, e580e38, 7ce42d2, d427e5a, 7448b74, a0deb50, 5b5b4ad, a755fec, 6e4b027) are visible. *(All 10 listed hashes reachable; origin/main is 20 linear commits ahead of 0a3f103, which is fine — plan's "9 ahead" count was an undercount, not a blocker.)*
-- [ ] 1.2 In `/Users/vkkovalev/projects/GigaAM`: `git merge --ff-only origin/main`. If ff fails, stop and ⚠️-flag (local unclean state — do not force).
-  - ⚠️ **BLOCKER (2026-04-24, ralphex iter 1):** state has drifted since this plan was written. HEAD is on `local-experiment` at `10e5b9c` (4 commits on top of `0a3f103`, including `feat: add transcribe_mp3.py script for longform audio transcription`) with an uncommitted modification to `transcribe_mp3.py` (adds `remove_duplicate_words` helper). Local branch `main` is also divergent — at `89c8d42` with 6 commits on top of `bd77657` (own line of work: WebRTC VAD support, tensor decoding perf fix, etc.), diverged from origin/main at an earlier point.
-  - `git merge --ff-only origin/main` run from `local-experiment` fails with `fatal: Not possible to fast-forward, aborting.` — divergent, as expected.
-  - Per plan's own guard ("do not force") and CLAUDE.md (no destructive git ops without explicit written instruction; do not delete/revert other-session in-progress work), the loop cannot self-resolve. User must choose: (a) rebase `local-experiment` onto `origin/main` (preserves the 4 custom commits but rewrites history), (b) merge `origin/main` into `local-experiment` with a regular merge commit, (c) create a fresh branch at `origin/main` for the editable-install tree and move `local-experiment`/`main` work aside, or (d) something else. Re-run ralphex after the decision.
-- [ ] 1.3 Verify the editable-install still resolves the new version: `/Users/vkkovalev/projects/recog/venv-gigaam/bin/python -c "import gigaam; print(gigaam.__file__)"` — path should still point at `../GigaAM/gigaam/__init__.py`.
-- [ ] 1.4 Quick API probe (path-based transcription only, no batch yet):
+- [x] 1.2 **Resolved via Variant A (fresh branch at `origin/main`):** user stashed in-progress `transcribe_mp3.py` and pre-created `upstream-main` branch at `origin/main`. HEAD in `/Users/vkkovalev/projects/GigaAM` is now `6e4b027`. Local branches `local-experiment` (7 ahead / 20 behind) and `main` (6 ahead / 21 behind) are preserved untouched; uncommitted work is in `stash@{0}: On local-experiment: wip transcribe_mp3 helper`. The editable install at `venv-gigaam/bin/python` resolves to `/Users/vkkovalev/projects/GigaAM/gigaam/__init__.py` — that path now points at upstream main content. Do NOT run `git merge --ff-only origin/main` or switch branches here; proceed directly to 1.3.
+- [x] 1.3 Verify the editable-install still resolves the new version: `/Users/vkkovalev/projects/recog/venv-gigaam/bin/python -c "import gigaam; print(gigaam.__file__)"` — path should still point at `../GigaAM/gigaam/__init__.py`. *(Verified: resolves to `/Users/vkkovalev/projects/GigaAM/gigaam/__init__.py`.)*
+- [x] 1.4 Quick API probe (path-based transcription only, no batch yet):
   ```bash
   /Users/vkkovalev/projects/recog/venv-gigaam/bin/python -c "
   import gigaam
@@ -51,8 +48,9 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
   print('first 5 words:', [(w.text, w.start, w.end) for w in r.words[:5]])
   "
   ```
-- [ ] 1.5 Acceptance: `r.words` is a non-empty list; each entry has `text` str, `start` and `end` floats or ints. Frame shift is ~10–40 ms per upstream audit — first word's `start` should be near 0, not negative. If the probe fails or the wav file is missing, try `example_5min.wav` in repo root.
-- [ ] 1.6 Commit the upstream move in the `GigaAM` checkout is implicit (merge fast-forward). No commit here — this is a pure dependency bump tracked outside this repo.
+  *(Raw fixture is 87.6 s which exceeds `transcribe`'s hard length cap → `ValueError("Too long wav file, use 'transcribe_longform' method.")`. Trimmed to a 20 s clip (`/tmp/recog_probe_20s.wav`, samples 17–37 s of `d9e189e5__Example.wav`) and re-ran `transcribe(..., word_timestamps=True)` on the short clip — this matches what 1.5 actually tests.)*
+- [x] 1.5 Acceptance: `r.words` is a non-empty list; each entry has `text` str, `start` and `end` floats or ints. Frame shift is ~10–40 ms per upstream audit — first word's `start` should be near 0, not negative. If the probe fails or the wav file is missing, try `example_5min.wav` in repo root. *(All green: `type=TranscriptionResult`, `len(r.words)=37`, first five words `[('Раз,', 0.8, 1.12), ('два,', 1.16, 1.36), ('три,', 1.40, 1.56), ('четыре,', 1.64, 1.84), ('пять,', 1.92, 2.16)]`, `start`/`end` are `float` in seconds, first word start = 0.80 s (positive, near zero — plausible frame shift).)*
+- [x] 1.6 Commit the upstream move in the `GigaAM` checkout is implicit (merge fast-forward). No commit here — this is a pure dependency bump tracked outside this repo. *(User resolved 1.2 via Variant A: fresh `upstream-main` branch at `origin/main` = `6e4b027`; editable install already points at that tree. No commit inside `../GigaAM` needed; plan-side marking happens in this repo's commit.)*
 
 ### Task 2: Adapt ASRModule.transcribe_batch to new decoding.decode signature
 
