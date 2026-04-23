@@ -114,10 +114,10 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ### Task 7: MPS batched-forward micro-bench
 
-- [ ] 7.1 Create `scripts/mps_batch_bench.py`: load one `ASRModule` per device (CPU, MPS), synthesise batches of N ∈ {1, 4, 8} copies of a 10-second 16 kHz synthetic sine or silence, call `transcribe_batch`, time wall-clock (use `torch.mps.synchronize()` + `time.perf_counter()` on MPS; just `time.perf_counter()` on CPU). Dump a small markdown table.
-- [ ] 7.2 Run and save output: `venv-gigaam/bin/python scripts/mps_batch_bench.py > experiments/2026-04-24-mps-batch.md`.
-- [ ] 7.3 Acceptance: MPS wall ≤ CPU wall at B=8 (ideally ≤ 0.5×). If MPS is slower, not blocking for the plan — document in the file but flag with ⚠️ for follow-up.
-- [ ] 7.4 Commit: `exp: MPS batched-forward micro-bench (B=1,4,8) results`
+- [x] 7.1 Create `scripts/mps_batch_bench.py`: load one `ASRModule` per device (CPU, MPS), synthesise batches of N ∈ {1, 4, 8} copies of a 10-second 16 kHz synthetic sine or silence, call `transcribe_batch`, time wall-clock (use `torch.mps.synchronize()` + `time.perf_counter()` on MPS; just `time.perf_counter()` on CPU). Dump a small markdown table. *(Implemented. One global B=1 warmup after model load, plus one per-batch-size warmup (MPS may recompile on shape change), then 5 measured iterations with `sync(device)` both before and after each `transcribe_batch` so `perf_counter` brackets the full preprocess + pad + forward + decode round-trip. Silence (float32 zeros) is used to keep the decode path deterministic — we're measuring encoder throughput, not ASR realism. Report emits raw ms table, MPS/CPU ratio table, explicit PASS/FAIL acceptance line for B=8, and per-iteration timings for transparency. `--skip-mps` debug flag and graceful `torch.backends.mps.is_available()` fallback are included.)*
+- [x] 7.2 Run and save output: `venv-gigaam/bin/python scripts/mps_batch_bench.py > experiments/2026-04-24-mps-batch.md`. *(Ran on live service idle (no KTalk meeting), exit 0, total wall ~40 s.)*
+- [x] 7.3 Acceptance: MPS wall ≤ CPU wall at B=8 (ideally ≤ 0.5×). If MPS is slower, not blocking for the plan — document in the file but flag with ⚠️ for follow-up. *(**PASS** — CPU B=8 median 1287.7 ms vs MPS B=8 median 795.4 ms, ratio 0.62× (speedup 1.62×). Above the ideal 0.5× target, but well inside the non-blocking "MPS ≤ CPU" band. B=4 ratio 0.64× (1.56×); B=1 ratio 0.88× (1.14×, fixed overhead dominates at batch=1, as expected). CPU is extremely deterministic (max–min < 12 ms per cell); MPS has visible jitter at B=8 (732–862 ms across iterations), typical for Metal command scheduling — median is the right statistic here.)*
+- [x] 7.4 Commit: `exp: MPS batched-forward micro-bench (B=1,4,8) results`
 
 ### Task 8: Update tasks.md progress in openspec change
 
