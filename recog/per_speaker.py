@@ -34,10 +34,12 @@ from .config import (
     PCM_BATCH_INTERVAL_MS,
     PCM_CHUNK_DURATION_S,
     PCM_MAX_BATCH_SIZE,
+    PCM_REFINE_MONOLOG_CAP_S,
     PCM_REFINE_WINDOW_S,
     PCM_SILENCE_WATCHDOG_S,
     SPEAKER_TURN_GAP,
 )
+from .refine import RefineTask
 
 # The PcmChunk dataclass lives in `ktalk_bridge`; importing lazily inside
 # callers would break static type checkers, so we re-import at module level.
@@ -138,6 +140,10 @@ class PerSpeakerIngest:
         # Which pids saw at least one chunk since the last tick — used to
         # decide which pids get silence-incremented by the tick loop.
         self._pids_had_chunk_since_last_tick: Set[str] = set()
+        # Per-pid sample rate (samples/s) recorded from the most recent chunk.
+        # Used by get_refine_candidate to convert samples↔ms; chunks from the
+        # same pid share a rate in practice (extension is hard-coded to 16 kHz).
+        self._pid_sample_rate: Dict[str, int] = {}
         # Ring capacity (ms) — derived from config once at construction.
         self._pid_ring_capacity_ms: float = (
             (PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S + 3.0) * 1000.0
@@ -283,6 +289,7 @@ class PerSpeakerIngest:
                 self._continuous_speech_ms[chunk.pid] = (
                     self._continuous_speech_ms.get(chunk.pid, 0.0) + chunk_ms
                 )
+                self._pid_sample_rate[chunk.pid] = sample_rate
                 self._enforce_ring_capacity_locked(chunk.pid, sample_rate)
                 self._pids_had_chunk_since_last_tick.add(chunk.pid)
 
@@ -323,6 +330,7 @@ class PerSpeakerIngest:
             self._silence_ms.clear()
             self._continuous_speech_ms.clear()
             self._pids_had_chunk_since_last_tick.clear()
+            self._pid_sample_rate.clear()
 
     def tick(self, now: Optional[float] = None) -> List[BatchedChunk]:
         """Advance state by one tick: check watchdog, drain up to one batch,
@@ -381,6 +389,85 @@ class PerSpeakerIngest:
         """
         with self._lock:
             return self._pid_audio_ms.get(pid, 0.0)
+
+    def get_refine_candidate(self, pid: str) -> Optional[RefineTask]:
+        """Return a `RefineTask` for `pid` if the gap or monolog trigger has
+        fired, else None.
+
+        Gap trigger: `_silence_ms[pid] >= SPEAKER_TURN_GAP * 1000`.
+        Monolog fallback: `_continuous_speech_ms[pid] >= PCM_REFINE_MONOLOG_CAP_S * 1000`.
+
+        Assembles the trailing PCM window from the per-pid ring — spanning
+        `[watermark, pid_audio_ms]` and capped at `PCM_REFINE_WINDOW_S * 1000`
+        ms. Computes `offset_base_ms = max(0, pid_audio_ms - samples_duration_ms)`
+        so upstream word timestamps can be rebased into the pid frame. Advances
+        `_refine_watermark_ms[pid]` to `pid_audio_ms` atomically so a second
+        call without new audio returns None. On monolog trigger also resets
+        `_continuous_speech_ms[pid]=0` to avoid re-firing next tick.
+
+        Thread-safe: the watermark advance and task creation happen atomically
+        under `self._lock`, so a concurrent `enqueue` cannot slip un-refined
+        audio past the handoff.
+        """
+        with self._lock:
+            pid_audio_ms = self._pid_audio_ms.get(pid, 0.0)
+            watermark = self._refine_watermark_ms.get(pid, 0.0)
+            unrefined_ms = pid_audio_ms - watermark
+            if unrefined_ms <= 0.0:
+                return None
+
+            silence_ms = self._silence_ms.get(pid, 0.0)
+            continuous_ms = self._continuous_speech_ms.get(pid, 0.0)
+            gap_triggered = silence_ms >= SPEAKER_TURN_GAP * 1000.0
+            monolog_triggered = (
+                continuous_ms >= PCM_REFINE_MONOLOG_CAP_S * 1000.0
+            )
+            if not (gap_triggered or monolog_triggered):
+                return None
+
+            ring = self._pcm_rings.get(pid)
+            if not ring:
+                return None
+
+            sample_rate = self._pid_sample_rate.get(pid, 16000) or 16000
+            window_ms = PCM_REFINE_WINDOW_S * 1000.0
+            target_ms = min(unrefined_ms, window_ms)
+            target_samples = int(round(target_ms * sample_rate / 1000.0))
+            if target_samples <= 0:
+                return None
+
+            pulled: List[np.ndarray] = []
+            total = 0
+            for entry in reversed(ring):
+                pulled.append(entry)
+                total += int(entry.size)
+                if total >= target_samples:
+                    break
+            if not pulled:
+                return None
+            pulled.reverse()
+            pcm_samples = np.concatenate(pulled)
+            if pcm_samples.dtype != np.int16:
+                pcm_samples = pcm_samples.astype(np.int16, copy=False)
+            # Trim leading samples if we overshot (happens when the oldest
+            # pulled chunk's tail overshoots target — only the tail of that
+            # chunk belongs to the window).
+            if pcm_samples.size > target_samples:
+                pcm_samples = pcm_samples[pcm_samples.size - target_samples:]
+
+            actual_samples_ms = (pcm_samples.size / sample_rate) * 1000.0
+            offset_base_ms = max(0.0, pid_audio_ms - actual_samples_ms)
+
+            self._refine_watermark_ms[pid] = pid_audio_ms
+            if monolog_triggered:
+                self._continuous_speech_ms[pid] = 0.0
+
+            return RefineTask(
+                pid=pid,
+                pcm_samples=pcm_samples,
+                offset_base_ms=offset_base_ms,
+                submitted_at=self._time_fn(),
+            )
 
     # ----- internal -------------------------------------------------------
 

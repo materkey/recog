@@ -111,17 +111,17 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 7: get_refine_candidate trigger logic
 
-- [ ] 7.1 Add `PerSpeakerIngest.get_refine_candidate(pid: str) -> Optional[RefineTask]`:
+- [x] 7.1 Add `PerSpeakerIngest.get_refine_candidate(pid: str) -> Optional[RefineTask]`:
   - Returns None if no un-refined audio (watermark == pid_audio_ms).
   - Gap trigger: if `_silence_ms[pid] >= SPEAKER_TURN_GAP * 1000`, assemble trailing window — PCM from watermark to pid_audio_ms, capped at `PCM_REFINE_WINDOW_S * 1000`. Compute `offset_base_ms = max(0, pid_audio_ms - samples_duration_ms)`. Advance watermark to pid_audio_ms. Return `RefineTask(pid, pcm_samples, offset_base_ms, submitted_at=time.time())`.
   - Monolog fallback: if `_continuous_speech_ms[pid] >= PCM_REFINE_MONOLOG_CAP_S * 1000`, same window computation, same watermark advance, plus reset `_continuous_speech_ms[pid]=0` to avoid re-firing next tick.
   - Under `self._lock` atomically (watermark advance + task creation must not interleave with `enqueue`).
-- [ ] 7.2 Unit test in `tests/test_per_speaker.py`:
+- [x] 7.2 Unit test in `tests/test_per_speaker.py`:
   - `test_gap_trigger_returns_window_and_advances_watermark`.
   - `test_monolog_trigger_fires_at_cap`.
   - `test_no_candidate_when_no_unrefined_audio`.
   - `test_watermark_advance_prevents_double_fire` (call twice, second returns None).
-- [ ] 7.3 Commit: `feat(per_speaker): get_refine_candidate trigger logic (gap + monolog)`
+- [x] 7.3 Commit: `feat(per_speaker): get_refine_candidate trigger logic (gap + monolog)`
 
 ### Task 8: Live-segment registry in LiveTranscriber
 
