@@ -27,8 +27,9 @@ def _make_mocked_asr(decoded_texts: list[str]) -> tuple[ASRModule, MagicMock]:
     """Create ASRModule with `model` replaced by a MagicMock.
 
     The mock's `forward` returns a sentinel (encoded, encoded_len) pair; its
-    `decoding.decode` returns `decoded_texts` verbatim.  `load_model` is
-    overridden to skip real gigaam import.
+    `decoding.decode` returns one `(text, token_ids, token_frames)` tuple per
+    input text — matching upstream GigaAM's post-`a755fec` decode signature.
+    `load_model` is overridden to skip the real gigaam import.
     """
     asr = ASRModule.__new__(ASRModule)  # bypass __init__ (which imports gigaam)
     asr.SAMPLE_RATE = 16000
@@ -42,7 +43,8 @@ def _make_mocked_asr(decoded_texts: list[str]) -> tuple[ASRModule, MagicMock]:
     model.forward = MagicMock(return_value=("ENCODED", "ENCODED_LEN"))
     model.head = "HEAD"
     model.decoding = MagicMock()
-    model.decoding.decode = MagicMock(return_value=decoded_texts)
+    decoded_tuples = [(text, [], []) for text in decoded_texts]
+    model.decoding.decode = MagicMock(return_value=decoded_tuples)
 
     asr.model = model
     asr.load_model = lambda quiet=False: model  # type: ignore[assignment]
