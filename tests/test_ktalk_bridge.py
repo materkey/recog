@@ -204,6 +204,14 @@ def _make_pcm_chunk_message(
     }
 
 
+def _attach_meeting_storage(bridge: KTalkBridge, source: str = "ktalk") -> Mock:
+    storage = Mock()
+    storage.current_meeting_path = Path("/tmp/recog-test-meeting")
+    storage._load_meta = Mock(return_value={"source": source})
+    bridge.set_meeting_storage(storage)
+    return storage
+
+
 @pytest.mark.asyncio
 async def test_pcm_chunk_parsing_dispatches_to_callback():
     """
@@ -213,6 +221,7 @@ async def test_pcm_chunk_parsing_dispatches_to_callback():
           timestamps corrected by clock_offset
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
     received: list[PcmChunk] = []
     bridge.set_pcm_chunk_callback(received.append)
 
@@ -255,6 +264,7 @@ async def test_pcm_chunk_no_callback_does_not_raise():
     then: no exception is raised (chunk is silently dropped)
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
     assert bridge._on_pcm_chunk is None
 
     message = _make_pcm_chunk_message()
@@ -270,6 +280,7 @@ async def test_pcm_chunk_malformed_payload_logged_not_raised(capsys):
     then: bridge logs a warning and does NOT call the callback; no exception
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
     received: list[PcmChunk] = []
     bridge.set_pcm_chunk_callback(received.append)
 
@@ -307,6 +318,7 @@ async def test_pcm_chunk_coerces_non_string_pid_and_speaker(capsys):
           callback and drop every sibling chunk along with the bad one
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
     received: list[PcmChunk] = []
     bridge.set_pcm_chunk_callback(received.append)
 
@@ -341,6 +353,7 @@ async def test_pcm_chunk_odd_length_payload_rejected_at_ingress(capsys):
           take a pending batch down with it
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
     received: list[PcmChunk] = []
     bridge.set_pcm_chunk_callback(received.append)
 
@@ -363,6 +376,7 @@ async def test_pcm_chunk_empty_payload_rejected_at_ingress(capsys):
           transcribe_batch and take the whole batch down with it
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
     received: list[PcmChunk] = []
     bridge.set_pcm_chunk_callback(received.append)
 
@@ -383,6 +397,7 @@ async def test_pcm_chunk_unsupported_sample_rate_rejected(capsys):
           other rate would produce silent garbage downstream with no error
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
     received: list[PcmChunk] = []
     bridge.set_pcm_chunk_callback(received.append)
 
@@ -404,6 +419,7 @@ async def test_pcm_chunk_is_local_forced_false_at_ingress():
           chunk so a malformed frame cannot tag a segment as local
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
     received: list[PcmChunk] = []
     bridge.set_pcm_chunk_callback(received.append)
 
@@ -412,6 +428,43 @@ async def test_pcm_chunk_is_local_forced_false_at_ingress():
 
     assert len(received) == 1
     assert received[0].is_local is False
+
+
+@pytest.mark.asyncio
+async def test_pcm_chunk_without_meeting_storage_is_dropped(capsys):
+    """
+    given: bridge with PCM callback but no meeting storage
+    when: a valid pcm_chunk arrives
+    then: callback is not invoked because there is no active KTalk meeting
+    """
+    bridge = KTalkBridge()
+    received: list[PcmChunk] = []
+    bridge.set_pcm_chunk_callback(received.append)
+
+    await bridge._process_message(_make_pcm_chunk_message())
+
+    assert received == []
+    err_out = capsys.readouterr().err
+    assert "outside active ktalk meeting" in err_out
+
+
+@pytest.mark.asyncio
+async def test_pcm_chunk_for_orphan_meeting_is_dropped(capsys):
+    """
+    given: bridge storage has already switched back to orphan after leave
+    when: a stale valid pcm_chunk arrives
+    then: callback is not invoked so stale PCM cannot enter the new meeting
+    """
+    bridge = KTalkBridge()
+    _attach_meeting_storage(bridge, source="orphan")
+    received: list[PcmChunk] = []
+    bridge.set_pcm_chunk_callback(received.append)
+
+    await bridge._process_message(_make_pcm_chunk_message())
+
+    assert received == []
+    err_out = capsys.readouterr().err
+    assert "outside active ktalk meeting" in err_out
 
 
 @pytest.mark.asyncio
@@ -474,6 +527,7 @@ async def test_pcm_chunk_callback_exception_does_not_break_bridge(capsys):
     then: exception is caught and logged; subsequent messages still work
     """
     bridge = KTalkBridge()
+    _attach_meeting_storage(bridge)
 
     def boom(_chunk: PcmChunk):
         raise RuntimeError("callback intentionally failed")

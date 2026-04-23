@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -129,3 +130,47 @@ def test_transcribe_batch_preserves_input_order_across_varying_lengths():
 
     _, length_batch = model.forward.call_args[0]
     assert length_batch.tolist() == [8000, 24000, 16000]
+
+
+def test_load_model_is_single_flight_across_threads():
+    """
+    given: several threads race to lazily load ASR
+    when: load_model is called concurrently
+    then: GigaAM is loaded once and all callers receive the same model object
+    """
+    asr = ASRModule.__new__(ASRModule)  # bypass __init__ (which imports gigaam)
+    asr.model_name = "stub"
+    asr.device = None
+    asr.model = None
+    asr._model_lock = threading.Lock()
+    asr.gigaam = MagicMock()
+
+    loaded_model = object()
+
+    def slow_load_model(_model_name: str, device=None):
+        time.sleep(0.02)
+        return loaded_model
+
+    asr.gigaam.load_model = MagicMock(side_effect=slow_load_model)
+
+    thread_count = 8
+    barrier = threading.Barrier(thread_count)
+    results = []
+    errors = []
+
+    def load_from_thread():
+        try:
+            barrier.wait(timeout=1)
+            results.append(asr.load_model(quiet=True))
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=load_from_thread) for _ in range(thread_count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=1)
+
+    assert errors == []
+    assert results == [loaded_model] * thread_count
+    asr.gigaam.load_model.assert_called_once_with("stub", device=None)

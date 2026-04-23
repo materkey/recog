@@ -406,6 +406,17 @@ class KTalkBridge:
         """Set IncrementGenerator for auto-generating increments on meeting leave."""
         self._increment_generator = generator
 
+    def _has_active_ktalk_meeting(self) -> bool:
+        """Return True only while current storage points at a KTalk meeting."""
+        if not self._meeting_storage or not self._meeting_storage.current_meeting_path:
+            return False
+        try:
+            meta = self._meeting_storage._load_meta()
+        except Exception as e:
+            print(f"[KTalk Bridge] pcm_chunk meeting guard failed: {e}", file=sys.stderr)
+            return False
+        return bool(meta and meta.get("source") == "ktalk")
+
     async def _safe_generate_increment(self, meeting_id: str, meeting_path):
         """Wrapper for increment generation that logs unexpected errors."""
         try:
@@ -1582,6 +1593,14 @@ class KTalkBridge:
                 sample_rate=sample_rate,
                 pcm=pcm_bytes,
             )
+
+            if not self._has_active_ktalk_meeting():
+                print(
+                    f"[KTalk Bridge] pcm_chunk outside active ktalk meeting skipped "
+                    f"(pid={pid}, seq={seq})",
+                    file=sys.stderr,
+                )
+                return
 
             if self._on_pcm_chunk is not None:
                 try:

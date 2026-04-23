@@ -49,6 +49,25 @@ def test_no_uncertain_local_reason_for_system_audio():
         f"Old uncertain logic still present: {buggy_pattern}"
 
 
+def test_live_startup_loads_asr_before_pcm_ingress():
+    """
+    Verify that PCM worker and WS bridge cannot accept chunks before the
+    explicit ASR model load in LiveTranscriber.run().
+    """
+    live_py_path = Path(__file__).resolve().parent.parent / 'recog' / 'live.py'
+    source = live_py_path.read_text()
+    run_start = source.index("    def run(")
+    run_end = source.index("\n    def ", run_start + 1)
+    run_body = source[run_start:run_end]
+
+    load_pos = run_body.index("self.asr.load_model(quiet=True)")
+    ingest_pos = run_body.index("self._setup_per_speaker_ingest()")
+    bridge_pos = run_body.index("self._start_ktalk_bridge()")
+
+    assert load_pos < ingest_pos
+    assert load_pos < bridge_pos
+
+
 # --- Sole unmuted fallback wiring tests ---
 
 

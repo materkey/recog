@@ -26,17 +26,20 @@ class ASRModule:
         self.model_name = model_name
         self.device = device
         self.model = None
-        # Serializes model.forward across threads: live mic/system ASR runs on
-        # the main loop, PerSpeakerIngest batches run on a worker thread, and
-        # PyTorch modules are not safe for concurrent forward on a shared instance.
+        # Serializes model load and model.forward across threads: live
+        # mic/system ASR runs on the main loop, PerSpeakerIngest batches run
+        # on a worker thread, and PyTorch modules are not safe for concurrent
+        # forward on a shared instance.
         self._model_lock = threading.Lock()
 
     def load_model(self, quiet: bool = False):
         """Загружает модель GigaAM."""
         if self.model is None:
-            if not quiet:
-                print(f"Загрузка модели {self.model_name}...", file=sys.stderr)
-            self.model = self.gigaam.load_model(self.model_name, device=self.device)
+            with self._model_lock:
+                if self.model is None:
+                    if not quiet:
+                        print(f"Загрузка модели {self.model_name}...", file=sys.stderr)
+                    self.model = self.gigaam.load_model(self.model_name, device=self.device)
         return self.model
 
     def transcribe_longform(self, audio_path: str) -> List[Segment]:
