@@ -90,6 +90,20 @@ When `RECOG_PCM_TRANSPORT=1` and a KTalk meeting is active, the pipeline switche
 
 See `docs/plans/2026-04-22-per-speaker-asr-pipeline.md` for the decisions table and task breakdown.
 
+### Per-speaker refine contour (RECOG_PCM_REFINE)
+When `RECOG_PCM_REFINE=1` (also requires `RECOG_PCM_TRANSPORT=1` — see `recog/config.py:pcm_refine_enabled()`), a tier-2 refine pass re-transcribes per-pid PCM windows with word-level timestamps and replaces live-segment text in `transcript.jsonl` with `refined: true`:
+
+- State ownership (design.md D11):
+  - `recog/refine.py` — `RefineWorker` daemon thread + queue + `make_abortable_decode` decoder monkey-patch + `RefineTask` / `RefineResult` dataclasses.
+  - `recog/per_speaker.py` — per-pid PCM ring (`_pcm_rings`), monotonic audio counter (`_pid_audio_ms`), silence/continuous-speech counters (`_silence_ms`, `_continuous_speech_ms`), refine watermark. Trigger via `get_refine_candidate(pid)`.
+  - `recog/live.py` — per-pid live-segment registry `_pcm_live_segments[pid] = [(segment_id, start_ms, end_ms), ...]`, `_pcm_segment_texts` cache for identical-text skip, `_apply_refine` alignment + `update_segments` call.
+  - `meeting_storage.py` — `TranscriptSegment.refined: bool = False`; `update_segments(...)` accepts optional `text` per row, sets `refined=True` when present.
+- Flow: PCM arrives via `PerSpeakerIngest.enqueue` → per-pid ring + counters update → tick loop calls `get_refine_candidate(pid)` → gap (`SPEAKER_TURN_GAP=3s` silence) or monolog cap (`PCM_REFINE_MONOLOG_CAP_S=15s`) assembles a 20 s trailing window → `RefineWorker.submit` → worker acquires `asr._model_lock`, runs `transcribe_with_timestamps` → `_apply_refine` rebases words via `task.offset_base_ms`, intersects with live segments under `_state_lock` + meeting-generation check → `update_segments` rewrites JSONL rows.
+- Shared model lock: `ASRModule._model_lock` is a `threading.RLock` (not `Lock`). The refine worker acquires it externally to serialise with the live batched-forward path; `transcribe_with_timestamps` re-acquires internally — recursion must not deadlock.
+- Cooperative abort: default `abort_mode="cooperative"`. `LiveTranscriber._refine_transcribe_fn` installs `make_abortable_decode` on `model.decoding.decode` for the duration of one refine call; the hook polls `should_abort()` at the top of the RNN-T time-step loop and raises `RefineAborted`. Worker catches, releases the lock, re-enqueues the task. `LiveTranscriber._on_pcm_batch` calls `refine_worker.set_live_pending()` / `clear_live_pending()` around `asr.transcribe_batch` so live gets priority. Per the spike (`experiments/2026-04-24-refine-abort-spike.md`), cooperative abort saves ~770 ms per preempted refine on MPS (~80 % of inference cost).
+
+See `docs/plans/2026-04-24-per-speaker-refine-backend.md` and `openspec/changes/per-speaker-stream-refine/` for the decisions table and task breakdown. Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension overlay) are a follow-up plan.
+
 ### Module Organization
 - `recog/` - Core Python package
   - `ai_provider.py` - AIProvider ABC, CodexCliProvider, resolve_cli() — shared AI provider interface used by increment.py and title_generator.py
@@ -125,6 +139,7 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env`:
 - `OPENROUTER_API_KEY` - Required if using OpenRouter
 - `MIC_SPEAKER_NAME` - Speaker label for microphone input in live mode (default: `Me`)
 - `RECOG_PCM_TRANSPORT` - `1` enables per-speaker PCM transport from the KTalk extension (ADR-0018); default `0`. Requires extension rebuild + `./recog-service.sh restart` to apply.
+- `RECOG_PCM_REFINE` - `1` enables tier-2 refine contour on top of PCM transport; default `0`. Gated on `RECOG_PCM_TRANSPORT=1` — `pcm_refine_enabled()` returns False unless both flags are on. Adds a `refined: bool` field to `transcript.jsonl` rows (default `false`).
 
 ## Data Files
 
