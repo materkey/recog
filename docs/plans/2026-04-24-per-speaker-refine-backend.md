@@ -125,18 +125,18 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 8: Live-segment registry in LiveTranscriber
 
-- [ ] 8.1 In `LiveTranscriber.__init__`, add `self._pcm_live_segments: Dict[str, List[Tuple[int, float, float]]] = {}` — per-pid list of `(segment_id, pid_audio_ms_start, pid_audio_ms_end)`.
-- [ ] 8.2 In `_on_pcm_batch`, AFTER `append_segment(...)` returns a `segment_id`:
+- [x] 8.1 In `LiveTranscriber.__init__`, add `self._pcm_live_segments: Dict[str, List[Tuple[int, float, float]]] = {}` — per-pid list of `(segment_id, pid_audio_ms_start, pid_audio_ms_end)`.
+- [x] 8.2 In `_on_pcm_batch`, AFTER `append_segment(...)` returns a `segment_id`:
   - Read `pid_audio_ms_now = self._per_speaker_ingest.get_pid_audio_ms(pid)`.
   - Compute `chunk_duration_ms = len(pcm_samples) / sample_rate * 1000` (already available — this is the current chunk's length).
   - Append `(segment_id, pid_audio_ms_now - chunk_duration_ms, pid_audio_ms_now)` to `self._pcm_live_segments[pid]`.
-- [ ] 8.3 Periodic prune: after appending, drop entries whose `pid_audio_ms_end < pid_audio_ms_now - (PCM_REFINE_WINDOW_S + 5) * 1000`. Cap memory.
-- [ ] 8.4 All reads/writes under `self._state_lock` (the existing lock around per-pid state).
-- [ ] 8.5 Unit test in `tests/test_live_segment_registry.py`:
+- [x] 8.3 Periodic prune: after appending, drop entries whose `pid_audio_ms_end < pid_audio_ms_now - (PCM_REFINE_WINDOW_S + 5) * 1000`. Cap memory.
+- [x] 8.4 All reads/writes under `self._state_lock` (the existing lock around per-pid state).
+- [x] 8.5 Unit test in `tests/test_live_segment_registry.py`:
   - `test_registry_appends_on_emit`.
   - `test_registry_prunes_old_entries`.
   - `test_registry_partitioned_by_pid`.
-- [ ] 8.6 Commit: `feat(live): per-pid live-segment registry for refine alignment`
+- [x] 8.6 Commit: `feat(live): per-pid live-segment registry for refine alignment`
 
 ### Task 9: Alignment + _apply_refine
 
