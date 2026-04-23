@@ -19,6 +19,8 @@ KTalk Bridge - WebSocket server для приёма данных о спикер
 """
 
 import asyncio
+import base64
+import binascii
 import json
 import threading
 import time
@@ -31,7 +33,7 @@ import sys
 from pathlib import Path
 from recog.node_env import get_node_env
 from recog.ai_provider import resolve_cli
-from recog.config import load_dotenv
+from recog.config import load_dotenv, pcm_transport_enabled
 
 if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
@@ -236,6 +238,24 @@ class Participant:
     mic_muted: bool = True
 
 
+@dataclass
+class PcmChunk:
+    """Чанк Int16 PCM от одного участника KTalk-конференции.
+
+    Поля соответствуют WS-протоколу `type: "pcm_chunk"` (см. design.md).
+    `pcm` — decoded Int16LE bytes (sample_count = len(pcm) // 2).
+    Timestamp'ы уже скорректированы на clock_offset (см. `_process_message`).
+    """
+    pid: str
+    speaker_name: str
+    is_local: bool
+    seq: int
+    chunk_start_ts: float  # Unix timestamp (секунды) — начало окна, с учётом clock_offset
+    chunk_end_ts: float    # Unix timestamp (секунды) — конец окна, с учётом clock_offset
+    sample_rate: int
+    pcm: bytes
+
+
 class KTalkBridge:
     """
     WebSocket сервер для приёма данных о спикерах из KTalk Chrome extension.
@@ -290,6 +310,12 @@ class KTalkBridge:
         self._on_segment_complete: Optional[Callable[[SpeakerSegment], None]] = None
         self._on_meeting_change: Optional[Callable[[str, Path], None]] = None
         self._on_pre_meeting_switch: Optional[Callable[[], None]] = None
+        self._on_pcm_chunk: Optional[Callable[[PcmChunk], None]] = None
+
+        # Snapshot RECOG_PCM_TRANSPORT на старте bridge; отправляется extension'у
+        # handshake'ом на WS-connect. Перечитывание при reconnect'е не делаем —
+        # чтобы поменять флаг, нужен restart bridge'а.
+        self._pcm_transport_enabled: bool = pcm_transport_enabled()
 
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
@@ -355,6 +381,17 @@ class KTalkBridge:
         Используется для инвалидации in-flight чанков перед сменой meeting path.
         """
         self._on_pre_meeting_switch = callback
+
+    def set_pcm_chunk_callback(self, callback: Optional[Callable[['PcmChunk'], None]]):
+        """
+        Устанавливает callback для приёма PCM-чанков от extension'а.
+
+        Args:
+            callback: функция (chunk: PcmChunk) — вызывается синхронно из
+                asyncio-потока bridge'а для каждого валидного `pcm_chunk`
+                сообщения. None — отключить callback.
+        """
+        self._on_pcm_chunk = callback
 
     def set_meeting_storage(self, storage: 'MeetingStorage'):
         """
@@ -1090,6 +1127,26 @@ class KTalkBridge:
                 "error": str(e)
             })
 
+    def set_pcm_transport_enabled(self, enabled: bool) -> None:
+        """Dynamically update the server-authoritative PCM gate and broadcast
+        the new state to every connected extension client.
+
+        Used by e2e tests to simulate a mid-meeting extension-side dispose
+        without reloading the host page (which would close the WebSocket and
+        end the meeting). Also callable from production code if we ever want
+        to toggle the flag without a bridge restart.
+        """
+        self._pcm_transport_enabled = bool(enabled)
+        if self._loop is None or not self._connected_clients:
+            return
+        asyncio.run_coroutine_threadsafe(
+            self._broadcast_message({
+                "type": "pcm_transport_enabled",
+                "enabled": self._pcm_transport_enabled,
+            }),
+            self._loop,
+        )
+
     async def _handle_client(self, websocket):
         """Обрабатывает подключение клиента (Chrome extension)."""
         self._connected_clients.add(websocket)
@@ -1099,6 +1156,20 @@ class KTalkBridge:
             self._last_seq = 0
             self._clock_offset = 0.0
         print(f"[KTalk Bridge] Client connected from {websocket.remote_address}", file=sys.stderr)
+
+        # Server-authoritative PCM transport gate (см. recog/config.py
+        # pcm_transport_enabled()): extension аттачит AudioWorklet'ы только
+        # если enabled=True. Флаг читается один раз на старте bridge.
+        try:
+            await websocket.send(json.dumps({
+                "type": "pcm_transport_enabled",
+                "enabled": self._pcm_transport_enabled,
+            }))
+        except Exception as e:
+            print(
+                f"[KTalk Bridge] Failed to send pcm_transport_enabled handshake: {e}",
+                file=sys.stderr,
+            )
 
         try:
             async for message in websocket:
@@ -1420,6 +1491,106 @@ class KTalkBridge:
             print(f"[KTalk Bridge] Anchor request: {lines_count} lines, window: {window_seconds}s, model: {model}, meeting: {meeting_title[:50]}", file=sys.stderr)
 
             asyncio.create_task(self._handle_anchor(transcript, user_name, model, meeting_title))
+
+        elif msg_type == "pcm_chunk":
+            # Per-speaker PCM-чанк от extension worklet'а. На этом этапе
+            # (Task 1) — только парсинг + dispatch в callback. Актуальная
+            # обработка (batching + GigaAM.forward) появится в Task 3-4.
+            try:
+                # Coerce pid / speaker_name to str so downstream slicing
+                # (`pid[:6]`, `.replace(...)`) cannot crash on non-string
+                # inputs from a malformed / malicious frame — otherwise the
+                # exception in `_on_pcm_batch` would drop every sibling
+                # chunk in the same batch.
+                pid = str(data["pid"])
+                if not pid:
+                    raise ValueError("pid is empty")
+                speaker_name = str(data.get("speaker_name") or "")
+                # D9 contract: PCM transport is for REMOTE participants only
+                # (extension skips local mic at pcm_transport.js:172). Ignore
+                # whatever the frame claims and enforce the invariant here so
+                # a buggy or forged frame cannot tag a segment as local.
+                is_local = False
+                seq = int(data["seq"])
+                chunk_start_ms = float(data["chunk_start_ms"])
+                chunk_end_ms = float(data["chunk_end_ms"])
+                sample_rate = int(data["sample_rate"])
+                pcm_base64 = data["pcm_base64"]
+            except (KeyError, TypeError, ValueError) as e:
+                print(
+                    f"[KTalk Bridge] Malformed pcm_chunk frame, skipped: {e}",
+                    file=sys.stderr,
+                )
+                return
+
+            # GigaAM's preprocessor assumes 16 kHz; any other rate would
+            # produce silent garbage downstream with no error.  Reject
+            # mismatches at ingress — the worklet is hardcoded to 48→16 kHz
+            # so this only trips on a protocol drift / buggy client.
+            if sample_rate != 16000:
+                print(
+                    f"[KTalk Bridge] pcm_chunk unsupported sample_rate={sample_rate} "
+                    f"(pid={pid}, seq={seq}); expected 16000",
+                    file=sys.stderr,
+                )
+                return
+
+            try:
+                pcm_bytes = base64.b64decode(pcm_base64, validate=True)
+            except (binascii.Error, ValueError) as e:
+                print(
+                    f"[KTalk Bridge] pcm_chunk base64 decode failed "
+                    f"(pid={pid}, seq={seq}): {e}",
+                    file=sys.stderr,
+                )
+                return
+
+            # Int16LE PCM — odd byte counts cannot be interpreted as samples
+            # and would raise ValueError inside PerSpeakerIngest's
+            # _decode_pcm_int16, dropping the entire in-flight batch along
+            # with the malformed chunk.  Reject at the ingress instead.
+            # Zero-length payloads are also rejected: they pad to a shape
+            # with a length-0 slot that crashes GigaAM's mel preprocessor
+            # in `transcribe_batch`, taking the whole batch down with it.
+            if len(pcm_bytes) == 0:
+                print(
+                    f"[KTalk Bridge] pcm_chunk empty payload skipped "
+                    f"(pid={pid}, seq={seq})",
+                    file=sys.stderr,
+                )
+                return
+            if len(pcm_bytes) % 2 != 0:
+                print(
+                    f"[KTalk Bridge] pcm_chunk odd-length payload skipped "
+                    f"(pid={pid}, seq={seq}, bytes={len(pcm_bytes)})",
+                    file=sys.stderr,
+                )
+                return
+
+            # Тайстампы из extension'а приходят в мс JS-клока, переводим
+            # в секунды + корректируем clock_offset (см. clock_sync handler).
+            chunk_start_ts = chunk_start_ms / 1000.0 + self._clock_offset
+            chunk_end_ts = chunk_end_ms / 1000.0 + self._clock_offset
+
+            chunk = PcmChunk(
+                pid=pid,
+                speaker_name=speaker_name,
+                is_local=is_local,
+                seq=seq,
+                chunk_start_ts=chunk_start_ts,
+                chunk_end_ts=chunk_end_ts,
+                sample_rate=sample_rate,
+                pcm=pcm_bytes,
+            )
+
+            if self._on_pcm_chunk is not None:
+                try:
+                    self._on_pcm_chunk(chunk)
+                except Exception as e:
+                    print(
+                        f"[KTalk Bridge] pcm_chunk callback raised: {e}",
+                        file=sys.stderr,
+                    )
 
     async def _run_server(self):
         """Запускает WebSocket сервер."""

@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
                      LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
-                     SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION)
+                     SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
+                     PCM_SILENCE_WATCHDOG_S, pcm_transport_enabled)
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
 
@@ -340,13 +341,17 @@ class LiveTranscriber:
         use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
         use_screencapture=False,  # Использовать ScreenCaptureKit вместо BlackHole
         save_audio=False,  # Сохранять аудио для последующей диаризации
-        mic_speaker_name=MIC_SPEAKER_NAME
+        mic_speaker_name=MIC_SPEAKER_NAME,
+        use_pcm_transport=False,  # Primary-path per-speaker PCM transport (RECOG_PCM_TRANSPORT)
     ):
         self.mic_device = mic_device
         self.system_device = system_device
         self.sample_rate = 16000
         self.use_screencapture = use_screencapture
         self.save_audio = save_audio
+        # PCM transport primary-path only when KTalk is also on (see plan §4.1).
+        # Without KTalk there is no extension to source per-pid PCM from.
+        self.use_pcm_transport = bool(use_pcm_transport) and bool(use_ktalk)
 
         # Определяем режим: dual (оба), mic-only, system-only, screencapture
         self.dual_mode = (mic_device is not None and (system_device is not None or use_screencapture))
@@ -403,6 +408,15 @@ class LiveTranscriber:
         self._mic_state: Optional[SourceState] = None
         self._sys_state: Optional[SourceState] = None
 
+        # Per-speaker PCM path state (see plan §4.2).  Populated only when
+        # `use_pcm_transport=True` and KTalk bridge is set up.
+        self._per_speaker_ingest = None  # type: ignore[assignment]
+        self._pcm_prev_words: dict[str, list] = {}   # pid -> last N words for dedup
+        self._pcm_pid_state: dict[str, dict] = {}    # pid -> {last_speech_time, segment_start_time}
+        # Tracks the last-observed watchdog state so we emit a transition
+        # marker only on actual flips (see plan §4.5).
+        self._last_pcm_degraded: bool = False
+
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Транскрибирует напрямую через tensor без temp файлов."""
         try:
@@ -419,8 +433,12 @@ class LiveTranscriber:
             wav = wav.to(self._model_device).to(self._model_dtype).unsqueeze(0)
             length = torch.tensor([wav.shape[-1]], device=self._model_device, dtype=torch.long)
 
-            encoded, encoded_len = model.forward(wav, length)
-            text = model.decoding.decode(model.head, encoded, encoded_len)[0]
+            # Serialize with PerSpeakerIngest worker's transcribe_batch: both
+            # paths share self.asr.model, and PyTorch modules are not safe for
+            # concurrent forward on a shared instance.
+            with self.asr._model_lock:
+                encoded, encoded_len = model.forward(wav, length)
+                text = model.decoding.decode(model.head, encoded, encoded_len)[0]
             return text.strip() if text else None
 
         except Exception as e:
@@ -664,15 +682,228 @@ class LiveTranscriber:
             self._ktalk_bridge.set_pre_meeting_switch_callback(self._invalidate_pending_chunks)
             # post-switch reinitializes audio recording at new path
             self._ktalk_bridge.set_meeting_change_callback(self._on_meeting_change)
-            self._ktalk_bridge.start()
-            print("KTalk bridge started, waiting for Chrome extension...")
-            time.sleep(1)
+            # NOTE: bridge.start() is deferred to _start_ktalk_bridge() so that
+            # _setup_per_speaker_ingest can wire set_pcm_chunk_callback before
+            # the WS server begins accepting connections.  Otherwise a fast
+            # extension reconnect could deliver pcm_chunk frames to a None
+            # callback (dropped silently at ktalk_bridge.py:1521).
         except ImportError:
             print("Warning: ktalk_bridge module not found, falling back to embedding-based", file=sys.stderr)
             self.use_ktalk = False
         except Exception as e:
             print(f"Warning: KTalk bridge error: {e}, falling back to embedding-based", file=sys.stderr)
             self.use_ktalk = False
+
+    def _setup_per_speaker_ingest(self):
+        """Wire per-speaker PCM ingest when RECOG_PCM_TRANSPORT=1 and KTalk is on.
+
+        Creates `PerSpeakerIngest`, registers its `enqueue` as the bridge's
+        PCM callback, and spawns the internal worker thread.  Also gates on
+        having a working bridge — `_setup_ktalk_bridge` may flip
+        `self.use_ktalk` to False on failure, in which case PCM is a no-op.
+        """
+        if not (self.use_pcm_transport and self.use_ktalk and self._ktalk_bridge):
+            return
+        try:
+            from .per_speaker import PerSpeakerIngest
+        except ImportError as e:
+            print(
+                f"Warning: per_speaker ingest unavailable ({e}); "
+                f"PCM transport disabled for this session",
+                file=sys.stderr,
+            )
+            self.use_pcm_transport = False
+            return
+
+        self._per_speaker_ingest = PerSpeakerIngest(
+            transcribe_callback=self._on_pcm_batch,
+            generation_getter=lambda: self._meeting_generation,
+            meeting_active_getter=lambda: bool(
+                self._meeting_storage
+                and self._meeting_storage.get_current_meeting_id()
+            ),
+        )
+        self._ktalk_bridge.set_pcm_chunk_callback(self._per_speaker_ingest.enqueue)
+        self._per_speaker_ingest.start()
+        print("Per-speaker PCM ingest started (RECOG_PCM_TRANSPORT=1)")
+
+    def _start_ktalk_bridge(self):
+        """Start the KTalk bridge WS server after all callbacks are wired.
+
+        Kept separate from `_setup_ktalk_bridge` so PCM chunk callback (set by
+        `_setup_per_speaker_ingest`) is guaranteed to be registered before the
+        server accepts its first connection.
+        """
+        if not self.use_ktalk or self._ktalk_bridge is None:
+            return
+        self._ktalk_bridge.start()
+        print("KTalk bridge started, waiting for Chrome extension...")
+        time.sleep(1)
+
+    def _on_pcm_batch(self, batch):
+        """Callback from `PerSpeakerIngest` worker thread.
+
+        Runs a single batched ASR forward on the raw PCM and emits transcript
+        entries with the speaker_name already attached to each chunk — we do
+        NOT query the KTalk bridge's `get_current_speaker` /
+        `get_dominant_speaker_for_period` here (see plan §4.2 "НЕ вызывает ...").
+
+        Meeting-generation safety: reading `self._meeting_generation` at
+        callback entry races with `_invalidate_pending_chunks`, which can
+        bump the counter between `_drain_batch_locked` and this callback.
+        We use `PerSpeakerIngest.last_drain_generation` instead — it reflects
+        the generation snapshot taken inside the drain under the ingest lock,
+        so the per-chunk check below correctly detects meeting switches that
+        happened after drain.
+        """
+        if not batch:
+            return
+        ingest = self._per_speaker_ingest
+        drain_gen = ingest.last_drain_generation if ingest is not None else None
+        chunk_gen = drain_gen if drain_gen is not None else self._meeting_generation
+
+        pcm_list = [item[3] for item in batch]
+        try:
+            texts = self.asr.transcribe_batch(pcm_list)
+        except Exception as e:
+            print(f"[PerSpeaker] transcribe_batch failed: {e}", file=sys.stderr)
+            return
+
+        current_time = time.time()
+        batch_now_ms = current_time * 1000.0
+        # Snapshot the system wav writer's current offset so each PCM
+        # segment can point at the correct byte range in audio_system.wav
+        # for playback ("extract clip") and "enroll from segments". The
+        # wav writer keeps advancing while PCM is primary (degraded-mode
+        # fallback still relies on it), so the live offset is a valid
+        # index into the file.
+        with self._wav_lock:
+            wav_offset_now_ms = (
+                self._wav_writer_system.get_offset_ms()
+                if self._wav_writer_system
+                else 0
+            )
+        for (pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms), raw_text in zip(batch, texts):
+            text = (raw_text or "").strip()
+            if not text:
+                continue
+
+            # _pcm_prev_words / _pcm_pid_state are also cleared by
+            # _invalidate_pending_chunks under _state_lock.  Holding the lock
+            # across dedup, per-pid state update, send_transcript, and
+            # append_segment keeps meeting-switch atomic: a concurrent
+            # _invalidate_pending_chunks cannot bump the generation (and
+            # swing current_meeting_path) between our gen-check and the I/O,
+            # so PCM from the old meeting never lands in the new meeting's
+            # transcript.jsonl or UI.
+            with self._state_lock:
+                if self._meeting_generation != chunk_gen:
+                    # Drop emissions whose meeting has already switched.
+                    continue
+                prev_words = self._pcm_prev_words.get(pid, [])
+                deduped = deduplicate(text, prev_words)
+                if not deduped:
+                    continue
+                self._pcm_prev_words[pid] = deduped.split()[-5:]
+
+                pid_state = self._pcm_pid_state.setdefault(
+                    pid,
+                    {"last_speech_time": 0.0, "segment_start_time": current_time},
+                )
+                time_gap = current_time - pid_state["last_speech_time"]
+                segment_duration = current_time - pid_state["segment_start_time"]
+                is_continuation = (
+                    time_gap < SPEAKER_TURN_GAP
+                    and segment_duration < MAX_SEGMENT_DURATION
+                )
+                pid_state["last_speech_time"] = current_time
+                if not is_continuation:
+                    pid_state["segment_start_time"] = current_time
+
+                # speaker_name is untrusted (extension-provided); strip newlines so
+                # it cannot break the markdown transcript line or confuse downstream
+                # regex parsers (`_parse_anchor_lines`, AI summary prompts).
+                safe_name = (speaker_name or "").replace("\n", " ").replace("\r", " ").strip()
+                speaker_label = safe_name or f"Участник {pid[:6]}"
+                timestamp = datetime.now().strftime("%H:%M:%S")
+
+                # Convert the chunk's wall-clock start (already carries the
+                # bridge's clock_offset) to an offset inside audio_system.wav
+                # by subtracting the chunk age from the just-sampled wav
+                # offset. This keeps segment playback / enrollment aligned
+                # with the real audio instead of always seeking from 0.
+                chunk_age_ms = int(batch_now_ms - chunk_start_ms)
+                audio_offset_ms = max(0, wav_offset_now_ms - chunk_age_ms)
+
+                line = f"\n**{speaker_label}** *[{timestamp}]*: {deduped}\n"
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                self.transcript_lines.append(line)
+
+                if self._ktalk_bridge:
+                    self._ktalk_bridge.send_transcript(
+                        speaker_label,
+                        deduped,
+                        timestamp,
+                        is_continuation=is_continuation,
+                        is_local=is_local,
+                        uncertain=False,
+                        uncertain_reason="",
+                    )
+
+                if self._meeting_storage:
+                    self._meeting_storage.append_segment(
+                        speaker=speaker_label,
+                        speaker_id=pid,
+                        text=deduped,
+                        is_local=is_local,
+                        is_continuation=is_continuation,
+                        uncertain=False,
+                        uncertain_reason="",
+                        audio_offset_ms=audio_offset_ms,
+                    )
+
+    def _emit_pcm_transition_marker(self, degraded: bool, marker_gen: int):
+        """Write a gap marker to the transcript on PCM ↔ mixed fallback flip.
+
+        Called from the system-audio branch of `_process_chunk` when
+        `PerSpeakerIngest.degraded` changes state.  Appears both in stdout
+        and in MeetingStorage so downstream consumers (frontend, AI summary)
+        can surface the degraded window.
+
+        `marker_gen` is captured together with the `_last_pcm_degraded`
+        compare-and-set at the call site, so that a concurrent
+        `_invalidate_pending_chunks` (meeting switch) does not cause us to
+        write the marker to the wrong meeting's transcript.jsonl.
+        """
+        if degraded:
+            msg = f"[PCM silence >{int(PCM_SILENCE_WATCHDOG_S)}s — switched to mixed fallback]"
+        else:
+            msg = "[PCM recovered — back to per-speaker]"
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        line = f"\n*{msg}* *[{timestamp}]*\n"
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        self.transcript_lines.append(line)
+        if self._meeting_storage:
+            # Hold _state_lock across the generation check + append_segment
+            # so a concurrent _invalidate_pending_chunks on the bridge thread
+            # cannot bump the generation (and swing current_meeting_path)
+            # between our check and the persist, which would land the marker
+            # in the new meeting's transcript.jsonl.
+            with self._state_lock:
+                if self._meeting_generation != marker_gen:
+                    return
+                self._meeting_storage.append_segment(
+                    speaker="Система",
+                    speaker_id="__system__",
+                    text=msg,
+                    is_local=False,
+                    is_continuation=False,
+                    uncertain=False,
+                    uncertain_reason="pcm_watchdog_transition",
+                    audio_offset_ms=0,
+                )
 
     def _start_audio_captures(self):
         """Start mic and system audio capture devices."""
@@ -693,6 +924,11 @@ class LiveTranscriber:
             self.mic_capture.stop()
         if self.system_capture:
             self.system_capture.stop()
+
+        # Stop per-speaker ingest worker before final ASR draw-down so that
+        # queued batches are not left dangling.
+        if self._per_speaker_ingest is not None:
+            self._per_speaker_ingest.stop()
 
         # Finalize audio recordings
         mic_audio_path = None
@@ -839,7 +1075,7 @@ class LiveTranscriber:
             )
 
     def _handle_ktalk_chunk(self, text, timestamp, chunk_start_time, chunk_end_time,
-                            chunk_time, chunk_gen, state):
+                            chunk_time, chunk_gen, state, *, fallback_mixed: bool = False):
         """Handle a transcribed system-audio chunk with KTalk speaker attribution.
 
         Speaker assignment fallback chain (see ADR / plan for rationale):
@@ -930,6 +1166,18 @@ class LiveTranscriber:
                 uncertain = True
                 uncertain_reason = "mics_off"
 
+            # Persisted (not sent to extension) diagnostic marker when the
+            # mixed-audio path ran only because the PCM watchdog tripped.
+            # Frontend compares uncertain_reason by exact key, so compound
+            # "fallback_mixed/<reason>" falls through to the default
+            # uncertain suffix without breaking known-reason rendering.
+            persisted_reason = uncertain_reason
+            if fallback_mixed:
+                persisted_reason = (
+                    f"fallback_mixed/{uncertain_reason}" if uncertain_reason
+                    else "fallback_mixed"
+                )
+
             self._ktalk_bridge.send_transcript(
                 speaker, text, timestamp, is_continuation,
                 is_local=is_local, uncertain=uncertain,
@@ -945,7 +1193,7 @@ class LiveTranscriber:
                     is_local=is_local,
                     is_continuation=is_continuation,
                     uncertain=uncertain,
-                    uncertain_reason=uncertain_reason,
+                    uncertain_reason=persisted_reason,
                     audio_offset_ms=state.audio_offset
                 )
 
@@ -1069,6 +1317,41 @@ class LiveTranscriber:
                 state.audio_offset = self._wav_writer_system.get_offset_ms()
                 self._wav_writer_system.write_chunk(chunk)
 
+        # Per-speaker PCM primary-path gating for system-audio chunks
+        # (see plan §4.5).  WAV writing above still runs so that the
+        # system capture stays available as an offline fallback, but
+        # we skip ASR while the PCM path is healthy and emit a gap
+        # marker on degraded↔healthy transitions.
+        #
+        # `pcm_ever_seen` keeps the mixed-path running until the extension
+        # has actually produced a chunk for this meeting — otherwise the
+        # pre-join / broken-extension window silently swallows up to
+        # PCM_SILENCE_WATCHDOG_S of system audio before the watchdog fires.
+        fallback_mixed = False
+        if (
+            not is_mic
+            and self._per_speaker_ingest is not None
+            and self._per_speaker_ingest.pcm_ever_seen
+        ):
+            degraded_now = self._per_speaker_ingest.degraded
+            # _last_pcm_degraded is also reset by _invalidate_pending_chunks
+            # under _state_lock; guard the compare-and-swap so we don't emit
+            # a spurious transition marker on a meeting boundary. Capture
+            # chunk_gen atomically with the flag update so the transition
+            # marker below lands on the meeting that observed the flip and
+            # not a new one entered while we were releasing the lock.
+            with self._state_lock:
+                should_emit = degraded_now != self._last_pcm_degraded
+                if should_emit:
+                    self._last_pcm_degraded = degraded_now
+                marker_gen = self._meeting_generation
+            if should_emit:
+                self._emit_pcm_transition_marker(degraded_now, marker_gen)
+            if not degraded_now:
+                # PCM is primary; drop system-audio ASR work entirely.
+                return
+            fallback_mixed = True
+
         # Пропускаем запись микрофона если на KTalk встрече и mic замьючен
         # Проверяем ДО ASR inference чтобы не тратить CPU на muted chunks
         if is_mic and self._ktalk_bridge and self._ktalk_bridge.is_local_mic_muted():
@@ -1109,7 +1392,8 @@ class LiveTranscriber:
         elif self.use_ktalk:
             self._handle_ktalk_chunk(
                 text, timestamp, chunk_start_time, chunk_end_time,
-                chunk_time, chunk_gen, state)
+                chunk_time, chunk_gen, state,
+                fallback_mixed=fallback_mixed)
         else:
             self._handle_embedding_chunk(
                 text, timestamp, chunk_time, chunk_gen, state,
@@ -1150,6 +1434,8 @@ class LiveTranscriber:
 
         self._setup_meeting_storage()
         self._setup_ktalk_bridge()
+        self._setup_per_speaker_ingest()
+        self._start_ktalk_bridge()
 
         self.asr.load_model(quiet=True)
 
@@ -1209,6 +1495,17 @@ class LiveTranscriber:
                     state.last_words = []
                     state.segment_start_time = 0
                     state.pending_updates = []
+            # Reset PCM per-pid state so continuation/dedup don't carry
+            # across meetings.  Watchdog transition flag also resets because
+            # a fresh meeting should start assuming PCM healthy.
+            self._pcm_prev_words.clear()
+            self._pcm_pid_state.clear()
+            self._last_pcm_degraded = False
+        # Clear per-speaker ingest buffers (bumped generation would drop
+        # them at drain time anyway, but clearing eagerly avoids a 200 ms
+        # window where stale-gen chunks occupy capacity).
+        if self._per_speaker_ingest is not None:
+            self._per_speaker_ingest.drain()
         # Clear capture buffers so the next get_chunk() returns only
         # audio recorded AFTER the meeting switch, not stale old-meeting
         # samples that accumulated since the last drain.
@@ -1284,12 +1581,18 @@ def live_pipeline(
     list_devices=False,
     use_ktalk=False,
     use_screencapture=False,
-    mic_speaker_name=MIC_SPEAKER_NAME
+    mic_speaker_name=MIC_SPEAKER_NAME,
+    use_pcm_transport=None,
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
         LiveAudioCapture.list_devices()
         return
+
+    # Gate per-speaker PCM ingest on the RECOG_PCM_TRANSPORT env var unless
+    # the caller passed an explicit bool (used by tests).
+    if use_pcm_transport is None:
+        use_pcm_transport = pcm_transport_enabled()
 
     # Автоопределение устройств
     if mic_device == "auto":
@@ -1319,6 +1622,7 @@ def live_pipeline(
         no_diarization=no_diarization,
         use_ktalk=use_ktalk,
         use_screencapture=use_screencapture,
-        mic_speaker_name=mic_speaker_name
+        mic_speaker_name=mic_speaker_name,
+        use_pcm_transport=use_pcm_transport,
     )
     transcriber.run(force_exit=True)

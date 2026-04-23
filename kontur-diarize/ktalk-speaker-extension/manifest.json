@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jitsi Speaker Detector",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Detects and displays the current active speaker in Jitsi-based video conferences (KTalk, vas3k.cloud, vkkovalev.work)",
   "permissions": [
     "activeTab",
@@ -34,7 +34,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["injected.js"],
+      "resources": ["injected.js", "src/audio-worklet/downsampler.js"],
       "matches": ["https://*.ktalk.ru/*", "https://meet.vas3k.cloud/*", "https://meet.vkkovalev.work/*"]
     }
   ]

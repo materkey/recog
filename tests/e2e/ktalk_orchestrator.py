@@ -18,6 +18,7 @@ import re
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -54,6 +55,21 @@ class E2ETestResult:
     duration_seconds: float = 0.0
     errors: list[str] = field(default_factory=list)
     debug_state: dict = field(default_factory=dict)
+    meeting_path: Optional[Path] = None
+    # True iff at least one real PCM chunk reached PerSpeakerIngest before
+    # the test finished. If False in a test that requires PCM flow (e.g.
+    # degraded-mode), the caller should fail with a clear diagnostic
+    # instead of asserting downstream markers that depend on pcm_ever_seen.
+    first_pcm_seen: bool = False
+    # Captured `console.*` messages from the host page (extension log
+    # surface). Used to diagnose extension-side failures that would
+    # otherwise be invisible to pytest — AudioContext state, worklet load
+    # errors, attach-summary counts. Tagged with message type prefix.
+    browser_console_lines: list[str] = field(default_factory=list)
+    # Preflight snapshot of `conf._participantsMap` taken shortly after
+    # guests join. Distinguishes "SFU not relaying fake audio to host"
+    # from "extension worklet fails to start" when first_pcm_seen=False.
+    participants_preflight: list[dict] = field(default_factory=list)
 
 
 class KTalkOrchestrator:
@@ -75,6 +91,10 @@ class KTalkOrchestrator:
         speaker_windows: list[SpeakerWindow],
         record_duration: float = 45.0,
         inject_speakers: bool = True,
+        use_pcm_transport: bool = False,
+        host_reload_at_s: Optional[float] = None,
+        pcm_disable_at_s: Optional[float] = None,
+        pcm_warmup_timeout_s: float = 25.0,
     ):
         if len(guest_names) != len(guest_audio_files):
             raise ValueError("guest_names and guest_audio_files must have the same length")
@@ -84,14 +104,47 @@ class KTalkOrchestrator:
         self.speaker_windows = sorted(speaker_windows, key=lambda w: w.start)
         self.record_duration = record_duration
         self.inject_speakers = inject_speakers
+        self.use_pcm_transport = use_pcm_transport
+        # Schedule a host_page.reload() at ``host_reload_at_s`` seconds from
+        # the moment guests finish joining. Used by
+        # test_per_speaker_degraded_mode_on_extension_reload to simulate MV3
+        # service-worker eviction (extension stops sending PCM; watchdog
+        # fires; live transcriber falls back to mixed-path).
+        self.host_reload_at_s = host_reload_at_s
+        # Schedule a ``bridge.set_pcm_transport_enabled(False)`` broadcast at
+        # ``pcm_disable_at_s`` seconds from the moment PCM flow is confirmed.
+        # Cleaner than host_reload: extension disposes its AudioWorklet but
+        # the WebSocket + Jitsi conference stay up, so the meeting is NOT
+        # torn down and the watchdog fires on a genuine PCM-active→silent
+        # transition (pcm_ever_seen=True → transition marker is emitted).
+        self.pcm_disable_at_s = pcm_disable_at_s
+        # How long to poll PerSpeakerIngest.pcm_ever_seen before giving up
+        # when ``use_pcm_transport=True``. If no PCM arrives in this window,
+        # the result's ``first_pcm_seen`` stays False and degraded-mode
+        # simulation is skipped (nothing to degrade from).
+        self.pcm_warmup_timeout_s = pcm_warmup_timeout_s
 
-        self._login = os.environ["SSO_LOGIN"]
-        self._password = os.environ["SSO_PASSWORD"]
+        # Pre-made room URL (skips SSO login + create_public_room). Supply
+        # via env when you want to reuse an existing public room on any
+        # KTalk subdomain — e.g. `app.ktalk.ru` or a user's personal
+        # workspace. Creds are optional in this mode.
+        self._room_url_override = os.environ.get("KTALK_ROOM_URL", "").strip()
+        if self._room_url_override:
+            self._login = ""
+            self._password = ""
+        else:
+            self._login = os.environ["SSO_LOGIN"]
+            self._password = os.environ["SSO_PASSWORD"]
 
         self._transcriber = None
         self._transcriber_thread: Optional[threading.Thread] = None
         self._transcript_lines: list[str] = []
         self._debug_state: dict = {}
+        self._meeting_path: Optional[Path] = None
+        # Ring-buffer the host page's console output so long-running tests
+        # do not accumulate unbounded diagnostic lines.
+        self._browser_console_lines: deque[str] = deque(maxlen=500)
+        self._participants_preflight: list[dict] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -101,17 +154,39 @@ class KTalkOrchestrator:
         """Run the full e2e test and return the collected result."""
         errors: list[str] = []
         start_time = time.time()
+        first_pcm_seen = False
 
         with sync_playwright() as playwright:
             # --- Host browser (extension + silence) ---
             host_context, host_page = launch_host_browser(playwright, _SILENCE_WAV)
 
-            # --- Login and create room ---
+            # Capture all console.* from the host page so extension-side
+            # lifecycle events (AudioContext state, worklet load, attach
+            # counts) surface in pytest -s output when things go wrong.
+            def _on_console(msg):
+                try:
+                    line = f"[{msg.type}] {msg.text}"
+                except Exception:
+                    line = "[?] <unreadable console msg>"
+                self._browser_console_lines.append(line)
+            host_page.on("console", _on_console)
+
+            # --- Room URL: either pre-made (public) or create via SSO ---
             try:
-                host_page.goto("https://example.ktalk.ru", wait_until="domcontentloaded", timeout=20_000)
-                kontur_login(host_page, self._login, self._password)
-                room_url = create_public_room(host_page)
-                print(f"[e2e] Room created: {room_url}")
+                if self._room_url_override:
+                    room_url = self._room_url_override
+                    print(f"[e2e] Using pre-made room URL: {room_url}")
+                    # Host still needs to be IN the room for the extension's
+                    # $conf to populate and PCM transport to attach to the
+                    # remote participants' streams. Join as "Host" via the
+                    # same public-room prejoin flow that guests use.
+                    guest_join_room(host_page, room_url, "Host")
+                    print("[e2e] Host joined pre-made room")
+                else:
+                    host_page.goto("https://example.ktalk.ru", wait_until="domcontentloaded", timeout=20_000)
+                    kontur_login(host_page, self._login, self._password)
+                    room_url = create_public_room(host_page)
+                    print(f"[e2e] Room created: {room_url}")
             except Exception as exc:
                 errors.append(f"Host setup failed: {exc}")
                 host_context.close()
@@ -142,7 +217,50 @@ class KTalkOrchestrator:
                 self._speaker_injector_thread.start()
 
             print(f"[e2e] All guests joined. Recording for {self.record_duration}s...")
-            time.sleep(self.record_duration)
+
+            # --- Preflight + wait for first PCM chunk (if PCM path is on) ---
+            # Preflight distinguishes "Jitsi SFU isn't relaying fake audio
+            # to host as remote tracks" from "worklet never starts" — run
+            # it concurrently with the PCM poll so we don't add 5 s of
+            # serial sleep to every run.
+            if self.use_pcm_transport:
+                first_pcm_seen = self._wait_with_preflight(
+                    host_page, self.pcm_warmup_timeout_s
+                )
+
+            if self.pcm_disable_at_s is not None and first_pcm_seen:
+                pre = min(self.pcm_disable_at_s, self.record_duration)
+                time.sleep(pre)
+                print(
+                    f"[e2e] Broadcasting pcm_transport_enabled=False at "
+                    f"t={pre:.0f}s (simulates extension-side PCM stop)"
+                )
+                try:
+                    self._transcriber._ktalk_bridge.set_pcm_transport_enabled(False)
+                except Exception as exc:
+                    errors.append(f"pcm_disable broadcast failed: {exc}")
+                remainder = self.record_duration - pre
+                if remainder > 0:
+                    time.sleep(remainder)
+            # --- Optional mid-meeting host reload (legacy degraded-mode) ---
+            # Kept for backwards compatibility. host_page.reload() tears down
+            # the Jitsi conference as a side effect, which creates a meeting
+            # boundary and resets pcm_ever_seen — prefer pcm_disable_at_s.
+            elif self.host_reload_at_s is not None:
+                pre = min(self.host_reload_at_s, self.record_duration)
+                time.sleep(pre)
+                print(f"[e2e] Reloading host page at t={pre:.0f}s "
+                      f"(simulates extension PCM stop)")
+                try:
+                    host_page.reload(wait_until="domcontentloaded", timeout=20_000)
+                    print("[e2e] Host page reloaded")
+                except Exception as exc:
+                    errors.append(f"Host reload failed: {exc}")
+                remainder = self.record_duration - pre
+                if remainder > 0:
+                    time.sleep(remainder)
+            else:
+                time.sleep(self.record_duration)
 
             # --- Collect extension debug state from host page ---
             self._debug_state = self._collect_debug_state(host_page)
@@ -171,11 +289,121 @@ class KTalkOrchestrator:
             duration_seconds=duration_seconds,
             errors=errors,
             debug_state=self._debug_state,
+            meeting_path=self._meeting_path,
+            first_pcm_seen=first_pcm_seen,
+            browser_console_lines=list(self._browser_console_lines),
+            participants_preflight=self._participants_preflight,
         )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _safe_evaluate(page, js: str, tag: str, default):
+        """Run ``page.evaluate(js)`` and return its result, or ``default``
+        on any navigation/connection error. Prints a one-line failure
+        note so the caller sees why the snapshot is empty.
+        """
+        try:
+            return page.evaluate(js)
+        except Exception as exc:
+            print(f"[e2e] {tag} evaluate failed: {exc}", flush=True)
+            return default
+
+    def _snapshot_participants(self, host_page) -> list[dict]:
+        """One-shot snapshot of ``conf._participantsMap`` shaped as a
+        list of ``{pid, local, displayName, hasStream, streamActive}``.
+        """
+        snapshot = self._safe_evaluate(
+            host_page,
+            """() => {
+                const pm = window.$conf && window.$conf._participantsMap;
+                if (!pm || !pm.forEach) return [];
+                const out = [];
+                pm.forEach((p, key) => {
+                    const stream = p && p._audioTrack$ && p._audioTrack$.value
+                        && p._audioTrack$.value.jitsiTrack
+                        && p._audioTrack$.value.jitsiTrack.stream;
+                    out.push({
+                        key,
+                        pid: p && p._id,
+                        local: !!(p && p.local),
+                        displayName: (p && (p._displayName || p.name)) || null,
+                        hasStream: !!stream,
+                        streamActive: !!(stream && stream.active),
+                    });
+                });
+                return out;
+            }""",
+            tag="participants preflight",
+            default=[],
+        )
+        return snapshot if isinstance(snapshot, list) else []
+
+    def _dump_browser_console(self, tag: str, n: int = 60) -> None:
+        """Print the last N captured browser console lines to stderr."""
+        if not self._browser_console_lines:
+            print(f"[e2e][{tag}] no browser console lines captured", flush=True)
+            return
+        print(f"[e2e][{tag}] last {n} browser console lines:", flush=True)
+        tail = list(self._browser_console_lines)[-n:]
+        for line in tail:
+            print(f"  {line}", flush=True)
+
+    def _wait_with_preflight(self, host_page, timeout_s: float) -> bool:
+        """Poll PerSpeakerIngest.pcm_ever_seen and take a one-shot
+        preflight snapshot of remote tracks during the same window —
+        no extra serial sleep before the poll starts.
+
+        Preflight is taken ~2 s into the wait (Jitsi has already had the
+        guest-join time on top). Failing tests get both the snapshot and
+        the browser console tail for diagnosis.
+        """
+        if self._transcriber is None:
+            return False
+        ingest = getattr(self._transcriber, "_per_speaker_ingest", None)
+        if ingest is None:
+            print("[e2e] PCM wait skipped — no PerSpeakerIngest on transcriber", flush=True)
+            return False
+
+        preflight_deadline = time.time() + 2.0
+        warmup_deadline = time.time() + timeout_s
+        took_preflight = False
+
+        while time.time() < warmup_deadline:
+            if not took_preflight and time.time() >= preflight_deadline:
+                self._participants_preflight = self._snapshot_participants(host_page)
+                print(
+                    f"[e2e] participants preflight: {self._participants_preflight}",
+                    flush=True,
+                )
+                took_preflight = True
+            if ingest.pcm_ever_seen:
+                waited = timeout_s - (warmup_deadline - time.time())
+                print(f"[e2e] PCM first-chunk observed after {waited:.1f}s", flush=True)
+                if not took_preflight:
+                    self._participants_preflight = self._snapshot_participants(host_page)
+                return True
+            time.sleep(0.2)
+
+        print(
+            f"[e2e] WARNING: no PCM chunk arrived within {timeout_s:.0f}s — "
+            "degraded-mode simulation will be skipped",
+            flush=True,
+        )
+        if self._participants_preflight:
+            remote_with_stream = [
+                p for p in self._participants_preflight
+                if not p.get("local") and p.get("hasStream")
+            ]
+            print(
+                f"[e2e] preflight: {len(self._participants_preflight)} participants, "
+                f"{len(remote_with_stream)} remote with stream",
+                flush=True,
+            )
+        self._dump_browser_console("pcm-wait-timeout")
+        return False
 
     def _run_speaker_injector(self) -> None:
         """Send speaker_update messages to the bridge on a schedule.
@@ -237,8 +465,9 @@ class KTalkOrchestrator:
 
     def _collect_debug_state(self, host_page) -> dict:
         """Read noise gate debug state from the extension's debug panel."""
-        try:
-            state = host_page.evaluate("""() => {
+        state = self._safe_evaluate(
+            host_page,
+            """() => {
                 const panel = document.querySelector('.ktalk-debug-panel');
                 if (!panel) return {};
                 const rows = {};
@@ -248,13 +477,13 @@ class KTalkOrchestrator:
                     if (key) rows[key] = value;
                 });
                 return rows;
-            }""")
-            if state:
-                print(f"[e2e] Debug state: {state}")
-            return state or {}
-        except Exception as exc:
-            print(f"[e2e] Failed to collect debug state: {exc}")
-            return {}
+            }""",
+            tag="debug state",
+            default={},
+        ) or {}
+        if state:
+            print(f"[e2e] Debug state: {state}")
+        return state
 
     def _start_transcriber(self) -> None:
         """Import LiveTranscriber, find BlackHole device, start in daemon thread."""
@@ -266,9 +495,17 @@ class KTalkOrchestrator:
         blackhole_device = SingleDeviceCapture.find_blackhole()
         print(f"[e2e] BlackHole device: {blackhole_device}")
 
+        # RECOG_PCM_TRANSPORT is read by ktalk_bridge on startup to decide the
+        # server-authoritative handshake value sent to each extension client.
+        # Set it here so the bridge (spawned inside LiveTranscriber) picks it up.
+        if self.use_pcm_transport:
+            os.environ["RECOG_PCM_TRANSPORT"] = "1"
+            print("[e2e] RECOG_PCM_TRANSPORT=1 (per-speaker PCM path enabled)")
+
         self._transcriber = LiveTranscriber(
             system_device=blackhole_device,
             use_ktalk=True,
+            use_pcm_transport=self.use_pcm_transport,
         )
 
         self._transcriber_error: Optional[str] = None
@@ -296,6 +533,10 @@ class KTalkOrchestrator:
         """Signal the transcriber to stop and collect transcript_lines."""
         if self._transcriber is not None:
             print(f"[e2e] Stopping transcriber. Lines so far: {len(self._transcriber.transcript_lines)}")
+            # Capture meeting_path before stop_session clears it.
+            storage = getattr(self._transcriber, "_meeting_storage", None)
+            if storage is not None:
+                self._meeting_path = getattr(storage, "current_meeting_path", None)
             self._transcriber.running = False
 
         if self._transcriber_thread is not None:
