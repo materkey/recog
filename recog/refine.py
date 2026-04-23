@@ -27,7 +27,7 @@ import sys
 import threading
 import traceback
 from dataclasses import dataclass
-from typing import Callable, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional
 
 import numpy as np
 
@@ -42,6 +42,111 @@ class RefineAborted(Exception):
     `should_abort()` returns True mid-inference. The worker catches this,
     releases `model_lock`, and re-enqueues the originating `RefineTask`.
     """
+
+
+def make_abortable_decode(decoding: Any, should_abort: Callable[[], bool]) -> Callable:
+    """Return a drop-in replacement for `RNNTGreedyDecoding.decode` that polls
+    `should_abort()` between encoder time steps and raises `RefineAborted`
+    when True.
+
+    The body mirrors upstream `gigaam/decoding.py::RNNTGreedyDecoding.decode`
+    (commit `6e4b027`) verbatim except for the added
+    `if should_abort(): raise RefineAborted()` at the top of the outer
+    `for t in range(T):` loop. See
+    `experiments/2026-04-24-refine-abort-spike.md` for the spike that
+    validated this hook — worst-case abort latency is the encoder forward
+    pass (~187 ms on MPS for 30 s audio), saving ~770 ms per aborted refine.
+
+    Install the returned callable by assigning it to `model.decoding.decode`
+    for the duration of one `transcribe` call (wrap in `try/finally` to
+    restore the original).
+
+    Args:
+        decoding: The `model.decoding` instance. Used to capture tokenizer,
+            blank_id, max_symbols, and the `_cat_states`/`_split_state`
+            helpers into the closure.
+        should_abort: No-arg callable returning True when inference should
+            be cut short. The worker typically passes
+            `self._live_pending.is_set` here.
+
+    Returns:
+        Callable with the shape `decode(head, encoded, enc_len)` matching
+        the upstream decoder; suitable for drop-in replacement via
+        `model.decoding.decode = make_abortable_decode(...)`.
+    """
+    import torch
+
+    tokenizer = decoding.tokenizer
+    blank_id = decoding.blank_id
+    max_symbols = decoding.max_symbols
+
+    cat_states = decoding._cat_states
+    split_state = decoding._split_state
+
+    @torch.inference_mode()
+    def decode(head, encoded, enc_len):
+        x = encoded.transpose(1, 2)
+        B, T, _ = x.shape
+        device = x.device
+
+        hyps: list[list[int]] = [[] for _ in range(B)]
+        token_frames: list[list[int]] = [[] for _ in range(B)]
+        last_label: list = [None] * B
+        dec_state: list = [None] * B
+
+        def emit_batch(batch_idx, t, fresh):
+            idx = torch.tensor(batch_idx, device=device, dtype=torch.long)
+            f = x[idx, t:t + 1, :]
+            if fresh:
+                g, hidden = head.decoder.predict(None, None, batch_size=len(batch_idx))
+            else:
+                labels = torch.cat([last_label[i] for i in batch_idx], dim=0)
+                state = cat_states([dec_state[i] for i in batch_idx])
+                g, hidden = head.decoder.predict(labels, state, batch_size=len(batch_idx))
+
+            k = head.joint.joint(f, g)[:, 0, 0, :].argmax(dim=-1)
+            emit = k.ne(blank_id)
+            if not emit.any():
+                return []
+
+            hidden_parts = split_state(hidden)
+            out = []
+            for p in emit.nonzero(as_tuple=False).squeeze(1).tolist():
+                bi = batch_idx[p]
+                tok = int(k[p])
+                hyps[bi].append(tok)
+                token_frames[bi].append(t)
+                last_label[bi] = k[p:p + 1].view(1, 1)
+                dec_state[bi] = hidden_parts[p]
+                out.append(bi)
+            return out
+
+        enc_len_cpu = enc_len.cpu()
+        for t in range(T):
+            if should_abort():
+                raise RefineAborted(f"abort@t={t}/{T}")
+            active = (t < enc_len_cpu).nonzero(as_tuple=False).squeeze(1).tolist()
+            if not active:
+                break
+            for _ in range(max_symbols):
+                if not active:
+                    break
+                fresh = [i for i in active if dec_state[i] is None]
+                stateful = [i for i in active if dec_state[i] is not None]
+
+                next_active = []
+                if fresh:
+                    next_active.extend(emit_batch(fresh, t, fresh=True))
+                if stateful:
+                    next_active.extend(emit_batch(stateful, t, fresh=False))
+
+                if not next_active:
+                    break
+                active = next_active
+
+        return [(tokenizer.decode(h), h, tf) for h, tf in zip(hyps, token_frames)]
+
+    return decode
 
 
 @dataclass(frozen=True, eq=False)

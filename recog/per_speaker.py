@@ -80,6 +80,7 @@ class PerSpeakerIngest:
         silence_watchdog_s: float = PCM_SILENCE_WATCHDOG_S,
         max_chunks_per_pid: int = 3 * PCM_MAX_BATCH_SIZE,
         time_fn: Callable[[], float] = time.time,
+        refine_submit_callback: Optional[Callable[[RefineTask], None]] = None,
     ):
         self._transcribe_callback = transcribe_callback
         self._generation_getter = generation_getter or (lambda: 0)
@@ -89,6 +90,14 @@ class PerSpeakerIngest:
         self._silence_watchdog_s = silence_watchdog_s
         self._max_chunks_per_pid = max_chunks_per_pid
         self._time_fn = time_fn
+        # Callback invoked on every tick for each pid that has a refine
+        # candidate ready (gap or monolog trigger fired). `LiveTranscriber`
+        # wires this to `RefineWorker.submit` when `pcm_refine_enabled()` is
+        # True; None disables the refine path entirely (no iteration, no
+        # overhead). Set via constructor or `set_refine_submit_callback`.
+        self._refine_submit_callback: Optional[Callable[[RefineTask], None]] = (
+            refine_submit_callback
+        )
 
         self._lock = threading.Lock()
         # Per-pid list kept sorted by seq; bisect.insort is O(log n) lookup +
@@ -334,13 +343,15 @@ class PerSpeakerIngest:
 
     def tick(self, now: Optional[float] = None) -> List[BatchedChunk]:
         """Advance state by one tick: check watchdog, drain up to one batch,
-        dispatch to callback.
+        dispatch to callback, and hand any ready refine candidates off to
+        `_refine_submit_callback`.
 
         Returns the batch that was dispatched (primarily for tests).
         """
         if now is None:
             now = self._time_fn()
         batch: List[BatchedChunk] = []
+        active_pids: List[str] = []
         with self._lock:
             self._check_watchdog_locked(now)
             batch = self._drain_batch_locked()
@@ -349,6 +360,11 @@ class PerSpeakerIngest:
             # logic has fresh `_silence_ms` / `_continuous_speech_ms` numbers
             # even when the drain itself was a no-op.
             self._update_per_pid_silence_locked()
+            if self._refine_submit_callback is not None:
+                # Snapshot pid list under the lock; get_refine_candidate
+                # re-acquires _lock (it's threading.Lock, not reentrant), so
+                # the per-pid check must run without _lock held.
+                active_pids = list(self._pid_audio_ms.keys())
         if batch:
             try:
                 self._transcribe_callback(batch)
@@ -357,7 +373,32 @@ class PerSpeakerIngest:
                     f"[PerSpeakerIngest] transcribe callback raised: {e}",
                     file=sys.stderr,
                 )
+        if active_pids and self._refine_submit_callback is not None:
+            for pid in active_pids:
+                task = self.get_refine_candidate(pid)
+                if task is None:
+                    continue
+                try:
+                    self._refine_submit_callback(task)
+                except Exception as e:
+                    print(
+                        f"[PerSpeakerIngest] refine submit raised: {e}",
+                        file=sys.stderr,
+                    )
         return batch
+
+    def set_refine_submit_callback(
+        self, callback: Optional[Callable[[RefineTask], None]]
+    ) -> None:
+        """Attach / detach the per-tick refine submit callback.
+
+        Exists so `LiveTranscriber` can build the `PerSpeakerIngest` first
+        (fast, cheap) and only later build the `RefineWorker` (gated on
+        `pcm_refine_enabled()`). `None` disables the refine iteration in
+        `tick()` entirely.
+        """
+        with self._lock:
+            self._refine_submit_callback = callback
 
     def start(self) -> None:
         """Spawn the background worker thread."""

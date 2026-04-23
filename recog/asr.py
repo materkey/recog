@@ -36,8 +36,11 @@ class ASRModule:
         # Serializes model load and model.forward across threads: live
         # mic/system ASR runs on the main loop, PerSpeakerIngest batches run
         # on a worker thread, and PyTorch modules are not safe for concurrent
-        # forward on a shared instance.
-        self._model_lock = threading.Lock()
+        # forward on a shared instance. Reentrant so RefineWorker (which
+        # acquires this lock externally to coordinate priority with the live
+        # path) can call `transcribe_with_timestamps` — which re-acquires the
+        # same lock internally — without deadlocking.
+        self._model_lock = threading.RLock()
 
     def load_model(self, quiet: bool = False):
         """Загружает модель GigaAM."""

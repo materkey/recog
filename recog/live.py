@@ -21,9 +21,9 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
-                     pcm_transport_enabled)
+                     pcm_refine_enabled, pcm_transport_enabled)
 from .asr import ASRModule
-from .refine import RefineResult
+from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
 
 
@@ -752,6 +752,76 @@ class LiveTranscriber:
         self._per_speaker_ingest.start()
         print("Per-speaker PCM ingest started (RECOG_PCM_TRANSPORT=1)")
 
+        # RECOG_PCM_REFINE bolts the refine contour on top of the ingest.
+        # Build + start the worker, then register its submit method so the
+        # ingest's tick loop feeds it per-pid refine candidates.
+        self._setup_refine_worker()
+
+    def _setup_refine_worker(self) -> None:
+        """Build and start `RefineWorker` if refine is enabled.
+
+        Gates:
+            * `pcm_refine_enabled()` — requires both `RECOG_PCM_TRANSPORT=1`
+              and `RECOG_PCM_REFINE=1`; otherwise no-op.
+            * `self._per_speaker_ingest` is not None — the ingest owns the
+              per-pid ring + trigger state the worker's tasks come from.
+
+        Wiring:
+            * `model_lock = self.asr._model_lock` (RLock) — shared with the
+              live batched-forward path so cooperative abort in the worker
+              yields the model promptly when `_on_pcm_batch` signals
+              `set_live_pending()`.
+            * `transcribe_fn = self._refine_transcribe_fn` — installs the
+              abortable decoder monkey-patch in cooperative mode, then runs
+              `asr.transcribe_with_timestamps`. Restores the decoder on
+              the way out.
+            * `apply_fn = self._apply_refine` — executed OUTSIDE the model
+              lock; takes its own locks for JSONL rewrite (`MeetingStorage._
+              segment_lock`) and live state (`self._state_lock`).
+            * `abort_mode = "cooperative"` — the default from the spike
+              (see `experiments/2026-04-24-refine-abort-spike.md`); saves
+              ~77 % of inference cost per aborted refine on MPS.
+        """
+        if not pcm_refine_enabled():
+            return
+        if self._per_speaker_ingest is None:
+            return
+        self._refine_worker = RefineWorker(
+            model_lock=self.asr._model_lock,
+            transcribe_fn=self._refine_transcribe_fn,
+            apply_fn=self._apply_refine,
+            abort_mode="cooperative",
+        )
+        self._refine_worker.start()
+        self._per_speaker_ingest.set_refine_submit_callback(
+            self._refine_worker.submit
+        )
+        print("RefineWorker started (RECOG_PCM_REFINE=1)")
+
+    def _refine_transcribe_fn(self, pcm_samples, *, should_abort=None):
+        """Bridge between `RefineWorker` and `ASRModule.transcribe_with_
+        timestamps`.
+
+        In cooperative mode (`should_abort` is a callable) install the
+        abortable decoder monkey-patch for the duration of one transcribe,
+        then restore. Coarse mode (`should_abort is None`) is a direct
+        pass-through — no monkey-patch, no restoration.
+
+        The monkey-patch mutates `model.decoding.decode`. It is safe because
+        `RefineWorker._process_task` holds `asr._model_lock` across this
+        call, so no other caller can observe the replaced decoder.
+        """
+        if should_abort is None:
+            return self.asr.transcribe_with_timestamps(pcm_samples)
+        model = self.asr.load_model(quiet=True)
+        original_decode = model.decoding.decode
+        abortable = make_abortable_decode(model.decoding, should_abort)
+        try:
+            model.decoding.decode = abortable
+            return self.asr.transcribe_with_timestamps(pcm_samples)
+        finally:
+            model.decoding.decode = original_decode
+
     def _start_ktalk_bridge(self):
         """Start the KTalk bridge WS server after all callbacks are wired.
 
@@ -788,11 +858,22 @@ class LiveTranscriber:
         chunk_gen = drain_gen if drain_gen is not None else self._meeting_generation
 
         pcm_list = [item[3] for item in batch]
+        # Priority-signal to the refine worker: live is about to wait on
+        # `asr._model_lock`; cooperative mode aborts in-flight refine at
+        # the next decoder step-boundary so live does not block on a full
+        # refine window. Clear after transcribe_batch returns (both on
+        # success and failure) so a subsequent refine can run.
+        refine_worker = self._refine_worker
+        if refine_worker is not None:
+            refine_worker.set_live_pending()
         try:
             texts = self.asr.transcribe_batch(pcm_list)
         except Exception as e:
             print(f"[PerSpeaker] transcribe_batch failed: {e}", file=sys.stderr)
             return
+        finally:
+            if refine_worker is not None:
+                refine_worker.clear_live_pending()
 
         current_time = time.time()
         batch_now_ms = current_time * 1000.0
@@ -1083,6 +1164,14 @@ class LiveTranscriber:
             self.mic_capture.stop()
         if self.system_capture:
             self.system_capture.stop()
+
+        # Stop the refine worker before the ingest so that a late refine
+        # submission from the ingest's last tick does not land in a queue
+        # about to be drained by `RefineWorker.stop()`. The worker joins
+        # its thread with a short timeout; no-op if refine was never enabled.
+        if self._refine_worker is not None:
+            self._refine_worker.stop()
+            self._refine_worker = None
 
         # Stop per-speaker ingest worker before final ASR draw-down so that
         # queued batches are not left dangling.
