@@ -114,6 +114,16 @@ python add_speaker_live.py "Speaker Name" 10
 - Continuation lines indented without timestamp
 - Speaker turn detected by: different speaker OR pause > 3 seconds
 
+## Environment Variables
+
+Copy `.env.example` → `.env` and edit. Key flags:
+
+- `RECOG_PCM_TRANSPORT=1` — switch live transcription to per-participant PCM streams from the KTalk Chrome extension (ADR-0018). Requires extension rebuild + service restart. Default `0`.
+- `RECOG_PCM_REFINE=1` — enable tier-2 refine pass on top of PCM transport. Re-transcribes per-pid PCM windows (20 s) with word-level timestamps on reply-close (3 s gap) or monolog cap (15 s), rewrites rows in `meetings/<id>/transcript.jsonl` with `refined: true`. Gated on `RECOG_PCM_TRANSPORT=1`. Default `0`.
+- `MIC_SPEAKER_NAME` — speaker label for microphone input (default `Me`).
+
+See `.env.example` for the full list and `CLAUDE.md` for architectural notes.
+
 ## Architecture
 
 See [ADR documents](adr/) for architecture decisions:
@@ -128,6 +138,9 @@ See [ADR documents](adr/) for architecture decisions:
 - ADR-0008: SpeechBrain ECAPA-TDNN embeddings
 - ADR-0009: Remove double clustering
 - ADR-0010: Live transcription mode
+- ADR-0011: Meeting storage
+- ADR-0013: AI transcript analysis
+- ADR-0018: Per-speaker ASR pipeline (PCM transport from Chrome extension)
 
 ## Files
 
