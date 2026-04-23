@@ -14,38 +14,38 @@
 
 ## 2. Refine worker foundations
 
-- [ ] 2.1 New constants in `recog/config.py`: `PCM_REFINE_WINDOW_S = 20.0`, `PCM_REFINE_MONOLOG_CAP_S = 15.0`; new `pcm_refine_enabled()` reading `RECOG_PCM_REFINE` (returns `False` unless `pcm_transport_enabled()` is also `True`)
-- [ ] 2.2 New method `ASRModule.transcribe_with_timestamps(pcm: Tensor | np.ndarray) -> TranscriptionResult` wrapping upstream `transcribe(word_timestamps=True)`; word start/end normalised to milliseconds (ints)
-- [ ] 2.3 **Spike (must precede 2.4):** determine whether upstream GigaAM's RNN-T decoder exposes a per-step hook suitable for cooperative abort. Concretely: inspect `gigaam.decoding.RNNTGreedyDecoder.decode` post upstream merge; attempt a monkey-patched `step_callback` prototype; record outcome in `experiments/2026-04-XX-refine-abort-spike.md`. Outcome drives the abort mode in 2.4 and the worded guarantee in the spec (§"Live batch preempts refine")
-- [ ] 2.4 New module `recog/refine.py` with `RefineWorker(model_lock: threading.Lock, transcribe_fn: Callable, apply_fn: Callable, abort_mode: Literal["cooperative", "coarse"])`. `abort_mode` defaults to spike outcome; background thread; API: `submit(task: RefineTask)`, `pause()`, `resume()`, `stop()`. In `cooperative` mode, the transcribe_fn honours a `should_abort()` callable polled between decoder steps; in `coarse` mode, refine holds the lock until one full window finishes (≤ 3 s CPU worst case)
-- [ ] 2.5 Model-lock integration in `LiveTranscriber._on_pcm_batch`: acquire `model_lock` before `transcribe_batch`; set a `live_pending` flag that `RefineWorker` polls (cadence per spike outcome recorded in 2.3)
-- [ ] 2.6 Unit test `tests/test_refine_worker.py`: task submission, pause/resume, abort-on-live semantics for BOTH `cooperative` and `coarse` modes with a mock transcribe_fn
+- [x] 2.1 New constants in `recog/config.py`: `PCM_REFINE_WINDOW_S = 20.0`, `PCM_REFINE_MONOLOG_CAP_S = 15.0`; new `pcm_refine_enabled()` reading `RECOG_PCM_REFINE` (returns `False` unless `pcm_transport_enabled()` is also `True`)
+- [x] 2.2 New method `ASRModule.transcribe_with_timestamps(pcm: Tensor | np.ndarray) -> TranscriptionResult` wrapping upstream `transcribe(word_timestamps=True)`; word start/end normalised to milliseconds (ints)
+- [x] 2.3 **Spike (must precede 2.4):** determine whether upstream GigaAM's RNN-T decoder exposes a per-step hook suitable for cooperative abort. Concretely: inspect `gigaam.decoding.RNNTGreedyDecoder.decode` post upstream merge; attempt a monkey-patched `step_callback` prototype; record outcome in `experiments/2026-04-XX-refine-abort-spike.md`. Outcome drives the abort mode in 2.4 and the worded guarantee in the spec (§"Live batch preempts refine")
+- [x] 2.4 New module `recog/refine.py` with `RefineWorker(model_lock: threading.Lock, transcribe_fn: Callable, apply_fn: Callable, abort_mode: Literal["cooperative", "coarse"])`. `abort_mode` defaults to spike outcome; background thread; API: `submit(task: RefineTask)`, `pause()`, `resume()`, `stop()`. In `cooperative` mode, the transcribe_fn honours a `should_abort()` callable polled between decoder steps; in `coarse` mode, refine holds the lock until one full window finishes (≤ 3 s CPU worst case)
+- [x] 2.5 Model-lock integration in `LiveTranscriber._on_pcm_batch`: acquire `model_lock` before `transcribe_batch`; set a `live_pending` flag that `RefineWorker` polls (cadence per spike outcome recorded in 2.3)
+- [x] 2.6 Unit test `tests/test_refine_worker.py`: task submission, pause/resume, abort-on-live semantics for BOTH `cooperative` and `coarse` modes with a mock transcribe_fn
 
 ## 3. Per-pid rolling PCM ring
 
-- [ ] 3.1 Extend `PerSpeakerIngest` with `_pcm_rings: Dict[pid, deque[np.ndarray]]` sized to `PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S` worth of Int16 samples; append in lockstep with every successful `enqueue`
-- [ ] 3.2 Add per-pid `_silence_ms[pid]` counter: increments by `PCM_BATCH_INTERVAL_MS` on each tick with no new chunk; resets to 0 on any new chunk
-- [ ] 3.3 Add per-pid `_continuous_speech_ms[pid]` counter: increments by chunk duration on each new chunk when `_silence_ms` was already 0; resets to 0 on silence gap `>= SPEAKER_TURN_GAP * 1000`
-- [ ] 3.4 Maintain per-pid monotonic `_pid_audio_ms: Dict[pid, float]` in `PerSpeakerIngest`; increment by `len(samples) / 16000 * 1000` on every successful ring append (same call site as 3.1). Exposed via `get_pid_audio_ms(pid) -> float`
-- [ ] 3.5 New method `PerSpeakerIngest.get_refine_candidate(pid) -> Optional[RefineTask]`: returns `RefineTask(pid, pcm_samples, offset_base_ms)` when `_silence_ms >= SPEAKER_TURN_GAP*1000` (gap) OR `_continuous_speech_ms >= PCM_REFINE_MONOLOG_CAP_S*1000` (monolog). `offset_base_ms` = `_pid_audio_ms[pid] - len(pcm_samples) / 16000 * 1000` (i.e., the pid-frame time of the first sample in the snapshot). Returns `None` if no un-refined audio; advances the un-refined watermark atomically
-- [ ] 3.6 Integrate `get_refine_candidate` call in the existing `_worker` drain loop; on candidate, call `refine_worker.submit(task)`
-- [ ] 3.7 Unit tests in `tests/test_per_speaker.py`: gap trigger fires once per reply; monolog trigger fires at 15 s cap; watermark advances on successful apply
+- [x] 3.1 Extend `PerSpeakerIngest` with `_pcm_rings: Dict[pid, deque[np.ndarray]]` sized to `PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S` worth of Int16 samples; append in lockstep with every successful `enqueue`
+- [x] 3.2 Add per-pid `_silence_ms[pid]` counter: increments by `PCM_BATCH_INTERVAL_MS` on each tick with no new chunk; resets to 0 on any new chunk
+- [x] 3.3 Add per-pid `_continuous_speech_ms[pid]` counter: increments by chunk duration on each new chunk when `_silence_ms` was already 0; resets to 0 on silence gap `>= SPEAKER_TURN_GAP * 1000`
+- [x] 3.4 Maintain per-pid monotonic `_pid_audio_ms: Dict[pid, float]` in `PerSpeakerIngest`; increment by `len(samples) / 16000 * 1000` on every successful ring append (same call site as 3.1). Exposed via `get_pid_audio_ms(pid) -> float`
+- [x] 3.5 New method `PerSpeakerIngest.get_refine_candidate(pid) -> Optional[RefineTask]`: returns `RefineTask(pid, pcm_samples, offset_base_ms)` when `_silence_ms >= SPEAKER_TURN_GAP*1000` (gap) OR `_continuous_speech_ms >= PCM_REFINE_MONOLOG_CAP_S*1000` (monolog). `offset_base_ms` = `_pid_audio_ms[pid] - len(pcm_samples) / 16000 * 1000` (i.e., the pid-frame time of the first sample in the snapshot). Returns `None` if no un-refined audio; advances the un-refined watermark atomically
+- [x] 3.6 Integrate `get_refine_candidate` call in the existing `_worker` drain loop; on candidate, call `refine_worker.submit(task)`
+- [x] 3.7 Unit tests in `tests/test_per_speaker.py`: gap trigger fires once per reply; monolog trigger fires at 15 s cap; watermark advances on successful apply
 
 ## 4. Segment tracking for alignment
 
-- [ ] 4.1 Add per-pid `_pcm_live_segments: Dict[pid, List[Tuple[segment_id, pid_audio_ms_start, pid_audio_ms_end]]]` to `LiveTranscriber` (times are in the per-pid frame defined in D1); populate inside `_on_pcm_batch` after each `append_segment` returns an id. `pid_audio_ms_start = per_speaker_ingest.get_pid_audio_ms(pid) - chunk_duration_ms`; `pid_audio_ms_end = per_speaker_ingest.get_pid_audio_ms(pid)`. `audio_offset_ms` (mixed-wav frame) continues to be stored on the segment for playback and is NOT used for refine alignment
-- [ ] 4.2 When a refine task returns, snapshot the subset of `_pcm_live_segments[pid]` whose `[offset, offset+duration]` intersects the refine window; this is `task.segment_ids`
-- [ ] 4.3 Prune `_pcm_live_segments[pid]` entries older than `PCM_REFINE_WINDOW_S + 5 s` to cap memory
-- [ ] 4.4 All reads/writes of `_pcm_live_segments` under `_state_lock` (consistent with sibling per-pid dicts)
+- [x] 4.1 Add per-pid `_pcm_live_segments: Dict[pid, List[Tuple[segment_id, pid_audio_ms_start, pid_audio_ms_end]]]` to `LiveTranscriber` (times are in the per-pid frame defined in D1); populate inside `_on_pcm_batch` after each `append_segment` returns an id. `pid_audio_ms_start = per_speaker_ingest.get_pid_audio_ms(pid) - chunk_duration_ms`; `pid_audio_ms_end = per_speaker_ingest.get_pid_audio_ms(pid)`. `audio_offset_ms` (mixed-wav frame) continues to be stored on the segment for playback and is NOT used for refine alignment
+- [x] 4.2 When a refine task returns, snapshot the subset of `_pcm_live_segments[pid]` whose `[offset, offset+duration]` intersects the refine window; this is `task.segment_ids`
+- [x] 4.3 Prune `_pcm_live_segments[pid]` entries older than `PCM_REFINE_WINDOW_S + 5 s` to cap memory
+- [x] 4.4 All reads/writes of `_pcm_live_segments` under `_state_lock` (consistent with sibling per-pid dicts)
 
 ## 5. Alignment + replace
 
-- [ ] 5.1 Implement `LiveTranscriber._apply_refine(result: RefineResult)`: rebase each refined `Word` into the per-pid frame via `word_pid_ms = result.offset_base_ms + word.start_ms` (same for end); then for each `segment_id` in `result.segment_ids`, select words whose rebased `[word_pid_ms_start, word_pid_ms_end]` lie inside `[pid_audio_ms_start, pid_audio_ms_end]` (from `_pcm_live_segments[pid]`); join their `.text` to form `new_text`; skip if empty (D8) or identical to current `text` (D8). `audio_offset_ms` on the JSONL row is untouched (mixed-wav frame is independent)
-- [ ] 5.2 Extend `MeetingStorage.update_segments` to accept an optional `text` key per update row; when present, also set `refined: true` on that row. Preserves all other fields untouched
-- [ ] 5.3 Add `refined: bool = False` to `TranscriptSegment` dataclass; `asdict(segment)` now includes the flag on every row
-- [ ] 5.4 After `update_segments` returns, call `bridge.send_refine([{segment_id, text, refined_at: now_iso}])` for the applied changes
-- [ ] 5.5 Wrap the whole apply path in a `_meeting_generation` check (same pattern as `_on_pcm_batch`); drop results whose generation no longer matches
-- [ ] 5.6 Unit test `tests/test_refine_alignment.py`: synthetic `Word` list + segment boundaries ⇒ expected per-segment `new_text`; coverage of empty-list, identical-text, subset, and straddle-boundary cases
+- [x] 5.1 Implement `LiveTranscriber._apply_refine(result: RefineResult)`: rebase each refined `Word` into the per-pid frame via `word_pid_ms = result.offset_base_ms + word.start_ms` (same for end); then for each `segment_id` in `result.segment_ids`, select words whose rebased `[word_pid_ms_start, word_pid_ms_end]` lie inside `[pid_audio_ms_start, pid_audio_ms_end]` (from `_pcm_live_segments[pid]`); join their `.text` to form `new_text`; skip if empty (D8) or identical to current `text` (D8). `audio_offset_ms` on the JSONL row is untouched (mixed-wav frame is independent)
+- [x] 5.2 Extend `MeetingStorage.update_segments` to accept an optional `text` key per update row; when present, also set `refined: true` on that row. Preserves all other fields untouched
+- [x] 5.3 Add `refined: bool = False` to `TranscriptSegment` dataclass; `asdict(segment)` now includes the flag on every row
+- [x] 5.4 After `update_segments` returns, call `bridge.send_refine([{segment_id, text, refined_at: now_iso}])` for the applied changes
+- [x] 5.5 Wrap the whole apply path in a `_meeting_generation` check (same pattern as `_on_pcm_batch`); drop results whose generation no longer matches
+- [x] 5.6 Unit test `tests/test_refine_alignment.py`: synthetic `Word` list + segment boundaries ⇒ expected per-segment `new_text`; coverage of empty-list, identical-text, subset, and straddle-boundary cases
 
 ## 6. WebSocket transport
 

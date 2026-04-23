@@ -187,11 +187,11 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 12: Update OpenSpec tasks.md + tests pass + commit + push
 
-- [ ] 12.1 In `openspec/changes/per-speaker-stream-refine/tasks.md`, mark §2 (2.1–2.6), §3 (3.1–3.7), §4 (4.1–4.4), §5 (5.1–5.6) as `[x]`. Do NOT modify task bodies.
-- [ ] 12.2 `openspec validate per-speaker-stream-refine` — must pass.
-- [ ] 12.3 Full unit suite: `venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green. If any regression surfaces in existing tests (meeting_storage, live, per_speaker), investigate before marking task complete.
-- [ ] 12.4 Commit: `plan(openspec): mark stream-refine §2-§5 complete (refine backend)`
-- [ ] 12.5 `git push` to origin on the new branch.
+- [x] 12.1 In `openspec/changes/per-speaker-stream-refine/tasks.md`, mark §2 (2.1–2.6), §3 (3.1–3.7), §4 (4.1–4.4), §5 (5.1–5.6) as `[x]`. Do NOT modify task bodies.
+- [x] 12.2 `openspec validate per-speaker-stream-refine` — must pass.
+- [x] 12.3 Full unit suite: `venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green. If any regression surfaces in existing tests (meeting_storage, live, per_speaker), investigate before marking task complete.
+- [x] 12.4 Commit: `plan(openspec): mark stream-refine §2-§5 complete (refine backend)`
+- [x] 12.5 `git push` to origin on the new branch.
 
 ## Post-Completion
 
