@@ -1434,10 +1434,10 @@ class LiveTranscriber:
 
         self._setup_meeting_storage()
         self._setup_ktalk_bridge()
+        self.asr.load_model(quiet=True)
+
         self._setup_per_speaker_ingest()
         self._start_ktalk_bridge()
-
-        self.asr.load_model(quiet=True)
 
         self._start_audio_captures()
 
