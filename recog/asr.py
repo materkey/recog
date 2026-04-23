@@ -119,7 +119,9 @@ class ASRModule:
 
                 with torch.inference_mode():
                     encoded, encoded_len = model.forward(wav, length)
-                    text = model.decoding.decode(model.head, encoded, encoded_len)[0]
+                    # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
+                    # we only need the first sample's text.
+                    text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
 
                 if text.strip():
                     start_time = start_sample / self.SAMPLE_RATE
@@ -188,9 +190,11 @@ class ASRModule:
 
         with self._model_lock, torch.inference_mode():
             encoded, encoded_len = model.forward(wav_batch, length_batch)
-            texts = model.decoding.decode(model.head, encoded, encoded_len)
+            # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
+            # token ids/frames are unused here.
+            decoded = model.decoding.decode(model.head, encoded, encoded_len)
 
-        return list(texts)
+        return [entry[0] for entry in decoded]
 
     def _remove_duplicate_words(
         self,

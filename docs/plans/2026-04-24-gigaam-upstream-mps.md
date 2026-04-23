@@ -54,16 +54,17 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ### Task 2: Adapt ASRModule.transcribe_batch to new decoding.decode signature
 
-- [ ] 2.1 Read `recog/asr.py::ASRModule.transcribe_batch` in full; also grep for any other call to `model.decoding.decode` or `.decoding.decode` across `recog/` and `scripts/`.
-- [ ] 2.2 Update each call site: old `texts = model.decoding.decode(...)` (List[str]) → new `decoded = model.decoding.decode(...); texts = [t[0] for t in decoded]` (first tuple element is text). Token IDs and frames are unused; don't store them.
-- [ ] 2.3 The public `ASRModule.transcribe_batch(pcm_list) -> List[str]` signature MUST stay stable. Callers in `recog/live.py::_on_pcm_batch` must not need edits. Verify by grep after the change: no call sites changed.
-- [ ] 2.4 Run full unit suite: `cd /Users/vkkovalev/projects/recog && venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green.
-- [ ] 2.5 Manual live smoke:
+- [x] 2.1 Read `recog/asr.py::ASRModule.transcribe_batch` in full; also grep for any other call to `model.decoding.decode` or `.decoding.decode` across `recog/` and `scripts/`. *(Three production call sites found: `recog/asr.py:122` in `transcribe_simple`, `recog/asr.py:191` in `transcribe_batch`, `recog/live.py:441` in `_transcribe_direct`. Benchmark `tests/bench_gigaam_rtf.py` discards the return value so no change needed there — kept out of scope per "minimal change" rule. Upstream signature confirmed at `../GigaAM/gigaam/decoding.py:57,129`: both CTC and RNN-T greedy decoders return `List[Tuple[str, List[int], List[int]]]`.)*
+- [x] 2.2 Update each call site: old `texts = model.decoding.decode(...)` (List[str]) → new `decoded = model.decoding.decode(...); texts = [t[0] for t in decoded]` (first tuple element is text). Token IDs and frames are unused; don't store them. *(For single-sample paths `transcribe_simple` and `_transcribe_direct` the existing `[0]` kept its batch-index meaning and a second `[0]` now extracts the text from the tuple → `...decode(...)[0][0]`. For `transcribe_batch` the plan's list-comprehension pattern is applied verbatim.)*
+- [x] 2.3 The public `ASRModule.transcribe_batch(pcm_list) -> List[str]` signature MUST stay stable. Callers in `recog/live.py::_on_pcm_batch` must not need edits. Verify by grep after the change: no call sites changed. *(Confirmed: `recog/live.py:770` caller untouched; `tests/test_live_speaker_attribution.py` mocks `t.asr.transcribe_batch.return_value = [...]` (list of strings) remain compatible; `tests/test_asr.py` mock helper internally maps `decoded_texts` → `(text, [], [])` tuples so the public helper signature stays `list[str]`.)*
+- [x] 2.4 Run full unit suite: `cd /Users/vkkovalev/projects/recog && venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green. *(`164 passed, 2 deselected in 0.85s`.)*
+- [x] 2.5 Manual live smoke:
   - `./recog-service.sh restart`
   - Open a short KTalk meeting or run a quick `python mp4_notes.py live --list-devices` sanity check.
   - Verify `logs/live.log` shows no stack traces referencing `decoding.decode` or tuple unpacking.
   - 30 s is enough. Stop the service when done if it isn't run continuously.
-- [ ] 2.6 Commit: `fix(asr): adapt transcribe_batch to new GigaAM decoding.decode tuple return`
+  *(Device list renders clean; service restarted (live PID 73888, frontend PID 73894); scanning last 500 lines of `logs/live.stderr.log` and `logs/live.stdout.log` for `Traceback|error|AttributeError|TypeError|tuple` returns zero hits. Also verified at runtime via a direct in-process smoke: loaded the real GigaAM model, called `transcribe_batch` with two silent int16 PCM arrays of different lengths — returned `list[str]` with two empty strings; `transcribe_simple` on a 5 s silent WAV returned an empty segments list without crashing. Both the new tuple-extraction paths exercise cleanly.)*
+- [x] 2.6 Commit: `fix(asr): adapt transcribe_batch to new GigaAM decoding.decode tuple return`
 
 ### Task 3: Grid-search regression (confirm WER baseline)
 

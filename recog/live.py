@@ -438,7 +438,9 @@ class LiveTranscriber:
             # concurrent forward on a shared instance.
             with self.asr._model_lock:
                 encoded, encoded_len = model.forward(wav, length)
-                text = model.decoding.decode(model.head, encoded, encoded_len)[0]
+                # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
+                # we only need the first sample's text.
+                text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
             return text.strip() if text else None
 
         except Exception as e:
