@@ -390,6 +390,45 @@ class KTalkBridge:
         """Wire a getter returning PerSpeakerIngest.get_stats() for debug."""
         self._pcm_stats_getter = getter
 
+    def _capture_pcm_chunk(self, chunk: 'PcmChunk') -> None:
+        """Dump a PCM chunk to disk for offline experimentation.
+
+        Active iff env RECOG_PCM_CAPTURE_DIR is set. Writes per-pid raw
+        Int16LE files + a parallel JSONL with metadata (seq, timestamps,
+        byte offset, speaker_name). Capture is exactly what ASR sees —
+        overlap windows included — so offline replay can reconstruct any
+        alternative chunking/overlap strategy from the same material.
+        """
+        capture_dir = os.environ.get("RECOG_PCM_CAPTURE_DIR", "").strip()
+        if not capture_dir:
+            return
+        try:
+            meeting_id = (
+                self._meeting_storage.get_current_meeting_id()
+                if self._meeting_storage else None
+            ) or "unknown"
+            out_dir = Path(capture_dir) / meeting_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            raw_path = out_dir / f"{chunk.pid}.raw"
+            with open(raw_path, "ab") as f:
+                byte_offset = f.tell()
+                f.write(chunk.pcm)
+            meta = {
+                "pid": chunk.pid,
+                "speaker_name": chunk.speaker_name,
+                "is_local": chunk.is_local,
+                "seq": chunk.seq,
+                "chunk_start_ts": chunk.chunk_start_ts,
+                "chunk_end_ts": chunk.chunk_end_ts,
+                "sample_rate": chunk.sample_rate,
+                "byte_offset": byte_offset,
+                "num_bytes": len(chunk.pcm),
+            }
+            with open(out_dir / f"{chunk.pid}.jsonl", "a") as f:
+                f.write(json.dumps(meta) + "\n")
+        except Exception as e:
+            print(f"[KTalk Bridge] pcm capture failed: {e}", file=sys.stderr)
+
     def set_pcm_chunk_callback(self, callback: Optional[Callable[['PcmChunk'], None]]):
         """
         Устанавливает callback для приёма PCM-чанков от extension'а.
@@ -1617,6 +1656,8 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
                 return
+
+            self._capture_pcm_chunk(chunk)
 
             if self._on_pcm_chunk is not None:
                 try:
