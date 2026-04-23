@@ -155,8 +155,13 @@ def main() -> int:
     ap.add_argument(
         "--configs",
         default="3.0:0.3,3.0:0.6,5.0:1.0,10.0:1.0,20.0:1.0",
-        help="Comma-separated chunk_s:overlap_s pairs",
+        help="Comma-separated chunk_s:overlap_s pairs. Use 'full:0' for single-chunk decode.",
     )
+    ap.add_argument("--no-dedup", action="store_true",
+                    help="Disable _remove_duplicate_words (see if it over-drops words)")
+    ap.add_argument("--longform", action="store_true",
+                    help="Use transcribe_longform (pyannote VAD) instead of transcribe_simple; ignores --configs")
+    ap.add_argument("--device", default=None, help="Device for GigaAM (e.g. cpu, mps); default = auto")
     args = ap.parse_args()
 
     # Load reference
@@ -171,11 +176,11 @@ def main() -> int:
     print(f"REFERENCE ({len(ref_words)} words): {' '.join(ref_words[:30])}{'…' if len(ref_words) > 30 else ''}")
     print()
 
-    # Parse configs
+    # Parse configs (`full:0` defers chunk-size to per-file duration).
     configs = []
     for c in args.configs.split(","):
         chunk, overlap = c.strip().split(":")
-        configs.append((float(chunk), float(overlap)))
+        configs.append((chunk.strip(), float(overlap)))
 
     # Trim inputs if asked
     trimmed_inputs: List[Tuple[str, Path]] = []
@@ -188,18 +193,44 @@ def main() -> int:
         else:
             trimmed_inputs.append((wav_path.name, wav_path))
 
-    # Load ASR once
-    print("Loading GigaAM model…", file=sys.stderr)
-    asr = ASRModule()
+    # Load ASR once. Device override honours --device; None = auto.
+    print(f"Loading GigaAM model (device={args.device or 'auto'})…", file=sys.stderr)
+    asr = ASRModule(device=args.device)
     asr.load_model(quiet=True)
+
+    # Optionally disable dedup to test whether it over-drops words.
+    if args.no_dedup:
+        print("Dedup disabled (--no-dedup)", file=sys.stderr)
+        asr._remove_duplicate_words = lambda results: results  # type: ignore[assignment]
 
     # Header
     print(f"{'config':<14} {'file':<42} {'WER':>7} {'S':>4} {'I':>4} {'D':>4} {'N':>4}  transcript")
     print("-" * 140)
 
+    def _duration_s(path: Path) -> float:
+        import wave
+        with wave.open(str(path), "rb") as wf:
+            return wf.getnframes() / wf.getframerate()
+
     try:
-        for chunk_s, overlap_s in configs:
+        if args.longform:
             for wav_label, path in trimmed_inputs:
+                segs = asr.transcribe_longform(str(path))
+                hyp_text = " ".join(s.text for s in segs)
+                hyp_words = normalize(hyp_text)
+                w, br = wer(ref_words, hyp_words)
+                preview = " ".join(hyp_words)
+                if len(preview) > 80:
+                    preview = preview[:77] + "…"
+                print(
+                    f"{'longform':<14} {wav_label[:42]:<42} "
+                    f"{w*100:>6.1f}% {br['S']:>4} {br['I']:>4} {br['D']:>4} {br['N']:>4}  {preview}"
+                )
+            return 0
+
+        for chunk_spec, overlap_s in configs:
+            for wav_label, path in trimmed_inputs:
+                chunk_s = _duration_s(path) if chunk_spec == "full" else float(chunk_spec)
                 segs = asr.transcribe_simple(
                     str(path),
                     chunk_duration=chunk_s,
@@ -209,7 +240,7 @@ def main() -> int:
                 hyp_text = " ".join(s.text for s in segs)
                 hyp_words = normalize(hyp_text)
                 w, br = wer(ref_words, hyp_words)
-                tag = f"{chunk_s}/{overlap_s}"
+                tag = f"{chunk_spec}/{overlap_s}"
                 preview = " ".join(hyp_words)
                 if len(preview) > 80:
                     preview = preview[:77] + "…"
