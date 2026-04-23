@@ -135,6 +135,40 @@ def test_transcribe_batch_accepts_float32_inputs():
     assert wav_batch[0, 0].item() == pytest.approx(0.5)
 
 
+def test_transcribe_simple_unpacks_decode_tuple(monkeypatch, tmp_path):
+    """
+    given: model.decoding.decode returns List[Tuple[str, List[int], List[int]]]
+          (post-GigaAM commit a755fec tuple shape)
+    when: transcribe_simple runs one chunk
+    then: the first-tuple-element text is extracted into Segment.text
+
+    Regression guard for recog/asr.py:134 — a revert to single-index `[0]`
+    would assign a tuple to `text` and crash on `.strip()`.
+    """
+    import types
+
+    asr, model = _make_mocked_asr(decoded_texts=["hello world"])
+
+    # Stub gigaam.preprocess to avoid the heavy upstream import chain; the
+    # audio returned here just needs to satisfy transcribe_simple's shape
+    # expectations (1-D at SAMPLE_RATE, >= 0.5 s).
+    fake_preprocess = types.ModuleType("gigaam.preprocess")
+    fake_preprocess.load_audio = lambda _path: torch.zeros(16000)
+    fake_preprocess.SAMPLE_RATE = 16000
+    monkeypatch.setitem(sys.modules, "gigaam.preprocess", fake_preprocess)
+
+    segments = asr.transcribe_simple(
+        str(tmp_path / "dummy.wav"),
+        chunk_duration=1.0,
+        overlap=0.0,
+        quiet=True,
+    )
+
+    assert len(segments) == 1
+    assert segments[0].text == "hello world"
+    model.decoding.decode.assert_called_once()
+
+
 def test_transcribe_batch_preserves_input_order_across_varying_lengths():
     """
     given: 3 samples with lengths (8000, 24000, 16000)
@@ -334,12 +368,16 @@ def test_asrmodule_autodetects_mps_device_when_device_none():
     assert asr.device == "mps"
 
 
-def test_asrmodule_explicit_cpu_overrides_mps_autodetect():
+def test_asrmodule_explicit_cpu_overrides_mps_autodetect(monkeypatch):
     """
-    given: an explicit device="cpu" kwarg
+    given: an explicit device="cpu" kwarg and MPS is available
     when: ASRModule is instantiated
-    then: self.device stays "cpu" regardless of MPS availability on the host
+    then: self.device stays "cpu" — auto-detect path is bypassed
+
+    Without the monkeypatch, this test would be tautological on CPU-only
+    hosts: both the explicit and auto-detect branches yield "cpu".
     """
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
     asr = ASRModule(device="cpu")
     assert asr.device == "cpu"
 

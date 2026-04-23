@@ -706,3 +706,42 @@ def test_use_pcm_transport_enabled_when_ktalk_on():
         use_pcm_transport=True,
     )
     assert transcriber.use_pcm_transport is True
+
+
+def test_transcribe_direct_unpacks_decode_tuple():
+    """
+    given: model.decoding.decode returns List[Tuple[str, List[int], List[int]]]
+          (post-GigaAM commit a755fec tuple shape)
+    when:  _transcribe_direct runs
+    then:  the first tuple's text field is extracted and stripped
+
+    Regression guard for recog/live.py:443. The method wraps the decode
+    call in `except Exception: return None`, so any malformed unpack would
+    silently degrade live transcription to None rather than surfacing the
+    error.
+    """
+    import numpy as np
+    import torch
+    from unittest.mock import MagicMock
+
+    model = MagicMock()
+    model._device = torch.device("cpu")
+    model._dtype = torch.float32
+    model.forward = MagicMock(return_value=("ENCODED", "ENCODED_LEN"))
+    model.head = "HEAD"
+    model.decoding = MagicMock()
+    model.decoding.decode = MagicMock(return_value=[("hello world", [], [])])
+
+    asr = Mock()
+    asr.model = model
+    asr._model_lock = threading.Lock()
+
+    transcriber = LiveTranscriber.__new__(LiveTranscriber)
+    transcriber.asr = asr
+    transcriber._model_device = None
+    transcriber._model_dtype = None
+
+    text = transcriber._transcribe_direct(np.zeros(16000, dtype=np.float32))
+
+    assert text == "hello world"
+    model.decoding.decode.assert_called_once_with("HEAD", "ENCODED", "ENCODED_LEN")
