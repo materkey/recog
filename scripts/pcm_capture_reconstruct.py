@@ -2,8 +2,8 @@
 """Reconstruct per-pid continuous WAV files from a RECOG_PCM_CAPTURE_DIR.
 
 Input layout (written by ktalk_bridge._capture_pcm_chunk):
-    <capture_dir>/<meeting_id>/<pid>.raw      # Int16LE samples, all chunks concatenated (with overlap)
-    <capture_dir>/<meeting_id>/<pid>.jsonl    # metadata per chunk: seq, chunk_start_ts, chunk_end_ts, byte_offset, num_bytes
+    <capture_dir>/<meeting_id>/<safe-pid>.raw      # Int16LE samples, all chunks concatenated (with overlap)
+    <capture_dir>/<meeting_id>/<safe-pid>.jsonl    # metadata per chunk: pid, seq, chunk_start_ts, chunk_end_ts, byte_offset, num_bytes
 
 Output:
     <out_dir>/<pid>__<speaker>.wav            # 16 kHz mono 16-bit PCM, continuous timeline
@@ -49,8 +49,17 @@ def _read_raw_slice(raw_path: Path, offset: int, n: int) -> bytes:
         return f.read(n)
 
 
+def _meta_sort_key(meta: dict) -> tuple[float, float, int, int]:
+    """Sort chunks by capture timeline; seq can reset after track reconnect."""
+    chunk_start_ts = float(meta.get("chunk_start_ts", meta.get("chunk_end_ts", 0.0)))
+    chunk_end_ts = float(meta.get("chunk_end_ts", chunk_start_ts))
+    byte_offset = int(meta.get("byte_offset", 0))
+    seq = int(meta.get("seq", 0))
+    return (chunk_start_ts, chunk_end_ts, byte_offset, seq)
+
+
 def reconstruct_pid(raw_path: Path, jsonl_path: Path, out_wav: Path) -> dict:
-    metas = sorted(_iter_meta(jsonl_path), key=lambda m: m["seq"])
+    metas = sorted(_iter_meta(jsonl_path), key=_meta_sort_key)
     if not metas:
         return {"chunk_count": 0, "duration_s": 0.0, "gaps_count": 0}
 
