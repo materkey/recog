@@ -23,6 +23,7 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
                      pcm_transport_enabled)
 from .asr import ASRModule
+from .refine import RefineResult
 from .speaker_db import SpeakerDatabase
 
 
@@ -422,6 +423,18 @@ class LiveTranscriber:
         # live segment IDs in transcript.jsonl. All reads/writes under
         # `self._state_lock`.
         self._pcm_live_segments: dict[str, list[tuple[int, float, float]]] = {}
+        # Latest text per live segment_id — cache used by `_apply_refine`
+        # (Task 9) to skip no-op writes when refined text is byte-identical
+        # to what's already in the JSONL. Avoids JSONL re-reads on every
+        # refine. Populated in `_on_pcm_batch` alongside
+        # `_register_pcm_live_segment`; pruned together with the segment
+        # registry. All reads/writes under `self._state_lock`.
+        self._pcm_segment_texts: dict[int, str] = {}
+        # Refine worker placeholder — `_setup_refine_worker` (Task 11) builds
+        # it when `pcm_refine_enabled()` and wires `apply_fn=self._apply_refine`.
+        # Kept as None here so `_teardown_session` / `_on_pcm_batch` priority
+        # signals can no-op cleanly when refine is disabled.
+        self._refine_worker = None
         # Tracks the last-observed watchdog state so we emit a transition
         # marker only on actual flips (see plan §4.5).
         self._last_pcm_degraded: bool = False
@@ -878,6 +891,10 @@ class LiveTranscriber:
                     # refine contour (Task 9) can align refined word timestamps
                     # back to this segment_id for the JSONL rewrite.
                     self._register_pcm_live_segment(pid, segment_id, _pcm)
+                    # Cache the freshly-written text so `_apply_refine` can
+                    # short-circuit identical refinements without an extra
+                    # JSONL read.
+                    self._pcm_segment_texts[segment_id] = deduped
 
     def _register_pcm_live_segment(
         self,
@@ -908,7 +925,102 @@ class LiveTranscriber:
         ))
         prune_floor = pid_audio_ms_now - (PCM_REFINE_WINDOW_S + 5.0) * 1000.0
         while entries and entries[0][2] < prune_floor:
-            entries.pop(0)
+            pruned = entries.pop(0)
+            # Keep the text cache in lockstep with the live registry so it
+            # does not grow unboundedly on long-running meetings.
+            self._pcm_segment_texts.pop(pruned[0], None)
+
+    def _apply_refine(self, result: RefineResult) -> None:
+        """Align refined words back to live segments and rewrite JSONL.
+
+        Invoked by `RefineWorker` on its daemon thread OUTSIDE `model_lock`
+        (see `recog/refine.py`). Upstream `Word` timestamps are relative to
+        the refine window; rebase into the per-pid frame via
+        `task.offset_base_ms`, intersect with `_pcm_live_segments[pid]` to
+        build per-segment update dicts, then hand off to
+        `MeetingStorage.update_segments` (Task 10 extends it to accept
+        `text` + `refined=True`).
+
+        Meeting-generation safety: `_invalidate_pending_chunks` bumps
+        `_meeting_generation` and clears `_pcm_live_segments` under
+        `_state_lock`. We snapshot `target_meeting_path` inside the lock and
+        compare `task.meeting_generation` to drop refines whose meeting
+        switched between dispatch and apply (design.md D11).
+
+        The actual `update_segments` call happens OUTSIDE `_state_lock` —
+        that method takes its own `_segment_lock` for the JSONL rewrite, and
+        holding two locks across file I/O would invite deadlocks.
+        """
+        task = result.task
+        pid = task.pid
+        words = result.words or []
+
+        # Rebase upstream word ms timestamps into the per-pid frame once —
+        # `task.offset_base_ms` is the pid_audio_ms of `pcm_samples[0]`.
+        rebased: list[tuple[float, float, str]] = []
+        for w in words:
+            w_text = (getattr(w, "text", "") or "").strip()
+            if not w_text:
+                continue
+            try:
+                w_start = float(w.start)
+                w_end = float(w.end)
+            except (TypeError, ValueError):
+                continue
+            rebased.append((
+                task.offset_base_ms + w_start,
+                task.offset_base_ms + w_end,
+                w_text,
+            ))
+
+        updates: list[dict] = []
+        target_meeting_path = None
+
+        with self._state_lock:
+            if task.meeting_generation != self._meeting_generation:
+                return
+            if self._meeting_storage is None:
+                return
+            target_meeting_path = self._meeting_storage.current_meeting_path
+            if target_meeting_path is None:
+                return
+
+            window_ms = PCM_REFINE_WINDOW_S * 1000.0
+            task_start_ms = task.offset_base_ms
+            task_end_ms = task.offset_base_ms + window_ms
+
+            for segment_id, seg_start, seg_end in self._pcm_live_segments.get(pid, []):
+                # Skip segments outside the refine window — saves work on
+                # long-running pids where the registry holds many entries.
+                if seg_end < task_start_ms or seg_start > task_end_ms:
+                    continue
+                collected: list[str] = []
+                for w_start, w_end, w_text in rebased:
+                    if w_start >= seg_start and w_end <= seg_end:
+                        collected.append(w_text)
+                if not collected:
+                    continue
+                new_text = " ".join(collected).strip()
+                if not new_text:
+                    continue
+                cached_text = self._pcm_segment_texts.get(segment_id)
+                if cached_text is not None and cached_text == new_text:
+                    continue
+                updates.append({
+                    "segment_id": segment_id,
+                    "text": new_text,
+                    "refined": True,
+                })
+                # Update the cache so a follow-up refine on the same segment
+                # compares against the most recent value — avoids redundant
+                # writes on stable transcriptions.
+                self._pcm_segment_texts[segment_id] = new_text
+
+        if not updates:
+            return
+        self._meeting_storage.update_segments(
+            updates, meeting_path=target_meeting_path
+        )
 
     def _emit_pcm_transition_marker(self, degraded: bool, marker_gen: int):
         """Write a gap marker to the transcript on PCM ↔ mixed fallback flip.
@@ -1551,6 +1663,10 @@ class LiveTranscriber:
             # on the new meeting and pid_audio_ms bounds are only meaningful
             # within one meeting's pid frame.
             self._pcm_live_segments.clear()
+            # Segment-text cache is keyed by segment_id; those IDs restart on
+            # meeting switch, so any cached values would collide with fresh
+            # segment_ids in the new meeting's pid frame.
+            self._pcm_segment_texts.clear()
             self._last_pcm_degraded = False
         # Clear per-speaker ingest buffers (bumped generation would drop
         # them at drain time anyway, but clearing eagerly avoids a 200 ms

@@ -140,7 +140,7 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 9: Alignment + _apply_refine
 
-- [ ] 9.1 Implement `LiveTranscriber._apply_refine(result: RefineResult)`:
+- [x] 9.1 Implement `LiveTranscriber._apply_refine(result: RefineResult)`:
   - Rebase every refined `Word` into the per-pid frame: `word_start_pid_ms = result.task.offset_base_ms + word.start` (same for end; words from upstream are in ms ints already per Task 4.1 from the previous plan).
   - Under `self._state_lock` + `_meeting_generation` check (drop if generation drifted):
     - For each `(segment_id, seg_start, seg_end)` in `self._pcm_live_segments[result.task.pid]` that intersects `[result.task.offset_base_ms, result.task.offset_base_ms + window_ms]`:
@@ -149,14 +149,14 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
       - Skip if empty OR byte-identical to the segment's current `text` (look up from storage — keep a small cache of last N segment texts on LiveTranscriber to avoid JSONL re-reads).
       - Collect into `updates: list[dict]` with `segment_id`, `text`, `refined=True`.
   - Call `self._meeting_storage.update_segments(updates)` with a `meeting_path` snapshot.
-- [ ] 9.2 Wire `RefineWorker`'s `apply_fn` parameter to `self._apply_refine` in whatever setup method builds the worker (Task 11).
-- [ ] 9.3 Unit test in `tests/test_refine_alignment.py`:
+- [x] 9.2 Wire `RefineWorker`'s `apply_fn` parameter to `self._apply_refine` in whatever setup method builds the worker (Task 11).
+- [x] 9.3 Unit test in `tests/test_refine_alignment.py`:
   - `test_word_rebase_into_pid_frame`.
   - `test_empty_collection_skips_segment`.
   - `test_identical_text_skips_update`.
   - `test_segment_subset_produces_updates_list`.
   - `test_generation_mismatch_drops_result`.
-- [ ] 9.4 Commit: `feat(live): _apply_refine with word-timestamp alignment`
+- [x] 9.4 Commit: `feat(live): _apply_refine with word-timestamp alignment`
 
 ### Task 10: JSONL schema extension
 
