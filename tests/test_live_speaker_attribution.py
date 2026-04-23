@@ -201,6 +201,7 @@ def _fresh_transcriber_mock():
     t._pcm_live_segments = {}
     t._pcm_segment_texts = {}
     t._last_pcm_degraded = False
+    t._refine_worker = None
     t.use_pcm_transport = False
     t.use_ktalk = True
     t.asr = Mock()

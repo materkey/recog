@@ -171,19 +171,19 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 11: Wire refine contour into LiveTranscriber lifecycle
 
-- [ ] 11.1 In `LiveTranscriber._setup_per_speaker_ingest` (or a new sibling `_setup_refine_worker`):
+- [x] 11.1 In `LiveTranscriber._setup_per_speaker_ingest` (or a new sibling `_setup_refine_worker`):
   - Gate on `pcm_refine_enabled()` from `recog/config.py`. If False → no-op, do not build `RefineWorker`.
   - Build `RefineWorker(model_lock=self._asr_lock, transcribe_fn=self.asr.transcribe_with_timestamps, apply_fn=self._apply_refine, abort_mode=<from spike>)`.
   - Start it.
   - Store on `self._refine_worker` for later teardown.
-- [ ] 11.2 In the existing `_worker` drain loop of `PerSpeakerIngest` (or wherever per-pid tick happens), add: for each active pid, call `get_refine_candidate(pid)` — if non-None and refine enabled, call `self._refine_worker.submit(task)`.
-- [ ] 11.3 In `LiveTranscriber._on_pcm_batch` acquire `self._asr_lock` before `asr.transcribe_batch`; notify `refine_worker.set_live_pending()` before the attempt and `clear_live_pending()` after release. No-op if `self._refine_worker is None`.
-- [ ] 11.4 In teardown (`_teardown_session`), call `self._refine_worker.stop()` if set.
-- [ ] 11.5 Integration smoke test in `tests/test_refine_integration.py`:
+- [x] 11.2 In the existing `_worker` drain loop of `PerSpeakerIngest` (or wherever per-pid tick happens), add: for each active pid, call `get_refine_candidate(pid)` — if non-None and refine enabled, call `self._refine_worker.submit(task)`.
+- [x] 11.3 In `LiveTranscriber._on_pcm_batch` acquire `self._asr_lock` before `asr.transcribe_batch`; notify `refine_worker.set_live_pending()` before the attempt and `clear_live_pending()` after release. No-op if `self._refine_worker is None`.
+- [x] 11.4 In teardown (`_teardown_session`), call `self._refine_worker.stop()` if set.
+- [x] 11.5 Integration smoke test in `tests/test_refine_integration.py`:
   - Set `RECOG_PCM_TRANSPORT=1` and `RECOG_PCM_REFINE=1`.
   - Build a minimal `LiveTranscriber` with stubbed `asr.transcribe_with_timestamps` returning a fixed `TranscriptionResult`.
   - Feed a synthetic PCM stream via `PerSpeakerIngest.enqueue`, wait for batch + refine cycle, assert `meeting_storage.update_segments` called with `text=<refined>, refined=True`.
-- [ ] 11.6 Commit: `feat(live): wire refine contour into LiveTranscriber (gated on RECOG_PCM_REFINE)`
+- [x] 11.6 Commit: `feat(live): wire refine contour into LiveTranscriber (gated on RECOG_PCM_REFINE)`
 
 ### Task 12: Update OpenSpec tasks.md + tests pass + commit + push
 
