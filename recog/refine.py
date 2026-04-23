@@ -1,20 +1,33 @@
-"""Per-speaker refine contour: scaffold.
+"""Per-speaker refine contour: worker + tasks.
 
-When `RECOG_PCM_REFINE=1` (gated on `RECOG_PCM_TRANSPORT=1`), the refine
-worker reruns `ASRModule.transcribe_with_timestamps` on a trailing per-pid
-PCM window and feeds the aligned result back into `LiveTranscriber` to
-replace live-segment text with `refined: true`.
+When `RECOG_PCM_REFINE=1` (gated on `RECOG_PCM_TRANSPORT=1`), `RefineWorker`
+reruns `ASRModule.transcribe_with_timestamps` on a trailing per-pid PCM
+window and feeds the aligned result back into `LiveTranscriber` to replace
+live-segment text with `refined: true`.
 
-This module contains the immutable task/result records and the worker
-shell. The worker loop, priority-abort logic, and live-pending gate are
-fleshed out in Task 4; see `docs/plans/2026-04-24-per-speaker-refine-backend.md`.
+Threading model (design.md D11):
+    - The worker owns a daemon thread that pops `RefineTask`s from an
+      internal queue, acquires a shared `model_lock` (serialises with the
+      live batched-forward path), and runs `transcribe_fn`.
+    - In `cooperative` mode the worker passes a `should_abort=` closure
+      (reading `_live_pending`) into `transcribe_fn`; the upstream decoder
+      monkey-patch (see `experiments/2026-04-24-refine-abort-spike.md`)
+      polls it between time-steps and raises `RefineAborted` on request.
+      The worker catches the exception, releases the lock, and re-enqueues
+      the task so the next live batch can run without waiting for the
+      refine pass to finish.
+    - In `coarse` mode the worker runs to completion; live waits at most
+      one refine-window for the shared model.
 """
 
 from __future__ import annotations
 
+import queue
+import sys
 import threading
+import traceback
 from dataclasses import dataclass
-from typing import Callable, List, Literal
+from typing import Callable, List, Literal, Optional
 
 import numpy as np
 
@@ -22,6 +35,13 @@ from gigaam.types import TranscriptionResult, Word
 
 
 AbortMode = Literal["cooperative", "coarse"]
+
+
+class RefineAborted(Exception):
+    """Raised by the cooperative-mode decoder monkey-patch when
+    `should_abort()` returns True mid-inference. The worker catches this,
+    releases `model_lock`, and re-enqueues the originating `RefineTask`.
+    """
 
 
 @dataclass(frozen=True, eq=False)
@@ -63,30 +83,54 @@ class RefineResult:
     words: List[Word]
 
 
-TranscribeFn = Callable[[np.ndarray], TranscriptionResult]
-ApplyFn = Callable[[RefineResult], None]
+# In cooperative mode the worker calls
+# `transcribe_fn(pcm, should_abort=<bool-getter>)`; in coarse mode it calls
+# `transcribe_fn(pcm)`. Typed as `Callable[..., TranscriptionResult]` to
+# accommodate both shapes without forcing callers to accept kwargs.
+TranscribeFn = Callable[..., TranscriptionResult]
+ApplyFn = Callable[["RefineResult"], None]
 
 
 class RefineWorker:
-    """Serialised refine worker — scaffold.
+    """Serialised refine worker.
 
     Owns a daemon thread that pops `RefineTask`s, runs `transcribe_fn`
     under `model_lock` (shared with the live batched-forward path), and
-    hands results to `apply_fn`. Full behaviour is implemented in Task 4;
-    right now only the constructor is live — `submit/pause/resume/stop`
-    raise `NotImplementedError`.
+    hands results to `apply_fn` outside the lock.
+
+    Lifecycle:
+        worker = RefineWorker(lock, transcribe_fn, apply_fn)
+        worker.start()           # spawn daemon thread
+        worker.submit(task)      # enqueue a RefineTask
+        worker.pause() / resume()
+        worker.stop()            # signal + join
+
+    Priority signalling (for the live path):
+        worker.set_live_pending()    # live is about to acquire model_lock
+        worker.clear_live_pending()  # live has released model_lock
+
+    In `cooperative` mode the worker polls `_live_pending` via the
+    `should_abort=` closure passed into `transcribe_fn`. When the live path
+    needs the model, in-flight refine aborts early (see the decoder
+    monkey-patch in `experiments/2026-04-24-refine-abort-spike.md`) and
+    the task is re-enqueued for a later attempt.
 
     Args:
         model_lock: Shared lock around the GigaAM model (serialises live
             and refine forward passes).
-        transcribe_fn: `ASRModule.transcribe_with_timestamps`-shaped
-            callable. Task 4 wires in `should_abort` for cooperative mode.
+        transcribe_fn: Callable of shape `(pcm, *, should_abort=<getter>)`
+            returning `TranscriptionResult`. In coarse mode the worker
+            omits `should_abort`.
         apply_fn: Called with `RefineResult` OUTSIDE `model_lock`; maps to
             `LiveTranscriber._apply_refine`.
         abort_mode: `"cooperative"` polls `should_abort` per decoder step
             (default — see `experiments/2026-04-24-refine-abort-spike.md`);
             `"coarse"` always runs to completion.
     """
+
+    # queue.get poll interval — small enough to notice `_stopped` promptly,
+    # large enough not to dominate CPU when idle.
+    _POLL_S: float = 0.2
 
     def __init__(
         self,
@@ -104,18 +148,158 @@ class RefineWorker:
         self._apply_fn = apply_fn
         self._abort_mode: AbortMode = abort_mode
 
+        self._queue: "queue.Queue[Optional[RefineTask]]" = queue.Queue()
+        # `_paused` and `_queue` must be consulted atomically in `submit`
+        # vs `pause`, otherwise a concurrent submit can slip a task in
+        # between the pause-flag flip and the drain.
+        self._paused: bool = False
+        self._paused_lock = threading.Lock()
+        self._live_pending = threading.Event()
+        self._stopped = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    # ----- public API -----------------------------------------------------
+
     @property
     def abort_mode(self) -> AbortMode:
         return self._abort_mode
 
+    def start(self) -> None:
+        """Spawn the daemon worker thread. No-op if already running."""
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stopped.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="RefineWorker",
+            daemon=True,
+        )
+        self._thread.start()
+
     def submit(self, task: RefineTask) -> None:
-        raise NotImplementedError("RefineWorker.submit — implemented in Task 4")
+        """Enqueue a `RefineTask`. No-op if paused or stopped."""
+        if self._stopped.is_set():
+            return
+        with self._paused_lock:
+            if self._paused:
+                return
+            self._queue.put(task)
 
     def pause(self) -> None:
-        raise NotImplementedError("RefineWorker.pause — implemented in Task 4")
+        """Pause processing and drop any tasks already queued.
+
+        Dropped tasks are NOT rescheduled — the next gap/monolog trigger on
+        the owning pid will re-submit with a fresh window.
+        """
+        with self._paused_lock:
+            self._paused = True
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
 
     def resume(self) -> None:
-        raise NotImplementedError("RefineWorker.resume — implemented in Task 4")
+        """Clear the pause flag; subsequent `submit` calls enqueue again."""
+        with self._paused_lock:
+            self._paused = False
 
-    def stop(self) -> None:
-        raise NotImplementedError("RefineWorker.stop — implemented in Task 4")
+    def stop(self, timeout: float = 2.0) -> None:
+        """Signal the worker to exit and wait for the thread to join.
+
+        Drains any residual queue entries (including the wake-up sentinel)
+        so `submit` after `stop` leaves the queue empty.
+        """
+        self._stopped.set()
+        # Nudge a blocked `queue.get` so the loop can notice `_stopped`
+        # without waiting for the poll timeout.
+        try:
+            self._queue.put_nowait(None)
+        except Exception:
+            pass
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def set_live_pending(self) -> None:
+        """Signal that the live path needs `model_lock`; cooperative mode
+        will abort in-flight refine at the next decoder step-boundary."""
+        self._live_pending.set()
+
+    def clear_live_pending(self) -> None:
+        """Signal that live has released `model_lock`; refine may resume."""
+        self._live_pending.clear()
+
+    # ----- internal -------------------------------------------------------
+
+    def _run(self) -> None:
+        while not self._stopped.is_set():
+            try:
+                task = self._queue.get(timeout=self._POLL_S)
+            except queue.Empty:
+                continue
+            if task is None or self._stopped.is_set():
+                break
+            with self._paused_lock:
+                if self._paused:
+                    # Drop — pause-drain may have missed this one if it
+                    # raced in between pause() and get_nowait.
+                    continue
+            try:
+                self._process_task(task)
+            except Exception as e:
+                # Swallow + log; never kill the worker thread.
+                print(
+                    f"[RefineWorker] task processing raised "
+                    f"{type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+                traceback.print_exc()
+
+    def _process_task(self, task: RefineTask) -> None:
+        aborted = False
+        result: Optional[TranscriptionResult] = None
+
+        with self._model_lock:
+            if self._stopped.is_set():
+                return
+            try:
+                if self._abort_mode == "cooperative":
+                    result = self._transcribe_fn(
+                        task.pcm_samples,
+                        should_abort=self._live_pending.is_set,
+                    )
+                else:
+                    result = self._transcribe_fn(task.pcm_samples)
+            except RefineAborted:
+                aborted = True
+
+        if aborted:
+            # Re-enqueue for another attempt once live releases the model.
+            self._queue.put(task)
+            return
+
+        if result is None:
+            return
+
+        text = getattr(result, "text", "") or ""
+        words_attr = getattr(result, "words", None)
+        words: List[Word] = list(words_attr) if words_attr else []
+        refine_result = RefineResult(task=task, text=text, words=words)
+
+        # apply_fn runs OUTSIDE `model_lock` — it performs JSONL I/O under
+        # its own lock and must not hold the model.
+        try:
+            self._apply_fn(refine_result)
+        except Exception as e:
+            print(
+                f"[RefineWorker] apply_fn raised "
+                f"{type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+            traceback.print_exc()
