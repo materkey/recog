@@ -21,6 +21,7 @@ KTalk Bridge - WebSocket server для приёма данных о спикер
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import threading
 import time
@@ -39,6 +40,25 @@ if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
 
 load_dotenv()
+
+_PCM_CAPTURE_STEM_MAX_LEN = 120
+
+
+def _safe_pcm_capture_stem(pid: str) -> str:
+    """Return a single safe filename stem for a participant id."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", pid).strip("._")
+    if (
+        safe == pid
+        and safe
+        and len(safe) <= _PCM_CAPTURE_STEM_MAX_LEN
+        and "/" not in safe
+        and "\\" not in safe
+    ):
+        return safe
+
+    digest = hashlib.sha256(pid.encode("utf-8", "surrogatepass")).hexdigest()[:12]
+    prefix = safe[:_PCM_CAPTURE_STEM_MAX_LEN].rstrip("._") or "pid"
+    return f"{prefix}__{digest}"
 
 
 def _truncate_text(text: str, max_len: int) -> str:
@@ -409,12 +429,14 @@ class KTalkBridge:
             ) or "unknown"
             out_dir = Path(capture_dir) / meeting_id
             out_dir.mkdir(parents=True, exist_ok=True)
-            raw_path = out_dir / f"{chunk.pid}.raw"
+            capture_stem = _safe_pcm_capture_stem(chunk.pid)
+            raw_path = out_dir / f"{capture_stem}.raw"
             with open(raw_path, "ab") as f:
                 byte_offset = f.tell()
                 f.write(chunk.pcm)
             meta = {
                 "pid": chunk.pid,
+                "capture_stem": capture_stem,
                 "speaker_name": chunk.speaker_name,
                 "is_local": chunk.is_local,
                 "seq": chunk.seq,
@@ -424,7 +446,7 @@ class KTalkBridge:
                 "byte_offset": byte_offset,
                 "num_bytes": len(chunk.pcm),
             }
-            with open(out_dir / f"{chunk.pid}.jsonl", "a") as f:
+            with open(out_dir / f"{capture_stem}.jsonl", "a") as f:
                 f.write(json.dumps(meta) + "\n")
         except Exception as e:
             print(f"[KTalk Bridge] pcm capture failed: {e}", file=sys.stderr)

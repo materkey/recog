@@ -271,6 +271,48 @@ async def test_pcm_chunk_no_callback_does_not_raise():
     await bridge._process_message(message)  # must not raise
 
 
+def test_capture_pcm_chunk_sanitizes_pid_path_component(tmp_path, monkeypatch):
+    """
+    given: PCM capture is enabled and a frame carries a pid with ../
+    when: the bridge writes the capture files
+    then: raw/jsonl files stay direct children of the meeting capture dir
+          while metadata keeps the original pid for analysis
+    """
+    bridge = KTalkBridge()
+    storage = Mock()
+    storage.get_current_meeting_id.return_value = "meeting-1"
+    bridge.set_meeting_storage(storage)
+    capture_dir = tmp_path / "capture"
+    monkeypatch.setenv("RECOG_PCM_CAPTURE_DIR", str(capture_dir))
+
+    chunk = PcmChunk(
+        pid="../evil",
+        speaker_name="Alice",
+        is_local=False,
+        seq=1,
+        chunk_start_ts=1.0,
+        chunk_end_ts=1.1,
+        sample_rate=16000,
+        pcm=b"\x01\x00\x02\x00",
+    )
+
+    bridge._capture_pcm_chunk(chunk)
+
+    meeting_dir = capture_dir / "meeting-1"
+    raw_files = list(meeting_dir.glob("*.raw"))
+    meta_files = list(meeting_dir.glob("*.jsonl"))
+    assert len(raw_files) == 1
+    assert len(meta_files) == 1
+    assert raw_files[0].parent == meeting_dir
+    assert meta_files[0].parent == meeting_dir
+    assert not (capture_dir / "evil.raw").exists()
+    assert not (capture_dir / "evil.jsonl").exists()
+
+    meta = json.loads(meta_files[0].read_text().splitlines()[0])
+    assert meta["pid"] == "../evil"
+    assert meta["capture_stem"] == raw_files[0].stem == meta_files[0].stem
+
+
 @pytest.mark.asyncio
 async def test_pcm_chunk_malformed_payload_logged_not_raised(capsys):
     """
