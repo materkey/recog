@@ -34,8 +34,11 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ### Task 1: Upgrade upstream GigaAM checkout
 
-- [ ] 1.1 In `/Users/vkkovalev/projects/GigaAM`: `git fetch origin` then `git log --oneline 0a3f103..origin/main` — verify the 9 expected commits (cfef5e7, 33be2c4, e580e38, 7ce42d2, d427e5a, 7448b74, a0deb50, 5b5b4ad, a755fec, 6e4b027) are visible.
+- [x] 1.1 In `/Users/vkkovalev/projects/GigaAM`: `git fetch origin` then `git log --oneline 0a3f103..origin/main` — verify the 9 expected commits (cfef5e7, 33be2c4, e580e38, 7ce42d2, d427e5a, 7448b74, a0deb50, 5b5b4ad, a755fec, 6e4b027) are visible. *(All 10 listed hashes reachable; origin/main is 20 linear commits ahead of 0a3f103, which is fine — plan's "9 ahead" count was an undercount, not a blocker.)*
 - [ ] 1.2 In `/Users/vkkovalev/projects/GigaAM`: `git merge --ff-only origin/main`. If ff fails, stop and ⚠️-flag (local unclean state — do not force).
+  - ⚠️ **BLOCKER (2026-04-24, ralphex iter 1):** state has drifted since this plan was written. HEAD is on `local-experiment` at `10e5b9c` (4 commits on top of `0a3f103`, including `feat: add transcribe_mp3.py script for longform audio transcription`) with an uncommitted modification to `transcribe_mp3.py` (adds `remove_duplicate_words` helper). Local branch `main` is also divergent — at `89c8d42` with 6 commits on top of `bd77657` (own line of work: WebRTC VAD support, tensor decoding perf fix, etc.), diverged from origin/main at an earlier point.
+  - `git merge --ff-only origin/main` run from `local-experiment` fails with `fatal: Not possible to fast-forward, aborting.` — divergent, as expected.
+  - Per plan's own guard ("do not force") and CLAUDE.md (no destructive git ops without explicit written instruction; do not delete/revert other-session in-progress work), the loop cannot self-resolve. User must choose: (a) rebase `local-experiment` onto `origin/main` (preserves the 4 custom commits but rewrites history), (b) merge `origin/main` into `local-experiment` with a regular merge commit, (c) create a fresh branch at `origin/main` for the editable-install tree and move `local-experiment`/`main` work aside, or (d) something else. Re-run ralphex after the decision.
 - [ ] 1.3 Verify the editable-install still resolves the new version: `/Users/vkkovalev/projects/recog/venv-gigaam/bin/python -c "import gigaam; print(gigaam.__file__)"` — path should still point at `../GigaAM/gigaam/__init__.py`.
 - [ ] 1.4 Quick API probe (path-based transcription only, no batch yet):
   ```bash
