@@ -57,12 +57,12 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 3: RefineTask dataclass and recog/refine.py module scaffold
 
-- [ ] 3.1 Create new file `recog/refine.py` with:
+- [x] 3.1 Create new file `recog/refine.py` with:
   - Dataclass `RefineTask(pid: str, pcm_samples: np.ndarray, offset_base_ms: float, submitted_at: float)` — immutable, carries one pid's trailing window for refine.
   - Dataclass `RefineResult(task: RefineTask, text: str, words: list[Word])` — where `Word` is imported from gigaam.
   - Empty `RefineWorker` class with `__init__(model_lock, transcribe_fn, apply_fn, abort_mode: Literal["cooperative","coarse"] = "...")` (default from 2.4), `submit/pause/resume/stop` methods as stubs raising `NotImplementedError`. Flesh out in Task 4.
-- [ ] 3.2 Unit test scaffold `tests/test_refine.py`: import symbols from `recog.refine`, assert dataclass construction works.
-- [ ] 3.3 Commit: `feat(refine): add refine module scaffold with dataclasses`
+- [x] 3.2 Unit test scaffold `tests/test_refine.py`: import symbols from `recog.refine`, assert dataclass construction works.
+- [x] 3.3 Commit: `feat(refine): add refine module scaffold with dataclasses`
 
 ### Task 4: RefineWorker implementation
 
