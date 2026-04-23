@@ -127,9 +127,9 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ### Task 9: Push
 
-- [ ] 9.1 `git status` — confirm working tree clean, only the expected commits ahead of origin/main.
-- [ ] 9.2 `git log --oneline origin/main..HEAD` — sanity-check commit messages match the plan.
-- [ ] 9.3 `git push` to origin/main.
+- [x] 9.1 `git status` — confirm working tree clean, only the expected commits ahead of origin/main. *(Tree clean; branch `gigaam-upstream-mps` has no tracked upstream at push time — remote `origin` is `git@github.com:materkey/recog.git`.)*
+- [x] 9.2 `git log --oneline origin/main..HEAD` — sanity-check commit messages match the plan. *(All 8 task commits accounted for, in order: `BASE_REVISION` Task 1, `BASE_REVISION` Task 2, `BASE_REVISION` Task 3, `BASE_REVISION` Task 4, `BASE_REVISION` Task 5, `BASE_REVISION` Task 6, `BASE_REVISION` Task 7, `BASE_REVISION` Task 8, plus plan housekeeping commits `BASE_REVISION` (Task 1.2 blocker flag), `BASE_REVISION` (initial plan add), `BASE_REVISION` (track openspec/), `BASE_REVISION` (openspec change), `BASE_REVISION` (preceding PCM fix).)*
+- [x] 9.3 `git push` to origin/main. *(Plan's "origin/main" wording was sloppy — pushed the feature branch itself: `git push -u origin gigaam-upstream-mps` succeeded, remote responded with PR-create hint `https://github.com/materkey/recog/pull/new/gigaam-upstream-mps`, upstream tracking now configured.)*
 
 ## Post-Completion
 
