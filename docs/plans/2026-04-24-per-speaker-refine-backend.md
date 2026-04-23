@@ -160,14 +160,14 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 10: JSONL schema extension
 
-- [ ] 10.1 In `meeting_storage.py`, add `refined: bool = False` to the `TranscriptSegment` dataclass. Default False — existing rows on reload will deserialise with `refined=False` if the field is missing (use `dataclasses.field(default=False)` and tolerate absent keys on read).
-- [ ] 10.2 Extend `MeetingStorage.update_segments(updates, meeting_path=None)` to accept an optional `text` key per row. When present: set the segment's `text` field AND set `refined=True`. Other fields (speaker, uncertain, etc.) still honoured if present in the update dict.
-- [ ] 10.3 Unit test in `tests/test_meeting_storage.py`:
+- [x] 10.1 In `meeting_storage.py`, add `refined: bool = False` to the `TranscriptSegment` dataclass. Default False — existing rows on reload will deserialise with `refined=False` if the field is missing (use `dataclasses.field(default=False)` and tolerate absent keys on read).
+- [x] 10.2 Extend `MeetingStorage.update_segments(updates, meeting_path=None)` to accept an optional `text` key per row. When present: set the segment's `text` field AND set `refined=True`. Other fields (speaker, uncertain, etc.) still honoured if present in the update dict.
+- [x] 10.3 Unit test in `tests/test_meeting_storage.py`:
   - `test_update_segments_rewrites_text_and_sets_refined_true`.
   - `test_update_segments_preserves_other_fields`.
   - `test_update_segments_without_text_key_still_works` (backwards-compat with speaker-correction path).
   - `test_reload_of_row_with_refined_true_roundtrips`.
-- [ ] 10.4 Commit: `feat(storage): update_segments accepts text + refined flag`
+- [x] 10.4 Commit: `feat(storage): update_segments accepts text + refined flag`
 
 ### Task 11: Wire refine contour into LiveTranscriber lifecycle
 

@@ -12,7 +12,7 @@ Meeting Storage - хранилище митингов для KTalk режима.
 
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Optional
 from urllib.parse import urlparse
 import json
@@ -71,6 +71,7 @@ class TranscriptSegment:
     uncertain: bool
     uncertain_reason: str = ""
     audio_offset_ms: int = 0     # Offset from audio recording start in milliseconds
+    refined: bool = field(default=False)  # True once word-timestamp refine has rewritten `text`
 
 
 class MeetingStorage:
@@ -675,17 +676,21 @@ class MeetingStorage:
         meeting_path: Optional[Path] = None,
     ):
         """
-        Update speaker attribution for existing segments in JSONL.
+        Update existing segments in JSONL in-place.
 
-        Rewrites transcript.jsonl lines matching segment IDs with new speaker info.
-        Used by retroactive correction to fix Unknown runs.
+        Rewrites transcript.jsonl lines matching segment IDs. Per-row keys are
+        optional and applied only if present:
+            - speaker (str): sets both `speaker` and `speaker_id` on the segment;
+              the legacy retroactive-correction path always bundles this with
+              `uncertain` / `uncertain_reason`.
+            - uncertain (bool): overrides the `uncertain` flag.
+            - uncertain_reason (str): overrides the reason.
+            - text (str): overrides `text` AND sets `refined=True` (word-level
+              refine pipeline — ADR-0018 / §5).
 
         Args:
-            updates: List of dicts with keys:
-                - segment_id (int): ID of the segment to update
-                - speaker (str): New speaker name
-                - uncertain (bool): New uncertain flag
-                - uncertain_reason (str): New reason (empty if corrected)
+            updates: List of dicts. Each row must include `segment_id`; any
+                combination of the keys above is honoured.
             meeting_path: Explicit meeting directory. When provided, the update
                 targets this path regardless of current_meeting_path. This
                 prevents a TOCTOU race where a meeting switch between the
@@ -715,10 +720,16 @@ class MeetingStorage:
                     seg_id = segment.get("id")
                     if seg_id in update_map:
                         upd = update_map[seg_id]
-                        segment["speaker"] = upd["speaker"]
-                        segment["speaker_id"] = upd["speaker"]
-                        segment["uncertain"] = upd.get("uncertain", False)
-                        segment["uncertain_reason"] = upd.get("uncertain_reason", "")
+                        if "speaker" in upd:
+                            segment["speaker"] = upd["speaker"]
+                            segment["speaker_id"] = upd["speaker"]
+                        if "uncertain" in upd:
+                            segment["uncertain"] = upd["uncertain"]
+                        if "uncertain_reason" in upd:
+                            segment["uncertain_reason"] = upd["uncertain_reason"]
+                        if "text" in upd:
+                            segment["text"] = upd["text"]
+                            segment["refined"] = True
                     new_lines.append(json.dumps(segment, ensure_ascii=False))
                 except json.JSONDecodeError:
                     new_lines.append(line)
