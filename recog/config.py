@@ -121,3 +121,36 @@ def pcm_transport_enabled() -> bool:
     toggle в popup/chrome.storage — один источник правды.
     """
     return os.environ.get("RECOG_PCM_TRANSPORT", "0") == "1"
+
+
+# ============================================================================
+# PER-SPEAKER REFINE (RECOG_PCM_REFINE)
+# ============================================================================
+#
+# Рефайн-контур второго эшелона: поверх live-транскрипции, по мере накопления
+# PCM в пер-pid ring'е, запускается `transcribe_with_timestamps` на окне и
+# результат заменяет live-текст соответствующих сегментов. Гейт `RECOG_PCM_REFINE`
+# поверх `RECOG_PCM_TRANSPORT` — рефайн имеет смысл только при per-speaker PCM.
+#
+# См. openspec/changes/per-speaker-stream-refine/ + docs/plans/2026-04-24-per-speaker-refine-backend.md.
+
+# Длина скользящего окна refine (секунды). При срабатывании триггера
+# (gap/monolog) собирается trailing window не длиннее этого значения.
+PCM_REFINE_WINDOW_S: float = 20.0
+
+# Cap на непрерывную речь одного спикера без gap'а — после этого refine
+# всё равно запускается (monolog fallback), чтобы длинные монологи не
+# висели без коррекции.
+PCM_REFINE_MONOLOG_CAP_S: float = 15.0
+
+
+def pcm_refine_enabled() -> bool:
+    """Returns True iff BOTH RECOG_PCM_TRANSPORT=1 AND RECOG_PCM_REFINE=1.
+
+    Refine имеет смысл только поверх per-speaker PCM transport: live-сегменты,
+    которые он правит, создаются именно пер-pid PCM-пайплайном. При выключенном
+    transport (mixed audio) гейт должен возвращать False независимо от RECOG_PCM_REFINE.
+    """
+    if not pcm_transport_enabled():
+        return False
+    return os.environ.get("RECOG_PCM_REFINE", "0") == "1"
