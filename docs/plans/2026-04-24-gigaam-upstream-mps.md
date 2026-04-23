@@ -68,7 +68,7 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ### Task 3: Grid-search regression (confirm WER baseline)
 
-- [ ] 3.1 Re-run the harness on take-2 fixtures for two key configs:
+- [x] 3.1 Re-run the harness on take-2 fixtures for two key configs:
   ```bash
   ./scripts/pcm_experiment.py \
     --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav \
@@ -77,12 +77,12 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
     --reference-file experiments/reference_take2.txt \
     --configs "20:1.0,10:0.5"
   ```
-  If `/tmp/recog_exp/raw_take2/` is gone (ephemeral), first regenerate via `scripts/pcm_capture_reconstruct.py` from the most recent capture under `/tmp/recog_pcm_capture/` — or ⚠️-flag and ask.
-- [ ] 3.2 Expected numbers (from `experiments/2026-04-23-gigaam-grid.md`):
+  If `/tmp/recog_exp/raw_take2/` is gone (ephemeral), first regenerate via `scripts/pcm_capture_reconstruct.py` from the most recent capture under `/tmp/recog_pcm_capture/` — or ⚠️-flag and ask. *(Fixtures present at expected path; harness loaded GigaAM on auto-device and produced the four WER figures in under a minute.)*
+- [x] 3.2 Expected numbers (from `experiments/2026-04-23-gigaam-grid.md`):
   - 20/1.0 → Example 23.9% / Example2 23.9% / avg 23.9%
   - 10/0.5 → Example 25.0% / Example2 23.9% / avg 24.5%
-- [ ] 3.3 Acceptance: both configs stay within ±1% absolute WER of these numbers. If regression > 1%, stop and ⚠️-flag — upstream either changed the decoder defaults or the tuple unpacking dropped some text.
-- [ ] 3.4 No commit — this is a verification step. Findings noted inline below task heading if anything interesting (e.g. slightly different WER).
+- [x] 3.3 Acceptance: both configs stay within ±1% absolute WER of these numbers. If regression > 1%, stop and ⚠️-flag — upstream either changed the decoder defaults or the tuple unpacking dropped some text. *(Bit-identical to baselines: 20/1.0 → 23.9%/23.9%, 10/0.5 → 25.0%/23.9%. All four per-file WER values match to the tenth of a percent — Δ=0, well within ±1%. S/I/D breakdowns: 20/1.0 = 10/0/12 on both files; 10/0.5 = 14/1/8 on Example, 12/1/9 on Example2. Tuple-unpacking patch verified not to drop any text.)*
+- [x] 3.4 No commit — this is a verification step. Findings noted inline below task heading if anything interesting (e.g. slightly different WER). *(Nothing interesting — zero delta vs baseline. Plan-progress commit for the `[x]` marks is created via the ralphex outer loop, which is separate from Task 3's own "no functional commit" stipulation.)*
 
 ### Task 4: Add transcribe_with_timestamps helper to ASRModule
 
