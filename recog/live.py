@@ -20,7 +20,8 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
-                     PCM_SILENCE_WATCHDOG_S, pcm_transport_enabled)
+                     PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
+                     pcm_transport_enabled)
 from .asr import ASRModule
 from .speaker_db import SpeakerDatabase
 
@@ -413,6 +414,14 @@ class LiveTranscriber:
         self._per_speaker_ingest = None  # type: ignore[assignment]
         self._pcm_prev_words: dict[str, list] = {}   # pid -> last N words for dedup
         self._pcm_pid_state: dict[str, dict] = {}    # pid -> {last_speech_time, segment_start_time}
+        # Per-pid live-segment registry for refine alignment (Task 8 of
+        # docs/plans/2026-04-24-per-speaker-refine-backend.md). Each entry:
+        # (segment_id, pid_audio_ms_start, pid_audio_ms_end). Populated by
+        # `_register_pcm_live_segment` after append_segment; consumed by
+        # `_apply_refine` (Task 9) to map refined word timestamps back to the
+        # live segment IDs in transcript.jsonl. All reads/writes under
+        # `self._state_lock`.
+        self._pcm_live_segments: dict[str, list[tuple[int, float, float]]] = {}
         # Tracks the last-observed watchdog state so we emit a transition
         # marker only on actual flips (see plan §4.5).
         self._last_pcm_degraded: bool = False
@@ -855,7 +864,7 @@ class LiveTranscriber:
                     )
 
                 if self._meeting_storage:
-                    self._meeting_storage.append_segment(
+                    segment_id = self._meeting_storage.append_segment(
                         speaker=speaker_label,
                         speaker_id=pid,
                         text=deduped,
@@ -865,6 +874,41 @@ class LiveTranscriber:
                         uncertain_reason="",
                         audio_offset_ms=audio_offset_ms,
                     )
+                    # Stamp the live segment with its pid-frame bounds so the
+                    # refine contour (Task 9) can align refined word timestamps
+                    # back to this segment_id for the JSONL rewrite.
+                    self._register_pcm_live_segment(pid, segment_id, _pcm)
+
+    def _register_pcm_live_segment(
+        self,
+        pid: str,
+        segment_id: int,
+        chunk_samples: np.ndarray,
+    ) -> None:
+        """Append (segment_id, pid_audio_ms_start, pid_audio_ms_end) to the
+        per-pid live-segment registry and prune entries outside the refine
+        window + head room.
+
+        Caller must hold `self._state_lock`. Reads `pid_audio_ms_now` from the
+        per-speaker ingest — the end bound; start = end - chunk_duration_ms.
+        Prune floor = pid_audio_ms_now - (PCM_REFINE_WINDOW_S + 5) * 1000 ms,
+        matching the capacity of the PCM ring so stale entries do not grow
+        unboundedly when a pid talks for a long time.
+        """
+        ingest = self._per_speaker_ingest
+        if ingest is None:
+            return
+        pid_audio_ms_now = ingest.get_pid_audio_ms(pid)
+        chunk_duration_ms = (len(chunk_samples) / self.sample_rate) * 1000.0
+        entries = self._pcm_live_segments.setdefault(pid, [])
+        entries.append((
+            segment_id,
+            pid_audio_ms_now - chunk_duration_ms,
+            pid_audio_ms_now,
+        ))
+        prune_floor = pid_audio_ms_now - (PCM_REFINE_WINDOW_S + 5.0) * 1000.0
+        while entries and entries[0][2] < prune_floor:
+            entries.pop(0)
 
     def _emit_pcm_transition_marker(self, degraded: bool, marker_gen: int):
         """Write a gap marker to the transcript on PCM ↔ mixed fallback flip.
@@ -1503,6 +1547,10 @@ class LiveTranscriber:
             # a fresh meeting should start assuming PCM healthy.
             self._pcm_prev_words.clear()
             self._pcm_pid_state.clear()
+            # Live-segment registry is per-meeting: segment_ids restart at 0
+            # on the new meeting and pid_audio_ms bounds are only meaningful
+            # within one meeting's pid frame.
+            self._pcm_live_segments.clear()
             self._last_pcm_degraded = False
         # Clear per-speaker ingest buffers (bumped generation would drop
         # them at drain time anyway, but clearing eagerly avoids a 200 ms
