@@ -82,14 +82,14 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 5: RefineWorker unit tests
 
-- [ ] 5.1 In `tests/test_refine.py`:
+- [x] 5.1 In `tests/test_refine.py`:
   - `test_submit_runs_transcribe_then_apply`: mock `transcribe_fn`, `apply_fn`; submit one task; assert both called in order.
   - `test_pause_drops_queued_tasks`: submit → pause → assert queue empty, worker idle.
   - `test_live_pending_aborts_cooperative`: in cooperative mode, simulate `transcribe_fn` that honours `should_abort`; set `live_pending`; assert task re-enqueued.
   - `test_coarse_mode_ignores_live_pending`: in coarse mode, `transcribe_fn` completes without checking abort; task NOT re-enqueued.
   - `test_stop_joins_cleanly`: `stop()` completes within 1 s.
-- [ ] 5.2 Run: `venv-gigaam/bin/python -m pytest tests/test_refine.py -v` — all green.
-- [ ] 5.3 Commit: `test(refine): RefineWorker submit/pause/resume/stop/abort coverage`
+- [x] 5.2 Run: `venv-gigaam/bin/python -m pytest tests/test_refine.py -v` — all green.
+- [x] 5.3 Commit: `test(refine): RefineWorker submit/pause/resume/stop/abort coverage`
 
 ### Task 6: Per-pid rolling PCM ring in PerSpeakerIngest
 
