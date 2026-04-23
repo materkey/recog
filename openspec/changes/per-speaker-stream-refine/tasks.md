@@ -1,16 +1,16 @@
 ## 0. Pre-flight: upstream GigaAM merge
 
-- [ ] 0.1 Upgrade `../GigaAM` checkout to upstream `origin/main` (commits through `6e4b027`); verify `import gigaam` + `gigaam.load_model("v3_e2e_rnnt").transcribe(wav_path, word_timestamps=True)` returns a `TranscriptionResult` with `.words` list of `Word(text, start, end)`
-- [ ] 0.2 Adapt `recog/asr.py::ASRModule.transcribe_batch` to the new `decoding.decode()` return type (was `List[str]`; after commit `a755fec` is `List[Tuple[str, List[int], List[int]]]`). Keep public method signature stable — callers unaffected
-- [ ] 0.3 Full unit suite green (`python -m pytest tests/ -v`); manual live smoke: `./recog-service.sh restart` + short KTalk meeting; confirm no regression on live 3-s path
-- [ ] 0.4 Grid-search regression: re-run `scripts/pcm_experiment.py` against take-2 fixtures with configs 20:1.0 and 10:0.5; WER must stay within ±1% of the baseline in `experiments/2026-04-23-gigaam-grid.md`
+- [x] 0.1 Upgrade `../GigaAM` checkout to upstream `origin/main` (commits through `6e4b027`); verify `import gigaam` + `gigaam.load_model("v3_e2e_rnnt").transcribe(wav_path, word_timestamps=True)` returns a `TranscriptionResult` with `.words` list of `Word(text, start, end)`
+- [x] 0.2 Adapt `recog/asr.py::ASRModule.transcribe_batch` to the new `decoding.decode()` return type (was `List[str]`; after commit `a755fec` is `List[Tuple[str, List[int], List[int]]]`). Keep public method signature stable — callers unaffected
+- [x] 0.3 Full unit suite green (`python -m pytest tests/ -v`); manual live smoke: `./recog-service.sh restart` + short KTalk meeting; confirm no regression on live 3-s path
+- [x] 0.4 Grid-search regression: re-run `scripts/pcm_experiment.py` against take-2 fixtures with configs 20:1.0 and 10:0.5; WER must stay within ±1% of the baseline in `experiments/2026-04-23-gigaam-grid.md`
 
 ## 1. MPS (Metal) backend
 
-- [ ] 1.1 Add MPS auto-detect to `ASRModule.__init__` when `device` arg is `None`: `"mps" if torch.backends.mps.is_available() else "cpu"`. Explicit override (`device="cpu"`) always honoured
-- [ ] 1.2 Manual smoke: `scripts/pcm_experiment.py --device mps --configs 20:1.0,10:0.5 --wav ...` produces text bit-identical to CPU run on same input (compare stdout line-by-line)
-- [ ] 1.3 Benchmark batched forward on MPS with B ∈ {1, 4, 8} and variable-length inputs padded to `T_max`; record wall-clock per batch in `experiments/2026-04-XX-mps-batch.md`; confirm no regression vs CPU
-- [ ] 1.4 Default device stays `None` (auto-detect) — no CLI / env changes needed by users
+- [x] 1.1 Add MPS auto-detect to `ASRModule.__init__` when `device` arg is `None`: `"mps" if torch.backends.mps.is_available() else "cpu"`. Explicit override (`device="cpu"`) always honoured
+- [x] 1.2 Manual smoke: `scripts/pcm_experiment.py --device mps --configs 20:1.0,10:0.5 --wav ...` produces text bit-identical to CPU run on same input (compare stdout line-by-line)
+- [x] 1.3 Benchmark batched forward on MPS with B ∈ {1, 4, 8} and variable-length inputs padded to `T_max`; record wall-clock per batch in `experiments/2026-04-XX-mps-batch.md`; confirm no regression vs CPU
+- [x] 1.4 Default device stays `None` (auto-detect) — no CLI / env changes needed by users
 
 ## 2. Refine worker foundations
 
