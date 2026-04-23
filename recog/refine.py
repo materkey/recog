@@ -58,12 +58,17 @@ class RefineTask:
             to rebase upstream word timestamps back into the pid frame.
         submitted_at: `time.time()` at `PerSpeakerIngest.get_refine_candidate`,
             for queue-age logging/metrics.
+        meeting_generation: LiveTranscriber's `_meeting_generation` snapshot
+            at submit time. `_apply_refine` drops the result if the current
+            generation no longer matches (meeting switched between dispatch
+            and apply — same pattern as `_on_pcm_batch`, design.md D11).
     """
 
     pid: str
     pcm_samples: np.ndarray
     offset_base_ms: float
     submitted_at: float
+    meeting_generation: int = 0
 
 
 @dataclass(frozen=True, eq=False)

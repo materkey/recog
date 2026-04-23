@@ -199,6 +199,7 @@ def _fresh_transcriber_mock():
     t._pcm_prev_words = {}
     t._pcm_pid_state = {}
     t._pcm_live_segments = {}
+    t._pcm_segment_texts = {}
     t._last_pcm_degraded = False
     t.use_pcm_transport = False
     t.use_ktalk = True
@@ -657,6 +658,7 @@ def test_invalidate_pending_chunks_drains_per_speaker_ingest():
     t._pcm_prev_words = {"pid-1": ["foo", "bar"]}
     t._pcm_pid_state = {"pid-1": {"last_speech_time": 1.0, "segment_start_time": 0.0}}
     t._pcm_live_segments = {"pid-1": [(5, 0.0, 3000.0)]}
+    t._pcm_segment_texts = {5: "prior"}
     t._last_pcm_degraded = True
 
     drained = {"count": 0}
@@ -674,6 +676,7 @@ def test_invalidate_pending_chunks_drains_per_speaker_ingest():
     assert t._pcm_prev_words == {}
     assert t._pcm_pid_state == {}
     assert t._pcm_live_segments == {}
+    assert t._pcm_segment_texts == {}
     assert t._last_pcm_degraded is False
 
 

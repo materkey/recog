@@ -467,6 +467,7 @@ class PerSpeakerIngest:
                 pcm_samples=pcm_samples,
                 offset_base_ms=offset_base_ms,
                 submitted_at=self._time_fn(),
+                meeting_generation=self._generation_getter(),
             )
 
     # ----- internal -------------------------------------------------------

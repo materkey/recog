@@ -27,13 +27,15 @@ CHUNK_3S_SAMPLES = SAMPLE_RATE * 3  # 3 s chunk => 3000 ms
 
 def _make_transcriber(pid_audio_ms_by_pid: dict[str, float]) -> Mock:
     """Build a Mock(spec=LiveTranscriber) with the minimal state the helper
-    reads: _pcm_live_segments, _state_lock, sample_rate, and a stubbed
+    reads: _pcm_live_segments, _pcm_segment_texts (pruned in lockstep with
+    the registry by Task 9), _state_lock, sample_rate, and a stubbed
     _per_speaker_ingest whose get_pid_audio_ms is backed by the given map.
     """
     t = Mock(spec=LiveTranscriber)
     t._state_lock = threading.Lock()
     t.sample_rate = SAMPLE_RATE
     t._pcm_live_segments = {}
+    t._pcm_segment_texts = {}
 
     ingest = Mock()
     ingest.get_pid_audio_ms.side_effect = lambda pid: pid_audio_ms_by_pid.get(pid, 0.0)
