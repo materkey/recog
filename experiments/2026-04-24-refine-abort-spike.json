@@ -1,0 +1,26 @@
+{
+  "device": "mps:0",
+  "dtype": "torch.float16",
+  "audio_duration_s": 30.0,
+  "trials": 3,
+  "baseline_ms": [
+    961.9345830287784,
+    953.5153330070898,
+    953.8757499540225
+  ],
+  "encoder_only_ms": [
+    184.86812495393679,
+    187.38225003471598,
+    187.1672500274144
+  ],
+  "cooperative_abort_ms": [
+    187.35812499653548,
+    186.4539590314962,
+    188.00737499259412
+  ],
+  "baseline_median_ms": 953.9,
+  "encoder_only_median_ms": 187.2,
+  "cooperative_abort_median_ms": 187.4,
+  "decoder_loop_median_ms": 766.7,
+  "decoder_loop_pct_of_baseline": 80.4
+}
