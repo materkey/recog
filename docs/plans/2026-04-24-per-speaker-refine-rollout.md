@@ -104,12 +104,12 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 7: Update CLAUDE.md Architecture section
 
-- [ ] 7.1 In `CLAUDE.md` "Architecture" section (look near the existing ADR-0018 note around "Per-speaker ASR path"), add a sibling paragraph for refine:
+- [x] 7.1 In `CLAUDE.md` "Architecture" section (look near the existing ADR-0018 note around "Per-speaker ASR path"), add a sibling paragraph for refine:
   - One sentence: when `RECOG_PCM_REFINE=1` AND `RECOG_PCM_TRANSPORT=1`, per-pid rolling PCM buffer drives a `RefineWorker` (shared GigaAM mutex, cooperative abort) that re-transcribes just-closed replies with 20-s context and rewrites `transcript.jsonl` + broadcasts `transcript_refine` WS messages.
   - One sentence on UI: webapp renders tier-1 (opacity 0.6, dashed border) → tier-2 (solid) on refine arrival; extension overlay does plain text swap with fade.
   - Link: "See `openspec/changes/per-speaker-stream-refine/` and ADR-0019".
-- [ ] 7.2 Add env flag to the "Environment Variables" section of CLAUDE.md: `RECOG_PCM_REFINE` — `1` enables stream+refine (default `0`, gated behind `RECOG_PCM_TRANSPORT`).
-- [ ] 7.3 Commit: `docs(claude): describe stream-refine in Architecture + env vars`
+- [x] 7.2 Add env flag to the "Environment Variables" section of CLAUDE.md: `RECOG_PCM_REFINE` — `1` enables stream+refine (default `0`, gated behind `RECOG_PCM_TRANSPORT`).
+- [x] 7.3 Commit: `docs(claude): describe stream-refine in Architecture + env vars`
 
 ### Task 8: .env.example
 

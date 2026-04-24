@@ -102,7 +102,9 @@ When `RECOG_PCM_REFINE=1` (also requires `RECOG_PCM_TRANSPORT=1` — see `recog/
 - Shared model lock: `ASRModule._model_lock` is a `threading.RLock` (not `Lock`). The refine worker acquires it externally to serialise with the live batched-forward path; `transcribe_with_timestamps` re-acquires internally — recursion must not deadlock.
 - Cooperative abort: default `abort_mode="cooperative"`. `LiveTranscriber._refine_transcribe_fn` installs `make_abortable_decode` on `model.decoding.decode` for the duration of one refine call; the hook polls `should_abort()` at the top of the RNN-T time-step loop and raises `RefineAborted`. Worker catches, releases the lock, re-enqueues the task. `LiveTranscriber._on_pcm_batch` calls `refine_worker.set_live_pending()` / `clear_live_pending()` around `asr.transcribe_batch` so live gets priority. Per the spike (`experiments/2026-04-24-refine-abort-spike.md`), cooperative abort saves ~770 ms per preempted refine on MPS (~80 % of inference cost).
 
-See `docs/plans/2026-04-24-per-speaker-refine-backend.md` and `openspec/changes/per-speaker-stream-refine/` for the decisions table and task breakdown. Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension overlay) are a follow-up plan.
+On refine arrival the webapp renders tier-1 (opacity 0.6, dashed border) → tier-2 (solid) segments via `data-refined` on `.transcript-segment`; the KTalk extension overlay does a plain text swap with a brief `.refine-fade` pulse.
+
+See `docs/plans/2026-04-24-per-speaker-refine-backend.md`, `openspec/changes/per-speaker-stream-refine/`, and ADR-0019 for the decisions table and task breakdown.
 
 ### Module Organization
 - `recog/` - Core Python package
@@ -141,7 +143,7 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env`:
 - `OPENROUTER_API_KEY` - Required if using OpenRouter
 - `MIC_SPEAKER_NAME` - Speaker label for microphone input in live mode (default: `Me`)
 - `RECOG_PCM_TRANSPORT` - `1` enables per-speaker PCM transport from the KTalk extension (ADR-0018); default `0`. Requires extension rebuild + `./recog-service.sh restart` to apply.
-- `RECOG_PCM_REFINE` - `1` enables tier-2 refine contour on top of PCM transport; default `0`. Gated on `RECOG_PCM_TRANSPORT=1` — `pcm_refine_enabled()` returns False unless both flags are on. Adds a `refined: bool` field to `transcript.jsonl` rows (default `false`).
+- `RECOG_PCM_REFINE` - `1` enables the tier-2 stream-refine contour on top of PCM transport (ADR-0019); default `0`. Gated on `RECOG_PCM_TRANSPORT=1` — `pcm_refine_enabled()` returns False unless both flags are on. Adds a `refined: bool` field to `transcript.jsonl` rows (default `false`).
 - `RECOG_BRIDGE_WS_URL` - Overrides the bridge WebSocket URL the frontend subscriber connects to (default `ws://localhost:8766`). Used by `frontend/bridge_subscriber.py` to forward `transcript_refine` events from `ktalk_bridge.py` to webapp clients (D10 — JSONL tail cannot see refine rewrites).
 
 ## Data Files
@@ -167,3 +169,4 @@ Architecture Decision Records in `adr/`:
 - **ADR-0011**: Meeting storage
 - **ADR-0013**: AI transcript analysis
 - **ADR-0018**: Per-speaker ASR pipeline (PCM transport from Chrome extension, gated by `RECOG_PCM_TRANSPORT`)
+- **ADR-0019**: Stream-refine — tier-2 re-transcription with 20 s context, gated by `RECOG_PCM_REFINE`
