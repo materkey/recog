@@ -744,9 +744,13 @@ class KTalkBridge:
         if completed_segment and self._on_segment_complete:
             self._on_segment_complete(completed_segment)
 
-    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False, uncertain_reason: str = "", correction: bool = False):
-        """Отправляет транскрипт всем подключённым клиентам."""
-        message = json.dumps({
+    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False, uncertain_reason: str = "", correction: bool = False, segment_id: int = 0):
+        """Отправляет транскрипт всем подключённым клиентам.
+
+        `segment_id` (>0) пробрасывается в DOM как `data-segment-id`, чтобы
+        `transcript_refine` мог найти соответствующий bubble при tier-2 апдейте.
+        """
+        payload = {
             "type": "transcript",
             "speaker": speaker,
             "text": text,
@@ -755,8 +759,11 @@ class KTalkBridge:
             "is_local": is_local,  # True = микрофон (я), False = системный звук (другие)
             "uncertain": uncertain,  # True = непонятно кто говорит
             "uncertain_reason": uncertain_reason,  # "local" = системный звук + локальный спикер, "mics_off" = все микрофоны выключены
-            "correction": correction  # True = retroactive correction of previously Unknown segment
-        })
+            "correction": correction,  # True = retroactive correction of previously Unknown segment
+        }
+        if segment_id > 0:
+            payload["segment_id"] = segment_id
+        message = json.dumps(payload)
 
         # Отправляем асинхронно через event loop
         if self._loop and self._connected_clients:

@@ -347,6 +347,12 @@ export function injectVas3kStyles() {
       color: rgba(255, 255, 255, 0.5);
     }
 
+    /* Tier-2 refine pulse: brief fade to hint that text was rewritten. */
+    .jitsi-transcript-text.refine-fade {
+      transition: opacity 100ms;
+      opacity: 0.3;
+    }
+
     /* Empty state */
     .jitsi-transcript-empty {
       text-align: center;
@@ -612,6 +618,9 @@ export function addVas3kTranscriptLine(line) {
   lineEl.className = 'jitsi-transcript-line';
   if (line.id) {
     lineEl.dataset.lineId = line.id;
+  }
+  if (line.segment_id && line.segment_id > 0) {
+    lineEl.dataset.segmentId = line.segment_id;
   }
   if (line.timestamp) {
     lineEl.dataset.timestamp = line.timestamp;

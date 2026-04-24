@@ -642,6 +642,7 @@ class LiveTranscriber:
                     uncertain=False,
                     uncertain_reason="",
                     correction=True,
+                    segment_id=seg.meeting_segment_id,
                 )
 
     def _setup_meeting_storage(self):
@@ -946,17 +947,12 @@ class LiveTranscriber:
                 sys.stdout.flush()
                 self.transcript_lines.append(line)
 
-                if self._ktalk_bridge:
-                    self._ktalk_bridge.send_transcript(
-                        speaker_label,
-                        deduped,
-                        timestamp,
-                        is_continuation=is_continuation,
-                        is_local=is_local,
-                        uncertain=False,
-                        uncertain_reason="",
-                    )
-
+                # Write to MeetingStorage first so the freshly-minted
+                # `segment_id` can be threaded into `send_transcript` for the
+                # extension's `data-segment-id` attribute (tier-2 refine binds
+                # to that id on the DOM). Without the reorder the bridge would
+                # emit a bubble the refine pass cannot later rewrite.
+                segment_id = 0
                 if self._meeting_storage:
                     segment_id = self._meeting_storage.append_segment(
                         speaker=speaker_label,
@@ -982,6 +978,18 @@ class LiveTranscriber:
                     # short-circuit identical refinements without an extra
                     # JSONL read.
                     self._pcm_segment_texts[segment_id] = deduped
+
+                if self._ktalk_bridge:
+                    self._ktalk_bridge.send_transcript(
+                        speaker_label,
+                        deduped,
+                        timestamp,
+                        is_continuation=is_continuation,
+                        is_local=is_local,
+                        uncertain=False,
+                        uncertain_reason="",
+                        segment_id=segment_id,
+                    )
 
     def _register_pcm_live_segment(
         self,
@@ -1353,14 +1361,12 @@ class LiveTranscriber:
         sys.stdout.flush()
         self.transcript_lines.append(line)
 
-        # Отправляем транскрипт микрофона в Chrome extension (is_local=True)
-        if self._ktalk_bridge:
-            self._ktalk_bridge.send_transcript(
-                mic_speaker_name, text, timestamp, is_continuation, is_local=True)
-
-        # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
+        # Сохраняем в MeetingStorage сначала, чтобы `segment_id` попал в
+        # `send_transcript` и extension мог пометить bubble атрибутом
+        # `data-segment-id` для будущих refine-апдейтов.
+        segment_id = 0
         if self._meeting_storage and self._meeting_generation == chunk_gen:
-            self._meeting_storage.append_segment(
+            segment_id = self._meeting_storage.append_segment(
                 speaker=mic_speaker_name,
                 speaker_id="local",
                 text=text,
@@ -1370,6 +1376,12 @@ class LiveTranscriber:
                 uncertain_reason="",
                 audio_offset_ms=state.audio_offset
             )
+
+        # Отправляем транскрипт микрофона в Chrome extension (is_local=True)
+        if self._ktalk_bridge:
+            self._ktalk_bridge.send_transcript(
+                mic_speaker_name, text, timestamp, is_continuation,
+                is_local=True, segment_id=segment_id)
 
     def _handle_ktalk_chunk(self, text, timestamp, chunk_start_time, chunk_end_time,
                             chunk_time, chunk_gen, state, *, fallback_mixed: bool = False):
@@ -1475,12 +1487,9 @@ class LiveTranscriber:
                     else "fallback_mixed"
                 )
 
-            self._ktalk_bridge.send_transcript(
-                speaker, text, timestamp, is_continuation,
-                is_local=is_local, uncertain=uncertain,
-                uncertain_reason=uncertain_reason)
-
-            # Сохраняем в MeetingStorage (skip if meeting changed mid-chunk)
+            # Сохраняем в MeetingStorage первым, чтобы `segment_id`
+            # сразу был доступен для payload'а send_transcript (tier-2
+            # refine ищет bubble по `data-segment-id`).
             meeting_seg_id = 0
             if self._meeting_storage and self._meeting_generation == chunk_gen:
                 meeting_seg_id = self._meeting_storage.append_segment(
@@ -1493,6 +1502,12 @@ class LiveTranscriber:
                     uncertain_reason=persisted_reason,
                     audio_offset_ms=state.audio_offset
                 )
+
+            self._ktalk_bridge.send_transcript(
+                speaker, text, timestamp, is_continuation,
+                is_local=is_local, uncertain=uncertain,
+                uncertain_reason=uncertain_reason,
+                segment_id=meeting_seg_id)
 
             # Track segment for retroactive correction.
             # Lock guards against _invalidate_pending_chunks racing
