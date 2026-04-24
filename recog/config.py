@@ -154,10 +154,3 @@ def pcm_refine_enabled() -> bool:
     if not pcm_transport_enabled():
         return False
     return os.environ.get("RECOG_PCM_REFINE", "0") == "1"
-
-
-def pcm_cross_pid_echo_suppression_enabled() -> bool:
-    """True only when per-speaker PCM is enabled and cross-pid echo dropping is explicitly enabled."""
-    if not pcm_transport_enabled():
-        return False
-    return os.environ.get("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "0") == "1"

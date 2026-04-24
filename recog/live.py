@@ -21,8 +21,7 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
-                     pcm_refine_enabled, pcm_transport_enabled,
-                     pcm_cross_pid_echo_suppression_enabled)
+                     pcm_refine_enabled, pcm_transport_enabled)
 from .asr import ASRModule
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
@@ -305,23 +304,6 @@ class SourceState:
             self.last_text_time = time.time()
 
 
-@dataclass(slots=True)
-class _CrossPidPhrase:
-    """Recent remote phrase used by the cross-pid echo-suppression gate.
-
-    Stored in `LiveTranscriber._cross_pid_recent_phrases` (deque, maxlen=32);
-    a new entry is appended for every remote PCM segment that reaches the
-    `_is_cross_pid_echo` check. Tokens are pre-normalized via `normalize_word`
-    so the suppression test is just a set-overlap on cached values.
-    """
-    pid: str
-    speaker: str
-    text: str
-    tokens: tuple[str, ...]
-    chunk_start_ms: float
-    chunk_end_ms: float
-
-
 def normalize_word(w: str) -> str:
     """Strip punctuation and lowercase a word for deduplication comparison."""
     return ''.join(c.lower() for c in w if c.isalnum())
@@ -448,14 +430,6 @@ class LiveTranscriber:
         # `_register_pcm_live_segment`; pruned together with the segment
         # registry. All reads/writes under `self._state_lock`.
         self._pcm_segment_texts: dict[int, str] = {}
-        # Cross-pid echo suppression (gated by RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION).
-        # Bounded ring of the last few remote phrases; `_is_cross_pid_echo`
-        # walks it on each remote chunk and returns True when the same
-        # 3+-token phrase already appeared on a different pid in a near-by
-        # audio window. Counters are diagnostic-only (`[PerSpeaker]` log).
-        self._cross_pid_recent_phrases: deque[_CrossPidPhrase] = deque(maxlen=32)
-        self._cross_pid_echo_checked_count = 0
-        self._cross_pid_echo_suppressed_count = 0
         # Refine worker placeholder — `_setup_refine_worker` (Task 11) builds
         # it when `pcm_refine_enabled()` and wires `apply_fn=self._apply_refine`.
         # Kept as None here so `_teardown_session` / `_on_pcm_batch` priority
@@ -944,27 +918,6 @@ class LiveTranscriber:
                 safe_name = (speaker_name or "").replace("\n", " ").replace("\r", " ").strip()
                 speaker_label = safe_name or f"Участник {pid[:6]}"
 
-                # Echo check BEFORE mutating per-pid dedup/continuation state so
-                # that a suppressed chunk does not leave stale `_pcm_prev_words`
-                # or advance `_pcm_pid_state` for a bubble that never reached
-                # the UI/JSONL — otherwise the next genuine chunk on this pid
-                # would dedup against tokens never shown and/or be flagged
-                # `is_continuation` off a non-existent prior segment.
-                if (pcm_cross_pid_echo_suppression_enabled()
-                        and not is_local
-                        and self._is_cross_pid_echo(
-                            pid=pid, speaker=speaker_label, text=deduped,
-                            chunk_start_ms=chunk_start_ms, chunk_end_ms=_end_ms)):
-                    self._cross_pid_echo_suppressed_count += 1
-                    print(
-                        "[PerSpeaker] cross-pid echo suppressed "
-                        f"pid={pid} words={len(deduped.split())} "
-                        f"window={chunk_start_ms:.0f}-{_end_ms:.0f}ms "
-                        f"suppressed_total={self._cross_pid_echo_suppressed_count}",
-                        file=sys.stderr,
-                    )
-                    continue
-
                 self._pcm_prev_words[pid] = deduped.split()[-5:]
 
                 pid_state = self._pcm_pid_state.setdefault(
@@ -1079,50 +1032,6 @@ class LiveTranscriber:
             # Keep the text cache in lockstep with the live registry so it
             # does not grow unboundedly on long-running meetings.
             self._pcm_segment_texts.pop(pruned[0], None)
-
-    @staticmethod
-    def _audio_windows_close(a_start_ms, a_end_ms, b_start_ms, b_end_ms, *, tolerance_ms):
-        """True if [a_start, a_end] and [b_start, b_end] overlap or are within tolerance_ms."""
-        return max(a_start_ms, b_start_ms) <= min(a_end_ms, b_end_ms) + tolerance_ms
-
-    def _remember_cross_pid_phrase(self, pid, speaker, text, tokens, chunk_start_ms, chunk_end_ms):
-        self._cross_pid_recent_phrases.append(_CrossPidPhrase(
-            pid=pid, speaker=speaker, text=text, tokens=tokens,
-            chunk_start_ms=chunk_start_ms, chunk_end_ms=chunk_end_ms,
-        ))
-
-    def _is_cross_pid_echo(self, *, pid, speaker, text, chunk_start_ms, chunk_end_ms) -> bool:
-        """Detect a remote phrase echoed across two PCM pids in a near-by audio window.
-
-        Phrases shorter than 3 normalized tokens are remembered but never
-        flagged (single-word ack like "да" naturally repeats across speakers).
-        For longer phrases, returns True when a previously-seen phrase from a
-        different pid covers an audio window within ±1.5 s and at least 80 %
-        of normalized-token overlap. Non-echo phrases are remembered so later
-        chunks can compare against them; suppressed echoes are NOT remembered
-        — otherwise a follow-up from the original source could false-match
-        its own text mirrored through the echo entry.
-        """
-        tokens = tuple(t for t in (normalize_word(w) for w in text.split()) if t)
-        if len(tokens) < 3:
-            self._remember_cross_pid_phrase(pid, speaker, text, tokens, chunk_start_ms, chunk_end_ms)
-            return False
-        current = set(tokens)
-        self._cross_pid_echo_checked_count += 1
-        for prior in self._cross_pid_recent_phrases:
-            if prior.pid == pid:
-                continue
-            if not LiveTranscriber._audio_windows_close(
-                prior.chunk_start_ms, prior.chunk_end_ms,
-                chunk_start_ms, chunk_end_ms,
-                tolerance_ms=1500,
-            ):
-                continue
-            overlap = len(current.intersection(prior.tokens)) / max(len(current), len(set(prior.tokens)))
-            if overlap >= 0.8:
-                return True
-        self._remember_cross_pid_phrase(pid, speaker, text, tokens, chunk_start_ms, chunk_end_ms)
-        return False
 
     def _apply_refine(self, result: RefineResult) -> None:
         """Align refined words back to live segments and rewrite JSONL.
@@ -1933,11 +1842,6 @@ class LiveTranscriber:
             # a fresh meeting should start assuming PCM healthy.
             self._pcm_prev_words.clear()
             self._pcm_pid_state.clear()
-            # Cross-pid echo deque is per-meeting: a phrase that was a real
-            # echo in meeting A would be a fresh utterance in meeting B.
-            self._cross_pid_recent_phrases.clear()
-            self._cross_pid_echo_checked_count = 0
-            self._cross_pid_echo_suppressed_count = 0
             # Live-segment registry is per-meeting: segment_ids restart at 0
             # on the new meeting and pid_audio_ms bounds are only meaningful
             # within one meeting's pid frame.

@@ -144,7 +144,6 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env`:
 - `MIC_SPEAKER_NAME` - Speaker label for microphone input in live mode (default: `Me`)
 - `RECOG_PCM_TRANSPORT` - `1` enables per-speaker PCM transport from the KTalk extension (ADR-0018); default `0`. Requires extension rebuild + `./recog-service.sh restart` to apply.
 - `RECOG_PCM_REFINE` - `1` enables the tier-2 stream-refine contour on top of PCM transport (ADR-0019); default `0`. Gated on `RECOG_PCM_TRANSPORT=1` — `pcm_refine_enabled()` returns False unless both flags are on. Adds a `refined: bool` field to `transcript.jsonl` rows (default `false`).
-- `RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION` - `1` drops high-confidence duplicate remote phrases across different PCM pids (e.g. one physical voice captured by two tabs); default `0`. Gated on `RECOG_PCM_TRANSPORT=1` via `pcm_cross_pid_echo_suppression_enabled()`. Risky — the canonical transcript loses the suppressed text; use only for dual-tab echo validation. Suppressions are logged to stderr as `[PerSpeaker] cross-pid echo suppressed pid=... words=... window=...`.
 - `RECOG_BRIDGE_WS_URL` - Overrides the bridge WebSocket URL the frontend subscriber connects to (default `ws://localhost:8766`). Used by `frontend/bridge_subscriber.py` to forward `transcript_refine` events from `ktalk_bridge.py` to webapp clients (D10 — JSONL tail cannot see refine rewrites).
 
 ## Data Files
