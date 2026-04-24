@@ -35,6 +35,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 from meeting_storage import MeetingStorage, get_external_paths
 from bridge_subscriber import BridgeSubscriber
+from live_watcher import LiveWatcher
 
 # Configuration
 HOST = "127.0.0.1"
@@ -120,105 +121,6 @@ class TranscriptWatcher(FileSystemEventHandler):
                         self.clients[meeting_id].discard(ws)
         except Exception as e:
             print(f"Error reading transcript: {e}")
-
-
-class LiveWatcher(FileSystemEventHandler):
-    """Watch for live transcription updates (current meeting)."""
-
-    def __init__(self):
-        self.clients: set[WebSocket] = set()
-        self.current_meeting_id: Optional[str] = None
-        self.file_position: int = 0
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-
-    def set_loop(self, loop: asyncio.AbstractEventLoop):
-        self._loop = loop
-
-    def register(self, websocket: WebSocket):
-        self.clients.add(websocket)
-
-    def unregister(self, websocket: WebSocket):
-        self.clients.discard(websocket)
-
-    def on_modified(self, event):
-        if event.is_directory:
-            return
-
-        path = Path(event.src_path)
-
-        # Watch index.json for new meetings
-        if path.name == "index.json" and self._loop:
-            asyncio.run_coroutine_threadsafe(
-                self._check_current_meeting(),
-                self._loop
-            )
-
-        # Watch transcript of current meeting
-        if path.name == "transcript.jsonl" and self._loop:
-            meeting_id = path.parent.name
-            if meeting_id == self.current_meeting_id:
-                asyncio.run_coroutine_threadsafe(
-                    self._notify_new_segments(path),
-                    self._loop
-                )
-
-    async def _check_current_meeting(self):
-        """Check for new/changed current meeting."""
-        try:
-            storage = get_storage()
-            active_meetings = storage.list_active_meetings()
-            current = active_meetings[0] if active_meetings else None
-
-            if current and current["id"] != self.current_meeting_id:
-                self.current_meeting_id = current["id"]
-                self.file_position = 0
-
-                # Notify clients about meeting change
-                message = json.dumps({
-                    "type": "meeting_change",
-                    "meeting": current
-                })
-                await self._broadcast(message)
-        except Exception as e:
-            print(f"Error checking current meeting: {e}")
-
-    async def _notify_new_segments(self, transcript_path: Path):
-        """Read new lines and send to connected clients."""
-        if not transcript_path.exists():
-            return
-
-        try:
-            with open(transcript_path, 'r', encoding='utf-8') as f:
-                f.seek(self.file_position)
-                new_lines = f.readlines()
-                self.file_position = f.tell()
-
-            if new_lines:
-                segments = []
-                for line in new_lines:
-                    line = line.strip()
-                    if line:
-                        try:
-                            segments.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
-
-                if segments:
-                    message = json.dumps({"type": "segments", "data": segments})
-                    await self._broadcast(message)
-        except Exception as e:
-            print(f"Error reading transcript: {e}")
-
-    async def _broadcast(self, message: str):
-        dead_clients = []
-        for ws in self.clients:
-            try:
-                await ws.send_text(message)
-            except Exception:
-                dead_clients.append(ws)
-
-        for ws in dead_clients:
-            self.clients.discard(ws)
 
 
 # --- Helpers (WDIM / Cognitive Anchor) ---

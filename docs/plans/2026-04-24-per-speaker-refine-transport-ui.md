@@ -54,10 +54,10 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 3: Fix JSONL tail rewrite-blind bug (per design D10)
 
-- [ ] 3.1 In `frontend/server.py::LiveWatcher._notify_new_segments`, detect file rewrite by comparing `os.stat(path).st_size` to `self.file_position`. If `st_size < self.file_position`, the file shrank (likely `os.replace` of a rewrite): reset `self.file_position = 0` and diff against a seen-id watermark (`self._seen_segment_ids: set[int]`) before broadcasting, so we don't re-broadcast previously-seen segments to webapp clients.
-- [ ] 3.2 Also handle `st_size == self.file_position`: a rewrite where the new file is the same length as the old — still possible (e.g., `text` changed but length preserved). Could be detected via `os.stat(path).st_ino` vs a cached inode. If complicated, note as a TODO and rely on `transcript_refine` messages via the bridge channel (Task 2) to deliver refined text.
-- [ ] 3.3 Unit test: create a JSONL file, seek forward past EOF, shrink via rewrite, call `_notify_new_segments`, assert no duplicate segments broadcast.
-- [ ] 3.4 Commit: `fix(frontend): detect JSONL rewrite via size-shrink, prevent re-broadcast`
+- [x] 3.1 In `frontend/server.py::LiveWatcher._notify_new_segments`, detect file rewrite by comparing `os.stat(path).st_size` to `self.file_position`. If `st_size < self.file_position`, the file shrank (likely `os.replace` of a rewrite): reset `self.file_position = 0` and diff against a seen-id watermark (`self._seen_segment_ids: set[int]`) before broadcasting, so we don't re-broadcast previously-seen segments to webapp clients. Extracted `LiveWatcher` to `frontend/live_watcher.py` so it is testable without the full FastAPI stack.
+- [x] 3.2 Also handle inode change via `os.stat(path).st_ino` vs `self._file_inode` — covers the "same length, different inode" rewrite case. `_check_current_meeting` resets the watermark + inode on meeting switch so state does not leak across meetings.
+- [x] 3.3 Unit test in `tests/test_frontend_live_watcher.py`: 7 cases covering initial read, pure append, size-shrink rewrite, same-size inode-change rewrite, rewrite+append combo, meeting switch clearing watermark, and rows missing `id`.
+- [x] 3.4 Commit: `fix(frontend): detect JSONL rewrite via size-shrink, prevent re-broadcast`
 
 ### Task 4: Extension overlay handler for transcript_refine
 
