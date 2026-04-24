@@ -70,6 +70,22 @@ class LiveWatcher(FileSystemEventHandler):
             self._seen_segment_ids = set()
             self._file_inode = None
 
+    def seed_post_init_watermark(self, known_segment_ids):
+        """Pre-populate the seen-id watermark with segment_ids already
+        delivered in an `init` WS frame, so the first `on_modified` after
+        a fresh `live_stream` connect does not re-broadcast rows that the
+        webapp has already rendered.
+
+        Called between `set_current_meeting` (which resets the watermark
+        on meeting switch) and the init `send_text`. `file_position`
+        stays at 0 on purpose: any segment appended between
+        `storage.get_meeting` and this call is not in `known_segment_ids`
+        and must still be picked up on the next read.
+        """
+        for sid in known_segment_ids:
+            if isinstance(sid, int):
+                self._seen_segment_ids.add(sid)
+
     def on_modified(self, event):
         if event.is_directory:
             return
