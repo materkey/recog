@@ -61,11 +61,11 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 4: Extension overlay handler for transcript_refine
 
-- [ ] 4.1 Discover the extension's transcript-bubble render path. Grep `kontur-diarize/ktalk-speaker-extension/src/` for `send_transcript`, `transcript`, `segment`, and bubble-creation code. Find where bubbles are appended to the DOM on `type: "transcript"` WS events.
-- [ ] 4.2 Add `data-segment-id` attribute to each rendered bubble (bubble needs to know its segment id — but `send_transcript` today does NOT send a segment id to the extension). Plan: add `segment_id` to `send_transcript` payload at `ktalk_bridge.py:725` AND update the extension WS-message handler to stash it as a DOM attribute. (This is a minor extension-side change but necessary — without it, `transcript_refine` handler can't find the bubble to rewrite.)
-- [ ] 4.3 Add WS-message handler for `type: "transcript_refine"`: iterate `updates`, for each one find `[data-segment-id="N"]` in DOM, replace its text content, add a short `.refine-fade` CSS class, remove after 200 ms for fade-out/fade-in visual.
-- [ ] 4.4 CSS: `.refine-fade { transition: opacity 100ms; opacity: 0.3; }` applied briefly to signal the change.
-- [ ] 4.5 Commit: `feat(extension): handle transcript_refine to rewrite bubbles in place`
+- [x] 4.1 Discover the extension's transcript-bubble render path. Render paths: `ui.js::updateTranscriptUI` emits `.ktalk-msg > .ktalk-msg-text` (ktalk); `ui-vas3k.js::addVas3kTranscriptLine` emits `.jitsi-transcript-line > .jitsi-transcript-text` (vas3k/Jitsi). Both triggered from `handleTranscript`/`handleTranscriptHistory` in `ui.js` via `ws.js::onmessage`.
+- [x] 4.2 Added `segment_id: int = 0` param to `send_transcript` in `ktalk_bridge.py`; emitted only when > 0. Reordered `live.py` call sites so `MeetingStorage.append_segment` runs before `send_transcript` (PCM per-speaker, mic, ktalk fallback paths); correction path already had `seg.meeting_segment_id`. Extension stashes `segment_id` on `state.transcriptLines` entries and renders `data-segment-id` on both `.ktalk-msg` (ui.js) and `.jitsi-transcript-line` (ui-vas3k.js). History path also pulls `id` field from JSONL rows.
+- [x] 4.3 Added `handleTranscriptRefine(data)` in `ui.js` — iterates `updates`, rewrites text in place for both ktalk and vas3k paths, mirrors the change into `state.transcriptLines` so full re-renders preserve refined text. Wired via `ws.js::onmessage` on `type === 'transcript_refine'`. Missing bubbles are skipped silently (handles scroll-out / reconnect mid-meeting).
+- [x] 4.4 Added `.refine-fade { transition: opacity 100ms; opacity: 0.3; }` in both stylesheets (ui.js for `.ktalk-msg-text`, ui-vas3k.js for `.jitsi-transcript-text`); class is added for 200 ms after each rewrite.
+- [x] 4.5 Commit: `feat(extension): handle transcript_refine to rewrite bubbles in place`
 
 ### Task 5: Extension rebuild + manifest version bump
 

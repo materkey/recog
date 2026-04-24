@@ -1,5 +1,5 @@
 import { state, constants } from './state.js';
-import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
+import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleTranscriptRefine, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
 import { handleVas3kSummaryResponse } from './ui-vas3k.js';
 import { getActiveSpeaker, sendParticipantsUpdate, sendFilteredSpeakerUpdate } from './speaker.js';
 import { sendWsMessage, handlePcmTransportEnabledMessage, resetPcmTransportOnDisconnect } from './ws_api.js';
@@ -77,6 +77,8 @@ export function connectWebSocket() {
           handleTranscript(data);
         } else if (data.type === 'transcript_history') {
           handleTranscriptHistory(data);
+        } else if (data.type === 'transcript_refine') {
+          handleTranscriptRefine(data);
         } else if (data.type === 'new_meeting') {
           handleNewMeeting(data);
         } else if (data.type === 'summarize_response') {

@@ -724,6 +724,11 @@ export function injectStyles() {
         line-height: 1.4;
         user-select: text;
       }
+      /* Tier-2 refine pulse: brief fade to hint that text was rewritten. */
+      .ktalk-msg-text.refine-fade {
+        transition: opacity 100ms;
+        opacity: 0.3;
+      }
       .bio-word {
         display: inline;
       }
@@ -1082,6 +1087,7 @@ export function handleTranscriptHistory(data) {
       speaker: seg.speaker,
       text: seg.text,
       timestamp: seg.timestamp || seg.ts_display,
+      segment_id: seg.id || 0,
       is_local: seg.is_local || false,
       uncertain: seg.uncertain || false,
       uncertain_reason: seg.uncertain_reason || "",
@@ -1127,12 +1133,13 @@ export function handleNewMeeting(data) {
 }
 
 export function handleTranscript(data) {
-  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction } = data;
+  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction, segment_id } = data;
 
   const newLine = {
     speaker,
     text,
     timestamp,
+    segment_id: segment_id || 0,
     is_local: is_local || false,
     uncertain: uncertain || false,
     uncertain_reason: uncertain_reason || '',
@@ -1203,6 +1210,74 @@ export function handleTranscript(data) {
   }));
 }
 
+/**
+ * Handle tier-2 refined transcript updates. The backend tier-1 (live) path
+ * already populated bubbles via `handleTranscript`; when word-timestamp
+ * refine rewrites a segment, the bridge fans out a `transcript_refine`
+ * message. We swap text in place so scroll position is preserved, add a
+ * short `.refine-fade` pulse, and mirror the change into
+ * `state.transcriptLines` so any full re-render (history reload, new
+ * meeting) keeps the refined text.
+ *
+ * Missing bubbles are ignored silently — extension overlay only renders
+ * recent lines, so a refine for a segment that was pushed out of view (or
+ * for a segment the extension never saw because it reconnected mid-meeting)
+ * should not error.
+ */
+export function handleTranscriptRefine(data) {
+  const updates = Array.isArray(data && data.updates) ? data.updates : [];
+  if (updates.length === 0) return;
+
+  const byId = new Map();
+  for (const upd of updates) {
+    if (!upd) continue;
+    const sid = Number(upd.segment_id);
+    if (!Number.isFinite(sid) || sid <= 0) continue;
+    if (typeof upd.text !== 'string') continue;
+    byId.set(sid, upd.text);
+  }
+  if (byId.size === 0) return;
+
+  for (const line of state.transcriptLines) {
+    if (line.segment_id && byId.has(line.segment_id)) {
+      line.text = byId.get(line.segment_id);
+      line.refined = true;
+    }
+  }
+
+  if (isJitsiPlatform()) {
+    const content = document.querySelector('.jitsi-transcript-content');
+    if (content) {
+      for (const [sid, newText] of byId) {
+        const lineEl = content.querySelector(`.jitsi-transcript-line[data-segment-id="${sid}"]`);
+        if (!lineEl) continue;
+        const textEl = lineEl.querySelector('.jitsi-transcript-text');
+        if (!textEl) continue;
+        textEl.textContent = newText;
+        textEl.classList.add('refine-fade');
+        setTimeout(() => textEl.classList.remove('refine-fade'), 200);
+      }
+    }
+  } else {
+    const container = document.querySelector('.ktalk-transcript-messages');
+    if (container) {
+      for (const [sid, newText] of byId) {
+        const msgEl = container.querySelector(`.ktalk-msg[data-segment-id="${sid}"]`);
+        if (!msgEl) continue;
+        const textEl = msgEl.querySelector('.ktalk-msg-text');
+        if (!textEl) continue;
+        textEl.innerHTML = formatTranscriptText(newText);
+        textEl.classList.add('refine-fade');
+        setTimeout(() => textEl.classList.remove('refine-fade'), 200);
+      }
+    }
+  }
+
+  window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
+    detail: { transcriptLines: state.transcriptLines.slice() }
+  }));
+}
+
 function copyAllTranscript() {
   if (state.transcriptLines.length === 0) return;
 
@@ -1262,8 +1337,11 @@ function updateTranscriptUI() {
 
     const messageText = formatTranscriptText(line.text);
     const timeValue = line.time || '';
+    const segmentIdAttr = line.segment_id > 0
+      ? ` data-segment-id="${line.segment_id}"`
+      : '';
 
-    return `<div class="${classes}" data-ts="${escapeHtml(timeValue)}">
+    return `<div class="${classes}" data-ts="${escapeHtml(timeValue)}"${segmentIdAttr}>
         <div class="ktalk-msg-header">
           <span class="ktalk-msg-speaker">${speakerDisplay}</span>
           <span class="ktalk-msg-time">${line.time}</span>
