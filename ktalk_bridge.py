@@ -1349,10 +1349,19 @@ class KTalkBridge:
                         with self._lock:
                             self._connected_clients.discard(websocket)
                             self._subscriber_clients.add(websocket)
+                            no_extension_clients = not self._connected_clients
                         print(
                             f"[KTalk Bridge] Subscriber registered from {websocket.remote_address}",
                             file=sys.stderr,
                         )
+                        # Race recovery: between this socket's WS-open and
+                        # hello-processing, it sat in `_connected_clients`.
+                        # If an extension client disconnected in that window,
+                        # its finally-block saw `no_extension_clients=False`
+                        # and skipped the meeting-end lifecycle. Re-run the
+                        # check now that the subscriber has been unmasked.
+                        if no_extension_clients:
+                            await self._end_meeting_on_last_extension_gone()
                         continue
                     await self._process_message(data)
                 except json.JSONDecodeError:
@@ -1371,35 +1380,51 @@ class KTalkBridge:
                 f"[KTalk Bridge] {'Subscriber' if was_subscriber else 'Client'} disconnected",
                 file=sys.stderr,
             )
-            # Clear stale participant state BEFORE bumping the generation
-            # (same order as meeting_leave) so that the live thread's next
-            # chunk cannot read old-meeting speaker data through
-            # get_current_speaker / get_sole_unmuted_remote_participant.
             # Only extension clients count for lifecycle — subscribers are
             # passive listeners and must not block "last extension gone".
             if no_extension_clients:
-                self._clear_speaker_state()
-            # End meeting if this was the last extension client and meeting is active
-            if self._meeting_storage and no_extension_clients and self._meeting_storage.current_meeting_path:
-                meta = self._meeting_storage._load_meta()
-                if meta and meta.get("source") == "ktalk":
-                    # Capture prev meeting context BEFORE on_ktalk_leave switches it
-                    prev_meeting_id = self._meeting_storage.current_meeting_id
-                    prev_meeting_path = self._meeting_storage.current_meeting_path
-                    # Use the same pre/post switch flow as meeting_join/leave
-                    # so that _meeting_generation is bumped and WAV writers are swapped.
-                    if self._on_pre_meeting_switch:
-                        self._on_pre_meeting_switch()
-                    new_meeting_id = self._meeting_storage.on_ktalk_leave("disconnected")
-                    if self._on_meeting_change:
-                        meeting_path = self._meeting_storage.current_meeting_path
-                        self._on_meeting_change(new_meeting_id, meeting_path)
-                    # Trigger async increment generation for the meeting we just left
-                    if self._increment_generator and prev_meeting_id and prev_meeting_path:
-                        task = asyncio.create_task(self._safe_generate_increment(prev_meeting_id, prev_meeting_path))
-                        self._background_tasks.add(task)
-                        task.add_done_callback(self._background_tasks.discard)
-                    print("[KTalk Bridge] Ended KTalk meeting due to client disconnect", file=sys.stderr)
+                await self._end_meeting_on_last_extension_gone()
+
+    async def _end_meeting_on_last_extension_gone(self) -> None:
+        """Run the end-of-meeting cleanup when no extension clients remain.
+
+        Idempotent: safe to call when no meeting is active (the inner
+        checks skip the cleanup). Called from two sites:
+        1. `_handle_client.finally` when an extension closes and leaves
+           `_connected_clients` empty.
+        2. the `subscriber_hello` handler, to recover from the race where
+           an extension disconnected while this subscriber was still
+           transiently counted in `_connected_clients` (between WS-open
+           and hello-processing), causing the extension's finally-block
+           to skip the cleanup.
+        """
+        # Clear stale participant state BEFORE bumping the generation
+        # (same order as meeting_leave) so that the live thread's next
+        # chunk cannot read old-meeting speaker data through
+        # get_current_speaker / get_sole_unmuted_remote_participant.
+        self._clear_speaker_state()
+        if not (self._meeting_storage and self._meeting_storage.current_meeting_path):
+            return
+        meta = self._meeting_storage._load_meta()
+        if not (meta and meta.get("source") == "ktalk"):
+            return
+        # Capture prev meeting context BEFORE on_ktalk_leave switches it
+        prev_meeting_id = self._meeting_storage.current_meeting_id
+        prev_meeting_path = self._meeting_storage.current_meeting_path
+        # Use the same pre/post switch flow as meeting_join/leave
+        # so that _meeting_generation is bumped and WAV writers are swapped.
+        if self._on_pre_meeting_switch:
+            self._on_pre_meeting_switch()
+        new_meeting_id = self._meeting_storage.on_ktalk_leave("disconnected")
+        if self._on_meeting_change:
+            meeting_path = self._meeting_storage.current_meeting_path
+            self._on_meeting_change(new_meeting_id, meeting_path)
+        # Trigger async increment generation for the meeting we just left
+        if self._increment_generator and prev_meeting_id and prev_meeting_path:
+            task = asyncio.create_task(self._safe_generate_increment(prev_meeting_id, prev_meeting_path))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+        print("[KTalk Bridge] Ended KTalk meeting due to client disconnect", file=sys.stderr)
 
     async def _process_message(self, data: dict):
         """Обрабатывает сообщение от extension."""
