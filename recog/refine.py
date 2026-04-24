@@ -25,7 +25,6 @@ from __future__ import annotations
 import queue
 import sys
 import threading
-import time
 import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, List, Literal, Optional
@@ -365,11 +364,16 @@ class RefineWorker:
         waiting here lets live win the lock without the worker paying a
         doomed encoder forward pass on the unfair `threading.Lock` race
         (see class docstring and the `_LIVE_POLL_S` comment).
+
+        Waits on `self._stopped` (with a timeout that bounds how long we
+        hold between `_live_pending` polls) rather than sleeping blindly,
+        so `stop()` unblocks shutdown immediately instead of idling
+        through the remainder of the current poll tick.
         """
         while self._live_pending.is_set():
             if self._stopped.is_set():
                 return
-            time.sleep(self._LIVE_POLL_S)
+            self._stopped.wait(timeout=self._LIVE_POLL_S)
 
     def _run(self) -> None:
         while not self._stopped.is_set():

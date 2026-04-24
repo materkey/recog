@@ -334,3 +334,136 @@ class TestApplyFnCompatibility:
             apply_fn=lambda result: LiveTranscriber._apply_refine(t, result),
         )
         assert worker.abort_mode == "cooperative"
+
+
+class TestWordAtSegmentBoundary:
+    """given a word whose rebased timestamps straddle a live-segment boundary -
+    when _apply_refine runs - then the word lands in exactly one segment by
+    its start ms (design.md D1 single-point alignment)."""
+
+    def test_word_straddling_boundary_assigned_to_segment_containing_start(self):
+        """Regression: both-bounds-inside alignment dropped boundary-straddling
+        words entirely. Word [2900, 3100] straddles seg1/seg2 boundary at 3000.
+        Both-bounds check: `2900 >= 0 AND 3100 <= 3000` → False for seg1;
+        `2900 >= 3000` → False for seg2. Word lost. Single-point by start:
+        seg1 contains 2900, gets the word."""
+        pid = "pid-1"
+        t = _make_transcriber(
+            live_segments={pid: [
+                (1, 0.0, 3_000.0),
+                (2, 3_000.0, 6_000.0),
+            ]},
+            segment_texts={1: "stale-1", 2: "stale-2"},
+        )
+        task = _make_task(pid=pid, offset_base_ms=0.0)
+        result = RefineResult(
+            task=task,
+            text="a straddle c",
+            words=[
+                Word(text="a", start=100, end=400),          # in seg 1
+                Word(text="straddle", start=2900, end=3100),  # crosses boundary
+                Word(text="c", start=3500, end=3900),        # in seg 2
+            ],
+        )
+        LiveTranscriber._apply_refine(t, result)
+
+        t._meeting_storage.update_segments.assert_called_once()
+        args, _ = t._meeting_storage.update_segments.call_args
+        updates = args[0]
+        # Straddling word goes to the segment containing its start (2900 → seg 1).
+        assert updates == [
+            {"segment_id": 1, "text": "a straddle", "refined": True},
+            {"segment_id": 2, "text": "c", "refined": True},
+        ]
+
+    def test_word_at_exact_boundary_goes_to_later_segment(self):
+        """Word start == seg_start is included in that segment (half-open
+        interval `[seg_start, seg_end)`). Prevents double-counting when two
+        adjacent segments share an exact ms boundary."""
+        pid = "pid-1"
+        t = _make_transcriber(
+            live_segments={pid: [
+                (1, 0.0, 3_000.0),
+                (2, 3_000.0, 6_000.0),
+            ]},
+        )
+        task = _make_task(pid=pid, offset_base_ms=0.0)
+        result = RefineResult(
+            task=task,
+            text="boundary",
+            words=[Word(text="boundary", start=3000, end=3500)],
+        )
+        LiveTranscriber._apply_refine(t, result)
+
+        args, _ = t._meeting_storage.update_segments.call_args
+        # Word at exactly 3000 → assigned to seg 2 (start-inclusive).
+        assert args[0] == [
+            {"segment_id": 2, "text": "boundary", "refined": True},
+        ]
+
+    def test_word_at_segment_end_excluded_from_earlier_segment(self):
+        """Word start == seg_end is NOT included in that segment (half-open
+        `[seg_start, seg_end)`). With a sole later segment starting at the
+        same boundary, the word lands there."""
+        pid = "pid-1"
+        t = _make_transcriber(
+            live_segments={pid: [
+                (1, 0.0, 3_000.0),
+                (2, 3_000.0, 6_000.0),
+            ]},
+        )
+        task = _make_task(pid=pid, offset_base_ms=0.0)
+        result = RefineResult(
+            task=task,
+            text="edge",
+            words=[Word(text="edge", start=3000, end=3100)],
+        )
+        LiveTranscriber._apply_refine(t, result)
+
+        args, _ = t._meeting_storage.update_segments.call_args
+        assert args[0] == [
+            {"segment_id": 2, "text": "edge", "refined": True},
+        ]
+
+
+class TestCacheRewriteFiltersPrunedSegments:
+    """given a segment pruned from the live registry while the lock was
+    released for the JSONL rewrite - when _apply_refine re-acquires the lock
+    to update `_pcm_segment_texts` - then the pruned entry is NOT
+    re-populated (prevents unbounded cache growth on long meetings)."""
+
+    def test_pruned_segment_not_re_added_to_cache(self):
+        pid = "pid-1"
+        # Initial state: seg 1 and seg 2 both present.
+        t = _make_transcriber(
+            live_segments={pid: [
+                (1, 0.0, 1_000.0),
+                (2, 2_000.0, 3_000.0),
+            ]},
+            segment_texts={},
+        )
+        # The mock for `update_segments` flips the registry to simulate a
+        # concurrent prune — seg 1 is gone by the time the lock is reacquired
+        # for the cache write. A real-life equivalent happens when
+        # `_register_pcm_live_segment` prunes the oldest entry while we are
+        # outside the state lock doing JSONL I/O.
+        def side_effect(_updates, **_kwargs):
+            with t._state_lock:
+                t._pcm_live_segments[pid] = [(2, 2_000.0, 3_000.0)]
+        t._meeting_storage.update_segments.side_effect = side_effect
+
+        task = _make_task(pid=pid, offset_base_ms=0.0)
+        result = RefineResult(
+            task=task,
+            text="a c",
+            words=[
+                Word(text="a", start=100, end=400),
+                Word(text="c", start=2100, end=2500),
+            ],
+        )
+        LiveTranscriber._apply_refine(t, result)
+
+        # Seg 1 was pruned concurrently → cache must NOT have entry for seg 1.
+        assert 1 not in t._pcm_segment_texts
+        # Seg 2 is still live → cache entry written.
+        assert t._pcm_segment_texts[2] == "c"
