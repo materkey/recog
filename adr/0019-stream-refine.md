@@ -126,6 +126,14 @@ WS egress (`send_refine`). Narrow surface: три callable + один accessor
 `POST /api/pcm-diagnostics {"refine_enabled": false}` вызывает
 `RefineWorker.pause()` без restart'а сервиса.
 
+> ⚠ Partially implemented (2026-04-24). MVP содержит только базовые guards:
+> empty-text и identical-text skip в `_apply_refine` + watchdog-driven
+> `RefineWorker.pause()/resume()` через `_emit_pcm_transition_marker`. Расширенный
+> sanity filter (word-count-delta + Levenshtein + `rejected_sanity` counter) и
+> POST `/api/pcm-diagnostics` runtime toggle не реализованы в коде — отмечены как
+> "Known limitations" в `experiments/2026-04-24-refine-wer.md` и остаются
+> как follow-up задачи перед default-flip.
+
 ## Benchmark results (см. `experiments/2026-04-24-refine-wer.md`)
 
 Take-2 fixtures (per-pid WAVs, два трека ~48 s, 92 reference-слов каждый,
@@ -199,7 +207,8 @@ Acceptance gates:
 - `segment_id` стабилен — downstream (AI-summary, anchor, playback) не трогается.
 - Atomic rollback: `RECOG_PCM_REFINE=0` + restart = refine-контур no-op.
 - Runtime kill-switch без restart'а через
-  `POST /api/pcm-diagnostics {"refine_enabled": false}`.
+  `POST /api/pcm-diagnostics {"refine_enabled": false}` (спроектирован в D12 —
+  не реализован, см. ⚠-заметку в D12).
 - `RefineWorker` паузится во fallback_mixed, pipeline не ломается.
 
 ### Negative
@@ -214,7 +223,9 @@ Acceptance gates:
 ### Mitigation
 
 - Feature flag default `0`; operational validation перед default-flip.
-- Sanity filter в `_apply_refine` (D12) отбрасывает catastrophic decoder drift.
+- Базовые guards в `_apply_refine` (empty-text + identical-text skip) и watchdog
+  pause/resume. Расширенный sanity filter (D12) запланирован, но не реализован —
+  см. ⚠-заметку в D12.
 - Cooperative abort гарантирует, что live никогда не ждёт больше ~187 ms.
 - `RECOG_BRIDGE_WS_URL` overridable для нетипичных setup'ов.
 
