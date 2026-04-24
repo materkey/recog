@@ -89,12 +89,12 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 5: Latency micro-benchmark — first-paint under refine load
 
-- [ ] 5.1 Extend `scripts/refine_benchmark.py` with `--latency-profile` flag (or new script `scripts/refine_latency_bench.py`): simulate 4 parallel pids each with 30 seconds of synthetic PCM; measure wall-clock from chunk `enqueue` → `append_segment` return (first-paint) for each chunk. Report p50, p95, max.
-- [ ] 5.2 Run twice: once with `RECOG_PCM_REFINE=0` (baseline), once with `RECOG_PCM_REFINE=1`.
-- [ ] 5.3 Acceptance: p95 first-paint regression ≤ 100 ms with refine enabled (per design D6 / Open Question 3).
-- [ ] 5.4 Append results to `experiments/2026-04-24-refine-wer.md` in a "Latency" section.
-- [ ] 5.5 If either acceptance (WER or latency) misses, ⚠️-flag in the report and do NOT recommend default-flip to the user — keep `RECOG_PCM_REFINE` default `0`.
-- [ ] 5.6 Commit: `exp: refine latency micro-bench (first-paint p50/p95 under multi-pid)`
+- [x] 5.1 Extend `scripts/refine_benchmark.py` with `--latency-profile` flag (or new script `scripts/refine_latency_bench.py`): simulate 4 parallel pids each with 30 seconds of synthetic PCM; measure wall-clock from chunk `enqueue` → `append_segment` return (first-paint) for each chunk. Report p50, p95, max.
+- [x] 5.2 Run twice: once with `RECOG_PCM_REFINE=0` (baseline), once with `RECOG_PCM_REFINE=1`.
+- [x] 5.3 Acceptance: p95 first-paint regression ≤ 100 ms with refine enabled (per design D6 / Open Question 3). Δ p95 = +23.4 ms — **PASS**.
+- [x] 5.4 Append results to `experiments/2026-04-24-refine-wer.md` in a "Latency" section.
+- [x] 5.5 If either acceptance (WER or latency) misses, ⚠️-flag in the report and do NOT recommend default-flip to the user — keep `RECOG_PCM_REFINE` default `0`. WER still MISSED on Task 4; latency PASS doesn't unblock default-flip.
+- [x] 5.6 Commit: `exp: refine latency micro-bench (first-paint p50/p95 under multi-pid)`
 
 ### Task 6: ADR-0019
 
