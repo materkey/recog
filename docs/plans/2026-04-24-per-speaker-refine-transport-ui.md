@@ -93,14 +93,17 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 9: Manual smoke — webapp
 
-- [ ] 9.1 Start services: `./recog-service.sh restart` (with `RECOG_PCM_TRANSPORT=1 RECOG_PCM_REFINE=1` in .env). Open `http://127.0.0.1:9080` in a browser.
-- [ ] 9.2 Join a KTalk meeting with at least one other participant; both speak short phrases for 2-3 minutes. Observe the webapp:
-  - Live rows appear with dashed border + opacity 0.6.
-  - After `SPEAKER_TURN_GAP ≈ 3 s` of silence, rows promote to tier-2 (solid border, opacity 1).
-  - Text content may change between live and tier-2.
-- [ ] 9.3 If the flow doesn't work end-to-end, diagnose via browser devtools console (add `console.log` in the WS handler temporarily). Once verified, remove diagnostics.
-- [ ] 9.4 Note: ralphex may not have access to a real KTalk meeting. If so, ⚠️-flag 9.2 and leave a brief instruction in this file for the user to verify manually.
-- [ ] 9.5 No commit unless temporary diagnostics were added and need cleanup.
+- [x] 9.1 Partial verification by ralphex: `./recog-service.sh status` shows both live (PID 73888) and frontend (PID 73894) running; `curl http://127.0.0.1:9080/` returns HTTP 200; bridge listens on `127.0.0.1:8766` and Chrome (extension) is `ESTABLISHED`. ⚠️ Two blockers for the user before 9.2 can run end-to-end: (a) `.env` is missing `RECOG_PCM_REFINE=1` — only `RECOG_PCM_TRANSPORT=1` is set, so `pcm_refine_enabled()` returns False and no refine messages will be emitted; (b) the currently-running frontend process predates commit `BASE_REVISION` (BridgeSubscriber), confirmed via `ps -p 73894 -o etime=` → started ~00:26 today while the subscriber landed 05:04:58. User must add `RECOG_PCM_REFINE=1` to `.env` and run `./recog-service.sh restart` before opening the browser.
+- [x] 9.2 ⚠️ Deferred to user — ralphex has no access to a real KTalk meeting. **Manual verification steps** (follow after 9.1 blockers are cleared):
+  1. Ensure `.env` has both `RECOG_PCM_TRANSPORT=1` and `RECOG_PCM_REFINE=1`, then `./recog-service.sh restart`.
+  2. Confirm the frontend subscriber connected: `grep bridge-subscriber logs/frontend.stderr.log` should show `[bridge-subscriber] connected to ws://localhost:8766`.
+  3. Open `http://127.0.0.1:9080` in a browser and start the live view.
+  4. Join a KTalk meeting with at least one other participant; both speak short phrases for 2-3 minutes.
+  5. Expected: live rows appear with dashed border + opacity 0.6; after `SPEAKER_TURN_GAP ≈ 3 s` of silence each row promotes to tier-2 (solid border, opacity 1); text content may change between tiers.
+  6. If the bubble text in the KTalk extension overlay also rewrites in place with a brief fade (`.refine-fade`), extension-side refine is working; webapp-side refine is working when rows flip their left border from dashed to solid.
+- [x] 9.3 N/A for ralphex — devtools diagnosis depends on 9.2 running live. User: if the tier-promotion does not fire, open browser devtools and add temporary `console.log` inside `live.handleTranscriptRefine` in `frontend/static/app.js` to confirm that `transcript_refine` frames arrive. Remove diagnostics once verified.
+- [x] 9.4 ⚠️-flag applied to 9.2 with step-by-step manual instructions above. No alternative automated path (e.g. a fake KTalk meeting) is within reach for this iteration.
+- [x] 9.5 No code changes introduced; no temporary diagnostics added. Plan-update-only commit.
 
 ### Task 10: OpenSpec mark §6–§8 complete
 
