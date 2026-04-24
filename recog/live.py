@@ -1169,11 +1169,22 @@ class LiveTranscriber:
         and in MeetingStorage so downstream consumers (frontend, AI summary)
         can surface the degraded window.
 
+        Also pauses the refine worker while we're running on the mixed
+        fallback path: tier-2 rewrites cannot be trusted without per-pid
+        PCM (the rolling ring has gone stale and the live segments now come
+        from the mixed-audio branch, which has no pid-frame mapping).
+        Resume on recovery.
+
         `marker_gen` is captured together with the `_last_pcm_degraded`
         compare-and-set at the call site, so that a concurrent
         `_invalidate_pending_chunks` (meeting switch) does not cause us to
         write the marker to the wrong meeting's transcript.jsonl.
         """
+        if self._refine_worker is not None:
+            if degraded:
+                self._refine_worker.pause()
+            else:
+                self._refine_worker.resume()
         if degraded:
             msg = f"[PCM silence >{int(PCM_SILENCE_WATCHDOG_S)}s — switched to mixed fallback]"
         else:

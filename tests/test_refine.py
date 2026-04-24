@@ -174,6 +174,69 @@ class TestRefineWorkerLifecycle:
         finally:
             worker.stop(timeout=1.0)
 
+    def test_pause_rejects_new_submissions(self):
+        """Plan 2026-04-24 §1.4: submit() while paused must be a no-op,
+        not just queue-and-drop. The check lives inside `submit`, under
+        `_paused_lock`, so the task never reaches the queue.
+        """
+        transcribe_calls: List = []
+
+        def transcribe_fn(pcm, **_kw):
+            transcribe_calls.append(pcm)
+            return _FakeResult("x", [])
+
+        worker = RefineWorker(
+            model_lock=threading.Lock(),
+            transcribe_fn=transcribe_fn,
+            apply_fn=lambda _r: None,
+        )
+        worker.start()
+        try:
+            worker.pause()
+            worker.submit(_make_task("p1"))
+            worker.submit(_make_task("p2"))
+            time.sleep(0.4)  # > _POLL_S
+            assert transcribe_calls == [], (
+                "submit-while-paused should drop silently"
+            )
+            # Internal invariant: queue stays empty, not just masked.
+            assert worker._queue.empty()
+        finally:
+            worker.stop(timeout=1.0)
+
+    def test_resume_accepts_submissions(self):
+        """Plan 2026-04-24 §1.4: after resume(), submit() must enqueue
+        tasks again. Mirrors the watchdog pause→resume cycle that Task 1
+        wires into `_emit_pcm_transition_marker`.
+        """
+        done = threading.Event()
+
+        def transcribe_fn(pcm, **_kw):
+            return _FakeResult("ok", [])
+
+        def apply_fn(_result):
+            done.set()
+
+        worker = RefineWorker(
+            model_lock=threading.Lock(),
+            transcribe_fn=transcribe_fn,
+            apply_fn=apply_fn,
+        )
+        worker.start()
+        try:
+            worker.pause()
+            worker.submit(_make_task("p1"))
+            time.sleep(0.2)
+            assert not done.is_set()
+
+            worker.resume()
+            worker.submit(_make_task("p2"))
+            assert done.wait(timeout=2.0), (
+                "apply_fn not invoked after resume()"
+            )
+        finally:
+            worker.stop(timeout=1.0)
+
     def test_live_pending_aborts_cooperative(self):
         """Cooperative abort: live signals `_live_pending` mid-inference;
         the decoder monkey-patch (simulated here by transcribe_fn) raises
