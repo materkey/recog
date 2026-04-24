@@ -275,6 +275,55 @@ async def test_set_current_meeting_same_id_keeps_watermark(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_seed_post_init_watermark_prevents_duplicate_broadcast(tmp_path):
+    """given: fresh WS connect to meeting with existing segments; watcher
+    state reset by set_current_meeting; init payload already sent via WS
+    carrying ids 1-3
+    when: the watchdog fires on_modified after a new append (id 4) — the
+    first time the watcher has read this file post-reset
+    then: only id 4 is broadcast; ids 1-3 are filtered out so the webapp
+    does not render duplicates of the init payload
+
+    Regression for the duplicate-on-connect bug introduced when
+    set_current_meeting started resetting file_position to 0 without a
+    matching seed of already-delivered segment_ids.
+    """
+    path = tmp_path / "transcript.jsonl"
+    _write_jsonl(path, [
+        {"id": 1, "text": "a"},
+        {"id": 2, "text": "b"},
+        {"id": 3, "text": "c"},
+    ])
+
+    watcher, broadcasts = _make_watcher()
+    # Simulate live_stream endpoint: reset + seed watermark from init payload.
+    watcher.set_current_meeting("meeting-x")
+    watcher.seed_post_init_watermark([1, 2, 3])
+
+    # Now transcription appends id 4.
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"id": 4, "text": "d"}, ensure_ascii=False) + "\n")
+
+    await watcher._notify_new_segments(path)
+
+    assert len(broadcasts) == 1
+    assert [s["id"] for s in broadcasts[0]["data"]] == [4]
+    assert watcher._seen_segment_ids == {1, 2, 3, 4}
+
+
+@pytest.mark.asyncio
+async def test_seed_post_init_watermark_ignores_non_int_ids(tmp_path):
+    """given: init payload with event rows that have no `id` field
+    when: seed_post_init_watermark is called with a mix of ints and None
+    then: only int ids are added; None/str/missing are silently dropped
+    and do not poison the set with un-comparable values
+    """
+    watcher, _ = _make_watcher()
+    watcher.seed_post_init_watermark([1, None, 2, "x", 3])
+    assert watcher._seen_segment_ids == {1, 2, 3}
+
+
+@pytest.mark.asyncio
 async def test_missing_id_segments_still_broadcast(tmp_path):
     """given: a line without id field (rare but valid in some event rows)
     when: watcher processes the file

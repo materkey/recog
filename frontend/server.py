@@ -1337,10 +1337,19 @@ async def live_stream(websocket: WebSocket):
         if current:
             live_watcher.set_current_meeting(current["id"])
             meeting_data = storage.get_meeting(current["id"])
+            init_segments = meeting_data.get("segments", []) if meeting_data else []
+            # Populate the watermark with the segment_ids we're about to
+            # deliver via `init`. Without this the first on_modified (fired
+            # by the next transcript.jsonl write) reads from offset 0 with
+            # an empty watermark and re-broadcasts every existing row as a
+            # `segments` frame, producing duplicates on the webapp.
+            live_watcher.seed_post_init_watermark(
+                s.get("id") for s in init_segments
+            )
             await websocket.send_text(json.dumps({
                 "type": "init",
                 "meeting": current,
-                "segments": meeting_data.get("segments", []) if meeting_data else [],
+                "segments": init_segments,
                 "active_meetings": active_meetings,
                 "refine_enabled": refine_on,
             }))
