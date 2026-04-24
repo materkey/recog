@@ -132,10 +132,10 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 10: Push and finalise
 
-- [ ] 10.1 Full unit suite: `venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green.
-- [ ] 10.2 `git status` — tree clean, commits line up with plan.
-- [ ] 10.3 `git push` to origin on `gigaam-upstream-mps` branch.
-- [ ] 10.4 `git log --oneline gigaam-upstream-mps --not main | wc -l` — report total commit count for user reference.
+- [x] 10.1 Full unit suite: `venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green. 281 passed, 2 deselected in 7.70s.
+- [x] 10.2 `git status` — tree clean, commits line up with plan.
+- [x] 10.3 `git push` to origin on `gigaam-upstream-mps` branch. Pushed `BASE_REVISION..BASE_REVISION` (15 local commits published).
+- [x] 10.4 `git log --oneline gigaam-upstream-mps --not main | wc -l` — 57 commits on branch vs `main`.
 
 ### Task 11: Final report
 
