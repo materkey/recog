@@ -113,9 +113,9 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 11: Push
 
-- [ ] 11.1 Full unit suite: `venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green.
-- [ ] 11.2 `git status` — tree clean, commits line up with plan.
-- [ ] 11.3 `git push` to origin on the `gigaam-upstream-mps` branch.
+- [x] 11.1 Full unit suite: `venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green. Result: 257 passed, 2 deselected (e2e) in 5.01s.
+- [x] 11.2 `git status` — tree clean, commits line up with plan. 16 commits ahead of origin/gigaam-upstream-mps covering Tasks 1–10 in order (BASE_REVISION bridge.send_refine → BASE_REVISION openspec §6-§8 marks).
+- [x] 11.3 `git push` to origin on the `gigaam-upstream-mps` branch. Pushed `BASE_REVISION..BASE_REVISION`.
 
 ## Post-Completion
 
