@@ -306,6 +306,13 @@ class KTalkBridge:
         self._running = False
         self._loop = None
         self._connected_clients = set()
+        # Subscriber clients (e.g. frontend `BridgeSubscriber`) connect as
+        # read-only listeners. They do NOT participate in the KTalk meeting
+        # lifecycle: their presence must not block the
+        # "last extension disconnect -> end meeting" path, and they do not
+        # send clock_sync/speaker_update so we do not reset _clock_offset
+        # on their connect. Populated when a client sends `subscriber_hello`.
+        self._subscriber_clients = set()
 
         # Отслеживание активного сегмента речи
         self._segment_start_time: Optional[float] = None
@@ -807,8 +814,12 @@ class KTalkBridge:
             envelope["meeting_id"] = meeting_id
         message = json.dumps(envelope, ensure_ascii=False)
 
-        if self._loop and self._connected_clients:
-            for client in list(self._connected_clients):
+        # Broadcast to both extension and subscriber clients — subscribers
+        # (e.g. frontend `BridgeSubscriber`) relay the refine onto webapp
+        # WS clients, see plan `2026-04-24-per-speaker-refine-transport-ui.md`.
+        if self._loop:
+            recipients = list(self._connected_clients) + list(self._subscriber_clients)
+            for client in recipients:
                 try:
                     asyncio.run_coroutine_threadsafe(
                         client.send(message),
@@ -1284,13 +1295,17 @@ class KTalkBridge:
         )
 
     async def _handle_client(self, websocket):
-        """Обрабатывает подключение клиента (Chrome extension)."""
+        """Обрабатывает подключение клиента (Chrome extension или subscriber)."""
         self._connected_clients.add(websocket)
         # Reset sequence counter on new client connect — extension resets its counter
-        # on page reload, so we must accept seq=1 again
+        # on page reload, so we must accept seq=1 again.
+        # _clock_offset is NOT reset here: a subscriber client (frontend
+        # `BridgeSubscriber`) reconnect would otherwise wipe the
+        # extension's synced offset for up to ~30 s (next clock_sync).
+        # The extension sends `clock_sync` immediately after its own
+        # connect, overwriting any stale offset within a few ms.
         with self._lock:
             self._last_seq = 0
-            self._clock_offset = 0.0
         print(f"[KTalk Bridge] Client connected from {websocket.remote_address}", file=sys.stderr)
 
         # Server-authoritative PCM transport gate (см. recog/config.py
@@ -1311,6 +1326,20 @@ class KTalkBridge:
             async for message in websocket:
                 try:
                     data = json.loads(message)
+                    if data.get("type") == "subscriber_hello":
+                        # Subscriber announces itself — move the connection
+                        # from the extension set to the subscribers set so
+                        # it does not block meeting lifecycle or receive
+                        # clock_sync resets. No further messages are
+                        # expected from a subscriber; the loop remains open
+                        # to relay server→client broadcasts until close.
+                        self._connected_clients.discard(websocket)
+                        self._subscriber_clients.add(websocket)
+                        print(
+                            f"[KTalk Bridge] Subscriber registered from {websocket.remote_address}",
+                            file=sys.stderr,
+                        )
+                        continue
                     await self._process_message(data)
                 except json.JSONDecodeError:
                     print(f"[KTalk Bridge] Invalid JSON: {message[:100]}", file=sys.stderr)
@@ -1319,15 +1348,22 @@ class KTalkBridge:
         except Exception as e:
             print(f"[KTalk Bridge] Connection error: {e}", file=sys.stderr)
         finally:
+            was_subscriber = websocket in self._subscriber_clients
             self._connected_clients.discard(websocket)
-            print(f"[KTalk Bridge] Client disconnected", file=sys.stderr)
+            self._subscriber_clients.discard(websocket)
+            print(
+                f"[KTalk Bridge] {'Subscriber' if was_subscriber else 'Client'} disconnected",
+                file=sys.stderr,
+            )
             # Clear stale participant state BEFORE bumping the generation
             # (same order as meeting_leave) so that the live thread's next
             # chunk cannot read old-meeting speaker data through
             # get_current_speaker / get_sole_unmuted_remote_participant.
+            # Only extension clients count for lifecycle — subscribers are
+            # passive listeners and must not block "last extension gone".
             if not self._connected_clients:
                 self._clear_speaker_state()
-            # End meeting if this was the last client and meeting is active
+            # End meeting if this was the last extension client and meeting is active
             if self._meeting_storage and not self._connected_clients and self._meeting_storage.current_meeting_path:
                 meta = self._meeting_storage._load_meta()
                 if meta and meta.get("source") == "ktalk":

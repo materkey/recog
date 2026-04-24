@@ -144,6 +144,50 @@ async def test_subscriber_starts_when_bridge_unavailable():
 
 
 @pytest.mark.asyncio
+async def test_subscriber_sends_subscriber_hello_on_connect():
+    """given: mock bridge receives connections
+    when: BridgeSubscriber connects
+    then: the first frame it sends is `{"type": "subscriber_hello"}` so the
+          bridge can move the connection out of its extension-client set
+          (preserving meeting-lifecycle semantics)
+    """
+    received: list[str] = []
+
+    async def handler(websocket):
+        try:
+            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            received.append(first)
+        except Exception:
+            pass
+        # Keep the connection alive briefly so the subscriber doesn't
+        # immediately reconnect and race the assert.
+        await asyncio.sleep(0.2)
+
+    async def forward(message: str) -> None:
+        pass
+
+    server, port = await _start_mock_bridge(handler)
+    sub = BridgeSubscriber(
+        bridge_url=f"ws://127.0.0.1:{port}",
+        forward_callback=forward,
+    )
+    await sub.start()
+
+    try:
+        for _ in range(20):
+            if received:
+                break
+            await asyncio.sleep(0.05)
+        assert received, "subscriber did not send any frame"
+        payload = json.loads(received[0])
+        assert payload == {"type": "subscriber_hello"}
+    finally:
+        await sub.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_subscriber_drops_malformed_frames():
     """given: bridge sends a non-JSON frame followed by a valid refine
     when: subscriber processes the stream

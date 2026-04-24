@@ -90,6 +90,21 @@ class BridgeSubscriber:
         while not self._stop_event.is_set():
             try:
                 async with websockets.connect(self.bridge_url) as ws:
+                    # Announce ourselves as a passive subscriber: the bridge
+                    # moves this connection into its `_subscriber_clients`
+                    # set so it does NOT count toward the extension-client
+                    # lifecycle (meeting end on last disconnect) and does
+                    # NOT trigger clock_offset/last_seq resets intended for
+                    # the Chrome extension. Failure is non-fatal — a bridge
+                    # that predates this protocol still delivers refines,
+                    # but we'll hold open a phantom "extension" slot.
+                    try:
+                        await ws.send(json.dumps({"type": "subscriber_hello"}))
+                    except Exception as exc:
+                        print(
+                            f"{self._log_prefix} subscriber_hello send failed: {exc!r}",
+                            file=sys.stderr,
+                        )
                     self._on_connected()
                     delay = self.INITIAL_BACKOFF_S
                     async for raw in ws:
