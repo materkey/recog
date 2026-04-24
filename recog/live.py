@@ -16,15 +16,16 @@ import torch
 from collections import deque
 from dataclasses import dataclass
 
-from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
+from .config import (PCM_VAD_THRESHOLD, SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
                      LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
-                     pcm_refine_enabled, pcm_transport_enabled)
+                     pcm_refine_enabled, pcm_transport_enabled, pcm_vad_enabled)
 from .asr import ASRModule
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
+from .vad import pcm_int16_has_speech
 
 
 class IncrementalWavWriter:
@@ -430,6 +431,10 @@ class LiveTranscriber:
         # `_register_pcm_live_segment`; pruned together with the segment
         # registry. All reads/writes under `self._state_lock`.
         self._pcm_segment_texts: dict[int, str] = {}
+        # Diagnostic counter for Silero VAD prefilter in `_on_pcm_batch`.
+        # Incremented when a PCM batch item is dropped as non-speech; reset
+        # in `_invalidate_pending_chunks` so it reflects the current meeting.
+        self._pcm_vad_dropped_count = 0
         # Refine worker placeholder — `_setup_refine_worker` (Task 11) builds
         # it when `pcm_refine_enabled()` and wires `apply_fn=self._apply_refine`.
         # Kept as None here so `_teardown_session` / `_on_pcm_batch` priority
@@ -857,6 +862,25 @@ class LiveTranscriber:
         ingest = self._per_speaker_ingest
         drain_gen = ingest.last_drain_generation if ingest is not None else None
         chunk_gen = drain_gen if drain_gen is not None else self._meeting_generation
+
+        # Silero VAD prefilter (gated on RECOG_PCM_VAD).  Drops near-silence
+        # PCM batch items before they reach GigaAM so RNN-T does not emit
+        # short hallucinated fillers ("Да/Угу/Вот/Ок") on quiet windows.
+        # Mic path already runs an RMS VAD in `_process_chunk`; this makes
+        # the PCM path symmetric.  Fails open — keep chunk on VAD error.
+        if pcm_vad_enabled():
+            kept = [item for item in batch if pcm_int16_has_speech(item[3], threshold=PCM_VAD_THRESHOLD)]
+            dropped = len(batch) - len(kept)
+            if dropped:
+                self._pcm_vad_dropped_count += dropped
+                print(
+                    f"[PerSpeaker] VAD dropped {dropped}/{len(batch)} silent chunks "
+                    f"(total={self._pcm_vad_dropped_count})",
+                    file=sys.stderr,
+                )
+            if not kept:
+                return
+            batch = kept
 
         pcm_list = [item[3] for item in batch]
         # Priority-signal to the refine worker: live is about to wait on
@@ -1842,6 +1866,9 @@ class LiveTranscriber:
             # a fresh meeting should start assuming PCM healthy.
             self._pcm_prev_words.clear()
             self._pcm_pid_state.clear()
+            # VAD diagnostic counter is per-meeting so stderr suppression
+            # rates reflect only the current session.
+            self._pcm_vad_dropped_count = 0
             # Live-segment registry is per-meeting: segment_ids restart at 0
             # on the new meeting and pid_audio_ms bounds are only meaningful
             # within one meeting's pid frame.
