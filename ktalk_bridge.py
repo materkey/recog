@@ -751,11 +751,16 @@ class KTalkBridge:
         if completed_segment and self._on_segment_complete:
             self._on_segment_complete(completed_segment)
 
-    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False, uncertain_reason: str = "", correction: bool = False, segment_id: int = 0):
+    def send_transcript(self, speaker: str, text: str, timestamp: str, is_continuation: bool = False, is_local: bool = False, uncertain: bool = False, uncertain_reason: str = "", correction: bool = False, segment_id: int = 0, source_id: str = ""):
         """Отправляет транскрипт всем подключённым клиентам.
 
         `segment_id` (>0) пробрасывается в DOM как `data-segment-id`, чтобы
         `transcript_refine` мог найти соответствующий bubble при tier-2 апдейте.
+
+        `source_id` (non-empty) — стабильный идентификатор источника (например,
+        per-pid PCM stream); расширение использует его в continuation-merge
+        предикате, чтобы chunks от разных источников не склеивались в один
+        bubble (см. `2026-04-24-per-speaker-refine-bugs.md`, Bug 1).
         """
         payload = {
             "type": "transcript",
@@ -770,6 +775,8 @@ class KTalkBridge:
         }
         if segment_id > 0:
             payload["segment_id"] = segment_id
+        if source_id:
+            payload["source_id"] = source_id
         message = json.dumps(payload)
 
         # Отправляем асинхронно через event loop. Snapshot under the
