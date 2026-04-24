@@ -889,7 +889,7 @@ class LiveTranscriber:
                 if self._wav_writer_system
                 else 0
             )
-        for (pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms, pid_audio_ms_end), raw_text in zip(batch, texts):
+        for (pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms, pid_audio_ms_start, pid_audio_ms_end), raw_text in zip(batch, texts):
             text = (raw_text or "").strip()
             if not text:
                 continue
@@ -970,13 +970,13 @@ class LiveTranscriber:
                     )
                     # Stamp the live segment with its pid-frame bounds so the
                     # refine contour (Task 9) can align refined word timestamps
-                    # back to this segment_id for the JSONL rewrite. Pass the
-                    # per-chunk `pid_audio_ms_end` captured at enqueue time
-                    # rather than reading the ingest's latest counter — the
-                    # latter collapses to identical bounds for multi-chunk-
-                    # same-pid batches.
+                    # back to this segment_id for the JSONL rewrite. Use the
+                    # per-chunk `pid_audio_ms_start`/`_end` captured at enqueue
+                    # time directly — deriving start from `len(_pcm) / rate`
+                    # would re-introduce the 600 ms payload-overlap that the
+                    # ingest already stripped from the pid-frame counter.
                     self._register_pcm_live_segment(
-                        pid, segment_id, _pcm, pid_audio_ms_end
+                        pid, segment_id, pid_audio_ms_start, pid_audio_ms_end
                     )
                     # Cache the freshly-written text so `_apply_refine` can
                     # short-circuit identical refinements without an extra
@@ -987,28 +987,32 @@ class LiveTranscriber:
         self,
         pid: str,
         segment_id: int,
-        chunk_samples: np.ndarray,
+        pid_audio_ms_start: float,
         pid_audio_ms_end: float,
     ) -> None:
         """Append (segment_id, pid_audio_ms_start, pid_audio_ms_end) to the
         per-pid live-segment registry and prune entries outside the refine
         window + head room.
 
-        Caller must hold `self._state_lock`. `pid_audio_ms_end` is the
-        per-chunk snapshot taken at enqueue time (threaded through
-        `BatchedChunk`) so multiple chunks of the same pid in one batch do
-        not collapse to identical bounds. `start = end - chunk_duration_ms`.
-        Prune floor = pid_audio_ms_end - (PCM_REFINE_WINDOW_S + 5) * 1000 ms,
+        Caller must hold `self._state_lock`. Both bounds are per-chunk
+        snapshots taken at enqueue time and threaded through `BatchedChunk`
+        so multiple chunks of the same pid in one batch get their own
+        non-overlapping bounds. Computing `start` locally from
+        `len(chunk_samples) / sample_rate` would re-introduce the 600 ms
+        payload-overlap that the ingest strips from `_pid_audio_ms` — the
+        previous-chunk tail is physically present in the live-path PCM but
+        its pid-frame range was already covered by the previous segment's
+        bounds, so refine alignment must not claim it again here. Prune
+        floor = `pid_audio_ms_end - (PCM_REFINE_WINDOW_S + 5) * 1000` ms,
         matching the capacity of the PCM ring so stale entries do not grow
         unboundedly when a pid talks for a long time.
         """
         if self._per_speaker_ingest is None:
             return
-        chunk_duration_ms = (len(chunk_samples) / self.sample_rate) * 1000.0
         entries = self._pcm_live_segments.setdefault(pid, [])
         entries.append((
             segment_id,
-            pid_audio_ms_end - chunk_duration_ms,
+            pid_audio_ms_start,
             pid_audio_ms_end,
         ))
         prune_floor = pid_audio_ms_end - (PCM_REFINE_WINDOW_S + 5.0) * 1000.0

@@ -33,6 +33,8 @@ import numpy as np
 from .config import (
     PCM_BATCH_INTERVAL_MS,
     PCM_CHUNK_DURATION_S,
+    PCM_CHUNK_OVERLAP_MS,
+    PCM_CHUNK_PAYLOAD_S,
     PCM_MAX_BATCH_SIZE,
     PCM_REFINE_MONOLOG_CAP_S,
     PCM_REFINE_WINDOW_S,
@@ -50,12 +52,17 @@ from ktalk_bridge import PcmChunk
 
 # Payload produced for ASRModule.transcribe_batch:
 # (pid, speaker_name, is_local, pcm_int16_np, chunk_start_ms, chunk_end_ms,
-#  pid_audio_ms_end) — the last field is the per-pid monotonic audio counter
-# snapshot taken at enqueue time (right after `_pid_audio_ms[pid]` was bumped
-# for this chunk). Threaded through so `_register_pcm_live_segment` can stamp
-# per-chunk bounds instead of reading a shared `_pid_audio_ms[pid]` that
-# would be the SAME value for every chunk of a multi-chunk-same-pid batch.
-BatchedChunk = Tuple[str, str, bool, np.ndarray, float, float, float]
+#  pid_audio_ms_start, pid_audio_ms_end) — the last two fields bracket this
+# chunk's contribution to the per-pid timeline. They are the snapshots of
+# `_pid_audio_ms[pid]` taken BEFORE and AFTER the chunk was accounted for
+# in enqueue. `_register_pcm_live_segment` stamps segment bounds directly
+# from these, so consecutive chunks get non-overlapping bounds even when
+# the worklet emits overlapping payloads (production: 3.6 s payload, 3.0 s
+# stride → 600 ms overlap). See §D1 timeline contract in design.md and
+# commit `BASE_REVISION` "Known follow-up" section.
+BatchedChunk = Tuple[
+    str, str, bool, np.ndarray, float, float, float, float
+]
 
 
 @dataclass
@@ -65,10 +72,13 @@ class _BufferedChunk:
     chunk: PcmChunk
     meeting_generation: int
     enqueued_at: float
-    # Snapshot of `_pid_audio_ms[chunk.pid]` taken right after this chunk was
-    # accounted for — used to stamp per-chunk pid-frame bounds in the
-    # live-segment registry instead of reading a shared counter that may have
-    # already advanced past this chunk's end.
+    # Snapshots of `_pid_audio_ms[chunk.pid]` taken BEFORE and AFTER this
+    # chunk was accounted for. The live-segment registry consumes the pair
+    # to stamp non-overlapping pid-frame bounds per chunk — computing
+    # `start = end - sample_count/rate` instead would re-introduce the
+    # overlap (chunks carry 600 ms of the previous chunk's tail) and
+    # pollute alignment.
+    pid_audio_ms_start: float = 0.0
     pid_audio_ms_end: float = 0.0
 
 
@@ -139,13 +149,26 @@ class PerSpeakerIngest:
         self._thread: Optional[threading.Thread] = None
 
         # ----- refine state (§3 of per-speaker-stream-refine) ----------------
-        # Per-pid rolling PCM ring: deque of Int16 np.ndarray chunks. Capacity
-        # in seconds = PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S + head_room;
-        # enforced per-pid at enqueue time by dropping oldest entries.
-        self._pcm_rings: Dict[str, Deque[np.ndarray]] = {}
+        # Per-pid rolling PCM ring: deque of (Int16 np.ndarray, pid_audio_ms_end)
+        # tuples. The second value is the per-pid audio counter snapshot AFTER
+        # the chunk was accounted for in enqueue — lets get_refine_candidate
+        # skip ring entries that correspond to audio not yet drained + handed
+        # off to live ASR (no `_pcm_live_segments` entry = nothing to refine).
+        # Capacity in seconds = PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S +
+        # head_room; enforced per-pid at enqueue time by dropping oldest entries.
+        self._pcm_rings: Dict[str, Deque[Tuple[np.ndarray, float]]] = {}
         # Per-pid monotonic audio counter (ms), D1 timeline contract. Advances
         # by chunk_ms on each enqueue; never reset except on meeting drain.
         self._pid_audio_ms: Dict[str, float] = {}
+        # Per-pid cumulative max `pid_audio_ms_end` of chunks actually emitted
+        # to live (via `_transcribe_callback`). Advances ONLY during
+        # `_drain_batch_locked`, never during enqueue. `get_refine_candidate`
+        # uses this (instead of `_pid_audio_ms`) so the watermark cannot
+        # advance past chunks that haven't been transcribed by live — those
+        # chunks have no `_pcm_live_segments` entry yet and `_apply_refine`
+        # would drop their refined words with nothing to re-trigger refine
+        # later (watermark already past them).
+        self._pid_drained_ms: Dict[str, float] = {}
         # Per-pid pid_audio_ms of the oldest un-refined sample. Starts at 0 on
         # the first chunk; advanced by get_refine_candidate when a window is
         # handed off to the RefineWorker.
@@ -294,13 +317,39 @@ class PerSpeakerIngest:
             # locked is cheap, but keeping one authoritative decode is cleaner.
             samples = _decode_pcm_int16(chunk.pcm)
             sample_rate = chunk.sample_rate or 16000
+            # Strip the 600 ms overlap from every chunk after the first when
+            # the payload matches the production worklet shape (3.6 s at
+            # `sample_rate`). The worklet emits overlapping payloads so the
+            # live path's `_remove_duplicate_words` has context on chunk
+            # boundaries; the refine ring and pid-frame counter must see
+            # non-overlapping audio to keep `pid_audio_ms` aligned with true
+            # walltime and prevent refined words from duplicating across the
+            # stride boundary. Tests use smaller chunks (1 s / 3 s) which
+            # never match `expected_payload_samples` so no stripping occurs
+            # for them — the detection is deliberately payload-size gated
+            # rather than unconditional to keep the existing no-overlap test
+            # corpus working without the worklet's protocol constants
+            # leaking into every synthetic chunk.
+            expected_payload_samples = int(PCM_CHUNK_PAYLOAD_S * sample_rate)
+            first_chunk_for_pid = chunk.pid not in self._pid_audio_ms
+            if (
+                not first_chunk_for_pid
+                and samples.size == expected_payload_samples
+            ):
+                overlap_samples = int(
+                    PCM_CHUNK_OVERLAP_MS * sample_rate / 1000
+                )
+                if 0 < overlap_samples < samples.size:
+                    samples = samples[overlap_samples:]
             chunk_ms = (samples.size / sample_rate) * 1000.0 if sample_rate else 0.0
             if samples.size > 0 and chunk_ms > 0.0:
                 ring = self._pcm_rings.setdefault(chunk.pid, deque())
-                ring.append(samples)
-                self._pid_audio_ms[chunk.pid] = (
-                    self._pid_audio_ms.get(chunk.pid, 0.0) + chunk_ms
-                )
+                prev_pid_audio_ms = self._pid_audio_ms.get(chunk.pid, 0.0)
+                self._pid_audio_ms[chunk.pid] = prev_pid_audio_ms + chunk_ms
+                # Store the per-chunk pid_audio_ms_end alongside samples so the
+                # refine pull can filter out ring entries whose audio has not
+                # yet been drained to live (see _pid_drained_ms comment).
+                ring.append((samples, self._pid_audio_ms[chunk.pid]))
                 # Watermark is initialised to 0 on the first chunk; advanced by
                 # get_refine_candidate (Task 7) when a window is handed off.
                 self._refine_watermark_ms.setdefault(chunk.pid, 0.0)
@@ -311,12 +360,14 @@ class PerSpeakerIngest:
                 self._pid_sample_rate[chunk.pid] = sample_rate
                 self._enforce_ring_capacity_locked(chunk.pid, sample_rate)
                 self._pids_had_chunk_since_last_tick.add(chunk.pid)
-                # Snapshot per-chunk end bound AFTER counter advance so each
-                # chunk carries its own pid-frame end through the batch
-                # pipeline. Multiple chunks from the same pid in one batch
-                # would otherwise all read the same latest counter value at
-                # _register_pcm_live_segment time and collapse to identical
-                # bounds.
+                # Snapshot per-chunk start/end bounds so each chunk carries
+                # its own non-overlapping pid-frame range through the batch
+                # pipeline. Reading a shared counter at
+                # `_register_pcm_live_segment` time would collapse multi-
+                # chunk-same-pid batches to identical bounds; recomputing
+                # start from `sample_count` would re-introduce the overlap
+                # that we stripped above.
+                buffered.pid_audio_ms_start = prev_pid_audio_ms
                 buffered.pid_audio_ms_end = self._pid_audio_ms[chunk.pid]
 
             total = sum(len(b) for b in self._buffers.values())
@@ -352,6 +403,7 @@ class PerSpeakerIngest:
             # rings and counters together with the live buffers.
             self._pcm_rings.clear()
             self._pid_audio_ms.clear()
+            self._pid_drained_ms.clear()
             self._refine_watermark_ms.clear()
             self._silence_ms.clear()
             self._continuous_speech_ms.clear()
@@ -456,21 +508,25 @@ class PerSpeakerIngest:
         Monolog fallback: `_continuous_speech_ms[pid] >= PCM_REFINE_MONOLOG_CAP_S * 1000`.
 
         Assembles the trailing PCM window from the per-pid ring — spanning
-        `[watermark, pid_audio_ms]` and capped at `PCM_REFINE_WINDOW_S * 1000`
-        ms. Computes `offset_base_ms = max(0, pid_audio_ms - samples_duration_ms)`
-        so upstream word timestamps can be rebased into the pid frame. Advances
-        `_refine_watermark_ms[pid]` to `pid_audio_ms` atomically so a second
-        call without new audio returns None. On monolog trigger also resets
-        `_continuous_speech_ms[pid]=0` to avoid re-firing next tick.
+        `[watermark, drained_ms]` (NOT `pid_audio_ms` — see `_pid_drained_ms`
+        docstring) and capped at `PCM_REFINE_WINDOW_S * 1000` ms. Ring
+        entries whose `pid_audio_ms_end > drained_ms` are skipped because
+        their audio has no corresponding `_pcm_live_segments` entry yet.
+        Computes `offset_base_ms = max(0, drained_ms - samples_duration_ms)`
+        so upstream word timestamps can be rebased into the pid frame.
+        Advances `_refine_watermark_ms[pid]` to `drained_ms` atomically so a
+        second call without new drained audio returns None. On monolog
+        trigger also resets `_continuous_speech_ms[pid]=0` to avoid re-firing
+        next tick.
 
         Thread-safe: the watermark advance and task creation happen atomically
         under `self._lock`, so a concurrent `enqueue` cannot slip un-refined
         audio past the handoff.
         """
         with self._lock:
-            pid_audio_ms = self._pid_audio_ms.get(pid, 0.0)
+            drained_ms = self._pid_drained_ms.get(pid, 0.0)
             watermark = self._refine_watermark_ms.get(pid, 0.0)
-            unrefined_ms = pid_audio_ms - watermark
+            unrefined_ms = drained_ms - watermark
             if unrefined_ms <= 0.0:
                 return None
 
@@ -496,9 +552,19 @@ class PerSpeakerIngest:
 
             pulled: List[np.ndarray] = []
             total = 0
-            for entry in reversed(ring):
-                pulled.append(entry)
-                total += int(entry.size)
+            for samples, entry_end_ms in reversed(ring):
+                # Skip ring entries that correspond to audio not yet drained
+                # to live — refining them would produce word timestamps with
+                # no matching live segment (entries registered only after
+                # `_on_pcm_batch` runs on the drained batch).
+                if entry_end_ms > drained_ms:
+                    continue
+                # Ring entries older than the watermark were already covered
+                # by a previous refine — stop instead of including them.
+                if entry_end_ms <= watermark:
+                    break
+                pulled.append(samples)
+                total += int(samples.size)
                 if total >= target_samples:
                     break
             if not pulled:
@@ -514,9 +580,9 @@ class PerSpeakerIngest:
                 pcm_samples = pcm_samples[pcm_samples.size - target_samples:]
 
             actual_samples_ms = (pcm_samples.size / sample_rate) * 1000.0
-            offset_base_ms = max(0.0, pid_audio_ms - actual_samples_ms)
+            offset_base_ms = max(0.0, drained_ms - actual_samples_ms)
 
-            self._refine_watermark_ms[pid] = pid_audio_ms
+            self._refine_watermark_ms[pid] = drained_ms
             if monolog_triggered:
                 self._continuous_speech_ms[pid] = 0.0
 
@@ -544,10 +610,10 @@ class PerSpeakerIngest:
         cap_samples = int(self._pid_ring_capacity_ms * sample_rate / 1000.0)
         if cap_samples <= 0:
             return
-        total = sum(int(entry.size) for entry in ring)
+        total = sum(int(samples.size) for samples, _end_ms in ring)
         while total > cap_samples and len(ring) > 1:
-            oldest = ring.popleft()
-            total -= int(oldest.size)
+            oldest_samples, _ = ring.popleft()
+            total -= int(oldest_samples.size)
 
     def _update_per_pid_silence_locked(self) -> None:
         """Advance `_silence_ms` for pids idle this tick; reset continuous
@@ -639,6 +705,13 @@ class PerSpeakerIngest:
                 continue
 
             pcm_i16 = _decode_pcm_int16(buffered.chunk.pcm)
+            # Cumulative per-pid "emitted to live" counter. Updated here (not
+            # in enqueue) so `get_refine_candidate` can cap the watermark
+            # advance at drained audio and avoid moving past chunks whose
+            # `_pcm_live_segments` entries have not been registered yet.
+            current_drained = self._pid_drained_ms.get(best_pid, 0.0)
+            if buffered.pid_audio_ms_end > current_drained:
+                self._pid_drained_ms[best_pid] = buffered.pid_audio_ms_end
             batch.append((
                 buffered.chunk.pid,
                 buffered.chunk.speaker_name,
@@ -646,6 +719,7 @@ class PerSpeakerIngest:
                 pcm_i16,
                 buffered.chunk.chunk_start_ts * 1000.0,
                 buffered.chunk.chunk_end_ts * 1000.0,
+                buffered.pid_audio_ms_start,
                 buffered.pid_audio_ms_end,
             ))
 

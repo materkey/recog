@@ -248,6 +248,7 @@ def test_pcm_on_batch_callback_does_not_query_bridge_speakers():
         np.zeros(48000, dtype=np.int16),  # pcm
         1000.0,            # chunk_start_ms
         4300.0,            # chunk_end_ms
+        0.0,               # pid_audio_ms_start
         3000.0,            # pid_audio_ms_end
     )]
 
@@ -282,7 +283,8 @@ def test_pcm_on_batch_rejects_batch_when_meeting_switched_post_drain():
     import numpy as np
 
     batch = [(
-        "pid-1", "Alice", False, np.zeros(48000, dtype=np.int16), 0.0, 3300.0, 3000.0,
+        "pid-1", "Alice", False, np.zeros(48000, dtype=np.int16),
+        0.0, 3300.0, 0.0, 3000.0,
     )]
 
     LiveTranscriber._on_pcm_batch(t, batch)
@@ -311,6 +313,7 @@ def test_pcm_on_batch_sanitizes_newlines_in_speaker_name():
         np.zeros(48000, dtype=np.int16),
         0.0,
         3300.0,
+        0.0,
         3000.0,
     )]
 
@@ -354,7 +357,7 @@ def test_pcm_on_batch_sets_audio_offset_from_wav_writer():
         "pid-1", "Alice", False,
         np.zeros(48000, dtype=np.int16),
         now_ms - 2000, now_ms + 1300,
-        3300.0,
+        0.0, 3300.0,
     )]
 
     LiveTranscriber._on_pcm_batch(t, batch)
@@ -386,7 +389,7 @@ def test_pcm_on_batch_audio_offset_clamped_to_zero_when_no_wav_writer():
         "pid-1", "Alice", False,
         np.zeros(48000, dtype=np.int16),
         time.time() * 1000 - 500, time.time() * 1000 + 2800,
-        3300.0,
+        0.0, 3300.0,
     )]
 
     LiveTranscriber._on_pcm_batch(t, batch)

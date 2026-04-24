@@ -12,7 +12,6 @@ import threading
 from pathlib import Path
 from unittest.mock import Mock
 
-import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,7 +21,6 @@ from recog.live import LiveTranscriber
 
 
 SAMPLE_RATE = 16000
-CHUNK_3S_SAMPLES = SAMPLE_RATE * 3  # 3 s chunk => 3000 ms
 
 
 def _make_transcriber() -> Mock:
@@ -30,8 +28,8 @@ def _make_transcriber() -> Mock:
     reads: _pcm_live_segments, _pcm_segment_texts (pruned in lockstep with
     the registry by Task 9), _state_lock, sample_rate, and a stubbed
     _per_speaker_ingest (non-None sentinel — the helper's no-op guard reads
-    only `is None`, so a bare Mock is sufficient; per-chunk `pid_audio_ms_end`
-    is now threaded in through the call argument).
+    only `is None`, so a bare Mock is sufficient; per-chunk bounds are now
+    threaded in through the call argument).
     """
     t = Mock(spec=LiveTranscriber)
     t._state_lock = threading.Lock()
@@ -48,24 +46,22 @@ class TestRegistryAppendsOnEmit:
     def test_appends_entry_with_pid_frame_bounds(self):
         pid = "pid-1"
         t = _make_transcriber()
-        samples = np.zeros(CHUNK_3S_SAMPLES, dtype=np.int16)
 
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid, 42, samples, 3000.0)
+            LiveTranscriber._register_pcm_live_segment(t, pid, 42, 0.0, 3000.0)
 
         assert t._pcm_live_segments[pid] == [(42, 0.0, 3000.0)]
 
     def test_appends_preserve_order_on_multiple_chunks(self):
         pid = "pid-1"
         t = _make_transcriber()
-        samples = np.zeros(CHUNK_3S_SAMPLES, dtype=np.int16)
 
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid, 1, samples, 3000.0)
+            LiveTranscriber._register_pcm_live_segment(t, pid, 1, 0.0, 3000.0)
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid, 2, samples, 6000.0)
+            LiveTranscriber._register_pcm_live_segment(t, pid, 2, 3000.0, 6000.0)
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid, 3, samples, 9000.0)
+            LiveTranscriber._register_pcm_live_segment(t, pid, 3, 6000.0, 9000.0)
 
         entries = t._pcm_live_segments[pid]
         assert [e[0] for e in entries] == [1, 2, 3]
@@ -76,18 +72,17 @@ class TestRegistryAppendsOnEmit:
     def test_multiple_chunks_same_pid_same_batch_use_per_chunk_bounds(self):
         """given: two chunks of the same pid drained together in one batch
            when:  _register_pcm_live_segment called for each with its own
-                  pid_audio_ms_end (snapshotted at enqueue time)
+                  pid_audio_ms_start/end (snapshotted at enqueue time)
            then:  each segment records its true per-chunk bounds rather than
                   collapsing to the latest-seen counter value — this is the
                   burst/reconnect bug that the per-chunk threading fixes
         """
         pid = "pid-1"
         t = _make_transcriber()
-        samples = np.zeros(CHUNK_3S_SAMPLES, dtype=np.int16)
 
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid, 1, samples, 3000.0)
-            LiveTranscriber._register_pcm_live_segment(t, pid, 2, samples, 6000.0)
+            LiveTranscriber._register_pcm_live_segment(t, pid, 1, 0.0, 3000.0)
+            LiveTranscriber._register_pcm_live_segment(t, pid, 2, 3000.0, 6000.0)
 
         entries = t._pcm_live_segments[pid]
         assert entries[0] == (1, 0.0, 3000.0)
@@ -98,10 +93,9 @@ class TestRegistryAppendsOnEmit:
         is reachable during teardown / when pcm-transport is disabled."""
         t = _make_transcriber()
         t._per_speaker_ingest = None
-        samples = np.zeros(CHUNK_3S_SAMPLES, dtype=np.int16)
 
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, "pid-1", 1, samples, 3000.0)
+            LiveTranscriber._register_pcm_live_segment(t, "pid-1", 1, 0.0, 3000.0)
 
         assert t._pcm_live_segments == {}
 
@@ -120,10 +114,11 @@ class TestRegistryPrunesOldEntries:
             (2, 7_000.0, 10_000.0),   # end=10_000 < 15_000 => pruned
             (3, 14_000.0, 15_000.0),  # end=15_000 NOT < 15_000 => kept
         ]
-        samples = np.zeros(CHUNK_3S_SAMPLES, dtype=np.int16)
 
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid, 4, samples, now_ms)
+            LiveTranscriber._register_pcm_live_segment(
+                t, pid, 4, 37_000.0, now_ms
+            )
 
         entries = t._pcm_live_segments[pid]
         assert [e[0] for e in entries] == [3, 4]
@@ -139,10 +134,11 @@ class TestRegistryPrunesOldEntries:
             (10, 3_000.0, 6_000.0),
             (11, 6_000.0, 9_000.0),
         ]
-        samples = np.zeros(CHUNK_3S_SAMPLES, dtype=np.int16)
 
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid, 12, samples, now_ms)
+            LiveTranscriber._register_pcm_live_segment(
+                t, pid, 12, 27_000.0, now_ms
+            )
 
         entries = t._pcm_live_segments[pid]
         assert [e[0] for e in entries] == [10, 11, 12]
@@ -155,11 +151,14 @@ class TestRegistryPartitionedByPid:
         pid_a = "pid-A"
         pid_b = "pid-B"
         t = _make_transcriber()
-        samples = np.zeros(CHUNK_3S_SAMPLES, dtype=np.int16)
 
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid_a, 10, samples, 3_000.0)
-            LiveTranscriber._register_pcm_live_segment(t, pid_b, 20, samples, 6_000.0)
+            LiveTranscriber._register_pcm_live_segment(
+                t, pid_a, 10, 0.0, 3_000.0
+            )
+            LiveTranscriber._register_pcm_live_segment(
+                t, pid_b, 20, 3_000.0, 6_000.0
+            )
 
         assert t._pcm_live_segments[pid_a] == [(10, 0.0, 3_000.0)]
         assert t._pcm_live_segments[pid_b] == [(20, 3_000.0, 6_000.0)]
@@ -172,10 +171,11 @@ class TestRegistryPartitionedByPid:
         # and its old-looking entry must stay because we never ran a prune for pid_b.
         t._pcm_live_segments[pid_a] = [(1, 2_000.0, 5_000.0)]  # will be pruned
         t._pcm_live_segments[pid_b] = [(99, 0.0, 500.0)]       # must survive
-        samples = np.zeros(CHUNK_3S_SAMPLES, dtype=np.int16)
 
         with t._state_lock:
-            LiveTranscriber._register_pcm_live_segment(t, pid_a, 2, samples, 40_000.0)
+            LiveTranscriber._register_pcm_live_segment(
+                t, pid_a, 2, 37_000.0, 40_000.0
+            )
 
         assert [e[0] for e in t._pcm_live_segments[pid_a]] == [2]
         assert t._pcm_live_segments[pid_b] == [(99, 0.0, 500.0)]
