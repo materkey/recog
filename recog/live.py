@@ -937,6 +937,34 @@ class LiveTranscriber:
                 deduped = deduplicate(text, prev_words)
                 if not deduped:
                     continue
+
+                # speaker_name is untrusted (extension-provided); strip newlines so
+                # it cannot break the markdown transcript line or confuse downstream
+                # regex parsers (`_parse_anchor_lines`, AI summary prompts).
+                safe_name = (speaker_name or "").replace("\n", " ").replace("\r", " ").strip()
+                speaker_label = safe_name or f"Участник {pid[:6]}"
+
+                # Echo check BEFORE mutating per-pid dedup/continuation state so
+                # that a suppressed chunk does not leave stale `_pcm_prev_words`
+                # or advance `_pcm_pid_state` for a bubble that never reached
+                # the UI/JSONL — otherwise the next genuine chunk on this pid
+                # would dedup against tokens never shown and/or be flagged
+                # `is_continuation` off a non-existent prior segment.
+                if (pcm_cross_pid_echo_suppression_enabled()
+                        and not is_local
+                        and self._is_cross_pid_echo(
+                            pid=pid, speaker=speaker_label, text=deduped,
+                            chunk_start_ms=chunk_start_ms, chunk_end_ms=_end_ms)):
+                    self._cross_pid_echo_suppressed_count += 1
+                    print(
+                        "[PerSpeaker] cross-pid echo suppressed "
+                        f"pid={pid} words={len(deduped.split())} "
+                        f"window={chunk_start_ms:.0f}-{_end_ms:.0f}ms "
+                        f"suppressed_total={self._cross_pid_echo_suppressed_count}",
+                        file=sys.stderr,
+                    )
+                    continue
+
                 self._pcm_prev_words[pid] = deduped.split()[-5:]
 
                 pid_state = self._pcm_pid_state.setdefault(
@@ -952,27 +980,6 @@ class LiveTranscriber:
                 pid_state["last_speech_time"] = current_time
                 if not is_continuation:
                     pid_state["segment_start_time"] = current_time
-
-                # speaker_name is untrusted (extension-provided); strip newlines so
-                # it cannot break the markdown transcript line or confuse downstream
-                # regex parsers (`_parse_anchor_lines`, AI summary prompts).
-                safe_name = (speaker_name or "").replace("\n", " ").replace("\r", " ").strip()
-                speaker_label = safe_name or f"Участник {pid[:6]}"
-
-                if (pcm_cross_pid_echo_suppression_enabled()
-                        and not is_local
-                        and self._is_cross_pid_echo(
-                            pid=pid, speaker=speaker_label, text=deduped,
-                            chunk_start_ms=chunk_start_ms, chunk_end_ms=_end_ms)):
-                    self._cross_pid_echo_suppressed_count += 1
-                    print(
-                        "[PerSpeaker] cross-pid echo suppressed "
-                        f"pid={pid} words={len(deduped.split())} "
-                        f"window={chunk_start_ms:.0f}-{_end_ms:.0f}ms "
-                        f"suppressed_total={self._cross_pid_echo_suppressed_count}",
-                        file=sys.stderr,
-                    )
-                    continue
 
                 timestamp = datetime.now().strftime("%H:%M:%S")
 
@@ -1091,8 +1098,10 @@ class LiveTranscriber:
         flagged (single-word ack like "да" naturally repeats across speakers).
         For longer phrases, returns True when a previously-seen phrase from a
         different pid covers an audio window within ±1.5 s and at least 80 %
-        of normalized-token overlap. The current phrase is always remembered
-        so subsequent chunks can compare against it.
+        of normalized-token overlap. Non-echo phrases are remembered so later
+        chunks can compare against them; suppressed echoes are NOT remembered
+        — otherwise a follow-up from the original source could false-match
+        its own text mirrored through the echo entry.
         """
         tokens = tuple(t for t in (normalize_word(w) for w in text.split()) if t)
         if len(tokens) < 3:
@@ -1111,7 +1120,6 @@ class LiveTranscriber:
                 continue
             overlap = len(current.intersection(prior.tokens)) / max(len(current), len(set(prior.tokens)))
             if overlap >= 0.8:
-                self._remember_cross_pid_phrase(pid, speaker, text, tokens, chunk_start_ms, chunk_end_ms)
                 return True
         self._remember_cross_pid_phrase(pid, speaker, text, tokens, chunk_start_ms, chunk_end_ms)
         return False

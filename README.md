@@ -120,6 +120,7 @@ Copy `.env.example` → `.env` and edit. Key flags:
 
 - `RECOG_PCM_TRANSPORT=1` — switch live transcription to per-participant PCM streams from the KTalk Chrome extension (ADR-0018). Requires extension rebuild + service restart. Default `0`.
 - `RECOG_PCM_REFINE=1` — enable tier-2 refine pass on top of PCM transport. Re-transcribes per-pid PCM windows (20 s) with word-level timestamps on reply-close (3 s gap) or monolog cap (15 s), rewrites rows in `meetings/<id>/transcript.jsonl` with `refined: true`. Gated on `RECOG_PCM_TRANSPORT=1`. Default `0`.
+- `RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION=1` — drop high-confidence duplicate remote phrases across different PCM pids (useful when the same physical voice is captured by two tabs). Gated on `RECOG_PCM_TRANSPORT=1`. Risky — suppressed text is lost from the canonical transcript; default `0`.
 - `MIC_SPEAKER_NAME` — speaker label for microphone input (default `Me`).
 
 See `.env.example` for the full list and `CLAUDE.md` for architectural notes.
