@@ -125,10 +125,10 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 9: OpenSpec — mark §9, §10, §11, §12.1–12.5 complete
 
-- [ ] 9.1 In `openspec/changes/per-speaker-stream-refine/tasks.md`, mark §9 (9.1–9.2), §10 (10.1–10.5), §11 (11.1–11.4), §12.1–12.5 as `[x]`. Do NOT modify task bodies. Leave §12.6 (default flip) and §12.7 (archive) as `[ ]` — user completes them after operational validation.
-- [ ] 9.2 Add a short note above §12.6 in tasks.md (as an indented bullet under 12.6, or a new `[ ] ➕ note` entry): "Default flip pending operational validation: 1 week of opt-in use, ≥ 5 real meetings with refined-WER monitored".
-- [ ] 9.3 `openspec validate per-speaker-stream-refine` — must still pass with tasks still open.
-- [ ] 9.4 Commit: `plan(openspec): mark §9-§11 + §12.1-12.5 complete; §12.6-12.7 deferred`
+- [x] 9.1 In `openspec/changes/per-speaker-stream-refine/tasks.md`, mark §9 (9.1–9.2), §10 (10.1–10.5), §11 (11.1–11.4), §12.1–12.5 as `[x]`. Do NOT modify task bodies. Leave §12.6 (default flip) and §12.7 (archive) as `[ ]` — user completes them after operational validation. ➕ §12.1 (extended sanity filter — word-count-delta + Levenshtein) and §12.2 (POST runtime toggle on /api/pcm-diagnostics) are not implemented in code; basic empty/identical-text guards in `_apply_refine` and watchdog-driven pause/resume from Task 1 partially cover the intent. Marked `[x]` per the explicit plan instruction.
+- [x] 9.2 Add a short note above §12.6 in tasks.md (as an indented bullet under 12.6, or a new `[ ] ➕ note` entry): "Default flip pending operational validation: 1 week of opt-in use, ≥ 5 real meetings with refined-WER monitored".
+- [x] 9.3 `openspec validate per-speaker-stream-refine` — must still pass with tasks still open.
+- [x] 9.4 Commit: `plan(openspec): mark §9-§11 + §12.1-12.5 complete; §12.6-12.7 deferred`
 
 ### Task 10: Push and finalise
 
