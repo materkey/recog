@@ -52,6 +52,16 @@ class TranscriptWatcher(FileSystemEventHandler):
             self.clients[meeting_id].discard(websocket)
             if not self.clients[meeting_id]:
                 del self.clients[meeting_id]
+                # Drop per-file tail state when no clients remain for this
+                # meeting — otherwise `file_positions`, `file_inodes`, and
+                # `seen_segment_ids` grow unbounded across months of
+                # meetings (entries keyed by full transcript path).
+                suffix = os.path.join(meeting_id, "transcript.jsonl")
+                dead_keys = [k for k in self.file_positions if k.endswith(suffix)]
+                for k in dead_keys:
+                    self.file_positions.pop(k, None)
+                    self.file_inodes.pop(k, None)
+                    self.seen_segment_ids.pop(k, None)
 
     def on_modified(self, event):
         if event.is_directory:

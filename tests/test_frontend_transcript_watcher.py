@@ -143,3 +143,69 @@ async def test_same_size_inode_change_still_detected(tmp_path):
 
     assert len(ws.sent) == 1  # no rebroadcast
     assert watcher.file_inodes[str(path)] != old_inode
+
+
+@pytest.mark.asyncio
+async def test_unregister_last_client_clears_per_file_state(tmp_path):
+    """given: watcher accumulated per-file state for meetings A and B
+    when: unregister the only client of meeting A
+    then: A's file_positions / file_inodes / seen_segment_ids entries are
+    dropped, but B's survive (prevents slow unbounded growth)
+    """
+    meeting_a = "m-A"
+    meeting_b = "m-B"
+    path_a = tmp_path / meeting_a / "transcript.jsonl"
+    path_a.parent.mkdir()
+    _write_jsonl(path_a, [{"id": 1, "text": "a"}])
+    path_b = tmp_path / meeting_b / "transcript.jsonl"
+    path_b.parent.mkdir()
+    _write_jsonl(path_b, [{"id": 1, "text": "b"}])
+
+    watcher = TranscriptWatcher()
+    ws_a = _FakeWebSocket()
+    ws_b = _FakeWebSocket()
+    watcher.register(meeting_a, ws_a)
+    watcher.register(meeting_b, ws_b)
+
+    await watcher._notify_clients(meeting_a, path_a)
+    await watcher._notify_clients(meeting_b, path_b)
+    assert str(path_a) in watcher.file_positions
+    assert str(path_b) in watcher.file_positions
+
+    watcher.unregister(meeting_a, ws_a)
+
+    assert str(path_a) not in watcher.file_positions
+    assert str(path_a) not in watcher.file_inodes
+    assert str(path_a) not in watcher.seen_segment_ids
+    # B untouched — still has a registered client.
+    assert str(path_b) in watcher.file_positions
+    assert str(path_b) in watcher.file_inodes
+    assert str(path_b) in watcher.seen_segment_ids
+
+
+@pytest.mark.asyncio
+async def test_unregister_non_last_client_keeps_state(tmp_path):
+    """given: two clients watching the same meeting
+    when: only one disconnects
+    then: per-file state is preserved (the other client still needs it)
+    """
+    meeting_id = "m-two-clients"
+    path = tmp_path / meeting_id / "transcript.jsonl"
+    path.parent.mkdir()
+    _write_jsonl(path, [{"id": 1, "text": "a"}])
+
+    watcher = TranscriptWatcher()
+    ws1 = _FakeWebSocket()
+    ws2 = _FakeWebSocket()
+    watcher.register(meeting_id, ws1)
+    watcher.register(meeting_id, ws2)
+
+    await watcher._notify_clients(meeting_id, path)
+    assert str(path) in watcher.file_positions
+
+    watcher.unregister(meeting_id, ws1)
+
+    # State retained for the still-connected ws2.
+    assert str(path) in watcher.file_positions
+    assert str(path) in watcher.file_inodes
+    assert str(path) in watcher.seen_segment_ids

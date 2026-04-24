@@ -740,6 +740,12 @@ const views = {
                     // emitted a tier-2 refine. `appendSegments` below
                     // consumes matching entries per segment id and leaves
                     // non-matching entries for future `segments` events.
+                    // Cross-meeting cleanup: a WS reconnect whose init
+                    // lands on a different meeting (meeting rotated while
+                    // we were offline) must not leak the previous
+                    // meeting's pending refines, since segment_ids restart
+                    // at 1 per meeting and would alias.
+                    this.prunePendingRefinesForMeeting(msg.meeting ? msg.meeting.id : null);
                     lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
                     this.renderTranscript(transcriptEl);
@@ -775,6 +781,7 @@ const views = {
                 return;
             }
             const updates = Array.isArray(msg && msg.updates) ? msg.updates : [];
+            const refineMeetingId = msg && msg.meeting_id ? msg.meeting_id : currentId;
             for (const update of updates) {
                 if (update == null || typeof update !== 'object') continue;
                 const segmentId = update.segment_id;
@@ -801,7 +808,27 @@ const views = {
                     row.dataset.refined = 'true';
                     row.title = '';
                 } else {
-                    this.pendingRefines.set(segmentId, { text, refined_at: msg.refined_at });
+                    // Tag with meeting_id so a WS reconnect that lands on
+                    // a different meeting cannot consume this entry against
+                    // an unrelated segment sharing the same id (ids restart
+                    // at 1 per meeting).
+                    this.pendingRefines.set(segmentId, {
+                        text,
+                        refined_at: msg.refined_at,
+                        meeting_id: refineMeetingId,
+                    });
+                }
+            }
+        },
+
+        prunePendingRefinesForMeeting(meetingId) {
+            // Drop pending entries whose meeting_id does not match the
+            // currently-displayed meeting. Legacy entries without a
+            // meeting_id (should not happen, defensive) are kept.
+            if (!meetingId) return;
+            for (const [segId, entry] of this.pendingRefines) {
+                if (entry && entry.meeting_id && entry.meeting_id !== meetingId) {
+                    this.pendingRefines.delete(segId);
                 }
             }
         },

@@ -226,6 +226,55 @@ async def test_meeting_change_clears_watermark(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_set_current_meeting_resets_watermark_on_switch(tmp_path):
+    """given: watcher has watermark from meeting A
+    when: set_current_meeting(B) is called (as live_stream ws connect does)
+    then: watermark, file_position, and inode are cleared so stale ids
+    from A cannot silently drop B's rows (ids restart at 1 per meeting)
+    """
+    path_a = tmp_path / "a" / "transcript.jsonl"
+    path_a.parent.mkdir()
+    _write_jsonl(path_a, [{"id": 1, "text": "a1"}, {"id": 2, "text": "a2"}])
+
+    watcher, _broadcasts = _make_watcher()
+    watcher.current_meeting_id = "meeting-a"
+    await watcher._notify_new_segments(path_a)
+    assert watcher._seen_segment_ids == {1, 2}
+    assert watcher.file_position > 0
+    assert watcher._file_inode is not None
+
+    watcher.set_current_meeting("meeting-b")
+
+    assert watcher.current_meeting_id == "meeting-b"
+    assert watcher._seen_segment_ids == set()
+    assert watcher.file_position == 0
+    assert watcher._file_inode is None
+
+
+@pytest.mark.asyncio
+async def test_set_current_meeting_same_id_keeps_watermark(tmp_path):
+    """given: watcher has watermark from meeting A
+    when: set_current_meeting(A) — same id, as happens on repeat WS connect
+    then: watermark / position are preserved (no unnecessary reset)
+    """
+    path = tmp_path / "transcript.jsonl"
+    _write_jsonl(path, [{"id": 1, "text": "one"}])
+
+    watcher, _broadcasts = _make_watcher()
+    watcher.current_meeting_id = "meeting-a"
+    await watcher._notify_new_segments(path)
+    position = watcher.file_position
+    seen = set(watcher._seen_segment_ids)
+    inode = watcher._file_inode
+
+    watcher.set_current_meeting("meeting-a")
+
+    assert watcher.file_position == position
+    assert watcher._seen_segment_ids == seen
+    assert watcher._file_inode == inode
+
+
+@pytest.mark.asyncio
 async def test_missing_id_segments_still_broadcast(tmp_path):
     """given: a line without id field (rare but valid in some event rows)
     when: watcher processes the file
