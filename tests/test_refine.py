@@ -237,6 +237,56 @@ class TestRefineWorkerLifecycle:
         finally:
             worker.stop(timeout=1.0)
 
+    def test_pause_during_transcribe_drops_inflight_result(self):
+        """Spec regression: spec.md:156-158 requires "existing tier-1 rows
+        stay tier-1 (no spurious promotions)" on watchdog trip. `pause()`
+        drains the queue, but a task already popped by the worker is
+        mid-inference and outside that drain. Without a post-transcribe
+        pause check, the in-flight task would complete and its result
+        would be applied to the JSONL — a spurious tier-2 promotion
+        exactly in the window the spec forbids.
+        """
+        transcribe_entered = threading.Event()
+        release_transcribe = threading.Event()
+        apply_calls: List = []
+
+        def transcribe_fn(pcm, **_kw):
+            transcribe_entered.set()
+            # Block to let the test land pause() while this task is
+            # mid-inference (mirrors the ~500 ms MPS transcribe window).
+            release_transcribe.wait(timeout=2.0)
+            return _FakeResult("ok", [])
+
+        def apply_fn(result: RefineResult) -> None:
+            apply_calls.append(result)
+
+        worker = RefineWorker(
+            model_lock=threading.Lock(),
+            transcribe_fn=transcribe_fn,
+            apply_fn=apply_fn,
+        )
+        worker.start()
+        try:
+            worker.submit(_make_task("p1"))
+            assert transcribe_entered.wait(timeout=1.0), (
+                "transcribe_fn should have been called"
+            )
+            # Watchdog trip mid-transcribe: pause() lands while the task
+            # is still inside transcribe_fn. Queue is empty (task already
+            # popped), so the drain is a no-op.
+            worker.pause()
+            # Let transcribe_fn complete; the post-transcribe pause check
+            # must now drop the result instead of calling apply_fn.
+            release_transcribe.set()
+            time.sleep(0.3)
+            assert apply_calls == [], (
+                "apply_fn must NOT be called when pause() landed during "
+                "in-flight transcribe — spec.md:156-158"
+            )
+        finally:
+            release_transcribe.set()
+            worker.stop(timeout=1.0)
+
     def test_live_pending_aborts_cooperative(self):
         """Cooperative abort: live signals `_live_pending` mid-inference;
         the decoder monkey-patch (simulated here by transcribe_fn) raises
