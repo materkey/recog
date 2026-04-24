@@ -55,14 +55,14 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 2: Scripted e2e test for full refine contour
 
-- [ ] 2.1 New test `tests/test_per_speaker_refine_e2e.py` (not pytest `e2e` marker — this is an integration test using only synthetic PCM, no browser):
+- [x] 2.1 New test `tests/test_per_speaker_refine_e2e.py` (not pytest `e2e` marker — this is an integration test using only synthetic PCM, no browser):
   - Set env `RECOG_PCM_TRANSPORT=1 RECOG_PCM_REFINE=1` via monkeypatch.
   - Instantiate `LiveTranscriber` with a fake KTalk bridge (no real WS server), stubbed `MeetingStorage` with a per-call `update_segments` recorder, real `PerSpeakerIngest`, real `RefineWorker` wired to a stubbed `ASRModule.transcribe_with_timestamps` that returns deterministic Word lists.
   - Feed a synthetic 15-second PCM stream for one pid via `PerSpeakerIngest.enqueue` (5 × 3s chunks + 3s of silence to trigger gap).
   - Wait (with timeout) for a refine cycle to complete.
   - Assert: `update_segments` called with `[{segment_id, text, refined=True}]` for at least one segment; `bridge.send_refine` called with the matching updates.
-- [ ] 2.2 Second scenario: same pipeline but with `_degraded=True` set mid-stream. Assert no `update_segments(text=...)` calls after the trip.
-- [ ] 2.3 Commit: `test(refine): scripted e2e for full contour (PCM → alignment → apply → send_refine)`
+- [x] 2.2 Second scenario: same pipeline but with `_degraded=True` set mid-stream. Assert no `update_segments(text=...)` calls after the trip.
+- [x] 2.3 Commit: `test(refine): scripted e2e for full contour (PCM → alignment → apply → send_refine)`
 
 ### Task 3: scripts/refine_benchmark.py — WER harness
 
