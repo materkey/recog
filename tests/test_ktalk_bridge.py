@@ -617,10 +617,13 @@ async def test_send_refine_broadcasts_correct_shape():
     client = RecordingClient()
     bridge._connected_clients.add(client)
 
-    bridge.send_refine([
-        {"segment_id": 7, "text": "первый вариант текста"},
-        {"segment_id": 8, "text": "второй"},
-    ])
+    bridge.send_refine(
+        [
+            {"segment_id": 7, "text": "первый вариант текста"},
+            {"segment_id": 8, "text": "второй"},
+        ],
+        meeting_id="2026-04-24_100101_meeting",
+    )
 
     # asyncio.run_coroutine_threadsafe routes through call_soon_threadsafe
     # and needs a real scheduler tick on the target loop before the
@@ -634,6 +637,7 @@ async def test_send_refine_broadcasts_correct_shape():
         {"segment_id": 7, "text": "первый вариант текста"},
         {"segment_id": 8, "text": "второй"},
     ]
+    assert payload["meeting_id"] == "2026-04-24_100101_meeting"
     assert isinstance(payload["refined_at"], str)
     # datetime.now().isoformat() always contains a 'T' separator.
     assert "T" in payload["refined_at"]
@@ -697,3 +701,26 @@ async def test_send_refine_drops_extra_fields_from_updates():
     assert len(client.sent) == 1
     payload = json.loads(client.sent[0])
     assert payload["updates"] == [{"segment_id": 42, "text": "уточнённый"}]
+    # meeting_id not supplied → not included in envelope (back-compat for
+    # consumers that predate the meeting-filter guard).
+    assert "meeting_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_send_refine_omits_meeting_id_when_none():
+    """
+    given: bridge with a connected client
+    when: send_refine called without a meeting_id argument
+    then: the serialized payload omits `meeting_id` entirely
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    client = RecordingClient()
+    bridge._connected_clients.add(client)
+
+    bridge.send_refine([{"segment_id": 1, "text": "x"}])
+
+    await asyncio.sleep(0.05)
+    assert len(client.sent) == 1
+    payload = json.loads(client.sent[0])
+    assert "meeting_id" not in payload

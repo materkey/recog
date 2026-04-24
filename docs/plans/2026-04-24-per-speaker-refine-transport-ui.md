@@ -119,7 +119,7 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ## Post-Completion
 
-- `transcript_refine` flows end-to-end: `_apply_refine` → `bridge.send_refine` → WS:8765 (extension) + WS:9080 (webapp via bridge-subscribe).
+- `transcript_refine` flows end-to-end: `_apply_refine` → `bridge.send_refine` → WS:8766 (extension) + WS:9080 (webapp via bridge-subscribe).
 - Extension overlay rewrites bubble text on refine arrival.
 - Webapp shows tier-1 (predварительное) → tier-2 (финальное) lifecycle.
 - Bug fixed: JSONL tail watcher no longer stalls after `os.replace` rewrite (benefits both refine and retroactive-correction paths).

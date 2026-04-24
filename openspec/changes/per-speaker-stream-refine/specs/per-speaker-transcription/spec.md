@@ -67,7 +67,7 @@ Refined word timestamps SHALL be rebased into the per-pid audio timeline (`pid_a
 
 ### Requirement: `transcript_refine` WebSocket message
 
-The KTalk bridge SHALL broadcast a new WebSocket message type `transcript_refine` on `ws://localhost:8765` whenever one or more segments are refined. The webapp frontend SHALL mirror the same message on `ws://127.0.0.1:9080` to its clients.
+The KTalk bridge SHALL broadcast a new WebSocket message type `transcript_refine` on `ws://localhost:8766` whenever one or more segments are refined. The webapp frontend SHALL mirror the same message on `ws://127.0.0.1:9080` to its clients.
 
 #### Scenario: Message shape
 
