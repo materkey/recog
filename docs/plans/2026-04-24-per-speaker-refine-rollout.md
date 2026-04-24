@@ -139,13 +139,13 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 11: Final report
 
-- [ ] 11.1 Append a "Final state" section to `experiments/2026-04-24-refine-wer.md`:
-  - Commits on `gigaam-upstream-mps`: total N since `main`.
-  - WER delta: live X% → refined Y% on take-2 (or ⚠️ if benchmark not runnable).
-  - Latency delta: p95 Z ms (or ⚠️ if regression > 100 ms).
-  - Known limitations (e.g., `/api/meetings/{id}/watch` doesn't receive `transcript_refine` — latent, Plan 3 review note).
+- [x] 11.1 Append a "Final state" section to `experiments/2026-04-24-refine-wer.md`:
+  - Commits on `gigaam-upstream-mps`: total 58 since `main`.
+  - WER delta: live 36.4% → refined 32.6% avg on take-2 (delta PASS, absolute 25% gate MISS).
+  - Latency delta: p95 +23.4 ms (PASS under 100 ms budget).
+  - Known limitations documented (`/api/meetings/{id}/watch` no WS `transcript_refine`; synthetic bench under-samples firings; §12.1/12.2 partially implemented).
   - User actions remaining: (1) real-meeting smoke test with `RECOG_PCM_REFINE=1` for a week; (2) if healthy, flip default in `recog/config.py::pcm_refine_enabled()`; (3) `openspec archive per-speaker-stream-refine`; (4) merge `gigaam-upstream-mps` → `main` via PR or cherry-pick.
-- [ ] 11.2 No commit needed — this is written in Task 4/5 iteration. If a separate commit makes sense for clean history, commit as `docs: final state for stream-refine chain`.
+- [x] 11.2 Separate commit for clean history: `docs: final state for stream-refine chain`.
 
 ## Post-Completion
 
