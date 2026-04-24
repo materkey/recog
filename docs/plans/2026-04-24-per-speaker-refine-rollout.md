@@ -98,9 +98,9 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 6: ADR-0019
 
-- [ ] 6.1 Write `adr/ADR-0019-stream-refine.md` summarising the refine decision: D1-D12 from `openspec/changes/per-speaker-stream-refine/design.md` (brief, one paragraph each). Include benchmark results from Task 4 and 5 (live-WER, refined-WER, latency p50/p95).
-- [ ] 6.2 Reference the OpenSpec change (`openspec/changes/per-speaker-stream-refine/`) as source of truth for detailed design; ADR is a summary.
-- [ ] 6.3 Commit: `docs(adr): ADR-0019 stream-refine decision + bench results`
+- [x] 6.1 Write `adr/ADR-0019-stream-refine.md` summarising the refine decision: D1-D12 from `openspec/changes/per-speaker-stream-refine/design.md` (brief, one paragraph each). Include benchmark results from Task 4 and 5 (live-WER, refined-WER, latency p50/p95). ➕ File written as `adr/0019-stream-refine.md` to match existing `NNNN-title.md` naming convention used by all 18 prior ADRs in `adr/`.
+- [x] 6.2 Reference the OpenSpec change (`openspec/changes/per-speaker-stream-refine/`) as source of truth for detailed design; ADR is a summary.
+- [x] 6.3 Commit: `docs(adr): ADR-0019 stream-refine decision + bench results`
 
 ### Task 7: Update CLAUDE.md Architecture section
 
