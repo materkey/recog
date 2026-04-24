@@ -107,9 +107,9 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 10: OpenSpec mark §6–§8 complete
 
-- [ ] 10.1 In `openspec/changes/per-speaker-stream-refine/tasks.md`, mark §6 (6.1–6.3), §7 (7.1–7.4), §8 (8.1–8.5) as `[x]`. Do NOT modify task bodies.
-- [ ] 10.2 `openspec validate per-speaker-stream-refine` — must pass.
-- [ ] 10.3 Commit: `plan(openspec): mark stream-refine §6-§8 complete (transport + UI)`
+- [x] 10.1 In `openspec/changes/per-speaker-stream-refine/tasks.md`, mark §6 (6.1–6.3), §7 (7.1–7.4), §8 (8.1–8.5) as `[x]`. Do NOT modify task bodies. 6.4 left unchecked — its "sequential send_transcript → send_refine do not interleave" assertion is not covered by the Task 1.3 shape tests in `tests/test_ktalk_bridge.py` (only `broadcasts_correct_shape`, `empty_list_is_noop`, `no_clients_is_noop`, `drops_extra_fields`).
+- [x] 10.2 `openspec validate per-speaker-stream-refine` — must pass. Ran `openspec validate per-speaker-stream-refine` → `Change 'per-speaker-stream-refine' is valid`.
+- [x] 10.3 Commit: `plan(openspec): mark stream-refine §6-§8 complete (transport + UI)`
 
 ### Task 11: Push
 
