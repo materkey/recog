@@ -81,22 +81,9 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 7: Webapp — tier-1/tier-2 CSS
 
-- [ ] 7.1 In `frontend/static/` CSS file (or inline in `index.html` / the main stylesheet — discover in task), add:
-  ```css
-  [data-refined="false"] {
-    opacity: 0.6;
-    border-left: 2px dashed var(--muted-color, #888);
-    transition: opacity 200ms, border-color 200ms;
-  }
-  [data-refined="true"] {
-    opacity: 1;
-    border-left: 2px solid var(--accent-color, #2a7ae0);
-    transition: opacity 200ms, border-color 200ms;
-  }
-  ```
-  Adjust CSS variable names to match the existing theme (discover during implementation).
-- [ ] 7.2 Add a `title` attribute or tooltip on tier-1 rows: "Предварительная расшифровка — будет уточнена". On tier-2 rows, clear the tooltip.
-- [ ] 7.3 Commit: `feat(webapp): tier-1 tier-2 CSS for refined transcript rows`
+- [x] 7.1 Added `.transcript-segment[data-refined="false"]` (opacity 0.6, `border-left-style: dashed`) and `.transcript-segment[data-refined="true"]` (opacity 1, `border-left-style: solid`) in `frontend/static/style.css` (just before `/* --- Segment Audio Playback --- */`). Deviation from the plan template: only override `border-left-style` (not the full `border-left`), so the existing `.speaker-local` / `.speaker-other` `border-left-color` rules keep tinting the bar by speaker. Width stays at the default 3px from the base `.transcript-segment` rule. Transition uses the existing `--transition` (0.2s ease) var. CSS vars used: none new — theme already has `--speaker-local` / `--speaker-other` for the color.
+- [x] 7.2 Added `div.title = 'Предварительная расшифровка — будет уточнена'` in `frontend/static/app.js::live.appendSegments` only when `div.dataset.refined === 'false'`. Tier-2 rows get no `title` (DOM default — equivalent to "clear"). System events (event_type rows) skip both `data-refined` and `title`. Task 8 will flip `div.title = ''` alongside the `data-refined="true"` promotion.
+- [x] 7.3 Commit: `feat(webapp): tier-1 tier-2 CSS for refined transcript rows`
 
 ### Task 8: Webapp — transcript_refine WS handler
 
