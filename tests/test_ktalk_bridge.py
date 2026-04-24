@@ -882,3 +882,79 @@ async def test_send_refine_broadcasts_to_subscribers():
     payload = json.loads(subscriber.sent[0])
     assert payload["type"] == "transcript_refine"
     assert payload["updates"] == [{"segment_id": 3, "text": "t"}]
+
+
+@pytest.mark.asyncio
+async def test_subscriber_hello_triggers_end_meeting_if_extension_left_during_race():
+    """
+    given: active ktalk meeting; extension disconnects while a subscriber
+           WS is open but still transiently in _connected_clients (before
+           its subscriber_hello message is processed)
+    when:  the subscriber_hello finally arrives and the socket moves into
+           _subscriber_clients, revealing _connected_clients is empty
+    then:  on_ktalk_leave("disconnected") IS called — the race-window
+           lifecycle miss is recovered. Prior regression: the extension's
+           own finally-block saw _connected_clients={subscriber_ws} and
+           skipped the cleanup; subscriber_hello did not re-check.
+    """
+    bridge = KTalkBridge()
+    mock_storage = Mock()
+    mock_storage._load_meta = Mock(return_value={"source": "ktalk"})
+    mock_storage.on_ktalk_leave = Mock(return_value="next_meeting_id")
+    mock_storage.current_meeting_path = Path("/tmp/m.jsonl")
+    mock_storage.current_meeting_id = "m"
+    bridge.set_meeting_storage(mock_storage)
+
+    # Simulate race end-state: the subscriber is in _connected_clients
+    # (it has connected but has not yet had its hello processed). The
+    # extension already disconnected; its finally-block ran, saw
+    # _connected_clients={subscriber_ws}, and skipped cleanup.
+    subscriber_ws = ControllableFakeWebSocket()
+    subscriber_ws.add_message(json.dumps({"type": "subscriber_hello"}))
+
+    handler_task = asyncio.create_task(bridge._handle_client(subscriber_ws))
+
+    # Wait for the hello-handler side-effect: on_ktalk_leave is fired
+    # the moment _connected_clients empties out as the socket is
+    # moved into _subscriber_clients.
+    for _ in range(50):
+        if mock_storage.on_ktalk_leave.called:
+            break
+        await asyncio.sleep(0.01)
+    try:
+        mock_storage.on_ktalk_leave.assert_called_once_with("disconnected")
+        assert subscriber_ws in bridge._subscriber_clients
+        assert subscriber_ws not in bridge._connected_clients
+    finally:
+        subscriber_ws.signal_close()
+        await handler_task
+
+
+@pytest.mark.asyncio
+async def test_subscriber_hello_without_active_meeting_is_noop():
+    """
+    given: no active meeting, no extensions, a subscriber connects
+    when:  its subscriber_hello is processed
+    then:  _end_meeting_on_last_extension_gone is safe to call — no
+           on_ktalk_leave invocation because no meeting is active.
+    """
+    bridge = KTalkBridge()
+    mock_storage = Mock()
+    mock_storage.current_meeting_path = None
+    mock_storage.on_ktalk_leave = Mock()
+    bridge.set_meeting_storage(mock_storage)
+
+    subscriber_ws = ControllableFakeWebSocket()
+    subscriber_ws.add_message(json.dumps({"type": "subscriber_hello"}))
+
+    handler_task = asyncio.create_task(bridge._handle_client(subscriber_ws))
+    for _ in range(30):
+        if subscriber_ws in bridge._subscriber_clients:
+            break
+        await asyncio.sleep(0.01)
+    try:
+        assert subscriber_ws in bridge._subscriber_clients
+        mock_storage.on_ktalk_leave.assert_not_called()
+    finally:
+        subscriber_ws.signal_close()
+        await handler_task
