@@ -1178,13 +1178,13 @@ class LiveTranscriber:
         `marker_gen` is captured together with the `_last_pcm_degraded`
         compare-and-set at the call site, so that a concurrent
         `_invalidate_pending_chunks` (meeting switch) does not cause us to
-        write the marker to the wrong meeting's transcript.jsonl.
+        write the marker to the wrong meeting's transcript.jsonl OR pause
+        the refine worker without a matching resume in the new meeting.
+        `_invalidate_pending_chunks` resets `_last_pcm_degraded=False` AND
+        drains the ingest (`ingest._degraded=False`), so a stale pause
+        applied here would never observe a healthy→degraded→healthy cycle
+        in the new meeting and refine would stay disabled indefinitely.
         """
-        if self._refine_worker is not None:
-            if degraded:
-                self._refine_worker.pause()
-            else:
-                self._refine_worker.resume()
         if degraded:
             msg = f"[PCM silence >{int(PCM_SILENCE_WATCHDOG_S)}s — switched to mixed fallback]"
         else:
@@ -1194,15 +1194,21 @@ class LiveTranscriber:
         sys.stdout.write(line)
         sys.stdout.flush()
         self.transcript_lines.append(line)
-        if self._meeting_storage:
-            # Hold _state_lock across the generation check + append_segment
-            # so a concurrent _invalidate_pending_chunks on the bridge thread
-            # cannot bump the generation (and swing current_meeting_path)
-            # between our check and the persist, which would land the marker
-            # in the new meeting's transcript.jsonl.
-            with self._state_lock:
-                if self._meeting_generation != marker_gen:
-                    return
+        # Hold _state_lock across the generation check + pause/resume +
+        # append_segment so a concurrent _invalidate_pending_chunks on the
+        # bridge thread cannot bump the generation between our check and
+        # the mutations. Pause/resume must sit behind the same guard as the
+        # JSONL write — otherwise a stale transition could leave the worker
+        # paused for the next meeting (see method docstring).
+        with self._state_lock:
+            if self._meeting_generation != marker_gen:
+                return
+            if self._refine_worker is not None:
+                if degraded:
+                    self._refine_worker.pause()
+                else:
+                    self._refine_worker.resume()
+            if self._meeting_storage:
                 self._meeting_storage.append_segment(
                     speaker="Система",
                     speaker_id="__system__",
