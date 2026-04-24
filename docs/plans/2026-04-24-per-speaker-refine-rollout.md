@@ -113,14 +113,15 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 8: .env.example
 
-- [ ] 8.1 Read existing `.env.example` (or equivalent); add:
+- [x] 8.1 Read existing `.env.example` (or equivalent); add:
   ```
   # Stream-refine (Option B, ADR-0019): re-transcribe closed replies with 20s context
   # and promote UI rows tier-1 → tier-2. Gated behind RECOG_PCM_TRANSPORT=1.
   # Target WER: 33% → 24%. Default off — enable after operational validation.
   RECOG_PCM_REFINE=0
   ```
-- [ ] 8.2 Commit: `docs(env): add RECOG_PCM_REFINE example with context`
+  Existing `.env.example` already had a RECOG_PCM_REFINE block with different (implementation-detail) wording — replaced in place with the plan's text.
+- [x] 8.2 Commit: `docs(env): add RECOG_PCM_REFINE example with context`
 
 ### Task 9: OpenSpec — mark §9, §10, §11, §12.1–12.5 complete
 
