@@ -87,14 +87,9 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 8: Webapp — transcript_refine WS handler
 
-- [ ] 8.1 In `frontend/static/app.js`, add handler for WS message `type: "transcript_refine"`. For each entry in `updates`:
-  - Find row by `[data-segment-id="{segment_id}"]`.
-  - Update its text content with the new `text` (preserve speaker prefix / timestamp formatting if present).
-  - Flip `data-refined="true"`.
-  - CSS transition handles the visual promotion.
-  - Update the in-memory `this.segments[i].text` and `this.segments[i].refined` so that scrolled-out-and-back rows render correctly.
-- [ ] 8.2 Handle race: if `transcript_refine` arrives for a segment that isn't in DOM yet (deep scroll or slow render), stash into a `pendingRefines: Map<segment_id, {text, refined_at}>`. When `appendSegments` runs, consult the map and apply before first paint.
-- [ ] 8.3 Commit: `feat(webapp): transcript_refine handler with tier promotion and pending-map`
+- [x] 8.1 Added `handleTranscriptRefine(msg, container)` in `frontend/static/app.js::live` and wired it via `handleMessage` `case 'transcript_refine'`. For each update: walks `this.segments` to mutate `text` + `refined = true`; finds DOM row by `[data-segment-id="{id}"]`; swaps `.segment-text` via `textContent`; flips `row.dataset.refined = 'true'`; clears tier-1 `title` attr so the "Предварительная расшифровка" tooltip goes away. Speaker/timestamp live in `.segment-header` and are untouched. CSS transition (Task 7) handles the visual promotion.
+- [x] 8.2 Added `pendingRefines: new Map()` to `live` object. When `handleTranscriptRefine` can't find a DOM row (scrolled-out / slow render / reconnect), it stashes `{text, refined_at}` keyed by `segment_id`. `appendSegments` consults the map at the top of each iteration — if a pending refine exists for `seg.id`, it mutates `seg.text` / `seg.refined` (reference is shared with `this.segments`) and deletes the map entry, so the first paint already shows tier-2. Map is cleared in `disconnect()`, `init`, and `meeting_change` cases so stale refines don't leak across meetings.
+- [x] 8.3 Commit: `feat(webapp): transcript_refine handler with tier promotion and pending-map`
 
 ### Task 9: Manual smoke — webapp
 

@@ -665,6 +665,7 @@ const views = {
         segments: [],
         currentMeeting: null,
         followMode: localStorage.getItem('liveFollowMode') !== 'false',
+        pendingRefines: new Map(),
 
         connect() {
             this.updateFollowButton();
@@ -703,6 +704,7 @@ const views = {
             }
             this.segments = [];
             this.currentMeeting = null;
+            this.pendingRefines.clear();
         },
 
         updateStatus(status) {
@@ -729,6 +731,7 @@ const views = {
                 case 'init':
                     this.currentMeeting = msg.meeting;
                     this.segments = msg.segments || [];
+                    this.pendingRefines.clear();
                     lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
                     this.renderTranscript(transcriptEl);
@@ -737,6 +740,7 @@ const views = {
                 case 'meeting_change':
                     this.currentMeeting = msg.meeting;
                     this.segments = [];
+                    this.pendingRefines.clear();
                     lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
                     this.renderTranscript(transcriptEl);
@@ -747,9 +751,45 @@ const views = {
                     this.appendSegments(msg.data, transcriptEl);
                     break;
 
+                case 'transcript_refine':
+                    this.handleTranscriptRefine(msg, transcriptEl);
+                    break;
+
                 case 'error':
                     infoEl.innerHTML = `<div class="error">${msg.message}</div>`;
                     break;
+            }
+        },
+
+        handleTranscriptRefine(msg, container) {
+            const updates = Array.isArray(msg && msg.updates) ? msg.updates : [];
+            for (const update of updates) {
+                if (update == null || typeof update !== 'object') continue;
+                const segmentId = update.segment_id;
+                const text = update.text;
+                if (segmentId == null || typeof text !== 'string') continue;
+
+                for (let i = 0; i < this.segments.length; i++) {
+                    if (this.segments[i].id === segmentId) {
+                        this.segments[i].text = text;
+                        this.segments[i].refined = true;
+                        break;
+                    }
+                }
+
+                const row = container && container.querySelector
+                    ? container.querySelector(`[data-segment-id="${segmentId}"]`)
+                    : null;
+                if (row) {
+                    const textEl = row.querySelector('.segment-text');
+                    if (textEl) {
+                        textEl.textContent = text;
+                    }
+                    row.dataset.refined = 'true';
+                    row.title = '';
+                } else {
+                    this.pendingRefines.set(segmentId, { text, refined_at: msg.refined_at });
+                }
             }
         },
 
@@ -791,6 +831,13 @@ const views = {
             if (waiting) waiting.remove();
 
             for (const seg of segments) {
+                if (seg.id != null && this.pendingRefines.has(seg.id)) {
+                    const pending = this.pendingRefines.get(seg.id);
+                    seg.text = pending.text;
+                    seg.refined = true;
+                    this.pendingRefines.delete(seg.id);
+                }
+
                 const speakerClass = seg.is_local ? 'speaker-local' : 'speaker-other';
 
                 const div = document.createElement('div');
