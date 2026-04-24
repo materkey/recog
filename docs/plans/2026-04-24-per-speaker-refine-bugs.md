@@ -169,8 +169,8 @@
 
 ### Task 5: Commit and push
 
-- [ ] `git log --oneline origin/gigaam-upstream-mps..HEAD` — expect the new 3 code commits on top of existing local commits; verify each commit touches only files from its scope.
-- [ ] `git push` to `gigaam-upstream-mps` (current branch). No force push.
+- [x] `git log --oneline origin/gigaam-upstream-mps..HEAD` — expect the new 3 code commits on top of existing local commits; verify each commit touches only files from its scope.
+- [x] `git push` to `gigaam-upstream-mps` (current branch). No force push.
 
 ## Post-Completion
 
