@@ -1130,7 +1130,8 @@ class LiveTranscriber:
         if self._ktalk_bridge is not None:
             try:
                 self._ktalk_bridge.send_refine(
-                    [{"segment_id": u["segment_id"], "text": u["text"]} for u in updates]
+                    [{"segment_id": u["segment_id"], "text": u["text"]} for u in updates],
+                    meeting_id=target_meeting_path.name,
                 )
             except Exception as exc:
                 print(f"[Live] send_refine failed: {exc}", file=sys.stderr)

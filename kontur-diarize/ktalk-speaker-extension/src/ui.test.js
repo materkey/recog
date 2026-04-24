@@ -35,6 +35,7 @@ describe('handleTranscriptRefine', () => {
     document.body.innerHTML = '';
     state.transcriptLines = [];
     state.bioRead = { enabled: false };
+    state.currentMeetingId = null;
     isJitsiPlatformMock.mockReturnValue(false);
   });
 
@@ -120,6 +121,33 @@ describe('handleTranscriptRefine', () => {
 
     expect(document.querySelector('.ktalk-msg-text').innerHTML).toBe('keep');
     expect(state.transcriptLines[0].text).toBe('keep');
+  });
+
+  test('drops refine when meeting_id differs from current meeting', () => {
+    state.currentMeetingId = 'meeting-B';
+    state.transcriptLines = [
+      { speaker: 'Alice', text: 'B-text', time: '10:00:01', segment_id: 3 },
+    ];
+    document.body.innerHTML = `
+      <div class="ktalk-transcript-messages">
+        <div class="ktalk-msg" data-segment-id="3">
+          <div class="ktalk-msg-text">B-text</div>
+        </div>
+      </div>
+    `;
+
+    // Refine payload targets the PREVIOUS meeting. Segment_ids restart
+    // at 1 per meeting — if we did not filter by meeting_id, this would
+    // rewrite Alice's current-meeting bubble with stale text.
+    handleTranscriptRefine({
+      type: 'transcript_refine',
+      meeting_id: 'meeting-A',
+      updates: [{ segment_id: 3, text: 'stale from A' }],
+    });
+
+    expect(document.querySelector('.ktalk-msg-text').innerHTML).toBe('B-text');
+    expect(state.transcriptLines[0].text).toBe('B-text');
+    expect(state.transcriptLines[0].refined).toBeFalsy();
   });
 
   test('vas3k path rewrites .jitsi-transcript-text by data-segment-id', () => {

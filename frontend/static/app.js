@@ -664,6 +664,7 @@ const views = {
         ws: null,
         segments: [],
         currentMeeting: null,
+        refineEnabled: false,
         followMode: localStorage.getItem('liveFollowMode') !== 'false',
         pendingRefines: new Map(),
 
@@ -731,6 +732,7 @@ const views = {
                 case 'init':
                     this.currentMeeting = msg.meeting;
                     this.segments = msg.segments || [];
+                    this.refineEnabled = msg.refine_enabled === true;
                     this.pendingRefines.clear();
                     lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
@@ -762,12 +764,17 @@ const views = {
         },
 
         handleTranscriptRefine(msg, container) {
+            const currentId = this.currentMeeting ? this.currentMeeting.id : null;
+            if (msg && msg.meeting_id && currentId && msg.meeting_id !== currentId) {
+                return;
+            }
             const updates = Array.isArray(msg && msg.updates) ? msg.updates : [];
             for (const update of updates) {
                 if (update == null || typeof update !== 'object') continue;
                 const segmentId = update.segment_id;
                 const text = update.text;
-                if (segmentId == null || typeof text !== 'string') continue;
+                if (typeof segmentId !== 'number' || segmentId <= 0) continue;
+                if (typeof text !== 'string') continue;
 
                 for (let i = 0; i < this.segments.length; i++) {
                     if (this.segments[i].id === segmentId) {
@@ -846,7 +853,7 @@ const views = {
                 if (seg.id != null) {
                     div.dataset.segmentId = String(seg.id);
                 }
-                if (!seg.event_type) {
+                if (!seg.event_type && (this.refineEnabled || seg.refined === true)) {
                     div.dataset.refined = seg.refined === true ? 'true' : 'false';
                     if (div.dataset.refined === 'false') {
                         div.title = 'Предварительная расшифровка — будет уточнена';

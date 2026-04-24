@@ -2874,6 +2874,7 @@ const state = {
   conferenceReadyTimeout: null,
 
   currentMeetingUrl: null,
+  currentMeetingId: null,
   meetingCheckInterval: null,
 
   summaryModalElement: null,
@@ -5036,6 +5037,10 @@ function updateWsIndicator(connected) {
 function handleTranscriptHistory(data) {
   console.log('[KTalk Transcript] Received history:', data.segments?.length || 0, 'segments');
 
+  if (data && data.meeting_id) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId = data.meeting_id;
+  }
+
   if (!data.segments || data.segments.length === 0) {
     return;
   }
@@ -5080,6 +5085,7 @@ function handleTranscriptHistory(data) {
 function handleNewMeeting(data) {
   console.log('[KTalk Transcript] New meeting:', data.meeting_id);
 
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId = data && data.meeting_id ? data.meeting_id : null;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines = [];
   if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
     (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.clearVas3kTranscript)();
@@ -5187,6 +5193,14 @@ function handleTranscript(data) {
 function handleTranscriptRefine(data) {
   const updates = Array.isArray(data && data.updates) ? data.updates : [];
   if (updates.length === 0) return;
+
+  // Segment_ids restart at 1 per meeting, so a refine that slipped past a
+  // meeting switch would otherwise rewrite a DIFFERENT speaker's bubble in
+  // the new meeting with stale text from the old one.
+  if (data && data.meeting_id && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId
+      && data.meeting_id !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId) {
+    return;
+  }
 
   const byId = new Map();
   for (const upd of updates) {

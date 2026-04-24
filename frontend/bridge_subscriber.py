@@ -58,15 +58,29 @@ class BridgeSubscriber:
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
-        """Signal the loop to exit and wait for it to finish."""
+        """Signal the loop to exit and wait for it to finish.
+
+        Bounded by a short timeout so a hung bridge-close handshake does
+        not block frontend shutdown.
+        """
         if self._stop_event is not None:
             self._stop_event.set()
         if self._task is not None:
             self._task.cancel()
             try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
+                await asyncio.wait_for(self._task, timeout=5.0)
+            except asyncio.CancelledError:
                 pass
+            except asyncio.TimeoutError:
+                print(
+                    f"{self._log_prefix} stop timed out; detaching task",
+                    file=sys.stderr,
+                )
+            except Exception as exc:
+                print(
+                    f"{self._log_prefix} stop raised: {exc!r}",
+                    file=sys.stderr,
+                )
             self._task = None
         self._stop_event = None
 

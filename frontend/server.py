@@ -34,8 +34,10 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from meeting_storage import MeetingStorage, get_external_paths
+from recog.config import pcm_refine_enabled
 from bridge_subscriber import BridgeSubscriber
 from live_watcher import LiveWatcher
+from transcript_watcher import TranscriptWatcher
 
 # Configuration
 HOST = "127.0.0.1"
@@ -47,80 +49,6 @@ BRIDGE_WS_URL = os.environ.get("RECOG_BRIDGE_WS_URL", "ws://localhost:8766")
 def get_storage() -> MeetingStorage:
     """Get MeetingStorage instance with external paths."""
     return MeetingStorage(MEETINGS_DIR, external_paths=get_external_paths())
-
-
-class TranscriptWatcher(FileSystemEventHandler):
-    """Watch transcript files for changes and notify WebSocket clients."""
-
-    def __init__(self):
-        self.clients: dict[str, set[WebSocket]] = {}  # meeting_id -> set of websockets
-        self.file_positions: dict[str, int] = {}  # file_path -> last read position
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-
-    def set_loop(self, loop: asyncio.AbstractEventLoop):
-        self._loop = loop
-
-    def register(self, meeting_id: str, websocket: WebSocket):
-        if meeting_id not in self.clients:
-            self.clients[meeting_id] = set()
-        self.clients[meeting_id].add(websocket)
-
-    def unregister(self, meeting_id: str, websocket: WebSocket):
-        if meeting_id in self.clients:
-            self.clients[meeting_id].discard(websocket)
-            if not self.clients[meeting_id]:
-                del self.clients[meeting_id]
-
-    def on_modified(self, event):
-        if event.is_directory:
-            return
-
-        path = Path(event.src_path)
-        if path.name == "transcript.jsonl":
-            meeting_id = path.parent.name
-            if meeting_id in self.clients and self._loop:
-                asyncio.run_coroutine_threadsafe(
-                    self._notify_clients(meeting_id, path),
-                    self._loop
-                )
-
-    async def _notify_clients(self, meeting_id: str, transcript_path: Path):
-        """Read new lines and send to connected clients."""
-        if not transcript_path.exists():
-            return
-
-        file_key = str(transcript_path)
-        last_pos = self.file_positions.get(file_key, 0)
-
-        try:
-            with open(transcript_path, 'r', encoding='utf-8') as f:
-                f.seek(last_pos)
-                new_lines = f.readlines()
-                self.file_positions[file_key] = f.tell()
-
-            if new_lines and meeting_id in self.clients:
-                segments = []
-                for line in new_lines:
-                    line = line.strip()
-                    if line:
-                        try:
-                            segments.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
-
-                if segments:
-                    message = json.dumps({"type": "segments", "data": segments})
-                    dead_clients = []
-                    for ws in self.clients[meeting_id]:
-                        try:
-                            await ws.send_text(message)
-                        except Exception:
-                            dead_clients.append(ws)
-
-                    for ws in dead_clients:
-                        self.clients[meeting_id].discard(ws)
-        except Exception as e:
-            print(f"Error reading transcript: {e}")
 
 
 # --- Helpers (WDIM / Cognitive Anchor) ---
@@ -1405,6 +1333,7 @@ async def live_stream(websocket: WebSocket):
         active_meetings = storage.list_active_meetings()
         current = active_meetings[0] if active_meetings else None
 
+        refine_on = pcm_refine_enabled()
         if current:
             live_watcher.current_meeting_id = current["id"]
             meeting_data = storage.get_meeting(current["id"])
@@ -1412,14 +1341,16 @@ async def live_stream(websocket: WebSocket):
                 "type": "init",
                 "meeting": current,
                 "segments": meeting_data.get("segments", []) if meeting_data else [],
-                "active_meetings": active_meetings
+                "active_meetings": active_meetings,
+                "refine_enabled": refine_on,
             }))
         else:
             await websocket.send_text(json.dumps({
                 "type": "init",
                 "meeting": None,
                 "segments": [],
-                "active_meetings": []
+                "active_meetings": [],
+                "refine_enabled": refine_on,
             }))
     except Exception as e:
         await websocket.send_text(json.dumps({

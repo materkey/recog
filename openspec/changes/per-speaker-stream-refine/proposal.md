@@ -13,7 +13,7 @@ Upstream GigaAM (`salute-developers/GigaAM origin/main` through commit `6e4b027`
 - **Trigger**: gap-driven on `SPEAKER_TURN_GAP = 3 s` with a fallback timer (`PCM_REFINE_MONOLOG_CAP_S = 15 s`) for continuous monologues.
 - **Word-level alignment**: map each live segment's `(audio_offset_ms, duration_ms)` onto the refined word timeline; the collected words become the new `text`.
 - **Inline JSONL rewrite** via `MeetingStorage.update_segments` (already used by retroactive speaker correction); `text` field added to the update API; new boolean `refined` on `TranscriptSegment`.
-- **New WS message type** `transcript_refine` with payload `{segment_id, text, refined_at}`. Broadcast on both `ws://localhost:8765` (extension overlay) and `ws://127.0.0.1:9080` (webapp).
+- **New WS message type** `transcript_refine` with payload `{segment_id, text, refined_at}`. Broadcast on both `ws://localhost:8766` (extension overlay) and `ws://127.0.0.1:9080` (webapp).
 - **Tier-1 / tier-2 UI**: live-only rows render with opacity 0.6 and a dashed accent; on refine arrival the row rewrites in place and promotes to solid (tier-2). Extension overlay gets a simpler fade-in/out with no tier marker (space-constrained).
 - **Feature flag** `RECOG_PCM_REFINE=1`, default OFF. No-op when `RECOG_PCM_TRANSPORT=0`.
 - **Fallback_mixed mode**: refine is disabled (per-speaker audio does not exist there).
@@ -45,7 +45,7 @@ None.
 - `tests/` — unit tests for alignment + trigger + replace; e2e on scripted overlap dialogue.
 
 **APIs:**
-- WS:8765 and WS:8766 gain `transcript_refine` (additive; unknown-type handlers already drop).
+- WS:8766 and WS:9080 gain `transcript_refine` (additive; unknown-type handlers already drop).
 - `transcript.jsonl` gains `refined: bool` field on each row (additive; dataclass-based readers tolerate).
 - `update_segments` accepts an optional `text` key (backwards-compatible).
 

@@ -776,7 +776,7 @@ class KTalkBridge:
                 except Exception:
                     pass  # Клиент может отключиться
 
-    def send_refine(self, updates: list[dict]):
+    def send_refine(self, updates: list[dict], meeting_id: Optional[str] = None):
         """Broadcast tier-2 refined segment text to all connected clients.
 
         Invoked from `LiveTranscriber._apply_refine` after
@@ -784,6 +784,11 @@ class KTalkBridge:
         `updates` carries `segment_id` and `text`; downstream the extension
         overlay swaps bubble text and the webapp promotes tier-1 rows to
         tier-2 (see plan `2026-04-24-per-speaker-refine-transport-ui.md`).
+
+        `meeting_id` identifies the meeting whose segment_ids these updates
+        reference. Consumers filter by it so a refine in-flight across a
+        meeting switch cannot rewrite rows in the new meeting that happen
+        to share a segment_id (ids restart at 1 per meeting).
         """
         if not updates:
             return
@@ -793,11 +798,14 @@ class KTalkBridge:
             {"segment_id": u["segment_id"], "text": u["text"]}
             for u in updates
         ]
-        message = json.dumps({
+        envelope = {
             "type": "transcript_refine",
             "updates": payload_updates,
             "refined_at": refined_at,
-        }, ensure_ascii=False)
+        }
+        if meeting_id:
+            envelope["meeting_id"] = meeting_id
+        message = json.dumps(envelope, ensure_ascii=False)
 
         if self._loop and self._connected_clients:
             for client in list(self._connected_clients):

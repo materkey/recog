@@ -27,6 +27,7 @@ export const state = {
   conferenceReadyTimeout: null,
 
   currentMeetingUrl: null,
+  currentMeetingId: null,
   meetingCheckInterval: null,
 
   summaryModalElement: null,
