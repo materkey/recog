@@ -958,3 +958,41 @@ async def test_subscriber_hello_without_active_meeting_is_noop():
     finally:
         subscriber_ws.signal_close()
         await handler_task
+
+
+# --- send_transcript: source_id payload serialization ---
+
+
+def test_send_transcript_includes_source_id_when_non_empty():
+    """
+    given: send_transcript called with a non-empty source_id
+    when:  payload is serialized for broadcast
+    then:  the `source_id` key is present with the supplied value
+    """
+    from unittest.mock import patch
+
+    bridge = KTalkBridge()
+    bridge._loop = None  # skip dispatch; we only inspect the built payload
+    with patch("ktalk_bridge.json.dumps") as mock_dumps:
+        bridge.send_transcript(
+            "Alice", "привет", "10:00:00", source_id="pid-a"
+        )
+        payload = mock_dumps.call_args.args[0]
+        assert payload.get("source_id") == "pid-a"
+
+
+def test_send_transcript_omits_source_id_when_empty_default():
+    """
+    given: send_transcript called without source_id (empty default)
+    when:  payload is serialized for broadcast
+    then:  the `source_id` key is absent — backward-compatible with older
+           extension builds that never looked at it
+    """
+    from unittest.mock import patch
+
+    bridge = KTalkBridge()
+    bridge._loop = None
+    with patch("ktalk_bridge.json.dumps") as mock_dumps:
+        bridge.send_transcript("Alice", "привет", "10:00:00")
+        payload = mock_dumps.call_args.args[0]
+        assert "source_id" not in payload
