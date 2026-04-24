@@ -69,7 +69,7 @@
 
 ### Task 3: Gated cross-pid phrase-echo suppression (Bug 3)
 
-- [ ] Add to `recog/config.py`:
+- [x] Add to `recog/config.py`:
   ```python
   def pcm_cross_pid_echo_suppression_enabled() -> bool:
       """True only when per-speaker PCM is enabled and cross-pid echo dropping is explicitly enabled."""
@@ -77,13 +77,13 @@
           return False
       return os.environ.get("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "0") == "1"
   ```
-- [ ] Append to `.env.example`:
+- [x] Append to `.env.example`:
   ```dotenv
   # Optional, risky: suppress high-confidence duplicate remote phrases across different PCM pids.
   # Default 0 preserves canonical transcript text; set to 1 only for dual-tab echo validation.
   RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION=0
   ```
-- [ ] In `recog/live.py`, add near `_pcm_segment_texts` initialization (around line 432):
+- [x] In `recog/live.py`, add near `_pcm_segment_texts` initialization (around line 432):
   ```python
   @dataclass(slots=True)
   class _CrossPidPhrase:
@@ -100,8 +100,8 @@
   self._cross_pid_echo_suppressed_count = 0
   ```
   Place `_CrossPidPhrase` dataclass at module scope; add `from collections import deque` and `from dataclasses import dataclass` if not already imported.
-- [ ] In `_invalidate_pending_chunks` (around line 1840): add `self._cross_pid_recent_phrases.clear()`, `self._cross_pid_echo_checked_count = 0`, `self._cross_pid_echo_suppressed_count = 0` next to existing `_pcm_prev_words.clear()` / `_pcm_pid_state.clear()`.
-- [ ] Add helper methods to `LiveTranscriber`:
+- [x] In `_invalidate_pending_chunks` (around line 1840): add `self._cross_pid_recent_phrases.clear()`, `self._cross_pid_echo_checked_count = 0`, `self._cross_pid_echo_suppressed_count = 0` next to existing `_pcm_prev_words.clear()` / `_pcm_pid_state.clear()`.
+- [x] Add helper methods to `LiveTranscriber`:
   ```python
   @staticmethod
   def _audio_windows_close(a_start_ms, a_end_ms, b_start_ms, b_end_ms, *, tolerance_ms):
@@ -133,7 +133,7 @@
       self._remember_cross_pid_phrase(pid, speaker, text, tokens, chunk_start_ms, chunk_end_ms)
       return False
   ```
-- [ ] Wire into `_on_pcm_batch` per-item loop (~line 906-914), after `deduplicate()` and `speaker_label` computation, before `append_segment` / `send_transcript`:
+- [x] Wire into `_on_pcm_batch` per-item loop (~line 906-914), after `deduplicate()` and `speaker_label` computation, before `append_segment` / `send_transcript`:
   ```python
   if (pcm_cross_pid_echo_suppression_enabled()
           and not is_local
@@ -150,16 +150,16 @@
       )
       continue
   ```
-- [ ] Add six pytest cases to `tests/test_live_speaker_attribution.py`. All drive `_on_pcm_batch` directly with `is_local=False`:
+- [x] Add six pytest cases to `tests/test_live_speaker_attribution.py`. All drive `_on_pcm_batch` directly with `is_local=False`:
   1. `test_pcm_cross_pid_phrase_echo_suppressed_when_enabled` — two remote pids emit the same 3+ token phrase in close audio windows with `RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION=1`; second segment is neither stored nor sent.
   2. `test_pcm_cross_pid_same_single_word_from_two_remotes_not_suppressed` — two remote pids emit the same one-word utterance ("да" or "зайчик") inside the window; both stored/sent.
   3. `test_pcm_cross_pid_different_words_from_two_remotes_not_suppressed` — two remote pids, different phrases, close audio windows; both stored/sent.
   4. `test_pcm_cross_pid_phrase_outside_audio_window_not_suppressed` — same phrase, windows farther than tolerance; both stored/sent.
   5. `test_pcm_cross_pid_echo_gate_off_does_not_suppress` — with gate `=0`, duplicate phrases are not suppressed.
   6. `test_pcm_cross_pid_same_python_batch_but_separate_audio_windows_not_suppressed` — two ASR results in one Python batch but deliberately separated `chunk_start_ms`/`_end_ms` values; must not be treated as echo.
-- [ ] Run `venv-gigaam/bin/python -m pytest tests/test_live_speaker_attribution.py -v` — all tests green.
-- [ ] Run `venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — no regressions.
-- [ ] Commit as `fix(live): suppress gated cross-pid phrase echoes` listing only `recog/config.py`, `.env.example`, `recog/live.py`, `tests/test_live_speaker_attribution.py`.
+- [x] Run `venv-gigaam/bin/python -m pytest tests/test_live_speaker_attribution.py -v` — all tests green.
+- [x] Run `venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — no regressions.
+- [x] Commit as `fix(live): suppress gated cross-pid phrase echoes` listing only `recog/config.py`, `.env.example`, `recog/live.py`, `tests/test_live_speaker_attribution.py`.
 
 ### Task 4: Rebuild extension and bump manifest
 
