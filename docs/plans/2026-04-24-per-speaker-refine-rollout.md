@@ -81,11 +81,11 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 4: Run the refine benchmark on take-2 fixtures
 
-- [ ] 4.1 If `/tmp/recog_exp/raw_take2/d9e189e5__Example.wav` missing, regenerate from the most recent `/tmp/recog_pcm_capture/` subdirectory via `scripts/pcm_capture_reconstruct.py`. If no capture exists either, ⚠️-flag and skip task 4.2 + 4.3 — leave a note in `experiments/2026-04-24-refine-wer.md` that user must re-capture.
-- [ ] 4.2 Run: `venv-gigaam/bin/python scripts/refine_benchmark.py --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav --reference-file experiments/reference_take2.txt --trim 17-65`.
-- [ ] 4.3 Acceptance: refined-WER ≤ 25% on at least one of the two tracks (baseline is 33%); delta (refined vs live) is negative (better) on both tracks.
-- [ ] 4.4 Write results to `experiments/2026-04-24-refine-wer.md` including any edge cases observed (empty word lists, boundary-straddling, sanity-filter rejections).
-- [ ] 4.5 Commit: `exp: refine benchmark on take-2 fixtures (WER live vs refined)`
+- [x] 4.1 If `/tmp/recog_exp/raw_take2/d9e189e5__Example.wav` missing, regenerate from the most recent `/tmp/recog_pcm_capture/` subdirectory via `scripts/pcm_capture_reconstruct.py`. If no capture exists either, ⚠️-flag and skip task 4.2 + 4.3 — leave a note in `experiments/2026-04-24-refine-wer.md` that user must re-capture.
+- [x] 4.2 Run: `venv-gigaam/bin/python scripts/refine_benchmark.py --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav --reference-file experiments/reference_take2.txt --trim 17-65`.
+- [x] 4.3 Acceptance: refined-WER ≤ 25% on at least one of the two tracks (baseline is 33%); delta (refined vs live) is negative (better) on both tracks. ⚠️ Absolute 25% gate MISSED (both tracks landed at 32.6%); delta criterion PASS (-4.3% / -3.3%). See Observations in `experiments/2026-04-24-refine-wer.md` — do not flip `RECOG_PCM_REFINE` default.
+- [x] 4.4 Write results to `experiments/2026-04-24-refine-wer.md` including any edge cases observed (empty word lists, boundary-straddling, sanity-filter rejections).
+- [x] 4.5 Commit: `exp: refine benchmark on take-2 fixtures (WER live vs refined)`
 
 ### Task 5: Latency micro-benchmark — first-paint under refine load
 
