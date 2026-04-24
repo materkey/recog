@@ -52,7 +52,7 @@
 - [x] 6.1 Add `KTalkBridge.send_refine(updates: list[dict])` mirroring `send_transcript`; broadcasts `{type: "transcript_refine", updates: [{segment_id, text, refined_at}]}` to all connected extension clients on `ws://localhost:8766`
 - [x] 6.2 In `frontend/server.py`, add a WS-client subscription to `ws://localhost:8766` (the bridge) on startup that forwards `transcript_refine` messages to webapp clients on `ws://127.0.0.1:9080` (per D10). Reconnect loop with exponential backoff (1s → 30s cap). The existing JSONL tail watcher remains for cold-start / reconnect replay of `segments` only; it does NOT forward refines
 - [x] 6.3 Fix `_notify_new_segments` rewrite-blind bug (`frontend/server.py:183-208`): when the tailer observes `os.stat(path).st_size < self.file_position`, reset `self.file_position = 0` and diff against a seen-id watermark before re-broadcasting. Prevents the retroactive-speaker-correction path from stalling. Unit test in `tests/test_frontend_server.py`
-- [ ] 6.4 Unit test in `tests/test_ktalk_bridge.py`: `send_refine` produces correct JSON shape; sequential `send_transcript` → `send_refine` do not interleave on a single client
+- [x] 6.4 Unit test in `tests/test_ktalk_bridge.py`: `send_refine` produces correct JSON shape; sequential `send_transcript` → `send_refine` do not interleave on a single client *(covered by 6 tests in `tests/test_ktalk_bridge.py:607+` added during Plan 3 task 1.3)*
 
 ## 7. UI — extension overlay
 
