@@ -1839,6 +1839,17 @@ class LiveTranscriber:
             # segment_ids in the new meeting's pid frame.
             self._pcm_segment_texts.clear()
             self._last_pcm_degraded = False
+            # If a degraded-trip in the old meeting paused the refine
+            # worker, the pause state outlives the meeting switch. The
+            # watchdog compare-and-set above is now reset
+            # (_last_pcm_degraded=False, ingest._degraded=False after
+            # drain()), so the healthy→degraded→healthy edge that calls
+            # resume() via _emit_pcm_transition_marker will never fire in
+            # the new meeting. Resume eagerly so refine is active from the
+            # first PCM frame of meeting B; the watchdog can re-pause if
+            # PCM goes silent there.
+            if self._refine_worker is not None:
+                self._refine_worker.resume()
         # Clear per-speaker ingest buffers (bumped generation would drop
         # them at drain time anyway, but clearing eagerly avoids a 200 ms
         # window where stale-gen chunks occupy capacity).

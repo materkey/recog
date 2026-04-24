@@ -735,6 +735,7 @@ def test_invalidate_pending_chunks_drains_per_speaker_ingest():
     t._per_speaker_ingest = ingest_mock
     t.mic_capture = None
     t.system_capture = None
+    t._refine_worker = None
 
     LiveTranscriber._invalidate_pending_chunks(t)
 
@@ -746,6 +747,68 @@ def test_invalidate_pending_chunks_drains_per_speaker_ingest():
     assert t._pcm_live_segments == {}
     assert t._pcm_segment_texts == {}
     assert t._last_pcm_degraded is False
+
+
+def test_invalidate_pending_chunks_resumes_paused_refine_worker():
+    """
+    given: refine worker paused in meeting A by a PCM-watchdog degraded trip
+           (ingest._degraded=True), meeting ends before PCM recovers
+    when:  _invalidate_pending_chunks fires on the meeting-switch edge
+    then:  refine worker resume() is called so meeting B starts with refine
+           enabled; without this, the healthy→degraded→healthy compare-and-
+           set in _emit_pcm_transition_marker never re-fires in meeting B
+           (both _last_pcm_degraded and ingest._degraded reset to False by
+           _invalidate_pending_chunks) and the worker would stay paused for
+           the rest of the process lifetime.
+    """
+    t = Mock(spec=LiveTranscriber)
+    t._state_lock = threading.Lock()
+    t._meeting_generation = 3
+    t._recent_system_segments = deque()
+    t._mic_state = None
+    t._sys_state = None
+    t._pcm_prev_words = {}
+    t._pcm_pid_state = {}
+    t._pcm_live_segments = {}
+    t._pcm_segment_texts = {}
+    t._last_pcm_degraded = True
+    t._per_speaker_ingest = Mock()
+    t.mic_capture = None
+    t.system_capture = None
+
+    refine_worker = Mock()
+    t._refine_worker = refine_worker
+
+    LiveTranscriber._invalidate_pending_chunks(t)
+
+    refine_worker.resume.assert_called_once()
+
+
+def test_invalidate_pending_chunks_safe_when_refine_worker_none():
+    """
+    given: _refine_worker is None (RECOG_PCM_REFINE=0 code path)
+    when:  _invalidate_pending_chunks fires on meeting-switch edge
+    then:  no AttributeError; resume is guarded by a None check
+    """
+    t = Mock(spec=LiveTranscriber)
+    t._state_lock = threading.Lock()
+    t._meeting_generation = 0
+    t._recent_system_segments = deque()
+    t._mic_state = None
+    t._sys_state = None
+    t._pcm_prev_words = {}
+    t._pcm_pid_state = {}
+    t._pcm_live_segments = {}
+    t._pcm_segment_texts = {}
+    t._last_pcm_degraded = False
+    t._per_speaker_ingest = None
+    t.mic_capture = None
+    t.system_capture = None
+    t._refine_worker = None
+
+    LiveTranscriber._invalidate_pending_chunks(t)
+
+    assert t._meeting_generation == 1
 
 
 def test_use_pcm_transport_requires_ktalk():
