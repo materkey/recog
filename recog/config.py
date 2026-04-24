@@ -113,6 +113,10 @@ PCM_CHUNK_OVERLAP_MS = 600
 PCM_SILENCE_WATCHDOG_S = 30.0
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "0") == "1"
+
+
 def pcm_transport_enabled() -> bool:
     """Читает RECOG_PCM_TRANSPORT env var и возвращает True если включён.
 
@@ -120,7 +124,7 @@ def pcm_transport_enabled() -> bool:
     от bridge на WS-connect и шлёт PCM только если флаг True. Нет отдельного
     toggle в popup/chrome.storage — один источник правды.
     """
-    return os.environ.get("RECOG_PCM_TRANSPORT", "0") == "1"
+    return _env_flag("RECOG_PCM_TRANSPORT")
 
 
 # ============================================================================
@@ -145,30 +149,16 @@ PCM_REFINE_MONOLOG_CAP_S: float = 15.0
 
 
 def pcm_refine_enabled() -> bool:
-    """Returns True iff BOTH RECOG_PCM_TRANSPORT=1 AND RECOG_PCM_REFINE=1.
-
-    Refine имеет смысл только поверх per-speaker PCM transport: live-сегменты,
-    которые он правит, создаются именно пер-pid PCM-пайплайном. При выключенном
-    transport (mixed audio) гейт должен возвращать False независимо от RECOG_PCM_REFINE.
-    """
-    if not pcm_transport_enabled():
-        return False
-    return os.environ.get("RECOG_PCM_REFINE", "0") == "1"
+    """True iff BOTH RECOG_PCM_TRANSPORT=1 AND RECOG_PCM_REFINE=1."""
+    return pcm_transport_enabled() and _env_flag("RECOG_PCM_REFINE")
 
 
-# Silero VAD threshold for the PCM path.  Speech probability above this
-# keeps the chunk; below — chunk is dropped before ASR to avoid GigaAM
-# hallucinations on silence/noise.  0.3 matches Silero's own default for
-# the "drop ambiguous as non-speech" bias.
+# 0.3 biases toward keeping quiet real speech at the cost of a few false
+# positives — safer than Silero's 0.5 default when the goal is to preserve
+# canonical transcript text.
 PCM_VAD_THRESHOLD: float = float(os.environ.get("RECOG_PCM_VAD_THRESHOLD", "0.3"))
 
 
 def pcm_vad_enabled() -> bool:
-    """True iff per-speaker PCM transport is on AND RECOG_PCM_VAD=1.
-
-    Guards the Silero VAD prefilter in `_on_pcm_batch`; default 0 preserves
-    legacy behaviour so rollout can be validated on a single service first.
-    """
-    if not pcm_transport_enabled():
-        return False
-    return os.environ.get("RECOG_PCM_VAD", "0") == "1"
+    """True iff BOTH RECOG_PCM_TRANSPORT=1 AND RECOG_PCM_VAD=1."""
+    return pcm_transport_enabled() and _env_flag("RECOG_PCM_VAD")
