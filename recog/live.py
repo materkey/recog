@@ -1087,8 +1087,14 @@ class LiveTranscriber:
                 if seg_end < task_start_ms or seg_start > task_end_ms:
                     continue
                 collected: list[str] = []
-                for w_start, w_end, w_text in rebased:
-                    if w_start >= seg_start and w_end <= seg_end:
+                for w_start, _w_end, w_text in rebased:
+                    # Single-point alignment by word start (design.md D1):
+                    # "segment.pid_audio_ms_start <= word_pid_ms <=
+                    # segment.pid_audio_ms_end". Using both bounds would
+                    # drop boundary-straddling words (e.g. a word at
+                    # [2900, 3100] when segments meet at 3000) — the exact
+                    # case that motivated 20-s refine context (proposal.md).
+                    if seg_start <= w_start < seg_end:
                         collected.append(w_text)
                 if not collected:
                     continue
@@ -1121,8 +1127,19 @@ class LiveTranscriber:
             # at 1 per meeting → collisions possible).
             if task.meeting_generation != self._meeting_generation:
                 return
+            # Snapshot currently-present segment_ids for `pid` so we do NOT
+            # re-populate cache entries that `_register_pcm_live_segment`
+            # has pruned while the lock was released for the JSONL rewrite.
+            # Otherwise the cache grows unbounded over long meetings, since
+            # pruned entries are only cleared when `_register_pcm_live_segment`
+            # evicts them from the registry (and it cannot evict what it
+            # doesn't know about).
+            live_ids = {
+                seg_id for seg_id, _s, _e in self._pcm_live_segments.get(pid, [])
+            }
             for upd in updates:
-                self._pcm_segment_texts[upd["segment_id"]] = upd["text"]
+                if upd["segment_id"] in live_ids:
+                    self._pcm_segment_texts[upd["segment_id"]] = upd["text"]
 
     def _emit_pcm_transition_marker(self, degraded: bool, marker_gen: int):
         """Write a gap marker to the transcript on PCM ↔ mixed fallback flip.
