@@ -462,6 +462,16 @@ class RefineWorker:
         if result is None:
             return
 
+        # Post-transcribe pause check: `pause()` may have landed during the
+        # ~500 ms inference window (e.g. PCM watchdog trip mid-transcribe).
+        # The drain in pause() only covers tasks still in the queue; an
+        # in-flight task that completes afterward must drop its result to
+        # satisfy spec "existing tier-1 rows stay tier-1 (no spurious
+        # promotions)" (specs/per-speaker-transcription/spec.md:158).
+        with self._paused_lock:
+            if self._paused:
+                return
+
         text = getattr(result, "text", "") or ""
         words_attr = getattr(result, "words", None)
         words: List[Word] = list(words_attr) if words_attr else []
