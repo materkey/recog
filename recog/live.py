@@ -889,7 +889,7 @@ class LiveTranscriber:
                 if self._wav_writer_system
                 else 0
             )
-        for (pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms), raw_text in zip(batch, texts):
+        for (pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms, pid_audio_ms_end), raw_text in zip(batch, texts):
             text = (raw_text or "").strip()
             if not text:
                 continue
@@ -970,8 +970,14 @@ class LiveTranscriber:
                     )
                     # Stamp the live segment with its pid-frame bounds so the
                     # refine contour (Task 9) can align refined word timestamps
-                    # back to this segment_id for the JSONL rewrite.
-                    self._register_pcm_live_segment(pid, segment_id, _pcm)
+                    # back to this segment_id for the JSONL rewrite. Pass the
+                    # per-chunk `pid_audio_ms_end` captured at enqueue time
+                    # rather than reading the ingest's latest counter — the
+                    # latter collapses to identical bounds for multi-chunk-
+                    # same-pid batches.
+                    self._register_pcm_live_segment(
+                        pid, segment_id, _pcm, pid_audio_ms_end
+                    )
                     # Cache the freshly-written text so `_apply_refine` can
                     # short-circuit identical refinements without an extra
                     # JSONL read.
@@ -982,29 +988,30 @@ class LiveTranscriber:
         pid: str,
         segment_id: int,
         chunk_samples: np.ndarray,
+        pid_audio_ms_end: float,
     ) -> None:
         """Append (segment_id, pid_audio_ms_start, pid_audio_ms_end) to the
         per-pid live-segment registry and prune entries outside the refine
         window + head room.
 
-        Caller must hold `self._state_lock`. Reads `pid_audio_ms_now` from the
-        per-speaker ingest — the end bound; start = end - chunk_duration_ms.
-        Prune floor = pid_audio_ms_now - (PCM_REFINE_WINDOW_S + 5) * 1000 ms,
+        Caller must hold `self._state_lock`. `pid_audio_ms_end` is the
+        per-chunk snapshot taken at enqueue time (threaded through
+        `BatchedChunk`) so multiple chunks of the same pid in one batch do
+        not collapse to identical bounds. `start = end - chunk_duration_ms`.
+        Prune floor = pid_audio_ms_end - (PCM_REFINE_WINDOW_S + 5) * 1000 ms,
         matching the capacity of the PCM ring so stale entries do not grow
         unboundedly when a pid talks for a long time.
         """
-        ingest = self._per_speaker_ingest
-        if ingest is None:
+        if self._per_speaker_ingest is None:
             return
-        pid_audio_ms_now = ingest.get_pid_audio_ms(pid)
         chunk_duration_ms = (len(chunk_samples) / self.sample_rate) * 1000.0
         entries = self._pcm_live_segments.setdefault(pid, [])
         entries.append((
             segment_id,
-            pid_audio_ms_now - chunk_duration_ms,
-            pid_audio_ms_now,
+            pid_audio_ms_end - chunk_duration_ms,
+            pid_audio_ms_end,
         ))
-        prune_floor = pid_audio_ms_now - (PCM_REFINE_WINDOW_S + 5.0) * 1000.0
+        prune_floor = pid_audio_ms_end - (PCM_REFINE_WINDOW_S + 5.0) * 1000.0
         while entries and entries[0][2] < prune_floor:
             pruned = entries.pop(0)
             # Keep the text cache in lockstep with the live registry so it
@@ -1103,6 +1110,13 @@ class LiveTranscriber:
         # disk so a subsequent refine with the same text retries instead
         # of silently skipping.
         with self._state_lock:
+            # Re-check the generation: _invalidate_pending_chunks may have
+            # cleared _pcm_segment_texts between the update_segments call
+            # (outside the lock) and this reacquire. Writing stale segment_ids
+            # back would pollute the new meeting's cache (segment_ids restart
+            # at 1 per meeting → collisions possible).
+            if task.meeting_generation != self._meeting_generation:
+                return
             for upd in updates:
                 self._pcm_segment_texts[upd["segment_id"]] = upd["text"]
 
