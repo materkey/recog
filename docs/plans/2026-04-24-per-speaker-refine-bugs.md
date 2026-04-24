@@ -163,9 +163,9 @@
 
 ### Task 4: Rebuild extension and bump manifest
 
-- [ ] Edit `kontur-diarize/ktalk-speaker-extension/manifest.json:4` — bump `"version": "1.4.1"` → `"version": "1.4.2"`. Leave `package.json:3` on `"1.0.0"` (pre-existing drift, out of scope).
-- [ ] `cd kontur-diarize/ktalk-speaker-extension && npm run build` — verify `injected.js` regenerated without errors.
-- [ ] Amend the Task 1 extension commit (or add as a trailing commit on top of Task 1) so the manifest bump and rebuilt `injected.js` live in the same commit as the extension source changes. Do not amend if Task 2 or Task 3 commits were already pushed — in that case add a new commit `chore(extension): bump manifest 1.4.1 → 1.4.2 and rebuild`.
+- [x] Edit `kontur-diarize/ktalk-speaker-extension/manifest.json:4` — bump `"version": "1.4.1"` → `"version": "1.4.2"`. Leave `package.json:3` on `"1.0.0"` (pre-existing drift, out of scope).
+- [x] `cd kontur-diarize/ktalk-speaker-extension && npm run build` — verify `injected.js` regenerated without errors.
+- [x] Amend the Task 1 extension commit (or add as a trailing commit on top of Task 1) so the manifest bump and rebuilt `injected.js` live in the same commit as the extension source changes. Do not amend if Task 2 or Task 3 commits were already pushed — in that case add a new commit `chore(extension): bump manifest 1.4.1 → 1.4.2 and rebuild`.
 
 ### Task 5: Commit and push
 
