@@ -686,7 +686,7 @@ class MeetingStorage:
             - uncertain (bool): overrides the `uncertain` flag.
             - uncertain_reason (str): overrides the reason.
             - text (str): overrides `text` AND sets `refined=True` (word-level
-              refine pipeline — ADR-0018 / §5).
+              refine pipeline — ADR-0019 / §5).
 
         Args:
             updates: List of dicts. Each row must include `segment_id`; any
