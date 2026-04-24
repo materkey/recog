@@ -1115,6 +1115,17 @@ class LiveTranscriber:
         self._meeting_storage.update_segments(
             updates, meeting_path=target_meeting_path
         )
+        # Publish the refined text to extension + webapp clients via the
+        # bridge so UI surfaces can promote tier-1 rows to tier-2 without
+        # tailing the JSONL (the file rewrite is invisible to the forward
+        # seek tail reader — see plan §3 / design D10).
+        if self._ktalk_bridge is not None:
+            try:
+                self._ktalk_bridge.send_refine(
+                    [{"segment_id": u["segment_id"], "text": u["text"]} for u in updates]
+                )
+            except Exception as exc:
+                print(f"[Live] send_refine failed: {exc}", file=sys.stderr)
         # Cache AFTER successful update_segments — if the JSONL rewrite
         # fails (I/O error, permissions), the cache stays in sync with
         # disk so a subsequent refine with the same text retries instead

@@ -769,6 +769,39 @@ class KTalkBridge:
                 except Exception:
                     pass  # Клиент может отключиться
 
+    def send_refine(self, updates: list[dict]):
+        """Broadcast tier-2 refined segment text to all connected clients.
+
+        Invoked from `LiveTranscriber._apply_refine` after
+        `MeetingStorage.update_segments` rewrites the JSONL. Each entry in
+        `updates` carries `segment_id` and `text`; downstream the extension
+        overlay swaps bubble text and the webapp promotes tier-1 rows to
+        tier-2 (see plan `2026-04-24-per-speaker-refine-transport-ui.md`).
+        """
+        if not updates:
+            return
+
+        refined_at = datetime.now().isoformat()
+        payload_updates = [
+            {"segment_id": u["segment_id"], "text": u["text"]}
+            for u in updates
+        ]
+        message = json.dumps({
+            "type": "transcript_refine",
+            "updates": payload_updates,
+            "refined_at": refined_at,
+        }, ensure_ascii=False)
+
+        if self._loop and self._connected_clients:
+            for client in list(self._connected_clients):
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        client.send(message),
+                        self._loop
+                    )
+                except Exception:
+                    pass  # Клиент может отключиться
+
     async def _send_transcript_history(self):
         """Отправляет историю транскрипта текущей встречи всем подключённым клиентам."""
         if not self._meeting_storage:
