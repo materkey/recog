@@ -796,6 +796,12 @@ const views = {
                 const div = document.createElement('div');
                 div.className = `transcript-segment ${speakerClass} segment-new`;
                 div.dataset.tsDisplay = seg.ts_display || '';
+                if (seg.id != null) {
+                    div.dataset.segmentId = String(seg.id);
+                }
+                if (!seg.event_type) {
+                    div.dataset.refined = seg.refined === true ? 'true' : 'false';
+                }
                 div.innerHTML = `
                     <div class="segment-header">
                         <span class="segment-speaker">${escapeHtml(seg.speaker)}</span>

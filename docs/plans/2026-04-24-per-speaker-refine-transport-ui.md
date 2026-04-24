@@ -75,9 +75,9 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 6: Webapp — data attributes on transcript rows
 
-- [ ] 6.1 In `frontend/static/app.js` (or whichever module renders transcript rows — discover in task), each row gets `data-segment-id="{id}"` and `data-refined="{true/false}"` attributes. On segments load, `data-refined` is taken from the JSONL field (which now may be `true` post-refine).
-- [ ] 6.2 Update `renderTranscript` / `appendSegments` to set these attributes. Current segment array in `this.segments` should already carry `id`; verify and surface `refined` if missing.
-- [ ] 6.3 Commit: `feat(webapp): add data-segment-id and data-refined on transcript rows`
+- [x] 6.1 Added `data-segment-id` and `data-refined` attributes to live transcript rows in `frontend/static/app.js::live.appendSegments`. `data-segment-id` set from `seg.id` (int) when present; `data-refined` set to `"true"`/`"false"` from `seg.refined` on non-event rows (system events — `event_type` set — skip `data-refined` so Task 7's tier-1/tier-2 CSS won't decorate them). WS payload already carries both fields: JSONL rows serialize from `TranscriptSegment` dataclass via `asdict()` (id int + refined bool default False), and `live_watcher._notify_new_segments` forwards rows unchanged to webapp clients. `get_meeting` (init + meeting_change) does the same. Meeting-view `renderTranscript` deliberately untouched — it groups contiguous same-speaker segments via `groupSegments`, which would make per-segment refine targeting ambiguous; the refine pipeline's UI target is the live view, and historical meeting rows already show refined text because JSONL rows carry the final text when read on page load.
+- [x] 6.2 Verified `this.segments` carries `id` and `refined`: `init` msg calls `storage.get_meeting(id)` → `_load_meeting_from_path` reads JSONL rows directly (fields preserved). `segments` msg forwards JSONL rows through `live_watcher`. No surfacing needed — `seg.refined === true` compare defensively coerces `undefined` → `false` for legacy rows predating the field.
+- [x] 6.3 Commit: `feat(webapp): add data-segment-id and data-refined on transcript rows`
 
 ### Task 7: Webapp — tier-1/tier-2 CSS
 
