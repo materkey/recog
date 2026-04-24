@@ -72,6 +72,9 @@ def _make_transcriber(
     # _apply_refine emits tier-2 updates via the bridge when available.
     # Alignment tests focus on JSONL rewrite math; leave the bridge unset.
     t._ktalk_bridge = None
+    # Alignment tests do not exercise watchdog pause; leave the worker unset
+    # so `_apply_refine`'s is_paused() guard short-circuits via the None check.
+    t._refine_worker = None
     return t
 
 
