@@ -69,6 +69,9 @@ def _make_transcriber(
     t._pcm_segment_texts = segment_texts or {}
     t._meeting_storage = Mock()
     t._meeting_storage.current_meeting_path = meeting_path
+    # _apply_refine emits tier-2 updates via the bridge when available.
+    # Alignment tests focus on JSONL rewrite math; leave the bridge unset.
+    t._ktalk_bridge = None
     return t
 
 

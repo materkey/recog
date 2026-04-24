@@ -65,6 +65,10 @@ def _make_transcriber(
     t._pcm_live_segments = {}
     t._pcm_segment_texts = {}
     t._refine_worker = None
+    # `_apply_refine` emits tier-2 updates via the bridge when available;
+    # the integration test only cares about the JSONL rewrite path, so stub
+    # the attribute out. `send_refine` stays exercised by unit tests.
+    t._ktalk_bridge = None
     # Minimal ASR stub — only `transcribe_with_timestamps` and `_model_lock`
     # are consulted by the refine path.
     asr_stub = Mock()

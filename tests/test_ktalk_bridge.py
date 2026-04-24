@@ -588,3 +588,112 @@ async def test_pcm_chunk_callback_exception_does_not_break_bridge(capsys):
     await bridge._process_message(_make_pcm_chunk_message(seq=2))
     assert len(received) == 1
     assert received[0].seq == 2
+
+
+# --- send_refine: tier-2 refined segment broadcast ---
+
+
+class RecordingClient:
+    """Fake WS client whose `send` is a coroutine recording dispatched messages."""
+
+    def __init__(self):
+        self.sent: list[str] = []
+
+    async def send(self, message: str):
+        self.sent.append(message)
+
+
+@pytest.mark.asyncio
+async def test_send_refine_broadcasts_correct_shape():
+    """
+    given: KTalkBridge with a connected client and a running event loop
+    when: send_refine called with a list of {segment_id, text} updates
+    then: each connected client receives a single JSON frame with
+          type="transcript_refine", updates list shaped {segment_id, text},
+          and an envelope-level refined_at ISO8601 timestamp
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    client = RecordingClient()
+    bridge._connected_clients.add(client)
+
+    bridge.send_refine([
+        {"segment_id": 7, "text": "первый вариант текста"},
+        {"segment_id": 8, "text": "второй"},
+    ])
+
+    # asyncio.run_coroutine_threadsafe routes through call_soon_threadsafe
+    # and needs a real scheduler tick on the target loop before the
+    # coroutine runs. A short sleep (not 0) gives it room to complete.
+    await asyncio.sleep(0.05)
+
+    assert len(client.sent) == 1
+    payload = json.loads(client.sent[0])
+    assert payload["type"] == "transcript_refine"
+    assert payload["updates"] == [
+        {"segment_id": 7, "text": "первый вариант текста"},
+        {"segment_id": 8, "text": "второй"},
+    ]
+    assert isinstance(payload["refined_at"], str)
+    # datetime.now().isoformat() always contains a 'T' separator.
+    assert "T" in payload["refined_at"]
+
+
+@pytest.mark.asyncio
+async def test_send_refine_empty_list_is_noop():
+    """
+    given: KTalkBridge with a connected client
+    when: send_refine called with an empty updates list
+    then: no message is dispatched (noop — no WS traffic on a no-op refine)
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    client = RecordingClient()
+    bridge._connected_clients.add(client)
+
+    bridge.send_refine([])
+
+    await asyncio.sleep(0.05)
+
+    assert client.sent == []
+
+
+@pytest.mark.asyncio
+async def test_send_refine_no_clients_is_noop():
+    """
+    given: KTalkBridge with no connected clients
+    when: send_refine called with valid updates
+    then: method returns without raising (idempotent, no-op broadcast)
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    assert not bridge._connected_clients
+
+    # Should not raise.
+    bridge.send_refine([{"segment_id": 1, "text": "x"}])
+
+
+@pytest.mark.asyncio
+async def test_send_refine_drops_extra_fields_from_updates():
+    """
+    given: bridge with a connected client; caller passes updates that
+           include extra keys (e.g. `refined: True` left over from the
+           update_segments payload)
+    when: send_refine is invoked
+    then: only the documented `segment_id` and `text` keys are forwarded;
+          extra fields are stripped so extension/webapp consumers can rely
+          on a stable schema
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    client = RecordingClient()
+    bridge._connected_clients.add(client)
+
+    bridge.send_refine([
+        {"segment_id": 42, "text": "уточнённый", "refined": True, "extra": 1},
+    ])
+
+    await asyncio.sleep(0.05)
+    assert len(client.sent) == 1
+    payload = json.loads(client.sent[0])
+    assert payload["updates"] == [{"segment_id": 42, "text": "уточнённый"}]
