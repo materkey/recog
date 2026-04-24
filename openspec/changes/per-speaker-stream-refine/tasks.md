@@ -71,31 +71,32 @@
 
 ## 9. Fallback_mixed integration
 
-- [ ] 9.1 When `PerSpeakerIngest._degraded` flips `True`, call `refine_worker.pause()` which cancels queued tasks and drops new submissions; when flips back to `False`, call `refine_worker.resume()`
-- [ ] 9.2 Wire the pause/resume to the same code path that writes the `[PCM silence → mixed fallback]` marker (already in `_emit_pcm_transition_marker`)
-- [ ] 9.3 Integration test `tests/test_refine_fallback.py`: simulate watchdog trip via forced `_degraded = True`; assert no `transcript_refine` emitted until `_degraded = False`
+- [x] 9.1 When `PerSpeakerIngest._degraded` flips `True`, call `refine_worker.pause()` which cancels queued tasks and drops new submissions; when flips back to `False`, call `refine_worker.resume()`
+- [x] 9.2 Wire the pause/resume to the same code path that writes the `[PCM silence → mixed fallback]` marker (already in `_emit_pcm_transition_marker`)
+- [x] 9.3 Integration test `tests/test_refine_fallback.py`: simulate watchdog trip via forced `_degraded = True`; assert no `transcript_refine` emitted until `_degraded = False`
 
 ## 10. Tests
 
-- [ ] 10.1 `tests/test_refine_alignment.py` (unit): coverage from task 5.6
-- [ ] 10.2 `tests/test_refine_trigger.py` (unit): `get_refine_candidate` returns on gap, returns on monolog cap, returns `None` when no un-refined audio, watermark advances correctly
-- [ ] 10.3 `tests/test_per_speaker_refine.py` (e2e, marker `needs_audio_loopback`): scripted 15-s dialogue with 5-s overlap on two synthetic guests; after 20 s of idle, assert ≥ 50% of tier-1 segments promoted to `refined: true` AND aggregate WER against reference drops by ≥ 5% absolute
-- [ ] 10.4 `tests/test_meeting_storage.py`: new coverage for `update_segments({text, refined: true})`
-- [ ] 10.5 Regression: full suite `python -m pytest tests/ -v -m "not e2e"` stays green
+- [x] 10.1 `tests/test_refine_alignment.py` (unit): coverage from task 5.6
+- [x] 10.2 `tests/test_refine_trigger.py` (unit): `get_refine_candidate` returns on gap, returns on monolog cap, returns `None` when no un-refined audio, watermark advances correctly
+- [x] 10.3 `tests/test_per_speaker_refine.py` (e2e, marker `needs_audio_loopback`): scripted 15-s dialogue with 5-s overlap on two synthetic guests; after 20 s of idle, assert ≥ 50% of tier-1 segments promoted to `refined: true` AND aggregate WER against reference drops by ≥ 5% absolute
+- [x] 10.4 `tests/test_meeting_storage.py`: new coverage for `update_segments({text, refined: true})`
+- [x] 10.5 Regression: full suite `python -m pytest tests/ -v -m "not e2e"` stays green
 
 ## 11. Benchmarking + validation
 
-- [ ] 11.1 New harness `scripts/refine_benchmark.py`: replays recorded per-pid WAVs through `PerSpeakerIngest` + `RefineWorker`; outputs per-segment live-WER and refined-WER against a reference transcript, plus overall avg
-- [ ] 11.2 Run on take-2 fixture; acceptance: overall refined-WER ≤ 25% (vs live 33% baseline); write results to `experiments/2026-04-XX-stream-refine.md`
-- [ ] 11.3 Latency measurement: `scripts/refine_benchmark.py --latency-profile` with 4 simulated pids in parallel; first-paint p50/p95 must regress ≤ 100 ms vs baseline live-only
-- [ ] 11.4 If 11.2 or 11.3 fail acceptance thresholds, flag in `experiments/2026-04-XX-stream-refine.md` and do NOT proceed to default-flip task 12.6; iterate design
+- [x] 11.1 New harness `scripts/refine_benchmark.py`: replays recorded per-pid WAVs through `PerSpeakerIngest` + `RefineWorker`; outputs per-segment live-WER and refined-WER against a reference transcript, plus overall avg
+- [x] 11.2 Run on take-2 fixture; acceptance: overall refined-WER ≤ 25% (vs live 33% baseline); write results to `experiments/2026-04-XX-stream-refine.md`
+- [x] 11.3 Latency measurement: `scripts/refine_benchmark.py --latency-profile` with 4 simulated pids in parallel; first-paint p50/p95 must regress ≤ 100 ms vs baseline live-only
+- [x] 11.4 If 11.2 or 11.3 fail acceptance thresholds, flag in `experiments/2026-04-XX-stream-refine.md` and do NOT proceed to default-flip task 12.6; iterate design
 
 ## 12. Rollout + docs
 
-- [ ] 12.1 Sanity filter in `_apply_refine` (per D12): word-count-delta and Levenshtein guards with reject counters; unit test in `tests/test_refine_alignment.py` covering pass/reject on synthetic inputs
-- [ ] 12.2 Runtime toggle in `/api/pcm-diagnostics` (per D12): `POST {"refine_enabled": bool}` wired to `RefineWorker.pause()` / `resume()`; `GET` reports current enabled state and `refine.rejected_sanity` counter
-- [ ] 12.3 Write `adr/ADR-0019-stream-refine.md` summarising decisions D1–D12 and benchmark results
-- [ ] 12.4 Update `CLAUDE.md` Architecture section: refine contour, tier-1/tier-2 UI, feature flag
-- [ ] 12.5 `.env.example`: add `RECOG_PCM_REFINE=0` with one-line explanation
+- [x] 12.1 Sanity filter in `_apply_refine` (per D12): word-count-delta and Levenshtein guards with reject counters; unit test in `tests/test_refine_alignment.py` covering pass/reject on synthetic inputs
+- [x] 12.2 Runtime toggle in `/api/pcm-diagnostics` (per D12): `POST {"refine_enabled": bool}` wired to `RefineWorker.pause()` / `resume()`; `GET` reports current enabled state and `refine.rejected_sanity` counter
+- [x] 12.3 Write `adr/ADR-0019-stream-refine.md` summarising decisions D1–D12 and benchmark results
+- [x] 12.4 Update `CLAUDE.md` Architecture section: refine contour, tier-1/tier-2 UI, feature flag
+- [x] 12.5 `.env.example`: add `RECOG_PCM_REFINE=0` with one-line explanation
+- [ ] ➕ Default flip pending operational validation: 1 week of opt-in use, ≥ 5 real meetings with refined-WER monitored
 - [ ] 12.6 After one week of opt-in on at least 5 real meetings, flip default to `RECOG_PCM_REFINE=1` in `recog/config.py::pcm_refine_enabled()`; keep env override for rollback
 - [ ] 12.7 `openspec archive per-speaker-stream-refine` once tasks 0–11 are complete and manual smoke passes
