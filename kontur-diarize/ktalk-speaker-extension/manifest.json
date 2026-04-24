@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jitsi Speaker Detector",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Detects and displays the current active speaker in Jitsi-based video conferences (KTalk, vas3k.cloud, vkkovalev.work)",
   "permissions": [
     "activeTab",

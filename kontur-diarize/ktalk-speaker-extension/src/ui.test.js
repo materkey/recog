@@ -8,6 +8,7 @@
 import { jest } from '@jest/globals';
 
 let state;
+let handleTranscript;
 let handleTranscriptRefine;
 
 // `isJitsiPlatform` lives in `platforms/index.js` and is derived from
@@ -27,7 +28,7 @@ beforeAll(async () => {
   }));
 
   state = (await import('./state.js')).state;
-  ({ handleTranscriptRefine } = await import('./ui.js'));
+  ({ handleTranscript, handleTranscriptRefine } = await import('./ui.js'));
 });
 
 describe('handleTranscriptRefine', () => {
@@ -174,6 +175,89 @@ describe('handleTranscriptRefine', () => {
     const textEl = document.querySelector('.jitsi-transcript-line[data-segment-id="11"] .jitsi-transcript-text');
     expect(textEl.textContent).toBe('refined');
     expect(textEl.classList.contains('refine-fade')).toBe(true);
+    expect(state.transcriptLines[0].refined).toBe(true);
+  });
+
+  test('refine updates continuation child segment_id inside merged ktalk bubble', () => {
+    // Simulate two PCM chunks from the same speaker: second arrives as
+    // is_continuation=true, so the extension merges it into the previous
+    // state line. Both chunks still have their own backend segment_id.
+    document.body.innerHTML = `
+      <div class="ktalk-transcript-messages"></div>
+    `;
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'первая часть',
+      timestamp: '10:00:01',
+      is_continuation: false,
+      segment_id: 20,
+    });
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'вторая часть',
+      timestamp: '10:00:04',
+      is_continuation: true,
+      segment_id: 21,
+    });
+
+    expect(state.transcriptLines).toHaveLength(1);
+    const merged = state.transcriptLines[0];
+    expect(merged.segment_ids).toEqual([20, 21]);
+    expect(merged.segment_texts).toEqual({ 20: 'первая часть', 21: 'вторая часть' });
+    expect(merged.text).toBe('первая часть вторая часть');
+
+    // DOM exposes only primary segment_id (20) since updateTranscriptUI
+    // rebuilds from state — a refine for the continuation's id (21) must
+    // still rewrite that merged bubble via child-id lookup.
+    handleTranscriptRefine({
+      updates: [{ segment_id: 21, text: 'уточнённая вторая часть' }],
+    });
+
+    const textEl = document.querySelector('.ktalk-msg[data-segment-id="20"] .ktalk-msg-text');
+    expect(textEl).not.toBeNull();
+    expect(textEl.innerHTML).toBe('первая часть уточнённая вторая часть');
+    expect(state.transcriptLines[0].segment_texts[21]).toBe('уточнённая вторая часть');
+    expect(state.transcriptLines[0].text).toBe('первая часть уточнённая вторая часть');
+    expect(state.transcriptLines[0].refined).toBe(true);
+  });
+
+  test('refine updates continuation child segment_id on vas3k per-chunk DOM line', () => {
+    // Vas3k renders one DOM line per chunk (addVas3kTranscriptLine is
+    // called for every transcript incl. continuations), so each child
+    // segment_id has its own bubble; refine must target the specific one.
+    isJitsiPlatformMock.mockReturnValue(true);
+    document.body.innerHTML = `
+      <div class="jitsi-transcript-content"></div>
+    `;
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'one',
+      timestamp: '10:00:01',
+      is_continuation: false,
+      segment_id: 30,
+    });
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'two',
+      timestamp: '10:00:04',
+      is_continuation: true,
+      segment_id: 31,
+    });
+
+    expect(state.transcriptLines).toHaveLength(1);
+    expect(state.transcriptLines[0].segment_ids).toEqual([30, 31]);
+
+    handleTranscriptRefine({
+      updates: [{ segment_id: 31, text: 'refined-two' }],
+    });
+
+    // Vas3k DOM: child segment_id bubble rewritten.
+    const el31 = document.querySelector('.jitsi-transcript-line[data-segment-id="31"] .jitsi-transcript-text');
+    expect(el31).not.toBeNull();
+    expect(el31.textContent).toBe('refined-two');
+    // State child text updated; merged text rebuilt.
+    expect(state.transcriptLines[0].segment_texts[31]).toBe('refined-two');
+    expect(state.transcriptLines[0].text).toBe('one refined-two');
     expect(state.transcriptLines[0].refined).toBe(true);
   });
 });

@@ -5101,11 +5101,18 @@ function handleNewMeeting(data) {
 function handleTranscript(data) {
   const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction, segment_id } = data;
 
+  const sid = segment_id || 0;
   const newLine = {
     speaker,
     text,
     timestamp,
-    segment_id: segment_id || 0,
+    segment_id: sid,
+    // Per-child segment tracking so tier-2 refine can target continuation
+    // chunks merged into this line. Backend issues a fresh segment_id for
+    // every 3-s PCM chunk including continuations; without this, refines
+    // for any chunk after the first in a merged bubble are silently dropped.
+    segment_ids: sid > 0 ? [sid] : [],
+    segment_texts: sid > 0 ? { [sid]: text } : {},
     is_local: is_local || false,
     uncertain: uncertain || false,
     uncertain_reason: uncertain_reason || '',
@@ -5155,7 +5162,22 @@ function handleTranscript(data) {
   }
 
   if (is_continuation && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length > 0) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length - 1].text += ' ' + text;
+    const prev = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length - 1];
+    prev.text += ' ' + text;
+    if (sid > 0) {
+      // Backfill tracking for legacy lines pushed before this change so the
+      // refine handler can find them by either primary or child segment_id.
+      if (!prev.segment_ids) {
+        prev.segment_ids = prev.segment_id > 0 ? [prev.segment_id] : [];
+      }
+      if (!prev.segment_texts) {
+        prev.segment_texts = prev.segment_id > 0
+          ? { [prev.segment_id]: prev.text.slice(0, -(text.length + 1)) }
+          : {};
+      }
+      prev.segment_ids.push(sid);
+      prev.segment_texts[sid] = text;
+    }
   } else {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.push(newLine);
 
@@ -5212,16 +5234,44 @@ function handleTranscriptRefine(data) {
   }
   if (byId.size === 0) return;
 
-  for (const line of _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines) {
-    if (line.segment_id && byId.has(line.segment_id)) {
-      line.text = byId.get(line.segment_id);
-      line.refined = true;
+  // Resolve each refined segment_id to its containing state line. A state
+  // line may own multiple segment_ids when consecutive PCM chunks were
+  // merged as continuations (handleTranscript above) — we look up via both
+  // `segment_ids` (child list) and `segment_id` (legacy primary).
+  const touchedLines = new Set();
+  for (const [sid, newText] of byId) {
+    let target = null;
+    for (const line of _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines) {
+      if (Array.isArray(line.segment_ids) && line.segment_ids.includes(sid)) {
+        target = line;
+        break;
+      }
+      if (line.segment_id === sid) {
+        target = line;
+        break;
+      }
     }
+    if (!target) continue;
+    if (target.segment_texts && Array.isArray(target.segment_ids)
+        && target.segment_ids.length > 0) {
+      target.segment_texts[sid] = newText;
+      target.text = target.segment_ids
+        .map(id => target.segment_texts[id] || '')
+        .filter(Boolean)
+        .join(' ');
+    } else {
+      target.text = newText;
+    }
+    target.refined = true;
+    touchedLines.add(target);
   }
 
   if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
     const content = document.querySelector('.jitsi-transcript-content');
     if (content) {
+      // Vas3k path renders one DOM line per chunk (addVas3kTranscriptLine is
+      // called for every transcript, including continuations), so each
+      // refined segment_id has its own bubble to target.
       for (const [sid, newText] of byId) {
         const lineEl = content.querySelector(`.jitsi-transcript-line[data-segment-id="${sid}"]`);
         if (!lineEl) continue;
@@ -5235,12 +5285,18 @@ function handleTranscriptRefine(data) {
   } else {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) {
-      for (const [sid, newText] of byId) {
-        const msgEl = container.querySelector(`.ktalk-msg[data-segment-id="${sid}"]`);
+      // Ktalk path rebuilds the container from state.transcriptLines, so
+      // merged continuation bubbles only expose `data-segment-id` of the
+      // primary (first) chunk. Look up by primary id but render the
+      // rebuilt merged text (already updated in state above).
+      for (const line of touchedLines) {
+        const primaryId = line.segment_id;
+        if (!primaryId) continue;
+        const msgEl = container.querySelector(`.ktalk-msg[data-segment-id="${primaryId}"]`);
         if (!msgEl) continue;
         const textEl = msgEl.querySelector('.ktalk-msg-text');
         if (!textEl) continue;
-        textEl.innerHTML = formatTranscriptText(newText);
+        textEl.innerHTML = formatTranscriptText(line.text);
         textEl.classList.add('refine-fade');
         setTimeout(() => textEl.classList.remove('refine-fade'), 200);
       }
