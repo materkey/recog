@@ -69,9 +69,9 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 5: Extension rebuild + manifest version bump
 
-- [ ] 5.1 `cd kontur-diarize/ktalk-speaker-extension && npm run build` — rebuilds `injected.js`. Verify new handler is present via `grep transcript_refine injected.js`.
-- [ ] 5.2 Bump `manifest.json` version `1.3.1 → 1.4.0` (minor bump — new feature: tier-2 refined text support).
-- [ ] 5.3 Commit: `chore(extension): rebuild + bump manifest to 1.4.0`
+- [x] 5.1 `cd kontur-diarize/ktalk-speaker-extension && npm run build` — rebuilds `injected.js`. Verify new handler is present via `grep transcript_refine injected.js`. Bundle grew from 220531 → 224141 bytes; grep confirms `transcript_refine` (2), `handleTranscriptRefine` (3), `refine-fade` (7) occurrences.
+- [x] 5.2 Bump `manifest.json` version `1.3.1 → 1.4.0` (minor bump — new feature: tier-2 refined text support).
+- [x] 5.3 Commit: `chore(extension): rebuild + bump manifest to 1.4.0`
 
 ### Task 6: Webapp — data attributes on transcript rows
 
