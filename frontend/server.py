@@ -34,11 +34,13 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from meeting_storage import MeetingStorage, get_external_paths
+from bridge_subscriber import BridgeSubscriber
 
 # Configuration
 HOST = "127.0.0.1"
 PORT = 9080
 MEETINGS_DIR = Path(__file__).parent.parent / "meetings"
+BRIDGE_WS_URL = os.environ.get("RECOG_BRIDGE_WS_URL", "ws://localhost:8766")
 
 
 def get_storage() -> MeetingStorage:
@@ -616,12 +618,18 @@ def _resolve_ai_context(
 transcript_watcher = TranscriptWatcher()
 live_watcher = LiveWatcher()
 observer: Optional[Observer] = None
+bridge_subscriber: Optional[BridgeSubscriber] = None
+
+
+async def _forward_bridge_message(raw: str) -> None:
+    """Relay a bridge frame to all connected webapp live-stream clients."""
+    await live_watcher._broadcast(raw)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    global observer
+    global observer, bridge_subscriber
 
     # Start file watcher
     loop = asyncio.get_running_loop()
@@ -634,11 +642,22 @@ async def lifespan(app: FastAPI):
     observer.schedule(live_watcher, str(MEETINGS_DIR), recursive=True)
     observer.start()
 
+    # Subscribe to KTalk bridge to forward `transcript_refine` events
+    # to webapp live-stream clients (D10: JSONL tail-reader cannot see
+    # post-rewrite refines, so the bridge channel carries them).
+    bridge_subscriber = BridgeSubscriber(
+        bridge_url=BRIDGE_WS_URL,
+        forward_callback=_forward_bridge_message,
+    )
+    await bridge_subscriber.start()
+
     print(f"Server started at http://{HOST}:{PORT}")
 
     yield
 
     # Shutdown
+    if bridge_subscriber:
+        await bridge_subscriber.stop()
     if observer:
         observer.stop()
         observer.join()

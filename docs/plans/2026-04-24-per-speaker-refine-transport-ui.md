@@ -46,11 +46,11 @@ Backend refine contour (§2–§5) is complete: PCM ring → gap/monolog trigger
 
 ### Task 2: Frontend subscribes to bridge as WS client
 
-- [ ] 2.1 In `frontend/server.py`, add a startup task: a `asyncio.Task` that connects to `ws://localhost:8765` as a WS client (using `websockets` library — already a dep). On receipt, filter messages by `type`: if `type == "transcript_refine"`, forward to all connected webapp clients on the webapp WS server (port 9080). If `type == "transcript"` — skip (webapp already reads transcripts from JSONL on tail).
-- [ ] 2.2 Reconnect loop: if the bridge client connection drops, wait with exponential backoff (start 1 s, double up to 30 s cap) and reconnect. Log each attempt at INFO; do NOT log every retry at INFO — only first after a success and every 60 s.
-- [ ] 2.3 Handle bridge-down gracefully: do not block frontend server startup if bridge is not yet up. Webapp should still serve transcripts; refine messages will resume when bridge connects.
-- [ ] 2.4 Unit test: simulate a mock WS bridge that sends `{type: "transcript_refine", updates: [...]}`; assert the frontend's internal `broadcast_to_clients` is called with the forwarded message. If writing async tests is awkward, a lighter integration test is fine.
-- [ ] 2.5 Commit: `feat(frontend): subscribe to bridge WS and forward transcript_refine to webapp`
+- [x] 2.1 In `frontend/server.py`, add a startup task: a `asyncio.Task` that connects to `ws://localhost:8765` as a WS client (using `websockets` library — already a dep). On receipt, filter messages by `type`: if `type == "transcript_refine"`, forward to all connected webapp clients on the webapp WS server (port 9080). If `type == "transcript"` — skip (webapp already reads transcripts from JSONL on tail). ⚠️ Bridge actually listens on 8766 (default in `KTalkBridge.__init__`); plan said 8765 — used 8766. URL is overridable via `RECOG_BRIDGE_WS_URL`.
+- [x] 2.2 Reconnect loop: if the bridge client connection drops, wait with exponential backoff (start 1 s, double up to 30 s cap) and reconnect. Log each attempt at INFO; do NOT log every retry at INFO — only first after a success and every 60 s.
+- [x] 2.3 Handle bridge-down gracefully: do not block frontend server startup if bridge is not yet up. Webapp should still serve transcripts; refine messages will resume when bridge connects.
+- [x] 2.4 Unit test: simulate a mock WS bridge that sends `{type: "transcript_refine", updates: [...]}`; assert the frontend's internal `broadcast_to_clients` is called with the forwarded message. If writing async tests is awkward, a lighter integration test is fine.
+- [x] 2.5 Commit: `feat(frontend): subscribe to bridge WS and forward transcript_refine to webapp`
 
 ### Task 3: Fix JSONL tail rewrite-blind bug (per design D10)
 
