@@ -25,6 +25,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, List, Literal, Optional
@@ -241,6 +242,14 @@ class RefineWorker:
     # queue.get poll interval — small enough to notice `_stopped` promptly,
     # large enough not to dominate CPU when idle.
     _POLL_S: float = 0.2
+    # `_live_pending` poll interval used when waiting for the live path to
+    # release the model lock before re-contending after a cooperative abort.
+    # Python Lock is not fair — without this wait, the worker thread can
+    # reacquire `_model_lock` ahead of the waiting live thread, paying the
+    # encoder forward cost (~187 ms on MPS per the 2026-04-24 spike) on each
+    # immediately-aborted retry. 50 ms polls keep wasted wake-ups low while
+    # still reacting quickly once live completes its batch (~200-500 ms).
+    _LIVE_POLL_S: float = 0.05
 
     def __init__(
         self,
@@ -347,6 +356,21 @@ class RefineWorker:
 
     # ----- internal -------------------------------------------------------
 
+    def _wait_for_live_released(self) -> None:
+        """Block until `_live_pending` is cleared (or the worker stops).
+
+        Called from the pre-lock gate in `_process_task` before every
+        `_model_lock` acquisition. Live sets the event before acquiring
+        `_model_lock` and clears it after `transcribe_batch` returns;
+        waiting here lets live win the lock without the worker paying a
+        doomed encoder forward pass on the unfair `threading.Lock` race
+        (see class docstring and the `_LIVE_POLL_S` comment).
+        """
+        while self._live_pending.is_set():
+            if self._stopped.is_set():
+                return
+            time.sleep(self._LIVE_POLL_S)
+
     def _run(self) -> None:
         while not self._stopped.is_set():
             try:
@@ -375,22 +399,59 @@ class RefineWorker:
         aborted = False
         result: Optional[TranscriptionResult] = None
 
+        # Cooperative pre-lock gate: if live has already signalled intent to
+        # acquire `_model_lock`, wait for it to clear before contending. The
+        # decoder monkey-patch polls `_live_pending` inside the time-step
+        # loop, but the preceding encoder forward pass (~187 ms on MPS per
+        # the 2026-04-24 spike) runs unconditionally. Without this gate a
+        # queued refine task can pop right as live signals, win the unfair
+        # `threading.Lock` race, pay the encoder cost, and only abort
+        # afterwards in decode — leaving live waiting through wasted work.
+        # The gate also subsumes the post-abort retry case: when
+        # `RefineAborted` bounces the task back onto the queue, the next
+        # `_process_task` call lands here first.
+        #
+        # Coarse mode opts out: design.md D6 states "refine holds the lock
+        # for one full 20-s inference ... and live waits." There is no
+        # abort path in coarse mode, so the encoder cost is never wasted —
+        # deferring at task boundary would just reshuffle an already
+        # accepted wait. Keep coarse semantics unchanged.
+        if self._abort_mode == "cooperative":
+            self._wait_for_live_released()
+
         with self._model_lock:
             if self._stopped.is_set():
                 return
-            try:
-                if self._abort_mode == "cooperative":
-                    result = self._transcribe_fn(
-                        task.pcm_samples,
-                        should_abort=self._live_pending.is_set,
-                    )
-                else:
-                    result = self._transcribe_fn(task.pcm_samples)
-            except RefineAborted:
+            # Post-lock re-check narrows the TOCTOU window between
+            # `_wait_for_live_released()` returning and `_model_lock`
+            # acquisition: live can call `set_live_pending()` in that gap,
+            # win the race to the queued `with self._model_lock` contention,
+            # and still end up waiting through our encoder forward pass
+            # (~187 ms on MPS per the 2026-04-24 spike) before the decoder
+            # hook aborts. Checking once here — after we hold the lock but
+            # before the encoder runs — lets the worker release and requeue
+            # the task without paying that cost. Coarse mode has no abort
+            # path and accepts the full-window wait by design (D6).
+            if (
+                self._abort_mode == "cooperative"
+                and self._live_pending.is_set()
+            ):
                 aborted = True
+            else:
+                try:
+                    if self._abort_mode == "cooperative":
+                        result = self._transcribe_fn(
+                            task.pcm_samples,
+                            should_abort=self._live_pending.is_set,
+                        )
+                    else:
+                        result = self._transcribe_fn(task.pcm_samples)
+                except RefineAborted:
+                    aborted = True
 
         if aborted:
-            # Re-enqueue for another attempt once live releases the model.
+            # Re-enqueue; the pre-lock gate on the next iteration will wait
+            # for live to release `_model_lock` before contending again.
             self._queue.put(task)
             return
 

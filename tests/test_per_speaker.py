@@ -368,7 +368,16 @@ def test_batch_pcm_payload_is_int16_numpy():
     assert len(received) == 1
     batch = received[0]
     assert len(batch) == 1
-    pid, speaker_name, is_local, pcm_np, start_ms, end_ms, pid_audio_ms_end = batch[0]
+    (
+        pid,
+        speaker_name,
+        is_local,
+        pcm_np,
+        start_ms,
+        end_ms,
+        pid_audio_ms_start,
+        pid_audio_ms_end,
+    ) = batch[0]
     assert isinstance(pcm_np, np.ndarray)
     assert pcm_np.dtype == np.int16
     assert pcm_np.tolist() == [1, -1, 32767, -32768]
@@ -526,7 +535,7 @@ def test_ring_caps_at_window_plus_head_room():
     cap_seconds = PCM_REFINE_WINDOW_S + PCM_CHUNK_DURATION_S + 3.0
     cap_samples = int(cap_seconds * sample_rate)
     ring = ingest._pcm_rings["p1"]
-    total_samples = sum(int(entry.size) for entry in ring)
+    total_samples = sum(int(samples.size) for samples, _end_ms in ring)
     assert total_samples <= cap_samples
     # Head-room is ≥ one chunk (1 s at 16 kHz = 16000 samples), so we should
     # retain at least (cap_seconds - 1) s worth; guards against over-trimming.
@@ -562,6 +571,63 @@ def test_pid_audio_ms_monotonic_per_pid():
     assert ingest.get_pid_audio_ms("p1") == pytest.approx(5_000.0)
     assert ingest.get_pid_audio_ms("p2") == pytest.approx(3_000.0)
     assert ingest.get_pid_audio_ms("never_seen") == 0.0
+
+
+def test_production_payload_chunks_strip_overlap_in_pid_frame():
+    """
+    given: chunks shaped like the production worklet emits — 3.6 s payload
+           @ 16 kHz with 600 ms overlap carried from the previous chunk
+    when:  three back-to-back chunks are enqueued for the same pid
+    then:  `_pid_audio_ms` advances by the full payload on the first chunk
+           and by the 3.0 s stride on every subsequent chunk (overlap
+           stripped), and the refine ring stores non-overlapping samples
+           so concatenation during `get_refine_candidate` cannot duplicate
+           audio at the 3 s boundary (bug flagged in commit `ae25f69`
+           "Known follow-up").
+    """
+    from recog.config import (
+        PCM_CHUNK_DURATION_S,
+        PCM_CHUNK_OVERLAP_MS,
+        PCM_CHUNK_PAYLOAD_S,
+    )
+
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        max_batch_size=1000,
+        max_chunks_per_pid=1000,
+    )
+    sample_rate = 16000
+    payload_samples = int(PCM_CHUNK_PAYLOAD_S * sample_rate)
+    overlap_samples = int(PCM_CHUNK_OVERLAP_MS * sample_rate / 1000)
+    stride_samples = payload_samples - overlap_samples
+    production_pcm = np.zeros(payload_samples, dtype="<i2").tobytes()
+
+    for seq in range(1, 4):
+        ingest.enqueue(_make_chunk(
+            seq=seq, sample_rate=sample_rate, pcm=production_pcm,
+        ))
+
+    # pid_audio_ms: 3.6 s (first) + 3.0 s + 3.0 s = 9.6 s.
+    expected_ms = (
+        PCM_CHUNK_PAYLOAD_S + 2 * PCM_CHUNK_DURATION_S
+    ) * 1000.0
+    assert ingest.get_pid_audio_ms("p1") == pytest.approx(expected_ms)
+
+    # Ring stores stripped chunks — first full payload, then stride-only.
+    ring = ingest._pcm_rings["p1"]
+    assert len(ring) == 3
+    first_samples, first_end = ring[0]
+    second_samples, second_end = ring[1]
+    third_samples, third_end = ring[2]
+    assert first_samples.size == payload_samples
+    assert second_samples.size == stride_samples
+    assert third_samples.size == stride_samples
+    # End bounds advance with pid_audio_ms and are non-overlapping.
+    assert first_end == pytest.approx(PCM_CHUNK_PAYLOAD_S * 1000.0)
+    assert second_end == pytest.approx(
+        (PCM_CHUNK_PAYLOAD_S + PCM_CHUNK_DURATION_S) * 1000.0
+    )
+    assert third_end == pytest.approx(expected_ms)
 
 
 def test_silence_ms_resets_on_new_chunk():
@@ -657,6 +723,7 @@ def test_refine_state_cleared_on_drain():
 
     assert ingest._pcm_rings == {}
     assert ingest._pid_audio_ms == {}
+    assert ingest._pid_drained_ms == {}
     assert ingest._refine_watermark_ms == {}
     assert ingest._silence_ms == {}
     assert ingest._continuous_speech_ms == {}
@@ -757,6 +824,10 @@ def test_monolog_trigger_fires_at_cap():
         ingest.enqueue(_make_chunk(
             seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
         ))
+    # One tick drains the batch (max_batch_size=1000 covers all chunks) so
+    # `_pid_drained_ms` matches `_pid_audio_ms` by the time
+    # `get_refine_candidate` reads the drained-audio upper bound.
+    ingest.tick(now=clock.now)
     # Monolog trigger precondition, gap trigger should NOT be active.
     assert (
         ingest._continuous_speech_ms["p1"]
@@ -866,6 +937,10 @@ def test_refine_candidate_caps_at_refine_window():
         ingest.enqueue(_make_chunk(
             seq=s, sample_rate=sample_rate, pcm=pcm_one_second,
         ))
+    # One tick drains the batch so `_pid_drained_ms` is in sync with
+    # `_pid_audio_ms` — `get_refine_candidate` bounds the window on the
+    # drained counter to avoid advancing the watermark past un-drained audio.
+    ingest.tick(now=clock.now)
 
     task = ingest.get_refine_candidate("p1")
     assert task is not None
