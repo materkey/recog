@@ -592,6 +592,66 @@ def test_pcm_transition_marker_skips_append_on_stale_generation():
     storage.append_segment.assert_not_called()
 
 
+def test_pcm_transition_marker_skips_pause_on_stale_generation():
+    """
+    given: _emit_pcm_transition_marker called with stale marker_gen after
+           _invalidate_pending_chunks bumped the generation and reset
+           _last_pcm_degraded=False (AND PerSpeakerIngest.drain reset
+           ingest._degraded=False)
+    when:  the stale transition tries to pause the refine worker
+    then:  pause/resume is NOT invoked — if it were, the new meeting would
+           never observe a healthy→degraded→healthy cycle (both flip flags
+           start at False) and refine would stay paused indefinitely.
+    """
+    t = _fresh_transcriber_mock()
+    worker = Mock()
+    t._refine_worker = worker
+    t._meeting_generation = 10  # current, after meeting switch
+    t.transcript_lines = []
+
+    # Stale call captured before the switch at gen=9.
+    LiveTranscriber._emit_pcm_transition_marker(t, True, 9)
+
+    worker.pause.assert_not_called()
+    worker.resume.assert_not_called()
+
+
+def test_pcm_transition_marker_pauses_on_matching_generation():
+    """
+    given: marker_gen matches current meeting_generation, degraded=True
+    when:  _emit_pcm_transition_marker runs
+    then:  refine worker is paused
+    """
+    t = _fresh_transcriber_mock()
+    worker = Mock()
+    t._refine_worker = worker
+    t._meeting_generation = 4
+    t.transcript_lines = []
+
+    LiveTranscriber._emit_pcm_transition_marker(t, True, 4)
+
+    worker.pause.assert_called_once()
+    worker.resume.assert_not_called()
+
+
+def test_pcm_transition_marker_resumes_on_matching_generation():
+    """
+    given: marker_gen matches current meeting_generation, degraded=False
+    when:  _emit_pcm_transition_marker runs
+    then:  refine worker is resumed
+    """
+    t = _fresh_transcriber_mock()
+    worker = Mock()
+    t._refine_worker = worker
+    t._meeting_generation = 4
+    t.transcript_lines = []
+
+    LiveTranscriber._emit_pcm_transition_marker(t, False, 4)
+
+    worker.resume.assert_called_once()
+    worker.pause.assert_not_called()
+
+
 def test_pcm_transition_marker_writes_on_matching_generation():
     """
     given: marker_gen matches current meeting_generation
