@@ -368,7 +368,7 @@ def test_batch_pcm_payload_is_int16_numpy():
     assert len(received) == 1
     batch = received[0]
     assert len(batch) == 1
-    pid, speaker_name, is_local, pcm_np, start_ms, end_ms = batch[0]
+    pid, speaker_name, is_local, pcm_np, start_ms, end_ms, pid_audio_ms_end = batch[0]
     assert isinstance(pcm_np, np.ndarray)
     assert pcm_np.dtype == np.int16
     assert pcm_np.tolist() == [1, -1, 32767, -32768]

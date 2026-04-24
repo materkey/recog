@@ -49,8 +49,13 @@ from ktalk_bridge import PcmChunk
 
 
 # Payload produced for ASRModule.transcribe_batch:
-# (pid, speaker_name, is_local, pcm_int16_np, chunk_start_ms, chunk_end_ms)
-BatchedChunk = Tuple[str, str, bool, np.ndarray, float, float]
+# (pid, speaker_name, is_local, pcm_int16_np, chunk_start_ms, chunk_end_ms,
+#  pid_audio_ms_end) — the last field is the per-pid monotonic audio counter
+# snapshot taken at enqueue time (right after `_pid_audio_ms[pid]` was bumped
+# for this chunk). Threaded through so `_register_pcm_live_segment` can stamp
+# per-chunk bounds instead of reading a shared `_pid_audio_ms[pid]` that
+# would be the SAME value for every chunk of a multi-chunk-same-pid batch.
+BatchedChunk = Tuple[str, str, bool, np.ndarray, float, float, float]
 
 
 @dataclass
@@ -60,6 +65,11 @@ class _BufferedChunk:
     chunk: PcmChunk
     meeting_generation: int
     enqueued_at: float
+    # Snapshot of `_pid_audio_ms[chunk.pid]` taken right after this chunk was
+    # accounted for — used to stamp per-chunk pid-frame bounds in the
+    # live-segment registry instead of reading a shared counter that may have
+    # already advanced past this chunk's end.
+    pid_audio_ms_end: float = 0.0
 
 
 class PerSpeakerIngest:
@@ -301,6 +311,13 @@ class PerSpeakerIngest:
                 self._pid_sample_rate[chunk.pid] = sample_rate
                 self._enforce_ring_capacity_locked(chunk.pid, sample_rate)
                 self._pids_had_chunk_since_last_tick.add(chunk.pid)
+                # Snapshot per-chunk end bound AFTER counter advance so each
+                # chunk carries its own pid-frame end through the batch
+                # pipeline. Multiple chunks from the same pid in one batch
+                # would otherwise all read the same latest counter value at
+                # _register_pcm_live_segment time and collapse to identical
+                # bounds.
+                buffered.pid_audio_ms_end = self._pid_audio_ms[chunk.pid]
 
             total = sum(len(b) for b in self._buffers.values())
             if total >= self._max_batch_size:
@@ -629,6 +646,7 @@ class PerSpeakerIngest:
                 pcm_i16,
                 buffered.chunk.chunk_start_ts * 1000.0,
                 buffered.chunk.chunk_end_ts * 1000.0,
+                buffered.pid_audio_ms_end,
             ))
 
         if dropped_stale:
