@@ -52,6 +52,24 @@ class LiveWatcher(FileSystemEventHandler):
     def unregister(self, websocket: Any):
         self.clients.discard(websocket)
 
+    def set_current_meeting(self, meeting_id: Optional[str]):
+        """Point the watcher at `meeting_id`, resetting watermark on change.
+
+        Must be used instead of assigning `self.current_meeting_id`
+        directly: on a genuine meeting switch we also have to clear
+        `file_position`, `_file_inode`, and `_seen_segment_ids`, otherwise
+        a watermark leftover from the previous meeting can silently drop
+        new-meeting rows whose ids overlap (ids restart at 1 per meeting).
+        Without this, a `live_stream` WS connect that races the watchdog's
+        `_check_current_meeting` can pre-set the id and make the later
+        watchdog call skip the reset.
+        """
+        if meeting_id != self.current_meeting_id:
+            self.current_meeting_id = meeting_id
+            self.file_position = 0
+            self._seen_segment_ids = set()
+            self._file_inode = None
+
     def on_modified(self, event):
         if event.is_directory:
             return
@@ -85,10 +103,7 @@ class LiveWatcher(FileSystemEventHandler):
             current = active_meetings[0] if active_meetings else None
 
             if current and current["id"] != self.current_meeting_id:
-                self.current_meeting_id = current["id"]
-                self.file_position = 0
-                self._seen_segment_ids = set()
-                self._file_inode = None
+                self.set_current_meeting(current["id"])
 
                 message = json.dumps({
                     "type": "meeting_change",

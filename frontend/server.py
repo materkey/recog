@@ -1335,7 +1335,7 @@ async def live_stream(websocket: WebSocket):
 
         refine_on = pcm_refine_enabled()
         if current:
-            live_watcher.current_meeting_id = current["id"]
+            live_watcher.set_current_meeting(current["id"])
             meeting_data = storage.get_meeting(current["id"])
             await websocket.send_text(json.dumps({
                 "type": "init",
