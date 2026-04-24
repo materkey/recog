@@ -5099,14 +5099,19 @@ function handleNewMeeting(data) {
 }
 
 function handleTranscript(data) {
-  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction, segment_id } = data;
+  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction, segment_id, source_id } = data;
 
   const sid = segment_id || 0;
+  const sourceId = typeof source_id === 'string' ? source_id : '';
   const newLine = {
     speaker,
     text,
     timestamp,
     segment_id: sid,
+    // Stable per-source identifier (e.g. per-pid PCM stream). Used by the
+    // continuation-merge predicate below so chunks from different sources
+    // are not glued into a single bubble even if `is_continuation=true`.
+    source_id: sourceId,
     // Per-child segment tracking so tier-2 refine can target continuation
     // chunks merged into this line. Backend issues a fresh segment_id for
     // every 3-s PCM chunk including continuations; without this, refines
@@ -5161,8 +5166,15 @@ function handleTranscript(data) {
     return;
   }
 
-  if (is_continuation && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length > 0) {
-    const prev = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length - 1];
+  const prev = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length > 0
+    ? _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length - 1]
+    : null;
+  const sameSource = sourceId && prev && prev.source_id === sourceId;
+  const legacySameSpeaker = prev && !sourceId && !prev.source_id && prev.speaker === speaker;
+  if (is_continuation && prev && (sameSource || legacySameSpeaker)) {
+    // source_id prevents continuation chunks from contaminating another
+    // source's segment_ids/segment_texts; speaker fallback is only for
+    // legacy frames without source_id.
     prev.text += ' ' + text;
     if (sid > 0) {
       // Backfill tracking for legacy lines pushed before this change so the
