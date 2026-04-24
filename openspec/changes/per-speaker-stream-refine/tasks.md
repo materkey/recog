@@ -49,25 +49,25 @@
 
 ## 6. WebSocket transport
 
-- [ ] 6.1 Add `KTalkBridge.send_refine(updates: list[dict])` mirroring `send_transcript`; broadcasts `{type: "transcript_refine", updates: [{segment_id, text, refined_at}]}` to all connected extension clients on `ws://localhost:8765`
-- [ ] 6.2 In `frontend/server.py`, add a WS-client subscription to `ws://localhost:8765` (the bridge) on startup that forwards `transcript_refine` messages to webapp clients on `ws://127.0.0.1:9080` (per D10). Reconnect loop with exponential backoff (1s → 30s cap). The existing JSONL tail watcher remains for cold-start / reconnect replay of `segments` only; it does NOT forward refines
-- [ ] 6.3 Fix `_notify_new_segments` rewrite-blind bug (`frontend/server.py:183-208`): when the tailer observes `os.stat(path).st_size < self.file_position`, reset `self.file_position = 0` and diff against a seen-id watermark before re-broadcasting. Prevents the retroactive-speaker-correction path from stalling. Unit test in `tests/test_frontend_server.py`
+- [x] 6.1 Add `KTalkBridge.send_refine(updates: list[dict])` mirroring `send_transcript`; broadcasts `{type: "transcript_refine", updates: [{segment_id, text, refined_at}]}` to all connected extension clients on `ws://localhost:8765`
+- [x] 6.2 In `frontend/server.py`, add a WS-client subscription to `ws://localhost:8765` (the bridge) on startup that forwards `transcript_refine` messages to webapp clients on `ws://127.0.0.1:9080` (per D10). Reconnect loop with exponential backoff (1s → 30s cap). The existing JSONL tail watcher remains for cold-start / reconnect replay of `segments` only; it does NOT forward refines
+- [x] 6.3 Fix `_notify_new_segments` rewrite-blind bug (`frontend/server.py:183-208`): when the tailer observes `os.stat(path).st_size < self.file_position`, reset `self.file_position = 0` and diff against a seen-id watermark before re-broadcasting. Prevents the retroactive-speaker-correction path from stalling. Unit test in `tests/test_frontend_server.py`
 - [ ] 6.4 Unit test in `tests/test_ktalk_bridge.py`: `send_refine` produces correct JSON shape; sequential `send_transcript` → `send_refine` do not interleave on a single client
 
 ## 7. UI — extension overlay
 
-- [ ] 7.1 In the extension UI module that renders transcript bubbles, add a handler for `{type: "transcript_refine"}` messages; locate bubble by `data-segment-id` attribute and replace its text content
-- [ ] 7.2 100 ms fade-out / fade-in CSS transition on the text element to make the swap visible but not jarring
-- [ ] 7.3 Rebuild extension (`npm run build`); bump `manifest.json` version to `1.4.0`
-- [ ] 7.4 Manual smoke: live meeting, observe at least 3 bubbles refine within 5 s of reply-end
+- [x] 7.1 In the extension UI module that renders transcript bubbles, add a handler for `{type: "transcript_refine"}` messages; locate bubble by `data-segment-id` attribute and replace its text content
+- [x] 7.2 100 ms fade-out / fade-in CSS transition on the text element to make the swap visible but not jarring
+- [x] 7.3 Rebuild extension (`npm run build`); bump `manifest.json` version to `1.4.0`
+- [x] 7.4 Manual smoke: live meeting, observe at least 3 bubbles refine within 5 s of reply-end
 
 ## 8. UI — webapp frontend
 
-- [ ] 8.1 In the transcript-row rendering code (`frontend/static/`), add `data-segment-id={id}` and `data-refined={refined}` attributes to each row
-- [ ] 8.2 CSS rules: `[data-refined="false"] { opacity: .6; border-left: 2px dashed var(--muted); }` and `[data-refined="true"] { opacity: 1; border-left: 2px solid var(--accent); transition: opacity 200ms, border-color 200ms; }`
-- [ ] 8.3 JS handler for `transcript_refine`: update row textContent, set `data-refined="true"`, relying on the CSS transition for the visual
-- [ ] 8.4 Tooltip / title attribute on tier-1 rows: "Предварительная расшифровка — будет уточнена"
-- [ ] 8.5 Manual smoke on `http://127.0.0.1:9080`: visual tier transitions are smooth, no DOM reflow; scroll position preserved across refine
+- [x] 8.1 In the transcript-row rendering code (`frontend/static/`), add `data-segment-id={id}` and `data-refined={refined}` attributes to each row
+- [x] 8.2 CSS rules: `[data-refined="false"] { opacity: .6; border-left: 2px dashed var(--muted); }` and `[data-refined="true"] { opacity: 1; border-left: 2px solid var(--accent); transition: opacity 200ms, border-color 200ms; }`
+- [x] 8.3 JS handler for `transcript_refine`: update row textContent, set `data-refined="true"`, relying on the CSS transition for the visual
+- [x] 8.4 Tooltip / title attribute on tier-1 rows: "Предварительная расшифровка — будет уточнена"
+- [x] 8.5 Manual smoke on `http://127.0.0.1:9080`: visual tier transitions are smooth, no DOM reflow; scroll position preserved across refine
 
 ## 9. Fallback_mixed integration
 
