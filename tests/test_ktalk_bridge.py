@@ -724,3 +724,161 @@ async def test_send_refine_omits_meeting_id_when_none():
     assert len(client.sent) == 1
     payload = json.loads(client.sent[0])
     assert "meeting_id" not in payload
+
+
+# --- subscriber_hello protocol (frontend/bridge_subscriber.py ←→ bridge) ---
+
+
+class ControllableFakeWebSocket(FakeWebSocket):
+    """FakeWebSocket that stays open until `signal_close()` is invoked.
+
+    Used to inspect mid-handler state (e.g. set membership after
+    `subscriber_hello` is processed but before disconnect unwinds).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._close_event = asyncio.Event()
+
+    async def __anext__(self):
+        if self._messages:
+            return self._messages.pop(0)
+        await self._close_event.wait()
+        raise StopAsyncIteration
+
+    def signal_close(self):
+        self._close_event.set()
+
+    async def send(self, message: str):  # Supports outbound send in case
+        pass                               # _handle_client writes to it.
+
+
+@pytest.mark.asyncio
+async def test_subscriber_hello_moves_client_to_subscriber_set():
+    """
+    given: a WS client connects and sends a `subscriber_hello` message first
+    when: _handle_client processes the stream
+    then: the client is moved out of _connected_clients into
+          _subscriber_clients while the connection is still open
+    """
+    bridge = KTalkBridge()
+
+    ws = ControllableFakeWebSocket()
+    ws.add_message(json.dumps({"type": "subscriber_hello"}))
+
+    # Run the handler as a task so the connection stays "open" until we
+    # close it explicitly, letting us inspect the live state.
+    handler_task = asyncio.create_task(bridge._handle_client(ws))
+    for _ in range(20):
+        if ws in bridge._subscriber_clients:
+            break
+        await asyncio.sleep(0.01)
+    try:
+        assert ws in bridge._subscriber_clients
+        assert ws not in bridge._connected_clients
+    finally:
+        ws.signal_close()
+        await handler_task
+
+    # Finally-block cleanup must purge from both sets regardless of role.
+    assert ws not in bridge._connected_clients
+    assert ws not in bridge._subscriber_clients
+
+
+@pytest.mark.asyncio
+async def test_subscriber_disconnect_does_not_end_ktalk_meeting():
+    """
+    given: KTalkBridge with an active ktalk meeting AND an extension client
+           still connected; a subscriber also connects and sends hello
+    when: the subscriber disconnects
+    then: on_ktalk_leave is NOT called — the extension is still present,
+          so the meeting must continue. Previous regression: subscriber
+          lived in _connected_clients so its disconnect could end meetings.
+    """
+    bridge = KTalkBridge()
+    mock_storage = Mock()
+    mock_storage._load_meta = Mock(return_value={"source": "ktalk"})
+    mock_storage.on_ktalk_leave = Mock()
+    bridge.set_meeting_storage(mock_storage)
+
+    # Extension client present.
+    extension_ws = FakeWebSocket()
+    bridge._connected_clients.add(extension_ws)
+
+    subscriber_ws = FakeWebSocket()
+    subscriber_ws.add_message(json.dumps({"type": "subscriber_hello"}))
+    await bridge._handle_client(subscriber_ws)
+
+    mock_storage.on_ktalk_leave.assert_not_called()
+    assert extension_ws in bridge._connected_clients
+
+    # Cleanup
+    bridge._connected_clients.discard(extension_ws)
+
+
+@pytest.mark.asyncio
+async def test_extension_disconnect_ends_meeting_even_with_subscriber_connected():
+    """
+    given: KTalkBridge with an active ktalk meeting, one extension client
+           AND one registered subscriber
+    when: the extension disconnects
+    then: on_ktalk_leave("disconnected") IS called. Previous regression:
+          subscriber presence in _connected_clients blocked this path.
+    """
+    bridge = KTalkBridge()
+    mock_storage = Mock()
+    mock_storage._load_meta = Mock(return_value={"source": "ktalk"})
+    mock_storage.on_ktalk_leave = Mock(return_value="next_meeting_id")
+    bridge.set_meeting_storage(mock_storage)
+
+    # Pre-register a subscriber in the subscriber set (simulates prior
+    # hello handshake).
+    subscriber_ws = FakeWebSocket()
+    bridge._subscriber_clients.add(subscriber_ws)
+
+    # Extension client connects and immediately disconnects.
+    extension_ws = FakeWebSocket()
+    await bridge._handle_client(extension_ws)
+
+    mock_storage.on_ktalk_leave.assert_called_once_with("disconnected")
+
+
+@pytest.mark.asyncio
+async def test_clock_offset_preserved_across_client_connects():
+    """
+    given: bridge has a non-zero _clock_offset from a prior clock_sync
+    when: a new client connects via _handle_client
+    then: _clock_offset is NOT reset to 0.0 — the extension's synced
+          offset must survive subscriber reconnects and incidental
+          extension reopens. Prior regression: every connect wiped offset
+          to 0 for up to ~30 s (next clock_sync interval).
+    """
+    bridge = KTalkBridge()
+    bridge._clock_offset = 1.234
+
+    ws = FakeWebSocket()  # No messages — disconnect immediately.
+    await bridge._handle_client(ws)
+
+    assert bridge._clock_offset == 1.234
+
+
+@pytest.mark.asyncio
+async def test_send_refine_broadcasts_to_subscribers():
+    """
+    given: bridge with ONLY a subscriber registered (no extensions)
+    when: send_refine is invoked
+    then: the subscriber still receives the transcript_refine envelope so
+          the webapp subscriber path works even when no extension is live.
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    subscriber = RecordingClient()
+    bridge._subscriber_clients.add(subscriber)
+
+    bridge.send_refine([{"segment_id": 3, "text": "t"}])
+
+    await asyncio.sleep(0.05)
+    assert len(subscriber.sent) == 1
+    payload = json.loads(subscriber.sent[0])
+    assert payload["type"] == "transcript_refine"
+    assert payload["updates"] == [{"segment_id": 3, "text": "t"}]

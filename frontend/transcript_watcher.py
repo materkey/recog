@@ -110,8 +110,12 @@ class TranscriptWatcher(FileSystemEventHandler):
 
                 if segments:
                     message = json.dumps({"type": "segments", "data": segments})
+                    # Snapshot before iterating: concurrent `unregister` on
+                    # another task would mutate `self.clients[meeting_id]`
+                    # during the inner `await` and raise
+                    # `RuntimeError: Set changed size during iteration`.
                     dead_clients = []
-                    for ws in self.clients[meeting_id]:
+                    for ws in list(self.clients[meeting_id]):
                         try:
                             await ws.send_text(message)
                         except Exception:

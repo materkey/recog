@@ -733,7 +733,13 @@ const views = {
                     this.currentMeeting = msg.meeting;
                     this.segments = msg.segments || [];
                     this.refineEnabled = msg.refine_enabled === true;
-                    this.pendingRefines.clear();
+                    // Do NOT clear pendingRefines here: a `transcript_refine`
+                    // forwarded by the bridge can arrive BEFORE the init
+                    // handshake completes. Clearing would drop that update,
+                    // leaving the tier-1 row stuck even though backend
+                    // emitted a tier-2 refine. `appendSegments` below
+                    // consumes matching entries per segment id and leaves
+                    // non-matching entries for future `segments` events.
                     lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
                     this.renderTranscript(transcriptEl);

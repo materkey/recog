@@ -149,8 +149,11 @@ class LiveWatcher(FileSystemEventHandler):
             print(f"Error reading transcript: {e}")
 
     async def _broadcast(self, message: str):
+        # Snapshot before iterating: concurrent `unregister` on another
+        # task would mutate `self.clients` during the inner `await` and
+        # raise `RuntimeError: Set changed size during iteration`.
         dead_clients = []
-        for ws in self.clients:
+        for ws in list(self.clients):
             try:
                 await ws.send_text(message)
             except Exception:
