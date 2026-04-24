@@ -322,6 +322,17 @@ class RefineWorker:
         with self._paused_lock:
             self._paused = False
 
+    def is_paused(self) -> bool:
+        """Return the current pause flag under `_paused_lock`.
+
+        Callers that already hold `_state_lock` in `LiveTranscriber`
+        (e.g. `_apply_refine`) use this to drop an in-flight refine whose
+        `pause()` landed between the worker's post-transcribe check and the
+        JSONL/broadcast apply — closing the "no spurious promotions" window.
+        """
+        with self._paused_lock:
+            return self._paused
+
     def stop(self, timeout: float = 2.0) -> None:
         """Signal the worker to exit and wait for the thread to join.
 

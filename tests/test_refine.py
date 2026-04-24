@@ -237,6 +237,27 @@ class TestRefineWorkerLifecycle:
         finally:
             worker.stop(timeout=1.0)
 
+    def test_is_paused_reflects_flag(self):
+        """`is_paused()` is the public read-path used by
+        `LiveTranscriber._apply_refine` to close the race between the
+        worker's post-transcribe pause-check and the JSONL/broadcast apply.
+        The flag must match `pause()`/`resume()` round-trips.
+        """
+        worker = RefineWorker(
+            model_lock=threading.Lock(),
+            transcribe_fn=lambda pcm, **_kw: _FakeResult("x", []),
+            apply_fn=lambda _r: None,
+        )
+        worker.start()
+        try:
+            assert worker.is_paused() is False
+            worker.pause()
+            assert worker.is_paused() is True
+            worker.resume()
+            assert worker.is_paused() is False
+        finally:
+            worker.stop(timeout=1.0)
+
     def test_pause_during_transcribe_drops_inflight_result(self):
         """Spec regression: spec.md:156-158 requires "existing tier-1 rows
         stay tier-1 (no spurious promotions)" on watchdog trip. `pause()`

@@ -1079,6 +1079,15 @@ class LiveTranscriber:
         with self._state_lock:
             if task.meeting_generation != self._meeting_generation:
                 return
+            # Closes the "pause lands between post-transcribe check and
+            # apply" race (refine.py:465-473 only covers the window up to
+            # `_apply_fn` entry). `_emit_pcm_transition_marker` holds
+            # `_state_lock` across `pause()`, so checking here serialises
+            # the spurious-promotion gate with the watchdog transition.
+            # Lock order `_state_lock` → `_paused_lock` matches both paths
+            # — no deadlock risk.
+            if self._refine_worker is not None and self._refine_worker.is_paused():
+                return
             if self._meeting_storage is None:
                 return
             target_meeting_path = self._meeting_storage.current_meeting_path
