@@ -141,6 +141,7 @@ See [ADR documents](adr/) for architecture decisions:
 - ADR-0011: Meeting storage
 - ADR-0013: AI transcript analysis
 - ADR-0018: Per-speaker ASR pipeline (PCM transport from Chrome extension)
+- ADR-0019: Stream-refine — tier-2 re-transcription with 20 s context
 
 ## Files
 

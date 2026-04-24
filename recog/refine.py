@@ -27,7 +27,7 @@ import sys
 import threading
 import traceback
 from dataclasses import dataclass
-from typing import Any, Callable, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional, Union
 
 import numpy as np
 
@@ -252,7 +252,7 @@ class RefineWorker:
 
     def __init__(
         self,
-        model_lock: threading.Lock,
+        model_lock: Union[threading.Lock, threading.RLock],
         transcribe_fn: TranscribeFn,
         apply_fn: ApplyFn,
         abort_mode: AbortMode = "cooperative",
