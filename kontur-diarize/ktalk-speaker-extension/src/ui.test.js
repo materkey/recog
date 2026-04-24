@@ -260,4 +260,106 @@ describe('handleTranscriptRefine', () => {
     expect(state.transcriptLines[0].text).toBe('one refined-two');
     expect(state.transcriptLines[0].refined).toBe(true);
   });
+
+  test('handleTranscript pushes new line when continuation source_id differs', () => {
+    // Two different PCM sources (pid-a, pid-b) both labelled "Alice" — the
+    // backend may attach the same speaker name to two physical pids when an
+    // operator reuses the name. Without source_id discrimination the second
+    // chunk would be merged into Alice's first bubble and contaminate her
+    // segment_ids/segment_texts; with source_id the bubbles stay separate.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'first source',
+      timestamp: '10:00:01',
+      is_continuation: false,
+      segment_id: 20,
+      source_id: 'pid-a',
+    });
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'second source',
+      timestamp: '10:00:04',
+      is_continuation: true,
+      segment_id: 21,
+      source_id: 'pid-b',
+    });
+
+    expect(state.transcriptLines).toHaveLength(2);
+    expect(state.transcriptLines[0].segment_ids).toEqual([20]);
+    expect(state.transcriptLines[1].segment_ids).toEqual([21]);
+    expect(state.transcriptLines[0].source_id).toBe('pid-a');
+    expect(state.transcriptLines[1].source_id).toBe('pid-b');
+    expect(state.transcriptLines[0].text).toBe('first source');
+    expect(state.transcriptLines[1].text).toBe('second source');
+  });
+
+  test('handleTranscript merges continuation when source_id matches even if speaker label changes', () => {
+    // Same physical PCM stream (pid-a) but the extension renamed the
+    // speaker mid-turn ("Alice" → "Alice Renamed" via roster update). The
+    // continuation merge must follow the stable source_id, not the volatile
+    // speaker label, otherwise rename mid-turn would split a single utterance.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'часть один',
+      timestamp: '10:00:01',
+      is_continuation: false,
+      segment_id: 22,
+      source_id: 'pid-a',
+    });
+    handleTranscript({
+      speaker: 'Alice Renamed',
+      text: 'часть два',
+      timestamp: '10:00:04',
+      is_continuation: true,
+      segment_id: 23,
+      source_id: 'pid-a',
+    });
+
+    expect(state.transcriptLines).toHaveLength(1);
+    expect(state.transcriptLines[0].segment_ids).toEqual([22, 23]);
+    expect(state.transcriptLines[0].text).toBe('часть один часть два');
+    expect(state.transcriptLines[0].segment_texts).toEqual({
+      22: 'часть один',
+      23: 'часть два',
+    });
+  });
+
+  test('handleTranscript legacy fallback merges by speaker when source_id absent', () => {
+    // Pre-source_id payloads (legacy bridge) — predicate falls back to
+    // speaker equality. Same speaker → merge; different speaker → push new.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'one',
+      timestamp: '10:00:01',
+      is_continuation: false,
+      segment_id: 50,
+    });
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'two',
+      timestamp: '10:00:04',
+      is_continuation: true,
+      segment_id: 51,
+    });
+
+    expect(state.transcriptLines).toHaveLength(1);
+    expect(state.transcriptLines[0].segment_ids).toEqual([50, 51]);
+    expect(state.transcriptLines[0].text).toBe('one two');
+
+    handleTranscript({
+      speaker: 'Bob',
+      text: 'three',
+      timestamp: '10:00:07',
+      is_continuation: true,
+      segment_id: 52,
+    });
+
+    expect(state.transcriptLines).toHaveLength(2);
+    expect(state.transcriptLines[1].speaker).toBe('Bob');
+    expect(state.transcriptLines[1].segment_ids).toEqual([52]);
+    expect(state.transcriptLines[1].text).toBe('three');
+  });
 });

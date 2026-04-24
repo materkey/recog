@@ -989,6 +989,7 @@ class LiveTranscriber:
                         uncertain=False,
                         uncertain_reason="",
                         segment_id=segment_id,
+                        source_id=pid,
                     )
 
     def _register_pcm_live_segment(
