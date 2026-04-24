@@ -66,8 +66,8 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 3: scripts/refine_benchmark.py — WER harness
 
-- [ ] 3.1 New `scripts/refine_benchmark.py`: reads per-pid WAVs from a `--wav` argument (repeatable), a `--reference-file` for WER ground truth, and replays the WAVs through the full refine contour (not just the offline harness). Output: for each WAV, report per-segment live-text, refined-text, live-WER, refined-WER, and overall avg.
-- [ ] 3.2 Implementation approach:
+- [x] 3.1 New `scripts/refine_benchmark.py`: reads per-pid WAVs from a `--wav` argument (repeatable), a `--reference-file` for WER ground truth, and replays the WAVs through the full refine contour (not just the offline harness). Output: for each WAV, report per-segment live-text, refined-text, live-WER, refined-WER, and overall avg.
+- [x] 3.2 Implementation approach:
   - Use `scripts/pcm_experiment.py` as a reference for WER computation.
   - Instead of calling `ASRModule.transcribe_simple` directly, build a mini-harness:
     - Slice the input WAV into 3-second chunks (matching `PCM_CHUNK_DURATION_S`).
@@ -75,9 +75,9 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
     - Stash emitted segments by `segment_id`.
     - Let `RefineWorker` process and call `_apply_refine`; stash refined segments.
     - Compute WER (via `scripts/pcm_experiment.py::wer` helper — import it) for both live and refined segment texts joined.
-- [ ] 3.3 Support `--device {cpu,mps}` (defaults to auto).
-- [ ] 3.4 Write markdown report to `experiments/2026-04-24-refine-wer.md`: one table per config, showing live-WER vs refined-WER, delta, per-pid if multiple.
-- [ ] 3.5 No commit yet — script is built but not yet run.
+- [x] 3.3 Support `--device {cpu,mps}` (defaults to auto).
+- [x] 3.4 Write markdown report to `experiments/2026-04-24-refine-wer.md`: one table per config, showing live-WER vs refined-WER, delta, per-pid if multiple.
+- [x] 3.5 No commit yet — script is built but not yet run. (ralphex per-iteration commit: script lands without bench output; Task 4 appends the actual WER table to `experiments/2026-04-24-refine-wer.md`.)
 
 ### Task 4: Run the refine benchmark on take-2 fixtures
 
