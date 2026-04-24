@@ -200,9 +200,6 @@ def _fresh_transcriber_mock():
     t._pcm_pid_state = {}
     t._pcm_live_segments = {}
     t._pcm_segment_texts = {}
-    t._cross_pid_recent_phrases = deque(maxlen=32)
-    t._cross_pid_echo_checked_count = 0
-    t._cross_pid_echo_suppressed_count = 0
     t._last_pcm_degraded = False
     t._refine_worker = None
     t.use_pcm_transport = False
@@ -730,9 +727,6 @@ def test_invalidate_pending_chunks_drains_per_speaker_ingest():
     t._pcm_pid_state = {"pid-1": {"last_speech_time": 1.0, "segment_start_time": 0.0}}
     t._pcm_live_segments = {"pid-1": [(5, 0.0, 3000.0)]}
     t._pcm_segment_texts = {5: "prior"}
-    t._cross_pid_recent_phrases = deque(maxlen=32)
-    t._cross_pid_echo_checked_count = 3
-    t._cross_pid_echo_suppressed_count = 1
     t._last_pcm_degraded = True
 
     drained = {"count": 0}
@@ -752,9 +746,6 @@ def test_invalidate_pending_chunks_drains_per_speaker_ingest():
     assert t._pcm_pid_state == {}
     assert t._pcm_live_segments == {}
     assert t._pcm_segment_texts == {}
-    assert len(t._cross_pid_recent_phrases) == 0
-    assert t._cross_pid_echo_checked_count == 0
-    assert t._cross_pid_echo_suppressed_count == 0
     assert t._last_pcm_degraded is False
 
 
@@ -780,9 +771,6 @@ def test_invalidate_pending_chunks_resumes_paused_refine_worker():
     t._pcm_pid_state = {}
     t._pcm_live_segments = {}
     t._pcm_segment_texts = {}
-    t._cross_pid_recent_phrases = deque(maxlen=32)
-    t._cross_pid_echo_checked_count = 0
-    t._cross_pid_echo_suppressed_count = 0
     t._last_pcm_degraded = True
     t._per_speaker_ingest = Mock()
     t.mic_capture = None
@@ -812,9 +800,6 @@ def test_invalidate_pending_chunks_safe_when_refine_worker_none():
     t._pcm_pid_state = {}
     t._pcm_live_segments = {}
     t._pcm_segment_texts = {}
-    t._cross_pid_recent_phrases = deque(maxlen=32)
-    t._cross_pid_echo_checked_count = 0
-    t._cross_pid_echo_suppressed_count = 0
     t._last_pcm_degraded = False
     t._per_speaker_ingest = None
     t.mic_capture = None
@@ -898,291 +883,3 @@ def test_transcribe_direct_unpacks_decode_tuple():
     assert text == "hello world"
     model.decoding.decode.assert_called_once_with("HEAD", "ENCODED", "ENCODED_LEN")
 
-
-# --- Cross-pid echo suppression tests (Bug 3 / RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION) ---
-
-
-def _bind_cross_pid_helpers(t):
-    """Bind real `_is_cross_pid_echo` / `_remember_cross_pid_phrase` to a Mock(spec=…).
-
-    `_on_pcm_batch` (real) calls `self._is_cross_pid_echo(...)`; without
-    binding, Mock(spec=) would auto-generate a Mock that always returns a
-    truthy Mock object — defeating the gate's logic and the windowing rules
-    we want to exercise.
-    """
-    t._is_cross_pid_echo = LiveTranscriber._is_cross_pid_echo.__get__(t)
-    t._remember_cross_pid_phrase = LiveTranscriber._remember_cross_pid_phrase.__get__(t)
-
-
-def _pcm_batch_item(pid, speaker, text_window_ms, pid_audio_ms=(0.0, 3000.0)):
-    """Tuple shape consumed by `_on_pcm_batch` — `(pid, speaker, is_local, pcm,
-    chunk_start_ms, chunk_end_ms, pid_audio_ms_start, pid_audio_ms_end)`."""
-    import numpy as np
-    return (
-        pid, speaker, False,
-        np.zeros(48000, dtype=np.int16),
-        text_window_ms[0], text_window_ms[1],
-        pid_audio_ms[0], pid_audio_ms[1],
-    )
-
-
-def test_pcm_cross_pid_phrase_echo_suppressed_when_enabled(monkeypatch):
-    """
-    given: gate ON, two remote pids emit the same 3+ token phrase in close audio windows
-    when:  _on_pcm_batch processes both in one batch
-    then:  the second segment is neither stored nor sent
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "1")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-    t.asr.transcribe_batch.return_value = [
-        "проверка тест связи",
-        "проверка тест связи",
-    ]
-
-    batch = [
-        _pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0)),
-        _pcm_batch_item("pid-b", "Bob", (1100.0, 4400.0)),
-    ]
-
-    LiveTranscriber._on_pcm_batch(t, batch)
-
-    # Only the first item reached the extension and the in-memory transcript.
-    assert t._ktalk_bridge.send_transcript.call_count == 1
-    assert t._ktalk_bridge.send_transcript.call_args.args[0] == "Alice"
-    assert len(t.transcript_lines) == 1
-    assert t._cross_pid_echo_suppressed_count == 1
-
-
-def test_pcm_cross_pid_same_single_word_from_two_remotes_not_suppressed(monkeypatch):
-    """
-    given: gate ON, two remote pids emit the same one-word ack in close audio windows
-    when:  _on_pcm_batch processes both
-    then:  both are stored and sent (single-word phrases bypass the check)
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "1")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-    t.asr.transcribe_batch.return_value = ["да", "да"]
-
-    batch = [
-        _pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0)),
-        _pcm_batch_item("pid-b", "Bob", (1050.0, 4350.0)),
-    ]
-
-    LiveTranscriber._on_pcm_batch(t, batch)
-
-    assert t._ktalk_bridge.send_transcript.call_count == 2
-    assert len(t.transcript_lines) == 2
-    assert t._cross_pid_echo_suppressed_count == 0
-
-
-def test_pcm_cross_pid_different_words_from_two_remotes_not_suppressed(monkeypatch):
-    """
-    given: gate ON, two remote pids emit different multi-word phrases in close windows
-    when:  _on_pcm_batch processes both
-    then:  both are stored and sent (overlap below 80 % threshold)
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "1")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-    t.asr.transcribe_batch.return_value = [
-        "первая фраза тест",
-        "совсем другая речь",
-    ]
-
-    batch = [
-        _pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0)),
-        _pcm_batch_item("pid-b", "Bob", (1100.0, 4400.0)),
-    ]
-
-    LiveTranscriber._on_pcm_batch(t, batch)
-
-    assert t._ktalk_bridge.send_transcript.call_count == 2
-    assert len(t.transcript_lines) == 2
-    assert t._cross_pid_echo_suppressed_count == 0
-
-
-def test_pcm_cross_pid_phrase_outside_audio_window_not_suppressed(monkeypatch):
-    """
-    given: gate ON, same phrase from two pids but their audio windows are
-           farther apart than the 1.5 s tolerance
-    when:  two _on_pcm_batch calls land back-to-back
-    then:  both stored and sent (windowing rules out the false echo)
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "1")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-
-    t.asr.transcribe_batch.return_value = ["проверка тест связи"]
-    LiveTranscriber._on_pcm_batch(
-        t, [_pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0))]
-    )
-
-    t.asr.transcribe_batch.return_value = ["проверка тест связи"]
-    LiveTranscriber._on_pcm_batch(
-        t, [_pcm_batch_item("pid-b", "Bob", (8000.0, 11300.0))]
-    )
-
-    assert t._ktalk_bridge.send_transcript.call_count == 2
-    assert len(t.transcript_lines) == 2
-    assert t._cross_pid_echo_suppressed_count == 0
-
-
-def test_pcm_cross_pid_echo_gate_off_does_not_suppress(monkeypatch):
-    """
-    given: PCM transport ON but RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION=0
-    when:  same phrase arrives from two pids in close audio windows
-    then:  both stored and sent — gate explicitly disabled
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "0")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-    t.asr.transcribe_batch.return_value = [
-        "проверка тест связи",
-        "проверка тест связи",
-    ]
-
-    batch = [
-        _pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0)),
-        _pcm_batch_item("pid-b", "Bob", (1100.0, 4400.0)),
-    ]
-
-    LiveTranscriber._on_pcm_batch(t, batch)
-
-    assert t._ktalk_bridge.send_transcript.call_count == 2
-    assert len(t.transcript_lines) == 2
-    # Gate off — counters never tick.
-    assert t._cross_pid_echo_checked_count == 0
-    assert t._cross_pid_echo_suppressed_count == 0
-
-
-def test_pcm_cross_pid_same_python_batch_but_separate_audio_windows_not_suppressed(monkeypatch):
-    """
-    given: gate ON, two pids in one Python batch but with deliberately
-           separated chunk_start_ms/_end_ms (e.g. different speech turns
-           that ASR happened to batch together)
-    when:  _on_pcm_batch processes both
-    then:  both stored and sent — within-batch is not the same as
-           within-window; the audio-window predicate must isolate them
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "1")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-    t.asr.transcribe_batch.return_value = [
-        "проверка тест связи",
-        "проверка тест связи",
-    ]
-
-    batch = [
-        _pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0)),
-        _pcm_batch_item("pid-b", "Bob", (10000.0, 13300.0)),
-    ]
-
-    LiveTranscriber._on_pcm_batch(t, batch)
-
-    assert t._ktalk_bridge.send_transcript.call_count == 2
-    assert len(t.transcript_lines) == 2
-    assert t._cross_pid_echo_suppressed_count == 0
-
-
-def test_pcm_same_pid_high_overlap_sequel_not_suppressed(monkeypatch):
-    """
-    given: gate ON, one pid emits two 3+ token phrases in close windows where
-           the second survives dedup (no leading-prefix overlap) yet shares
-           ≥80 % tokens with the first by set overlap
-    when:  _on_pcm_batch processes each in its own call
-    then:  neither is suppressed — the `prior.pid == pid` skip in
-           _is_cross_pid_echo keeps same-pid continuations from false-matching
-           their own prior chunks; removing that skip would break this test.
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "1")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-
-    t.asr.transcribe_batch.return_value = ["раз два три четыре"]
-    LiveTranscriber._on_pcm_batch(
-        t, [_pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0))]
-    )
-
-    t.asr.transcribe_batch.return_value = ["пять раз два три четыре"]
-    LiveTranscriber._on_pcm_batch(
-        t, [_pcm_batch_item("pid-a", "Alice", (1200.0, 4500.0))]
-    )
-
-    assert t._ktalk_bridge.send_transcript.call_count == 2
-    assert t._cross_pid_echo_suppressed_count == 0
-
-
-def test_pcm_cross_pid_suppressed_chunk_does_not_mutate_pid_state(monkeypatch):
-    """
-    given: gate ON, pid-b echoes pid-a's 3+ token phrase (pid-b has no prior chunk)
-    when:  _on_pcm_batch suppresses pid-b's echo
-    then:  pid-b's dedup and continuation state remain untouched — otherwise the
-           next genuine pid-b chunk would dedup against tokens never shown or
-           be flagged is_continuation off a bubble that never existed.
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "1")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-    t.asr.transcribe_batch.return_value = [
-        "проверка тест связи",
-        "проверка тест связи",
-    ]
-
-    batch = [
-        _pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0)),
-        _pcm_batch_item("pid-b", "Bob", (1100.0, 4400.0)),
-    ]
-
-    LiveTranscriber._on_pcm_batch(t, batch)
-
-    assert t._cross_pid_echo_suppressed_count == 1
-    assert "pid-b" not in t._pcm_prev_words
-    assert "pid-b" not in t._pcm_pid_state
-
-
-def test_pcm_cross_pid_suppressed_echo_not_remembered(monkeypatch):
-    """
-    given: gate ON, pid-b's chunk is suppressed as an echo of pid-a
-    when:  _is_cross_pid_echo returns True
-    then:  only pid-a's original is kept in the ring — the suppressed echo is
-           not appended, so it cannot false-match a later legitimate pid-a
-           follow-up via mirrored content.
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION", "1")
-
-    t = _fresh_transcriber_mock()
-    _bind_cross_pid_helpers(t)
-    t.asr.transcribe_batch.return_value = [
-        "проверка тест связи",
-        "проверка тест связи",
-    ]
-
-    batch = [
-        _pcm_batch_item("pid-a", "Alice", (1000.0, 4300.0)),
-        _pcm_batch_item("pid-b", "Bob", (1100.0, 4400.0)),
-    ]
-
-    LiveTranscriber._on_pcm_batch(t, batch)
-
-    assert t._cross_pid_echo_suppressed_count == 1
-    remembered_pids = [p.pid for p in t._cross_pid_recent_phrases]
-    assert remembered_pids == ["pid-a"]

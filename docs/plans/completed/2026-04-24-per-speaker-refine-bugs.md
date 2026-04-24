@@ -67,7 +67,19 @@
 - [x] `npm run test` green.
 - [x] Commit as `test(extension): cover refine targeting different-source continuation-chunk` listing only `ui.test.js`.
 
-### Task 3: Gated cross-pid phrase-echo suppression (Bug 3)
+### Task 3: Gated cross-pid phrase-echo suppression (Bug 3) — ➕ REVERTED
+
+> **Reverted after live replay.** Исходная «Bug 3» оказалась ошибкой интерпретации:
+> описанный сценарий с двумя Chrome-вкладками одного голоса был **намеренным
+> тестом разбивки bubble'ов**, а не продовой проблемой. В боевых условиях
+> задвоения через два remote pipeline одного физического спикера не случается.
+> Heuristic token-set overlap + аудио-окно был реализован и затем полностью
+> откатан: удалены `pcm_cross_pid_echo_suppression_enabled()`, `_CrossPidPhrase`
+> dataclass, `_cross_pid_recent_phrases` deque, `_is_cross_pid_echo` /
+> `_audio_windows_close` / `_remember_cross_pid_phrase`, wiring в `_on_pcm_batch`,
+> clear в `_invalidate_pending_chunks`, env-var `RECOG_PCM_CROSS_PID_ECHO_SUPPRESSION`,
+> 9 pytest-тестов и упоминания в `CLAUDE.md`/`README.md`. Чекбоксы ниже
+> оставлены ASIS как история реализации.
 
 - [x] Add to `recog/config.py`:
   ```python
