@@ -683,6 +683,19 @@ a:hover {
     border-radius: 2px;
 }
 
+/* --- Transcript Tiers (data-refined: false=tier-1 live, true=tier-2 refined) --- */
+.transcript-segment[data-refined="false"] {
+    opacity: 0.6;
+    border-left-style: dashed;
+    transition: opacity var(--transition), border-left-color var(--transition);
+}
+
+.transcript-segment[data-refined="true"] {
+    opacity: 1;
+    border-left-style: solid;
+    transition: opacity var(--transition), border-left-color var(--transition);
+}
+
 /* --- Segment Audio Playback --- */
 .btn-play-segment {
     display: inline-flex;

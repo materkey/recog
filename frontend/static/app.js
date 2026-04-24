@@ -801,6 +801,9 @@ const views = {
                 }
                 if (!seg.event_type) {
                     div.dataset.refined = seg.refined === true ? 'true' : 'false';
+                    if (div.dataset.refined === 'false') {
+                        div.title = 'Предварительная расшифровка — будет уточнена';
+                    }
                 }
                 div.innerHTML = `
                     <div class="segment-header">
