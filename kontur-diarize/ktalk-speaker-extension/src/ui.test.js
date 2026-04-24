@@ -261,6 +261,56 @@ describe('handleTranscriptRefine', () => {
     expect(state.transcriptLines[0].refined).toBe(true);
   });
 
+  test('refine on different-source continuation chunk targets its own bubble, not the previous', () => {
+    // Two different PCM sources (pid-a, pid-b) — after Task 1's source_id
+    // discrimination they render as separate bubbles even though Bob's chunk
+    // arrives with is_continuation=true. A refine for Bob's segment_id must
+    // rewrite Bob's bubble and leave Alice's bubble untouched.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    handleTranscript({
+      speaker: 'Alice',
+      text: 'alice начало',
+      timestamp: '10:00:01',
+      is_continuation: false,
+      segment_id: 40,
+      source_id: 'pid-a',
+    });
+    handleTranscript({
+      speaker: 'Bob',
+      text: 'bob хвост',
+      timestamp: '10:00:04',
+      is_continuation: true,
+      segment_id: 41,
+      source_id: 'pid-b',
+    });
+
+    expect(state.transcriptLines).toHaveLength(2);
+    expect(state.transcriptLines[0].segment_ids).toEqual([40]);
+    expect(state.transcriptLines[0].segment_ids).not.toContain(41);
+    expect(state.transcriptLines[1].segment_ids).toEqual([41]);
+    expect(state.transcriptLines[1].segment_ids).toContain(41);
+
+    handleTranscriptRefine({
+      updates: [{ segment_id: 41, text: 'refined bob хвост' }],
+    });
+
+    // Bob's bubble rewritten.
+    const bobEl = document.querySelector('.ktalk-msg[data-segment-id="41"] .ktalk-msg-text');
+    expect(bobEl).not.toBeNull();
+    expect(bobEl.innerHTML).toBe('refined bob хвост');
+
+    // Alice's bubble untouched.
+    const aliceEl = document.querySelector('.ktalk-msg[data-segment-id="40"] .ktalk-msg-text');
+    expect(aliceEl).not.toBeNull();
+    expect(aliceEl.innerHTML).toBe('alice начало');
+
+    // State mirrors DOM.
+    expect(state.transcriptLines[0].text).toBe('alice начало');
+    expect(state.transcriptLines[0].refined).toBeFalsy();
+    expect(state.transcriptLines[1].text).toBe('refined bob хвост');
+    expect(state.transcriptLines[1].refined).toBe(true);
+  });
+
   test('handleTranscript pushes new line when continuation source_id differs', () => {
     // Two different PCM sources (pid-a, pid-b) both labelled "Alice" — the
     // backend may attach the same speaker name to two physical pids when an

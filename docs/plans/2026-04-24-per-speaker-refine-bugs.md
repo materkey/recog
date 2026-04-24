@@ -57,15 +57,15 @@
 
 ### Task 2: Regression coverage for refine on continuation-chunks (Bug 2)
 
-- [ ] Inspect existing `ui.test.js`; confirm these already exist (do not duplicate):
+- [x] Inspect existing `ui.test.js`; confirm these already exist (do not duplicate):
   - `'refine updates continuation child segment_id inside merged ktalk bubble'`
   - `'refine updates continuation child segment_id on vas3k per-chunk DOM line'`
-- [ ] Add one new test: `'refine on different-source continuation chunk targets its own bubble, not the previous'`
+- [x] Add one new test: `'refine on different-source continuation chunk targets its own bubble, not the previous'`
   - Alice sid=40 `source_id="pid-a"` `is_continuation=false`; Bob sid=41 `source_id="pid-b"` `is_continuation=true` (after Task 1 this is a separate bubble).
   - Call `handleTranscriptRefine({updates:[{segment_id:41, text:'...refined tail...'}]})`.
   - Assert: rewrite happens in Bob's bubble; `state.transcriptLines[0].segment_ids` does not contain `41`; `state.transcriptLines[1].segment_ids` does.
-- [ ] `npm run test` green.
-- [ ] Commit as `test(extension): cover refine targeting different-source continuation-chunk` listing only `ui.test.js`.
+- [x] `npm run test` green.
+- [x] Commit as `test(extension): cover refine targeting different-source continuation-chunk` listing only `ui.test.js`.
 
 ### Task 3: Gated cross-pid phrase-echo suppression (Bug 3)
 
