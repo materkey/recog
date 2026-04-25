@@ -992,13 +992,6 @@ __webpack_require__.r(__webpack_exports__);
 // 16 kHz Int16 PCM chunks every 3.0 s stride with 3.6 s payload. Chunks
 // are base64-encoded and shipped to ktalk_bridge via sendWsPcmChunk().
 //
-// Gating is server-authoritative (decision D2): the bridge broadcasts
-// `pcm_transport_enabled` on each WS connect; we subscribe to state
-// transitions via ws_api.js and materialize/teardown worklet nodes when
-// the gate flips. Attaching participants before the gate is on is fine —
-// we keep their metadata pending and materialize as soon as the gate
-// opens.
-//
 // Local-mic participant is intentionally skipped (decision D9): the host
 // tab does not expose its own mic as a remote track and unifying paths
 // would add risk without benefit; the sounddevice path stays the source
@@ -1140,7 +1133,6 @@ async function materialize(pid, info) {
         return;
       }
       if (data.type !== 'pcm_chunk') return;
-      if (!(0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.isPcmTransportEnabled)()) return;
       const int16 = data.int16Pcm;
       if (!int16 || !int16.length) return;
 
@@ -1216,9 +1208,7 @@ function pcmAttachParticipant(pid, speakerName, isLocal, mediaStream) {
   if (isLocal) return;
   if (pending.has(pid)) return;
   pending.set(pid, { speakerName: speakerName || pid, isLocal: !!isLocal, mediaStream });
-  if ((0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.isPcmTransportEnabled)()) {
-    void materialize(pid, pending.get(pid));
-  }
+  void materialize(pid, pending.get(pid));
 }
 
 // Update the cached display name for a pid whose PCM transport is already
@@ -1325,23 +1315,6 @@ function resolveSpeakerName(p, fallback) {
   return p?.name || p?.displayName || fallback;
 }
 
-// Handle server gate transitions. When the gate flips to true we
-// materialize any participants accumulated in `pending` while the gate
-// was off. When it flips to false we tear down active worklet nodes but
-// keep metadata so we can re-materialize on a later re-enable.
-(0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.subscribePcmTransport)((enabled) => {
-  if (enabled) {
-    for (const [pid, info] of pending) {
-      if (!active.has(pid)) {
-        void materialize(pid, info);
-      }
-    }
-  } else {
-    for (const pid of Array.from(active.keys())) {
-      teardown(pid);
-    }
-  }
-});
 
 
 /***/ },
@@ -6255,7 +6228,6 @@ function connectWebSocket() {
       console.log('[KTalk Transcript] WebSocket disconnected');
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected = false;
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicatorPlatform)(false);
-      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.resetPcmTransportOnDisconnect)();
 
       if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer) {
         clearInterval(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer);
@@ -6290,8 +6262,6 @@ function connectWebSocket() {
           (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_2__.handleVas3kSummaryResponse)(data);
         } else if (data.type === 'anchor_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
-        } else if (data.type === 'pcm_transport_enabled') {
-          (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.handlePcmTransportEnabledMessage)(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);
@@ -6314,27 +6284,17 @@ function connectWebSocket() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   handlePcmTransportEnabledMessage: () => (/* binding */ handlePcmTransportEnabledMessage),
-/* harmony export */   isPcmTransportEnabled: () => (/* binding */ isPcmTransportEnabled),
-/* harmony export */   resetPcmTransportOnDisconnect: () => (/* binding */ resetPcmTransportOnDisconnect),
 /* harmony export */   sendWsConnectionStatus: () => (/* binding */ sendWsConnectionStatus),
 /* harmony export */   sendWsMessage: () => (/* binding */ sendWsMessage),
 /* harmony export */   sendWsParticipants: () => (/* binding */ sendWsParticipants),
 /* harmony export */   sendWsPcmChunk: () => (/* binding */ sendWsPcmChunk),
-/* harmony export */   sendWsSpeakerUpdate: () => (/* binding */ sendWsSpeakerUpdate),
-/* harmony export */   subscribePcmTransport: () => (/* binding */ subscribePcmTransport)
+/* harmony export */   sendWsSpeakerUpdate: () => (/* binding */ sendWsSpeakerUpdate)
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 
 
 let messageSeq = 0;
 
-// Server-authoritative PCM transport gate. Bridge sends
-// {type: 'pcm_transport_enabled', enabled: bool} on each WS connect.
-// Extension must not send pcm_chunk frames unless this flag is true.
-// See docs/plans/2026-04-22-per-speaker-asr-pipeline.md decision D2.
-let pcmTransportEnabled = false;
-const pcmTransportListeners = new Set();
 
 function sendWsMessage(data) {
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.readyState === WebSocket.OPEN) {
@@ -6379,47 +6339,6 @@ function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, pcmBase6
   });
 }
 
-function isPcmTransportEnabled() {
-  return pcmTransportEnabled;
-}
-
-function subscribePcmTransport(listener) {
-  pcmTransportListeners.add(listener);
-  return () => {
-    pcmTransportListeners.delete(listener);
-  };
-}
-
-function handlePcmTransportEnabledMessage(data) {
-  const next = !!data?.enabled;
-  if (next === pcmTransportEnabled) return;
-  pcmTransportEnabled = next;
-  console.log('[PcmTransport] Server gate:', pcmTransportEnabled ? 'ENABLED' : 'DISABLED');
-  for (const listener of pcmTransportListeners) {
-    try {
-      listener(pcmTransportEnabled);
-    } catch (e) {
-      console.warn('[PcmTransport] Listener error:', e);
-    }
-  }
-}
-
-// Reset gate to default-off when WS disconnects so we don't keep the
-// stale positive flag when the server is gone. The next connect will
-// re-assert the server's value.
-function resetPcmTransportOnDisconnect() {
-  if (pcmTransportEnabled) {
-    pcmTransportEnabled = false;
-    console.log('[PcmTransport] Server gate: DISABLED (ws disconnect)');
-    for (const listener of pcmTransportListeners) {
-      try {
-        listener(false);
-      } catch (e) {
-        console.warn('[PcmTransport] Listener error:', e);
-      }
-    }
-  }
-}
 
 
 /***/ }

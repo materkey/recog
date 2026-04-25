@@ -229,17 +229,11 @@ class KTalkOrchestrator:
                 )
 
             if self.pcm_disable_at_s is not None and first_pcm_seen:
-                pre = min(self.pcm_disable_at_s, self.record_duration)
-                time.sleep(pre)
-                print(
-                    f"[e2e] Broadcasting pcm_transport_enabled=False at "
-                    f"t={pre:.0f}s (simulates extension-side PCM stop)"
-                )
-                try:
-                    self._transcriber._ktalk_bridge.set_pcm_transport_enabled(False)
-                except Exception as exc:
-                    errors.append(f"pcm_disable broadcast failed: {exc}")
-                remainder = self.record_duration - pre
+                # The mid-meeting PCM disable scenario depended on a
+                # server-authoritative gate broadcast that no longer
+                # exists; per-speaker is the only ingest path now.
+                # Skip the disable phase and just record straight through.
+                remainder = self.record_duration
                 if remainder > 0:
                     time.sleep(remainder)
             # --- Optional mid-meeting host reload (legacy degraded-mode) ---
@@ -495,17 +489,9 @@ class KTalkOrchestrator:
         blackhole_device = SingleDeviceCapture.find_blackhole()
         print(f"[e2e] BlackHole device: {blackhole_device}")
 
-        # RECOG_PCM_TRANSPORT is read by ktalk_bridge on startup to decide the
-        # server-authoritative handshake value sent to each extension client.
-        # Set it here so the bridge (spawned inside LiveTranscriber) picks it up.
-        if self.use_pcm_transport:
-            os.environ["RECOG_PCM_TRANSPORT"] = "1"
-            print("[e2e] RECOG_PCM_TRANSPORT=1 (per-speaker PCM path enabled)")
-
         self._transcriber = LiveTranscriber(
             system_device=blackhole_device,
             use_ktalk=True,
-            use_pcm_transport=self.use_pcm_transport,
         )
 
         self._transcriber_error: Optional[str] = None

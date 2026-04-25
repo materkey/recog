@@ -20,8 +20,7 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
-                     PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
-                     pcm_transport_enabled)
+                     PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S)
 from .asr import ASRModule
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
@@ -344,16 +343,16 @@ class LiveTranscriber:
         use_screencapture=False,  # Использовать ScreenCaptureKit вместо BlackHole
         save_audio=False,  # Сохранять аудио для последующей диаризации
         mic_speaker_name=MIC_SPEAKER_NAME,
-        use_pcm_transport=False,  # Primary-path per-speaker PCM transport (RECOG_PCM_TRANSPORT)
     ):
         self.mic_device = mic_device
         self.system_device = system_device
         self.sample_rate = 16000
         self.use_screencapture = use_screencapture
         self.save_audio = save_audio
-        # PCM transport primary-path only when KTalk is also on (see plan §4.1).
-        # Without KTalk there is no extension to source per-pid PCM from.
-        self.use_pcm_transport = bool(use_pcm_transport) and bool(use_ktalk)
+        # Per-speaker PCM transport is the only ingest path for KTalk
+        # meetings. Without KTalk there is no extension to source per-pid
+        # PCM from, so the path is implicitly off.
+        self.use_pcm_transport = bool(use_ktalk)
 
         # Определяем режим: dual (оба), mic-only, system-only, screencapture
         self.dual_mode = (mic_device is not None and (system_device is not None or use_screencapture))
@@ -720,7 +719,7 @@ class LiveTranscriber:
             self.use_ktalk = False
 
     def _setup_per_speaker_ingest(self):
-        """Wire per-speaker PCM ingest when RECOG_PCM_TRANSPORT=1 and KTalk is on.
+        """Wire per-speaker PCM ingest when KTalk is on.
 
         Creates `PerSpeakerIngest`, registers its `enqueue` as the bridge's
         PCM callback, and spawns the internal worker thread.  Also gates on
@@ -751,7 +750,7 @@ class LiveTranscriber:
         self._ktalk_bridge.set_pcm_chunk_callback(self._per_speaker_ingest.enqueue)
         self._ktalk_bridge.set_pcm_stats_getter(self._per_speaker_ingest.get_stats)
         self._per_speaker_ingest.start()
-        print("Per-speaker PCM ingest started (RECOG_PCM_TRANSPORT=1)")
+        print("Per-speaker PCM ingest started")
 
         # Refine bolts the second-tier contour on top of the ingest.
         # Build + start the worker, then register its submit method so the
@@ -1939,17 +1938,11 @@ def live_pipeline(
     use_ktalk=False,
     use_screencapture=False,
     mic_speaker_name=MIC_SPEAKER_NAME,
-    use_pcm_transport=None,
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
         LiveAudioCapture.list_devices()
         return
-
-    # Gate per-speaker PCM ingest on the RECOG_PCM_TRANSPORT env var unless
-    # the caller passed an explicit bool (used by tests).
-    if use_pcm_transport is None:
-        use_pcm_transport = pcm_transport_enabled()
 
     # Автоопределение устройств
     if mic_device == "auto":
@@ -1980,6 +1973,5 @@ def live_pipeline(
         use_ktalk=use_ktalk,
         use_screencapture=use_screencapture,
         mic_speaker_name=mic_speaker_name,
-        use_pcm_transport=use_pcm_transport,
     )
     transcriber.run(force_exit=True)

@@ -468,58 +468,6 @@ async def test_pcm_chunk_for_orphan_meeting_is_dropped(capsys):
 
 
 @pytest.mark.asyncio
-async def test_handshake_sends_pcm_transport_enabled_on_connect(monkeypatch):
-    """
-    given: RECOG_PCM_TRANSPORT=1 in env (captured at bridge init)
-    when: a client connects and the bridge handles the connection
-    then: the very first WS message sent to the client is
-          {type: "pcm_transport_enabled", enabled: true}
-    """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    bridge = KTalkBridge()
-    # _pcm_transport_enabled snapshot happens in __init__; verify:
-    assert bridge._pcm_transport_enabled is True
-
-    sent: list[str] = []
-
-    class RecordingWebSocket(FakeWebSocket):
-        async def send(self, message: str):
-            sent.append(message)
-
-    ws = RecordingWebSocket()
-    await bridge._handle_client(ws)
-
-    assert sent, "handshake frame must be sent on connect"
-    first = json.loads(sent[0])
-    assert first == {"type": "pcm_transport_enabled", "enabled": True}
-
-
-@pytest.mark.asyncio
-async def test_handshake_disabled_when_env_unset(monkeypatch):
-    """
-    given: RECOG_PCM_TRANSPORT is unset (default disabled)
-    when: a client connects
-    then: handshake sent with enabled: false — extension must not send PCM
-    """
-    monkeypatch.delenv("RECOG_PCM_TRANSPORT", raising=False)
-    bridge = KTalkBridge()
-    assert bridge._pcm_transport_enabled is False
-
-    sent: list[str] = []
-
-    class RecordingWebSocket(FakeWebSocket):
-        async def send(self, message: str):
-            sent.append(message)
-
-    ws = RecordingWebSocket()
-    await bridge._handle_client(ws)
-
-    assert sent, "handshake frame must be sent on connect"
-    first = json.loads(sent[0])
-    assert first == {"type": "pcm_transport_enabled", "enabled": False}
-
-
-@pytest.mark.asyncio
 async def test_pcm_chunk_callback_exception_does_not_break_bridge(capsys):
     """
     given: callback that raises on first call
