@@ -881,3 +881,55 @@ def test_transcribe_direct_unpacks_decode_tuple():
     assert text == "hello world"
     model.decoding.decode.assert_called_once_with("HEAD", "ENCODED", "ENCODED_LEN")
 
+
+def test_transcribe_direct_signals_refine_live_pending_before_model_lock():
+    """
+    given: direct live ASR runs while a RefineWorker exists
+    when:  _transcribe_direct contends for the shared model lock
+    then:  it sets live_pending before lock acquisition and clears it after
+           releasing the lock
+    """
+    import numpy as np
+    import torch
+
+    refine_worker = Mock()
+
+    class RecordingLock:
+        def __init__(self):
+            self.entered_after_signal = False
+            self.exited_before_clear = False
+
+        def __enter__(self):
+            self.entered_after_signal = refine_worker.set_live_pending.called
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.exited_before_clear = not refine_worker.clear_live_pending.called
+            return False
+
+    model = Mock()
+    model._device = torch.device("cpu")
+    model._dtype = torch.float32
+    model.forward = Mock(return_value=("ENCODED", "ENCODED_LEN"))
+    model.head = "HEAD"
+    model.decoding = Mock()
+    model.decoding.decode = Mock(return_value=[("prioritized live", [], [])])
+
+    lock = RecordingLock()
+    asr = Mock()
+    asr.model = model
+    asr._model_lock = lock
+
+    transcriber = LiveTranscriber.__new__(LiveTranscriber)
+    transcriber.asr = asr
+    transcriber._model_device = None
+    transcriber._model_dtype = None
+    transcriber._refine_worker = refine_worker
+
+    text = transcriber._transcribe_direct(np.zeros(16000, dtype=np.float32))
+
+    assert text == "prioritized live"
+    refine_worker.set_live_pending.assert_called_once_with()
+    refine_worker.clear_live_pending.assert_called_once_with()
+    assert lock.entered_after_signal is True
+    assert lock.exited_before_clear is True

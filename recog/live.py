@@ -456,12 +456,21 @@ class LiveTranscriber:
 
             # Serialize with PerSpeakerIngest worker's transcribe_batch: both
             # paths share self.asr.model, and PyTorch modules are not safe for
-            # concurrent forward on a shared instance.
-            with self.asr._model_lock:
-                encoded, encoded_len = model.forward(wav, length)
-                # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
-                # we only need the first sample's text.
-                text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
+            # concurrent forward on a shared instance. Signal live priority
+            # before contending so cooperative refine aborts promptly instead
+            # of making mic/fallback live ASR wait behind a full refine pass.
+            refine_worker = getattr(self, "_refine_worker", None)
+            if refine_worker is not None:
+                refine_worker.set_live_pending()
+            try:
+                with self.asr._model_lock:
+                    encoded, encoded_len = model.forward(wav, length)
+                    # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
+                    # we only need the first sample's text.
+                    text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
+            finally:
+                if refine_worker is not None:
+                    refine_worker.clear_live_pending()
             return text.strip() if text else None
 
         except Exception as e:

@@ -17,6 +17,12 @@ def _read_segments(storage: MeetingStorage) -> list[dict]:
     return [json.loads(line) for line in content.split("\n") if line]
 
 
+def _read_meta(storage: MeetingStorage) -> dict:
+    return json.loads(
+        (storage.current_meeting_path / "meta.json").read_text(encoding="utf-8")
+    )
+
+
 def test_transcript_segment_default_refined_false():
     """
     given: a freshly constructed TranscriptSegment with no explicit refined kwarg
@@ -58,6 +64,29 @@ def test_update_segments_rewrites_text_and_sets_refined_true(tmp_path):
     assert len(segments) == 1
     assert segments[0]["text"] == "refined and tidy text"
     assert segments[0]["refined"] is True
+
+
+def test_update_segments_text_rewrite_updates_words_count(tmp_path):
+    """
+    given: meta.stats.words_count was populated by append_segment
+    when: refine rewrites one segment with a different number of words
+    then: words_count is adjusted by the text delta
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    storage.start_session(ktalk=True)
+    seg_id = storage.append_segment(
+        speaker="Alice", speaker_id="Alice", text="one two three"
+    )
+    storage.append_segment(
+        speaker="Bob", speaker_id="Bob", text="four five"
+    )
+    assert _read_meta(storage)["stats"]["words_count"] == 5
+
+    storage.update_segments([
+        {"segment_id": seg_id, "text": "one"}
+    ])
+
+    assert _read_meta(storage)["stats"]["words_count"] == 3
 
 
 def test_update_segments_preserves_other_fields(tmp_path):

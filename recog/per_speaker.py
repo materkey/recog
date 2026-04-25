@@ -269,6 +269,14 @@ class PerSpeakerIngest:
         )
         wake = False
         with self._lock:
+            # The generation snapshot above is intentionally taken before we
+            # block on the ingest lock, so a meeting switch can bump the
+            # generation and drain state before this enqueue resumes. In that
+            # case the chunk belongs to the old meeting; drop it before it can
+            # seed new-meeting refine rings/counters.
+            if buffered.meeting_generation != self._generation_getter():
+                return
+
             buf = self._buffers.setdefault(chunk.pid, [])
             # Keep the list sorted by seq so drain emits in-order per pid.
             # bisect needs a key comparable — extract via small helper.
