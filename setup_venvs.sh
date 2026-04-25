@@ -34,10 +34,6 @@ if [ ! -d "venv-gigaam" ]; then
     ./venv-gigaam/bin/pip install --upgrade pip
     ./venv-gigaam/bin/pip install torch torchaudio
     ./venv-gigaam/bin/pip install soundfile sounddevice tqdm scikit-learn numpy speechbrain
-    # Silero VAD v6 for the per-speaker PCM path (drops hallucination-prone
-    # silence chunks before GigaAM). Uses the ONNX runtime — `onnxruntime`
-    # is installed transitively. Gated by RECOG_PCM_VAD=1 at runtime.
-    ./venv-gigaam/bin/pip install 'silero-vad[onnx-cpu]'
 
     # Install GigaAM
     if [ -d "../GigaAM" ]; then
