@@ -162,3 +162,22 @@ PCM_VAD_THRESHOLD: float = float(os.environ.get("RECOG_PCM_VAD_THRESHOLD", "0.3"
 def pcm_vad_enabled() -> bool:
     """True iff BOTH RECOG_PCM_TRANSPORT=1 AND RECOG_PCM_VAD=1."""
     return pcm_transport_enabled() and _env_flag("RECOG_PCM_VAD")
+
+
+def pcm_debug_enabled() -> bool:
+    """True iff RECOG_PCM_DEBUG=1.  Enables per-chunk diagnostic logging in
+    `_on_pcm_batch` (VAD max-prob, rms, raw/deduped text, emit decision).
+    Independent of pcm_transport_enabled so the flag can be toggled without
+    service restart during triage."""
+    return _env_flag("RECOG_PCM_DEBUG")
+
+
+def pcm_capture_48k_enabled() -> bool:
+    """True iff BOTH RECOG_PCM_TRANSPORT=1 AND RECOG_PCM_CAPTURE_48K=1.
+    Enables a parallel 48 kHz Float32 raw-source capture from the
+    AudioWorklet *before* the 48→16 kHz decimation. Lets you listen to
+    what arrives from Jitsi/Chrome independent of ASR's 16 kHz view.
+    Written to <RECOG_PCM_CAPTURE_DIR>/<meeting>/<pid>_48k.raw (f32le) +
+    <pid>_48k.jsonl. Payload is 4× larger than the 16 kHz path
+    (~1.1 GB/hr/pid); flip on only for a specific recording and off after."""
+    return pcm_transport_enabled() and _env_flag("RECOG_PCM_CAPTURE_48K")
