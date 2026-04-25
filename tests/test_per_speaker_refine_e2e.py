@@ -160,11 +160,11 @@ def _silence_chunk_bytes() -> bytes:
     return np.zeros(SAMPLES_PER_CHUNK, dtype="<i2").tobytes()
 
 
-def test_full_refine_contour_emits_refined_updates(tmp_path, monkeypatch):
+def test_full_refine_contour_emits_refined_updates(tmp_path):
     """
-    given: `RECOG_PCM_TRANSPORT=1`, a real `MeetingStorage`, real
-           `PerSpeakerIngest` and `RefineWorker`, stubbed ASR — and a
-           synthetic 15-second PCM stream for one pid (5 × 3-second
+    given: a real `MeetingStorage`, real `PerSpeakerIngest` and
+           `RefineWorker`, stubbed ASR — and a synthetic 15-second
+           PCM stream for one pid (5 × 3-second
            chunks) followed by a quiescent tick window
     when:  the ingest's tick loop drains the batch (5 live segments
            appended), `get_refine_candidate` fires the monolog trigger
@@ -174,8 +174,6 @@ def test_full_refine_contour_emits_refined_updates(tmp_path, monkeypatch):
            `refined=True` for at least one segment_id, and
            `bridge.send_refine` is invoked with matching ids
     """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-
     pid = "pid-alice"
 
     seq_counter = [0]
@@ -262,7 +260,7 @@ def test_full_refine_contour_emits_refined_updates(tmp_path, monkeypatch):
         ingest.stop()
 
 
-def test_full_refine_contour_pauses_when_watchdog_degraded(tmp_path, monkeypatch):
+def test_full_refine_contour_pauses_when_watchdog_degraded(tmp_path):
     """
     given: same end-to-end pipeline, but `_emit_pcm_transition_marker(
            degraded=True)` is invoked before chunks arrive — the watchdog
@@ -275,8 +273,6 @@ def test_full_refine_contour_pauses_when_watchdog_degraded(tmp_path, monkeypatch
            stays at zero invocations — the live append_segment path is
            unaffected
     """
-    monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-
     pid = "pid-alice"
     seq_counter = [0]
 
