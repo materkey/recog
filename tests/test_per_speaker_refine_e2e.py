@@ -162,10 +162,10 @@ def _silence_chunk_bytes() -> bytes:
 
 def test_full_refine_contour_emits_refined_updates(tmp_path, monkeypatch):
     """
-    given: `RECOG_PCM_TRANSPORT=1` + `RECOG_PCM_REFINE=1`, a real
-           `MeetingStorage`, real `PerSpeakerIngest` and `RefineWorker`,
-           stubbed ASR — and a synthetic 15-second PCM stream for one pid
-           (5 × 3-second chunks) followed by a quiescent tick window
+    given: `RECOG_PCM_TRANSPORT=1`, a real `MeetingStorage`, real
+           `PerSpeakerIngest` and `RefineWorker`, stubbed ASR — and a
+           synthetic 15-second PCM stream for one pid (5 × 3-second
+           chunks) followed by a quiescent tick window
     when:  the ingest's tick loop drains the batch (5 live segments
            appended), `get_refine_candidate` fires the monolog trigger
            (continuous_speech_ms ≥ 15000), and the worker re-transcribes
@@ -175,7 +175,6 @@ def test_full_refine_contour_emits_refined_updates(tmp_path, monkeypatch):
            `bridge.send_refine` is invoked with matching ids
     """
     monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_REFINE", "1")
 
     pid = "pid-alice"
 
@@ -277,7 +276,6 @@ def test_full_refine_contour_pauses_when_watchdog_degraded(tmp_path, monkeypatch
            unaffected
     """
     monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_REFINE", "1")
 
     pid = "pid-alice"
     seq_counter = [0]

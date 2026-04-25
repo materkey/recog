@@ -21,7 +21,7 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
-                     pcm_refine_enabled, pcm_transport_enabled)
+                     pcm_transport_enabled)
 from .asr import ASRModule
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
@@ -430,10 +430,10 @@ class LiveTranscriber:
         # `_register_pcm_live_segment`; pruned together with the segment
         # registry. All reads/writes under `self._state_lock`.
         self._pcm_segment_texts: dict[int, str] = {}
-        # Refine worker placeholder — `_setup_refine_worker` (Task 11) builds
-        # it when `pcm_refine_enabled()` and wires `apply_fn=self._apply_refine`.
-        # Kept as None here so `_teardown_session` / `_on_pcm_batch` priority
-        # signals can no-op cleanly when refine is disabled.
+        # Refine worker placeholder — `_setup_refine_worker` builds it and
+        # wires `apply_fn=self._apply_refine`. Kept as None here so
+        # `_teardown_session` / `_on_pcm_batch` priority signals can
+        # no-op cleanly until the worker is constructed.
         self._refine_worker = None
         # Tracks the last-observed watchdog state so we emit a transition
         # marker only on actual flips (see plan §4.5).
@@ -753,17 +753,15 @@ class LiveTranscriber:
         self._per_speaker_ingest.start()
         print("Per-speaker PCM ingest started (RECOG_PCM_TRANSPORT=1)")
 
-        # RECOG_PCM_REFINE bolts the refine contour on top of the ingest.
+        # Refine bolts the second-tier contour on top of the ingest.
         # Build + start the worker, then register its submit method so the
         # ingest's tick loop feeds it per-pid refine candidates.
         self._setup_refine_worker()
 
     def _setup_refine_worker(self) -> None:
-        """Build and start `RefineWorker` if refine is enabled.
+        """Build and start `RefineWorker`.
 
-        Gates:
-            * `pcm_refine_enabled()` — requires both `RECOG_PCM_TRANSPORT=1`
-              and `RECOG_PCM_REFINE=1`; otherwise no-op.
+        Notes:
             * `self._per_speaker_ingest` is not None — the ingest owns the
               per-pid ring + trigger state the worker's tasks come from.
 
@@ -783,8 +781,6 @@ class LiveTranscriber:
               (see `experiments/2026-04-24-refine-abort-spike.md`); saves
               ~77 % of inference cost per aborted refine on MPS.
         """
-        if not pcm_refine_enabled():
-            return
         if self._per_speaker_ingest is None:
             return
         self._refine_worker = RefineWorker(
@@ -797,7 +793,7 @@ class LiveTranscriber:
         self._per_speaker_ingest.set_refine_submit_callback(
             self._refine_worker.submit
         )
-        print("RefineWorker started (RECOG_PCM_REFINE=1)")
+        print("RefineWorker started")
 
     def _refine_transcribe_fn(self, pcm_samples, *, should_abort=None):
         """Bridge between `RefineWorker` and `ASRModule.transcribe_with_

@@ -1,9 +1,8 @@
 """Per-speaker refine contour: worker + tasks.
 
-When `RECOG_PCM_REFINE=1` (gated on `RECOG_PCM_TRANSPORT=1`), `RefineWorker`
-reruns `ASRModule.transcribe_with_timestamps` on a trailing per-pid PCM
-window and feeds the aligned result back into `LiveTranscriber` to replace
-live-segment text with `refined: true`.
+`RefineWorker` reruns `ASRModule.transcribe_with_timestamps` on a
+trailing per-pid PCM window and feeds the aligned result back into
+`LiveTranscriber` to replace live-segment text with `refined: true`.
 
 Threading model (design.md D11):
     - The worker owns a daemon thread that pops `RefineTask`s from an
