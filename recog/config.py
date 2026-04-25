@@ -69,7 +69,7 @@ MAX_SEGMENT_DURATION = 20.0
 MIC_SPEAKER_NAME = os.environ.get("MIC_SPEAKER_NAME", "").strip() or "Me"
 
 # ============================================================================
-# PER-SPEAKER PCM TRANSPORT (RECOG_PCM_TRANSPORT)
+# PER-SPEAKER PCM TRANSPORT
 # ============================================================================
 #
 # Константы протокола per-speaker ASR пайплайна: extension аттачит
@@ -111,16 +111,6 @@ PCM_CHUNK_OVERLAP_MS = 600
 # управление mixed-path fallback'у. 30 s достаточно, чтобы пропустить
 # flap reconnect, но не упустить весь разговор.
 PCM_SILENCE_WATCHDOG_S = 30.0
-
-
-def pcm_transport_enabled() -> bool:
-    """Читает RECOG_PCM_TRANSPORT env var и возвращает True если включён.
-
-    Server-authoritative gate: extension получает этот флаг через handshake
-    от bridge на WS-connect и шлёт PCM только если флаг True. Нет отдельного
-    toggle в popup/chrome.storage — один источник правды.
-    """
-    return os.environ.get("RECOG_PCM_TRANSPORT", "0") == "1"
 
 
 # ============================================================================

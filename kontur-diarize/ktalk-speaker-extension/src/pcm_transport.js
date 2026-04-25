@@ -6,23 +6,12 @@
 // 16 kHz Int16 PCM chunks every 3.0 s stride with 3.6 s payload. Chunks
 // are base64-encoded and shipped to ktalk_bridge via sendWsPcmChunk().
 //
-// Gating is server-authoritative (decision D2): the bridge broadcasts
-// `pcm_transport_enabled` on each WS connect; we subscribe to state
-// transitions via ws_api.js and materialize/teardown worklet nodes when
-// the gate flips. Attaching participants before the gate is on is fine —
-// we keep their metadata pending and materialize as soon as the gate
-// opens.
-//
 // Local-mic participant is intentionally skipped (decision D9): the host
 // tab does not expose its own mic as a remote track and unifying paths
 // would add risk without benefit; the sounddevice path stays the source
 // of truth for the local mic.
 
-import {
-  isPcmTransportEnabled,
-  subscribePcmTransport,
-  sendWsPcmChunk,
-} from './ws_api.js';
+import { sendWsPcmChunk } from './ws_api.js';
 
 let audioContext = null;
 let workletLoadPromise = null;
@@ -158,7 +147,6 @@ async function materialize(pid, info) {
         return;
       }
       if (data.type !== 'pcm_chunk') return;
-      if (!isPcmTransportEnabled()) return;
       const int16 = data.int16Pcm;
       if (!int16 || !int16.length) return;
 
@@ -234,9 +222,7 @@ export function pcmAttachParticipant(pid, speakerName, isLocal, mediaStream) {
   if (isLocal) return;
   if (pending.has(pid)) return;
   pending.set(pid, { speakerName: speakerName || pid, isLocal: !!isLocal, mediaStream });
-  if (isPcmTransportEnabled()) {
-    void materialize(pid, pending.get(pid));
-  }
+  void materialize(pid, pending.get(pid));
 }
 
 // Update the cached display name for a pid whose PCM transport is already
@@ -343,20 +329,3 @@ function resolveSpeakerName(p, fallback) {
   return p?.name || p?.displayName || fallback;
 }
 
-// Handle server gate transitions. When the gate flips to true we
-// materialize any participants accumulated in `pending` while the gate
-// was off. When it flips to false we tear down active worklet nodes but
-// keep metadata so we can re-materialize on a later re-enable.
-subscribePcmTransport((enabled) => {
-  if (enabled) {
-    for (const [pid, info] of pending) {
-      if (!active.has(pid)) {
-        void materialize(pid, info);
-      }
-    }
-  } else {
-    for (const pid of Array.from(active.keys())) {
-      teardown(pid);
-    }
-  }
-});

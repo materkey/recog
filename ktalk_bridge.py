@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 from recog.node_env import get_node_env
 from recog.ai_provider import resolve_cli
-from recog.config import load_dotenv, pcm_transport_enabled
+from recog.config import load_dotenv
 
 if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
@@ -321,11 +321,6 @@ class KTalkBridge:
         # LiveTranscriber wires it; bridge surfaces the result through the
         # debug file so frontend /api/pcm-diagnostics can read it.
         self._pcm_stats_getter: Optional[Callable[[], dict]] = None
-
-        # Snapshot RECOG_PCM_TRANSPORT на старте bridge; отправляется extension'у
-        # handshake'ом на WS-connect. Перечитывание при reconnect'е не делаем —
-        # чтобы поменять флаг, нужен restart bridge'а.
-        self._pcm_transport_enabled: bool = pcm_transport_enabled()
 
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
@@ -646,9 +641,7 @@ class KTalkBridge:
                     "meeting": {
                         "id": self._meeting_storage.get_current_meeting_id() if self._meeting_storage else None
                     },
-                    "pcm": {
-                        "transport_enabled": self._pcm_transport_enabled,
-                    },
+                    "pcm": {},
                 }
             if self._pcm_stats_getter is not None:
                 try:
@@ -1229,26 +1222,6 @@ class KTalkBridge:
                 "error": str(e)
             })
 
-    def set_pcm_transport_enabled(self, enabled: bool) -> None:
-        """Dynamically update the server-authoritative PCM gate and broadcast
-        the new state to every connected extension client.
-
-        Used by e2e tests to simulate a mid-meeting extension-side dispose
-        without reloading the host page (which would close the WebSocket and
-        end the meeting). Also callable from production code if we ever want
-        to toggle the flag without a bridge restart.
-        """
-        self._pcm_transport_enabled = bool(enabled)
-        if self._loop is None or not self._connected_clients:
-            return
-        asyncio.run_coroutine_threadsafe(
-            self._broadcast_message({
-                "type": "pcm_transport_enabled",
-                "enabled": self._pcm_transport_enabled,
-            }),
-            self._loop,
-        )
-
     async def _handle_client(self, websocket):
         """Обрабатывает подключение клиента (Chrome extension или subscriber)."""
         # Guard set mutation with `self._lock` — `send_transcript` /
@@ -1265,20 +1238,6 @@ class KTalkBridge:
             # connect, overwriting any stale offset within a few ms.
             self._last_seq = 0
         print(f"[KTalk Bridge] Client connected from {websocket.remote_address}", file=sys.stderr)
-
-        # Server-authoritative PCM transport gate (см. recog/config.py
-        # pcm_transport_enabled()): extension аттачит AudioWorklet'ы только
-        # если enabled=True. Флаг читается один раз на старте bridge.
-        try:
-            await websocket.send(json.dumps({
-                "type": "pcm_transport_enabled",
-                "enabled": self._pcm_transport_enabled,
-            }))
-        except Exception as e:
-            print(
-                f"[KTalk Bridge] Failed to send pcm_transport_enabled handshake: {e}",
-                file=sys.stderr,
-            )
 
         try:
             async for message in websocket:

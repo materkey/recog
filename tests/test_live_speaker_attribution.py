@@ -811,12 +811,11 @@ def test_invalidate_pending_chunks_safe_when_refine_worker_none():
     assert t._meeting_generation == 1
 
 
-def test_use_pcm_transport_requires_ktalk():
+def test_use_pcm_transport_off_without_ktalk():
     """
-    given: use_pcm_transport=True but use_ktalk=False
+    given: use_ktalk=False
     when:  LiveTranscriber.__init__ runs
-    then:  self.use_pcm_transport is coerced to False (no extension to pull
-           PCM from)
+    then:  self.use_pcm_transport is False (no extension to pull PCM from)
     """
     # None device selects default sounddevice input without touching hardware.
     transcriber = LiveTranscriber(
@@ -824,23 +823,22 @@ def test_use_pcm_transport_requires_ktalk():
         system_device=None,
         no_diarization=True,
         use_ktalk=False,
-        use_pcm_transport=True,
     )
     assert transcriber.use_pcm_transport is False
 
 
-def test_use_pcm_transport_enabled_when_ktalk_on():
+def test_use_pcm_transport_on_with_ktalk():
     """
-    given: use_pcm_transport=True AND use_ktalk=True
+    given: use_ktalk=True
     when:  LiveTranscriber.__init__ runs
-    then:  self.use_pcm_transport remains True
+    then:  self.use_pcm_transport is True (per-speaker is the only
+           ingest path for KTalk meetings)
     """
     transcriber = LiveTranscriber(
         mic_device=None,
         system_device=None,
         no_diarization=True,
         use_ktalk=True,
-        use_pcm_transport=True,
     )
     assert transcriber.use_pcm_transport is True
 
