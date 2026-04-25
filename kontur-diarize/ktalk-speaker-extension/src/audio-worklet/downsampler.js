@@ -24,13 +24,8 @@ const DECIMATION = SOURCE_SAMPLE_RATE / TARGET_SAMPLE_RATE; // 3
 const PAYLOAD_SAMPLES = Math.round((TARGET_SAMPLE_RATE * 3600) / 1000); // 57600
 const STRIDE_SAMPLES = Math.round((TARGET_SAMPLE_RATE * 3000) / 1000);  // 48000
 
-// Parallel 48 kHz Float32 ring — emitted when processorOptions.capture48k
-// is set. Same cadence as the 16 kHz path (3.6 s payload, 3.0 s stride).
-const PAYLOAD_SAMPLES_48K = Math.round((SOURCE_SAMPLE_RATE * 3600) / 1000); // 172800
-const STRIDE_SAMPLES_48K = Math.round((SOURCE_SAMPLE_RATE * 3000) / 1000);  // 144000
-
 class PcmDownsamplerProcessor extends AudioWorkletProcessor {
-  constructor(options) {
+  constructor() {
     super();
 
     this._disabled = false;
@@ -39,12 +34,9 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
     // from "worklet driven but input empty". Cap so we don't spam logs.
     this._processDebugLeft = 3;
 
-    this._capture48k = !!(options && options.processorOptions && options.processorOptions.capture48k);
-
     console.log(
       '[PcmDownsampler] constructed, sampleRate=', sampleRate,
-      'expected=', SOURCE_SAMPLE_RATE,
-      'capture48k=', this._capture48k
+      'expected=', SOURCE_SAMPLE_RATE
     );
 
     if (sampleRate !== SOURCE_SAMPLE_RATE) {
@@ -72,13 +64,6 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
     this._ringWrite = 0;
     this._ringFill = 0;
     this._samplesSinceLastEmit = 0;
-
-    if (this._capture48k) {
-      this._ring48k = new Float32Array(PAYLOAD_SAMPLES_48K);
-      this._ring48kWrite = 0;
-      this._ring48kFill = 0;
-      this._samplesSinceLastEmit48k = 0;
-    }
   }
 
   process(inputs) {
@@ -106,24 +91,8 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
     let ringFill = this._ringFill;
     let sinceEmit = this._samplesSinceLastEmit;
 
-    const cap48k = this._capture48k;
-    let r48W = cap48k ? this._ring48kWrite : 0;
-    let r48F = cap48k ? this._ring48kFill : 0;
-    let sinceEmit48k = cap48k ? this._samplesSinceLastEmit48k : 0;
-
     for (let i = 0; i < n; i++) {
       const x0 = ch[i];
-
-      if (cap48k) {
-        this._ring48k[r48W] = x0;
-        r48W = (r48W + 1) % PAYLOAD_SAMPLES_48K;
-        if (r48F < PAYLOAD_SAMPLES_48K) r48F++;
-        sinceEmit48k++;
-        if (sinceEmit48k >= STRIDE_SAMPLES_48K && r48F >= PAYLOAD_SAMPLES_48K) {
-          this._emit48k(r48W);
-          sinceEmit48k = 0;
-        }
-      }
 
       // Low-pass 3-tap: y = 0.25*x[n-2] + 0.5*x[n-1] + 0.25*x[n]
       const y = 0.25 * x2 + 0.5 * x1 + 0.25 * x0;
@@ -158,12 +127,6 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
     this._ringFill = ringFill;
     this._samplesSinceLastEmit = sinceEmit;
 
-    if (cap48k) {
-      this._ring48kWrite = r48W;
-      this._ring48kFill = r48F;
-      this._samplesSinceLastEmit48k = sinceEmit48k;
-    }
-
     return true;
   }
 
@@ -183,28 +146,6 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
         int16Pcm: out,
         sampleCount: PAYLOAD_SAMPLES,
         targetSampleRate: TARGET_SAMPLE_RATE,
-      },
-      [out.buffer]
-    );
-  }
-
-  _emit48k(ringWriteIdx) {
-    // Raw 48 kHz Float32 — exactly what AudioWorklet gets from the
-    // MediaStream before our 3-tap decimation. Same ring geometry as the
-    // 16 kHz path: oldest sample at ringWriteIdx, wrap around.
-    const out = new Float32Array(PAYLOAD_SAMPLES_48K);
-    const first = PAYLOAD_SAMPLES_48K - ringWriteIdx;
-    out.set(this._ring48k.subarray(ringWriteIdx, PAYLOAD_SAMPLES_48K), 0);
-    if (ringWriteIdx > 0) {
-      out.set(this._ring48k.subarray(0, ringWriteIdx), first);
-    }
-
-    this.port.postMessage(
-      {
-        type: 'pcm_chunk_48k',
-        float32Pcm: out,
-        sampleCount: PAYLOAD_SAMPLES_48K,
-        sourceSampleRate: SOURCE_SAMPLE_RATE,
       },
       [out.buffer]
     );

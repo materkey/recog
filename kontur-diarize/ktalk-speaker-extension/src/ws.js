@@ -2,7 +2,7 @@ import { state, constants } from './state.js';
 import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleTranscriptRefine, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
 import { handleVas3kSummaryResponse } from './ui-vas3k.js';
 import { getActiveSpeaker, sendParticipantsUpdate, sendFilteredSpeakerUpdate } from './speaker.js';
-import { sendWsMessage, handlePcmTransportEnabledMessage, handlePcmCapture48kEnabledMessage, resetPcmTransportOnDisconnect } from './ws_api.js';
+import { sendWsMessage, handlePcmTransportEnabledMessage, resetPcmTransportOnDisconnect } from './ws_api.js';
 import { sendMeetingJoin, startMeetingCheck } from './meeting.js';
 import { getPlatformAdapter } from './platforms/index.js';
 
@@ -88,8 +88,6 @@ export function connectWebSocket() {
           handleAnchorResponse(data);
         } else if (data.type === 'pcm_transport_enabled') {
           handlePcmTransportEnabledMessage(data);
-        } else if (data.type === 'pcm_capture_48k_enabled') {
-          handlePcmCapture48kEnabledMessage(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);
