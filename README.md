@@ -116,13 +116,15 @@ python add_speaker_live.py "Speaker Name" 10
 
 ## Environment Variables
 
-Copy `.env.example` → `.env` and edit. Key flags:
+Copy `.env.example` → `.env` and edit:
 
-- `RECOG_PCM_TRANSPORT=1` — switch live transcription to per-participant PCM streams from the KTalk Chrome extension (ADR-0018). Requires extension rebuild + service restart. Default `0`.
-- `RECOG_PCM_REFINE=1` — enable tier-2 refine pass on top of PCM transport. Re-transcribes per-pid PCM windows (20 s) with word-level timestamps on reply-close (3 s gap) or monolog cap (15 s), rewrites rows in `meetings/<id>/transcript.jsonl` with `refined: true`. Gated on `RECOG_PCM_TRANSPORT=1`. Default `0`.
 - `MIC_SPEAKER_NAME` — speaker label for microphone input (default `Me`).
+- `RECOG_BRIDGE_WS_URL` — override the bridge WebSocket URL the frontend
+  subscribes to (default `ws://localhost:8766`).
 
-See `.env.example` for the full list and `CLAUDE.md` for architectural notes.
+The per-speaker ASR path (per-participant PCM streams from the KTalk
+Chrome extension) and the tier-2 refine pass are always-on for KTalk
+meetings — no env flags. See `CLAUDE.md` for architectural notes.
 
 ## Architecture
 
