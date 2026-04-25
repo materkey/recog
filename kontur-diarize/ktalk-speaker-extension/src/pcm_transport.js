@@ -20,10 +20,8 @@
 
 import {
   isPcmTransportEnabled,
-  isPcmCapture48kEnabled,
   subscribePcmTransport,
   sendWsPcmChunk,
-  sendWsPcmChunk48k,
 } from './ws_api.js';
 
 let audioContext = null;
@@ -101,14 +99,7 @@ async function ensureWorkletModule(ctx) {
 }
 
 function int16ToBase64(int16) {
-  return bytesToBase64(new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength));
-}
-
-function float32ToBase64(f32) {
-  return bytesToBase64(new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength));
-}
-
-function bytesToBase64(bytes) {
+  const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
   let binary = '';
   const chunkSize = 8192;
   for (let i = 0; i < bytes.length; i += chunkSize) {
@@ -141,17 +132,15 @@ async function materialize(pid, info) {
 
   try {
     const source = ctx.createMediaStreamSource(info.mediaStream);
-    const capture48k = isPcmCapture48kEnabled();
     const node = new AudioWorkletNode(ctx, 'pcm-downsampler', {
       numberOfInputs: 1,
       numberOfOutputs: 0,
       channelCount: 1,
       channelCountMode: 'explicit',
       channelInterpretation: 'discrete',
-      processorOptions: { capture48k },
     });
 
-    const entry = { source, node, seq: 0, seq48k: 0, chunksLogged: 0, chunks48kLogged: 0 };
+    const entry = { source, node, seq: 0, chunksLogged: 0 };
 
     node.port.onmessage = (ev) => {
       const data = ev.data;
@@ -165,32 +154,6 @@ async function materialize(pid, info) {
             data.sampleRate
           );
           pcmDetachParticipant(pid);
-        }
-        return;
-      }
-      if (data.type === 'pcm_chunk_48k') {
-        if (!isPcmCapture48kEnabled()) return;
-        const f32 = data.float32Pcm;
-        if (!f32 || !f32.length) return;
-        const nowMs = Date.now();
-        const payloadMs = (data.sampleCount / 48000) * 1000;
-        const chunkEndMs = nowMs;
-        const chunkStartMs = nowMs - payloadMs;
-        sendWsPcmChunk48k(
-          pid,
-          info.speakerName,
-          entry.seq48k++,
-          chunkStartMs,
-          chunkEndMs,
-          float32ToBase64(f32)
-        );
-        if (entry.chunks48kLogged < 2) {
-          entry.chunks48kLogged++;
-          console.log(
-            '[PcmTransport] 48k chunk sent pid=', pid,
-            'seq=', entry.seq48k - 1,
-            'samples=', data.sampleCount
-          );
         }
         return;
       }

@@ -1081,14 +1081,7 @@ async function ensureWorkletModule(ctx) {
 }
 
 function int16ToBase64(int16) {
-  return bytesToBase64(new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength));
-}
-
-function float32ToBase64(f32) {
-  return bytesToBase64(new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength));
-}
-
-function bytesToBase64(bytes) {
+  const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
   let binary = '';
   const chunkSize = 8192;
   for (let i = 0; i < bytes.length; i += chunkSize) {
@@ -1121,17 +1114,15 @@ async function materialize(pid, info) {
 
   try {
     const source = ctx.createMediaStreamSource(info.mediaStream);
-    const capture48k = (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.isPcmCapture48kEnabled)();
     const node = new AudioWorkletNode(ctx, 'pcm-downsampler', {
       numberOfInputs: 1,
       numberOfOutputs: 0,
       channelCount: 1,
       channelCountMode: 'explicit',
       channelInterpretation: 'discrete',
-      processorOptions: { capture48k },
     });
 
-    const entry = { source, node, seq: 0, seq48k: 0, chunksLogged: 0, chunks48kLogged: 0 };
+    const entry = { source, node, seq: 0, chunksLogged: 0 };
 
     node.port.onmessage = (ev) => {
       const data = ev.data;
@@ -1145,32 +1136,6 @@ async function materialize(pid, info) {
             data.sampleRate
           );
           pcmDetachParticipant(pid);
-        }
-        return;
-      }
-      if (data.type === 'pcm_chunk_48k') {
-        if (!(0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.isPcmCapture48kEnabled)()) return;
-        const f32 = data.float32Pcm;
-        if (!f32 || !f32.length) return;
-        const nowMs = Date.now();
-        const payloadMs = (data.sampleCount / 48000) * 1000;
-        const chunkEndMs = nowMs;
-        const chunkStartMs = nowMs - payloadMs;
-        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_0__.sendWsPcmChunk48k)(
-          pid,
-          info.speakerName,
-          entry.seq48k++,
-          chunkStartMs,
-          chunkEndMs,
-          float32ToBase64(f32)
-        );
-        if (entry.chunks48kLogged < 2) {
-          entry.chunks48kLogged++;
-          console.log(
-            '[PcmTransport] 48k chunk sent pid=', pid,
-            'seq=', entry.seq48k - 1,
-            'samples=', data.sampleCount
-          );
         }
         return;
       }
@@ -6327,8 +6292,6 @@ function connectWebSocket() {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
         } else if (data.type === 'pcm_transport_enabled') {
           (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.handlePcmTransportEnabledMessage)(data);
-        } else if (data.type === 'pcm_capture_48k_enabled') {
-          (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.handlePcmCapture48kEnabledMessage)(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);
@@ -6351,16 +6314,13 @@ function connectWebSocket() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   handlePcmCapture48kEnabledMessage: () => (/* binding */ handlePcmCapture48kEnabledMessage),
 /* harmony export */   handlePcmTransportEnabledMessage: () => (/* binding */ handlePcmTransportEnabledMessage),
-/* harmony export */   isPcmCapture48kEnabled: () => (/* binding */ isPcmCapture48kEnabled),
 /* harmony export */   isPcmTransportEnabled: () => (/* binding */ isPcmTransportEnabled),
 /* harmony export */   resetPcmTransportOnDisconnect: () => (/* binding */ resetPcmTransportOnDisconnect),
 /* harmony export */   sendWsConnectionStatus: () => (/* binding */ sendWsConnectionStatus),
 /* harmony export */   sendWsMessage: () => (/* binding */ sendWsMessage),
 /* harmony export */   sendWsParticipants: () => (/* binding */ sendWsParticipants),
 /* harmony export */   sendWsPcmChunk: () => (/* binding */ sendWsPcmChunk),
-/* harmony export */   sendWsPcmChunk48k: () => (/* binding */ sendWsPcmChunk48k),
 /* harmony export */   sendWsSpeakerUpdate: () => (/* binding */ sendWsSpeakerUpdate),
 /* harmony export */   subscribePcmTransport: () => (/* binding */ subscribePcmTransport)
 /* harmony export */ });
@@ -6375,13 +6335,6 @@ let messageSeq = 0;
 // See docs/plans/2026-04-22-per-speaker-asr-pipeline.md decision D2.
 let pcmTransportEnabled = false;
 const pcmTransportListeners = new Set();
-
-// Parallel 48 kHz Float32 raw-source capture gate. Bridge sends
-// {type: 'pcm_capture_48k_enabled', enabled: bool} on WS connect.
-// When true, AudioWorklet emits pcm_chunk_48k frames alongside 16 kHz
-// pcm_chunk — used for listening to source-quality audio, not for ASR.
-// Decided at materialize() time; runtime toggle requires re-materialize.
-let pcmCapture48kEnabled = false;
 
 function sendWsMessage(data) {
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.readyState === WebSocket.OPEN) {
@@ -6426,31 +6379,8 @@ function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, pcmBase6
   });
 }
 
-function sendWsPcmChunk48k(pid, speakerName, seq, startMs, endMs, pcmBase64) {
-  sendWsMessage({
-    type: 'pcm_chunk_48k',
-    pid: pid,
-    speaker_name: speakerName,
-    seq: seq,
-    chunk_start_ms: startMs,
-    chunk_end_ms: endMs,
-    sample_rate: 48000,
-    format: 'f32le',
-    pcm_base64: pcmBase64,
-  });
-}
-
 function isPcmTransportEnabled() {
   return pcmTransportEnabled;
-}
-
-function isPcmCapture48kEnabled() {
-  return pcmCapture48kEnabled;
-}
-
-function handlePcmCapture48kEnabledMessage(data) {
-  pcmCapture48kEnabled = !!data?.enabled;
-  console.log('[PcmTransport] Server gate (48k capture):', pcmCapture48kEnabled ? 'ENABLED' : 'DISABLED');
 }
 
 function subscribePcmTransport(listener) {

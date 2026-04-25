@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 from recog.node_env import get_node_env
 from recog.ai_provider import resolve_cli
-from recog.config import load_dotenv, pcm_transport_enabled, pcm_capture_48k_enabled
+from recog.config import load_dotenv, pcm_transport_enabled
 
 if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
@@ -347,9 +347,6 @@ class KTalkBridge:
         # handshake'ом на WS-connect. Перечитывание при reconnect'е не делаем —
         # чтобы поменять флаг, нужен restart bridge'а.
         self._pcm_transport_enabled: bool = pcm_transport_enabled()
-        # Parallel 48 kHz source-capture flag (RECOG_PCM_CAPTURE_48K). Same
-        # handshake pattern as transport gate.
-        self._pcm_capture_48k_enabled: bool = pcm_capture_48k_enabled()
 
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
@@ -460,51 +457,6 @@ class KTalkBridge:
                 f.write(json.dumps(meta) + "\n")
         except Exception as e:
             print(f"[KTalk Bridge] pcm capture failed: {e}", file=sys.stderr)
-
-    def _capture_pcm_chunk_48k(
-        self,
-        pid: str,
-        speaker_name: str,
-        seq: int,
-        chunk_start_ts: float,
-        chunk_end_ts: float,
-        pcm_f32le: bytes,
-    ) -> None:
-        """Dump a 48 kHz Float32LE PCM chunk — raw source from the
-        AudioWorklet *before* the 48→16 kHz decimation. Written next to
-        the regular 16 kHz capture as `<stem>_48k.raw` + `<stem>_48k.jsonl`
-        so both can be compared side by side."""
-        capture_dir = os.environ.get("RECOG_PCM_CAPTURE_DIR", "").strip()
-        if not capture_dir:
-            return
-        try:
-            meeting_id = (
-                self._meeting_storage.get_current_meeting_id()
-                if self._meeting_storage else None
-            ) or "unknown"
-            out_dir = Path(capture_dir) / meeting_id
-            out_dir.mkdir(parents=True, exist_ok=True)
-            capture_stem = _safe_pcm_capture_stem(pid)
-            raw_path = out_dir / f"{capture_stem}_48k.raw"
-            with open(raw_path, "ab") as f:
-                byte_offset = f.tell()
-                f.write(pcm_f32le)
-            meta = {
-                "pid": pid,
-                "capture_stem": capture_stem,
-                "speaker_name": speaker_name,
-                "seq": seq,
-                "chunk_start_ts": chunk_start_ts,
-                "chunk_end_ts": chunk_end_ts,
-                "sample_rate": 48000,
-                "format": "f32le",
-                "byte_offset": byte_offset,
-                "num_bytes": len(pcm_f32le),
-            }
-            with open(out_dir / f"{capture_stem}_48k.jsonl", "a") as f:
-                f.write(json.dumps(meta) + "\n")
-        except Exception as e:
-            print(f"[KTalk Bridge] pcm capture 48k failed: {e}", file=sys.stderr)
 
     def set_pcm_chunk_callback(self, callback: Optional[Callable[['PcmChunk'], None]]):
         """
@@ -1384,10 +1336,6 @@ class KTalkBridge:
                 "type": "pcm_transport_enabled",
                 "enabled": self._pcm_transport_enabled,
             }))
-            await websocket.send(json.dumps({
-                "type": "pcm_capture_48k_enabled",
-                "enabled": self._pcm_capture_48k_enabled,
-            }))
         except Exception as e:
             print(
                 f"[KTalk Bridge] Failed to send pcm_transport_enabled handshake: {e}",
@@ -1873,71 +1821,6 @@ class KTalkBridge:
                         f"[KTalk Bridge] pcm_chunk callback raised: {e}",
                         file=sys.stderr,
                     )
-
-        elif msg_type == "pcm_chunk_48k":
-            # Raw 48 kHz Float32 source capture — listening-only, not
-            # routed to ASR. Same meeting-gating as pcm_chunk; payload is
-            # Float32LE (4 bytes/sample) instead of Int16LE.
-            if not self._pcm_capture_48k_enabled:
-                return
-            try:
-                pid = str(data["pid"])
-                if not pid:
-                    raise ValueError("pid is empty")
-                speaker_name = str(data.get("speaker_name") or "")
-                seq = int(data["seq"])
-                chunk_start_ms = float(data["chunk_start_ms"])
-                chunk_end_ms = float(data["chunk_end_ms"])
-                sample_rate = int(data.get("sample_rate", 48000))
-                pcm_base64 = data["pcm_base64"]
-            except (KeyError, TypeError, ValueError) as e:
-                print(
-                    f"[KTalk Bridge] Malformed pcm_chunk_48k frame, skipped: {e}",
-                    file=sys.stderr,
-                )
-                return
-
-            if sample_rate != 48000:
-                print(
-                    f"[KTalk Bridge] pcm_chunk_48k unsupported sample_rate={sample_rate} "
-                    f"(pid={pid}, seq={seq}); expected 48000",
-                    file=sys.stderr,
-                )
-                return
-
-            try:
-                pcm_bytes = base64.b64decode(pcm_base64, validate=True)
-            except (binascii.Error, ValueError) as e:
-                print(
-                    f"[KTalk Bridge] pcm_chunk_48k base64 decode failed "
-                    f"(pid={pid}, seq={seq}): {e}",
-                    file=sys.stderr,
-                )
-                return
-
-            if len(pcm_bytes) == 0 or len(pcm_bytes) % 4 != 0:
-                print(
-                    f"[KTalk Bridge] pcm_chunk_48k bad payload size "
-                    f"(pid={pid}, seq={seq}, bytes={len(pcm_bytes)}); "
-                    f"expected multiple of 4 (Float32LE)",
-                    file=sys.stderr,
-                )
-                return
-
-            chunk_start_ts = chunk_start_ms / 1000.0 + self._clock_offset
-            chunk_end_ts = chunk_end_ms / 1000.0 + self._clock_offset
-
-            if not self._has_active_ktalk_meeting():
-                return
-
-            self._capture_pcm_chunk_48k(
-                pid=pid,
-                speaker_name=speaker_name,
-                seq=seq,
-                chunk_start_ts=chunk_start_ts,
-                chunk_end_ts=chunk_end_ts,
-                pcm_f32le=pcm_bytes,
-            )
 
     async def _run_server(self):
         """Запускает WebSocket сервер."""

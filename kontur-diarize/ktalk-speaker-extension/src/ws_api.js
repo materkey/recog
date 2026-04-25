@@ -9,13 +9,6 @@ let messageSeq = 0;
 let pcmTransportEnabled = false;
 const pcmTransportListeners = new Set();
 
-// Parallel 48 kHz Float32 raw-source capture gate. Bridge sends
-// {type: 'pcm_capture_48k_enabled', enabled: bool} on WS connect.
-// When true, AudioWorklet emits pcm_chunk_48k frames alongside 16 kHz
-// pcm_chunk — used for listening to source-quality audio, not for ASR.
-// Decided at materialize() time; runtime toggle requires re-materialize.
-let pcmCapture48kEnabled = false;
-
 export function sendWsMessage(data) {
   if (state.wsConnection && state.wsConnection.readyState === WebSocket.OPEN) {
     state.wsConnection.send(JSON.stringify(data));
@@ -59,31 +52,8 @@ export function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, p
   });
 }
 
-export function sendWsPcmChunk48k(pid, speakerName, seq, startMs, endMs, pcmBase64) {
-  sendWsMessage({
-    type: 'pcm_chunk_48k',
-    pid: pid,
-    speaker_name: speakerName,
-    seq: seq,
-    chunk_start_ms: startMs,
-    chunk_end_ms: endMs,
-    sample_rate: 48000,
-    format: 'f32le',
-    pcm_base64: pcmBase64,
-  });
-}
-
 export function isPcmTransportEnabled() {
   return pcmTransportEnabled;
-}
-
-export function isPcmCapture48kEnabled() {
-  return pcmCapture48kEnabled;
-}
-
-export function handlePcmCapture48kEnabledMessage(data) {
-  pcmCapture48kEnabled = !!data?.enabled;
-  console.log('[PcmTransport] Server gate (48k capture):', pcmCapture48kEnabled ? 'ENABLED' : 'DISABLED');
 }
 
 export function subscribePcmTransport(listener) {
