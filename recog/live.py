@@ -16,7 +16,7 @@ import torch
 from collections import deque
 from dataclasses import dataclass
 
-from .config import (PCM_VAD_THRESHOLD, SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT, pcm_debug_enabled,
+from .config import (PCM_VAD_THRESHOLD, SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
                      LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
@@ -25,7 +25,7 @@ from .config import (PCM_VAD_THRESHOLD, SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_TH
 from .asr import ASRModule
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
-from .vad import pcm_int16_has_speech, pcm_int16_vad_details
+from .vad import pcm_int16_has_speech
 
 
 class IncrementalWavWriter:
@@ -860,31 +860,10 @@ class LiveTranscriber:
         chunk_gen = drain_gen if drain_gen is not None else self._meeting_generation
 
         # Gated Silero VAD prefilter; see pcm_vad_enabled(). Fails open.
-        debug = pcm_debug_enabled()
-        if pcm_vad_enabled() or debug:
-            vad_on = pcm_vad_enabled()
-            kept = []
-            for item in batch:
-                pid_, sp_, _il, pcm_, start_, end_, _a, _b = item
-                if debug:
-                    import numpy as _np
-                    rms = float(_np.sqrt(_np.mean((pcm_.astype(_np.float32) / 32768.0) ** 2)))
-                    max_p, total_f, above_f = pcm_int16_vad_details(pcm_)
-                    decision = "kept"
-                    if vad_on and max_p < PCM_VAD_THRESHOLD:
-                        decision = "dropped"
-                    print(
-                        f"[PCM-DEBUG] pid={pid_[:6]} sp={sp_!r} win={start_:.0f}-{end_:.0f}ms "
-                        f"samples={pcm_.size} rms={rms:.4f} vad_max={max_p:.2f} "
-                        f"vad>=0.3={above_f}/{total_f} vad={decision}",
-                        file=sys.stderr,
-                    )
-                    if decision == "kept":
-                        kept.append(item)
-                elif pcm_int16_has_speech(pcm_, PCM_VAD_THRESHOLD):
-                    kept.append(item)
+        if pcm_vad_enabled():
+            kept = [item for item in batch if pcm_int16_has_speech(item[3], PCM_VAD_THRESHOLD)]
             dropped = len(batch) - len(kept)
-            if dropped and not debug:
+            if dropped:
                 print(f"[PerSpeaker] VAD dropped {dropped}/{len(batch)} silent chunks", file=sys.stderr)
             if not kept:
                 return
@@ -924,11 +903,6 @@ class LiveTranscriber:
             )
         for (pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms, pid_audio_ms_start, pid_audio_ms_end), raw_text in zip(batch, texts):
             text = (raw_text or "").strip()
-            if debug:
-                print(
-                    f"[PCM-DEBUG] pid={pid[:6]} gigaam={text!r:.80}",
-                    file=sys.stderr,
-                )
             if not text:
                 continue
 
@@ -946,12 +920,6 @@ class LiveTranscriber:
                     continue
                 prev_words = self._pcm_prev_words.get(pid, [])
                 deduped = deduplicate(text, prev_words)
-                if debug:
-                    print(
-                        f"[PCM-DEBUG] pid={pid[:6]} prev={prev_words!r:.60} "
-                        f"deduped={deduped!r:.80} emit={'yes' if deduped else 'no(dedup-empty)'}",
-                        file=sys.stderr,
-                    )
                 if not deduped:
                     continue
 

@@ -61,40 +61,6 @@ def pcm_int16_has_speech(pcm_i16: np.ndarray, threshold: float) -> bool:
         return True
 
 
-def pcm_int16_vad_details(pcm_i16: np.ndarray) -> tuple[float, int, int]:
-    """Diagnostic scan: return (max_prob, total_frames, frames_>=_0.3_bucket).
-
-    Scans every 512-sample window without early-exit, so callers can
-    report precisely WHY a chunk was kept or dropped.  Used only on the
-    debug path (RECOG_PCM_DEBUG=1) — the hot path still uses
-    `pcm_int16_has_speech` with early-exit.  Returns (0.0, 0, 0) on
-    load/inference failure so debug lines stay well-formed.
-    """
-    if pcm_i16.size < _FRAME_SAMPLES:
-        return 0.0, 0, 0
-    model = _get_model()
-    if model is None or _torch is None:
-        return 0.0, 0, 0
-    try:
-        model.reset_states()
-        pcm_f32 = pcm_i16.astype(np.float32) / 32768.0
-        t = _torch.from_numpy(pcm_f32)
-        max_prob = 0.0
-        total = 0
-        above = 0
-        for start in range(0, pcm_f32.size - _FRAME_SAMPLES + 1, _FRAME_SAMPLES):
-            prob = model(t[start:start + _FRAME_SAMPLES], _SAMPLE_RATE).item()
-            total += 1
-            if prob > max_prob:
-                max_prob = prob
-            if prob >= 0.3:
-                above += 1
-        return max_prob, total, above
-    except (RuntimeError, ValueError) as exc:
-        print(f"[VAD] debug inference error: {exc}", file=sys.stderr)
-        return 0.0, 0, 0
-
-
 def reset() -> None:
     """Force-reload the model on next call. For tests only."""
     global _model
