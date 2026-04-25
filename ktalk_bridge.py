@@ -321,6 +321,10 @@ class KTalkBridge:
         # LiveTranscriber wires it; bridge surfaces the result through the
         # debug file so frontend /api/pcm-diagnostics can read it.
         self._pcm_stats_getter: Optional[Callable[[], dict]] = None
+        # Last browser-side PCM/WebRTC transport snapshot sent by the
+        # extension (`pcm_transport_stats`). Kept separate from PerSpeakerIngest
+        # stats because it describes browser graph / RTP health, not Python ASR.
+        self._pcm_transport_stats: dict = {}
 
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
@@ -352,6 +356,7 @@ class KTalkBridge:
             self._segment_start_time = None
             self._segment_speaker_name = None
             self._segment_speaker_id = None
+            self._pcm_transport_stats = {}
 
     def set_speaker_callback(self, callback: Callable[[Optional[str], bool], None]):
         """
@@ -642,6 +647,7 @@ class KTalkBridge:
                         "id": self._meeting_storage.get_current_meeting_id() if self._meeting_storage else None
                     },
                     "pcm": {},
+                    "pcm_transport": dict(self._pcm_transport_stats),
                 }
             if self._pcm_stats_getter is not None:
                 try:
@@ -1489,6 +1495,21 @@ class KTalkBridge:
 
             # Обновляем debug state
             self._write_debug_state()
+
+        elif msg_type == "pcm_transport_stats":
+            stats = data.get("stats", {})
+            if isinstance(stats, dict):
+                with self._lock:
+                    self._pcm_transport_stats = {
+                        **stats,
+                        "received_at": time.time(),
+                    }
+                self._write_debug_state()
+            else:
+                print(
+                    "[KTalk Bridge] Malformed pcm_transport_stats frame, skipped",
+                    file=sys.stderr,
+                )
 
         elif msg_type == "connection_status":
             # Статус подключения к конференции

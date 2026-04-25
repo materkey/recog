@@ -1,6 +1,7 @@
 import { state } from '../state.js';
 import { escapeHtml } from '../utils.js';
 import { injectDebugStyles } from './styles.js';
+import { pcmGetDiagnostics } from '../pcm_transport.js';
 
 export function ensureDebugPanel() {
   if (state.debugPanelElement) return;
@@ -34,6 +35,7 @@ export function updateDebugPanel() {
   const participants = state.lastParticipants || [];
   const speakerName = activeSpeaker?.name || '—';
   const speakerId = activeSpeaker?.id || '—';
+  const pcm = pcmGetDiagnostics();
 
   const rows = [
     ['wsConnected', state.wsConnected],
@@ -49,7 +51,12 @@ export function updateDebugPanel() {
     ['speakerHistory', state.speakerHistory.length],
     ['noiseFilter', state.audioFilterSuppressCount + ' suppressed'],
     ['flatness', state.audioFilterLastFlatness?.toFixed(3) ?? '—'],
-    ['filterReason', state.audioFilterLastReason ?? '—']
+    ['filterReason', state.audioFilterLastReason ?? '—'],
+    ['pcmActive', pcm.active_count],
+    ['pcmSilent', pcm.silent_bindings],
+    ['pcmRebinds', pcm.total_rebinds],
+    ['pcmPcCount', pcm.pc_count],
+    ['pcmInboundDelta', pcm.inbound_audio_bytes_delta]
   ];
 
   const rowsHtml = rows.map(([key, value]) => {
@@ -66,7 +73,8 @@ export function updateDebugPanel() {
     jitsiParticipantsCount: state.lastJitsiParticipantsCount,
     jitsiParticipantsMapCount: state.lastJitsiParticipantsMapCount,
     transcriptLines: state.transcriptLines.length,
-    speakerHistory: state.speakerHistory.length
+    speakerHistory: state.speakerHistory.length,
+    pcmTransport: pcm
   };
 
   state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${escapeHtml(JSON.stringify(payload, null, 2))}</div><div class="ktalk-debug-actions"><button class="ktalk-debug-copy-btn">Copy</button></div>`;

@@ -272,6 +272,35 @@ async def test_pcm_chunk_no_callback_does_not_raise():
 
 
 @pytest.mark.asyncio
+async def test_pcm_transport_stats_updates_debug_state(tmp_path):
+    """
+    given: bridge receiving browser-side PCM/WebRTC transport diagnostics
+    when: _process_message receives pcm_transport_stats
+    then: stats are kept separately from PerSpeakerIngest pcm stats and written
+          to the debug file for /api/pcm-diagnostics
+    """
+    bridge = KTalkBridge()
+    bridge._debug_file = tmp_path / "ktalk_debug.json"
+
+    await bridge._process_message({
+        "type": "pcm_transport_stats",
+        "stats": {
+            "active_count": 1,
+            "total_rebinds": 2,
+            "per_pid": {"pid-a": {"bound_via": "receiver"}},
+        },
+    })
+
+    assert bridge._pcm_transport_stats["active_count"] == 1
+    assert bridge._pcm_transport_stats["total_rebinds"] == 2
+    assert "received_at" in bridge._pcm_transport_stats
+
+    state = json.loads(bridge._debug_file.read_text())
+    assert state["pcm_transport"]["active_count"] == 1
+    assert state["pcm_transport"]["per_pid"]["pid-a"]["bound_via"] == "receiver"
+
+
+@pytest.mark.asyncio
 async def test_pcm_chunk_malformed_payload_logged_not_raised(capsys):
     """
     given: bridge with pcm_chunk callback registered

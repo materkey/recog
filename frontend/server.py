@@ -831,6 +831,7 @@ async def get_pcm_diagnostics():
         "meeting_id": state.get("meeting", {}).get("id"),
         "participants": state.get("conference", {}).get("participants", []),
         "pcm": state.get("pcm") or {"transport_enabled": False},
+        "pcm_transport": state.get("pcm_transport") or {},
     })
 
 

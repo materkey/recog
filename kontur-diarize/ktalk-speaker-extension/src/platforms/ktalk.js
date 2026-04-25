@@ -316,7 +316,11 @@ export class KTalkAdapter {
             const isLocal = this._isLocalParticipant(pid);
             if (!isLocal) {
               const speakerName = this.getParticipantName(pid);
-              pcmAttachParticipant(pid, speakerName, false, stream);
+              pcmAttachParticipant(pid, speakerName, false, stream, {
+                jitsiTrack: track,
+                jitsiConf,
+                conf,
+              });
               // User info often populates after trackAdded fires; wire a
               // name refresher so the first chunks' fallback pid is
               // replaced once real metadata lands.
