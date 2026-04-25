@@ -154,21 +154,3 @@ def pcm_refine_enabled() -> bool:
     if not pcm_transport_enabled():
         return False
     return os.environ.get("RECOG_PCM_REFINE", "0") == "1"
-
-
-# Silero VAD threshold for the PCM path.  Speech probability above this
-# keeps the chunk; below — chunk is dropped before ASR to avoid GigaAM
-# hallucinations on silence/noise.  0.3 matches Silero's own default for
-# the "drop ambiguous as non-speech" bias.
-PCM_VAD_THRESHOLD: float = float(os.environ.get("RECOG_PCM_VAD_THRESHOLD", "0.3"))
-
-
-def pcm_vad_enabled() -> bool:
-    """True iff per-speaker PCM transport is on AND RECOG_PCM_VAD=1.
-
-    Guards the Silero VAD prefilter in `_on_pcm_batch`; default 0 preserves
-    legacy behaviour so rollout can be validated on a single service first.
-    """
-    if not pcm_transport_enabled():
-        return False
-    return os.environ.get("RECOG_PCM_VAD", "0") == "1"
