@@ -34,7 +34,6 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from meeting_storage import MeetingStorage, get_external_paths
-from recog.config import pcm_refine_enabled
 from bridge_subscriber import BridgeSubscriber
 from live_watcher import LiveWatcher
 from transcript_watcher import TranscriptWatcher
@@ -1333,7 +1332,6 @@ async def live_stream(websocket: WebSocket):
         active_meetings = storage.list_active_meetings()
         current = active_meetings[0] if active_meetings else None
 
-        refine_on = pcm_refine_enabled()
         if current:
             live_watcher.set_current_meeting(current["id"])
             meeting_data = storage.get_meeting(current["id"])
@@ -1351,7 +1349,7 @@ async def live_stream(websocket: WebSocket):
                 "meeting": current,
                 "segments": init_segments,
                 "active_meetings": active_meetings,
-                "refine_enabled": refine_on,
+                "refine_enabled": True,
             }))
         else:
             await websocket.send_text(json.dumps({
@@ -1359,7 +1357,7 @@ async def live_stream(websocket: WebSocket):
                 "meeting": None,
                 "segments": [],
                 "active_meetings": [],
-                "refine_enabled": refine_on,
+                "refine_enabled": True,
             }))
     except Exception as e:
         await websocket.send_text(json.dumps({

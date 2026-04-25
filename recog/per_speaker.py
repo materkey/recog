@@ -112,9 +112,9 @@ class PerSpeakerIngest:
         self._time_fn = time_fn
         # Callback invoked on every tick for each pid that has a refine
         # candidate ready (gap or monolog trigger fired). `LiveTranscriber`
-        # wires this to `RefineWorker.submit` when `pcm_refine_enabled()` is
-        # True; None disables the refine path entirely (no iteration, no
-        # overhead). Set via constructor or `set_refine_submit_callback`.
+        # wires this to `RefineWorker.submit`. None disables the refine
+        # path entirely (no iteration, no overhead). Set via constructor
+        # or `set_refine_submit_callback`.
         self._refine_submit_callback: Optional[Callable[[RefineTask], None]] = (
             refine_submit_callback
         )
@@ -462,9 +462,8 @@ class PerSpeakerIngest:
         """Attach / detach the per-tick refine submit callback.
 
         Exists so `LiveTranscriber` can build the `PerSpeakerIngest` first
-        (fast, cheap) and only later build the `RefineWorker` (gated on
-        `pcm_refine_enabled()`). `None` disables the refine iteration in
-        `tick()` entirely.
+        (fast, cheap) and only later build the `RefineWorker`. `None`
+        disables the refine iteration in `tick()` entirely.
         """
         with self._lock:
             self._refine_submit_callback = callback

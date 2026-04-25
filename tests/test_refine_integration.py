@@ -106,9 +106,9 @@ def test_refine_integration_rewrites_jsonl_with_refined_flag(
     tmp_path, monkeypatch
 ):
     """
-    given: `RECOG_PCM_TRANSPORT=1` + `RECOG_PCM_REFINE=1`, a real
-           `MeetingStorage` pointed at `tmp_path`, two seeded live segments
-           whose pid-frame bounds cover the refine window
+    given: `RECOG_PCM_TRANSPORT=1`, a real `MeetingStorage` pointed at
+           `tmp_path`, two seeded live segments whose pid-frame bounds
+           cover the refine window
     when:  synthetic PCM is enqueued, the ingest's tick loop fires the
            gap-trigger, the `RefineWorker` runs a stubbed
            `transcribe_with_timestamps` returning refined words, and
@@ -118,7 +118,6 @@ def test_refine_integration_rewrites_jsonl_with_refined_flag(
            fields (speaker, speaker_id, uncertain) are preserved
     """
     monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_REFINE", "1")
 
     storage = MeetingStorage(base_path=tmp_path)
     storage.start_session(mic=False, system_audio=True, ktalk=True)
@@ -250,32 +249,20 @@ def test_refine_integration_rewrites_jsonl_with_refined_flag(
     assert by_id[seg_id_2]["speaker"] == "Alice"
 
 
-def test_refine_disabled_setup_is_noop(tmp_path, monkeypatch):
+def test_setup_refine_worker_noop_without_ingest(tmp_path, monkeypatch):
     """
-    given: `RECOG_PCM_REFINE=0` (transport enabled, refine gate off)
-    when:  `_setup_refine_worker` runs after `_setup_per_speaker_ingest`
-    then:  `_refine_worker` stays None and the ingest's refine callback
-           stays unset — no worker thread, no queue, no overhead
+    given: per-speaker ingest hasn't been built yet
+    when:  `_setup_refine_worker` runs
+    then:  `_refine_worker` stays None — guard prevents nil-deref on the
+           per_speaker_ingest attribute
     """
     monkeypatch.setenv("RECOG_PCM_TRANSPORT", "1")
-    monkeypatch.setenv("RECOG_PCM_REFINE", "0")
 
     transcriber = _make_transcriber(
         asr_transcribe_with_timestamps=lambda pcm: _StubTranscriptionResult(
             "", []
         ),
     )
-    # Minimal ingest — `_setup_refine_worker` reads it to decide whether
-    # to wire the callback.
-    transcriber._per_speaker_ingest = PerSpeakerIngest(
-        transcribe_callback=lambda _b: None,
-        generation_getter=lambda: 0,
-        meeting_active_getter=lambda: False,
-    )
-    try:
-        transcriber._setup_refine_worker()
-
-        assert transcriber._refine_worker is None
-        assert transcriber._per_speaker_ingest._refine_submit_callback is None
-    finally:
-        transcriber._per_speaker_ingest.stop()
+    transcriber._per_speaker_ingest = None
+    transcriber._setup_refine_worker()
+    assert transcriber._refine_worker is None

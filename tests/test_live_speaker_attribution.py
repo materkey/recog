@@ -786,7 +786,7 @@ def test_invalidate_pending_chunks_resumes_paused_refine_worker():
 
 def test_invalidate_pending_chunks_safe_when_refine_worker_none():
     """
-    given: _refine_worker is None (RECOG_PCM_REFINE=0 code path)
+    given: _refine_worker is None (worker not yet built)
     when:  _invalidate_pending_chunks fires on meeting-switch edge
     then:  no AttributeError; resume is guarded by a None check
     """
