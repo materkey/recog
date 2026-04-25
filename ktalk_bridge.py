@@ -23,7 +23,6 @@ import base64
 import binascii
 import hashlib
 import json
-import shutil
 import threading
 import time
 import os
@@ -506,53 +505,6 @@ class KTalkBridge:
                 f.write(json.dumps(meta) + "\n")
         except Exception as e:
             print(f"[KTalk Bridge] pcm capture 48k failed: {e}", file=sys.stderr)
-
-    def _cleanup_pcm_captures(self) -> None:
-        """Drop meeting dirs under RECOG_PCM_CAPTURE_DIR whose newest file
-        is older than RECOG_PCM_CAPTURE_TTL_SECONDS (default 3600 = 1h).
-
-        Capture is for debug-listening, not archival — the 48 kHz path
-        alone adds ~1 GB/hr/pid, so without a TTL the disk fills in a day.
-        Active meetings are safe: their files get touched on every chunk
-        write, so their mtime stays fresh and they never cross the TTL.
-        """
-        capture_dir = os.environ.get("RECOG_PCM_CAPTURE_DIR", "").strip()
-        if not capture_dir:
-            return
-        try:
-            ttl = int(os.environ.get("RECOG_PCM_CAPTURE_TTL_SECONDS", "3600"))
-        except ValueError:
-            ttl = 3600
-        root = Path(capture_dir)
-        if not root.is_dir():
-            return
-        now = time.time()
-        removed = 0
-        for meeting_dir in root.iterdir():
-            if not meeting_dir.is_dir():
-                continue
-            try:
-                mtimes = [f.stat().st_mtime for f in meeting_dir.iterdir()]
-            except OSError:
-                continue
-            try:
-                if not mtimes:
-                    meeting_dir.rmdir()
-                    removed += 1
-                elif now - max(mtimes) > ttl:
-                    shutil.rmtree(meeting_dir)
-                    removed += 1
-            except OSError as e:
-                print(
-                    f"[KTalk Bridge] pcm cleanup failed for {meeting_dir.name}: {e}",
-                    file=sys.stderr,
-                )
-        if removed:
-            print(
-                f"[KTalk Bridge] pcm cleanup: removed {removed} stale meeting dir(s) "
-                f"(ttl={ttl}s)",
-                file=sys.stderr,
-            )
 
     def set_pcm_chunk_callback(self, callback: Optional[Callable[['PcmChunk'], None]]):
         """
@@ -2001,10 +1953,6 @@ class KTalkBridge:
                 print(f"[KTalk Bridge] WebSocket server started on ws://{self.host}:{self.port}", file=sys.stderr)
                 self._running = True
 
-                # Initial sweep on startup so a crashed prior run that left
-                # stale captures behind gets reclaimed immediately.
-                self._cleanup_pcm_captures()
-
                 _flush_counter = 0
                 while self._running:
                     await asyncio.sleep(0.1)
@@ -2013,10 +1961,6 @@ class KTalkBridge:
                     # Каждую ~1 секунду проверяем таймаут сегмента
                     if _flush_counter % 10 == 0:
                         self._check_segment_timeout()
-
-                    # Cleanup stale PCM captures every ~10 min (6000 * 0.1 s).
-                    if _flush_counter % 6000 == 0:
-                        self._cleanup_pcm_captures()
 
                     # Периодически обновляем debug state даже без событий
                     self._write_debug_state()
