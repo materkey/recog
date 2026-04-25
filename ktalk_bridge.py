@@ -21,7 +21,6 @@ KTalk Bridge - WebSocket server для приёма данных о спикер
 import asyncio
 import base64
 import binascii
-import hashlib
 import json
 import threading
 import time
@@ -40,26 +39,6 @@ if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
 
 load_dotenv()
-
-_PCM_CAPTURE_STEM_MAX_LEN = 120
-
-
-def _safe_pcm_capture_stem(pid: str) -> str:
-    """Return a single safe filename stem for a participant id."""
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", pid).strip("._")
-    if (
-        safe == pid
-        and safe
-        and len(safe) <= _PCM_CAPTURE_STEM_MAX_LEN
-        and "/" not in safe
-        and "\\" not in safe
-    ):
-        return safe
-
-    digest = hashlib.sha256(pid.encode("utf-8", "surrogatepass")).hexdigest()[:12]
-    prefix = safe[:_PCM_CAPTURE_STEM_MAX_LEN].rstrip("._") or "pid"
-    return f"{prefix}__{digest}"
-
 
 def _truncate_text(text: str, max_len: int) -> str:
     clean = " ".join(text.split())
@@ -416,47 +395,6 @@ class KTalkBridge:
     def set_pcm_stats_getter(self, getter: Optional[Callable[[], dict]]) -> None:
         """Wire a getter returning PerSpeakerIngest.get_stats() for debug."""
         self._pcm_stats_getter = getter
-
-    def _capture_pcm_chunk(self, chunk: 'PcmChunk') -> None:
-        """Dump a PCM chunk to disk for offline experimentation.
-
-        Active iff env RECOG_PCM_CAPTURE_DIR is set. Writes per-pid raw
-        Int16LE files + a parallel JSONL with metadata (seq, timestamps,
-        byte offset, speaker_name). Capture is exactly what ASR sees —
-        overlap windows included — so offline replay can reconstruct any
-        alternative chunking/overlap strategy from the same material.
-        """
-        capture_dir = os.environ.get("RECOG_PCM_CAPTURE_DIR", "").strip()
-        if not capture_dir:
-            return
-        try:
-            meeting_id = (
-                self._meeting_storage.get_current_meeting_id()
-                if self._meeting_storage else None
-            ) or "unknown"
-            out_dir = Path(capture_dir) / meeting_id
-            out_dir.mkdir(parents=True, exist_ok=True)
-            capture_stem = _safe_pcm_capture_stem(chunk.pid)
-            raw_path = out_dir / f"{capture_stem}.raw"
-            with open(raw_path, "ab") as f:
-                byte_offset = f.tell()
-                f.write(chunk.pcm)
-            meta = {
-                "pid": chunk.pid,
-                "capture_stem": capture_stem,
-                "speaker_name": chunk.speaker_name,
-                "is_local": chunk.is_local,
-                "seq": chunk.seq,
-                "chunk_start_ts": chunk.chunk_start_ts,
-                "chunk_end_ts": chunk.chunk_end_ts,
-                "sample_rate": chunk.sample_rate,
-                "byte_offset": byte_offset,
-                "num_bytes": len(chunk.pcm),
-            }
-            with open(out_dir / f"{capture_stem}.jsonl", "a") as f:
-                f.write(json.dumps(meta) + "\n")
-        except Exception as e:
-            print(f"[KTalk Bridge] pcm capture failed: {e}", file=sys.stderr)
 
     def set_pcm_chunk_callback(self, callback: Optional[Callable[['PcmChunk'], None]]):
         """
@@ -1810,8 +1748,6 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
                 return
-
-            self._capture_pcm_chunk(chunk)
 
             if self._on_pcm_chunk is not None:
                 try:
