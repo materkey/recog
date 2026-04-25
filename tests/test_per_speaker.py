@@ -215,6 +215,40 @@ def test_batch_collector_drops_stale_generation():
     assert received == []  # no callback invocation when batch is empty
 
 
+def test_enqueue_drops_stale_generation_before_refine_bookkeeping():
+    """
+    given: enqueue captured the old generation, then a meeting switch bumped
+           generation before enqueue acquired the ingest lock
+    when: enqueue resumes
+    then: the stale chunk is dropped before it mutates new-meeting refine state
+    """
+    calls = {"count": 0}
+
+    def generation_getter() -> int:
+        calls["count"] += 1
+        return 0 if calls["count"] == 1 else 1
+
+    sample_rate = 16000
+    pcm_one_second = np.zeros(sample_rate, dtype="<i2").tobytes()
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        generation_getter=generation_getter,
+        max_batch_size=100,
+        max_chunks_per_pid=100,
+    )
+
+    ingest.enqueue(_make_chunk(seq=1, sample_rate=sample_rate, pcm=pcm_one_second))
+
+    assert ingest._buffers == {}
+    assert ingest._stats == {}
+    assert ingest._pcm_rings == {}
+    assert ingest._pid_audio_ms == {}
+    assert ingest._silence_ms == {}
+    assert ingest._continuous_speech_ms == {}
+    assert ingest._pids_had_chunk_since_last_tick == set()
+    assert ingest.pcm_ever_seen is False
+
+
 def test_drain_clears_all_buffers_and_cancels_timer():
     """
     given: 5 chunks enqueued across 2 pids

@@ -712,6 +712,7 @@ class MeetingStorage:
             # Rewrite JSONL with corrections
             lines = transcript_path.read_text(encoding="utf-8").strip().split("\n")
             new_lines = []
+            words_delta = 0
             for line in lines:
                 if not line:
                     continue
@@ -728,6 +729,10 @@ class MeetingStorage:
                         if "uncertain_reason" in upd:
                             segment["uncertain_reason"] = upd["uncertain_reason"]
                         if "text" in upd:
+                            words_delta += (
+                                len(upd["text"].split())
+                                - len(str(segment.get("text", "")).split())
+                            )
                             segment["text"] = upd["text"]
                             segment["refined"] = True
                     new_lines.append(json.dumps(segment, ensure_ascii=False))
@@ -737,6 +742,15 @@ class MeetingStorage:
             tmp_path = transcript_path.with_suffix(".jsonl.tmp")
             tmp_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
             os.replace(str(tmp_path), str(transcript_path))
+
+            if words_delta:
+                meta_path = target_path / "meta.json"
+                if meta_path.exists():
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    stats = meta.setdefault("stats", {})
+                    current_words = int(stats.get("words_count", 0))
+                    stats["words_count"] = max(0, current_words + words_delta)
+                    self._save_json(meta_path, meta)
 
     def _append_system_event(self, event_type: str, message: str):
         """
