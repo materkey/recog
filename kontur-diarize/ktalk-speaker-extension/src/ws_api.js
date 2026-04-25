@@ -46,3 +46,10 @@ export function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, p
   });
 }
 
+export function sendWsPcmTransportStats(stats) {
+  sendWsMessage({
+    type: 'pcm_transport_stats',
+    stats: stats || {},
+    timestamp: Date.now(),
+  });
+}
