@@ -54,7 +54,13 @@ install_service() {
         return 1
     fi
 
+    # Always unload-before-load so an in-memory cached plist (from a
+    # prior `launchctl load`) is replaced by what is on disk now.
+    # `launchctl start/stop` only signal a running daemon — they do
+    # NOT re-read the plist, so PATH / EnvironmentVariables changes
+    # are silently ignored on a plain restart.
     cp "$src" "$dst"
+    launchctl unload "$dst" 2>/dev/null || true
     launchctl load "$dst" 2>/dev/null || true
     info "Installed $name"
 }
@@ -68,14 +74,26 @@ uninstall_service() {
     info "Uninstalled $name"
 }
 
+# Reload an installed plist: copy fresh from repo, unload, load.
+# This is the only way to make launchd pick up plist changes (PATH,
+# EnvironmentVariables, ProgramArguments) — `launchctl start` after
+# `launchctl stop` reuses the cached plist.
 start_service() {
     local name="$1"
-    launchctl start "$name" 2>/dev/null || true
+    local src="$2"
+    local dst="$3"
+
+    if [ -f "$src" ]; then
+        cp "$src" "$dst"
+    fi
+    launchctl unload "$dst" 2>/dev/null || true
+    launchctl load "$dst" 2>/dev/null || true
 }
 
 stop_service() {
     local name="$1"
-    launchctl stop "$name" 2>/dev/null || true
+    local dst="$2"
+    launchctl unload "$dst" 2>/dev/null || true
 }
 
 check_service_status() {
@@ -128,18 +146,8 @@ cmd_start() {
     info "Starting services..."
     ensure_logs_dir
 
-    # Install if not installed
-    if [ ! -f "$LIVE_PLIST_DST" ]; then
-        warn "Live service not installed. Installing first..."
-        install_service "live transcription" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
-    fi
-    if [ ! -f "$FRONTEND_PLIST_DST" ]; then
-        warn "Frontend service not installed. Installing first..."
-        install_service "frontend" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
-    fi
-
-    start_service "$LIVE_PLIST_NAME"
-    start_service "$FRONTEND_PLIST_NAME"
+    start_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
+    start_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
 
     sleep 1
     cmd_status
@@ -151,8 +159,8 @@ cmd_start() {
 cmd_stop() {
     info "Stopping services..."
 
-    stop_service "$LIVE_PLIST_NAME"
-    stop_service "$FRONTEND_PLIST_NAME"
+    stop_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST"
+    stop_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST"
 
     info "Services stopped."
 }
@@ -165,17 +173,17 @@ cmd_restart() {
 
 cmd_restart_web() {
     info "Restarting frontend service..."
-    stop_service "$FRONTEND_PLIST_NAME"
+    stop_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST"
     sleep 1
-    start_service "$FRONTEND_PLIST_NAME"
+    start_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
     info "Frontend restarted. Available at: http://127.0.0.1:9080"
 }
 
 cmd_restart_live() {
     info "Restarting live transcription service..."
-    stop_service "$LIVE_PLIST_NAME"
+    stop_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST"
     sleep 1
-    start_service "$LIVE_PLIST_NAME"
+    start_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
     info "Live transcription restarted."
 }
 
