@@ -34,12 +34,21 @@ import sys
 from pathlib import Path
 from recog.node_env import get_node_env
 from recog.ai_provider import resolve_cli
-from recog.config import load_dotenv
+from recog.config import load_dotenv, MIC_SPEAKER_NAME
 
 if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
 
 load_dotenv()
+
+# Proactive transcript-tick thresholds for the Copilot channel. Either
+# trigger fires a `transcript_tick` frame to channel clients (if any) so
+# Claude can decide whether to surface a proactive note. Numbers here are
+# bridge-side ratelimits — the extension still gates the resulting
+# `copilot_reply` on its own 60 s UI cooldown and the user mute toggle.
+COPILOT_TICK_NEW_SEGMENTS = 5      # at least N new buffered segments
+COPILOT_TICK_INTERVAL_SECONDS = 15.0  # OR at least T seconds since the last tick
+COPILOT_TICK_RECENT_SEGMENTS = 10  # how many trailing segments to include as context
 
 def _truncate_text(text: str, max_len: int) -> str:
     clean = " ".join(text.split())
@@ -316,6 +325,12 @@ class KTalkBridge:
         # bounded across long meetings.
         self._copilot_transcript_buffer: Dict[int, dict] = {}
         self._copilot_transcript_order: collections.deque = collections.deque(maxlen=300)
+
+        # Proactive transcript-tick state. Only populated while a meeting is
+        # active so the trigger in `send_transcript` is a cheap None-check
+        # outside meetings. Reset on `meeting_join` and cleared on
+        # `meeting_leave` so a tick cannot reference a stale meeting_id.
+        self._copilot_tick_state: Optional[dict] = None
 
         # Отслеживание активного сегмента речи
         self._segment_start_time: Optional[float] = None
@@ -769,6 +784,79 @@ class KTalkBridge:
                 text=text,
                 meeting_id=meeting_id,
             )
+            self._maybe_emit_transcript_tick()
+
+    def _maybe_emit_transcript_tick(self) -> None:
+        """Broadcast a `transcript_tick` to channel clients when triggers fire.
+
+        Two independent triggers, evaluated under `_lock` to keep tick state
+        consistent across threads (`send_transcript` runs on the live/audio
+        thread; the asyncio loop owns the WS sockets):
+          * at least `COPILOT_TICK_NEW_SEGMENTS` new segments since the last
+            emit (uses a monotonic counter that survives deque eviction), OR
+          * at least `COPILOT_TICK_INTERVAL_SECONDS` of wall-clock elapsed
+            since the previous emit.
+        Suppressed when no meeting is active (`_copilot_tick_state is None`)
+        or no channel client is registered — the second guard avoids
+        formatting a snapshot nobody will read.
+        """
+        with self._lock:
+            tick_state = self._copilot_tick_state
+            if tick_state is None:
+                return
+            if not self._copilot_channel_clients:
+                return
+            tick_state["seg_count"] += 1
+            now_ts = time.time()
+            new_segs = tick_state["seg_count"] - tick_state["last_seg_count"]
+            elapsed = (
+                now_ts - tick_state["last_emit_ts"]
+                if tick_state["last_emit_ts"]
+                else None
+            )
+            time_trigger = elapsed is not None and elapsed >= COPILOT_TICK_INTERVAL_SECONDS
+            count_trigger = new_segs >= COPILOT_TICK_NEW_SEGMENTS
+            if not (count_trigger or time_trigger):
+                return
+            meeting_id = tick_state["meeting_id"]
+            meeting_title = tick_state.get("meeting_title") or ""
+            ordered_ids = list(self._copilot_transcript_order)
+            new_segments_payload = [
+                self._copilot_transcript_buffer[sid]
+                for sid in ordered_ids[-new_segs:]
+                if sid in self._copilot_transcript_buffer
+                and self._copilot_transcript_buffer[sid].get("meeting_id") == meeting_id
+            ]
+            recent_payload = [
+                self._copilot_transcript_buffer[sid]
+                for sid in ordered_ids[-COPILOT_TICK_RECENT_SEGMENTS:]
+                if sid in self._copilot_transcript_buffer
+                and self._copilot_transcript_buffer[sid].get("meeting_id") == meeting_id
+            ]
+            recent_context = "\n".join(
+                f"{entry.get('speaker') or '?'}: {entry.get('text') or ''}"
+                for entry in recent_payload
+            )
+            tick_state["last_seg_count"] = tick_state["seg_count"]
+            tick_state["last_emit_ts"] = now_ts
+            recipients = list(self._copilot_channel_clients)
+
+        if self._loop is None:
+            return
+        frame = {
+            "type": "transcript_tick",
+            "meeting_id": meeting_id,
+            "meeting_title": meeting_title,
+            "new_segments": new_segments_payload,
+            "recent_context": recent_context,
+            "local_user_name": MIC_SPEAKER_NAME,
+        }
+        message = json.dumps(frame, ensure_ascii=False)
+        for client in recipients:
+            try:
+                asyncio.run_coroutine_threadsafe(client.send(message), self._loop)
+            except Exception:
+                pass
 
     def _record_copilot_transcript(
         self,
@@ -1689,6 +1777,21 @@ class KTalkBridge:
                 }
                 await self._broadcast_to_channel_clients(meeting_started_frame)
                 await self._broadcast_message(meeting_started_frame)
+                # Reset proactive transcript-tick state for the new meeting.
+                # `send_transcript` consults this on every broadcast; a fresh
+                # baseline ensures the first tick fires after N=5 segments
+                # OR T=15s of activity, not against stale counters.
+                # `seg_count` is a monotonic counter incremented per
+                # `send_transcript` (with positive segment_id) — tracking
+                # the deque's `len()` would lose updates once the deque
+                # saturates at maxlen=300.
+                self._copilot_tick_state = {
+                    "meeting_id": meeting_id,
+                    "meeting_title": title,
+                    "seg_count": 0,
+                    "last_seg_count": 0,
+                    "last_emit_ts": 0.0,
+                }
                 # Отправляем историю транскрипта в extension
                 await self._send_transcript_history()
 
@@ -1744,6 +1847,10 @@ class KTalkBridge:
                     "meeting_id": prev_meeting_id,
                     "created_at": time.time() * 1000,
                 }
+                # Stop emitting transcript_tick for the meeting that just
+                # ended. Any further `send_transcript` (rare, in-flight) will
+                # see `_copilot_tick_state is None` and skip the trigger.
+                self._copilot_tick_state = None
                 await self._broadcast_to_channel_clients(meeting_ended_frame)
                 # Notify extension about new meeting (safe to await here —
                 # speaker state is already clean).
