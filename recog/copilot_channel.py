@@ -147,11 +147,36 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
     mcp = FastMCP(
         name="recog-copilot-channel",
         instructions=(
-            "Send chat messages back to the KTalk extension Copilot tab "
-            "for the active meeting. Use `send_copilot_message` for "
-            "answers, transcripts, or proactive notes; use "
-            "`set_copilot_status` to surface progress for a specific "
-            "user request."
+            "KTalk Copilot channel: send messages into the active KTalk "
+            "meeting Copilot tab and snapshot the recent transcript.\n"
+            "\n"
+            "Tools:\n"
+            "- send_copilot_message(kind, text, request_id?, meeting_id?): "
+            "post a message. Use kind='reply' for answers to a user "
+            "request, kind='proactive' for unsolicited notes, or "
+            "kind='manual' for ad-hoc messages.\n"
+            "- set_copilot_status(request_id, status, message?): update "
+            "the per-request status indicator (queued/working/done/error).\n"
+            "- get_recent_transcript(window_seconds=180, since_segment_id?, "
+            "include_refined=True): snapshot recent segments for the active "
+            "meeting only. Call this before answering when the buffered "
+            "context might be stale; do not invent context from memory.\n"
+            "\n"
+            "Behaviour contract:\n"
+            "- Default to silence. Most transcript_tick events should "
+            "produce no send_copilot_message call. Proactive output is "
+            "rate-limited by the extension UI cooldown (60 s) and a "
+            "global mute toggle, so noisy output is dropped — but "
+            "discarded messages still cost tokens.\n"
+            "- Reply to direct user requests (copilot_user_message) with "
+            "kind='reply' carrying the original request_id.\n"
+            "- Proactive triggers: a question addressed to the local user, "
+            "a missing owner or deadline on a stated action item, a "
+            "technical risk participants have not flagged, a contradiction "
+            "with earlier transcript context.\n"
+            "- Never speak up for filler, agreement, off-topic chat, or "
+            "anything obvious to participants. Do not summarise the "
+            "meeting unless asked."
         ),
         host=host,
         port=port,
@@ -258,10 +283,14 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
         try:
             response = await asyncio.wait_for(future, timeout=5.0)
         except asyncio.TimeoutError:
-            link.unregister_pending(request_id)
             return {"ok": False, "error": "timeout waiting for transcript snapshot"}
         except ConnectionError as exc:
             return {"ok": False, "error": str(exc)}
+        finally:
+            # Always unregister so a cancelled tool call (e.g. Claude
+            # session aborted) cannot leave the future entry pinned in
+            # `_pending` until the next reconnect drops the socket.
+            link.unregister_pending(request_id)
         return {"ok": True, "segments": response.get("segments", [])}
 
     return mcp
