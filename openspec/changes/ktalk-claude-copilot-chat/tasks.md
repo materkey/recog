@@ -27,7 +27,7 @@
 - [x] 4.1 Generate stable `request_id` values for extension-originated Copilot messages
 - [x] 4.2 Include meeting title, current meeting id if available, and recent transcript window in `copilot_chat_message`
 - [x] 4.3 Forward manual user messages from bridge to channel server as `copilot_user_message`
-- [x] 4.4 Send Claude channel notifications for `copilot_user_message`
+- [ ] 4.4 Send Claude channel notifications for `copilot_user_message` # placeholder — depends on 1.1 spike (channel server logs the frame; bridge→Claude push path not yet implemented)
 - [x] 4.5 Implement `send_copilot_message` tool in the channel server and relay replies back to bridge
 - [ ] 4.6 Verify end-to-end flow: KTalk DOM input → bridge → Claude Code → bridge → KTalk DOM reply # requires human smoke
 
