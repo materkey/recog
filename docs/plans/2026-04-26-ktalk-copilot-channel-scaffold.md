@@ -27,9 +27,9 @@
 ## Implementation Steps
 
 ### Task 1: Add `mcp` Python SDK dependency
-- [ ] Add a line `mcp>=1.2.0` to `requirements.txt` near the other Python deps (alphabetical or end of list — match existing style)
-- [ ] Install: `./venv-gigaam/bin/pip install -r requirements.txt`
-- [ ] Verify import: `./venv-gigaam/bin/python -c "from mcp.server.fastmcp import FastMCP; print('mcp ok')"`
+- [x] Add a line `mcp>=1.2.0` to `requirements.txt` near the other Python deps (alphabetical or end of list — match existing style)
+- [x] Install: `./venv-gigaam/bin/pip install -r requirements.txt`
+- [x] Verify import: `./venv-gigaam/bin/python -c "from mcp.server.fastmcp import FastMCP; print('mcp ok')"`
 
 ### Task 2: Bridge — register Copilot channel clients on `copilot_channel_hello`
 - [ ] In `ktalk_bridge.py` `KTalkBridge.__init__`, add `self._copilot_channel_clients: set = set()` next to `_subscriber_clients` (around line 294)
