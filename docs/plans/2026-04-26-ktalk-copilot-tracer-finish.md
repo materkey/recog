@@ -72,11 +72,11 @@
 - [x] Add unit tests: tick fires after N new segments; tick fires on time-based trigger; tick suppressed without active meeting; tick suppressed without channel clients.
 
 ### Task 5: Channel-server smoke (`tasks.md` 8.5)
-- [ ] Add `tests/test_copilot_channel.py`: spin up an in-memory fake bridge WS server (using `websockets.serve` on a random port), boot the channel-server module against it (call its `main` coroutine with overridden host/port args), and assert:
+- [x] Add `tests/test_copilot_channel.py`: spin up an in-memory fake bridge WS server (using `websockets.serve` on a random port), boot the channel-server module against it (call its `main` coroutine with overridden host/port args), and assert:
   - on connect, the server sends `copilot_channel_hello`.
   - calling the `send_copilot_message` tool produces a `copilot_channel_reply` frame on the bridge side with the correct fields.
   - calling the `get_recent_transcript` tool sends `get_recent_transcript_request` and resolves on `get_recent_transcript_response`.
-- [ ] Use `pytest-asyncio`. Do NOT spawn a real subprocess. If the channel server's MCP HTTP loop interferes, gate it behind a flag and only run the WS-client loop in the test.
+- [x] Use `pytest-asyncio`. Do NOT spawn a real subprocess. If the channel server's MCP HTTP loop interferes, gate it behind a flag and only run the WS-client loop in the test.
 
 ### Task 6: Update `tasks.md` and run automated test sweep (`tasks.md` 8.6, 8.7, 8.8)
 - [ ] Edit `openspec/changes/ktalk-claude-copilot-chat/tasks.md`: change `- [ ]` to `- [x]` for every task whose work is complete on this branch. Specifically check off:
