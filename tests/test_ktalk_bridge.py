@@ -932,6 +932,52 @@ async def test_copilot_channel_hello_registers_client():
 
 
 @pytest.mark.asyncio
+async def test_copilot_channel_hello_triggers_end_meeting_if_extension_left_during_race():
+    """
+    given: active ktalk meeting; extension disconnects while a copilot
+           channel WS is open but still transiently in _connected_clients
+           (before its copilot_channel_hello message is processed)
+    when:  the copilot_channel_hello finally arrives and the socket moves
+           into _copilot_channel_clients, revealing _connected_clients is
+           empty
+    then:  on_ktalk_leave("disconnected") IS called — the race-window
+           lifecycle miss is recovered. Mirrors the analogous
+           subscriber_hello race-recovery contract.
+    """
+    bridge = KTalkBridge()
+    mock_storage = Mock()
+    mock_storage._load_meta = Mock(return_value={"source": "ktalk"})
+    mock_storage.on_ktalk_leave = Mock(return_value="next_meeting_id")
+    mock_storage.current_meeting_path = Path("/tmp/m.jsonl")
+    mock_storage.current_meeting_id = "m"
+    bridge.set_meeting_storage(mock_storage)
+
+    # Simulate race end-state: the channel client is in _connected_clients
+    # (it has connected but has not yet had its hello processed). The
+    # extension already disconnected; its finally-block ran, saw
+    # _connected_clients={channel_ws}, and skipped cleanup.
+    channel_ws = ControllableFakeWebSocket()
+    channel_ws.add_message(json.dumps({"type": "copilot_channel_hello"}))
+
+    handler_task = asyncio.create_task(bridge._handle_client(channel_ws))
+
+    # Wait for the hello-handler side-effect: on_ktalk_leave is fired
+    # the moment _connected_clients empties out as the socket is
+    # moved into _copilot_channel_clients.
+    for _ in range(50):
+        if mock_storage.on_ktalk_leave.called:
+            break
+        await asyncio.sleep(0.01)
+    try:
+        mock_storage.on_ktalk_leave.assert_called_once_with("disconnected")
+        assert channel_ws in bridge._copilot_channel_clients
+        assert channel_ws not in bridge._connected_clients
+    finally:
+        channel_ws.signal_close()
+        await handler_task
+
+
+@pytest.mark.asyncio
 async def test_copilot_channel_disconnect_does_not_end_ktalk_meeting():
     """
     given: KTalkBridge with an active ktalk meeting AND an extension client
