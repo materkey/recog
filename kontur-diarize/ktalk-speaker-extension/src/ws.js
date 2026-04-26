@@ -18,6 +18,14 @@ export function connectWebSocket() {
       console.log('[KTalk Transcript] WebSocket connected');
       state.wsConnected = true;
       updateWsIndicatorPlatform(true);
+      // Reset channel-status indicator on bridge reconnect: the prior
+      // session's `channel_disconnected` (set by `onclose` /
+      // `handleCopilotBridgeDisconnect`) is no longer authoritative — the
+      // bridge will replay the actual channel state via a `channel_connected`
+      // primer in `_handle_client` if a channel client is registered.
+      // Without this reset the indicator would stay stuck on "channel
+      // offline" forever even after the channel came back.
+      state.copilotChannelStatus = 'unknown';
 
       // Send participants for both KTalk and vas3k
       const adapter = getPlatformAdapter();

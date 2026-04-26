@@ -318,4 +318,48 @@ describe('Copilot DOM panel', () => {
     expect(state.copilotPending.size).toBe(0);
     expect(state.copilotChannelStatus).toBe('channel_disconnected');
   });
+
+  test('handleCopilotStatus channel_connected resets indicator from disconnected', () => {
+    // Without a recovery path the indicator stays stuck on "channel_disconnected"
+    // forever once the channel has dropped. The bridge emits `channel_connected`
+    // on the 0→1 channel-client transition (and as a primer for late-joining
+    // extensions); the handler must accept it and flip the state back.
+    state.copilotChannelStatus = 'channel_disconnected';
+    handleCopilotStatus({
+      type: 'copilot_status',
+      request_id: '',
+      status: 'channel_connected',
+    });
+    expect(state.copilotChannelStatus).toBe('connected');
+  });
+
+  test('handleCopilotStatus channel_disconnected without request_id flips all pending placeholders', () => {
+    // Bridge emits this signal when the LAST channel client drops mid-flight.
+    // Multiple placeholders may be in-flight (concurrent chat turns); without
+    // the all-pending fan-out, only the per-request signal path would fire
+    // and we'd get a single error bubble while every placeholder stays on
+    // "Жду ответа Claude…" forever.
+    state.copilotMessages = [
+      { id: 'a1', kind: 'assistant', text: '…', request_id: 'req-1', status: 'working', time: '10:00:00' },
+      { id: 'a2', kind: 'assistant', text: '…', request_id: 'req-2', status: 'working', time: '10:00:01' },
+    ];
+    state.copilotPending.set('req-1', { userId: null, assistantId: 'a1', createdAt: Date.now() });
+    state.copilotPending.set('req-2', { userId: null, assistantId: 'a2', createdAt: Date.now() });
+    state.copilotMessages.forEach(renderCopilotMessage);
+
+    handleCopilotStatus({
+      type: 'copilot_status',
+      request_id: '',
+      status: 'channel_disconnected',
+    });
+
+    expect(state.copilotPending.size).toBe(0);
+    const a1 = state.copilotMessages.find((m) => m.id === 'a1');
+    const a2 = state.copilotMessages.find((m) => m.id === 'a2');
+    expect(a1.kind).toBe('error');
+    expect(a2.kind).toBe('error');
+    expect(a1.text).toMatch(/offline/i);
+    expect(a2.text).toMatch(/offline/i);
+    expect(state.copilotChannelStatus).toBe('channel_disconnected');
+  });
 });

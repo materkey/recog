@@ -6193,6 +6193,17 @@ function handleCopilotStatus(data) {
   const requestId = data && data.request_id;
   const status = (data && data.status) || 'unknown';
 
+  if (status === 'channel_connected') {
+    // Channel-level recovery signal — bridge emits this on the 0→1 channel
+    // client transition (or as a primer when an extension late-joins a
+    // bridge whose channel was already up). Without it, once the indicator
+    // flipped to `channel_disconnected` it would stay stuck even after the
+    // channel came back online.
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotChannelStatus = 'connected';
+    updateCopilotStatusIndicator();
+    return;
+  }
+
   if (status === 'channel_disconnected') {
     // Channel-level event — surface in the connectivity indicator. Per-
     // request statuses (queued/working/done/error) below describe a single
@@ -6210,6 +6221,24 @@ function handleCopilotStatus(data) {
         time: nowDisplay()
       });
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.delete(requestId);
+      setCopilotInputBusy(false);
+    } else if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.size > 0) {
+      // Channel-level signal (no specific request_id match) with pending
+      // requests in flight — the bridge fires this when the last channel
+      // client drops mid-flight. Flip every placeholder to error and re-
+      // enable input rather than appending a single bubble that says
+      // nothing about the stranded turns.
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.forEach((pending) => {
+        if (pending && pending.assistantId) {
+          updateCopilotMessage(pending.assistantId, {
+            kind: 'error',
+            text: 'Channel offline: Claude не подключён.',
+            status: 'error',
+            time: nowDisplay()
+          });
+        }
+      });
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.clear();
       setCopilotInputBusy(false);
     } else {
       appendCopilotMessage({
@@ -7593,6 +7622,14 @@ function connectWebSocket() {
       console.log('[KTalk Transcript] WebSocket connected');
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected = true;
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicatorPlatform)(true);
+      // Reset channel-status indicator on bridge reconnect: the prior
+      // session's `channel_disconnected` (set by `onclose` /
+      // `handleCopilotBridgeDisconnect`) is no longer authoritative — the
+      // bridge will replay the actual channel state via a `channel_connected`
+      // primer in `_handle_client` if a channel client is registered.
+      // Without this reset the indicator would stay stuck on "channel
+      // offline" forever even after the channel came back.
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotChannelStatus = 'unknown';
 
       // Send participants for both KTalk and vas3k
       const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_6__.getPlatformAdapter)();
