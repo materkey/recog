@@ -1,5 +1,5 @@
 import { state, constants } from './state.js';
-import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleTranscriptRefine, handleNewMeeting, handleSummaryResponse, handleAnchorResponse } from './ui.js';
+import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleTranscriptRefine, handleNewMeeting, handleSummaryResponse, handleAnchorResponse, handleCopilotReply, handleCopilotStatus } from './ui.js';
 import { handleVas3kSummaryResponse } from './ui-vas3k.js';
 import { getActiveSpeaker, sendParticipantsUpdate, sendFilteredSpeakerUpdate } from './speaker.js';
 import { sendWsMessage } from './ws_api.js';
@@ -85,6 +85,10 @@ export function connectWebSocket() {
           handleVas3kSummaryResponse(data);
         } else if (data.type === 'anchor_response') {
           handleAnchorResponse(data);
+        } else if (data.type === 'copilot_reply') {
+          handleCopilotReply(data);
+        } else if (data.type === 'copilot_status') {
+          handleCopilotStatus(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);

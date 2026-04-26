@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { injectStyles, addTranscriptTab, addContextTab, createTranscriptContent, createContextContent, watchTabChanges, updateWsIndicator, initPlatformUI } from './ui.js';
+import { injectStyles, addTranscriptTab, addContextTab, addCopilotTab, createTranscriptContent, createContextContent, createCopilotContent, watchTabChanges, updateWsIndicator, initPlatformUI } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
@@ -145,15 +145,17 @@ function setupUI() {
   // KTalk: Use tab injection
   const transcriptTabAdded = addTranscriptTab();
   const contextTabAdded = addContextTab();
-  if (transcriptTabAdded || contextTabAdded) {
+  const copilotTabAdded = addCopilotTab();
+  if (transcriptTabAdded || contextTabAdded || copilotTabAdded) {
     createTranscriptContent();
     createContextContent();
+    createCopilotContent();
     watchTabChanges();
     updateWsIndicator(state.wsConnected);
   }
 
   ensureDebugPanel();
-  return transcriptTabAdded || contextTabAdded;
+  return transcriptTabAdded || contextTabAdded || copilotTabAdded;
 }
 
 function subscribeToDominantSpeaker(conf) {
@@ -326,7 +328,7 @@ export function init() {
       }
     } else {
       // For KTalk: check tabs exist
-      if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab')) {
+      if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab') || !document.querySelector('.ktalk-copilot-tab')) {
         state.transcriptTabAdded = false;
         setupUI();
       }
@@ -339,6 +341,11 @@ export function init() {
         state.contextContentElement = null;
         state.originalChatContent = null;
         createContextContent();
+      }
+      if (!document.querySelector('.ktalk-copilot-content')) {
+        state.copilotContentElement = null;
+        state.originalChatContent = null;
+        createCopilotContent();
       }
     }
     tryAttachConference();
