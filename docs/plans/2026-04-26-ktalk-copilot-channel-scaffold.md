@@ -78,10 +78,10 @@
 - [x] Do NOT push yet
 
 ### Task 8: Commit channel-server scaffold + bridge protocol (second atomic commit)
-- [ ] `git status` — verify only `requirements.txt`, `ktalk_bridge.py`, `recog/copilot_channel.py`, `tests/test_ktalk_bridge.py` are modified/new
-- [ ] Stage explicitly: `git add requirements.txt ktalk_bridge.py recog/copilot_channel.py tests/test_ktalk_bridge.py`
-- [ ] Commit with message `feat(copilot): scaffold MCP HTTP channel server and bridge routing` and a body covering: new module `recog/copilot_channel.py` exposing `send_copilot_message`/`set_copilot_status` MCP tools over Streamable HTTP at `127.0.0.1:8767`; new bridge frame types `copilot_channel_hello`/`copilot_chat_message`/`copilot_channel_reply`/`copilot_channel_status`; isolated channel-client set; unit tests for hello/forward/relay/disconnected paths
-- [ ] Push: `git push` (current branch is `main` — do not force-push; if push is rejected, stop and surface the error in the progress log)
+- [x] `git status` — verify only `requirements.txt`, `ktalk_bridge.py`, `recog/copilot_channel.py`, `tests/test_ktalk_bridge.py` are modified/new
+- [x] Stage explicitly: `git add requirements.txt ktalk_bridge.py recog/copilot_channel.py tests/test_ktalk_bridge.py`
+- [x] Commit with message `feat(copilot): scaffold MCP HTTP channel server and bridge routing` and a body covering: new module `recog/copilot_channel.py` exposing `send_copilot_message`/`set_copilot_status` MCP tools over Streamable HTTP at `127.0.0.1:8767`; new bridge frame types `copilot_channel_hello`/`copilot_chat_message`/`copilot_channel_reply`/`copilot_channel_status`; isolated channel-client set; unit tests for hello/forward/relay/disconnected paths
+- [x] Push: `git push` (current branch is `main` — do not force-push; if push is rejected, stop and surface the error in the progress log)
 
 ## Post-Completion
 - Manual smoke (not automated by ralphex): start `./recog-service.sh start` (or `python ktalk_bridge.py`), in another terminal run `./venv-gigaam/bin/python -m recog.copilot_channel`, then `claude mcp add --transport http copilot http://127.0.0.1:8767/mcp` once. In a Claude Code session ask Claude to call `send_copilot_message(kind="manual", text="hello from Claude")` — expect the bridge log to show a relayed `copilot_reply` broadcast.
