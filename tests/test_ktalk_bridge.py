@@ -1506,6 +1506,72 @@ async def test_non_stale_copilot_reply_is_still_relayed():
     assert relayed[0]["text"] == "ответ"
 
 
+@pytest.mark.asyncio
+async def test_meeting_join_transition_marks_pending_requests_stale():
+    """
+    given: a `copilot_chat_message` was forwarded for meeting "m-prev",
+           and the user transitions directly to a new meeting via
+           `meeting_join` (no preceding `meeting_leave`)
+    when:  a `copilot_channel_reply` arrives carrying the prior request_id
+    then:  the reply is dropped — the meeting_join transition must mark
+           prior pending requests stale just like meeting_leave does, or
+           late replies for the previous meeting leak into the new tab
+    """
+    storage = Mock()
+    storage.current_meeting_path = Path("/tmp/m-prev.jsonl")
+    storage.current_meeting_id = "m-prev"
+    join_calls = {"count": 0}
+
+    def _on_join(url, *args, **kwargs):
+        join_calls["count"] += 1
+        # First call: enter "m-prev". Second call: switch to "m-next" by
+        # mutating both the path and the current_meeting_id.
+        if join_calls["count"] == 1:
+            storage.current_meeting_path = Path("/tmp/m-prev.jsonl")
+            storage.current_meeting_id = "m-prev"
+            return "m-prev"
+        storage.current_meeting_path = Path("/tmp/m-next.jsonl")
+        storage.current_meeting_id = "m-next"
+        return "m-next"
+
+    storage.on_meeting_join = Mock(side_effect=_on_join)
+    storage.get_current_transcript = Mock(return_value=[])
+    storage.get_current_meeting_id = Mock(side_effect=lambda: storage.current_meeting_id)
+
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(storage)
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    # Step 1: enter the prior meeting and queue a chat request.
+    await bridge._process_message({"type": "meeting_join", "url": "https://example.ktalk.ru/m-prev"})
+    await bridge._process_message({
+        "type": "copilot_chat_message",
+        "request_id": "req-prev",
+        "text": "вопрос",
+    }, websocket=RecordingClient())
+    assert bridge._copilot_pending_requests["req-prev"] == "m-prev"
+
+    # Step 2: transition to a new meeting via meeting_join (no leave).
+    await bridge._process_message({"type": "meeting_join", "url": "https://example.ktalk.ru/m-next"})
+    assert bridge._copilot_pending_requests["req-prev"] == "stale:m-prev"
+
+    # Step 3: late reply for the prior meeting must be dropped.
+    extension_client.sent.clear()
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-prev",
+        "kind": "manual",
+        "text": "опоздавший ответ",
+    })
+    relayed = [m for m in extension_client.sent if json.loads(m)["type"] == "copilot_reply"]
+    assert relayed == []
+    assert "req-prev" not in bridge._copilot_pending_requests
+
+
 # --- send_transcript: source_id payload serialization ---
 
 

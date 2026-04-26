@@ -817,14 +817,20 @@ class KTalkBridge:
             meeting_id = tick_state["meeting_id"]
             meeting_title = tick_state.get("meeting_title") or ""
             ordered_ids = list(self._copilot_transcript_order)
+            # Copy buffer entries under the lock — `send_refine` (refine
+            # worker thread) and `_record_copilot_transcript` (asyncio
+            # thread) mutate `entry["text"]` / `entry["refined"]` in place.
+            # Holding references and serialising outside the lock at line
+            # 850 would let `json.dumps` observe a torn state (e.g.,
+            # refined text with `refined=False`).
             new_segments_payload = [
-                self._copilot_transcript_buffer[sid]
+                dict(self._copilot_transcript_buffer[sid])
                 for sid in ordered_ids[-new_segs:]
                 if sid in self._copilot_transcript_buffer
                 and self._copilot_transcript_buffer[sid].get("meeting_id") == meeting_id
             ]
             recent_payload = [
-                self._copilot_transcript_buffer[sid]
+                dict(self._copilot_transcript_buffer[sid])
                 for sid in ordered_ids[-COPILOT_TICK_RECENT_SEGMENTS:]
                 if sid in self._copilot_transcript_buffer
                 and self._copilot_transcript_buffer[sid].get("meeting_id") == meeting_id
@@ -1788,6 +1794,7 @@ class KTalkBridge:
             platform = data.get("platform", "ktalk")
             if self._meeting_storage and url:
                 old_meeting_path = self._meeting_storage.current_meeting_path
+                prev_meeting_id = self._meeting_storage.current_meeting_id
                 # Clear stale speaker state from previous meeting so that
                 # get_current_speaker / get_sole_unmuted_remote_participant
                 # cannot return old-meeting participants during the transition.
@@ -1810,6 +1817,25 @@ class KTalkBridge:
                     if self._on_meeting_change:
                         meeting_path = self._meeting_storage.current_meeting_path
                         self._on_meeting_change(meeting_id, meeting_path)
+                    # Mark every in-flight `copilot_chat_message` request
+                    # that belonged to the prior meeting as stale. A direct
+                    # meeting_join transition (no preceding meeting_leave)
+                    # would otherwise leak late replies for the previous
+                    # meeting into the new meeting's Copilot tab — the
+                    # cross-meeting `meeting_id` filter at the reply
+                    # handler is best-effort and only fires when Claude
+                    # echoes `meeting_id` back.
+                    if prev_meeting_id:
+                        stale_count = 0
+                        for req_id, mid in list(self._copilot_pending_requests.items()):
+                            if mid == prev_meeting_id:
+                                self._copilot_pending_requests[req_id] = f"stale:{mid}"
+                                stale_count += 1
+                        if stale_count:
+                            print(
+                                f"[KTalk Bridge] Marked {stale_count} copilot request(s) stale on meeting_join transition",
+                                file=sys.stderr,
+                            )
                     # Wipe the recent-transcript buffer so a stale segment_id
                     # from the prior meeting cannot collide with the new
                     # meeting's ids (segment_ids restart at 1 per meeting),

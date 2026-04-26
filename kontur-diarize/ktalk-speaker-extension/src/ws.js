@@ -1,5 +1,5 @@
 import { state, constants } from './state.js';
-import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleTranscriptRefine, handleNewMeeting, handleSummaryResponse, handleAnchorResponse, handleCopilotReply, handleCopilotStatus, appendCopilotSystemMessage } from './ui.js';
+import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleTranscriptRefine, handleNewMeeting, handleSummaryResponse, handleAnchorResponse, handleCopilotReply, handleCopilotStatus, appendCopilotSystemMessage, handleCopilotBridgeDisconnect } from './ui.js';
 import { handleVas3kSummaryResponse } from './ui-vas3k.js';
 import { getActiveSpeaker, sendParticipantsUpdate, sendFilteredSpeakerUpdate } from './speaker.js';
 import { sendWsMessage } from './ws_api.js';
@@ -51,6 +51,14 @@ export function connectWebSocket() {
       console.log('[KTalk Transcript] WebSocket disconnected');
       state.wsConnected = false;
       updateWsIndicatorPlatform(false);
+      // Surface the bridge drop in the Copilot tab — flip pending
+      // placeholders to error and re-enable input. Otherwise an in-flight
+      // chat would leave the textarea disabled until the user reloaded.
+      try {
+        handleCopilotBridgeDisconnect();
+      } catch (e) {
+        console.log('[KTalk Copilot] bridge-disconnect handler failed:', e);
+      }
 
       if (state.clockSyncTimer) {
         clearInterval(state.clockSyncTimer);

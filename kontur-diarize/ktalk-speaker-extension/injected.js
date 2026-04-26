@@ -4464,6 +4464,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   createCopilotContent: () => (/* binding */ createCopilotContent),
 /* harmony export */   createTranscriptContent: () => (/* binding */ createTranscriptContent),
 /* harmony export */   handleAnchorResponse: () => (/* binding */ handleAnchorResponse),
+/* harmony export */   handleCopilotBridgeDisconnect: () => (/* binding */ handleCopilotBridgeDisconnect),
 /* harmony export */   handleCopilotReply: () => (/* binding */ handleCopilotReply),
 /* harmony export */   handleCopilotStatus: () => (/* binding */ handleCopilotStatus),
 /* harmony export */   handleNewMeeting: () => (/* binding */ handleNewMeeting),
@@ -6264,6 +6265,29 @@ function appendCopilotSystemMessage(text) {
   });
 }
 
+function handleCopilotBridgeDisconnect() {
+  // Bridge WS dropped — flip every in-flight chat placeholder to error and
+  // re-enable input. Without this, `submitCopilotInput` would leave the
+  // textarea disabled forever (only `copilot_reply` / `copilot_status` re-
+  // enable it, and neither will arrive from a closed socket).
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.size > 0) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.forEach((pending) => {
+      if (pending && pending.assistantId) {
+        updateCopilotMessage(pending.assistantId, {
+          kind: 'error',
+          text: 'Bridge offline: соединение прервано.',
+          status: 'error',
+          time: nowDisplay()
+        });
+      }
+    });
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.clear();
+  }
+  setCopilotInputBusy(false);
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotChannelStatus = 'channel_disconnected';
+  updateCopilotStatusIndicator();
+}
+
 function setActiveView(view) {
   const transcriptTabBtn = document.querySelector('.ktalk-transcript-tab');
   const contextTabBtn = document.querySelector('.ktalk-context-tab');
@@ -7574,6 +7598,14 @@ function connectWebSocket() {
       console.log('[KTalk Transcript] WebSocket disconnected');
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected = false;
       (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicatorPlatform)(false);
+      // Surface the bridge drop in the Copilot tab — flip pending
+      // placeholders to error and re-enable input. Otherwise an in-flight
+      // chat would leave the textarea disabled until the user reloaded.
+      try {
+        (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleCopilotBridgeDisconnect)();
+      } catch (e) {
+        console.log('[KTalk Copilot] bridge-disconnect handler failed:', e);
+      }
 
       if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer) {
         clearInterval(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer);

@@ -1777,6 +1777,29 @@ export function appendCopilotSystemMessage(text) {
   });
 }
 
+export function handleCopilotBridgeDisconnect() {
+  // Bridge WS dropped — flip every in-flight chat placeholder to error and
+  // re-enable input. Without this, `submitCopilotInput` would leave the
+  // textarea disabled forever (only `copilot_reply` / `copilot_status` re-
+  // enable it, and neither will arrive from a closed socket).
+  if (state.copilotPending && state.copilotPending.size > 0) {
+    state.copilotPending.forEach((pending) => {
+      if (pending && pending.assistantId) {
+        updateCopilotMessage(pending.assistantId, {
+          kind: 'error',
+          text: 'Bridge offline: соединение прервано.',
+          status: 'error',
+          time: nowDisplay()
+        });
+      }
+    });
+    state.copilotPending.clear();
+  }
+  setCopilotInputBusy(false);
+  state.copilotChannelStatus = 'channel_disconnected';
+  updateCopilotStatusIndicator();
+}
+
 function setActiveView(view) {
   const transcriptTabBtn = document.querySelector('.ktalk-transcript-tab');
   const contextTabBtn = document.querySelector('.ktalk-context-tab');

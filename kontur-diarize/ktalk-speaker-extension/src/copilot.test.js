@@ -13,6 +13,7 @@ let renderCopilotMessage;
 let handleCopilotReply;
 let handleCopilotStatus;
 let appendCopilotSystemMessage;
+let handleCopilotBridgeDisconnect;
 
 beforeAll(async () => {
   await jest.unstable_mockModule('./platforms/index.js', () => ({
@@ -31,6 +32,7 @@ beforeAll(async () => {
     handleCopilotReply,
     handleCopilotStatus,
     appendCopilotSystemMessage,
+    handleCopilotBridgeDisconnect,
   } = await import('./ui.js'));
 });
 
@@ -239,5 +241,26 @@ describe('Copilot DOM panel', () => {
 
     expect(state.copilotMessages.find((m) => m.id === 'a-dismiss')).toBeUndefined();
     expect(document.querySelector('[data-copilot-id="a-dismiss"]')).toBeNull();
+  });
+
+  test('handleCopilotBridgeDisconnect flips pending placeholders to error and re-enables input', () => {
+    // Without surfacing the bridge drop, an in-flight chat would leave the
+    // textarea disabled and the placeholder stuck on "Жду ответа Claude…"
+    // until the page is reloaded — `copilot_reply` / `copilot_status` are
+    // the only re-enable paths and neither will fire from a closed socket.
+    const requestId = 'req-disc';
+    state.copilotMessages = [
+      { id: 'a-disc', kind: 'assistant', text: '…', request_id: requestId, status: 'working', time: '10:00:00' },
+    ];
+    state.copilotPending.set(requestId, { userId: null, assistantId: 'a-disc', createdAt: Date.now() });
+    renderCopilotMessage(state.copilotMessages[0]);
+
+    handleCopilotBridgeDisconnect();
+
+    const assistant = state.copilotMessages.find((m) => m.id === 'a-disc');
+    expect(assistant.kind).toBe('error');
+    expect(assistant.text).toMatch(/offline/i);
+    expect(state.copilotPending.size).toBe(0);
+    expect(state.copilotChannelStatus).toBe('channel_disconnected');
   });
 });
