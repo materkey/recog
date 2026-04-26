@@ -22,6 +22,32 @@ separate process from the bridge and serves two roles simultaneously:
 Reconnect uses simple exponential backoff (1s -> 2s -> 4s -> ... -> max 30s),
 modelled on `frontend/bridge_subscriber.py` which serves the analogous role
 for refine events (see ADR-0019 / D10).
+
+## System prompt for Claude
+
+The MCP server description (`FastMCP.instructions` below) carries the
+behaviour contract for Claude when it receives `transcript_tick` events or
+direct `copilot_user_message`s. Defaults are conservative:
+
+- **Default to silence.** Most ticks should produce no `send_copilot_message`
+  call. Proactive output is rate-limited by the extension UI cooldown (60 s)
+  and a global `mute proactive 10m` toggle, so a high-volume style would
+  simply be discarded — but discarded messages still cost tokens.
+- **Reply only on direct user requests.** Manual chat from the local user
+  (`copilot_user_message`) always deserves an answer. Echo unchanged
+  questions back to the user with a one-line acknowledgement only if a
+  longer reply is still pending.
+- **Proactive triggers.** Speak up when the transcript shows: a question
+  addressed to the local user (`MIC_SPEAKER_NAME`); a missing owner or
+  deadline on a stated action item; a technical risk that the participants
+  have not flagged; a contradiction with earlier transcript context.
+- **Never speak up for.** Filler, agreement, off-topic chat, or anything
+  that would be obvious to the participants. Do not summarise the meeting
+  unless asked.
+- **Tool ordering.** When unsure whether the buffered context is fresh,
+  call `get_recent_transcript` first; do not invent context from memory.
+- **kind selection.** `kind="proactive"` for anything not tied to a
+  `request_id`; `kind="reply"` when answering a `copilot_user_message`.
 """
 
 from __future__ import annotations

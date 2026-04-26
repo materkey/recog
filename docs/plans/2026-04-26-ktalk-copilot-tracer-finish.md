@@ -79,7 +79,7 @@
 - [x] Use `pytest-asyncio`. Do NOT spawn a real subprocess. If the channel server's MCP HTTP loop interferes, gate it behind a flag and only run the WS-client loop in the test.
 
 ### Task 6: Update `tasks.md` and run automated test sweep (`tasks.md` 8.6, 8.7, 8.8)
-- [ ] Edit `openspec/changes/ktalk-claude-copilot-chat/tasks.md`: change `- [ ]` to `- [x]` for every task whose work is complete on this branch. Specifically check off:
+- [x] Edit `openspec/changes/ktalk-claude-copilot-chat/tasks.md`: change `- [ ]` to `- [x]` for every task whose work is complete on this branch. Specifically check off:
   - 1.2, 1.3, 1.4 (1.1 is a human spike — leave unchecked, append `# requires human smoke`).
   - 2.1, 2.2, 2.3, 2.4, 2.5.
   - 3.1, 3.2, 3.3, 3.4, 3.5, 3.6.
@@ -88,11 +88,11 @@
   - 6.1, 6.2, 6.3 (channel-server prompt instructions can be a one-liner doc — see below), 6.4, 6.5 (6.6 is a manual smoke).
   - 7.1, 7.2, 7.3, 7.4, 7.5.
   - 8.1, 8.2, 8.3, 8.4 (extension tests — only if a JS test runner is present), 8.5, 8.6, 8.8.
-- [ ] For task 6.3 (channel instructions), add a short `## System prompt for Claude` section to `recog/copilot_channel.py` module docstring (or a sibling `.md`) describing: default to silence, post only on direct questions to the local user, missing owner/deadline, technical risks, etc. This is what Claude Code's MCP server description carries.
-- [ ] Run `./venv-gigaam/bin/python -m pytest tests/ -v` — must pass.
-- [ ] Run `./venv-gigaam/bin/python -m compileall recog frontend`.
-- [ ] In `kontur-diarize/ktalk-speaker-extension`: check `package.json` for a `test` script. If present, run `npm test`. If absent, skip and note "Task 8.7 deferred — no JS test runner configured" in plan progress.
-- [ ] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension` — must succeed.
+- [x] For task 6.3 (channel instructions), add a short `## System prompt for Claude` section to `recog/copilot_channel.py` module docstring (or a sibling `.md`) describing: default to silence, post only on direct questions to the local user, missing owner/deadline, technical risks, etc. This is what Claude Code's MCP server description carries.
+- [x] Run `./venv-gigaam/bin/python -m pytest tests/ -v` — must pass.
+- [x] Run `./venv-gigaam/bin/python -m compileall recog frontend`.
+- [x] In `kontur-diarize/ktalk-speaker-extension`: check `package.json` for a `test` script. If present, run `npm test`. If absent, skip and note "Task 8.7 deferred — no JS test runner configured" in plan progress.
+- [x] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension` — must succeed.
 
 ### Task 7: Commit and push
 - [ ] `git status` — confirm only intended files changed.
