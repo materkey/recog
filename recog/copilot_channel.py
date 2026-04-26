@@ -270,30 +270,32 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
             return {"ok": False, "error": "bridge not connected"}
         request_id = f"snapshot_{uuid.uuid4().hex[:12]}"
         future = link.register_pending(request_id)
-        sent = await link.send(
-            {
-                "type": "get_recent_transcript_request",
-                "request_id": request_id,
-                "window_seconds": window_seconds,
-                "since_segment_id": since_segment_id,
-                "include_refined": include_refined,
-            }
-        )
-        if not sent.get("ok"):
-            link.unregister_pending(request_id)
-            return sent
+        # Wrap the entire body in try/finally so a CancelledError raised
+        # from `link.send` (e.g. MCP HTTP connection closed mid-await)
+        # cannot leave the future entry pinned in `_pending` until the
+        # next reconnect drops the socket — without this, repeated tool
+        # cancellations leak futures unboundedly while the WS stays up.
         try:
-            response = await asyncio.wait_for(future, timeout=5.0)
-        except asyncio.TimeoutError:
-            return {"ok": False, "error": "timeout waiting for transcript snapshot"}
-        except ConnectionError as exc:
-            return {"ok": False, "error": str(exc)}
+            sent = await link.send(
+                {
+                    "type": "get_recent_transcript_request",
+                    "request_id": request_id,
+                    "window_seconds": window_seconds,
+                    "since_segment_id": since_segment_id,
+                    "include_refined": include_refined,
+                }
+            )
+            if not sent.get("ok"):
+                return sent
+            try:
+                response = await asyncio.wait_for(future, timeout=5.0)
+            except asyncio.TimeoutError:
+                return {"ok": False, "error": "timeout waiting for transcript snapshot"}
+            except ConnectionError as exc:
+                return {"ok": False, "error": str(exc)}
+            return {"ok": True, "segments": response.get("segments", [])}
         finally:
-            # Always unregister so a cancelled tool call (e.g. Claude
-            # session aborted) cannot leave the future entry pinned in
-            # `_pending` until the next reconnect drops the socket.
             link.unregister_pending(request_id)
-        return {"ok": True, "segments": response.get("segments", [])}
 
     return mcp
 
