@@ -1457,7 +1457,30 @@ class KTalkBridge:
             # The extension sends `clock_sync` immediately after its own
             # connect, overwriting any stale offset within a few ms.
             self._last_seq = 0
+            channel_clients_present = bool(self._copilot_channel_clients)
         print(f"[KTalk Bridge] Client connected from {websocket.remote_address}", file=sys.stderr)
+        # Late-joiner channel state: the new socket is currently in
+        # `_connected_clients`; we can't tell yet whether it's an extension,
+        # subscriber, or channel client (those send hellos later). Sending
+        # `channel_connected` to channel/subscriber clients is harmless —
+        # `recog/copilot_channel.py::_handle_inbound` only acts on a fixed
+        # whitelist and `frontend/bridge_subscriber.py` only forwards
+        # `transcript_refine`. Without this primer, an extension that
+        # reconnects to a bridge whose channel was already up would never
+        # learn the channel is healthy and would keep showing "unknown".
+        if channel_clients_present:
+            try:
+                await websocket.send(json.dumps({
+                    "type": "copilot_status",
+                    "request_id": "",
+                    "status": "channel_connected",
+                    "message": "Copilot channel server connected",
+                }, ensure_ascii=False))
+            except Exception as e:
+                print(
+                    f"[KTalk Bridge] Failed to send channel_connected primer to new client: {e}",
+                    file=sys.stderr,
+                )
 
         try:
             async for message in websocket:
@@ -1502,6 +1525,7 @@ class KTalkBridge:
                 self._subscriber_clients.discard(websocket)
                 self._copilot_channel_clients.discard(websocket)
                 no_extension_clients = not self._connected_clients
+                no_channel_clients_left = not self._copilot_channel_clients
             if was_copilot_channel:
                 role = "Copilot channel"
             elif was_subscriber:
@@ -1512,6 +1536,34 @@ class KTalkBridge:
                 f"[KTalk Bridge] {role} disconnected",
                 file=sys.stderr,
             )
+            # Channel-client departure leaves any in-flight `copilot_chat_message`
+            # request without a path to Claude — the reply will never arrive,
+            # so the extension would hang forever on "Жду ответа Claude…" with
+            # the textarea disabled. When the LAST channel client leaves, drop
+            # pending bookkeeping (so a future reconnect cannot reuse a stale
+            # id) and broadcast a channel-level `channel_disconnected` to all
+            # extensions. The extension flips every pending placeholder via
+            # the existing handler. Other channel clients still present can
+            # still answer, so we only fire on the 1→0 transition.
+            if was_copilot_channel and no_channel_clients_left:
+                stranded = 0
+                for req_id, mid in list(self._copilot_pending_requests.items()):
+                    if isinstance(mid, str) and mid.startswith("stale:"):
+                        continue
+                    self._copilot_pending_requests.pop(req_id, None)
+                    stranded += 1
+                if stranded:
+                    print(
+                        f"[KTalk Bridge] Channel disconnected with "
+                        f"{stranded} in-flight request(s); dropped bookkeeping",
+                        file=sys.stderr,
+                    )
+                await self._broadcast_message({
+                    "type": "copilot_status",
+                    "request_id": "",
+                    "status": "channel_disconnected",
+                    "message": "Copilot channel server disconnected",
+                })
             # Only extension clients count for lifecycle — subscribers are
             # passive listeners and must not block "last extension gone".
             if no_extension_clients:
@@ -2120,6 +2172,7 @@ class KTalkBridge:
                 return
             with self._lock:
                 self._connected_clients.discard(websocket)
+                was_first_channel_client = not self._copilot_channel_clients
                 self._copilot_channel_clients.add(websocket)
                 no_extension_clients = not self._connected_clients
             print(
@@ -2135,6 +2188,21 @@ class KTalkBridge:
             # `subscriber_hello` above.
             if no_extension_clients:
                 await self._end_meeting_on_last_extension_gone()
+            # Mirror of the channel-client disconnect path: when the channel
+            # transitions from 0 to 1+ clients, broadcast a channel-level
+            # `channel_connected` so extensions can clear any prior
+            # `channel_disconnected` indicator. Without this signal the
+            # connectivity label would stay stuck on "channel offline"
+            # forever — `state.copilotChannelStatus` has no other recovery
+            # path. Skip when other channel clients were already present
+            # to avoid noisy duplicate signals.
+            if was_first_channel_client:
+                await self._broadcast_message({
+                    "type": "copilot_status",
+                    "request_id": "",
+                    "status": "channel_connected",
+                    "message": "Copilot channel server connected",
+                })
 
         elif msg_type == "copilot_chat_message":
             # Extension forwards a user-typed chat line. Forward it to every

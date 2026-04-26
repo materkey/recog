@@ -1705,6 +1705,17 @@ export function handleCopilotStatus(data) {
   const requestId = data && data.request_id;
   const status = (data && data.status) || 'unknown';
 
+  if (status === 'channel_connected') {
+    // Channel-level recovery signal — bridge emits this on the 0→1 channel
+    // client transition (or as a primer when an extension late-joins a
+    // bridge whose channel was already up). Without it, once the indicator
+    // flipped to `channel_disconnected` it would stay stuck even after the
+    // channel came back online.
+    state.copilotChannelStatus = 'connected';
+    updateCopilotStatusIndicator();
+    return;
+  }
+
   if (status === 'channel_disconnected') {
     // Channel-level event — surface in the connectivity indicator. Per-
     // request statuses (queued/working/done/error) below describe a single
@@ -1722,6 +1733,24 @@ export function handleCopilotStatus(data) {
         time: nowDisplay()
       });
       state.copilotPending.delete(requestId);
+      setCopilotInputBusy(false);
+    } else if (state.copilotPending && state.copilotPending.size > 0) {
+      // Channel-level signal (no specific request_id match) with pending
+      // requests in flight — the bridge fires this when the last channel
+      // client drops mid-flight. Flip every placeholder to error and re-
+      // enable input rather than appending a single bubble that says
+      // nothing about the stranded turns.
+      state.copilotPending.forEach((pending) => {
+        if (pending && pending.assistantId) {
+          updateCopilotMessage(pending.assistantId, {
+            kind: 'error',
+            text: 'Channel offline: Claude не подключён.',
+            status: 'error',
+            time: nowDisplay()
+          });
+        }
+      });
+      state.copilotPending.clear();
       setCopilotInputBusy(false);
     } else {
       appendCopilotMessage({

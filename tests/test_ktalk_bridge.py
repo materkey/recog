@@ -1011,6 +1011,155 @@ async def test_copilot_channel_disconnect_does_not_end_ktalk_meeting():
     bridge._connected_clients.discard(extension_ws)
 
 
+@pytest.mark.asyncio
+async def test_last_channel_client_disconnect_broadcasts_channel_disconnected_and_drops_pending():
+    """
+    given: a registered channel client and an extension client; pending
+           chat requests populated in `_copilot_pending_requests`
+    when:  the last channel client disconnects
+    then:  extension receives a `copilot_status status='channel_disconnected'`
+           channel-level frame (request_id="" — no specific request match);
+           non-stale `_copilot_pending_requests` entries are dropped so a
+           future channel reconnect cannot reuse stale ids; stale entries
+           are preserved (they belong to meetings that already transitioned
+           and have their own filter path)
+    """
+    bridge = KTalkBridge()
+
+    extension_ws = RecordingClient()
+    bridge._connected_clients.add(extension_ws)
+
+    channel_ws = ControllableFakeWebSocket()
+    channel_ws.add_message(json.dumps({"type": "copilot_channel_hello"}))
+
+    handler_task = asyncio.create_task(bridge._handle_client(channel_ws))
+
+    for _ in range(50):
+        if channel_ws in bridge._copilot_channel_clients:
+            break
+        await asyncio.sleep(0.01)
+    assert channel_ws in bridge._copilot_channel_clients
+
+    # Drain the `channel_connected` primer broadcast that fired on hello.
+    extension_ws.sent.clear()
+
+    # Seed bookkeeping as if two recent `copilot_chat_message` frames had
+    # been forwarded; one stale from a prior meeting transition.
+    bridge._copilot_pending_requests["req-1"] = "meeting-A"
+    bridge._copilot_pending_requests["req-2"] = "meeting-A"
+    bridge._copilot_pending_requests["req-3-stale"] = "stale:meeting-OLD"
+
+    channel_ws.signal_close()
+    await handler_task
+
+    assert "req-1" not in bridge._copilot_pending_requests
+    assert "req-2" not in bridge._copilot_pending_requests
+    assert "req-3-stale" in bridge._copilot_pending_requests
+
+    assert len(extension_ws.sent) == 1
+    payload = json.loads(extension_ws.sent[0])
+    assert payload["type"] == "copilot_status"
+    assert payload["request_id"] == ""
+    assert payload["status"] == "channel_disconnected"
+
+    bridge._connected_clients.discard(extension_ws)
+
+
+class RecordingControllableFakeWebSocket(ControllableFakeWebSocket):
+    """ControllableFakeWebSocket that records outbound `send` payloads.
+
+    Used by tests that need to assert the bridge wrote to the inbound
+    socket itself (e.g. the `channel_connected` primer sent from
+    `_handle_client` initial setup), not just to other clients in
+    `_connected_clients` / `_copilot_channel_clients`.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.sent: list[str] = []
+
+    async def send(self, message: str):
+        self.sent.append(message)
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_hello_broadcasts_channel_connected_on_first_client():
+    """
+    given: an extension client connected; no channel clients yet
+    when:  a channel client sends `copilot_channel_hello` (transition 0→1)
+    then:  the extension receives a `copilot_status status='channel_connected'`
+           channel-level frame so the connectivity indicator can flip back
+           out of `channel_disconnected`/'unknown' — without this signal
+           `state.copilotChannelStatus` has no recovery path
+    """
+    bridge = KTalkBridge()
+
+    extension_ws = RecordingClient()
+    bridge._connected_clients.add(extension_ws)
+    assert not bridge._copilot_channel_clients
+
+    channel_ws = ControllableFakeWebSocket()
+    channel_ws.add_message(json.dumps({"type": "copilot_channel_hello"}))
+
+    handler_task = asyncio.create_task(bridge._handle_client(channel_ws))
+
+    for _ in range(50):
+        if channel_ws in bridge._copilot_channel_clients:
+            break
+        await asyncio.sleep(0.01)
+
+    try:
+        assert channel_ws in bridge._copilot_channel_clients
+        assert len(extension_ws.sent) == 1
+        payload = json.loads(extension_ws.sent[0])
+        assert payload["type"] == "copilot_status"
+        assert payload["request_id"] == ""
+        assert payload["status"] == "channel_connected"
+    finally:
+        channel_ws.signal_close()
+        await handler_task
+
+    bridge._connected_clients.discard(extension_ws)
+
+
+@pytest.mark.asyncio
+async def test_new_client_receives_channel_connected_primer_when_channel_already_present():
+    """
+    given: a channel client is already registered when a new client connects
+           (e.g. extension reloaded; bridge stayed up; channel never dropped)
+    when:  the new client lands in `_handle_client` initial setup
+    then:  it receives an immediate `copilot_status status='channel_connected'`
+           primer addressed to itself — without this primer, a late-joining
+           extension would never learn the channel is up until the next
+           `copilot_channel_hello` (which only fires on channel reconnect)
+    """
+    bridge = KTalkBridge()
+
+    pre_existing_channel = RecordingClient()
+    bridge._copilot_channel_clients.add(pre_existing_channel)
+
+    new_ws = RecordingControllableFakeWebSocket()
+
+    handler_task = asyncio.create_task(bridge._handle_client(new_ws))
+
+    for _ in range(50):
+        if new_ws.sent:
+            break
+        await asyncio.sleep(0.01)
+
+    try:
+        assert len(new_ws.sent) == 1
+        payload = json.loads(new_ws.sent[0])
+        assert payload["type"] == "copilot_status"
+        assert payload["request_id"] == ""
+        assert payload["status"] == "channel_connected"
+    finally:
+        new_ws.signal_close()
+        await handler_task
+
+    bridge._copilot_channel_clients.discard(pre_existing_channel)
+
+
 # --- copilot_chat_message: extension -> channel forwarding ---
 
 
