@@ -67,9 +67,9 @@
 - [x] Verify boot: `./venv-gigaam/bin/python -m recog.copilot_channel --help` should not crash (add `argparse` with `--bridge-url`, `--mcp-host`, `--mcp-port` flags defaulting to `ws://127.0.0.1:8766`, `127.0.0.1`, `8767`)
 
 ### Task 6: Run all tests
-- [ ] `./venv-gigaam/bin/python -m pytest tests/ -v`
-- [ ] `./venv-gigaam/bin/python -m compileall recog frontend`
-- [ ] If any pre-existing test breaks, fix root cause — do not skip or `xfail` to silence
+- [x] `./venv-gigaam/bin/python -m pytest tests/ -v`
+- [x] `./venv-gigaam/bin/python -m compileall recog frontend`
+- [x] If any pre-existing test breaks, fix root cause — do not skip or `xfail` to silence
 
 ### Task 7: Commit openspec change docs (separate atomic commit)
 - [ ] `git status` — verify untracked files include `openspec/changes/ktalk-claude-copilot-chat/`
