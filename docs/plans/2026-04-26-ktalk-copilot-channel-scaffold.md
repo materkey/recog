@@ -72,10 +72,10 @@
 - [x] If any pre-existing test breaks, fix root cause — do not skip or `xfail` to silence
 
 ### Task 7: Commit openspec change docs (separate atomic commit)
-- [ ] `git status` — verify untracked files include `openspec/changes/ktalk-claude-copilot-chat/`
-- [ ] Stage explicitly: `git add openspec/changes/ktalk-claude-copilot-chat/proposal.md openspec/changes/ktalk-claude-copilot-chat/design.md openspec/changes/ktalk-claude-copilot-chat/tasks.md openspec/changes/ktalk-claude-copilot-chat/.openspec.yaml openspec/changes/ktalk-claude-copilot-chat/specs/ktalk-copilot-chat/spec.md`
-- [ ] Commit with message `docs(openspec): add ktalk-claude-copilot-chat change proposal` and a body explaining: tracer-bullet for live KTalk Copilot tab routed to a running Claude Code session via MCP Streamable HTTP; references D4 transport choice
-- [ ] Do NOT push yet
+- [x] `git status` — verify untracked files include `openspec/changes/ktalk-claude-copilot-chat/`
+- [x] Stage explicitly: `git add openspec/changes/ktalk-claude-copilot-chat/proposal.md openspec/changes/ktalk-claude-copilot-chat/design.md openspec/changes/ktalk-claude-copilot-chat/tasks.md openspec/changes/ktalk-claude-copilot-chat/.openspec.yaml openspec/changes/ktalk-claude-copilot-chat/specs/ktalk-copilot-chat/spec.md`
+- [x] Commit with message `docs(openspec): add ktalk-claude-copilot-chat change proposal` and a body explaining: tracer-bullet for live KTalk Copilot tab routed to a running Claude Code session via MCP Streamable HTTP; references D4 transport choice
+- [x] Do NOT push yet
 
 ### Task 8: Commit channel-server scaffold + bridge protocol (second atomic commit)
 - [ ] `git status` — verify only `requirements.txt`, `ktalk_bridge.py`, `recog/copilot_channel.py`, `tests/test_ktalk_bridge.py` are modified/new
