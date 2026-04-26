@@ -63,13 +63,13 @@
 - [x] Add unit tests in `tests/test_ktalk_bridge.py`: append, refine update by segment_id, snapshot returns segments within window, snapshot filters by `meeting_id`.
 
 ### Task 4: Proactive transcript ticks (`tasks.md` 6.1, 6.2, 6.4, 6.5, 7.4)
-- [ ] In `ktalk_bridge.py`, add `self._copilot_tick_state: dict | None = None`. On `meeting_join`, initialize `{"meeting_id", "last_seg_count": 0, "last_emit_ts": 0.0}`. On `meeting_leave`, set to `None` and cancel any scheduled task.
-- [ ] After every `transcript` broadcast, if `_copilot_tick_state is not None` AND `_copilot_channel_clients` is non-empty, check the trigger: at least 5 new segments since last emit OR at least 15 seconds elapsed. If triggered, broadcast `{"type": "transcript_tick", "meeting_id", "meeting_title", "new_segments": [...], "recent_context": "<last ~10 segments as text>", "local_user_name": <MIC_SPEAKER_NAME>}` to channel clients. Update `last_seg_count` / `last_emit_ts`.
-- [ ] In `kontur-diarize/ktalk-speaker-extension/src/ws.js`, when a `copilot_reply` has `kind === "proactive"`:
+- [x] In `ktalk_bridge.py`, add `self._copilot_tick_state: dict | None = None`. On `meeting_join`, initialize `{"meeting_id", "last_seg_count": 0, "last_emit_ts": 0.0}`. On `meeting_leave`, set to `None` and cancel any scheduled task.
+- [x] After every `transcript` broadcast, if `_copilot_tick_state is not None` AND `_copilot_channel_clients` is non-empty, check the trigger: at least 5 new segments since last emit OR at least 15 seconds elapsed. If triggered, broadcast `{"type": "transcript_tick", "meeting_id", "meeting_title", "new_segments": [...], "recent_context": "<last ~10 segments as text>", "local_user_name": <MIC_SPEAKER_NAME>}` to channel clients. Update `last_seg_count` / `last_emit_ts`.
+- [x] In `kontur-diarize/ktalk-speaker-extension/src/ws.js`, when a `copilot_reply` has `kind === "proactive"`:
   - if `state.copilotProactiveMutedUntil > Date.now()`, drop silently.
   - otherwise enforce a 60 s UI cooldown: if `Date.now() - state.copilotLastProactiveAt < 60_000`, drop the new proactive (do not queue). Otherwise render via `renderCopilotMessage` with `kind="proactive"` and update `copilotLastProactiveAt`.
-- [ ] Make sure proactive messages render with `copilot-msg-proactive` CSS class (already added in Task 1) so they stand out visually.
-- [ ] Add unit tests: tick fires after N new segments; tick fires on time-based trigger; tick suppressed without active meeting; tick suppressed without channel clients.
+- [x] Make sure proactive messages render with `copilot-msg-proactive` CSS class (already added in Task 1) so they stand out visually.
+- [x] Add unit tests: tick fires after N new segments; tick fires on time-based trigger; tick suppressed without active meeting; tick suppressed without channel clients.
 
 ### Task 5: Channel-server smoke (`tasks.md` 8.5)
 - [ ] Add `tests/test_copilot_channel.py`: spin up an in-memory fake bridge WS server (using `websockets.serve` on a random port), boot the channel-server module against it (call its `main` coroutine with overridden host/port args), and assert:

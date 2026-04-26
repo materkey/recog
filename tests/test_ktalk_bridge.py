@@ -1838,3 +1838,171 @@ def test_record_copilot_transcript_evicts_oldest_when_deque_full():
 
     assert list(bridge._copilot_transcript_order) == [2, 3, 4]
     assert set(bridge._copilot_transcript_buffer.keys()) == {2, 3, 4}
+
+
+# --- Proactive transcript ticks: trigger conditions and suppression ---
+
+
+def _activate_tick_state(bridge: "KTalkBridge", meeting_id: str = "m-1",
+                         meeting_title: str = "Sprint review") -> None:
+    """Populate `_copilot_tick_state` as `meeting_join` would.
+
+    Tests bypass the full `meeting_join` flow because exercising the trigger
+    only needs the tick counters and a registered channel client.
+    """
+    bridge._copilot_tick_state = {
+        "meeting_id": meeting_id,
+        "meeting_title": meeting_title,
+        "seg_count": 0,
+        "last_seg_count": 0,
+        "last_emit_ts": 0.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_transcript_tick_fires_after_n_new_segments():
+    """
+    given: an active meeting with one channel client and tick state freshly
+           reset (last_seg_count=0)
+    when:  five `send_transcript` calls land (count trigger threshold)
+    then:  exactly one `transcript_tick` is broadcast to the channel client,
+           carrying meeting_id, the trailing segments, and a non-empty
+           recent_context — the count_trigger short-circuits before the
+           time trigger so a sixth call does not fire a second tick
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+    _activate_tick_state(bridge)
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    for sid in range(1, 6):  # 5 new segments → count trigger
+        bridge.send_transcript("Alice", f"t{sid}", "10:00:00", segment_id=sid)
+
+    await asyncio.sleep(0.05)
+
+    ticks = [json.loads(m) for m in channel_client.sent if json.loads(m)["type"] == "transcript_tick"]
+    assert len(ticks) == 1
+    payload = ticks[0]
+    assert payload["meeting_id"] == "m-1"
+    assert payload["meeting_title"] == "Sprint review"
+    assert isinstance(payload["new_segments"], list) and payload["new_segments"]
+    assert payload["recent_context"]
+    assert "local_user_name" in payload
+
+
+@pytest.mark.asyncio
+async def test_transcript_tick_fires_on_time_trigger():
+    """
+    given: an active meeting with one channel client and tick state where
+           `last_emit_ts` is already older than the time threshold
+           (`COPILOT_TICK_INTERVAL_SECONDS`)
+    when:  a single `send_transcript` call lands (well below the count
+           threshold of 5)
+    then:  a `transcript_tick` still fires — the time trigger fires
+           independently of the count trigger
+    """
+    import ktalk_bridge as bridge_module
+
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+    _activate_tick_state(bridge)
+
+    # Push last_emit_ts comfortably past the interval so the next call
+    # crosses the time trigger; last_seg_count stays at 0 so the lone new
+    # segment is included in the tick payload.
+    bridge._copilot_tick_state["last_emit_ts"] = (
+        time.time() - bridge_module.COPILOT_TICK_INTERVAL_SECONDS - 1.0
+    )
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    bridge.send_transcript("Alice", "одна реплика", "10:00:00", segment_id=1)
+    await asyncio.sleep(0.05)
+
+    ticks = [json.loads(m) for m in channel_client.sent if json.loads(m)["type"] == "transcript_tick"]
+    assert len(ticks) == 1
+    assert ticks[0]["meeting_id"] == "m-1"
+    assert [s["segment_id"] for s in ticks[0]["new_segments"]] == [1]
+
+
+@pytest.mark.asyncio
+async def test_transcript_tick_suppressed_without_active_meeting():
+    """
+    given: a bridge with a registered channel client but no active meeting
+           (tick_state stays None)
+    when:  enough `send_transcript` calls to cross the count trigger arrive
+    then:  no `transcript_tick` is broadcast — the bridge cannot describe a
+           meeting that has not started, so the proactive path stays silent
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+    assert bridge._copilot_tick_state is None
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    for sid in range(1, 7):
+        bridge.send_transcript("Alice", f"t{sid}", "10:00:00", segment_id=sid)
+    await asyncio.sleep(0.05)
+
+    assert all(json.loads(m)["type"] != "transcript_tick" for m in channel_client.sent)
+
+
+@pytest.mark.asyncio
+async def test_transcript_tick_suppressed_without_channel_clients():
+    """
+    given: an active meeting (tick_state populated) but no channel clients
+    when:  `send_transcript` calls cross the count trigger
+    then:  no tick is constructed and `last_seg_count` stays at 0 — the
+           formatter is gated on subscriber presence to avoid building
+           snapshots no one will read
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+    _activate_tick_state(bridge)
+
+    assert not bridge._copilot_channel_clients
+
+    for sid in range(1, 7):
+        bridge.send_transcript("Alice", f"t{sid}", "10:00:00", segment_id=sid)
+    await asyncio.sleep(0.05)
+
+    assert bridge._copilot_tick_state["last_seg_count"] == 0
+    assert bridge._copilot_tick_state["last_emit_ts"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_meeting_join_resets_tick_state_and_meeting_leave_clears_it():
+    """
+    given: a bridge with `meeting_storage` ready to accept join/leave
+    when:  meeting_join lands then meeting_leave lands
+    then:  tick_state is populated on join (with the new meeting_id and
+           a zero baseline) and torn down on leave so a stray
+           `send_transcript` between meetings cannot emit a tick
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_meeting_storage_mock(meeting_id="m-now", new_meeting_id="m-next"))
+
+    await bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/abc",
+        "title": "Daily",
+        "platform": "ktalk",
+    })
+    assert bridge._copilot_tick_state is not None
+    assert bridge._copilot_tick_state["meeting_id"] == "m-now"
+    assert bridge._copilot_tick_state["seg_count"] == 0
+    assert bridge._copilot_tick_state["last_seg_count"] == 0
+
+    await bridge._process_message({
+        "type": "meeting_leave",
+        "reason": "user_left",
+    })
+    assert bridge._copilot_tick_state is None
