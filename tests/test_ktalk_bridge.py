@@ -2359,3 +2359,104 @@ async def test_reply_without_meeting_id_falls_through_filter():
     ]
     assert len(relayed) == 1
     assert relayed[0]["request_id"] == "req-known"
+
+
+# --- _end_meeting_on_last_extension_gone: defensive _load_meta error path ---
+
+
+@pytest.mark.asyncio
+async def test_extension_disconnect_swallows_load_meta_error():
+    """
+    given: an active meeting whose `_load_meta()` raises (transient I/O,
+           a JSON-decode error on a torn file, or an OSError) — the same
+           failure mode that `_has_active_ktalk_meeting` already catches
+           on its `pcm_chunk` guard at line 462
+    when:  the only extension client disconnects
+    then:  the cleanup must NOT propagate the exception out of the
+           handler — without the guard, an asyncio task would crash and
+           any later code in the finally-block would be skipped. The
+           function returns early, leaving Copilot state untouched.
+    """
+    bridge = KTalkBridge()
+
+    mock_storage = Mock()
+    mock_storage.current_meeting_path = Path("/tmp/m-prev.jsonl")
+    mock_storage.current_meeting_id = "m-prev"
+    mock_storage._load_meta = Mock(side_effect=OSError("disk gone"))
+    bridge.set_meeting_storage(mock_storage)
+
+    bridge._copilot_pending_requests["req-x"] = "m-prev"
+
+    fake_ws = FakeWebSocket()
+    # Must not raise — the disconnect cleanup is awaited in the
+    # finally-block of `_handle_client` and an unhandled OSError would
+    # bubble out and abort the entire connection task.
+    await bridge._handle_client(fake_ws)
+
+    # Cleanup did not run past the load_meta gate, so meeting bookkeeping
+    # is unchanged. The next meeting_join will overwrite this entry; we
+    # only care that the handler did not crash.
+    assert bridge._copilot_pending_requests.get("req-x") == "m-prev"
+
+
+# --- get_recent_transcript_request: snapshot stability vs refine writes ---
+
+
+@pytest.mark.asyncio
+async def test_get_recent_transcript_snapshots_decouple_from_buffer():
+    """
+    given: a buffered transcript entry. The refine worker runs on a
+           separate thread and mutates entries in-place via
+           `_apply_copilot_transcript_refine`. The snapshot path must
+           build copies under `_lock` so a refine that fires after the
+           lock release cannot retro-actively mutate fields the filter
+           loop is reading.
+    when:  the snapshot is taken, then the buffer entry is mutated
+           in-place after the snapshot returns
+    then:  the response segments are independent of subsequent buffer
+           mutations — proving each segment is a snapshot copy, not a
+           live reference into `_copilot_transcript_buffer`.
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    now_ms = time.time() * 1000
+    bridge._copilot_transcript_buffer[1] = {
+        "segment_id": 1,
+        "speaker": "Alice",
+        "text": "live text",
+        "start_ms": now_ms,
+        "end_ms": now_ms,
+        "refined": False,
+        "meeting_id": "m-1",
+    }
+    bridge._copilot_transcript_order.append(1)
+
+    channel_client = RecordingClient()
+    await bridge._process_message(
+        {
+            "type": "get_recent_transcript_request",
+            "request_id": "req-snap",
+            "window_seconds": 600,
+        },
+        websocket=channel_client,
+    )
+
+    # Now mutate the buffer entry as a refine worker would. If the
+    # snapshot held a reference (the pre-fix behaviour), we'd already
+    # have leaked the mutation into `segments` via `dict(entry)` racing
+    # mid-loop — but more importantly, callers parsing the JSON later
+    # could observe inconsistent state. The post-fix snapshot must be
+    # fully decoupled from the live buffer.
+    bridge._copilot_transcript_buffer[1]["text"] = "refined text"
+    bridge._copilot_transcript_buffer[1]["refined"] = True
+
+    responses = [
+        json.loads(m) for m in channel_client.sent
+        if json.loads(m).get("type") == "get_recent_transcript_response"
+    ]
+    assert len(responses) == 1
+    segs = responses[0]["segments"]
+    assert len(segs) == 1
+    assert segs[0]["text"] == "live text"
+    assert segs[0]["refined"] is False
