@@ -1093,6 +1093,166 @@ async def test_copilot_chat_message_with_invalid_fields_is_ignored():
     assert extension_ws.sent == []
 
 
+# --- copilot_channel_reply / copilot_channel_status: channel -> extension relay ---
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_reply_relayed_to_extension_clients():
+    """
+    given: an extension client registered in `_connected_clients`
+    when:  the channel server sends `copilot_channel_reply` with
+           request_id, kind, text, meeting_id, created_at
+    then:  the extension client receives a single `copilot_reply` frame
+           preserving all fields (only the type is renamed)
+    """
+    bridge = KTalkBridge()
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message(
+        {
+            "type": "copilot_channel_reply",
+            "request_id": "req-42",
+            "kind": "manual",
+            "text": "Алиса спросила про метрики.",
+            "meeting_id": "2026-04-26_test_meeting",
+            "created_at": 1700000123456.0,
+        }
+    )
+
+    assert len(extension_client.sent) == 1
+    payload = json.loads(extension_client.sent[0])
+    assert payload["type"] == "copilot_reply"
+    assert payload["request_id"] == "req-42"
+    assert payload["kind"] == "manual"
+    assert payload["text"] == "Алиса спросила про метрики."
+    assert payload["meeting_id"] == "2026-04-26_test_meeting"
+    assert payload["created_at"] == 1700000123456.0
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_reply_does_not_loopback_to_channel_clients():
+    """
+    given: a channel client in `_copilot_channel_clients` AND an extension
+           client in `_connected_clients`
+    when:  the channel server sends `copilot_channel_reply`
+    then:  only the extension client receives the relayed `copilot_reply`
+           — the channel client (the originator) does not see the frame
+           because `_broadcast_message` only iterates `_connected_clients`
+    """
+    bridge = KTalkBridge()
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message(
+        {
+            "type": "copilot_channel_reply",
+            "request_id": "req-7",
+            "kind": "live",
+            "text": "ok",
+            "meeting_id": None,
+        }
+    )
+
+    assert len(extension_client.sent) == 1
+    assert channel_client.sent == []
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_status_relayed_to_extension_clients():
+    """
+    given: an extension client registered in `_connected_clients`
+    when:  the channel server sends `copilot_channel_status` with
+           request_id, status, message
+    then:  the extension client receives a single `copilot_status` frame
+           preserving all fields (only the type is renamed)
+    """
+    bridge = KTalkBridge()
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message(
+        {
+            "type": "copilot_channel_status",
+            "request_id": "req-42",
+            "status": "working",
+            "message": "Claude is thinking",
+        }
+    )
+
+    assert len(extension_client.sent) == 1
+    payload = json.loads(extension_client.sent[0])
+    assert payload["type"] == "copilot_status"
+    assert payload["request_id"] == "req-42"
+    assert payload["status"] == "working"
+    assert payload["message"] == "Claude is thinking"
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_reply_with_invalid_fields_is_ignored():
+    """
+    given: an extension client registered in `_connected_clients`
+    when:  copilot_channel_reply frames arrive with missing/empty
+           request_id, kind, or with a non-string text
+    then:  no `copilot_reply` is broadcast — invalid input is dropped
+           silently per the dispatcher's "log and return" precedent
+    """
+    bridge = KTalkBridge()
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    # Missing request_id.
+    await bridge._process_message(
+        {"type": "copilot_channel_reply", "kind": "manual", "text": "x"}
+    )
+    # Empty request_id.
+    await bridge._process_message(
+        {"type": "copilot_channel_reply", "request_id": "", "kind": "manual", "text": "x"}
+    )
+    # Missing kind.
+    await bridge._process_message(
+        {"type": "copilot_channel_reply", "request_id": "req-1", "text": "x"}
+    )
+    # Non-string text.
+    await bridge._process_message(
+        {"type": "copilot_channel_reply", "request_id": "req-1", "kind": "manual", "text": 123}
+    )
+
+    assert extension_client.sent == []
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_status_with_invalid_fields_is_ignored():
+    """
+    given: an extension client registered in `_connected_clients`
+    when:  copilot_channel_status frames arrive with missing/empty
+           request_id or status
+    then:  no `copilot_status` is broadcast — invalid input is dropped
+           silently
+    """
+    bridge = KTalkBridge()
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message(
+        {"type": "copilot_channel_status", "status": "working"}
+    )
+    await bridge._process_message(
+        {"type": "copilot_channel_status", "request_id": "req-1"}
+    )
+    await bridge._process_message(
+        {"type": "copilot_channel_status", "request_id": "req-1", "status": ""}
+    )
+
+    assert extension_client.sent == []
+
+
 # --- send_transcript: source_id payload serialization ---
 
 

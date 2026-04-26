@@ -1866,6 +1866,76 @@ class KTalkBridge:
                         file=sys.stderr,
                     )
 
+        elif msg_type == "copilot_channel_reply":
+            # Channel server (recog/copilot_channel.py) emits a reply for a
+            # previous user request — or a proactive ("live"/"tick") frame.
+            # Re-emit as a `copilot_reply` so extension clients can render
+            # it in the Copilot tab. The channel client itself was moved
+            # out of `_connected_clients` by `copilot_channel_hello`, so
+            # `_broadcast_message` cannot loop the frame back to its
+            # author.
+            request_id = data.get("request_id")
+            if not isinstance(request_id, str) or not request_id:
+                print(
+                    "[KTalk Bridge] copilot_channel_reply missing/invalid request_id — ignored",
+                    file=sys.stderr,
+                )
+                return
+            text = data.get("text")
+            if not isinstance(text, str):
+                print(
+                    "[KTalk Bridge] copilot_channel_reply missing/invalid text — ignored",
+                    file=sys.stderr,
+                )
+                return
+            kind = data.get("kind")
+            if not isinstance(kind, str) or not kind:
+                print(
+                    "[KTalk Bridge] copilot_channel_reply missing/invalid kind — ignored",
+                    file=sys.stderr,
+                )
+                return
+            meeting_id = data.get("meeting_id")
+            created_at = data.get("created_at")
+            if not isinstance(created_at, (int, float)):
+                created_at = time.time() * 1000
+            await self._broadcast_message({
+                "type": "copilot_reply",
+                "request_id": request_id,
+                "kind": kind,
+                "text": text,
+                "meeting_id": meeting_id,
+                "created_at": created_at,
+            })
+
+        elif msg_type == "copilot_channel_status":
+            # Channel server reports per-request status (queued/working/
+            # error/done). Re-emit as `copilot_status` to extension
+            # clients so the UI can update the request indicator.
+            request_id = data.get("request_id")
+            if not isinstance(request_id, str) or not request_id:
+                print(
+                    "[KTalk Bridge] copilot_channel_status missing/invalid request_id — ignored",
+                    file=sys.stderr,
+                )
+                return
+            status = data.get("status")
+            if not isinstance(status, str) or not status:
+                print(
+                    "[KTalk Bridge] copilot_channel_status missing/invalid status — ignored",
+                    file=sys.stderr,
+                )
+                return
+            message_text = data.get("message")
+            if not isinstance(message_text, str):
+                message_text = ""
+            await self._broadcast_message({
+                "type": "copilot_status",
+                "request_id": request_id,
+                "status": status,
+                "message": message_text,
+            })
+
     async def _run_server(self):
         """Запускает WebSocket сервер."""
         try:
