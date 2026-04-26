@@ -55,16 +55,16 @@
   - `test_copilot_channel_status_relayed_to_extension_clients` — same shape for status
 
 ### Task 5: Channel server scaffold (`recog/copilot_channel.py`)
-- [ ] Create `recog/copilot_channel.py` with module docstring referencing ADR-0018/0019 patterns and the openspec change `ktalk-claude-copilot-chat`.
-- [ ] Implement two cooperating asyncio tasks:
+- [x] Create `recog/copilot_channel.py` with module docstring referencing ADR-0018/0019 patterns and the openspec change `ktalk-claude-copilot-chat`.
+- [x] Implement two cooperating asyncio tasks:
   - **MCP Streamable HTTP server** using `mcp.server.fastmcp.FastMCP` (or `mcp.server.streamable_http`), bound to `127.0.0.1:8767`, mount path `/mcp`. If `FastMCP.run` only supports stdio, fall back to constructing the server via the lower-level `mcp.server.Server` + `streamable_http.stateless_app()` pattern. Pick whichever works in the installed `mcp` version and document the choice in a code comment.
   - **WS client** to `ws://127.0.0.1:8766` that sends `{"type": "copilot_channel_hello"}` after connect, then reads frames in a loop. Reconnect with simple exponential backoff (1s → 2s → 4s → max 30s) on disconnect. Use `websockets.connect` (already in project deps).
-- [ ] Expose two MCP tools:
+- [x] Expose two MCP tools:
   - `send_copilot_message(request_id: str | None, kind: str, text: str, meeting_id: str | None) -> dict` — sends `{"type": "copilot_channel_reply", "request_id": ..., "kind": ..., "text": ..., "meeting_id": ...}` over the WS client. Return `{"ok": True}` on success, `{"ok": False, "error": "..."}` on failure.
   - `set_copilot_status(request_id: str, status: str, message: str) -> dict` — sends `{"type": "copilot_channel_status", "request_id": ..., "status": ..., "message": ...}`. Same return shape.
-- [ ] Add module entry point: `if __name__ == "__main__": asyncio.run(main())` and define `main()` to launch both tasks via `asyncio.gather`.
-- [ ] Verify syntax: `./venv-gigaam/bin/python -m compileall recog/copilot_channel.py`
-- [ ] Verify boot: `./venv-gigaam/bin/python -m recog.copilot_channel --help` should not crash (add `argparse` with `--bridge-url`, `--mcp-host`, `--mcp-port` flags defaulting to `ws://127.0.0.1:8766`, `127.0.0.1`, `8767`)
+- [x] Add module entry point: `if __name__ == "__main__": asyncio.run(main())` and define `main()` to launch both tasks via `asyncio.gather`.
+- [x] Verify syntax: `./venv-gigaam/bin/python -m compileall recog/copilot_channel.py`
+- [x] Verify boot: `./venv-gigaam/bin/python -m recog.copilot_channel --help` should not crash (add `argparse` with `--bridge-url`, `--mcp-host`, `--mcp-port` flags defaulting to `ws://127.0.0.1:8766`, `127.0.0.1`, `8767`)
 
 ### Task 6: Run all tests
 - [ ] `./venv-gigaam/bin/python -m pytest tests/ -v`
