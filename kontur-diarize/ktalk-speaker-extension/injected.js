@@ -5972,8 +5972,13 @@ function renderCopilotMessage(msg) {
 }
 
 function appendCopilotMessage(msg) {
+  // Render first, push only on success — on platforms without the
+  // Copilot DOM (e.g. vas3k) `renderCopilotMessage` returns null and a
+  // pre-render push would let `state.copilotMessages` accumulate
+  // unbounded across every `meeting_started`/`meeting_ended` chip.
+  const rendered = renderCopilotMessage(msg);
+  if (!rendered) return;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages.push(msg);
-  renderCopilotMessage(msg);
 }
 
 function findCopilotMessageElement(id) {
@@ -6014,6 +6019,15 @@ function updateCopilotMessageDom(id, updates) {
     el.classList.add(`copilot-msg-${updates.kind}`);
     const roleEl = el.querySelector('.copilot-msg-role');
     if (roleEl) roleEl.textContent = getCopilotRoleLabel(updates.kind);
+    // Drop the copy/dismiss row when the kind flips to one that does not
+    // own actions (status/error/user). The block below re-adds the row
+    // only for assistant/proactive, so without this cleanup an assistant
+    // bubble downgraded to error keeps a Copy button that copies stale
+    // text.
+    if (updates.kind !== 'assistant' && updates.kind !== 'proactive') {
+      const existingActions = el.querySelector('.copilot-msg-actions');
+      if (existingActions) existingActions.remove();
+    }
   }
   if (updates.kind === 'assistant' || updates.kind === 'proactive') {
     if (!el.querySelector('.copilot-msg-actions')) {
@@ -6060,6 +6074,21 @@ function submitCopilotInput() {
   if (!input) return;
   const text = (input.value || '').trim();
   if (!text) return;
+
+  // Bail before mutating the input or queueing a placeholder if the WS
+  // is down — `sendWsMessage` silently no-ops on a closed socket, and
+  // the user would otherwise see a permanently disabled input with a
+  // spinner that can never resolve.
+  const ws = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection;
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected || !ws || ws.readyState !== WebSocket.OPEN) {
+    appendCopilotMessage({
+      id: nextCopilotId(),
+      kind: 'error',
+      text: 'Bridge offline: сообщение не отправлено.',
+      time: nowDisplay()
+    });
+    return;
+  }
 
   const meetingTitleNow = document.title || meetingTitle || '';
   let requestId;

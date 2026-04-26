@@ -169,6 +169,25 @@ describe('Copilot DOM panel', () => {
     expect(assistant.kind).toBe('error');
     expect(assistant.text).toMatch(/offline/i);
     expect(state.copilotPending.has(requestId)).toBe(false);
+    // The Copy/Dismiss row that the assistant placeholder owned must be
+    // removed when the kind flips to error — otherwise the user can copy
+    // the now-stale spinner text.
+    const dom = document.querySelector('[data-copilot-id="a-x"]');
+    expect(dom.querySelector('.copilot-msg-actions')).toBeNull();
+  });
+
+  test('appendCopilotSystemMessage skips state push when Copilot DOM is missing', async () => {
+    // Drop the Copilot host so `createCopilotContent` returns null and
+    // `renderCopilotMessage` cannot attach the bubble. Without the gate
+    // in `appendCopilotMessage`, every meeting_started/ended chip would
+    // accumulate in state forever even though no DOM exists.
+    document.body.innerHTML = '';
+    state.copilotContentElement = null;
+    state.copilotMessages = [];
+
+    appendCopilotSystemMessage('orphan event');
+
+    expect(state.copilotMessages).toHaveLength(0);
   });
 
   test('appendCopilotSystemMessage pushes a status entry into the panel', () => {

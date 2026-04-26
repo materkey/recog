@@ -1305,11 +1305,21 @@ async def test_copilot_channel_status_with_invalid_fields_is_ignored():
 
 
 def _meeting_storage_mock(meeting_id="meet-1", new_meeting_id="meet-2"):
-    """Build a Mock MeetingStorage shaped for meeting_join/leave dispatch."""
+    """Build a Mock MeetingStorage shaped for meeting_join/leave dispatch.
+
+    `on_meeting_join` mutates `current_meeting_path` so the bridge sees a
+    real path change — without it, the bridge treats the join as a no-op
+    reconnect and skips the lifecycle broadcast / tick-state reset.
+    """
     storage = Mock()
     storage.current_meeting_path = Path("/tmp/old.jsonl")
     storage.current_meeting_id = meeting_id
-    storage.on_meeting_join = Mock(return_value=meeting_id)
+
+    def _on_join(url, *args, **kwargs):
+        storage.current_meeting_path = Path(f"/tmp/{meeting_id}.jsonl")
+        return meeting_id
+
+    storage.on_meeting_join = Mock(side_effect=_on_join)
     storage.on_ktalk_leave = Mock(return_value=new_meeting_id)
     storage.get_current_transcript = Mock(return_value=[])
     storage.get_current_meeting_id = Mock(return_value=meeting_id)
@@ -1855,7 +1865,7 @@ def _activate_tick_state(bridge: "KTalkBridge", meeting_id: str = "m-1",
         "meeting_title": meeting_title,
         "seg_count": 0,
         "last_seg_count": 0,
-        "last_emit_ts": 0.0,
+        "last_emit_ts": time.time(),
     }
 
 
@@ -1967,6 +1977,7 @@ async def test_transcript_tick_suppressed_without_channel_clients():
     bridge._loop = asyncio.get_event_loop()
     bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
     _activate_tick_state(bridge)
+    seeded_emit_ts = bridge._copilot_tick_state["last_emit_ts"]
 
     assert not bridge._copilot_channel_clients
 
@@ -1974,8 +1985,10 @@ async def test_transcript_tick_suppressed_without_channel_clients():
         bridge.send_transcript("Alice", f"t{sid}", "10:00:00", segment_id=sid)
     await asyncio.sleep(0.05)
 
+    # Counters stay at the seeded baseline because the formatter exits
+    # before mutating them when no channel clients are registered.
     assert bridge._copilot_tick_state["last_seg_count"] == 0
-    assert bridge._copilot_tick_state["last_emit_ts"] == 0.0
+    assert bridge._copilot_tick_state["last_emit_ts"] == seeded_emit_ts
 
 
 @pytest.mark.asyncio
@@ -2006,3 +2019,172 @@ async def test_meeting_join_resets_tick_state_and_meeting_leave_clears_it():
         "reason": "user_left",
     })
     assert bridge._copilot_tick_state is None
+
+
+@pytest.mark.asyncio
+async def test_meeting_leave_clears_recent_transcript_buffer():
+    """
+    given: a recent-transcript buffer populated during the active meeting
+    when:  meeting_leave lands
+    then:  the buffer and its insertion-order deque are emptied so a late
+           refine for this meeting cannot rewrite an entry that the next
+           meeting would otherwise occupy at the same segment_id
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_meeting_storage_mock(meeting_id="m-prev", new_meeting_id="m-next"))
+
+    bridge.send_transcript("Alice", "первая", "10:00:00", segment_id=1)
+    bridge.send_transcript("Bob", "вторая", "10:00:01", segment_id=2)
+    assert len(bridge._copilot_transcript_buffer) == 2
+    assert list(bridge._copilot_transcript_order) == [1, 2]
+
+    await bridge._process_message({"type": "meeting_leave", "reason": "user_left"})
+
+    assert bridge._copilot_transcript_buffer == {}
+    assert list(bridge._copilot_transcript_order) == []
+
+
+@pytest.mark.asyncio
+async def test_meeting_join_path_change_clears_prior_buffer():
+    """
+    given: a recent-transcript buffer populated for the prior meeting and
+           a fresh meeting_join whose `current_meeting_path` differs
+    when:  meeting_join lands
+    then:  the prior buffer is cleared so the new meeting starts with a
+           clean recent-transcript history; without this clear, segment_id
+           collisions across meetings (ids restart at 1 per meeting) would
+           leave the deque tail pointing at prior-meeting entries
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    storage = _meeting_storage_mock(meeting_id="m-current", new_meeting_id="m-next")
+    bridge.set_meeting_storage(storage)
+
+    # Populate with prior-meeting bookkeeping.
+    bridge._copilot_transcript_buffer[42] = {
+        "segment_id": 42,
+        "speaker": "Alice",
+        "text": "stale",
+        "start_ms": time.time() * 1000,
+        "end_ms": time.time() * 1000,
+        "refined": False,
+        "meeting_id": "m-prior",
+    }
+    bridge._copilot_transcript_order.append(42)
+
+    await bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/new",
+        "title": "Sprint review",
+        "platform": "ktalk",
+    })
+
+    assert bridge._copilot_transcript_buffer == {}
+    assert list(bridge._copilot_transcript_order) == []
+
+
+@pytest.mark.asyncio
+async def test_copilot_pending_request_dropped_after_successful_reply():
+    """
+    given: a pending request_id recorded for the active meeting and a
+           non-stale `copilot_channel_reply` arrives carrying that id
+    when:  the bridge relays the reply to extension clients
+    then:  the bookkeeping entry is popped so the dict cannot grow
+           unboundedly across many chat turns
+    """
+    bridge = KTalkBridge()
+    bridge._copilot_pending_requests["req-alive"] = "m-current"
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-alive",
+        "kind": "manual",
+        "text": "ответ",
+    })
+
+    relayed = [json.loads(m) for m in extension_client.sent if json.loads(m)["type"] == "copilot_reply"]
+    assert len(relayed) == 1
+    assert "req-alive" not in bridge._copilot_pending_requests
+
+
+@pytest.mark.asyncio
+async def test_copilot_pending_request_dropped_after_terminal_status():
+    """
+    given: a pending request_id recorded for the active meeting
+    when:  a terminal `copilot_channel_status` (status="done"/"error") arrives
+    then:  the bookkeeping entry is popped — the channel server is finished
+           with this request even if no separate reply lands
+    """
+    bridge = KTalkBridge()
+    bridge._copilot_pending_requests["req-done"] = "m-current"
+    bridge._copilot_pending_requests["req-err"] = "m-current"
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message({
+        "type": "copilot_channel_status",
+        "request_id": "req-done",
+        "status": "done",
+    })
+    await bridge._process_message({
+        "type": "copilot_channel_status",
+        "request_id": "req-err",
+        "status": "error",
+    })
+
+    assert "req-done" not in bridge._copilot_pending_requests
+    assert "req-err" not in bridge._copilot_pending_requests
+
+
+@pytest.mark.asyncio
+async def test_copilot_pending_request_kept_through_non_terminal_status():
+    """
+    given: a pending request_id recorded for the active meeting
+    when:  a non-terminal `copilot_channel_status` (queued/working) arrives
+    then:  the entry stays — only a reply or a terminal status pops it
+    """
+    bridge = KTalkBridge()
+    bridge._copilot_pending_requests["req-working"] = "m-current"
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    for status in ("queued", "working"):
+        await bridge._process_message({
+            "type": "copilot_channel_status",
+            "request_id": "req-working",
+            "status": status,
+        })
+
+    assert bridge._copilot_pending_requests.get("req-working") == "m-current"
+
+
+def test_send_refine_with_meeting_id_skips_cross_meeting_entries():
+    """
+    given: a buffer entry tagged with meeting_id="m-current"
+    when:  send_refine runs with meeting_id="m-other" carrying an update
+           for the same segment_id
+    then:  the entry is NOT mutated — the refine belongs to a different
+           meeting whose ids merely happen to collide (ids restart at 1
+           per meeting), so cross-meeting writes are silently dropped
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-current"))
+
+    bridge.send_transcript("Alice", "оригинал", "10:00:00", segment_id=1)
+    original_text = bridge._copilot_transcript_buffer[1]["text"]
+
+    bridge.send_refine(
+        [{"segment_id": 1, "text": "из другой встречи"}],
+        meeting_id="m-other",
+    )
+
+    entry = bridge._copilot_transcript_buffer[1]
+    assert entry["text"] == original_text
+    assert entry["refined"] is False

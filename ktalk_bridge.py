@@ -809,12 +809,8 @@ class KTalkBridge:
             tick_state["seg_count"] += 1
             now_ts = time.time()
             new_segs = tick_state["seg_count"] - tick_state["last_seg_count"]
-            elapsed = (
-                now_ts - tick_state["last_emit_ts"]
-                if tick_state["last_emit_ts"]
-                else None
-            )
-            time_trigger = elapsed is not None and elapsed >= COPILOT_TICK_INTERVAL_SECONDS
+            elapsed = now_ts - tick_state["last_emit_ts"]
+            time_trigger = elapsed >= COPILOT_TICK_INTERVAL_SECONDS
             count_trigger = new_segs >= COPILOT_TICK_NEW_SEGMENTS
             if not (count_trigger or time_trigger):
                 return
@@ -951,7 +947,11 @@ class KTalkBridge:
         # Tier-2 refine rewrites the recent-transcript buffer so the
         # `get_recent_transcript` MCP tool returns refined text once it is
         # available. Segments not yet in the buffer (e.g. evicted past the
-        # deque cap) are ignored silently.
+        # deque cap) are ignored silently. When `meeting_id` is provided
+        # we additionally guard against cross-meeting writes: a refine
+        # whose meeting_id does not match the buffer entry's meeting_id
+        # belongs to a different meeting and would silently corrupt the
+        # current meeting's text (segment_ids restart at 1 per meeting).
         with self._lock:
             for u in updates:
                 sid = u.get("segment_id")
@@ -962,6 +962,8 @@ class KTalkBridge:
                     continue
                 entry = self._copilot_transcript_buffer.get(sid)
                 if entry is None:
+                    continue
+                if meeting_id is not None and entry.get("meeting_id") != meeting_id:
                     continue
                 entry["text"] = text
                 entry["refined"] = True
@@ -1761,37 +1763,52 @@ class KTalkBridge:
                     self._on_pre_meeting_switch()
                 meeting_id = self._meeting_storage.on_meeting_join(url, title, platform)
                 print(f"[KTalk Bridge] Joined {platform} meeting: {url}", file=sys.stderr)
-                # Reinit audio recording only on real meeting changes
+                # Reinit audio recording, reset Copilot state, and emit
+                # lifecycle frames only on real meeting changes — a no-op
+                # reconnect (same live_id) must not duplicate
+                # `meeting_started` chips in the Copilot tab nor reset the
+                # proactive tick counters mid-conversation.
                 if self._meeting_storage.current_meeting_path != old_meeting_path:
                     if self._on_meeting_change:
                         meeting_path = self._meeting_storage.current_meeting_path
                         self._on_meeting_change(meeting_id, meeting_path)
-                # Emit lifecycle event: channel clients use it to attach
-                # meeting context to the next Claude turn, extension
-                # clients render a system entry in the Copilot tab.
-                meeting_started_frame = {
-                    "type": "meeting_started",
-                    "meeting_id": meeting_id,
-                    "meeting_title": title,
-                    "created_at": time.time() * 1000,
-                }
-                await self._broadcast_to_channel_clients(meeting_started_frame)
-                await self._broadcast_message(meeting_started_frame)
-                # Reset proactive transcript-tick state for the new meeting.
-                # `send_transcript` consults this on every broadcast; a fresh
-                # baseline ensures the first tick fires after N=5 segments
-                # OR T=15s of activity, not against stale counters.
-                # `seg_count` is a monotonic counter incremented per
-                # `send_transcript` (with positive segment_id) — tracking
-                # the deque's `len()` would lose updates once the deque
-                # saturates at maxlen=300.
-                self._copilot_tick_state = {
-                    "meeting_id": meeting_id,
-                    "meeting_title": title,
-                    "seg_count": 0,
-                    "last_seg_count": 0,
-                    "last_emit_ts": 0.0,
-                }
+                    # Wipe the recent-transcript buffer so a stale segment_id
+                    # from the prior meeting cannot collide with the new
+                    # meeting's ids (segment_ids restart at 1 per meeting),
+                    # which would otherwise corrupt `start_ms` and leave
+                    # `transcript_tick`'s deque-tail slice pointing at the
+                    # prior meeting's entries.
+                    with self._lock:
+                        self._copilot_transcript_buffer.clear()
+                        self._copilot_transcript_order.clear()
+                    # Emit lifecycle event: channel clients use it to attach
+                    # meeting context to the next Claude turn, extension
+                    # clients render a system entry in the Copilot tab.
+                    meeting_started_frame = {
+                        "type": "meeting_started",
+                        "meeting_id": meeting_id,
+                        "meeting_title": title,
+                        "created_at": time.time() * 1000,
+                    }
+                    await self._broadcast_to_channel_clients(meeting_started_frame)
+                    await self._broadcast_message(meeting_started_frame)
+                    # Reset proactive transcript-tick state for the new
+                    # meeting. `send_transcript` consults this on every
+                    # broadcast; seeding `last_emit_ts` to the join time
+                    # ensures the time trigger measures elapsed-since-join
+                    # for the very first tick (a 0.0 seed would be falsy
+                    # and disable the time path until count_trigger fired).
+                    # `seg_count` is a monotonic counter incremented per
+                    # `send_transcript` (with positive segment_id) —
+                    # tracking the deque's `len()` would lose updates once
+                    # the deque saturates at maxlen=300.
+                    self._copilot_tick_state = {
+                        "meeting_id": meeting_id,
+                        "meeting_title": title,
+                        "seg_count": 0,
+                        "last_seg_count": 0,
+                        "last_emit_ts": time.time(),
+                    }
                 # Отправляем историю транскрипта в extension
                 await self._send_transcript_history()
 
@@ -1851,6 +1868,15 @@ class KTalkBridge:
                 # ended. Any further `send_transcript` (rare, in-flight) will
                 # see `_copilot_tick_state is None` and skip the trigger.
                 self._copilot_tick_state = None
+                # Free the recent-transcript buffer immediately. A late
+                # `send_refine` for this meeting that arrives after the
+                # next `meeting_join` would otherwise rewrite an entry
+                # that now belongs to a different meeting (segment_ids
+                # restart at 1 per meeting), and `meeting_join` only
+                # clears the buffer when the path actually changes.
+                with self._lock:
+                    self._copilot_transcript_buffer.clear()
+                    self._copilot_transcript_order.clear()
                 await self._broadcast_to_channel_clients(meeting_ended_frame)
                 # Notify extension about new meeting (safe to await here —
                 # speaker state is already clean).
@@ -2185,6 +2211,14 @@ class KTalkBridge:
                 "meeting_id": meeting_id,
                 "created_at": created_at,
             })
+            # Each `copilot_chat_message` request gets exactly one reply by
+            # protocol; drop the bookkeeping entry now so the dict cannot
+            # grow unboundedly across many chat turns. Stale entries are
+            # already popped on the early-return path above; proactive
+            # replies (no prior chat message) carry a synthetic
+            # `proactive_<uuid>` request_id that was never recorded — the
+            # `pop` is a no-op for them.
+            self._copilot_pending_requests.pop(request_id, None)
 
         elif msg_type == "copilot_channel_status":
             # Channel server reports per-request status (queued/working/
@@ -2220,6 +2254,13 @@ class KTalkBridge:
                 "status": status,
                 "message": message_text,
             })
+            # Terminal statuses ("done"/"error") signal the channel server
+            # is finished with this request even if no `copilot_channel_reply`
+            # follows; drop the bookkeeping entry to bound memory across
+            # many chat turns. Non-terminal statuses ("queued"/"working")
+            # leave the entry in place — the matching reply will pop it.
+            if status in {"done", "error"}:
+                self._copilot_pending_requests.pop(request_id, None)
 
         elif msg_type == "get_recent_transcript_request":
             # Channel server (recog/copilot_channel.py) requests a snapshot
