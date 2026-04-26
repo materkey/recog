@@ -31,6 +31,7 @@ import asyncio
 import json
 import sys
 import time
+import uuid
 from typing import Any, Optional
 
 import websockets
@@ -119,10 +120,20 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
             return {"ok": False, "error": "kind must be a non-empty string"}
         if not isinstance(text, str) or not text:
             return {"ok": False, "error": "text must be a non-empty string"}
+        # Per design D7 `request_id` is optional on the tool surface
+        # (proactive/manual sends have no user request to correlate).
+        # The on-wire `copilot_channel_reply` frame still carries a
+        # non-empty value because the bridge requires one — generate a
+        # synthetic id when the caller omits it so the tool contract
+        # does not trip the bridge validation.
+        effective_request_id = (
+            request_id if isinstance(request_id, str) and request_id
+            else f"proactive_{uuid.uuid4().hex[:12]}"
+        )
         return await link.send(
             {
                 "type": "copilot_channel_reply",
-                "request_id": request_id or "",
+                "request_id": effective_request_id,
                 "kind": kind,
                 "text": text,
                 "meeting_id": meeting_id,
@@ -268,7 +279,7 @@ async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
     ws_task = asyncio.create_task(_ws_loop(bridge_url, link, stop_event))
     mcp_task = asyncio.create_task(mcp.run_streamable_http_async())
     try:
-        done, pending = await asyncio.wait(
+        done, _pending = await asyncio.wait(
             {ws_task, mcp_task}, return_when=asyncio.FIRST_COMPLETED
         )
         for task in done:
@@ -283,8 +294,13 @@ async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
         for task in (ws_task, mcp_task):
             try:
                 await task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 pass
+            except Exception as exc:
+                print(
+                    f"{LOG_PREFIX} cleanup task failed: {exc!r}",
+                    file=sys.stderr,
+                )
 
 
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
