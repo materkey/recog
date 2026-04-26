@@ -46,13 +46,13 @@
 - [x] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension` — verify it succeeds and `injected.js` is updated. (Covers Task 8.8.)
 
 ### Task 2: Meeting lifecycle events from bridge to channel (`tasks.md` 7.1, 7.2, 7.3, 7.5)
-- [ ] In `ktalk_bridge.py`, find the existing `meeting_join` and `meeting_leave` branches in `_process_message`. After the bridge's existing meeting-state update, also broadcast a frame to every websocket in `self._copilot_channel_clients`:
+- [x] In `ktalk_bridge.py`, find the existing `meeting_join` and `meeting_leave` branches in `_process_message`. After the bridge's existing meeting-state update, also broadcast a frame to every websocket in `self._copilot_channel_clients`:
   - join: `{"type": "meeting_started", "meeting_id", "meeting_title", "created_at"}`
   - leave: `{"type": "meeting_ended", "meeting_id", "created_at"}`
-- [ ] Add `self._copilot_pending_requests: dict[str, str]` in `__init__` (request_id → meeting_id). When `_process_message` forwards a `copilot_chat_message` (existing handler from previous ralphex), record the mapping. On `meeting_leave`, mark all entries for the leaving meeting as stale (e.g. prefix the value with `"stale:"`).
-- [ ] When a `copilot_channel_reply` or `copilot_channel_status` arrives for a stale `request_id`, log at INFO and drop instead of broadcasting to extension clients.
-- [ ] In `kontur-diarize/ktalk-speaker-extension/src/ws.js`, add branches for `meeting_started` / `meeting_ended` — push a system-style entry (`kind="status"`) into `state.copilotMessages` (e.g. "встреча началась" / "встреча закончилась").
-- [ ] Add unit tests in `tests/test_ktalk_bridge.py`: `meeting_started`/`meeting_ended` frames sent to channel clients; stale reply dropped after `meeting_leave`; non-stale reply still relayed.
+- [x] Add `self._copilot_pending_requests: dict[str, str]` in `__init__` (request_id → meeting_id). When `_process_message` forwards a `copilot_chat_message` (existing handler from previous ralphex), record the mapping. On `meeting_leave`, mark all entries for the leaving meeting as stale (e.g. prefix the value with `"stale:"`).
+- [x] When a `copilot_channel_reply` or `copilot_channel_status` arrives for a stale `request_id`, log at INFO and drop instead of broadcasting to extension clients.
+- [x] In `kontur-diarize/ktalk-speaker-extension/src/ws.js`, add branches for `meeting_started` / `meeting_ended` — push a system-style entry (`kind="status"`) into `state.copilotMessages` (e.g. "встреча началась" / "встреча закончилась").
+- [x] Add unit tests in `tests/test_ktalk_bridge.py`: `meeting_started`/`meeting_ended` frames sent to channel clients; stale reply dropped after `meeting_leave`; non-stale reply still relayed.
 
 ### Task 3: Recent transcript buffer + `get_recent_transcript` MCP tool (`tasks.md` 5.1–5.5)
 - [ ] In `ktalk_bridge.py` `__init__`, add `self._copilot_transcript_buffer: dict[int, dict] = {}` plus `self._copilot_transcript_order: collections.deque = collections.deque(maxlen=300)` (segment_id order). Each entry: `{"segment_id", "speaker", "text", "start_ms", "end_ms", "refined": False, "meeting_id"}`.
