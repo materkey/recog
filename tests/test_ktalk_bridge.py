@@ -963,6 +963,136 @@ async def test_copilot_channel_disconnect_does_not_end_ktalk_meeting():
     bridge._connected_clients.discard(extension_ws)
 
 
+# --- copilot_chat_message: extension -> channel forwarding ---
+
+
+@pytest.mark.asyncio
+async def test_copilot_chat_message_forwarded_to_channel_client():
+    """
+    given: a registered Copilot channel client AND a mock meeting_storage
+           reporting a current meeting_id; the extension sends
+           `copilot_chat_message` with request_id, text, and a
+           transcript_window passthrough payload
+    when:  _process_message dispatches the frame
+    then:  the channel client receives one `copilot_user_message` frame
+           that preserves request_id/text and carries the meeting_id from
+           storage, the meeting_title/transcript_window from the inbound
+           data, and a numeric created_at; the originating extension
+           websocket receives no status frame
+    """
+    bridge = KTalkBridge()
+
+    mock_storage = Mock()
+    mock_storage.get_current_meeting_id = Mock(return_value="2026-04-26_test_meeting")
+    bridge.set_meeting_storage(mock_storage)
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    extension_ws = RecordingClient()
+
+    transcript_window = [
+        {"speaker": "Alice", "text": "пробуем", "ts": 1700000000.0},
+    ]
+    await bridge._process_message(
+        {
+            "type": "copilot_chat_message",
+            "request_id": "req-42",
+            "text": "что только что сказала Алиса?",
+            "meeting_title": "Sprint review",
+            "transcript_window": transcript_window,
+            "created_at": 1700000123456.0,
+        },
+        websocket=extension_ws,
+    )
+
+    assert len(channel_client.sent) == 1
+    payload = json.loads(channel_client.sent[0])
+    assert payload["type"] == "copilot_user_message"
+    assert payload["request_id"] == "req-42"
+    assert payload["text"] == "что только что сказала Алиса?"
+    assert payload["meeting_id"] == "2026-04-26_test_meeting"
+    assert payload["meeting_title"] == "Sprint review"
+    assert payload["transcript_window"] == transcript_window
+    assert payload["created_at"] == 1700000123456.0
+
+    # Originator should not receive any status frame on the happy path.
+    assert extension_ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_copilot_chat_message_without_channel_returns_disconnected_status():
+    """
+    given: no Copilot channel client is connected
+    when:  the extension sends `copilot_chat_message`
+    then:  the originating websocket receives a `copilot_status` frame
+           with status="channel_disconnected" carrying the same request_id
+           so the UI can surface the failure
+    """
+    bridge = KTalkBridge()
+    assert not bridge._copilot_channel_clients
+
+    extension_ws = RecordingClient()
+
+    await bridge._process_message(
+        {
+            "type": "copilot_chat_message",
+            "request_id": "req-no-channel",
+            "text": "сводка",
+        },
+        websocket=extension_ws,
+    )
+
+    assert len(extension_ws.sent) == 1
+    payload = json.loads(extension_ws.sent[0])
+    assert payload["type"] == "copilot_status"
+    assert payload["request_id"] == "req-no-channel"
+    assert payload["status"] == "channel_disconnected"
+    assert isinstance(payload.get("message"), str) and payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_copilot_chat_message_with_invalid_fields_is_ignored():
+    """
+    given: a registered Copilot channel client
+    when:  copilot_chat_message frames arrive with missing/empty
+           request_id or text
+    then:  no frame is forwarded to the channel client and no status
+           is sent back — invalid input is dropped silently per the
+           dispatcher's "log and return" precedent
+    """
+    bridge = KTalkBridge()
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    extension_ws = RecordingClient()
+
+    # Missing request_id.
+    await bridge._process_message(
+        {"type": "copilot_chat_message", "text": "x"},
+        websocket=extension_ws,
+    )
+    # Empty request_id.
+    await bridge._process_message(
+        {"type": "copilot_chat_message", "request_id": "", "text": "x"},
+        websocket=extension_ws,
+    )
+    # Missing text.
+    await bridge._process_message(
+        {"type": "copilot_chat_message", "request_id": "req-1"},
+        websocket=extension_ws,
+    )
+    # Empty text.
+    await bridge._process_message(
+        {"type": "copilot_chat_message", "request_id": "req-1", "text": ""},
+        websocket=extension_ws,
+    )
+
+    assert channel_client.sent == []
+    assert extension_ws.sent == []
+
+
 # --- send_transcript: source_id payload serialization ---
 
 

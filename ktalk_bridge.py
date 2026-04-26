@@ -1782,6 +1782,90 @@ class KTalkBridge:
                 file=sys.stderr,
             )
 
+        elif msg_type == "copilot_chat_message":
+            # Extension forwards a user-typed chat line. Forward it to every
+            # registered Copilot channel client as a `copilot_user_message`
+            # frame, enriched with current meeting metadata so the channel
+            # server (recog/copilot_channel.py) can attach context for the
+            # MCP-connected Claude session. If no channel client is
+            # connected we cannot deliver the message — reply to the
+            # originating websocket with a `copilot_status` frame so the UI
+            # can surface the failure instead of silently swallowing it.
+            request_id = data.get("request_id")
+            text = data.get("text")
+            if not isinstance(request_id, str) or not request_id:
+                print(
+                    "[KTalk Bridge] copilot_chat_message missing/invalid request_id — ignored",
+                    file=sys.stderr,
+                )
+                return
+            if not isinstance(text, str) or not text:
+                print(
+                    "[KTalk Bridge] copilot_chat_message missing/invalid text — ignored",
+                    file=sys.stderr,
+                )
+                return
+
+            meeting_id = (
+                self._meeting_storage.get_current_meeting_id()
+                if self._meeting_storage is not None
+                else None
+            )
+            meeting_title = data.get("meeting_title")
+            transcript_window = data.get("transcript_window")
+            created_at = data.get("created_at")
+            if not isinstance(created_at, (int, float)):
+                created_at = time.time() * 1000
+
+            with self._lock:
+                channel_clients = list(self._copilot_channel_clients)
+
+            if not channel_clients:
+                if websocket is not None:
+                    status_frame = json.dumps(
+                        {
+                            "type": "copilot_status",
+                            "request_id": request_id,
+                            "status": "channel_disconnected",
+                            "message": "Copilot channel server is not connected",
+                        },
+                        ensure_ascii=False,
+                    )
+                    try:
+                        await websocket.send(status_frame)
+                    except Exception as e:
+                        print(
+                            f"[KTalk Bridge] Failed to send channel_disconnected status: {e}",
+                            file=sys.stderr,
+                        )
+                else:
+                    print(
+                        "[KTalk Bridge] copilot_chat_message dropped — no channel client and no originator socket",
+                        file=sys.stderr,
+                    )
+                return
+
+            outbound = json.dumps(
+                {
+                    "type": "copilot_user_message",
+                    "request_id": request_id,
+                    "text": text,
+                    "meeting_id": meeting_id,
+                    "meeting_title": meeting_title,
+                    "transcript_window": transcript_window,
+                    "created_at": created_at,
+                },
+                ensure_ascii=False,
+            )
+            for client in channel_clients:
+                try:
+                    await client.send(outbound)
+                except Exception as e:
+                    print(
+                        f"[KTalk Bridge] Failed to forward copilot_chat_message to channel client: {e}",
+                        file=sys.stderr,
+                    )
+
     async def _run_server(self):
         """Запускает WebSocket сервер."""
         try:

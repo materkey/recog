@@ -38,11 +38,11 @@
 - [x] Add a unit test `test_copilot_channel_hello_registers_client` in `tests/test_ktalk_bridge.py` modelled on the closest existing subscriber test: send the frame via `_process_message`, assert `bridge._copilot_channel_clients` contains the mock websocket
 
 ### Task 3: Bridge — route `copilot_chat_message` to channel clients
-- [ ] Add a new `elif msg_type == "copilot_chat_message":` branch in `_process_message`. Validate required fields: `request_id` (non-empty str), `text` (non-empty str). On invalid, log a warning and return without raising.
-- [ ] Build a `copilot_user_message` outbound frame with: `type`, `request_id`, `text`, `meeting_id` (use `self._current_meeting_id` if such field exists, else best-effort from current state), `meeting_title`, `transcript_window` (pass through if present, else `None`), `created_at` (echo or `time.time() * 1000`)
-- [ ] Send the frame to every websocket in `self._copilot_channel_clients` (use the same `await ws.send(json.dumps(...))` pattern as elsewhere in the bridge; iterate over a copy of the set to avoid mutation-during-iteration)
-- [ ] If `self._copilot_channel_clients` is empty when a `copilot_chat_message` arrives, send a `copilot_status` frame back to the originating `websocket` with `status="channel_disconnected"` and a short `message`
-- [ ] Add unit tests:
+- [x] Add a new `elif msg_type == "copilot_chat_message":` branch in `_process_message`. Validate required fields: `request_id` (non-empty str), `text` (non-empty str). On invalid, log a warning and return without raising.
+- [x] Build a `copilot_user_message` outbound frame with: `type`, `request_id`, `text`, `meeting_id` (use `self._current_meeting_id` if such field exists, else best-effort from current state), `meeting_title`, `transcript_window` (pass through if present, else `None`), `created_at` (echo or `time.time() * 1000`)
+- [x] Send the frame to every websocket in `self._copilot_channel_clients` (use the same `await ws.send(json.dumps(...))` pattern as elsewhere in the bridge; iterate over a copy of the set to avoid mutation-during-iteration)
+- [x] If `self._copilot_channel_clients` is empty when a `copilot_chat_message` arrives, send a `copilot_status` frame back to the originating `websocket` with `status="channel_disconnected"` and a short `message`
+- [x] Add unit tests:
   - `test_copilot_chat_message_forwarded_to_channel_client` — register a mock channel client, send chat_message, assert the channel client received the `copilot_user_message` frame with correct fields
   - `test_copilot_chat_message_without_channel_returns_disconnected_status` — no channel client, assert originating client receives `copilot_status` with `status="channel_disconnected"`
 
