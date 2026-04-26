@@ -47,10 +47,10 @@
   - `test_copilot_chat_message_without_channel_returns_disconnected_status` — no channel client, assert originating client receives `copilot_status` with `status="channel_disconnected"`
 
 ### Task 4: Bridge — relay `copilot_channel_reply` and `copilot_channel_status` to extension clients
-- [ ] Add `elif msg_type == "copilot_channel_reply":` branch. Re-emit as a `copilot_reply` frame (rename `type`) and broadcast to `self._connected_clients` (extension clients), preserving `request_id`, `kind`, `text`, `meeting_id`, `created_at`.
-- [ ] Add `elif msg_type == "copilot_channel_status":` branch. Re-emit as `copilot_status` and broadcast to `self._connected_clients` with `request_id`, `status`, `message`.
-- [ ] Use whatever broadcast helper already exists (look near where `transcript` frames are broadcast) — do not invent a new one if one is in place; otherwise inline the iteration pattern used for transcript broadcast.
-- [ ] Add unit tests:
+- [x] Add `elif msg_type == "copilot_channel_reply":` branch. Re-emit as a `copilot_reply` frame (rename `type`) and broadcast to `self._connected_clients` (extension clients), preserving `request_id`, `kind`, `text`, `meeting_id`, `created_at`.
+- [x] Add `elif msg_type == "copilot_channel_status":` branch. Re-emit as `copilot_status` and broadcast to `self._connected_clients` with `request_id`, `status`, `message`.
+- [x] Use whatever broadcast helper already exists (look near where `transcript` frames are broadcast) — do not invent a new one if one is in place; otherwise inline the iteration pattern used for transcript broadcast.
+- [x] Add unit tests:
   - `test_copilot_channel_reply_relayed_to_extension_clients` — register mock extension client, send `copilot_channel_reply` from a mock channel client, assert extension client received `copilot_reply` with the right `request_id`/`text`
   - `test_copilot_channel_status_relayed_to_extension_clients` — same shape for status
 
