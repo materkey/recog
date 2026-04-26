@@ -69,5 +69,13 @@ export const state = {
     maxHeadRatio: 0.6,
     ignoreNumbers: true,
     panelOpen: false
-  }
+  },
+
+  copilotMessages: [],
+  copilotPending: new Map(),
+  copilotProactiveMutedUntil: 0,
+  copilotChannelStatus: 'unknown',
+  copilotLastProactiveAt: 0,
+  copilotContentElement: null,
+  isCopilotActive: false
 };

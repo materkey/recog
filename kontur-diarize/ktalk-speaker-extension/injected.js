@@ -664,15 +664,17 @@ function setupUI() {
   // KTalk: Use tab injection
   const transcriptTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addTranscriptTab)();
   const contextTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addContextTab)();
-  if (transcriptTabAdded || contextTabAdded) {
+  const copilotTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addCopilotTab)();
+  if (transcriptTabAdded || contextTabAdded || copilotTabAdded) {
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
+    (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.watchTabChanges)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicator)(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected);
   }
 
   (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.ensureDebugPanel)();
-  return transcriptTabAdded || contextTabAdded;
+  return transcriptTabAdded || contextTabAdded || copilotTabAdded;
 }
 
 function subscribeToDominantSpeaker(conf) {
@@ -845,7 +847,7 @@ function init() {
       }
     } else {
       // For KTalk: check tabs exist
-      if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab')) {
+      if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab') || !document.querySelector('.ktalk-copilot-tab')) {
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = false;
         setupUI();
       }
@@ -858,6 +860,11 @@ function init() {
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = null;
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
         (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
+      }
+      if (!document.querySelector('.ktalk-copilot-content')) {
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement = null;
+        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
+        (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent)();
       }
     }
     tryAttachConference();
@@ -3415,7 +3422,15 @@ const state = {
     maxHeadRatio: 0.6,
     ignoreNumbers: true,
     panelOpen: false
-  }
+  },
+
+  copilotMessages: [],
+  copilotPending: new Map(),
+  copilotProactiveMutedUntil: 0,
+  copilotChannelStatus: 'unknown',
+  copilotLastProactiveAt: 0,
+  copilotContentElement: null,
+  isCopilotActive: false
 };
 
 
@@ -4441,11 +4456,16 @@ function initVas3kUI() {
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   addContextTab: () => (/* binding */ addContextTab),
+/* harmony export */   addCopilotTab: () => (/* binding */ addCopilotTab),
 /* harmony export */   addTranscriptLinePlatform: () => (/* binding */ addTranscriptLinePlatform),
 /* harmony export */   addTranscriptTab: () => (/* binding */ addTranscriptTab),
+/* harmony export */   appendCopilotSystemMessage: () => (/* binding */ appendCopilotSystemMessage),
 /* harmony export */   createContextContent: () => (/* binding */ createContextContent),
+/* harmony export */   createCopilotContent: () => (/* binding */ createCopilotContent),
 /* harmony export */   createTranscriptContent: () => (/* binding */ createTranscriptContent),
 /* harmony export */   handleAnchorResponse: () => (/* binding */ handleAnchorResponse),
+/* harmony export */   handleCopilotReply: () => (/* binding */ handleCopilotReply),
+/* harmony export */   handleCopilotStatus: () => (/* binding */ handleCopilotStatus),
 /* harmony export */   handleNewMeeting: () => (/* binding */ handleNewMeeting),
 /* harmony export */   handleSummaryResponse: () => (/* binding */ handleSummaryResponse),
 /* harmony export */   handleTranscript: () => (/* binding */ handleTranscript),
@@ -4453,6 +4473,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   handleTranscriptRefine: () => (/* binding */ handleTranscriptRefine),
 /* harmony export */   initPlatformUI: () => (/* binding */ initPlatformUI),
 /* harmony export */   injectStyles: () => (/* binding */ injectStyles),
+/* harmony export */   isCopilotProactiveMuted: () => (/* binding */ isCopilotProactiveMuted),
+/* harmony export */   renderCopilotMessage: () => (/* binding */ renderCopilotMessage),
 /* harmony export */   updateWsIndicator: () => (/* binding */ updateWsIndicator),
 /* harmony export */   updateWsIndicatorPlatform: () => (/* binding */ updateWsIndicatorPlatform),
 /* harmony export */   watchTabChanges: () => (/* binding */ watchTabChanges)
@@ -4487,18 +4509,21 @@ function injectStyles() {
   styles.textContent = `
       /* Transcript tab - exact match of KTalk's PRIVATE button */
       .ktalk-transcript-tab-wrapper.tl-tab,
-      .ktalk-context-tab-wrapper.tl-tab {
+      .ktalk-context-tab-wrapper.tl-tab,
+      .ktalk-copilot-tab-wrapper.tl-tab {
         display: inline-block !important;
         height: 32px;
         padding: 0;
         margin: 0;
       }
-      .ktalk-transcript-tab-wrapper.tl-tab {
+      .ktalk-transcript-tab-wrapper.tl-tab,
+      .ktalk-context-tab-wrapper.tl-tab {
         margin-right: 8px;
       }
 
       .ktalk-transcript-tab.link,
-      .ktalk-context-tab.link {
+      .ktalk-context-tab.link,
+      .ktalk-copilot-tab.link {
         display: block;
         height: 32px;
         padding: 0;
@@ -4519,15 +4544,18 @@ function injectStyles() {
         transition: color 0.15s;
       }
       .ktalk-transcript-tab.link:hover,
-      .ktalk-context-tab.link:hover {
+      .ktalk-context-tab.link:hover,
+      .ktalk-copilot-tab.link:hover {
         color: rgba(255, 255, 255, 0.85);
       }
       .ktalk-transcript-tab.link._active,
-      .ktalk-context-tab.link._active {
+      .ktalk-context-tab.link._active,
+      .ktalk-copilot-tab.link._active {
         color: rgba(255, 255, 255, 0.85);
       }
       .ktalk-transcript-tab .tab-content,
-      .ktalk-context-tab .tab-content {
+      .ktalk-context-tab .tab-content,
+      .ktalk-copilot-tab .tab-content {
         display: flex;
         align-items: center;
         height: 32px;
@@ -5231,6 +5259,214 @@ function injectStyles() {
         margin-top: 12px;
       }
 
+      /* Copilot panel */
+      .ktalk-copilot-content {
+        display: none;
+        flex-direction: column;
+        height: 100%;
+        background: rgb(52, 52, 52);
+        color: rgba(255, 255, 255, 0.85);
+      }
+      .ktalk-copilot-content.active {
+        display: flex;
+      }
+      .ktalk-copilot-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 16px;
+        background: rgb(60, 60, 60);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .ktalk-copilot-title {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .ktalk-copilot-status {
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.55);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .ktalk-copilot-status.connected {
+        color: #4ade80;
+      }
+      .ktalk-copilot-status.disconnected {
+        color: #f87171;
+      }
+      .ktalk-copilot-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .ktalk-copilot-mute-btn {
+        padding: 0 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+        color: rgba(255, 255, 255, 0.85);
+        font-size: 11px;
+        cursor: pointer;
+        height: 22px;
+        line-height: 22px;
+      }
+      .ktalk-copilot-mute-btn:hover {
+        background: rgba(255, 255, 255, 0.2);
+      }
+      .ktalk-copilot-mute-btn.active {
+        background: rgba(248, 113, 113, 0.2);
+        border-color: rgba(248, 113, 113, 0.6);
+        color: #f87171;
+      }
+      .ktalk-copilot-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .ktalk-copilot-empty {
+        color: rgba(255, 255, 255, 0.4);
+        text-align: center;
+        font-size: 12px;
+        padding: 32px 16px;
+      }
+      .copilot-msg {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        padding: 8px 12px;
+        border-left: 3px solid transparent;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .copilot-msg-user {
+        border-left-color: #60a5fa;
+      }
+      .copilot-msg-assistant {
+        border-left-color: #34d399;
+      }
+      .copilot-msg-proactive {
+        border-left-color: #f59e0b;
+        background: rgba(245, 158, 11, 0.08);
+      }
+      .copilot-msg-status {
+        border-left-color: rgba(255, 255, 255, 0.3);
+        background: rgba(255, 255, 255, 0.03);
+        color: rgba(255, 255, 255, 0.6);
+        font-style: italic;
+        font-size: 12px;
+      }
+      .copilot-msg-error {
+        border-left-color: #f87171;
+        background: rgba(248, 113, 113, 0.08);
+        color: #fca5a5;
+      }
+      .copilot-msg-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        margin-bottom: 4px;
+        color: rgba(255, 255, 255, 0.6);
+      }
+      .copilot-msg-role {
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .copilot-msg-time {
+        margin-left: auto;
+        font-variant-numeric: tabular-nums;
+      }
+      .copilot-msg-text {
+        color: rgba(255, 255, 255, 0.9);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .copilot-msg-text.pending {
+        color: rgba(255, 255, 255, 0.5);
+        font-style: italic;
+      }
+      .copilot-msg-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .copilot-msg-action-btn {
+        padding: 0 6px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 4px;
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 10px;
+        cursor: pointer;
+        height: 20px;
+        line-height: 20px;
+      }
+      .copilot-msg-action-btn:hover {
+        background: rgba(255, 255, 255, 0.16);
+        color: rgba(255, 255, 255, 0.95);
+      }
+      .copilot-msg-action-btn.copied {
+        background: #22c55e;
+        border-color: #22c55e;
+        color: #fff;
+      }
+      .ktalk-copilot-input-area {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px 12px;
+        background: rgb(56, 56, 56);
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .ktalk-copilot-input {
+        width: 100%;
+        min-height: 56px;
+        max-height: 160px;
+        padding: 8px 10px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 6px;
+        color: #fff;
+        font-size: 13px;
+        font-family: inherit;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+      .ktalk-copilot-input:focus {
+        outline: none;
+        border-color: #60a5fa;
+      }
+      .ktalk-copilot-input:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .ktalk-copilot-input-row {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+      }
+      .ktalk-copilot-send-btn {
+        padding: 6px 14px;
+        background: #60a5fa;
+        border: none;
+        border-radius: 6px;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .ktalk-copilot-send-btn:hover {
+        background: #3b82f6;
+      }
+      .ktalk-copilot-send-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
     `;
   document.head.appendChild(styles);
 }
@@ -5293,6 +5529,37 @@ function addContextTab() {
 
   tab.querySelector('button').addEventListener('click', () => {
     activateContextTab();
+  });
+
+  return true;
+}
+
+function addCopilotTab() {
+  if (document.querySelector('.ktalk-copilot-tab')) {
+    return true;
+  }
+
+  const tabsContainer = document.querySelector('.tl-tabset__content');
+  if (!tabsContainer) {
+    return false;
+  }
+
+  console.log('[KTalk Transcript] Adding copilot tab to tabset');
+
+  const tab = document.createElement('div');
+  tab.className = 'tl-tab _switchable ktalk-copilot-tab-wrapper';
+  tab.innerHTML = `
+      <button type="button" class="ktalk-copilot-tab link">
+        <span class="tab-content">
+          <span class="title">Copilot</span>
+        </span>
+      </button>
+    `;
+
+  tabsContainer.appendChild(tab);
+
+  tab.querySelector('button').addEventListener('click', () => {
+    activateCopilotTab();
   });
 
   return true;
@@ -5466,24 +5733,503 @@ function createContextContent() {
   return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement;
 }
 
+const COPILOT_PROACTIVE_MUTE_MS = 10 * 60 * 1000;
+const COPILOT_TRANSCRIPT_WINDOW_SIZE = 20;
+
+function nowDisplay() {
+  const d = new Date();
+  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function buildCopilotTranscriptWindow() {
+  if (!Array.isArray(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines)) return [];
+  const tail = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-COPILOT_TRANSCRIPT_WINDOW_SIZE);
+  return tail.map((line) => ({
+    speaker: line.speaker || '',
+    text: line.text || '',
+    timestamp: line.time || line.timestamp || '',
+    segment_id: line.segment_id || 0
+  }));
+}
+
+function createCopilotContent() {
+  if (document.querySelector('.ktalk-copilot-content')) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement = document.querySelector('.ktalk-copilot-content');
+    return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement;
+  }
+
+  const contentArea = document.querySelector('.slide-menu-wrapper .content');
+  if (!contentArea) {
+    console.log('[KTalk Transcript] Content area not found for copilot');
+    return null;
+  }
+
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = contentArea.firstElementChild;
+  }
+
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement = document.createElement('div');
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.className = 'ktalk-copilot-content';
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.innerHTML = `
+      <div class="ktalk-copilot-header">
+        <span class="ktalk-copilot-title">Copilot</span>
+        <span class="ktalk-copilot-status">…</span>
+        <div class="ktalk-copilot-actions">
+          <button type="button" class="ktalk-copilot-mute-btn" title="Mute proactive messages for 10 minutes">Mute proactive 10m</button>
+        </div>
+      </div>
+      <div class="ktalk-copilot-messages">
+        <div class="ktalk-copilot-empty">Сообщений пока нет.</div>
+      </div>
+      <div class="ktalk-copilot-input-area">
+        <textarea class="ktalk-copilot-input" rows="2" placeholder="Спросить Claude..."></textarea>
+        <div class="ktalk-copilot-input-row">
+          <button type="button" class="ktalk-copilot-send-btn">Send</button>
+        </div>
+      </div>
+    `;
+
+  const muteBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.querySelector('.ktalk-copilot-mute-btn');
+  muteBtn.addEventListener('click', () => toggleCopilotProactiveMute());
+  refreshCopilotMuteButton();
+
+  const input = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.querySelector('.ktalk-copilot-input');
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      submitCopilotInput();
+    }
+  });
+
+  const sendBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.querySelector('.ktalk-copilot-send-btn');
+  sendBtn.addEventListener('click', () => submitCopilotInput());
+
+  contentArea.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement);
+  updateCopilotStatusIndicator();
+  console.log('[KTalk Transcript] Copilot element created');
+  return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement;
+}
+
+function ensureCopilotContent() {
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement || !document.body.contains(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement)) {
+    createCopilotContent();
+  }
+}
+
+function getCopilotMessagesEl() {
+  return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement?.querySelector('.ktalk-copilot-messages') || null;
+}
+
+function getCopilotInputEl() {
+  return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement?.querySelector('.ktalk-copilot-input') || null;
+}
+
+function getCopilotSendBtn() {
+  return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement?.querySelector('.ktalk-copilot-send-btn') || null;
+}
+
+function refreshCopilotMuteButton() {
+  const btn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement?.querySelector('.ktalk-copilot-mute-btn');
+  if (!btn) return;
+  const muted = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotProactiveMutedUntil > Date.now();
+  btn.classList.toggle('active', muted);
+  btn.textContent = muted ? 'Unmute proactive' : 'Mute proactive 10m';
+}
+
+function toggleCopilotProactiveMute() {
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotProactiveMutedUntil > Date.now()) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotProactiveMutedUntil = 0;
+  } else {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotProactiveMutedUntil = Date.now() + COPILOT_PROACTIVE_MUTE_MS;
+  }
+  refreshCopilotMuteButton();
+}
+
+function isCopilotProactiveMuted() {
+  return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotProactiveMutedUntil > Date.now();
+}
+
+function updateCopilotStatusIndicator() {
+  const el = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement?.querySelector('.ktalk-copilot-status');
+  if (!el) return;
+  const status = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotChannelStatus || 'unknown';
+  el.classList.remove('connected', 'disconnected');
+  if (status === 'connected') {
+    el.classList.add('connected');
+    el.textContent = 'connected';
+  } else if (status === 'channel_disconnected' || status === 'disconnected') {
+    el.classList.add('disconnected');
+    el.textContent = 'channel offline';
+  } else if (status === 'working') {
+    el.textContent = 'working…';
+  } else {
+    el.textContent = status;
+  }
+}
+
+function escapeCopilotText(value) {
+  return (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(value == null ? '' : String(value));
+}
+
+function setCopilotInputBusy(busy) {
+  const input = getCopilotInputEl();
+  const btn = getCopilotSendBtn();
+  if (input) input.disabled = !!busy;
+  if (btn) btn.disabled = !!busy;
+}
+
+function clearCopilotEmptyPlaceholder() {
+  const messagesEl = getCopilotMessagesEl();
+  if (!messagesEl) return;
+  const empty = messagesEl.querySelector('.ktalk-copilot-empty');
+  if (empty) empty.remove();
+}
+
+function showCopilotEmptyIfNoneLeft() {
+  const messagesEl = getCopilotMessagesEl();
+  if (!messagesEl) return;
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages.length === 0 && !messagesEl.querySelector('.ktalk-copilot-empty')) {
+    const div = document.createElement('div');
+    div.className = 'ktalk-copilot-empty';
+    div.textContent = 'Сообщений пока нет.';
+    messagesEl.appendChild(div);
+  }
+}
+
+function scrollCopilotToBottom() {
+  const messagesEl = getCopilotMessagesEl();
+  if (!messagesEl) return;
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function getCopilotRoleLabel(kind) {
+  if (kind === 'user') return 'Вы';
+  if (kind === 'assistant') return 'Claude';
+  if (kind === 'proactive') return 'Claude · proactive';
+  if (kind === 'status') return 'Status';
+  if (kind === 'error') return 'Error';
+  return kind;
+}
+
+function renderCopilotMessage(msg) {
+  ensureCopilotContent();
+  const messagesEl = getCopilotMessagesEl();
+  if (!messagesEl) return null;
+  clearCopilotEmptyPlaceholder();
+
+  const wrapper = document.createElement('div');
+  wrapper.className = `copilot-msg copilot-msg-${msg.kind}`;
+  if (msg.id) wrapper.dataset.copilotId = msg.id;
+  if (msg.request_id) wrapper.dataset.copilotRequestId = msg.request_id;
+
+  const headerHtml = `
+      <div class="copilot-msg-header">
+        <span class="copilot-msg-role">${escapeCopilotText(getCopilotRoleLabel(msg.kind))}</span>
+        <span class="copilot-msg-time">${escapeCopilotText(msg.time || nowDisplay())}</span>
+      </div>
+    `;
+  const isPending = msg.status === 'working';
+  const textHtml = `<div class="copilot-msg-text${isPending ? ' pending' : ''}">${escapeCopilotText(msg.text || (isPending ? '…' : ''))}</div>`;
+
+  let actionsHtml = '';
+  if (msg.kind === 'assistant' || msg.kind === 'proactive') {
+    actionsHtml = `
+        <div class="copilot-msg-actions">
+          <button type="button" class="copilot-msg-action-btn copilot-msg-copy-btn" title="Copy">Copy</button>
+          <button type="button" class="copilot-msg-action-btn copilot-msg-dismiss-btn" title="Dismiss">Dismiss</button>
+        </div>
+      `;
+  }
+
+  wrapper.innerHTML = headerHtml + textHtml + actionsHtml;
+
+  const copyBtn = wrapper.querySelector('.copilot-msg-copy-btn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      const text = msg.text || '';
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(text).then(() => {
+          copyBtn.classList.add('copied');
+          copyBtn.textContent = 'Copied';
+          setTimeout(() => {
+            copyBtn.classList.remove('copied');
+            copyBtn.textContent = 'Copy';
+          }, 1500);
+        }).catch((err) => {
+          console.log('[KTalk Copilot] Copy failed', err);
+        });
+      }
+    });
+  }
+  const dismissBtn = wrapper.querySelector('.copilot-msg-dismiss-btn');
+  if (dismissBtn) {
+    dismissBtn.addEventListener('click', () => dismissCopilotMessage(msg.id));
+  }
+
+  messagesEl.appendChild(wrapper);
+  scrollCopilotToBottom();
+  return wrapper;
+}
+
+function appendCopilotMessage(msg) {
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages.push(msg);
+  renderCopilotMessage(msg);
+}
+
+function findCopilotMessageElement(id) {
+  const messagesEl = getCopilotMessagesEl();
+  if (!messagesEl || !id) return null;
+  return messagesEl.querySelector(`[data-copilot-id="${id}"]`);
+}
+
+function dismissCopilotMessage(id) {
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages.filter((m) => m.id !== id);
+  const el = findCopilotMessageElement(id);
+  if (el) el.remove();
+  showCopilotEmptyIfNoneLeft();
+}
+
+function updateCopilotMessageDom(id, updates) {
+  const el = findCopilotMessageElement(id);
+  if (!el) return;
+  if (updates.text != null) {
+    const textEl = el.querySelector('.copilot-msg-text');
+    if (textEl) {
+      textEl.textContent = updates.text;
+      textEl.classList.toggle('pending', updates.status === 'working');
+    }
+  }
+  if (updates.time != null) {
+    const timeEl = el.querySelector('.copilot-msg-time');
+    if (timeEl) timeEl.textContent = updates.time;
+  }
+  if (updates.kind) {
+    el.classList.remove(
+      'copilot-msg-user',
+      'copilot-msg-assistant',
+      'copilot-msg-proactive',
+      'copilot-msg-status',
+      'copilot-msg-error'
+    );
+    el.classList.add(`copilot-msg-${updates.kind}`);
+    const roleEl = el.querySelector('.copilot-msg-role');
+    if (roleEl) roleEl.textContent = getCopilotRoleLabel(updates.kind);
+  }
+  if (updates.kind === 'assistant' || updates.kind === 'proactive') {
+    if (!el.querySelector('.copilot-msg-actions')) {
+      const actions = document.createElement('div');
+      actions.className = 'copilot-msg-actions';
+      actions.innerHTML = `
+          <button type="button" class="copilot-msg-action-btn copilot-msg-copy-btn" title="Copy">Copy</button>
+          <button type="button" class="copilot-msg-action-btn copilot-msg-dismiss-btn" title="Dismiss">Dismiss</button>
+        `;
+      el.appendChild(actions);
+      const copyBtn = actions.querySelector('.copilot-msg-copy-btn');
+      copyBtn.addEventListener('click', () => {
+        const msg = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages.find((m) => m.id === id);
+        const text = msg ? (msg.text || '') : '';
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(text).then(() => {
+            copyBtn.classList.add('copied');
+            copyBtn.textContent = 'Copied';
+            setTimeout(() => {
+              copyBtn.classList.remove('copied');
+              copyBtn.textContent = 'Copy';
+            }, 1500);
+          }).catch(() => {});
+        }
+      });
+      const dismissBtn = actions.querySelector('.copilot-msg-dismiss-btn');
+      dismissBtn.addEventListener('click', () => dismissCopilotMessage(id));
+    }
+  }
+}
+
+function updateCopilotMessage(id, updates) {
+  const msg = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages.find((m) => m.id === id);
+  if (msg) Object.assign(msg, updates);
+  updateCopilotMessageDom(id, updates);
+}
+
+function nextCopilotId() {
+  return 'copilot-msg-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+function submitCopilotInput() {
+  const input = getCopilotInputEl();
+  if (!input) return;
+  const text = (input.value || '').trim();
+  if (!text) return;
+
+  const meetingTitleNow = document.title || meetingTitle || '';
+  let requestId;
+  try {
+    requestId = (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendCopilotChatMessage)({
+      text,
+      meetingId: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId,
+      meetingTitle: meetingTitleNow,
+      transcriptWindow: buildCopilotTranscriptWindow()
+    });
+  } catch (err) {
+    console.log('[KTalk Copilot] send failed', err);
+    appendCopilotMessage({
+      id: nextCopilotId(),
+      kind: 'error',
+      text: 'Не удалось отправить сообщение в Copilot.',
+      time: nowDisplay()
+    });
+    return;
+  }
+
+  const userId = nextCopilotId();
+  const assistantId = nextCopilotId();
+  appendCopilotMessage({
+    id: userId,
+    kind: 'user',
+    text,
+    request_id: requestId,
+    time: nowDisplay()
+  });
+  appendCopilotMessage({
+    id: assistantId,
+    kind: 'assistant',
+    text: 'Жду ответа Claude…',
+    request_id: requestId,
+    status: 'working',
+    time: nowDisplay()
+  });
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.set(requestId, { userId, assistantId, createdAt: Date.now() });
+
+  input.value = '';
+  setCopilotInputBusy(true);
+}
+
+function findPendingAssistantId(requestId) {
+  if (!requestId) return null;
+  const pending = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.get(requestId);
+  return pending ? pending.assistantId : null;
+}
+
+function handleCopilotReply(data) {
+  ensureCopilotContent();
+  const requestId = data && data.request_id;
+  const replyText = (data && (data.text || data.message || '')) || '';
+  const kind = data && data.kind === 'proactive' ? 'proactive' : 'assistant';
+  const time = nowDisplay();
+
+  if (kind === 'proactive') {
+    if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotProactiveMutedUntil > Date.now()) {
+      console.log('[KTalk Copilot] Proactive reply muted, dropping.');
+      return;
+    }
+    if (Date.now() - (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotLastProactiveAt || 0) < 60000) {
+      console.log('[KTalk Copilot] Proactive cooldown active, dropping.');
+      return;
+    }
+    appendCopilotMessage({
+      id: nextCopilotId(),
+      kind: 'proactive',
+      text: replyText,
+      request_id: requestId || null,
+      time
+    });
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotLastProactiveAt = Date.now();
+    return;
+  }
+
+  const pendingId = findPendingAssistantId(requestId);
+  if (pendingId) {
+    updateCopilotMessage(pendingId, {
+      kind: 'assistant',
+      text: replyText,
+      status: 'done',
+      time
+    });
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.delete(requestId);
+    setCopilotInputBusy(false);
+    return;
+  }
+  appendCopilotMessage({
+    id: nextCopilotId(),
+    kind: 'assistant',
+    text: replyText,
+    request_id: requestId || null,
+    time
+  });
+}
+
+function handleCopilotStatus(data) {
+  ensureCopilotContent();
+  const requestId = data && data.request_id;
+  const status = (data && data.status) || 'unknown';
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotChannelStatus = status;
+  updateCopilotStatusIndicator();
+
+  if (status === 'channel_disconnected') {
+    const pendingId = findPendingAssistantId(requestId);
+    if (pendingId) {
+      updateCopilotMessage(pendingId, {
+        kind: 'error',
+        text: 'Channel offline: Claude не подключён.',
+        status: 'error',
+        time: nowDisplay()
+      });
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.delete(requestId);
+      setCopilotInputBusy(false);
+    } else {
+      appendCopilotMessage({
+        id: nextCopilotId(),
+        kind: 'error',
+        text: 'Channel offline: Claude не подключён.',
+        time: nowDisplay()
+      });
+    }
+    return;
+  }
+
+  const pendingId = findPendingAssistantId(requestId);
+  if (pendingId) {
+    updateCopilotMessage(pendingId, {
+      status,
+      text: status === 'working' ? 'Claude думает…' : `Status: ${status}`,
+      time: nowDisplay()
+    });
+  }
+}
+
+function appendCopilotSystemMessage(text) {
+  ensureCopilotContent();
+  appendCopilotMessage({
+    id: nextCopilotId(),
+    kind: 'status',
+    text: text || '',
+    time: nowDisplay()
+  });
+}
+
 function setActiveView(view) {
   const transcriptTabBtn = document.querySelector('.ktalk-transcript-tab');
   const contextTabBtn = document.querySelector('.ktalk-context-tab');
+  const copilotTabBtn = document.querySelector('.ktalk-copilot-tab');
 
   const transcriptTab = transcriptTabBtn?.closest('.tl-tab');
   const contextTab = contextTabBtn?.closest('.tl-tab');
+  const copilotTab = copilotTabBtn?.closest('.tl-tab');
 
   const isTranscript = view === 'transcript';
   const isContext = view === 'context';
+  const isCopilot = view === 'copilot';
 
   if (transcriptTab) transcriptTab.classList.toggle('_active', isTranscript);
   if (contextTab) contextTab.classList.toggle('_active', isContext);
+  if (copilotTab) copilotTab.classList.toggle('_active', isCopilot);
 
   if (transcriptTabBtn) transcriptTabBtn.classList.toggle('_active', isTranscript);
   if (contextTabBtn) contextTabBtn.classList.toggle('_active', isContext);
+  if (copilotTabBtn) copilotTabBtn.classList.toggle('_active', isCopilot);
 
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent.style.display = isTranscript || isContext ? 'none' : '';
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent.style.display = isTranscript || isContext || isCopilot ? 'none' : '';
   }
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.classList.toggle('active', isTranscript);
@@ -5491,9 +6237,13 @@ function setActiveView(view) {
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.classList.toggle('active', isContext);
   }
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.classList.toggle('active', isCopilot);
+  }
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isTranscriptActive = isTranscript;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isContextActive = isContext;
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive = isCopilot;
 }
 
 function activateTranscriptTab() {
@@ -5511,6 +6261,13 @@ function activateContextTab() {
   }
 }
 
+function activateCopilotTab() {
+  ensureCopilotContent();
+  setActiveView('copilot');
+  const input = getCopilotInputEl();
+  if (input) input.focus();
+}
+
 function deactivateCustomTabs() {
   setActiveView(null);
 }
@@ -5525,14 +6282,15 @@ function watchTabChanges() {
 
     const isTranscriptTab = clickedTab.querySelector('.ktalk-transcript-tab');
     const isContextTab = clickedTab.querySelector('.ktalk-context-tab');
-    if (!isTranscriptTab && !isContextTab) {
+    const isCopilotTab = clickedTab.querySelector('.ktalk-copilot-tab');
+    if (!isTranscriptTab && !isContextTab && !isCopilotTab) {
       deactivateCustomTabs();
     }
   });
 }
 
 function updateWsIndicator(connected) {
-  document.querySelectorAll('.ktalk-transcript-tab-wrapper .ws-dot, .ktalk-context-tab-wrapper .ws-dot')
+  document.querySelectorAll('.ktalk-transcript-tab-wrapper .ws-dot, .ktalk-context-tab-wrapper .ws-dot, .ktalk-copilot-tab-wrapper .ws-dot')
     .forEach((dot) => {
       dot.classList.toggle('connected', connected);
     });
@@ -6793,6 +7551,10 @@ function connectWebSocket() {
           (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_2__.handleVas3kSummaryResponse)(data);
         } else if (data.type === 'anchor_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
+        } else if (data.type === 'copilot_reply') {
+          (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleCopilotReply)(data);
+        } else if (data.type === 'copilot_status') {
+          (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleCopilotStatus)(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);
@@ -6815,6 +7577,7 @@ function connectWebSocket() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   sendCopilotChatMessage: () => (/* binding */ sendCopilotChatMessage),
 /* harmony export */   sendWsConnectionStatus: () => (/* binding */ sendWsConnectionStatus),
 /* harmony export */   sendWsMessage: () => (/* binding */ sendWsMessage),
 /* harmony export */   sendWsParticipants: () => (/* binding */ sendWsParticipants),
@@ -6877,6 +7640,27 @@ function sendWsPcmTransportStats(stats) {
     stats: stats || {},
     timestamp: Date.now(),
   });
+}
+
+function generateCopilotRequestId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return 'copilot_' + crypto.randomUUID();
+  }
+  return 'copilot_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+}
+
+function sendCopilotChatMessage({ text, meetingId, meetingTitle, transcriptWindow }) {
+  const requestId = generateCopilotRequestId();
+  sendWsMessage({
+    type: 'copilot_chat_message',
+    request_id: requestId,
+    text: text,
+    meeting_id: meetingId || null,
+    meeting_title: meetingTitle || null,
+    transcript_window: transcriptWindow || [],
+    created_at: Date.now()
+  });
+  return requestId;
 }
 
 

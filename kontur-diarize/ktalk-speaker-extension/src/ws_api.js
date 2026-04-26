@@ -53,3 +53,24 @@ export function sendWsPcmTransportStats(stats) {
     timestamp: Date.now(),
   });
 }
+
+function generateCopilotRequestId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return 'copilot_' + crypto.randomUUID();
+  }
+  return 'copilot_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+}
+
+export function sendCopilotChatMessage({ text, meetingId, meetingTitle, transcriptWindow }) {
+  const requestId = generateCopilotRequestId();
+  sendWsMessage({
+    type: 'copilot_chat_message',
+    request_id: requestId,
+    text: text,
+    meeting_id: meetingId || null,
+    meeting_title: meetingTitle || null,
+    transcript_window: transcriptWindow || [],
+    created_at: Date.now()
+  });
+  return requestId;
+}
