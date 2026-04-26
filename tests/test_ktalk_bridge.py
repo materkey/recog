@@ -895,6 +895,74 @@ async def test_subscriber_hello_without_active_meeting_is_noop():
         await handler_task
 
 
+# --- copilot_channel_hello: copilot channel client registration ---
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_hello_registers_client():
+    """
+    given: a WS client connects and sends `copilot_channel_hello`
+    when:  _handle_client processes the stream
+    then:  the client is moved out of _connected_clients into
+           _copilot_channel_clients while the connection is still open;
+           the disconnect cleanup purges it from both sets
+    """
+    bridge = KTalkBridge()
+
+    ws = ControllableFakeWebSocket()
+    ws.add_message(json.dumps({"type": "copilot_channel_hello"}))
+
+    handler_task = asyncio.create_task(bridge._handle_client(ws))
+    for _ in range(20):
+        if ws in bridge._copilot_channel_clients:
+            break
+        await asyncio.sleep(0.01)
+    try:
+        assert ws in bridge._copilot_channel_clients
+        assert ws not in bridge._connected_clients
+        assert ws not in bridge._subscriber_clients
+    finally:
+        ws.signal_close()
+        await handler_task
+
+    # Finally-block cleanup must purge from all three sets.
+    assert ws not in bridge._connected_clients
+    assert ws not in bridge._subscriber_clients
+    assert ws not in bridge._copilot_channel_clients
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_disconnect_does_not_end_ktalk_meeting():
+    """
+    given: KTalkBridge with an active ktalk meeting AND an extension client
+           still connected; a copilot channel client also connects and sends
+           hello
+    when:  the copilot channel disconnects
+    then:  on_ktalk_leave is NOT called — the extension is still present,
+           so the meeting must continue. Channel clients live in their own
+           set (`_copilot_channel_clients`) so they never block lifecycle.
+    """
+    bridge = KTalkBridge()
+    mock_storage = Mock()
+    mock_storage._load_meta = Mock(return_value={"source": "ktalk"})
+    mock_storage.on_ktalk_leave = Mock()
+    bridge.set_meeting_storage(mock_storage)
+
+    # Extension client present.
+    extension_ws = FakeWebSocket()
+    bridge._connected_clients.add(extension_ws)
+
+    channel_ws = FakeWebSocket()
+    channel_ws.add_message(json.dumps({"type": "copilot_channel_hello"}))
+    await bridge._handle_client(channel_ws)
+
+    mock_storage.on_ktalk_leave.assert_not_called()
+    assert extension_ws in bridge._connected_clients
+
+    # Cleanup
+    bridge._connected_clients.discard(extension_ws)
+
+
 # --- send_transcript: source_id payload serialization ---
 
 
