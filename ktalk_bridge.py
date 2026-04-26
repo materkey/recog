@@ -21,6 +21,7 @@ KTalk Bridge - WebSocket server для приёма данных о спикер
 import asyncio
 import base64
 import binascii
+import collections
 import json
 import threading
 import time
@@ -307,6 +308,14 @@ class KTalkBridge:
         # after the meeting has ended is dropped instead of being relayed
         # to extension clients (which now belong to the next meeting).
         self._copilot_pending_requests: Dict[str, str] = {}
+
+        # Recent transcript buffer keyed by segment_id, used by the
+        # `get_recent_transcript` MCP tool exposed by `recog/copilot_channel.py`.
+        # The deque preserves insertion order with a hard cap; on overflow the
+        # oldest segment_id is also evicted from the dict so memory stays
+        # bounded across long meetings.
+        self._copilot_transcript_buffer: Dict[int, dict] = {}
+        self._copilot_transcript_order: collections.deque = collections.deque(maxlen=300)
 
         # Отслеживание активного сегмента речи
         self._segment_start_time: Optional[float] = None
@@ -748,6 +757,60 @@ class KTalkBridge:
                 except Exception:
                     pass  # Клиент может отключиться
 
+        if segment_id > 0:
+            meeting_id = (
+                self._meeting_storage.get_current_meeting_id()
+                if self._meeting_storage is not None
+                else None
+            )
+            self._record_copilot_transcript(
+                segment_id=segment_id,
+                speaker=speaker,
+                text=text,
+                meeting_id=meeting_id,
+            )
+
+    def _record_copilot_transcript(
+        self,
+        *,
+        segment_id: int,
+        speaker: str,
+        text: str,
+        meeting_id: Optional[str],
+    ) -> None:
+        """Append/replace a recent-transcript entry keyed by segment_id.
+
+        Backs the `get_recent_transcript` MCP tool in
+        `recog/copilot_channel.py`. The deque preserves insertion order so
+        an overflow can evict the oldest segment_id; for an existing entry
+        we overwrite text/speaker (continuations) and bump `end_ms` while
+        keeping the original `start_ms` and `refined` flag.
+        """
+        if segment_id <= 0:
+            return
+        now_ms = time.time() * 1000
+        with self._lock:
+            existing = self._copilot_transcript_buffer.get(segment_id)
+            if existing is not None:
+                existing["speaker"] = speaker
+                existing["text"] = text
+                existing["end_ms"] = now_ms
+                existing["meeting_id"] = meeting_id
+                return
+            if len(self._copilot_transcript_order) == self._copilot_transcript_order.maxlen:
+                evicted = self._copilot_transcript_order.popleft()
+                self._copilot_transcript_buffer.pop(evicted, None)
+            self._copilot_transcript_order.append(segment_id)
+            self._copilot_transcript_buffer[segment_id] = {
+                "segment_id": segment_id,
+                "speaker": speaker,
+                "text": text,
+                "start_ms": now_ms,
+                "end_ms": now_ms,
+                "refined": False,
+                "meeting_id": meeting_id,
+            }
+
     def send_refine(self, updates: list[dict], meeting_id: Optional[str] = None):
         """Broadcast tier-2 refined segment text to all connected clients.
 
@@ -796,6 +859,24 @@ class KTalkBridge:
                     )
                 except Exception:
                     pass  # Клиент может отключиться
+
+        # Tier-2 refine rewrites the recent-transcript buffer so the
+        # `get_recent_transcript` MCP tool returns refined text once it is
+        # available. Segments not yet in the buffer (e.g. evicted past the
+        # deque cap) are ignored silently.
+        with self._lock:
+            for u in updates:
+                sid = u.get("segment_id")
+                text = u.get("text")
+                if not isinstance(sid, int) or sid <= 0:
+                    continue
+                if not isinstance(text, str):
+                    continue
+                entry = self._copilot_transcript_buffer.get(sid)
+                if entry is None:
+                    continue
+                entry["text"] = text
+                entry["refined"] = True
 
     async def _send_transcript_history(self):
         """Отправляет историю транскрипта текущей встречи всем подключённым клиентам."""
@@ -2032,6 +2113,73 @@ class KTalkBridge:
                 "status": status,
                 "message": message_text,
             })
+
+        elif msg_type == "get_recent_transcript_request":
+            # Channel server (recog/copilot_channel.py) requests a snapshot
+            # of the recent transcript buffer for the current meeting. The
+            # response is sent only to the originator socket so the buffer
+            # cannot leak across meetings or clients.
+            request_id = data.get("request_id")
+            if not isinstance(request_id, str) or not request_id:
+                print(
+                    "[KTalk Bridge] get_recent_transcript_request missing/invalid request_id — ignored",
+                    file=sys.stderr,
+                )
+                return
+            window_seconds = data.get("window_seconds", 180)
+            if not isinstance(window_seconds, (int, float)) or window_seconds < 0:
+                window_seconds = 180
+            since_segment_id = data.get("since_segment_id")
+            if since_segment_id is not None and not isinstance(since_segment_id, int):
+                since_segment_id = None
+            include_refined = data.get("include_refined", True)
+            if not isinstance(include_refined, bool):
+                include_refined = True
+
+            current_meeting_id = (
+                self._meeting_storage.get_current_meeting_id()
+                if self._meeting_storage is not None
+                else None
+            )
+            cutoff_ms = time.time() * 1000 - float(window_seconds) * 1000
+
+            with self._lock:
+                ordered_entries = [
+                    self._copilot_transcript_buffer[sid]
+                    for sid in self._copilot_transcript_order
+                    if sid in self._copilot_transcript_buffer
+                ]
+
+            segments = []
+            for entry in ordered_entries:
+                if entry.get("meeting_id") != current_meeting_id:
+                    continue
+                if entry.get("end_ms", 0) < cutoff_ms:
+                    continue
+                if since_segment_id is not None and entry["segment_id"] <= since_segment_id:
+                    continue
+                if not include_refined and entry.get("refined"):
+                    continue
+                segments.append(dict(entry))
+
+            response = {
+                "type": "get_recent_transcript_response",
+                "request_id": request_id,
+                "segments": segments,
+            }
+            if websocket is not None:
+                try:
+                    await websocket.send(json.dumps(response, ensure_ascii=False))
+                except Exception as e:
+                    print(
+                        f"[KTalk Bridge] Failed to send get_recent_transcript_response: {e}",
+                        file=sys.stderr,
+                    )
+            else:
+                print(
+                    "[KTalk Bridge] get_recent_transcript_request without websocket — response dropped",
+                    file=sys.stderr,
+                )
 
     async def _run_server(self):
         """Запускает WebSocket сервер."""

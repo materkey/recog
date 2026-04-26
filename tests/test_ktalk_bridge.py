@@ -1,7 +1,9 @@
 """Tests for ktalk_bridge.py."""
 import asyncio
 import base64
+import collections
 import json
+import time
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock
@@ -1530,3 +1532,309 @@ def test_send_transcript_omits_source_id_when_empty_default():
         bridge.send_transcript("Alice", "привет", "10:00:00")
         payload = mock_dumps.call_args.args[0]
         assert "source_id" not in payload
+
+
+# --- Recent transcript buffer + get_recent_transcript snapshot ---
+
+
+def _make_storage_for_meeting(meeting_id: str) -> Mock:
+    """Build a Mock MeetingStorage that always reports `meeting_id`."""
+    storage = Mock()
+    storage.get_current_meeting_id = Mock(return_value=meeting_id)
+    return storage
+
+
+def test_send_transcript_appends_buffer_entry_with_meeting_id():
+    """
+    given: bridge with meeting_storage reporting "m-1" and no connected
+           clients (broadcast is a noop)
+    when:  send_transcript is called with a positive segment_id
+    then:  the recent-transcript buffer carries an entry keyed by
+           segment_id with speaker/text/meeting_id/refined=False and a
+           wall-clock end_ms in the present
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    bridge.send_transcript("Alice", "привет всем", "10:00:00", segment_id=42)
+
+    assert 42 in bridge._copilot_transcript_buffer
+    entry = bridge._copilot_transcript_buffer[42]
+    assert entry["segment_id"] == 42
+    assert entry["speaker"] == "Alice"
+    assert entry["text"] == "привет всем"
+    assert entry["meeting_id"] == "m-1"
+    assert entry["refined"] is False
+    assert entry["start_ms"] <= entry["end_ms"]
+    assert list(bridge._copilot_transcript_order) == [42]
+
+
+def test_send_transcript_skips_buffer_when_segment_id_zero():
+    """
+    given: bridge with meeting_storage; send_transcript called without
+           a segment_id (defaults to 0)
+    when:  the call completes
+    then:  the buffer stays empty — segment_id=0 is the "no id" sentinel
+           used by mic-only paths and must not pollute the snapshot
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    bridge.send_transcript("Alice", "no-id", "10:00:00")
+
+    assert bridge._copilot_transcript_buffer == {}
+    assert list(bridge._copilot_transcript_order) == []
+
+
+def test_send_transcript_replaces_entry_on_continuation():
+    """
+    given: an existing buffer entry for segment_id=7 (partial transcript)
+    when:  a continuation chunk lands carrying the same segment_id with
+           appended text
+    then:  the entry text is overwritten while start_ms is preserved and
+           end_ms advances; the deque is not duplicated
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    bridge.send_transcript("Alice", "первая", "10:00:00", segment_id=7)
+    first_entry = bridge._copilot_transcript_buffer[7]
+    first_start_ms = first_entry["start_ms"]
+    first_end_ms = first_entry["end_ms"]
+
+    # Force a measurable delta so end_ms moves forward without flaking.
+    time.sleep(0.005)
+
+    bridge.send_transcript(
+        "Alice", "первая часть", "10:00:01", is_continuation=True, segment_id=7
+    )
+
+    assert list(bridge._copilot_transcript_order) == [7]
+    updated = bridge._copilot_transcript_buffer[7]
+    assert updated["text"] == "первая часть"
+    assert updated["start_ms"] == first_start_ms
+    assert updated["end_ms"] >= first_end_ms
+
+
+def test_send_refine_updates_buffer_text_and_marks_refined():
+    """
+    given: a buffer entry from a prior send_transcript
+    when:  send_refine carries an update for that segment_id
+    then:  the entry text is replaced with the refined string and
+           refined=True; segments not in the buffer are silently ignored
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    bridge.send_transcript("Alice", "тираж1", "10:00:00", segment_id=1)
+    bridge.send_transcript("Alice", "тираж2", "10:00:01", segment_id=2)
+
+    bridge.send_refine([
+        {"segment_id": 1, "text": "тираж 1 точный"},
+        {"segment_id": 99, "text": "не существует"},  # ignored
+    ])
+
+    refined = bridge._copilot_transcript_buffer[1]
+    assert refined["text"] == "тираж 1 точный"
+    assert refined["refined"] is True
+
+    # Untouched entry stays as-is.
+    assert bridge._copilot_transcript_buffer[2]["refined"] is False
+    assert bridge._copilot_transcript_buffer[2]["text"] == "тираж2"
+    # Phantom segment_id was not inserted.
+    assert 99 not in bridge._copilot_transcript_buffer
+
+
+@pytest.mark.asyncio
+async def test_get_recent_transcript_request_returns_segments_within_window():
+    """
+    given: bridge with three buffered segments, one of which is older than
+           the requested window
+    when:  get_recent_transcript_request arrives over the channel WS
+    then:  the response is sent only on the originator websocket and
+           contains segments newer than the window cutoff in insertion
+           order
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    bridge.send_transcript("Alice", "первая", "10:00:00", segment_id=1)
+    bridge.send_transcript("Bob",   "вторая", "10:00:05", segment_id=2)
+    bridge.send_transcript("Alice", "третья", "10:00:10", segment_id=3)
+
+    # Push segment 1 outside a 60-second window by rewriting end_ms to the
+    # past — direct mutation matches how the buffer is filtered.
+    now_ms = time.time() * 1000
+    bridge._copilot_transcript_buffer[1]["end_ms"] = now_ms - 5 * 60 * 1000
+
+    requester = RecordingClient()
+    other_client = RecordingClient()
+    bridge._connected_clients.add(other_client)
+
+    await bridge._process_message(
+        {
+            "type": "get_recent_transcript_request",
+            "request_id": "snap-1",
+            "window_seconds": 60,
+        },
+        websocket=requester,
+    )
+
+    assert len(requester.sent) == 1
+    payload = json.loads(requester.sent[0])
+    assert payload["type"] == "get_recent_transcript_response"
+    assert payload["request_id"] == "snap-1"
+    ids = [s["segment_id"] for s in payload["segments"]]
+    assert ids == [2, 3]
+    # Non-originator clients must not receive the snapshot.
+    assert other_client.sent == []
+
+
+@pytest.mark.asyncio
+async def test_get_recent_transcript_request_filters_by_meeting_id():
+    """
+    given: buffer carries entries from a prior meeting "m-prev" and the
+           current meeting "m-now"
+    when:  the request asks for the active-meeting snapshot
+    then:  only entries with meeting_id == current meeting are returned
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    storage = _make_storage_for_meeting("m-now")
+    bridge.set_meeting_storage(storage)
+
+    # Prior meeting entries — manually inject so we can control meeting_id.
+    bridge._copilot_transcript_buffer[10] = {
+        "segment_id": 10,
+        "speaker": "Alice",
+        "text": "old",
+        "start_ms": time.time() * 1000,
+        "end_ms": time.time() * 1000,
+        "refined": False,
+        "meeting_id": "m-prev",
+    }
+    bridge._copilot_transcript_order.append(10)
+
+    bridge.send_transcript("Bob", "new", "10:00:00", segment_id=11)
+
+    requester = RecordingClient()
+    await bridge._process_message(
+        {
+            "type": "get_recent_transcript_request",
+            "request_id": "snap-2",
+            "window_seconds": 600,
+        },
+        websocket=requester,
+    )
+
+    payload = json.loads(requester.sent[0])
+    ids = [s["segment_id"] for s in payload["segments"]]
+    assert ids == [11]
+
+
+@pytest.mark.asyncio
+async def test_get_recent_transcript_request_respects_since_segment_id():
+    """
+    given: buffer with three segments in the active meeting
+    when:  the request supplies since_segment_id=2
+    then:  only segments with segment_id strictly greater than 2 come back
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    bridge.send_transcript("Alice", "1", "10:00:00", segment_id=1)
+    bridge.send_transcript("Bob",   "2", "10:00:01", segment_id=2)
+    bridge.send_transcript("Alice", "3", "10:00:02", segment_id=3)
+
+    requester = RecordingClient()
+    await bridge._process_message(
+        {
+            "type": "get_recent_transcript_request",
+            "request_id": "snap-3",
+            "window_seconds": 600,
+            "since_segment_id": 2,
+        },
+        websocket=requester,
+    )
+
+    payload = json.loads(requester.sent[0])
+    ids = [s["segment_id"] for s in payload["segments"]]
+    assert ids == [3]
+
+
+@pytest.mark.asyncio
+async def test_get_recent_transcript_request_can_skip_refined_entries():
+    """
+    given: buffer with one refined and one tier-1 segment
+    when:  the request sets include_refined=False
+    then:  the refined entry is omitted from the response
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    bridge.send_transcript("Alice", "tier1", "10:00:00", segment_id=1)
+    bridge.send_transcript("Bob",   "tier2", "10:00:01", segment_id=2)
+    bridge.send_refine([{"segment_id": 2, "text": "tier2 refined"}])
+
+    requester = RecordingClient()
+    await bridge._process_message(
+        {
+            "type": "get_recent_transcript_request",
+            "request_id": "snap-4",
+            "window_seconds": 600,
+            "include_refined": False,
+        },
+        websocket=requester,
+    )
+
+    payload = json.loads(requester.sent[0])
+    ids = [s["segment_id"] for s in payload["segments"]]
+    assert ids == [1]
+
+
+@pytest.mark.asyncio
+async def test_get_recent_transcript_request_invalid_request_id_logs_and_drops(capsys):
+    """
+    given: an originator websocket
+    when:  get_recent_transcript_request arrives without a request_id
+    then:  no response is sent and a warning is logged — invalid input is
+           dropped silently per the dispatcher's "log and return" precedent
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    requester = RecordingClient()
+    await bridge._process_message(
+        {"type": "get_recent_transcript_request"},
+        websocket=requester,
+    )
+    assert requester.sent == []
+    assert "get_recent_transcript_request" in capsys.readouterr().err
+
+
+def test_record_copilot_transcript_evicts_oldest_when_deque_full():
+    """
+    given: a bridge whose buffer cap is much smaller than 300 (test deque)
+    when:  more than `maxlen` segments are recorded
+    then:  the oldest segment_id is evicted from BOTH the deque and the
+           dict so the buffer cannot grow without bound
+    """
+    bridge = KTalkBridge()
+    bridge._loop = None
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    # Shrink the deque to exercise eviction without 300 inserts.
+    bridge._copilot_transcript_order = collections.deque(maxlen=3)
+    for sid in range(1, 5):  # inserts 1..4 — should evict 1
+        bridge.send_transcript("Alice", f"t{sid}", "10:00:00", segment_id=sid)
+
+    assert list(bridge._copilot_transcript_order) == [2, 3, 4]
+    assert set(bridge._copilot_transcript_buffer.keys()) == {2, 3, 4}
