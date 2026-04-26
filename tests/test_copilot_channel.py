@@ -165,6 +165,54 @@ async def test_send_copilot_message_tool_emits_channel_reply():
             await _stop_link(stop, task)
 
 
+async def test_get_recent_transcript_cleans_pending_on_cancellation():
+    """
+    given: the channel server is connected to a fake bridge and `link.send`
+           is patched to block (simulating an in-flight WS write that hasn't
+           yet flushed to the wire)
+    when:  the `get_recent_transcript` tool task is cancelled mid-send
+           (mirrors a real MCP HTTP client closing while Claude awaits the
+           snapshot)
+    then:  `BridgeLink._pending` is empty after cancellation — the
+           `register_pending` entry must be removed even though the
+           CancelledError unwound the stack before the inner try/except
+           blocks ran. Without the wrap-everything try/finally, the future
+           would stay pinned until the next `set_socket(None)` reconnect.
+    """
+    async with FakeBridgeServer() as bridge:
+        link, mcp, stop, task = await _start_link(bridge.url)
+        try:
+            await asyncio.wait_for(bridge.connected_event.wait(), timeout=2.0)
+            hello = await asyncio.wait_for(bridge.received.get(), timeout=2.0)
+            assert hello["type"] == "copilot_channel_hello"
+            await _wait_connected(link)
+
+            send_started = asyncio.Event()
+
+            async def slow_send(payload):
+                send_started.set()
+                await asyncio.sleep(60)
+                return {"ok": True}
+
+            link.send = slow_send  # type: ignore[assignment]
+
+            assert link._pending == {}
+
+            tool_task = asyncio.create_task(
+                mcp.call_tool("get_recent_transcript", {})
+            )
+            await asyncio.wait_for(send_started.wait(), timeout=2.0)
+            assert len(link._pending) == 1
+
+            tool_task.cancel()
+            with pytest.raises(BaseException):
+                await tool_task
+
+            assert link._pending == {}
+        finally:
+            await _stop_link(stop, task)
+
+
 async def test_get_recent_transcript_round_trips_through_bridge():
     """
     given: a fake bridge that, on `get_recent_transcript_request`,

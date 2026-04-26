@@ -243,6 +243,61 @@ describe('Copilot DOM panel', () => {
     expect(document.querySelector('[data-copilot-id="a-dismiss"]')).toBeNull();
   });
 
+  test('handleCopilotStatus terminal done without prior reply releases pending and re-enables input', () => {
+    // Claude can call `set_copilot_status('done')` standalone without a
+    // matching `send_copilot_message`. The bridge already pops its
+    // bookkeeping for done/error (ktalk_bridge.py:2349); without symmetric
+    // handling here, the placeholder would stay on "Жду ответа Claude…"
+    // and `setCopilotInputBusy(false)` would never fire.
+    const requestId = 'req-done-only';
+    state.copilotMessages = [
+      { id: 'a-done', kind: 'assistant', text: '…', request_id: requestId, status: 'working', time: '10:00:00' },
+    ];
+    state.copilotPending.set(requestId, { userId: null, assistantId: 'a-done', createdAt: Date.now() });
+    renderCopilotMessage(state.copilotMessages[0]);
+
+    handleCopilotStatus({
+      type: 'copilot_status',
+      request_id: requestId,
+      status: 'done',
+    });
+
+    const assistant = state.copilotMessages.find((m) => m.id === 'a-done');
+    expect(assistant.kind).toBe('status');
+    expect(assistant.text).toMatch(/завершён/i);
+    expect(state.copilotPending.has(requestId)).toBe(false);
+  });
+
+  test('handleCopilotStatus per-request status does not overwrite channel indicator', () => {
+    // `state.copilotChannelStatus` drives the connectivity indicator label.
+    // It must reflect channel HEALTH (connected / channel offline), not the
+    // current chat turn's status. Without this guard, after one round-trip
+    // the indicator would freeze on "done" or "working…" even though the
+    // channel is still live, and a stale 'working' from a prior request
+    // would mask a real `channel_disconnected` event.
+    state.copilotChannelStatus = 'unknown';
+    handleCopilotStatus({
+      type: 'copilot_status',
+      request_id: 'req-progress',
+      status: 'working',
+    });
+    expect(state.copilotChannelStatus).toBe('unknown');
+
+    handleCopilotStatus({
+      type: 'copilot_status',
+      request_id: 'req-progress',
+      status: 'done',
+    });
+    expect(state.copilotChannelStatus).toBe('unknown');
+
+    handleCopilotStatus({
+      type: 'copilot_status',
+      request_id: 'req-progress',
+      status: 'channel_disconnected',
+    });
+    expect(state.copilotChannelStatus).toBe('channel_disconnected');
+  });
+
   test('handleCopilotBridgeDisconnect flips pending placeholders to error and re-enables input', () => {
     // Without surfacing the bridge drop, an in-flight chat would leave the
     // textarea disabled and the placeholder stuck on "Жду ответа Claude…"

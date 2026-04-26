@@ -1704,10 +1704,15 @@ export function handleCopilotStatus(data) {
   ensureCopilotContent();
   const requestId = data && data.request_id;
   const status = (data && data.status) || 'unknown';
-  state.copilotChannelStatus = status;
-  updateCopilotStatusIndicator();
 
   if (status === 'channel_disconnected') {
+    // Channel-level event — surface in the connectivity indicator. Per-
+    // request statuses (queued/working/done/error) below describe a single
+    // chat turn and must not overwrite the indicator: otherwise the label
+    // would read "done" or "working…" long after the per-request bubble
+    // already settled, masking actual channel health.
+    state.copilotChannelStatus = 'channel_disconnected';
+    updateCopilotStatusIndicator();
     const pendingId = findPendingAssistantId(requestId);
     if (pendingId) {
       updateCopilotMessage(pendingId, {
@@ -1753,6 +1758,29 @@ export function handleCopilotStatus(data) {
         text: message,
         time: nowDisplay()
       });
+    }
+    return;
+  }
+
+  // Terminal `done` — the bridge already pops the pending bookkeeping
+  // (ktalk_bridge.py:2349). If a matching `copilot_reply` arrived first,
+  // `findPendingAssistantId` returns null and there is nothing to do.
+  // If `done` arrived without a preceding reply (Claude called
+  // `set_copilot_status('done')` standalone), the placeholder would stay
+  // on "Жду ответа Claude…" and `setCopilotInputBusy(false)` would never
+  // run, stranding the textarea disabled until reload.
+  if (status === 'done') {
+    const pendingId = findPendingAssistantId(requestId);
+    if (pendingId) {
+      const message = (data && data.message) || 'Запрос завершён без ответа.';
+      updateCopilotMessage(pendingId, {
+        kind: 'status',
+        text: message,
+        status: 'done',
+        time: nowDisplay()
+      });
+      state.copilotPending.delete(requestId);
+      setCopilotInputBusy(false);
     }
     return;
   }
