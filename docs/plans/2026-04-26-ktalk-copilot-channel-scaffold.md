@@ -32,10 +32,10 @@
 - [x] Verify import: `./venv-gigaam/bin/python -c "from mcp.server.fastmcp import FastMCP; print('mcp ok')"`
 
 ### Task 2: Bridge — register Copilot channel clients on `copilot_channel_hello`
-- [ ] In `ktalk_bridge.py` `KTalkBridge.__init__`, add `self._copilot_channel_clients: set = set()` next to `_subscriber_clients` (around line 294)
-- [ ] In `_process_message` (line 1339+), add a new `elif msg_type == "copilot_channel_hello":` branch that adds `websocket` to `self._copilot_channel_clients` and logs at INFO level (model on subscriber_hello at line 1252)
-- [ ] In the disconnect / `finally` block of `_handle_client` (search for `_subscriber_clients.discard` or equivalent cleanup), also `self._copilot_channel_clients.discard(websocket)`
-- [ ] Add a unit test `test_copilot_channel_hello_registers_client` in `tests/test_ktalk_bridge.py` modelled on the closest existing subscriber test: send the frame via `_process_message`, assert `bridge._copilot_channel_clients` contains the mock websocket
+- [x] In `ktalk_bridge.py` `KTalkBridge.__init__`, add `self._copilot_channel_clients: set = set()` next to `_subscriber_clients` (around line 294)
+- [x] In `_process_message` (line 1339+), add a new `elif msg_type == "copilot_channel_hello":` branch that adds `websocket` to `self._copilot_channel_clients` and logs at INFO level (model on subscriber_hello at line 1252)
+- [x] In the disconnect / `finally` block of `_handle_client` (search for `_subscriber_clients.discard` or equivalent cleanup), also `self._copilot_channel_clients.discard(websocket)`
+- [x] Add a unit test `test_copilot_channel_hello_registers_client` in `tests/test_ktalk_bridge.py` modelled on the closest existing subscriber test: send the frame via `_process_message`, assert `bridge._copilot_channel_clients` contains the mock websocket
 
 ### Task 3: Bridge — route `copilot_chat_message` to channel clients
 - [ ] Add a new `elif msg_type == "copilot_chat_message":` branch in `_process_message`. Validate required fields: `request_id` (non-empty str), `text` (non-empty str). On invalid, log a warning and return without raising.

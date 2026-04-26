@@ -292,6 +292,13 @@ class KTalkBridge:
         # send clock_sync/speaker_update so we do not reset _clock_offset
         # on their connect. Populated when a client sends `subscriber_hello`.
         self._subscriber_clients = set()
+        # Copilot channel clients (recog/copilot_channel.py) connect as the
+        # bidirectional bridge between extension chat frames and a Claude
+        # Code MCP session. Like subscribers, they are isolated from the
+        # KTalk meeting lifecycle: their presence must not block
+        # "last extension disconnect -> end meeting". Populated when a
+        # client sends `copilot_channel_hello`.
+        self._copilot_channel_clients: set = set()
 
         # Отслеживание активного сегмента речи
         self._segment_start_time: Optional[float] = None
@@ -1273,7 +1280,7 @@ class KTalkBridge:
                         if no_extension_clients:
                             await self._end_meeting_on_last_extension_gone()
                         continue
-                    await self._process_message(data)
+                    await self._process_message(data, websocket=websocket)
                 except json.JSONDecodeError:
                     print(f"[KTalk Bridge] Invalid JSON: {message[:100]}", file=sys.stderr)
                 except Exception as e:
@@ -1283,11 +1290,19 @@ class KTalkBridge:
         finally:
             with self._lock:
                 was_subscriber = websocket in self._subscriber_clients
+                was_copilot_channel = websocket in self._copilot_channel_clients
                 self._connected_clients.discard(websocket)
                 self._subscriber_clients.discard(websocket)
+                self._copilot_channel_clients.discard(websocket)
                 no_extension_clients = not self._connected_clients
+            if was_copilot_channel:
+                role = "Copilot channel"
+            elif was_subscriber:
+                role = "Subscriber"
+            else:
+                role = "Client"
             print(
-                f"[KTalk Bridge] {'Subscriber' if was_subscriber else 'Client'} disconnected",
+                f"[KTalk Bridge] {role} disconnected",
                 file=sys.stderr,
             )
             # Only extension clients count for lifecycle — subscribers are
@@ -1336,8 +1351,15 @@ class KTalkBridge:
             task.add_done_callback(self._background_tasks.discard)
         print("[KTalk Bridge] Ended KTalk meeting due to client disconnect", file=sys.stderr)
 
-    async def _process_message(self, data: dict):
-        """Обрабатывает сообщение от extension."""
+    async def _process_message(self, data: dict, websocket=None):
+        """Обрабатывает сообщение от extension.
+
+        `websocket` is required for branches that move the originating
+        socket between client sets (e.g. `copilot_channel_hello`) or that
+        need to address the originator directly (e.g. `copilot_chat_message`
+        replying with a `channel_disconnected` status). Other branches
+        broadcast or operate on shared state and ignore it.
+        """
         msg_type = data.get("type")
 
         if msg_type == "speaker_update":
@@ -1737,6 +1759,28 @@ class KTalkBridge:
                         f"[KTalk Bridge] pcm_chunk callback raised: {e}",
                         file=sys.stderr,
                     )
+
+        elif msg_type == "copilot_channel_hello":
+            # Copilot channel client (recog/copilot_channel.py) announces
+            # itself. Move the connection out of `_connected_clients` (where
+            # `_handle_client` registered it on connect) into the dedicated
+            # channel set so that the meeting-lifecycle path
+            # ("last extension disconnect -> end meeting") does not count
+            # this socket as an extension. Modelled on the `subscriber_hello`
+            # handshake.
+            if websocket is None:
+                print(
+                    "[KTalk Bridge] copilot_channel_hello without websocket — ignored",
+                    file=sys.stderr,
+                )
+                return
+            with self._lock:
+                self._connected_clients.discard(websocket)
+                self._copilot_channel_clients.add(websocket)
+            print(
+                f"[KTalk Bridge] Copilot channel client registered from {getattr(websocket, 'remote_address', 'unknown')}",
+                file=sys.stderr,
+            )
 
     async def _run_server(self):
         """Запускает WebSocket сервер."""
