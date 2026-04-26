@@ -176,6 +176,32 @@ describe('Copilot DOM panel', () => {
     expect(dom.querySelector('.copilot-msg-actions')).toBeNull();
   });
 
+  test('handleCopilotStatus terminal error flips placeholder, drops pending, re-enables input', () => {
+    // Without symmetric handling for status === 'error', the bridge could
+    // emit a terminal error and the input would stay disabled forever
+    // — handleCopilotStatus would only update the placeholder text and
+    // leave state.copilotPending populated, blocking setCopilotInputBusy
+    // from running.
+    const requestId = 'req-err';
+    state.copilotMessages = [
+      { id: 'a-err', kind: 'assistant', text: '…', request_id: requestId, status: 'working', time: '10:00:00' },
+    ];
+    state.copilotPending.set(requestId, { userId: null, assistantId: 'a-err', createdAt: Date.now() });
+    renderCopilotMessage(state.copilotMessages[0]);
+
+    handleCopilotStatus({
+      type: 'copilot_status',
+      request_id: requestId,
+      status: 'error',
+      message: 'Claude crashed',
+    });
+
+    const assistant = state.copilotMessages.find((m) => m.id === 'a-err');
+    expect(assistant.kind).toBe('error');
+    expect(assistant.text).toBe('Claude crashed');
+    expect(state.copilotPending.has(requestId)).toBe(false);
+  });
+
   test('appendCopilotSystemMessage skips state push when Copilot DOM is missing', async () => {
     // Drop the Copilot host so `createCopilotContent` returns null and
     // `renderCopilotMessage` cannot attach the bubble. Without the gate

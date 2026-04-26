@@ -1536,7 +1536,14 @@ class KTalkBridge:
         self._clear_speaker_state()
         if not (self._meeting_storage and self._meeting_storage.current_meeting_path):
             return
-        meta = self._meeting_storage._load_meta()
+        try:
+            meta = self._meeting_storage._load_meta()
+        except Exception as e:
+            print(
+                f"[KTalk Bridge] _load_meta failed during disconnect cleanup: {e}",
+                file=sys.stderr,
+            )
+            return
         if not (meta and meta.get("source") == "ktalk"):
             return
         # Capture prev meeting context BEFORE on_ktalk_leave switches it
@@ -2345,9 +2352,16 @@ class KTalkBridge:
             )
             cutoff_ms = time.time() * 1000 - float(window_seconds) * 1000
 
+            # Copy entries inside the lock — the refine worker thread
+            # mutates buffer entries via `send_refine` and the asyncio
+            # thread mutates them via `_record_copilot_transcript`. A
+            # reference snapshot would let mid-iteration mutations create
+            # torn reads (e.g., `refined` flips True between the filter
+            # check and the `dict(entry)` copy below). Snapshotting under
+            # the lock guarantees a consistent view.
             with self._lock:
                 ordered_entries = [
-                    self._copilot_transcript_buffer[sid]
+                    dict(self._copilot_transcript_buffer[sid])
                     for sid in self._copilot_transcript_order
                     if sid in self._copilot_transcript_buffer
                 ]
@@ -2362,7 +2376,7 @@ class KTalkBridge:
                     continue
                 if not include_refined and entry.get("refined"):
                     continue
-                segments.append(dict(entry))
+                segments.append(entry)
 
             response = {
                 "type": "get_recent_transcript_response",

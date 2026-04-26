@@ -6216,6 +6216,34 @@ function handleCopilotStatus(data) {
     return;
   }
 
+  // Terminal `error` from the channel server (e.g. Claude failed) — without
+  // a corresponding `copilot_reply` the input would stay disabled forever
+  // and the placeholder would still claim "working". Symmetrize with
+  // channel_disconnected: flip the placeholder to an error bubble, drop the
+  // pending entry, and re-enable input so the user can retry.
+  if (status === 'error') {
+    const pendingId = findPendingAssistantId(requestId);
+    const message = (data && data.message) || 'Claude не смог ответить.';
+    if (pendingId) {
+      updateCopilotMessage(pendingId, {
+        kind: 'error',
+        text: message,
+        status: 'error',
+        time: nowDisplay()
+      });
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.delete(requestId);
+      setCopilotInputBusy(false);
+    } else {
+      appendCopilotMessage({
+        id: nextCopilotId(),
+        kind: 'error',
+        text: message,
+        time: nowDisplay()
+      });
+    }
+    return;
+  }
+
   const pendingId = findPendingAssistantId(requestId);
   if (pendingId) {
     updateCopilotMessage(pendingId, {
