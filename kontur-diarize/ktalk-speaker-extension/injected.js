@@ -7555,6 +7555,11 @@ function connectWebSocket() {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleCopilotReply)(data);
         } else if (data.type === 'copilot_status') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleCopilotStatus)(data);
+        } else if (data.type === 'meeting_started') {
+          const title = (data && data.meeting_title) ? ` — ${data.meeting_title}` : '';
+          (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)(`Встреча началась${title}`);
+        } else if (data.type === 'meeting_ended') {
+          (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)('Встреча закончилась');
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);

@@ -300,6 +300,14 @@ class KTalkBridge:
         # client sends `copilot_channel_hello`.
         self._copilot_channel_clients: set = set()
 
+        # Tracks `copilot_chat_message` request_id -> meeting_id at the
+        # moment the request was forwarded to channel clients. On
+        # `meeting_leave` the value is prefixed with `"stale:"` so any
+        # late `copilot_channel_reply` / `copilot_channel_status` arriving
+        # after the meeting has ended is dropped instead of being relayed
+        # to extension clients (which now belong to the next meeting).
+        self._copilot_pending_requests: Dict[str, str] = {}
+
         # Отслеживание активного сегмента речи
         self._segment_start_time: Optional[float] = None
         self._segment_speaker_name: Optional[str] = None
@@ -814,6 +822,28 @@ class KTalkBridge:
                 await client.send(message)
             except Exception:
                 pass  # Клиент может отключиться
+
+    async def _broadcast_to_channel_clients(self, data: dict):
+        """Send a frame to every registered Copilot channel client.
+
+        Channel clients live outside `_connected_clients`, so the regular
+        `_broadcast_message` does not reach them. Used for meeting
+        lifecycle (`meeting_started`/`meeting_ended`) and any future
+        bridge → channel notifications.
+        """
+        with self._lock:
+            channel_clients = list(self._copilot_channel_clients)
+        if not channel_clients:
+            return
+        message = json.dumps(data, ensure_ascii=False)
+        for client in channel_clients:
+            try:
+                await client.send(message)
+            except Exception as e:
+                print(
+                    f"[KTalk Bridge] Failed to send {data.get('type')} to channel client: {e}",
+                    file=sys.stderr,
+                )
 
     async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.4") -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
@@ -1567,6 +1597,17 @@ class KTalkBridge:
                     if self._on_meeting_change:
                         meeting_path = self._meeting_storage.current_meeting_path
                         self._on_meeting_change(meeting_id, meeting_path)
+                # Emit lifecycle event: channel clients use it to attach
+                # meeting context to the next Claude turn, extension
+                # clients render a system entry in the Copilot tab.
+                meeting_started_frame = {
+                    "type": "meeting_started",
+                    "meeting_id": meeting_id,
+                    "meeting_title": title,
+                    "created_at": time.time() * 1000,
+                }
+                await self._broadcast_to_channel_clients(meeting_started_frame)
+                await self._broadcast_message(meeting_started_frame)
                 # Отправляем историю транскрипта в extension
                 await self._send_transcript_history()
 
@@ -1599,8 +1640,33 @@ class KTalkBridge:
                 if self._on_meeting_change:
                     meeting_path = self._meeting_storage.current_meeting_path
                     self._on_meeting_change(new_meeting_id, meeting_path)
+                # Mark every in-flight `copilot_chat_message` request that
+                # belonged to the meeting we just left as stale. A late
+                # `copilot_channel_reply` / `_status` for one of these
+                # requests must not reach the extension because the chat
+                # tab now belongs to the next meeting.
+                stale_count = 0
+                for req_id, mid in list(self._copilot_pending_requests.items()):
+                    if mid == prev_meeting_id and not mid.startswith("stale:"):
+                        self._copilot_pending_requests[req_id] = f"stale:{mid}"
+                        stale_count += 1
+                if stale_count:
+                    print(
+                        f"[KTalk Bridge] Marked {stale_count} copilot request(s) stale on meeting_leave",
+                        file=sys.stderr,
+                    )
+                # Emit lifecycle event: channel clients stop generating
+                # proactive ticks for a meeting that just ended; extension
+                # clients render a system entry in the Copilot tab.
+                meeting_ended_frame = {
+                    "type": "meeting_ended",
+                    "meeting_id": prev_meeting_id,
+                    "created_at": time.time() * 1000,
+                }
+                await self._broadcast_to_channel_clients(meeting_ended_frame)
                 # Notify extension about new meeting (safe to await here —
                 # speaker state is already clean).
+                await self._broadcast_message(meeting_ended_frame)
                 await self._broadcast_message({
                     "type": "new_meeting",
                     "meeting_id": new_meeting_id
@@ -1875,6 +1941,12 @@ class KTalkBridge:
                         f"[KTalk Bridge] Failed to forward copilot_chat_message to channel client: {e}",
                         file=sys.stderr,
                     )
+            # Record request_id -> meeting_id so a late reply that
+            # arrives after `meeting_leave` can be filtered out.
+            # Empty string is used when no meeting is active (the reply
+            # will then be relayed normally — there is no meeting to
+            # become stale against).
+            self._copilot_pending_requests[request_id] = meeting_id or ""
 
         elif msg_type == "copilot_channel_reply":
             # Channel server (recog/copilot_channel.py) emits a reply for a
@@ -1905,6 +1977,14 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
                 return
+            tracked = self._copilot_pending_requests.get(request_id)
+            if isinstance(tracked, str) and tracked.startswith("stale:"):
+                print(
+                    f"[KTalk Bridge] copilot_channel_reply for stale request_id={request_id} (kind={kind}) — dropped",
+                    file=sys.stderr,
+                )
+                self._copilot_pending_requests.pop(request_id, None)
+                return
             meeting_id = data.get("meeting_id")
             created_at = data.get("created_at")
             if not isinstance(created_at, (int, float)):
@@ -1933,6 +2013,13 @@ class KTalkBridge:
             if not isinstance(status, str) or not status:
                 print(
                     "[KTalk Bridge] copilot_channel_status missing/invalid status — ignored",
+                    file=sys.stderr,
+                )
+                return
+            tracked = self._copilot_pending_requests.get(request_id)
+            if isinstance(tracked, str) and tracked.startswith("stale:"):
+                print(
+                    f"[KTalk Bridge] copilot_channel_status for stale request_id={request_id} (status={status}) — dropped",
                     file=sys.stderr,
                 )
                 return

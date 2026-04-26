@@ -1299,6 +1299,201 @@ async def test_copilot_channel_status_with_invalid_fields_is_ignored():
     assert extension_client.sent == []
 
 
+# --- meeting_started / meeting_ended: lifecycle frames to channel clients ---
+
+
+def _meeting_storage_mock(meeting_id="meet-1", new_meeting_id="meet-2"):
+    """Build a Mock MeetingStorage shaped for meeting_join/leave dispatch."""
+    storage = Mock()
+    storage.current_meeting_path = Path("/tmp/old.jsonl")
+    storage.current_meeting_id = meeting_id
+    storage.on_meeting_join = Mock(return_value=meeting_id)
+    storage.on_ktalk_leave = Mock(return_value=new_meeting_id)
+    storage.get_current_transcript = Mock(return_value=[])
+    storage.get_current_meeting_id = Mock(return_value=meeting_id)
+    storage._load_meta = Mock(return_value={"source": "ktalk"})
+    return storage
+
+
+@pytest.mark.asyncio
+async def test_meeting_join_emits_meeting_started_to_channel_and_extension():
+    """
+    given: a registered Copilot channel client AND an extension client;
+           meeting_storage configured to accept on_meeting_join
+    when:  the bridge processes a `meeting_join` frame
+    then:  both the channel client and the extension client receive a
+           `meeting_started` frame carrying the new meeting_id, the
+           supplied meeting_title, and a numeric created_at
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_meeting_storage_mock(meeting_id="2026-04-26_review"))
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/abc",
+        "title": "Sprint review",
+        "platform": "ktalk",
+    })
+
+    channel_started = [
+        json.loads(m) for m in channel_client.sent if json.loads(m)["type"] == "meeting_started"
+    ]
+    assert len(channel_started) == 1
+    payload = channel_started[0]
+    assert payload["meeting_id"] == "2026-04-26_review"
+    assert payload["meeting_title"] == "Sprint review"
+    assert isinstance(payload.get("created_at"), (int, float))
+
+    extension_started = [
+        json.loads(m) for m in extension_client.sent if json.loads(m)["type"] == "meeting_started"
+    ]
+    assert len(extension_started) == 1
+    assert extension_started[0]["meeting_id"] == "2026-04-26_review"
+
+
+@pytest.mark.asyncio
+async def test_meeting_leave_emits_meeting_ended_to_channel_and_extension():
+    """
+    given: a registered Copilot channel client AND an extension client;
+           meeting_storage with current_meeting_id="m-prev"
+    when:  the bridge processes a `meeting_leave` frame
+    then:  both the channel client and the extension client receive a
+           `meeting_ended` frame carrying the previous meeting_id
+           (captured before on_ktalk_leave switches storage state)
+    """
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="m-prev", new_meeting_id="m-next")
+    bridge.set_meeting_storage(storage)
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message({
+        "type": "meeting_leave",
+        "reason": "user_left",
+    })
+
+    channel_ended = [
+        json.loads(m) for m in channel_client.sent if json.loads(m)["type"] == "meeting_ended"
+    ]
+    assert len(channel_ended) == 1
+    assert channel_ended[0]["meeting_id"] == "m-prev"
+    assert isinstance(channel_ended[0].get("created_at"), (int, float))
+
+    extension_ended = [
+        json.loads(m) for m in extension_client.sent if json.loads(m)["type"] == "meeting_ended"
+    ]
+    assert len(extension_ended) == 1
+    assert extension_ended[0]["meeting_id"] == "m-prev"
+
+
+# --- stale request_id: late replies dropped after meeting_leave ---
+
+
+@pytest.mark.asyncio
+async def test_late_copilot_reply_for_previous_meeting_is_dropped():
+    """
+    given: a `copilot_chat_message` was forwarded for meeting "m-prev",
+           recording the request_id in `_copilot_pending_requests`;
+           then `meeting_leave` marked the request as stale
+    when:  a `copilot_channel_reply` arrives carrying the same request_id
+    then:  the reply is NOT relayed to extension clients — the stale
+           bookkeeping protects the next meeting's chat tab from leaks,
+           and the entry is purged so the dict cannot grow forever
+    """
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="m-prev", new_meeting_id="m-next")
+    bridge.set_meeting_storage(storage)
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    # Step 1: extension sends a chat message during meeting "m-prev".
+    await bridge._process_message({
+        "type": "copilot_chat_message",
+        "request_id": "req-late",
+        "text": "сводка за последние 5 минут",
+    }, websocket=RecordingClient())
+    assert bridge._copilot_pending_requests.get("req-late") == "m-prev"
+
+    # Step 2: user leaves the meeting; the entry must be marked stale.
+    await bridge._process_message({"type": "meeting_leave", "reason": "user_left"})
+    assert bridge._copilot_pending_requests["req-late"].startswith("stale:")
+
+    # Step 3: late reply arrives — must be dropped, not relayed.
+    extension_client.sent.clear()
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-late",
+        "kind": "manual",
+        "text": "поздняя сводка",
+    })
+    relayed = [m for m in extension_client.sent if json.loads(m)["type"] == "copilot_reply"]
+    assert relayed == []
+    # The stale entry is purged after a reply lands so the dict cannot
+    # grow indefinitely across meetings.
+    assert "req-late" not in bridge._copilot_pending_requests
+
+
+@pytest.mark.asyncio
+async def test_late_copilot_status_for_previous_meeting_is_dropped():
+    """
+    given: a stale request_id (already marked via meeting_leave)
+    when:  a `copilot_channel_status` arrives carrying that request_id
+    then:  no `copilot_status` frame is broadcast to extension clients
+    """
+    bridge = KTalkBridge()
+    bridge._copilot_pending_requests["req-late"] = "stale:m-prev"
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message({
+        "type": "copilot_channel_status",
+        "request_id": "req-late",
+        "status": "working",
+    })
+
+    assert extension_client.sent == []
+
+
+@pytest.mark.asyncio
+async def test_non_stale_copilot_reply_is_still_relayed():
+    """
+    given: a non-stale request_id recorded for the active meeting
+    when:  a `copilot_channel_reply` arrives carrying that request_id
+    then:  the reply IS relayed to extension clients (the stale-drop
+           gate is opt-in — no marker means alive)
+    """
+    bridge = KTalkBridge()
+    bridge._copilot_pending_requests["req-active"] = "m-current"
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-active",
+        "kind": "manual",
+        "text": "ответ",
+        "meeting_id": "m-current",
+    })
+
+    relayed = [json.loads(m) for m in extension_client.sent if json.loads(m)["type"] == "copilot_reply"]
+    assert len(relayed) == 1
+    assert relayed[0]["request_id"] == "req-active"
+    assert relayed[0]["text"] == "ответ"
+
+
 # --- send_transcript: source_id payload serialization ---
 
 
