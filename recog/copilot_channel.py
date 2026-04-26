@@ -56,14 +56,29 @@ class BridgeLink:
     via the FastMCP instance — see `_attach_tools`. When the WS is down
     `send` returns an error dict instead of raising so the MCP tool reports
     a structured failure to the caller.
+
+    `_pending` holds request_id -> Future entries awaiting an inbound
+    response (e.g. `get_recent_transcript_response`). The inbound dispatcher
+    in `_handle_inbound` resolves the matching future; the tool unregisters
+    on timeout to avoid leaking entries.
     """
 
     def __init__(self) -> None:
         self._ws: Optional[Any] = None
         self._lock = asyncio.Lock()
+        self._pending: dict[str, "asyncio.Future[dict]"] = {}
 
     def set_socket(self, ws: Optional[Any]) -> None:
         self._ws = ws
+        # Drop any in-flight futures — the underlying socket has been
+        # replaced, so the responses they were waiting for can never arrive.
+        if ws is None and self._pending:
+            for future in list(self._pending.values()):
+                if not future.done():
+                    future.set_exception(
+                        ConnectionError("bridge connection dropped")
+                    )
+            self._pending.clear()
 
     def is_connected(self) -> bool:
         return self._ws is not None
@@ -79,6 +94,21 @@ class BridgeLink:
             except Exception as exc:
                 return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         return {"ok": True}
+
+    def register_pending(self, request_id: str) -> "asyncio.Future[dict]":
+        future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = future
+        return future
+
+    def unregister_pending(self, request_id: str) -> None:
+        self._pending.pop(request_id, None)
+
+    def resolve_pending(self, request_id: str, result: dict) -> bool:
+        future = self._pending.pop(request_id, None)
+        if future is None or future.done():
+            return False
+        future.set_result(result)
+        return True
 
 
 def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
@@ -166,6 +196,48 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
             }
         )
 
+    @mcp.tool(
+        name="get_recent_transcript",
+        description=(
+            "Snapshot the recent transcript buffer for the active KTalk "
+            "meeting. Returns segments newer than `window_seconds` (default "
+            "180) and, if `since_segment_id` is provided, only segments "
+            "with a strictly larger id. Set `include_refined=False` to skip "
+            "tier-2 refined segments. The bridge filters by the current "
+            "meeting_id, so segments from a meeting that already ended are "
+            "never returned."
+        ),
+    )
+    async def get_recent_transcript(
+        window_seconds: int = 180,
+        since_segment_id: Optional[int] = None,
+        include_refined: bool = True,
+    ) -> dict:
+        if not link.is_connected():
+            return {"ok": False, "error": "bridge not connected"}
+        request_id = f"snapshot_{uuid.uuid4().hex[:12]}"
+        future = link.register_pending(request_id)
+        sent = await link.send(
+            {
+                "type": "get_recent_transcript_request",
+                "request_id": request_id,
+                "window_seconds": window_seconds,
+                "since_segment_id": since_segment_id,
+                "include_refined": include_refined,
+            }
+        )
+        if not sent.get("ok"):
+            link.unregister_pending(request_id)
+            return sent
+        try:
+            response = await asyncio.wait_for(future, timeout=5.0)
+        except asyncio.TimeoutError:
+            link.unregister_pending(request_id)
+            return {"ok": False, "error": "timeout waiting for transcript snapshot"}
+        except ConnectionError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "segments": response.get("segments", [])}
+
     return mcp
 
 
@@ -208,12 +280,7 @@ async def _ws_loop(bridge_url: str, link: BridgeLink, stop_event: asyncio.Event)
                 delay = INITIAL_BACKOFF_S
                 try:
                     async for raw in ws:
-                        # Tracer bullet: the frame consumer for
-                        # `copilot_user_message` lands in a follow-up plan
-                        # together with the extension Copilot tab. For now
-                        # we just acknowledge receipt at debug level so the
-                        # transport is observable end-to-end.
-                        await _handle_inbound(raw)
+                        await _handle_inbound(raw, link)
                 finally:
                     link.set_socket(None)
         except asyncio.CancelledError:
@@ -240,7 +307,7 @@ async def _ws_loop(bridge_url: str, link: BridgeLink, stop_event: asyncio.Event)
         delay = min(delay * 2, MAX_BACKOFF_S)
 
 
-async def _handle_inbound(raw: Any) -> None:
+async def _handle_inbound(raw: Any, link: BridgeLink) -> None:
     if isinstance(raw, (bytes, bytearray)):
         try:
             raw = raw.decode("utf-8")
@@ -263,6 +330,10 @@ async def _handle_inbound(raw: Any) -> None:
             f"request_id={request_id!r} text={text!r:.80}",
             file=sys.stderr,
         )
+    elif msg_type == "get_recent_transcript_response":
+        request_id = data.get("request_id")
+        if isinstance(request_id, str) and request_id:
+            link.resolve_pending(request_id, data)
 
 
 async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
