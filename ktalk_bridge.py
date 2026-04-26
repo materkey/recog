@@ -1523,6 +1523,11 @@ class KTalkBridge:
            transiently counted in `_connected_clients` (between WS-open
            and hello-processing), causing the extension's finally-block
            to skip the cleanup.
+
+        Mirrors the explicit `meeting_leave` Copilot cleanup so a hard
+        extension disconnect (page reload, crash, network drop) cannot
+        leak tick state, transcript-buffer entries, or in-flight
+        `copilot_chat_message` request bookkeeping into the next meeting.
         """
         # Clear stale participant state BEFORE bumping the generation
         # (same order as meeting_leave) so that the live thread's next
@@ -1550,6 +1555,32 @@ class KTalkBridge:
             task = asyncio.create_task(self._safe_generate_increment(prev_meeting_id, prev_meeting_path))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
+        # Copilot cleanup (mirror of `meeting_leave`): mark in-flight
+        # requests stale, halt proactive ticks, free the transcript buffer,
+        # and notify any still-connected channel client that the meeting
+        # ended. Without this a hard disconnect would let a late
+        # `copilot_channel_reply` from the previous meeting leak into the
+        # next extension session.
+        stale_count = 0
+        for req_id, mid in list(self._copilot_pending_requests.items()):
+            if mid == prev_meeting_id and not mid.startswith("stale:"):
+                self._copilot_pending_requests[req_id] = f"stale:{mid}"
+                stale_count += 1
+        if stale_count:
+            print(
+                f"[KTalk Bridge] Marked {stale_count} copilot request(s) stale on extension disconnect",
+                file=sys.stderr,
+            )
+        self._copilot_tick_state = None
+        with self._lock:
+            self._copilot_transcript_buffer.clear()
+            self._copilot_transcript_order.clear()
+        if prev_meeting_id:
+            await self._broadcast_to_channel_clients({
+                "type": "meeting_ended",
+                "meeting_id": prev_meeting_id,
+                "created_at": time.time() * 1000,
+            })
         print("[KTalk Bridge] Ended KTalk meeting due to client disconnect", file=sys.stderr)
 
     async def _process_message(self, data: dict, websocket=None):
@@ -2200,6 +2231,29 @@ class KTalkBridge:
                 self._copilot_pending_requests.pop(request_id, None)
                 return
             meeting_id = data.get("meeting_id")
+            # Proactive replies use a synthetic `proactive_<uuid>` request_id
+            # that was never tracked in `_copilot_pending_requests`, so the
+            # stale-prefix check above cannot drop them. Cross-check the
+            # reply's `meeting_id` against the bridge's current meeting:
+            # mismatched ids almost certainly mean the meeting that produced
+            # the originating `transcript_tick` already ended. Fall through
+            # if either side is missing — replies generated before any
+            # meeting lifecycle should still reach the extension.
+            if isinstance(meeting_id, str) and meeting_id:
+                current_meeting_id = (
+                    self._meeting_storage.get_current_meeting_id()
+                    if self._meeting_storage is not None
+                    else None
+                )
+                if current_meeting_id and current_meeting_id != meeting_id:
+                    print(
+                        f"[KTalk Bridge] copilot_channel_reply for "
+                        f"meeting_id={meeting_id} but current is "
+                        f"{current_meeting_id} (kind={kind}) — dropped",
+                        file=sys.stderr,
+                    )
+                    self._copilot_pending_requests.pop(request_id, None)
+                    return
             created_at = data.get("created_at")
             if not isinstance(created_at, (int, float)):
                 created_at = time.time() * 1000

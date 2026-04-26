@@ -187,8 +187,10 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
         description=(
             "Send a Copilot message into the active KTalk meeting Copilot "
             "tab. Use kind='reply' for answers to a user request, "
-            "kind='live' for proactive notes, or kind='manual' for "
-            "ad-hoc messages."
+            "kind='proactive' for unsolicited notes (the extension UI "
+            "filters proactive messages through a 60 s cooldown and the "
+            "user's mute toggle — only kind='proactive' triggers that "
+            "path), or kind='manual' for ad-hoc messages."
         ),
     )
     async def send_copilot_message(
@@ -363,6 +365,19 @@ async def _ws_loop(bridge_url: str, link: BridgeLink, stop_event: asyncio.Event)
 
 
 async def _handle_inbound(raw: Any, link: BridgeLink) -> None:
+    """Dispatch inbound bridge frames.
+
+    Currently only `get_recent_transcript_response` is acted on (it
+    resolves a pending tool future). `copilot_user_message`,
+    `transcript_tick`, and `meeting_started`/`meeting_ended` arrive here
+    too but the bridge → Claude notification pipe is still a tracer-bullet
+    placeholder: standard MCP does not expose a generic server-pushed
+    event channel that would wake Claude up between tool calls, and the
+    Claude Code Channels mechanism that *would* (see `tasks.md` 1.1
+    spike) has not been validated locally. Until that spike lands, these
+    frames are logged for observability and dropped — Claude only
+    actually sees them when it calls `get_recent_transcript`.
+    """
     if isinstance(raw, (bytes, bytearray)):
         try:
             raw = raw.decode("utf-8")
@@ -377,18 +392,26 @@ async def _handle_inbound(raw: Any, link: BridgeLink) -> None:
     if not isinstance(data, dict):
         return
     msg_type = data.get("type")
-    if msg_type == "copilot_user_message":
-        request_id = data.get("request_id")
-        text = data.get("text")
-        print(
-            f"{LOG_PREFIX} received copilot_user_message "
-            f"request_id={request_id!r} text={text!r:.80}",
-            file=sys.stderr,
-        )
-    elif msg_type == "get_recent_transcript_response":
+    if msg_type == "get_recent_transcript_response":
         request_id = data.get("request_id")
         if isinstance(request_id, str) and request_id:
             link.resolve_pending(request_id, data)
+        return
+    if msg_type in {
+        "copilot_user_message",
+        "transcript_tick",
+        "meeting_started",
+        "meeting_ended",
+    }:
+        # Placeholder: see the docstring above. We log the type and a
+        # stable id so a developer can see the event flowed through, but
+        # Claude is not notified.
+        ref = data.get("request_id") or data.get("meeting_id")
+        print(
+            f"{LOG_PREFIX} dropped inbound {msg_type} ref={ref!r} — "
+            f"bridge→Claude notification path unimplemented (tasks.md 1.1)",
+            file=sys.stderr,
+        )
 
 
 async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:

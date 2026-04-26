@@ -2188,3 +2188,174 @@ def test_send_refine_with_meeting_id_skips_cross_meeting_entries():
     entry = bridge._copilot_transcript_buffer[1]
     assert entry["text"] == original_text
     assert entry["refined"] is False
+
+
+# --- _end_meeting_on_last_extension_gone: copilot cleanup parity with meeting_leave ---
+
+
+@pytest.mark.asyncio
+async def test_extension_disconnect_cleans_up_copilot_state():
+    """
+    given: an active ktalk meeting with copilot state populated — a
+           pending request_id mapped to the live meeting, an active
+           tick-state, a recent-transcript buffer entry, and one
+           registered copilot channel client
+    when:  the only extension client disconnects (no explicit
+           meeting_leave frame ever arrives — a page reload / crash /
+           network drop)
+    then:  the same Copilot cleanup that meeting_leave performs runs:
+           the pending request is marked stale, the tick-state is
+           cleared, the transcript buffer is emptied, and a
+           `meeting_ended` frame reaches the channel client. Without
+           this, a late `copilot_channel_reply` for the prior meeting
+           would leak into the next session.
+    """
+    bridge = KTalkBridge()
+
+    mock_storage = Mock()
+    mock_storage.current_meeting_path = Path("/tmp/m-prev.jsonl")
+    mock_storage.current_meeting_id = "m-prev"
+    mock_storage._load_meta = Mock(return_value={"source": "ktalk"})
+    mock_storage.on_ktalk_leave = Mock(return_value="m-next")
+    mock_storage.get_current_meeting_id = Mock(return_value="m-prev")
+    bridge.set_meeting_storage(mock_storage)
+
+    bridge._copilot_pending_requests["req-alive"] = "m-prev"
+    bridge._copilot_tick_state = {
+        "meeting_id": "m-prev",
+        "meeting_title": "Sprint review",
+        "seg_count": 0,
+        "last_seg_count": 0,
+        "last_emit_ts": time.time(),
+    }
+    bridge._copilot_transcript_buffer[7] = {
+        "segment_id": 7,
+        "speaker": "Alice",
+        "text": "first",
+        "start_ms": time.time() * 1000,
+        "end_ms": time.time() * 1000,
+        "refined": False,
+        "meeting_id": "m-prev",
+    }
+    bridge._copilot_transcript_order.append(7)
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    fake_ws = FakeWebSocket()
+    await bridge._handle_client(fake_ws)
+
+    assert bridge._copilot_pending_requests["req-alive"] == "stale:m-prev"
+    assert bridge._copilot_tick_state is None
+    assert bridge._copilot_transcript_buffer == {}
+    assert list(bridge._copilot_transcript_order) == []
+
+    ended = [
+        json.loads(m) for m in channel_client.sent
+        if json.loads(m).get("type") == "meeting_ended"
+    ]
+    assert len(ended) == 1
+    assert ended[0]["meeting_id"] == "m-prev"
+
+
+# --- copilot_channel_reply: cross-meeting filter for proactive replies ---
+
+
+@pytest.mark.asyncio
+async def test_proactive_reply_for_different_meeting_is_dropped():
+    """
+    given: bridge's current meeting is "m-now" and an extension client is
+           connected. Proactive replies use a synthetic
+           `proactive_<uuid>` request_id that was never tracked in
+           `_copilot_pending_requests`, so the request_id stale check
+           cannot drop them — only the meeting_id cross-check can.
+    when:  a `copilot_channel_reply` arrives carrying that synthetic
+           id and `meeting_id="m-old"` (the meeting that produced the
+           originating `transcript_tick` already ended)
+    then:  the reply is NOT relayed — the channel server lagged and
+           Claude's proactive note belongs to a meeting the user has
+           already left
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-now"))
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "proactive_abc123",
+        "kind": "proactive",
+        "text": "вопрос Славе про CI",
+        "meeting_id": "m-old",
+    })
+
+    relayed = [
+        m for m in extension_client.sent
+        if json.loads(m).get("type") == "copilot_reply"
+    ]
+    assert relayed == []
+
+
+@pytest.mark.asyncio
+async def test_proactive_reply_for_current_meeting_is_relayed():
+    """
+    given: bridge's current meeting is "m-now"
+    when:  a proactive `copilot_channel_reply` arrives carrying a
+           synthetic request_id and matching `meeting_id="m-now"`
+    then:  the reply IS relayed — the meeting_id filter only fires on
+           a mismatch
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-now"))
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "proactive_abc123",
+        "kind": "proactive",
+        "text": "вопрос Славе про CI",
+        "meeting_id": "m-now",
+    })
+
+    relayed = [
+        json.loads(m) for m in extension_client.sent
+        if json.loads(m).get("type") == "copilot_reply"
+    ]
+    assert len(relayed) == 1
+    assert relayed[0]["meeting_id"] == "m-now"
+    assert relayed[0]["kind"] == "proactive"
+
+
+@pytest.mark.asyncio
+async def test_reply_without_meeting_id_falls_through_filter():
+    """
+    given: bridge's current meeting is "m-now"; a reply arrives without
+           a `meeting_id` field (older channel server, or pre-meeting
+           manual send)
+    when:  the bridge processes the reply
+    then:  the reply IS relayed — the meeting_id filter is best-effort
+           and only drops on a definite mismatch, never on a missing id
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-now"))
+
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+    bridge._copilot_pending_requests["req-known"] = "m-now"
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-known",
+        "kind": "manual",
+        "text": "ответ без meeting_id",
+    })
+
+    relayed = [
+        json.loads(m) for m in extension_client.sent
+        if json.loads(m).get("type") == "copilot_reply"
+    ]
+    assert len(relayed) == 1
+    assert relayed[0]["request_id"] == "req-known"
