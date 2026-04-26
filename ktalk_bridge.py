@@ -1777,10 +1777,20 @@ class KTalkBridge:
             with self._lock:
                 self._connected_clients.discard(websocket)
                 self._copilot_channel_clients.add(websocket)
+                no_extension_clients = not self._connected_clients
             print(
                 f"[KTalk Bridge] Copilot channel client registered from {getattr(websocket, 'remote_address', 'unknown')}",
                 file=sys.stderr,
             )
+            # Race recovery: between this socket's WS-open and
+            # hello-processing, it sat in `_connected_clients`. If an
+            # extension client disconnected in that window, its
+            # finally-block saw `_connected_clients={channel_ws}` and
+            # skipped the meeting-end lifecycle. Re-run the check now
+            # that the channel client has been unmasked. Same pattern as
+            # `subscriber_hello` above.
+            if no_extension_clients:
+                await self._end_meeting_on_last_extension_gone()
 
         elif msg_type == "copilot_chat_message":
             # Extension forwards a user-typed chat line. Forward it to every
