@@ -95,8 +95,8 @@
 - [x] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension` — must succeed.
 
 ### Task 7: Commit and push
-- [ ] `git status` — confirm only intended files changed.
-- [ ] Atomic commits (collapse where it would split a single coherent change):
+- [x] `git status` — confirm only intended files changed.
+- [x] Atomic commits (collapse where it would split a single coherent change):
   - `feat(extension): add KTalk DOM Copilot tab and chat UI`
   - `feat(extension): wire copilot_reply, copilot_status, and meeting lifecycle frames`
   - `feat(bridge): emit meeting_started/meeting_ended to channel clients`
@@ -107,7 +107,7 @@
   - `feat(extension): render proactive copilot messages with cooldown and mute`
   - `test(copilot): scripted channel-server smoke and bridge transcript-buffer tests`
   - `docs(openspec): mark ktalk-copilot-chat tasks complete`
-- [ ] Push to current branch `ktalk-copilot-channel-scaffold`. Do not force-push. If push is rejected, surface the error and stop.
+- [x] Push to current branch `ktalk-copilot-channel-scaffold`. Do not force-push. If push is rejected, surface the error and stop.
 
 ## Post-Completion
 - Manual smoke (cannot be automated by ralphex):
