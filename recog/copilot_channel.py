@@ -62,11 +62,25 @@ from typing import Any, Optional
 
 import websockets
 from mcp.server.fastmcp import FastMCP
+from mcp.shared.message import SessionMessage
+from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 
 DEFAULT_BRIDGE_URL = "ws://127.0.0.1:8766"
 DEFAULT_MCP_HOST = "127.0.0.1"
 DEFAULT_MCP_PORT = 8767
+
+# Claude Code Channels (research preview): an MCP server declaring
+# `experimental['claude/channel']: {}` may emit `notifications/claude/channel`
+# notifications that wake the running session. The handler is gated on the
+# server name being listed in `--channels` (or `--dangerously-load-development-channels
+# server:<name>` for local dev). Transport is intentionally NOT gated on the
+# Claude Code side (`channelNotification.ts:gateChannelServer`) — the Streamable
+# HTTP transport is therefore valid for channel push, despite the bundled plugins
+# all using stdio. See `services/mcp/useManageMCPConnections.ts` for the
+# `setNotificationHandler` registration site.
+CHANNEL_NOTIFICATION_METHOD = "notifications/claude/channel"
+CHANNEL_CAPABILITY_KEY = "claude/channel"
 
 INITIAL_BACKOFF_S = 1.0
 MAX_BACKOFF_S = 30.0
@@ -93,6 +107,16 @@ class BridgeLink:
         self._ws: Optional[Any] = None
         self._lock = asyncio.Lock()
         self._pending: dict[str, "asyncio.Future[dict]"] = {}
+        # Bounded backlog for bridge → Claude events (`copilot_user_message`,
+        # `transcript_tick`, `meeting_started`, `meeting_ended`). Standard
+        # MCP has no server-pushed event channel that would wake Claude
+        # between tool calls; instead Claude drains this queue via the
+        # `await_copilot_event` long-poll tool while in copilot loop mode.
+        # maxsize=50 ≈ 12 min of transcript_ticks at the 15 s cadence —
+        # comfortably more than a polling Claude could miss before catching
+        # up. On overflow we drop the oldest event so the freshest meeting
+        # state is preserved.
+        self.event_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=50)
 
     def set_socket(self, ws: Optional[Any]) -> None:
         self._ws = ws
@@ -137,6 +161,125 @@ class BridgeLink:
         return True
 
 
+def _attach_channel_capability(mcp: FastMCP) -> None:
+    """Inject `experimental['claude/channel']: {}` into initialization.
+
+    FastMCP doesn't expose `experimental_capabilities` as a constructor kwarg,
+    so we monkey-patch the underlying lowlevel Server's
+    `create_initialization_options` to merge our capability key into whatever
+    the rest of the SDK passes in. This is the only knob Claude Code's
+    `gateChannelServer` actually inspects, so without it the server is invisible
+    to `--channels`.
+    """
+    server = mcp._mcp_server
+    original = server.create_initialization_options
+
+    def patched(notification_options=None, experimental_capabilities=None):
+        caps = dict(experimental_capabilities or {})
+        caps.setdefault(CHANNEL_CAPABILITY_KEY, {})
+        return original(notification_options, caps)
+
+    server.create_initialization_options = patched  # type: ignore[assignment]
+
+
+async def _broadcast_channel_notification(
+    mcp: FastMCP, content: str, meta: dict[str, str]
+) -> int:
+    """Push a `notifications/claude/channel` to every active HTTP session.
+
+    The Streamable HTTP session manager owns a registry of active transports
+    keyed by mcp_session_id. Each transport's `_write_stream` feeds its
+    outbound SSE channel — pushing a SessionMessage there is the same path
+    `ServerSession.send_notification` uses internally, just bypassed because
+    we're emitting from outside the session task (no `request_context`).
+
+    Returns the number of sessions the notification was successfully written
+    to. Zero is normal at startup before any client has initialized.
+    """
+    manager = mcp.session_manager if hasattr(mcp, "session_manager") else None
+    if manager is None:
+        return 0
+    transports = getattr(manager, "_server_instances", None) or {}
+    if not transports:
+        return 0
+
+    notification = JSONRPCNotification(
+        jsonrpc="2.0",
+        method=CHANNEL_NOTIFICATION_METHOD,
+        params={"content": content, "meta": meta},
+    )
+    session_message = SessionMessage(message=JSONRPCMessage(notification))
+
+    sent = 0
+    for transport in list(transports.values()):
+        write_stream = getattr(transport, "_write_stream", None)
+        if write_stream is None:
+            continue
+        try:
+            await write_stream.send(session_message)
+            sent += 1
+        except Exception as exc:
+            print(
+                f"{LOG_PREFIX} channel notification push failed: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+    return sent
+
+
+def _format_channel_event(event: dict) -> tuple[str, dict[str, str]]:
+    """Turn a bridge event dict into `(content, meta)` for the channel push.
+
+    The event payload becomes the body of the `<channel>` tag Claude sees;
+    meta keys become tag attributes. Meta keys must be identifiers (letters,
+    digits, underscores) per the Claude Code reference — non-string values
+    are coerced to str, and keys are filtered.
+    """
+    msg_type = str(event.get("type") or "unknown")
+    if msg_type == "copilot_user_message":
+        content = (
+            f"User typed in the Copilot tab. Reply with send_copilot_message "
+            f"kind='reply' carrying the original request_id.\n\n"
+            f"Text: {event.get('text', '')}"
+        )
+    elif msg_type == "transcript_tick":
+        new_segments = event.get("new_segments") or []
+        recent = event.get("recent_context") or ""
+        content = (
+            f"Transcript tick: {len(new_segments)} new segment(s). Apply the "
+            f"proactive-triggers contract; default to silence.\n\n"
+            f"Recent context:\n{recent}"
+        )
+    elif msg_type == "meeting_started":
+        content = (
+            f"Meeting started: {event.get('meeting_title') or '(untitled)'}. "
+            f"Reset internal proactive state."
+        )
+    elif msg_type == "meeting_ended":
+        content = (
+            "Meeting ended. Stop polling and exit the copilot loop."
+        )
+    else:
+        content = json.dumps(event, ensure_ascii=False)
+
+    meta_in: dict[str, Any] = {"event_type": msg_type}
+    for key in ("request_id", "meeting_id", "meeting_title", "local_user_name"):
+        value = event.get(key)
+        if value is None:
+            continue
+        meta_in[key] = value
+
+    meta_out: dict[str, str] = {}
+    for k, v in meta_in.items():
+        # Per channels-reference: meta keys must be [A-Za-z0-9_]+; others
+        # are silently dropped by Claude Code. Coerce values to string —
+        # the spec is `Record<string, string>`.
+        if not isinstance(k, str) or not k.replace("_", "").isalnum():
+            continue
+        meta_out[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+    return content, meta_out
+
+
 def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
     """Construct FastMCP and register the two Copilot tools.
 
@@ -148,7 +291,8 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
         name="recog-copilot-channel",
         instructions=(
             "KTalk Copilot channel: send messages into the active KTalk "
-            "meeting Copilot tab and snapshot the recent transcript.\n"
+            "meeting Copilot tab, snapshot the recent transcript, and "
+            "drain bridge events while a meeting is active.\n"
             "\n"
             "Tools:\n"
             "- send_copilot_message(kind, text, request_id?, meeting_id?): "
@@ -161,6 +305,27 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
             "include_refined=True): snapshot recent segments for the active "
             "meeting only. Call this before answering when the buffered "
             "context might be stale; do not invent context from memory.\n"
+            "- await_copilot_event(timeout_seconds=60): block until the "
+            "next bridge event (`copilot_user_message`, `transcript_tick`, "
+            "`meeting_started`, `meeting_ended`) or the timeout. Returns "
+            "{'event': null} on timeout. Standard MCP has no server-pushed "
+            "wake-up channel, so call this in a loop while a meeting is "
+            "active to consume events.\n"
+            "\n"
+            "Loop pattern (when the user asks you to enter copilot mode):\n"
+            "1. Call await_copilot_event(timeout_seconds=60).\n"
+            "2. If event is null, call again (or stop after a sustained "
+            "idle period — three consecutive null returns ≈ no meeting).\n"
+            "3. On copilot_user_message: read its text, decide whether the "
+            "buffered context is fresh (call get_recent_transcript if not), "
+            "answer with send_copilot_message(kind='reply', "
+            "request_id=event['request_id'], text=...).\n"
+            "4. On transcript_tick: apply the proactive-triggers contract "
+            "below; in most cases stay silent; if you do speak up, use "
+            "send_copilot_message(kind='proactive', text=...).\n"
+            "5. On meeting_started / meeting_ended: reset internal "
+            "proactive state. After meeting_ended, exit the loop.\n"
+            "6. After each handled event return to step 1.\n"
             "\n"
             "Behaviour contract:\n"
             "- Default to silence. Most transcript_tick events should "
@@ -297,10 +462,49 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
         finally:
             link.unregister_pending(request_id)
 
+    _attach_channel_capability(mcp)
+
+    @mcp.tool(
+        name="await_copilot_event",
+        description=(
+            "Block until the next bridge event arrives or the timeout "
+            "elapses. Returns {'ok': True, 'event': <dict>} on success or "
+            "{'ok': True, 'event': null} on timeout. Event types: "
+            "'copilot_user_message' (the user typed in the Copilot tab — "
+            "reply with send_copilot_message kind='reply' carrying the "
+            "original request_id), 'transcript_tick' (new transcript "
+            "segments — apply the proactive-triggers contract), "
+            "'meeting_started' / 'meeting_ended' (lifecycle markers; "
+            "reset internal proactive state and exit the loop after "
+            "meeting_ended). Call this in a loop while a meeting is "
+            "active. The queue is bounded at 50 events; oldest events "
+            "are dropped on overflow."
+        ),
+    )
+    async def await_copilot_event(timeout_seconds: int = 60) -> dict:
+        if not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+            return {"ok": False, "error": "timeout_seconds must be a positive int"}
+        # Cap timeouts to keep individual MCP requests bounded — a single
+        # tool call should not hold the HTTP connection open for hours.
+        timeout_seconds = min(timeout_seconds, 300)
+        try:
+            event = await asyncio.wait_for(
+                link.event_queue.get(),
+                timeout=timeout_seconds,
+            )
+            return {"ok": True, "event": event}
+        except asyncio.TimeoutError:
+            return {"ok": True, "event": None}
+
     return mcp
 
 
-async def _ws_loop(bridge_url: str, link: BridgeLink, stop_event: asyncio.Event) -> None:
+async def _ws_loop(
+    bridge_url: str,
+    link: BridgeLink,
+    stop_event: asyncio.Event,
+    mcp: Optional[FastMCP] = None,
+) -> None:
     """Maintain the bridge WS connection with reconnect+backoff.
 
     Mirrors `frontend/bridge_subscriber.py::BridgeSubscriber._run`. On every
@@ -339,7 +543,7 @@ async def _ws_loop(bridge_url: str, link: BridgeLink, stop_event: asyncio.Event)
                 delay = INITIAL_BACKOFF_S
                 try:
                     async for raw in ws:
-                        await _handle_inbound(raw, link)
+                        await _handle_inbound(raw, link, mcp)
                 finally:
                     link.set_socket(None)
         except asyncio.CancelledError:
@@ -366,19 +570,25 @@ async def _ws_loop(bridge_url: str, link: BridgeLink, stop_event: asyncio.Event)
         delay = min(delay * 2, MAX_BACKOFF_S)
 
 
-async def _handle_inbound(raw: Any, link: BridgeLink) -> None:
+async def _handle_inbound(
+    raw: Any, link: BridgeLink, mcp: Optional[FastMCP] = None
+) -> None:
     """Dispatch inbound bridge frames.
 
-    Currently only `get_recent_transcript_response` is acted on (it
-    resolves a pending tool future). `copilot_user_message`,
-    `transcript_tick`, and `meeting_started`/`meeting_ended` arrive here
-    too but the bridge → Claude notification pipe is still a tracer-bullet
-    placeholder: standard MCP does not expose a generic server-pushed
-    event channel that would wake Claude up between tool calls, and the
-    Claude Code Channels mechanism that *would* (see `tasks.md` 1.1
-    spike) has not been validated locally. Until that spike lands, these
-    frames are logged for observability and dropped — Claude only
-    actually sees them when it calls `get_recent_transcript`.
+    Two paths today:
+
+    - `get_recent_transcript_response` resolves the pending tool future
+      registered by the matching `get_recent_transcript` call.
+    - `copilot_user_message`, `transcript_tick`, and
+      `meeting_started`/`meeting_ended` are enqueued onto
+      `link.event_queue` so the `await_copilot_event` long-poll tool can
+      hand them to Claude. Standard MCP has no generic server-pushed
+      event channel that would wake Claude between tool calls, so the
+      `tasks.md` 1.1 spike concluded with a long-poll pattern instead:
+      Claude is told (via the MCP server `instructions`) to call
+      `await_copilot_event` in a loop while a meeting is active. On
+      queue overflow we drop the oldest event to keep the freshest
+      meeting state.
     """
     if isinstance(raw, (bytes, bytearray)):
         try:
@@ -405,15 +615,41 @@ async def _handle_inbound(raw: Any, link: BridgeLink) -> None:
         "meeting_started",
         "meeting_ended",
     }:
-        # Placeholder: see the docstring above. We log the type and a
-        # stable id so a developer can see the event flowed through, but
-        # Claude is not notified.
-        ref = data.get("request_id") or data.get("meeting_id")
-        print(
-            f"{LOG_PREFIX} dropped inbound {msg_type} ref={ref!r} — "
-            f"bridge→Claude notification path unimplemented (tasks.md 1.1)",
-            file=sys.stderr,
-        )
+        queue = link.event_queue
+        if queue.full():
+            try:
+                dropped = queue.get_nowait()
+                print(
+                    f"{LOG_PREFIX} event_queue full — dropped oldest "
+                    f"{dropped.get('type')!r}",
+                    file=sys.stderr,
+                )
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            queue.put_nowait(data)
+        except asyncio.QueueFull:
+            # Race with another consumer between full() and put_nowait();
+            # discard this event rather than block the inbound loop.
+            print(
+                f"{LOG_PREFIX} event_queue still full after drain — "
+                f"discarded {msg_type!r}",
+                file=sys.stderr,
+            )
+        # Channels push (research preview): if an MCP HTTP session is open
+        # and the client has --channels enabled for us, this wakes Claude
+        # immediately. If no session is open the broadcast is a no-op and
+        # Claude can still drain the queue via `await_copilot_event`.
+        if mcp is not None:
+            content, meta = _format_channel_event(data)
+            try:
+                await _broadcast_channel_notification(mcp, content, meta)
+            except Exception as exc:
+                print(
+                    f"{LOG_PREFIX} channel push failed for {msg_type!r}: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
 
 
 async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
@@ -427,7 +663,7 @@ async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
         file=sys.stderr,
     )
 
-    ws_task = asyncio.create_task(_ws_loop(bridge_url, link, stop_event))
+    ws_task = asyncio.create_task(_ws_loop(bridge_url, link, stop_event, mcp))
     mcp_task = asyncio.create_task(mcp.run_streamable_http_async())
     try:
         done, _pending = await asyncio.wait(
