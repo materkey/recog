@@ -307,13 +307,47 @@ cmd_claude() {
         exec claude --dangerously-load-development-channels server:copilot
     fi
 
-    exec expect -c "
+    # Ink (claude's TUI framework) sends terminal-capability queries that
+    # confuse expect's PTY when TERM=xterm-kitty leaks through (kitty-only
+    # DCS responses bleed into stdout — see bug report on the launch
+    # output). Force TERM=xterm-256color inside the spawned PTY so Ink stays
+    # on a vanilla VT220 control set; the user's outer kitty terminal still
+    # renders the result fine.
+    # Ink (claude's TUI framework) sends terminal-capability queries that
+    # confuse expect's PTY when TERM=xterm-kitty leaks through (kitty-only
+    # DCS responses bleed into stdout). Force TERM=xterm-256color inside the
+    # spawned PTY so Ink stays on a vanilla VT220 control set; the user's
+    # outer kitty terminal still renders the result fine.
+    #
+    # Match strategy: trigger on "Enter to confirm" — Ink renders the full
+    # dialog top-down and the help-line is the LAST thing drawn, so by the
+    # time it appears the Select widget's useInput subscription is already
+    # live. Matching earlier (e.g. the option label) races the input attach
+    # and the CR is silently dropped. Send CR + a backup CR after a short
+    # delay in case the first one lost the race anyway.
+    local expect_debug_arg=""
+    if [ "${RECOG_CLAUDE_DEBUG:-0}" = "1" ]; then
+        expect_debug_arg="-d"
+        warn "RECOG_CLAUDE_DEBUG=1 → expect will dump diagnostic trace to stderr"
+    fi
+
+    exec env TERM=xterm-256color expect $expect_debug_arg -c "
         set timeout 30
         log_user 1
         spawn -noecho claude --dangerously-load-development-channels server:copilot
         expect {
-            -re {I am using this for local development} { send -- \"\r\" }
-            timeout { puts \"\n[recog-service] dev-channels dialog did not appear within 30s — proceeding anyway\" }
+            -re {Enter to confirm} {
+                sleep 0.3
+                send -- \"\r\"
+                # Belt-and-suspenders: a second CR 250 ms later. If the
+                # first one already dismissed the dialog, the second is
+                # consumed by the next input box (harmless newline). If
+                # the first lost the race, the second arrives after Ink
+                # has had ample time to attach.
+                after 250
+                send -- \"\r\"
+            }
+            timeout { puts \"\\n\[recog-service\] dev-channels dialog did not appear within 30s — proceeding anyway\" }
             eof    { exit }
         }
         interact
