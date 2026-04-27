@@ -291,7 +291,33 @@ cmd_claude() {
     # cd before exec so project-scope mcpServers is read; --dangerously-load-development-channels
     # bypasses the Anthropic-curated channel allowlist for our local server entry.
     cd "$SCRIPT_DIR"
-    exec claude --dangerously-load-development-channels server:copilot
+
+    # Claude Code shows a per-session DevChannelsDialog ("I am using this for
+    # local development") when --dangerously-load-development-channels is
+    # combined with an active claude.ai login (interactiveHelpers.tsx:267).
+    # There is no env-var or persistent-trust bypass in the source; the dialog
+    # is always rendered.  Auto-press Enter via expect so the user does not
+    # have to confirm every launch.  Default Select highlight is the accept
+    # option, so a single carriage-return is enough.  Pass control back to
+    # the user with `interact` after the dialog passes.
+    if [ "${RECOG_NO_AUTO_CONFIRM:-0}" = "1" ] || ! command -v expect > /dev/null 2>&1; then
+        if [ "${RECOG_NO_AUTO_CONFIRM:-0}" != "1" ]; then
+            warn "expect(1) not found — falling back to interactive launch (manual Enter needed)"
+        fi
+        exec claude --dangerously-load-development-channels server:copilot
+    fi
+
+    exec expect -c "
+        set timeout 30
+        log_user 1
+        spawn -noecho claude --dangerously-load-development-channels server:copilot
+        expect {
+            -re {I am using this for local development} { send -- \"\r\" }
+            timeout { puts \"\n[recog-service] dev-channels dialog did not appear within 30s — proceeding anyway\" }
+            eof    { exit }
+        }
+        interact
+    "
 }
 
 cmd_help() {
