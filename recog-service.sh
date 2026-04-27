@@ -13,6 +13,7 @@
 #   ./recog-service.sh logs      - Tail logs (stderr)
 #   ./recog-service.sh logs-out  - Tail logs (stdout/transcripts)
 #   ./recog-service.sh logs-web  - Tail frontend logs
+#   ./recog-service.sh claude    - Launch Claude Code wired to the Copilot channel
 
 set -e
 
@@ -258,6 +259,41 @@ cmd_debug() {
     fi
 }
 
+cmd_claude() {
+    # Launch Claude Code with the copilot channel enabled.
+    # Two preconditions it cannot self-fix:
+    #   1. The copilot_channel daemon must be running on :8767 — Claude
+    #      Code spawns the channel handler from --channels but cannot start
+    #      our HTTP MCP server itself.
+    #   2. CWD must be the recog project dir so Claude reads the
+    #      project-scope mcpServers entry (`copilot` → http://127.0.0.1:8767/mcp).
+    #      Launching from $HOME silently produces "no MCP server configured
+    #      with that name" because the project entry is invisible there.
+    if ! curl -sS --max-time 1 -X POST http://127.0.0.1:8767/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"recog-service","version":"0"}}}' \
+        > /dev/null 2>&1; then
+        warn "Copilot channel daemon is NOT responding at http://127.0.0.1:8767/mcp"
+        warn "Start it in a separate terminal first:"
+        warn "  cd $SCRIPT_DIR && ./venv-gigaam/bin/python -m recog.copilot_channel"
+        warn ""
+        warn "Launching Claude Code anyway — channel push will be a no-op until the daemon comes up."
+    else
+        info "Copilot channel daemon is up at http://127.0.0.1:8767/mcp"
+    fi
+
+    if ! command -v claude > /dev/null 2>&1; then
+        error "claude CLI not found in PATH"
+    fi
+
+    info "Launching Claude Code (project: $SCRIPT_DIR, channel: server:copilot) ..."
+    # cd before exec so project-scope mcpServers is read; --dangerously-load-development-channels
+    # bypasses the Anthropic-curated channel allowlist for our local server entry.
+    cd "$SCRIPT_DIR"
+    exec claude --dangerously-load-development-channels server:copilot
+}
+
 cmd_help() {
     echo "recog-service.sh - Manage recog live transcription and frontend services"
     echo ""
@@ -276,10 +312,12 @@ cmd_help() {
     echo "  logs         - Tail live stderr logs"
     echo "  logs-out     - Tail live stdout logs (transcripts)"
     echo "  logs-web     - Tail frontend logs"
+    echo "  claude       - Launch Claude Code wired to the Copilot channel"
     echo ""
     echo "Services:"
     echo "  - Live transcription: mp4_notes.py live --screencapture --ktalk"
     echo "  - Frontend: http://127.0.0.1:9080"
+    echo "  - Copilot channel daemon: ./venv-gigaam/bin/python -m recog.copilot_channel"
 }
 
 # Main
@@ -296,6 +334,7 @@ case "${1:-}" in
     logs)         cmd_logs ;;
     logs-out)     cmd_logs_out ;;
     logs-web)     cmd_logs_web ;;
+    claude)       cmd_claude ;;
     help|--help|-h) cmd_help ;;
     *)
         cmd_help
