@@ -5873,10 +5873,13 @@ function escapeCopilotText(value) {
 }
 
 function setCopilotInputBusy(busy) {
-  const input = getCopilotInputEl();
-  const btn = getCopilotSendBtn();
-  if (input) input.disabled = !!busy;
-  if (btn) btn.disabled = !!busy;
+  // No-op by design: typing while a previous request is pending is
+  // allowed. Each request carries its own request_id and is tracked in
+  // state.copilotPending (a Map), so concurrent in-flight messages
+  // don't conflict — replies resolve to their own placeholder by id.
+  // The visual "pending" state is conveyed by the "Жду ответа Claude…"
+  // placeholder rendered in the message list.
+  void busy;
 }
 
 function clearCopilotEmptyPlaceholder() {
