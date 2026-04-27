@@ -307,24 +307,27 @@ cmd_claude() {
         exec claude --dangerously-load-development-channels server:copilot
     fi
 
-    # Ink (claude's TUI framework) sends terminal-capability queries that
-    # confuse expect's PTY when TERM=xterm-kitty leaks through (kitty-only
-    # DCS responses bleed into stdout — see bug report on the launch
-    # output). Force TERM=xterm-256color inside the spawned PTY so Ink stays
-    # on a vanilla VT220 control set; the user's outer kitty terminal still
-    # renders the result fine.
-    # Ink (claude's TUI framework) sends terminal-capability queries that
-    # confuse expect's PTY when TERM=xterm-kitty leaks through (kitty-only
-    # DCS responses bleed into stdout). Force TERM=xterm-256color inside the
-    # spawned PTY so Ink stays on a vanilla VT220 control set; the user's
-    # outer kitty terminal still renders the result fine.
+    # Two non-obvious facts dictate this script (verified against
+    # claude-code source + a real-pty dogfood):
     #
-    # Match strategy: trigger on "Enter to confirm" — Ink renders the full
-    # dialog top-down and the help-line is the LAST thing drawn, so by the
-    # time it appears the Select widget's useInput subscription is already
-    # live. Matching earlier (e.g. the option label) races the input attach
-    # and the CR is silently dropped. Send CR + a backup CR after a short
-    # delay in case the first one lost the race anyway.
+    # 1. Ink renders text with per-word cursor-forward escapes (\x1b[1C)
+    #    INSTEAD of literal spaces, so substring patterns like "Enter to
+    #    confirm" or "I am using this for local development" never match
+    #    the byte stream — Ink emits e.g. "Enter\x1b[1Cto\x1b[1Cconfirm".
+    #    Match on a single unique word ("confirm") plus a co-occurring
+    #    word ("Esc") that only appear together in the dialog footer.
+    #
+    # 2. Sending CR ("\r") to dismiss the Select dialog is unreliable —
+    #    PTY line-discipline and Ink's keypress library deferred subscription
+    #    combine to swallow it. The Select widget's `useInput` handler
+    #    honours numeric digits as direct option selection
+    #    (use-select-input.ts:251-282 — pressing "1" calls
+    #    `state.onChange?.(options[0].value)` regardless of whether the
+    #    keybinding system has finished mounting). Sending "1" picks
+    #    option 1 ("I am using this for local development") deterministically.
+    #
+    # TERM=xterm-256color is also pinned so Ink does not emit kitty-only
+    # DCS queries whose responses bleed into stdout.
     local expect_debug_arg=""
     if [ "${RECOG_CLAUDE_DEBUG:-0}" = "1" ]; then
         expect_debug_arg="-d"
@@ -336,16 +339,13 @@ cmd_claude() {
         log_user 1
         spawn -noecho claude --dangerously-load-development-channels server:copilot
         expect {
-            -re {Enter to confirm} {
-                sleep 0.3
-                send -- \"\r\"
-                # Belt-and-suspenders: a second CR 250 ms later. If the
-                # first one already dismissed the dialog, the second is
-                # consumed by the next input box (harmless newline). If
-                # the first lost the race, the second arrives after Ink
-                # has had ample time to attach.
-                after 250
-                send -- \"\r\"
+            -re {confirm.*Esc|Esc.*confirm} {
+                # 0.5 s settle: Ink ends the dialog with a synchronized-output
+                # mode close (\\x1b\[?2026l) right after the footer and useInput
+                # subscribes during that paint. Without the delay our digit
+                # can land before the subscription is live.
+                sleep 0.5
+                send -- \"1\"
             }
             timeout { puts \"\\n\[recog-service\] dev-channels dialog did not appear within 30s — proceeding anyway\" }
             eof    { exit }
