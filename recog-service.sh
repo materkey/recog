@@ -300,11 +300,21 @@ cmd_claude() {
     # have to confirm every launch.  Default Select highlight is the accept
     # option, so a single carriage-return is enough.  Pass control back to
     # the user with `interact` after the dialog passes.
+    # Additional roots Claude should treat as session-allowed (read/grep/glob
+    # without per-file permission prompts). Skip any path that does not exist
+    # so claude does not print a startup warning.
+    local extra_dirs_args=""
+    for dir in "$HOME/projects" "/Users/Shared/projects"; do
+        if [ -d "$dir" ]; then
+            extra_dirs_args="$extra_dirs_args --add-dir $dir"
+        fi
+    done
+
     if [ "${RECOG_NO_AUTO_CONFIRM:-0}" = "1" ] || ! command -v expect > /dev/null 2>&1; then
         if [ "${RECOG_NO_AUTO_CONFIRM:-0}" != "1" ]; then
             warn "expect(1) not found — falling back to interactive launch (manual Enter needed)"
         fi
-        exec claude --dangerously-load-development-channels server:copilot
+        exec claude --dangerously-load-development-channels server:copilot $extra_dirs_args
     fi
 
     # Two non-obvious facts dictate this script (verified against
@@ -337,7 +347,7 @@ cmd_claude() {
     exec env TERM=xterm-256color expect $expect_debug_arg -c "
         set timeout 30
         log_user 1
-        spawn -noecho claude --dangerously-load-development-channels server:copilot
+        spawn -noecho claude --dangerously-load-development-channels server:copilot $extra_dirs_args
         expect {
             -re {confirm.*Esc|Esc.*confirm} {
                 # 0.5 s settle: Ink ends the dialog with a synchronized-output
