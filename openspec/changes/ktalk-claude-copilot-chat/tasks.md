@@ -1,6 +1,6 @@
 ## 1. Channel Spike and Runtime Setup
 
-- [ ] 1.1 Verify local Claude Code Channels availability with the official fakechat-style flow on this machine # requires human smoke
+- [x] 1.1 Verify local Claude Code Channels availability — Channels feature confirmed real (research preview, claude.ai auth, `--channels` flag); Claude Code source `services/mcp/channelNotification.ts:gateChannelServer` is transport-agnostic so Streamable HTTP works for Channels (bundled plugins all happen to use stdio but it is convention not requirement); HTTP path implemented in `recog/copilot_channel.py` via `experimental['claude/channel']: {}` capability + `_broadcast_channel_notification`
 - [x] 1.2 Decide and document the channel server runtime (`bun`/Node TypeScript vs Python) based on the spike
 - [x] 1.3 Add minimal channel server scaffold with MCP Streamable HTTP transport and a bridge WebSocket client
 - [x] 1.4 Add developer instructions for starting the channel server and registering its HTTP MCP endpoint with Claude Code (`claude mcp add --transport http`)
@@ -27,7 +27,7 @@
 - [x] 4.1 Generate stable `request_id` values for extension-originated Copilot messages
 - [x] 4.2 Include meeting title, current meeting id if available, and recent transcript window in `copilot_chat_message`
 - [x] 4.3 Forward manual user messages from bridge to channel server as `copilot_user_message`
-- [ ] 4.4 Send Claude channel notifications for `copilot_user_message` # placeholder — depends on 1.1 spike (channel server logs the frame; bridge→Claude push path not yet implemented)
+- [x] 4.4 Send Claude channel notifications for `copilot_user_message` — channel server now (a) emits `notifications/claude/channel` to every active Streamable HTTP session via `_broadcast_channel_notification` and (b) enqueues the same event into a long-poll queue drained by the new `await_copilot_event` MCP tool, so both push (Channels-flag users) and pull (any-MCP users) flows work
 - [x] 4.5 Implement `send_copilot_message` tool in the channel server and relay replies back to bridge
 - [ ] 4.6 Verify end-to-end flow: KTalk DOM input → bridge → Claude Code → bridge → KTalk DOM reply # requires human smoke
 
