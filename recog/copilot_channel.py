@@ -643,7 +643,11 @@ async def _handle_inbound(
         if mcp is not None:
             content, meta = _format_channel_event(data)
             try:
-                await _broadcast_channel_notification(mcp, content, meta)
+                sent = await _broadcast_channel_notification(mcp, content, meta)
+                print(
+                    f"{LOG_PREFIX} channel push {msg_type!r} → {sent} session(s)",
+                    file=sys.stderr,
+                )
             except Exception as exc:
                 print(
                     f"{LOG_PREFIX} channel push failed for {msg_type!r}: "
