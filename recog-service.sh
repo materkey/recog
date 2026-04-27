@@ -310,11 +310,20 @@ cmd_claude() {
         fi
     done
 
+    # The project ships an agent at .claude/agents/copilot-session.md that
+    # eagerly preloads the copilot-mode skill (initialPrompt + skills:
+    # frontmatter). Use it unless the user is debugging the wrapper itself.
+    local agent_args="--agent copilot-session"
+    if [ "${RECOG_NO_AGENT:-0}" = "1" ]; then
+        agent_args=""
+        warn "RECOG_NO_AGENT=1 → skipping --agent copilot-session (skill not preloaded)"
+    fi
+
     if [ "${RECOG_NO_AUTO_CONFIRM:-0}" = "1" ] || ! command -v expect > /dev/null 2>&1; then
         if [ "${RECOG_NO_AUTO_CONFIRM:-0}" != "1" ]; then
             warn "expect(1) not found — falling back to interactive launch (manual Enter needed)"
         fi
-        exec claude --dangerously-load-development-channels server:copilot $extra_dirs_args
+        exec claude --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
     fi
 
     # Two non-obvious facts dictate this script (verified against
@@ -347,7 +356,7 @@ cmd_claude() {
     exec env TERM=xterm-256color expect $expect_debug_arg -c "
         set timeout 30
         log_user 1
-        spawn -noecho claude --dangerously-load-development-channels server:copilot $extra_dirs_args
+        spawn -noecho claude --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
         expect {
             -re {confirm.*Esc|Esc.*confirm} {
                 # 0.5 s settle: Ink ends the dialog with a synchronized-output
