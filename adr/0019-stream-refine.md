@@ -242,7 +242,7 @@ context manager (PyObjC) обёрнут вокруг всех четырёх hot
 (`transcribe_batch`, `transcribe_with_timestamps` обе ветки, `transcribe_simple`
 per-chunk, `_transcribe_direct`); throttled `_maybe_empty_mps_cache()`
 освобождает torch MPS allocator cache каждые 100 вызовов (~20 с при 5 Hz live
-batch'ах). См. план `docs/plans/2026-04-30-mps-autoreleasepool-leak-fix.md` и
+batch'ах). См. план `docs/plans/completed/2026-04-30-mps-autoreleasepool-leak-fix.md` и
 upstream issues `pytorch/pytorch#93397`, `pytorch/pytorch#96975`.
 
 ## Alternatives Considered

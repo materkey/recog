@@ -86,7 +86,16 @@ class ASRModule:
         self._mps_inference_count += 1
         if self._mps_inference_count >= self._MPS_EMPTY_CACHE_EVERY:
             self._mps_inference_count = 0
-            torch.mps.empty_cache()
+            # Best-effort — must not raise into the inference path or live/refine
+            # will silently drop chunks (outer `_transcribe_direct` try/except
+            # returns None on any exception).
+            try:
+                torch.mps.empty_cache()
+            except Exception as e:
+                print(
+                    f"[ASRModule] torch.mps.empty_cache() failed: {e}",
+                    file=sys.stderr,
+                )
 
     def load_model(self, quiet: bool = False):
         """Загружает модель GigaAM."""

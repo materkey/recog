@@ -669,6 +669,40 @@ def test_maybe_empty_mps_cache_concurrent_threads_remain_within_tolerance(monkey
     )
 
 
+def test_maybe_empty_mps_cache_empty_cache_exception_is_swallowed_and_logged(monkeypatch, capsys):
+    """
+    given: torch.mps.empty_cache patched to raise RuntimeError("simulated"),
+           ASRModule with device == "mps"
+    when: _maybe_empty_mps_cache is invoked 100 times (crossing the threshold)
+    then: no exception propagates, the counter still resets to 0, and a
+          stderr message identifies the failure
+
+    Regression guard for the contract that empty_cache is best-effort cleanup
+    and must not corrupt transcription correctness. Without try/except, a
+    backend regression would propagate up through `_transcribe_direct`'s outer
+    handler, return None, and silently drop every 100th live/refine chunk.
+    """
+    asr, _ = _make_mocked_asr(decoded_texts=[])
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    def _raising_empty_cache():
+        raise RuntimeError("simulated")
+
+    monkeypatch.setattr(torch.mps, "empty_cache", _raising_empty_cache)
+
+    for _ in range(ASRModule._MPS_EMPTY_CACHE_EVERY):
+        asr._maybe_empty_mps_cache()
+
+    # Counter reset even though empty_cache raised — exception was caught
+    # *after* the reset, so the throttle interval is preserved.
+    assert asr._mps_inference_count == 0
+
+    captured = capsys.readouterr()
+    assert "torch.mps.empty_cache() failed" in captured.err
+    assert "simulated" in captured.err
+
+
 # -----------------------------------------------------------------------------
 # Hot-path wrapping: transcribe_batch / transcribe_with_timestamps /
 # transcribe_simple wrap each inference in _mps_autoreleasepool and call
