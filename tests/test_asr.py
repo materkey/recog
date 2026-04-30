@@ -56,7 +56,8 @@ def _make_mocked_asr(decoded_texts: list[str]) -> tuple[ASRModule, MagicMock]:
     asr.SAMPLE_RATE = 16000
     asr.model_name = "stub"
     asr.device = None
-    asr._model_lock = threading.Lock()
+    asr._model_lock = threading.RLock()
+    asr._mps_inference_count = 0
 
     model = MagicMock()
     model._device = torch.device("cpu")
@@ -239,7 +240,8 @@ def _make_timestamps_asr(result: _FakeResult) -> tuple[ASRModule, MagicMock]:
     asr.SAMPLE_RATE = 16000
     asr.model_name = "stub"
     asr.device = None
-    asr._model_lock = threading.Lock()
+    asr._model_lock = threading.RLock()
+    asr._mps_inference_count = 0
 
     model = MagicMock()
     model.transcribe = MagicMock(return_value=result)
@@ -408,28 +410,35 @@ def _make_pool_mock() -> MagicMock:
     return pool_factory
 
 
-def test_mps_autoreleasepool_mps_device_with_pyobjc_enters_and_exits():
+def _install_pool_mock(monkeypatch) -> MagicMock:
+    """Install a MagicMock factory for `recog.asr.objc.autorelease_pool`.
+
+    Forces `_HAS_AUTORELEASE = True` so the wrapping branch is actually
+    exercised regardless of whether PyObjC is importable on the host.
+    Returns the pool_factory mock (call it like `pool_factory()` to get cm).
+    """
+    from recog import asr as asr_module
+
+    pool_factory = _make_pool_mock()
+    fake_objc = MagicMock()
+    fake_objc.autorelease_pool = pool_factory
+    monkeypatch.setattr(asr_module, "objc", fake_objc)
+    monkeypatch.setattr(asr_module, "_HAS_AUTORELEASE", True)
+    return pool_factory
+
+
+def test_mps_autoreleasepool_mps_device_with_pyobjc_enters_and_exits(monkeypatch):
     """
     given: device == "mps" and PyObjC is available
     when: _mps_autoreleasepool("mps") is used as a context manager
     then: objc.autorelease_pool().__enter__/__exit__ are each called once
     """
-    from recog import asr as asr_module
     from recog.asr import _mps_autoreleasepool
 
-    pool_factory = _make_pool_mock()
-    fake_objc = MagicMock()
-    fake_objc.autorelease_pool = pool_factory
-    original_objc = asr_module.objc
-    original_flag = asr_module._HAS_AUTORELEASE
-    asr_module.objc = fake_objc
-    asr_module._HAS_AUTORELEASE = True
-    try:
-        with _mps_autoreleasepool("mps"):
-            pass
-    finally:
-        asr_module.objc = original_objc
-        asr_module._HAS_AUTORELEASE = original_flag
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    with _mps_autoreleasepool("mps"):
+        pass
 
     pool_factory.assert_called_once_with()
     cm = pool_factory.return_value
@@ -437,33 +446,23 @@ def test_mps_autoreleasepool_mps_device_with_pyobjc_enters_and_exits():
     cm.__exit__.assert_called_once()
 
 
-def test_mps_autoreleasepool_cpu_device_does_not_call_objc():
+def test_mps_autoreleasepool_cpu_device_does_not_call_objc(monkeypatch):
     """
     given: device == "cpu"
     when: _mps_autoreleasepool("cpu") is used as a context manager
     then: objc.autorelease_pool is not called at all
     """
-    from recog import asr as asr_module
     from recog.asr import _mps_autoreleasepool
 
-    pool_factory = _make_pool_mock()
-    fake_objc = MagicMock()
-    fake_objc.autorelease_pool = pool_factory
-    original_objc = asr_module.objc
-    original_flag = asr_module._HAS_AUTORELEASE
-    asr_module.objc = fake_objc
-    asr_module._HAS_AUTORELEASE = True
-    try:
-        with _mps_autoreleasepool("cpu"):
-            pass
-    finally:
-        asr_module.objc = original_objc
-        asr_module._HAS_AUTORELEASE = original_flag
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    with _mps_autoreleasepool("cpu"):
+        pass
 
     pool_factory.assert_not_called()
 
 
-def test_mps_autoreleasepool_mps_without_pyobjc_is_noop():
+def test_mps_autoreleasepool_mps_without_pyobjc_is_noop(monkeypatch):
     """
     given: device == "mps" but _HAS_AUTORELEASE is False (no PyObjC)
     when: _mps_autoreleasepool("mps") is used as a context manager
@@ -472,51 +471,32 @@ def test_mps_autoreleasepool_mps_without_pyobjc_is_noop():
     from recog import asr as asr_module
     from recog.asr import _mps_autoreleasepool
 
-    pool_factory = _make_pool_mock()
-    fake_objc = MagicMock()
-    fake_objc.autorelease_pool = pool_factory
-    original_objc = asr_module.objc
-    original_flag = asr_module._HAS_AUTORELEASE
-    asr_module.objc = fake_objc
-    asr_module._HAS_AUTORELEASE = False
-    try:
-        with _mps_autoreleasepool("mps"):
-            pass
-    finally:
-        asr_module.objc = original_objc
-        asr_module._HAS_AUTORELEASE = original_flag
+    pool_factory = _install_pool_mock(monkeypatch)
+    monkeypatch.setattr(asr_module, "_HAS_AUTORELEASE", False)
+
+    with _mps_autoreleasepool("mps"):
+        pass
 
     pool_factory.assert_not_called()
 
 
-def test_mps_autoreleasepool_drains_on_exception_inside_with_block():
+def test_mps_autoreleasepool_drains_on_exception_inside_with_block(monkeypatch):
     """
     given: device == "mps", PyObjC available, body raises
     when: exception is raised inside the with-block
     then: __exit__ is invoked with non-None exc_info (pool drains) and the
           exception propagates to the caller
     """
-    from recog import asr as asr_module
     from recog.asr import _mps_autoreleasepool
 
-    pool_factory = _make_pool_mock()
-    fake_objc = MagicMock()
-    fake_objc.autorelease_pool = pool_factory
-    original_objc = asr_module.objc
-    original_flag = asr_module._HAS_AUTORELEASE
-    asr_module.objc = fake_objc
-    asr_module._HAS_AUTORELEASE = True
+    pool_factory = _install_pool_mock(monkeypatch)
 
     class _Boom(Exception):
         pass
 
-    try:
-        with pytest.raises(_Boom):
-            with _mps_autoreleasepool("mps"):
-                raise _Boom("inner")
-    finally:
-        asr_module.objc = original_objc
-        asr_module._HAS_AUTORELEASE = original_flag
+    with pytest.raises(_Boom):
+        with _mps_autoreleasepool("mps"):
+            raise _Boom("inner")
 
     cm = pool_factory.return_value
     cm.__enter__.assert_called_once()
@@ -578,23 +558,6 @@ def test_maybe_empty_mps_cache_cpu_device_is_noop_even_after_many_calls(monkeypa
 # _maybe_empty_mps_cache when device == "mps". Also asserts the symmetric
 # negative case (device == "cpu") to guard against silently dropped wrapping.
 # -----------------------------------------------------------------------------
-
-
-def _install_pool_mock(monkeypatch) -> MagicMock:
-    """Install a MagicMock factory for `recog.asr.objc.autorelease_pool`.
-
-    Forces `_HAS_AUTORELEASE = True` so the wrapping branch is actually
-    exercised regardless of whether PyObjC is importable on the host.
-    Returns the pool_factory mock (call it like `pool_factory()` to get cm).
-    """
-    from recog import asr as asr_module
-
-    pool_factory = _make_pool_mock()
-    fake_objc = MagicMock()
-    fake_objc.autorelease_pool = pool_factory
-    monkeypatch.setattr(asr_module, "objc", fake_objc)
-    monkeypatch.setattr(asr_module, "_HAS_AUTORELEASE", True)
-    return pool_factory
 
 
 def test_transcribe_batch_on_mps_wraps_inference_in_pool_and_calls_cache_helper(monkeypatch):
