@@ -257,13 +257,13 @@ finally:
 
 ### Task 6: Smoke + regression — полный test suite
 
-- [ ] `python -m compileall recog frontend` — нет синтаксических ошибок
-- [ ] `python -m pytest tests/test_asr.py -v` — все asr-тесты проходят
-- [ ] `python -m pytest tests/test_live_decomposed.py tests/test_per_speaker_refine_e2e.py -v` — live-related регрессия
-- [ ] `python -m pytest tests/ -v` — полный suite зелёный
-- [ ] `python mp4_notes.py --help` — CLI грузится без ImportError
-- [ ] `git diff --stat recog/asr.py recog/live.py tests/test_asr.py adr/ADR-0019.md` — изменения только в этих четырёх файлах
-- [ ] visually review diff — нет правок не по теме
+- [x] `python -m compileall recog frontend` — нет синтаксических ошибок
+- [x] `python -m pytest tests/test_asr.py -v` — все asr-тесты проходят (31 passed)
+- [x] `python -m pytest tests/test_live_decomposed.py tests/test_per_speaker_refine_e2e.py -v` — live-related регрессия (28 passed)
+- [x] `python -m pytest tests/ -v` — полный suite зелёный (363 passed, 2 deselected)
+- [x] `python mp4_notes.py --help` — CLI грузится без ImportError
+- [x] `git diff --stat 5677766..HEAD` — изменения только в четырёх файлах: recog/asr.py, recog/live.py, tests/test_asr.py, docs/plans/2026-04-30-mps-autoreleasepool-leak-fix.md (ADR-0019.md заметка отнесена к Task 7)
+- [x] visually review diff — изменения минимальны и по теме: autoreleasepool wrapping всех четырёх hot inference paths (transcribe_simple, transcribe_batch, transcribe_with_timestamps str/ndarray, _transcribe_direct), throttled empty_cache helper, тесты
 
 ### Task 7: ADR заметка
 
