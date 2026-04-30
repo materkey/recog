@@ -78,7 +78,9 @@ class ASRModule:
         """Best-effort throttled MPS allocator cache release.
 
         Counter increment is not atomic across threads (3 bytecodes); the race
-        only widens the throttle interval, never narrows it — acceptable for
+        may cause occasional duplicate `torch.mps.empty_cache()` calls in
+        immediate succession (e.g. two threads both crossing the threshold)
+        or a single skipped tick — both idempotent and harmless for
         cache-release accounting (not correctness-critical).
         """
         if self.device != "mps":
