@@ -21,7 +21,7 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S)
-from .asr import ASRModule
+from .asr import ASRModule, _mps_autoreleasepool
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
 
@@ -463,11 +463,12 @@ class LiveTranscriber:
             if refine_worker is not None:
                 refine_worker.set_live_pending()
             try:
-                with self.asr._model_lock:
+                with self.asr._model_lock, _mps_autoreleasepool(self.asr.device):
                     encoded, encoded_len = model.forward(wav, length)
                     # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
                     # we only need the first sample's text.
                     text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
+                    self.asr._maybe_empty_mps_cache()
             finally:
                 if refine_worker is not None:
                     refine_worker.clear_live_pending()
