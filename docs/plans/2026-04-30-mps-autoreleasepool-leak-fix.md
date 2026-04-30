@@ -226,13 +226,13 @@ finally:
 
 Каждый тест **явно ставит `asr.device = "mps"`** и monkey-patch'ит `recog.asr.objc.autorelease_pool` MagicMock'ом, иначе wrapping silently no-op'ит и тест зеленеет по неправильным причинам.
 
-- [ ] добавить тест `transcribe_batch on mps wraps inference in pool and calls cache helper once` (`_make_mocked_asr` + `asr.device = "mps"`; spy на `_maybe_empty_mps_cache`; assert pool entered/exited once)
-- [ ] добавить тест `transcribe_batch on cpu does not enter pool` (negative — `asr.device = "cpu"`; mock автопула; assert NOT entered)
-- [ ] добавить тест `transcribe_with_timestamps with audio path on mps - wraps in pool + calls cache helper` (`_make_timestamps_asr`)
-- [ ] добавить тест `transcribe_with_timestamps with numpy array on mps - wraps in pool + calls cache helper`
-- [ ] добавить тест `transcribe_simple on mps - one pool entry per chunk (N chunks → N enters, N cache helper calls)`
-- [ ] добавить тест `_transcribe_direct on mps wraps inference in pool and calls cache helper` (импортировать `LiveTranscriber` или замокать `self.asr.model` напрямую; см. `tests/test_live_decomposed.py` как образец)
-- [ ] прогнать `python -m pytest tests/test_asr.py -v -k "transcribe_ or transcribe_direct"` — новые проверки должны падать (RED)
+- [x] добавить тест `transcribe_batch on mps wraps inference in pool and calls cache helper once` (`_make_mocked_asr` + `asr.device = "mps"`; spy на `_maybe_empty_mps_cache`; assert pool entered/exited once)
+- [x] добавить тест `transcribe_batch on cpu does not enter pool` (negative — `asr.device = "cpu"`; mock автопула; assert NOT entered)
+- [x] добавить тест `transcribe_with_timestamps with audio path on mps - wraps in pool + calls cache helper` (`_make_timestamps_asr`)
+- [x] добавить тест `transcribe_with_timestamps with numpy array on mps - wraps in pool + calls cache helper`
+- [x] добавить тест `transcribe_simple on mps - one pool entry per chunk (N chunks → N enters, N cache helper calls)`
+- [x] добавить тест `_transcribe_direct on mps wraps inference in pool and calls cache helper` (импортировать `LiveTranscriber` или замокать `self.asr.model` напрямую; см. `tests/test_live_decomposed.py` как образец)
+- [x] прогнать `python -m pytest tests/test_asr.py -v -k "transcribe_ or transcribe_direct"` — новые проверки должны падать (RED)
 
 ### Task 4: Обернуть `transcribe_*` методы в `recog/asr.py`
 

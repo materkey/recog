@@ -570,3 +570,329 @@ def test_maybe_empty_mps_cache_cpu_device_is_noop_even_after_many_calls(monkeypa
 
     empty_cache.assert_not_called()
     assert asr._mps_inference_count == 0
+
+
+# -----------------------------------------------------------------------------
+# Hot-path wrapping: transcribe_batch / transcribe_with_timestamps /
+# transcribe_simple wrap each inference in _mps_autoreleasepool and call
+# _maybe_empty_mps_cache when device == "mps". Also asserts the symmetric
+# negative case (device == "cpu") to guard against silently dropped wrapping.
+# -----------------------------------------------------------------------------
+
+
+def _install_pool_mock(monkeypatch) -> MagicMock:
+    """Install a MagicMock factory for `recog.asr.objc.autorelease_pool`.
+
+    Forces `_HAS_AUTORELEASE = True` so the wrapping branch is actually
+    exercised regardless of whether PyObjC is importable on the host.
+    Returns the pool_factory mock (call it like `pool_factory()` to get cm).
+    """
+    from recog import asr as asr_module
+
+    pool_factory = _make_pool_mock()
+    fake_objc = MagicMock()
+    fake_objc.autorelease_pool = pool_factory
+    monkeypatch.setattr(asr_module, "objc", fake_objc)
+    monkeypatch.setattr(asr_module, "_HAS_AUTORELEASE", True)
+    return pool_factory
+
+
+def test_transcribe_batch_on_mps_wraps_inference_in_pool_and_calls_cache_helper(monkeypatch):
+    """
+    given: ASRModule with device == "mps", PyObjC patched in
+    when: transcribe_batch runs a single batch
+    then: objc.autorelease_pool is entered and exited exactly once and
+          _maybe_empty_mps_cache is called exactly once after decode
+    """
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, model = _make_mocked_asr(decoded_texts=["hello"])
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    cache_calls = []
+    monkeypatch.setattr(
+        ASRModule,
+        "_maybe_empty_mps_cache",
+        lambda self: cache_calls.append(1),
+    )
+
+    asr.transcribe_batch([np.full(16000, 100, dtype=np.int16)])
+
+    pool_factory.assert_called_once_with()
+    cm = pool_factory.return_value
+    cm.__enter__.assert_called_once()
+    cm.__exit__.assert_called_once()
+    assert len(cache_calls) == 1, "expected one cache-helper call after decode"
+    model.forward.assert_called_once()
+    model.decoding.decode.assert_called_once()
+
+
+def test_transcribe_batch_on_cpu_does_not_enter_pool(monkeypatch):
+    """
+    given: ASRModule with device == "cpu", PyObjC patched in
+    when: transcribe_batch runs
+    then: objc.autorelease_pool is NEVER called (negative guard)
+
+    Symmetric negative test — protects against silently dropped wrapping where
+    the helper is no-op'd on cpu and the test would pass without exercising
+    the actual MPS wrapping path.
+    """
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, _ = _make_mocked_asr(decoded_texts=["hello"])
+    asr.device = "cpu"
+    asr._mps_inference_count = 0
+
+    asr.transcribe_batch([np.full(16000, 100, dtype=np.int16)])
+
+    pool_factory.assert_not_called()
+
+
+def test_transcribe_with_timestamps_str_path_on_mps_wraps_in_pool_and_calls_cache_helper(monkeypatch, tmp_path):
+    """
+    given: ASRModule with device == "mps", str audio path
+    when: transcribe_with_timestamps runs
+    then: objc.autorelease_pool is entered/exited once and
+          _maybe_empty_mps_cache is called once
+    """
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, model = _make_timestamps_asr(_FakeResult(text="ok", words=[]))
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    wav_path = tmp_path / "input.wav"
+    sf.write(str(wav_path), np.zeros(16000, dtype=np.float32), 16000, subtype="FLOAT")
+
+    cache_calls = []
+    monkeypatch.setattr(
+        ASRModule,
+        "_maybe_empty_mps_cache",
+        lambda self: cache_calls.append(1),
+    )
+
+    asr.transcribe_with_timestamps(str(wav_path))
+
+    pool_factory.assert_called_once_with()
+    cm = pool_factory.return_value
+    cm.__enter__.assert_called_once()
+    cm.__exit__.assert_called_once()
+    assert len(cache_calls) == 1
+    model.transcribe.assert_called_once()
+
+
+def test_transcribe_with_timestamps_str_path_on_cpu_does_not_enter_pool(monkeypatch, tmp_path):
+    """
+    given: ASRModule with device == "cpu", str audio path
+    when: transcribe_with_timestamps runs
+    then: objc.autorelease_pool is NEVER called (negative guard)
+    """
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, _ = _make_timestamps_asr(_FakeResult(text="ok", words=[]))
+    asr.device = "cpu"
+    asr._mps_inference_count = 0
+
+    wav_path = tmp_path / "input.wav"
+    sf.write(str(wav_path), np.zeros(16000, dtype=np.float32), 16000, subtype="FLOAT")
+
+    asr.transcribe_with_timestamps(str(wav_path))
+
+    pool_factory.assert_not_called()
+
+
+def test_transcribe_with_timestamps_ndarray_on_mps_wraps_in_pool_and_calls_cache_helper(monkeypatch):
+    """
+    given: ASRModule with device == "mps", numpy audio array
+    when: transcribe_with_timestamps runs (writes temp WAV, then calls model)
+    then: objc.autorelease_pool is entered/exited once around model.transcribe
+          and _maybe_empty_mps_cache is called once
+    """
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, model = _make_timestamps_asr(_FakeResult(text="ok", words=[]))
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    cache_calls = []
+    monkeypatch.setattr(
+        ASRModule,
+        "_maybe_empty_mps_cache",
+        lambda self: cache_calls.append(1),
+    )
+
+    asr.transcribe_with_timestamps(np.zeros(16000, dtype=np.float32))
+
+    pool_factory.assert_called_once_with()
+    cm = pool_factory.return_value
+    cm.__enter__.assert_called_once()
+    cm.__exit__.assert_called_once()
+    assert len(cache_calls) == 1
+    model.transcribe.assert_called_once()
+
+
+def test_transcribe_with_timestamps_ndarray_on_cpu_does_not_enter_pool(monkeypatch):
+    """
+    given: ASRModule with device == "cpu", numpy audio array
+    when: transcribe_with_timestamps runs
+    then: objc.autorelease_pool is NEVER called (negative guard)
+    """
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, _ = _make_timestamps_asr(_FakeResult(text="ok", words=[]))
+    asr.device = "cpu"
+    asr._mps_inference_count = 0
+
+    asr.transcribe_with_timestamps(np.zeros(16000, dtype=np.float32))
+
+    pool_factory.assert_not_called()
+
+
+def test_transcribe_simple_on_mps_one_pool_entry_per_chunk(monkeypatch, tmp_path):
+    """
+    given: ASRModule with device == "mps" and audio long enough for 3 chunks
+    when: transcribe_simple is invoked
+    then: objc.autorelease_pool is entered N times (one per chunk) and
+          _maybe_empty_mps_cache is called N times
+    """
+    import types
+
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, model = _make_mocked_asr(decoded_texts=["hello"])
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    # 3 seconds of audio at 16 kHz with chunk_duration=1.0/overlap=0.0
+    # => 3 chunks (start_sample steps 0, 16000, 32000).
+    fake_preprocess = types.ModuleType("gigaam.preprocess")
+    fake_preprocess.load_audio = lambda _path: torch.zeros(48000)
+    fake_preprocess.SAMPLE_RATE = 16000
+    monkeypatch.setitem(sys.modules, "gigaam.preprocess", fake_preprocess)
+
+    cache_calls = []
+    monkeypatch.setattr(
+        ASRModule,
+        "_maybe_empty_mps_cache",
+        lambda self: cache_calls.append(1),
+    )
+
+    asr.transcribe_simple(
+        str(tmp_path / "dummy.wav"),
+        chunk_duration=1.0,
+        overlap=0.0,
+        quiet=True,
+    )
+
+    expected_chunks = 3
+    assert pool_factory.call_count == expected_chunks, (
+        f"expected pool entered once per chunk ({expected_chunks}); got {pool_factory.call_count}"
+    )
+    cm = pool_factory.return_value
+    assert cm.__enter__.call_count == expected_chunks
+    assert cm.__exit__.call_count == expected_chunks
+    assert len(cache_calls) == expected_chunks
+    assert model.forward.call_count == expected_chunks
+
+
+def test_transcribe_simple_on_cpu_does_not_enter_pool(monkeypatch, tmp_path):
+    """
+    given: ASRModule with device == "cpu" and 3-chunk audio
+    when: transcribe_simple is invoked
+    then: objc.autorelease_pool is NEVER called regardless of chunk count
+    """
+    import types
+
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, _ = _make_mocked_asr(decoded_texts=["hello"])
+    asr.device = "cpu"
+    asr._mps_inference_count = 0
+
+    fake_preprocess = types.ModuleType("gigaam.preprocess")
+    fake_preprocess.load_audio = lambda _path: torch.zeros(48000)
+    fake_preprocess.SAMPLE_RATE = 16000
+    monkeypatch.setitem(sys.modules, "gigaam.preprocess", fake_preprocess)
+
+    asr.transcribe_simple(
+        str(tmp_path / "dummy.wav"),
+        chunk_duration=1.0,
+        overlap=0.0,
+        quiet=True,
+    )
+
+    pool_factory.assert_not_called()
+
+
+def _make_live_transcriber_for_direct(asr: ASRModule):
+    """Build a minimal `LiveTranscriber`-shaped object for `_transcribe_direct`.
+
+    Uses `__new__` to bypass the heavy `__init__` (which constructs capture
+    devices, ASR module, etc.). Sets only the attributes `_transcribe_direct`
+    touches: `asr`, `_model_device`, `_model_dtype`, `_refine_worker`.
+    """
+    from recog.live import LiveTranscriber
+
+    transcriber = LiveTranscriber.__new__(LiveTranscriber)
+    transcriber.asr = asr
+    transcriber._model_device = None
+    transcriber._model_dtype = None
+    transcriber._refine_worker = None
+    return transcriber
+
+
+def test_transcribe_direct_on_mps_wraps_inference_in_pool_and_calls_cache_helper(monkeypatch):
+    """
+    given: LiveTranscriber whose ASR is on device == "mps", PyObjC patched in
+    when: _transcribe_direct runs on a 1 s float32 chunk
+    then: objc.autorelease_pool is entered/exited once and
+          asr._maybe_empty_mps_cache is called once
+
+    Mirrors the live mic / fallback-mixed path that bypasses transcribe_batch
+    and goes straight to model.forward + decode under self.asr._model_lock.
+    """
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, model = _make_mocked_asr(decoded_texts=["live text"])
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    cache_calls = []
+    monkeypatch.setattr(
+        ASRModule,
+        "_maybe_empty_mps_cache",
+        lambda self: cache_calls.append(1),
+    )
+
+    transcriber = _make_live_transcriber_for_direct(asr)
+    audio = np.zeros(16000, dtype=np.float32)
+    text = transcriber._transcribe_direct(audio)
+
+    assert text == "live text"
+    pool_factory.assert_called_once_with()
+    cm = pool_factory.return_value
+    cm.__enter__.assert_called_once()
+    cm.__exit__.assert_called_once()
+    assert len(cache_calls) == 1
+    model.forward.assert_called_once()
+    model.decoding.decode.assert_called_once()
+
+
+def test_transcribe_direct_on_cpu_does_not_enter_pool(monkeypatch):
+    """
+    given: LiveTranscriber whose ASR is on device == "cpu"
+    when: _transcribe_direct runs
+    then: objc.autorelease_pool is NEVER called (negative guard)
+    """
+    pool_factory = _install_pool_mock(monkeypatch)
+
+    asr, _ = _make_mocked_asr(decoded_texts=["live text"])
+    asr.device = "cpu"
+    asr._mps_inference_count = 0
+
+    transcriber = _make_live_transcriber_for_direct(asr)
+    audio = np.zeros(16000, dtype=np.float32)
+    transcriber._transcribe_direct(audio)
+
+    pool_factory.assert_not_called()
