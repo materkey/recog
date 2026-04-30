@@ -176,11 +176,12 @@ class ASRModule:
                 wav = chunk.to(device).to(dtype).unsqueeze(0)
                 length = torch.full([1], wav.shape[-1], device=device)
 
-                with torch.inference_mode():
+                with torch.inference_mode(), _mps_autoreleasepool(self.device):
                     encoded, encoded_len = model.forward(wav, length)
                     # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
                     # we only need the first sample's text.
                     text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
+                    self._maybe_empty_mps_cache()
 
                 if text.strip():
                     start_time = start_sample / self.SAMPLE_RATE
@@ -247,11 +248,12 @@ class ASRModule:
         wav_batch = torch.from_numpy(padded).to(device).to(dtype)
         length_batch = torch.tensor(lengths, dtype=torch.long, device=device)
 
-        with self._model_lock, torch.inference_mode():
+        with self._model_lock, torch.inference_mode(), _mps_autoreleasepool(self.device):
             encoded, encoded_len = model.forward(wav_batch, length_batch)
             # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
             # token ids/frames are unused here.
             decoded = model.decoding.decode(model.head, encoded, encoded_len)
+            self._maybe_empty_mps_cache()
 
         return [entry[0] for entry in decoded]
 
@@ -283,8 +285,9 @@ class ASRModule:
         model = self.load_model(quiet=quiet)
 
         if isinstance(audio, str):
-            with self._model_lock:
+            with self._model_lock, _mps_autoreleasepool(self.device):
                 result = model.transcribe(audio, word_timestamps=True)
+                self._maybe_empty_mps_cache()
         else:
             import soundfile as sf
 
@@ -309,8 +312,9 @@ class ASRModule:
             os.close(tmp_fd)
             try:
                 sf.write(tmp_path, arr, sample_rate, subtype="FLOAT")
-                with self._model_lock:
+                with self._model_lock, _mps_autoreleasepool(self.device):
                     result = model.transcribe(tmp_path, word_timestamps=True)
+                    self._maybe_empty_mps_cache()
             finally:
                 try:
                     os.unlink(tmp_path)
