@@ -229,6 +229,22 @@ Acceptance gates:
 - Cooperative abort гарантирует, что live никогда не ждёт больше ~187 ms.
 - `RECOG_BRIDGE_WS_URL` overridable для нетипичных setup'ов.
 
+## Operational concerns
+
+В долгоживущем `mp4_notes.py live --ktalk` обнаружена накопительная утечка
+Apple Metal/MPS NSObject'ов в worker-потоках (`PerSpeakerIngest`, `RefineWorker`):
+после ~3 суток uptime physical footprint достигает ~7.4 GB при resident < 400 MB,
+из них ~5.7 GB приходится на Apple Metal/MPS объекты (`AGXG16GFamilyCommandBuffer`
+~2.4M записей, `AGXG16GFamilyComputeContext` ~3.6M, `MPSCommandBuffer` ~2.4M).
+Корень — отсутствие NSAutoreleasePool вокруг forward-проходов на MPS-устройстве
+в worker-потоках. Митигация: module-level `_mps_autoreleasepool(device)`
+context manager (PyObjC) обёрнут вокруг всех четырёх hot inference paths
+(`transcribe_batch`, `transcribe_with_timestamps` обе ветки, `transcribe_simple`
+per-chunk, `_transcribe_direct`); throttled `_maybe_empty_mps_cache()`
+освобождает torch MPS allocator cache каждые 100 вызовов (~20 с при 5 Hz live
+batch'ах). См. план `docs/plans/2026-04-30-mps-autoreleasepool-leak-fix.md` и
+upstream issues `pytorch/pytorch#93397`, `pytorch/pytorch#96975`.
+
 ## Alternatives Considered
 
 1. **Option A: bump live chunk_duration до 10–20 s.** Отклонено — видимая
