@@ -26,7 +26,7 @@ except ImportError:
 
 @contextlib.contextmanager
 def _mps_autoreleasepool(device: str) -> Iterator[None]:
-    """Drain Apple Metal/MPS NSObject-ы after one inference call.
+    """Drain Apple Metal/MPS NSObjects after one inference call.
 
     On macOS with PyObjC available and ``device == "mps"``, wraps the body
     in ``with objc.autorelease_pool(): yield`` so any Metal/MPS Apple objects
@@ -71,25 +71,16 @@ class ASRModule:
         # path) can call `transcribe_with_timestamps` — which re-acquires the
         # same lock internally — without deadlocking.
         self._model_lock = threading.RLock()
-        # Best-effort MPS cache-release counter (see `_maybe_empty_mps_cache`).
+        # Counter increment is not atomic (3 bytecodes); without a lock concurrent
+        # increments can lose multiple updates and stretch the empty_cache interval
+        # beyond _MPS_EMPTY_CACHE_EVERY, or at threshold boundary fire back-to-back
+        # in two threads — both behaviors are idempotent and harmless. torch.mps.
+        # empty_cache() thread-safety is not in PyTorch's public contract; current
+        # implementation acquires the MPS allocator lock internally.
         self._mps_inference_count: int = 0
 
     def _maybe_empty_mps_cache(self) -> None:
-        """Best-effort throttled MPS allocator cache release.
-
-        Counter increment is not atomic across threads (3 bytecodes); without
-        a lock concurrent increments can lose multiple updates, so the actual
-        firing interval may stretch well beyond `_MPS_EMPTY_CACHE_EVERY` (e.g.
-        if many threads race repeatedly, the next fire can land 100+ inferences
-        late). Conversely, two threads both observing the threshold can fire
-        `torch.mps.empty_cache()` back-to-back. Both are idempotent and
-        harmless — accuracy is not a correctness invariant.
-
-        `torch.mps.empty_cache()` thread-safety is not documented as part of
-        PyTorch's public contract; current implementations serialise via the
-        MPS allocator's internal lock, so concurrent calls are safe in
-        practice. If this changes upstream we may need an explicit guard.
-        """
+        """Best-effort throttled MPS allocator cache release. No-op on non-MPS devices."""
         if self.device != "mps":
             return
         self._mps_inference_count += 1
