@@ -38,11 +38,6 @@
 
 ### Четыре hot inference paths (после plan-review)
 
-> **Note (archived):** the line numbers below were captured during planning
-> and are stale post-implementation (paths shifted by ~10-50 lines after the
-> wrapping landed). Kept as historical record; see `recog/asr.py` and
-> `recog/live.py:_transcribe_direct` for current locations.
-
 | # | Путь | Файл/строка | Поток |
 |---|---|---|---|
 | 1 | `transcribe_batch` | `asr.py:204` | PerSpeakerIngest worker (live PCM) |
@@ -142,13 +137,6 @@ def _maybe_empty_mps_cache(self) -> None:
     accuracy is not a correctness invariant.
     """
 ```
-
-> **Note (post-implementation revision):** the docstring text and contract
-> bullets in this section reflect iteration-1/iteration-2 review revisions —
-> see `recog/asr.py:_maybe_empty_mps_cache` for the current authoritative
-> wording. The original "race only widens the interval, never narrows it"
-> phrasing was rewritten in commit `a971b03` (iteration 1) and refined again
-> in iteration 2.
 
 ### Контракт `_maybe_empty_mps_cache`
 - Может вызываться **вне `_model_lock`** (в `transcribe_simple` chunk loop счётчик не под lock — best-effort throttle).

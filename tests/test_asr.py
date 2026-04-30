@@ -400,26 +400,23 @@ def test_asrmodule_falls_back_to_cpu_when_mps_unavailable(monkeypatch):
 # -----------------------------------------------------------------------------
 
 
-def _make_pool_mock() -> MagicMock:
-    """Build a MagicMock that behaves like a context manager and tracks
-    enter/exit. Used to verify `with objc.autorelease_pool(): ...` semantics."""
-    cm = MagicMock()
-    cm.__enter__ = MagicMock(return_value=None)
-    cm.__exit__ = MagicMock(return_value=False)  # don't suppress exceptions
-    pool_factory = MagicMock(return_value=cm)
-    return pool_factory
-
-
 def _install_pool_mock(monkeypatch) -> MagicMock:
     """Install a MagicMock factory for `recog.asr.objc.autorelease_pool`.
 
     Forces `_HAS_AUTORELEASE = True` so the wrapping branch is actually
     exercised regardless of whether PyObjC is importable on the host.
     Returns the pool_factory mock (call it like `pool_factory()` to get cm).
+
+    Note: cpu-negative tests don't need the `_HAS_AUTORELEASE = True` side
+    effect (cpu device short-circuits before reading either symbol) but reuse
+    the same fixture for symmetry.
     """
     from recog import asr as asr_module
 
-    pool_factory = _make_pool_mock()
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=None)
+    cm.__exit__ = MagicMock(return_value=False)  # don't suppress exceptions
+    pool_factory = MagicMock(return_value=cm)
     fake_objc = MagicMock()
     fake_objc.autorelease_pool = pool_factory
     monkeypatch.setattr(asr_module, "objc", fake_objc)
