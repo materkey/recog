@@ -2,12 +2,13 @@
 Модуль ASR (Automatic Speech Recognition) на базе GigaAM.
 """
 
+import contextlib
 import os
 import re
 import sys
 import tempfile
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import numpy as np
 import torch
@@ -15,9 +16,38 @@ import torch
 from .config import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP
 from .models import Segment
 
+try:
+    import objc
+    _HAS_AUTORELEASE = True
+except ImportError:
+    objc = None  # type: ignore[assignment]
+    _HAS_AUTORELEASE = False
+
+
+@contextlib.contextmanager
+def _mps_autoreleasepool(device: str) -> Iterator[None]:
+    """Drain Apple Metal/MPS NSObject-ы after one inference call.
+
+    On macOS with PyObjC available and ``device == "mps"``, wraps the body
+    in ``with objc.autorelease_pool(): yield`` so any Metal/MPS Apple objects
+    autoreleased during forward + decode get drained on exit (including the
+    exception path — context-manager protocol guarantees ``__exit__`` runs).
+
+    On CPU or hosts without PyObjC, this is a zero-overhead no-op.
+    """
+    if device == "mps" and _HAS_AUTORELEASE:
+        with objc.autorelease_pool():
+            yield
+    else:
+        yield
+
 
 class ASRModule:
     """Модуль для транскрибирования с GigaAM."""
+
+    # Number of inference calls between throttled `torch.mps.empty_cache()`
+    # invocations. ~20 s at 5 Hz live batches; longer when only refine runs.
+    _MPS_EMPTY_CACHE_EVERY: int = 100
 
     def __init__(self, model_name: str = DEFAULT_MODEL, device: Optional[str] = None):
         import gigaam
@@ -41,6 +71,22 @@ class ASRModule:
         # path) can call `transcribe_with_timestamps` — which re-acquires the
         # same lock internally — without deadlocking.
         self._model_lock = threading.RLock()
+        # Best-effort MPS cache-release counter (see `_maybe_empty_mps_cache`).
+        self._mps_inference_count: int = 0
+
+    def _maybe_empty_mps_cache(self) -> None:
+        """Best-effort throttled MPS allocator cache release.
+
+        Counter increment is not atomic across threads (3 bytecodes); the race
+        only widens the throttle interval, never narrows it — acceptable for
+        cache-release accounting (not correctness-critical).
+        """
+        if self.device != "mps":
+            return
+        self._mps_inference_count += 1
+        if self._mps_inference_count >= self._MPS_EMPTY_CACHE_EVERY:
+            self._mps_inference_count = 0
+            torch.mps.empty_cache()
 
     def load_model(self, quiet: bool = False):
         """Загружает модель GigaAM."""

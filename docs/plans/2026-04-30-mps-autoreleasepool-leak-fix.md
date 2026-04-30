@@ -212,12 +212,12 @@ finally:
 **Files:**
 - Modify: `recog/asr.py`
 
-- [ ] добавить `import contextlib` и `from typing import Iterator` к существующим импортам
-- [ ] добавить `try: import objc; _HAS_AUTORELEASE = True\nexcept ImportError: objc = None; _HAS_AUTORELEASE = False` (объявленная форма из Solution Overview — критично для определённости monkey-patch'а)
-- [ ] добавить module-level `@contextlib.contextmanager _mps_autoreleasepool(device: str) -> Iterator[None]` с телом `with objc.autorelease_pool(): yield` (НЕ ручной `__enter__/__exit__`)
-- [ ] добавить в `ASRModule.__init__` поле `self._mps_inference_count: int = 0` и константу класса `_MPS_EMPTY_CACHE_EVERY: int = 100`
-- [ ] добавить method `ASRModule._maybe_empty_mps_cache(self) -> None` с docstring про best-effort race
-- [ ] прогнать тесты Task 1 — должны проходить (GREEN)
+- [x] добавить `import contextlib` и `from typing import Iterator` к существующим импортам
+- [x] добавить `try: import objc; _HAS_AUTORELEASE = True\nexcept ImportError: objc = None; _HAS_AUTORELEASE = False` (объявленная форма из Solution Overview — критично для определённости monkey-patch'а)
+- [x] добавить module-level `@contextlib.contextmanager _mps_autoreleasepool(device: str) -> Iterator[None]` с телом `with objc.autorelease_pool(): yield` (НЕ ручной `__enter__/__exit__`)
+- [x] добавить в `ASRModule.__init__` поле `self._mps_inference_count: int = 0` и константу класса `_MPS_EMPTY_CACHE_EVERY: int = 100`
+- [x] добавить method `ASRModule._maybe_empty_mps_cache(self) -> None` с docstring про best-effort race
+- [x] прогнать тесты Task 1 — должны проходить (GREEN)
 
 ### Task 3: TDD — тесты на оборачивание четырёх hot paths
 
