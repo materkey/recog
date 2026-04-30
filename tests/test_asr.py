@@ -391,3 +391,182 @@ def test_asrmodule_falls_back_to_cpu_when_mps_unavailable(monkeypatch):
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     asr = ASRModule(device=None)
     assert asr.device == "cpu"
+
+
+# -----------------------------------------------------------------------------
+# _mps_autoreleasepool helper + _maybe_empty_mps_cache throttle
+# -----------------------------------------------------------------------------
+
+
+def _make_pool_mock() -> MagicMock:
+    """Build a MagicMock that behaves like a context manager and tracks
+    enter/exit. Used to verify `with objc.autorelease_pool(): ...` semantics."""
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=None)
+    cm.__exit__ = MagicMock(return_value=False)  # don't suppress exceptions
+    pool_factory = MagicMock(return_value=cm)
+    return pool_factory
+
+
+def test_mps_autoreleasepool_mps_device_with_pyobjc_enters_and_exits():
+    """
+    given: device == "mps" and PyObjC is available
+    when: _mps_autoreleasepool("mps") is used as a context manager
+    then: objc.autorelease_pool().__enter__/__exit__ are each called once
+    """
+    from recog import asr as asr_module
+    from recog.asr import _mps_autoreleasepool
+
+    pool_factory = _make_pool_mock()
+    fake_objc = MagicMock()
+    fake_objc.autorelease_pool = pool_factory
+    original_objc = asr_module.objc
+    original_flag = asr_module._HAS_AUTORELEASE
+    asr_module.objc = fake_objc
+    asr_module._HAS_AUTORELEASE = True
+    try:
+        with _mps_autoreleasepool("mps"):
+            pass
+    finally:
+        asr_module.objc = original_objc
+        asr_module._HAS_AUTORELEASE = original_flag
+
+    pool_factory.assert_called_once_with()
+    cm = pool_factory.return_value
+    cm.__enter__.assert_called_once()
+    cm.__exit__.assert_called_once()
+
+
+def test_mps_autoreleasepool_cpu_device_does_not_call_objc():
+    """
+    given: device == "cpu"
+    when: _mps_autoreleasepool("cpu") is used as a context manager
+    then: objc.autorelease_pool is not called at all
+    """
+    from recog import asr as asr_module
+    from recog.asr import _mps_autoreleasepool
+
+    pool_factory = _make_pool_mock()
+    fake_objc = MagicMock()
+    fake_objc.autorelease_pool = pool_factory
+    original_objc = asr_module.objc
+    original_flag = asr_module._HAS_AUTORELEASE
+    asr_module.objc = fake_objc
+    asr_module._HAS_AUTORELEASE = True
+    try:
+        with _mps_autoreleasepool("cpu"):
+            pass
+    finally:
+        asr_module.objc = original_objc
+        asr_module._HAS_AUTORELEASE = original_flag
+
+    pool_factory.assert_not_called()
+
+
+def test_mps_autoreleasepool_mps_without_pyobjc_is_noop():
+    """
+    given: device == "mps" but _HAS_AUTORELEASE is False (no PyObjC)
+    when: _mps_autoreleasepool("mps") is used as a context manager
+    then: no crash and objc is not invoked
+    """
+    from recog import asr as asr_module
+    from recog.asr import _mps_autoreleasepool
+
+    pool_factory = _make_pool_mock()
+    fake_objc = MagicMock()
+    fake_objc.autorelease_pool = pool_factory
+    original_objc = asr_module.objc
+    original_flag = asr_module._HAS_AUTORELEASE
+    asr_module.objc = fake_objc
+    asr_module._HAS_AUTORELEASE = False
+    try:
+        with _mps_autoreleasepool("mps"):
+            pass
+    finally:
+        asr_module.objc = original_objc
+        asr_module._HAS_AUTORELEASE = original_flag
+
+    pool_factory.assert_not_called()
+
+
+def test_mps_autoreleasepool_drains_on_exception_inside_with_block():
+    """
+    given: device == "mps", PyObjC available, body raises
+    when: exception is raised inside the with-block
+    then: __exit__ is invoked with non-None exc_info (pool drains) and the
+          exception propagates to the caller
+    """
+    from recog import asr as asr_module
+    from recog.asr import _mps_autoreleasepool
+
+    pool_factory = _make_pool_mock()
+    fake_objc = MagicMock()
+    fake_objc.autorelease_pool = pool_factory
+    original_objc = asr_module.objc
+    original_flag = asr_module._HAS_AUTORELEASE
+    asr_module.objc = fake_objc
+    asr_module._HAS_AUTORELEASE = True
+
+    class _Boom(Exception):
+        pass
+
+    try:
+        with pytest.raises(_Boom):
+            with _mps_autoreleasepool("mps"):
+                raise _Boom("inner")
+    finally:
+        asr_module.objc = original_objc
+        asr_module._HAS_AUTORELEASE = original_flag
+
+    cm = pool_factory.return_value
+    cm.__enter__.assert_called_once()
+    cm.__exit__.assert_called_once()
+    exit_args, _exit_kwargs = cm.__exit__.call_args
+    # contextlib's contextmanager forwards (exc_type, exc_value, traceback)
+    assert exit_args[0] is _Boom
+    assert isinstance(exit_args[1], _Boom)
+    assert exit_args[2] is not None
+
+
+def test_maybe_empty_mps_cache_99_calls_no_trigger_100th_triggers_and_resets(monkeypatch):
+    """
+    given: ASRModule with device == "mps" and a fresh _mps_inference_count
+    when: _maybe_empty_mps_cache is invoked 100 times
+    then: the first 99 do NOT call torch.mps.empty_cache, the 100th does, and
+          the counter resets to 0 after firing
+    """
+    asr, _ = _make_mocked_asr(decoded_texts=[])
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    empty_cache = MagicMock()
+    monkeypatch.setattr(torch.mps, "empty_cache", empty_cache)
+
+    for _ in range(ASRModule._MPS_EMPTY_CACHE_EVERY - 1):
+        asr._maybe_empty_mps_cache()
+    empty_cache.assert_not_called()
+    assert asr._mps_inference_count == ASRModule._MPS_EMPTY_CACHE_EVERY - 1
+
+    asr._maybe_empty_mps_cache()  # 100th call
+    empty_cache.assert_called_once_with()
+    assert asr._mps_inference_count == 0
+
+
+def test_maybe_empty_mps_cache_cpu_device_is_noop_even_after_many_calls(monkeypatch):
+    """
+    given: ASRModule with device == "cpu"
+    when: _maybe_empty_mps_cache is invoked many times
+    then: torch.mps.empty_cache is never called and counter stays at 0
+    """
+    asr, _ = _make_mocked_asr(decoded_texts=[])
+    asr.device = "cpu"
+    asr._mps_inference_count = 0
+
+    empty_cache = MagicMock()
+    monkeypatch.setattr(torch.mps, "empty_cache", empty_cache)
+
+    for _ in range(ASRModule._MPS_EMPTY_CACHE_EVERY * 2):
+        asr._maybe_empty_mps_cache()
+
+    empty_cache.assert_not_called()
+    assert asr._mps_inference_count == 0
