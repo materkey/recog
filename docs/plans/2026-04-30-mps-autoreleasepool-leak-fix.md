@@ -239,11 +239,11 @@ finally:
 **Files:**
 - Modify: `recog/asr.py`
 
-- [ ] `transcribe_batch`: добавить `_mps_autoreleasepool(self.device)` в `with`-цепочку (`_model_lock`, `inference_mode`, `_mps_autoreleasepool`); вызвать `self._maybe_empty_mps_cache()` после decode внутри `with`
-- [ ] `transcribe_with_timestamps` ветка `isinstance(audio, str)`: обернуть `model.transcribe` в `with self._model_lock, _mps_autoreleasepool(self.device):` + `_maybe_empty_mps_cache()`
-- [ ] `transcribe_with_timestamps` ветка numpy/Tensor: обернуть второй `model.transcribe` аналогично, внутри `try` блока (после `sf.write`)
-- [ ] `transcribe_simple` chunk loop: обернуть body `with torch.inference_mode(), _mps_autoreleasepool(self.device):` + `_maybe_empty_mps_cache()` после decode (per-chunk pool)
-- [ ] прогнать тесты Task 3 (только asr-методы) — должны проходить (GREEN)
+- [x] `transcribe_batch`: добавить `_mps_autoreleasepool(self.device)` в `with`-цепочку (`_model_lock`, `inference_mode`, `_mps_autoreleasepool`); вызвать `self._maybe_empty_mps_cache()` после decode внутри `with`
+- [x] `transcribe_with_timestamps` ветка `isinstance(audio, str)`: обернуть `model.transcribe` в `with self._model_lock, _mps_autoreleasepool(self.device):` + `_maybe_empty_mps_cache()`
+- [x] `transcribe_with_timestamps` ветка numpy/Tensor: обернуть второй `model.transcribe` аналогично, внутри `try` блока (после `sf.write`)
+- [x] `transcribe_simple` chunk loop: обернуть body `with torch.inference_mode(), _mps_autoreleasepool(self.device):` + `_maybe_empty_mps_cache()` после decode (per-chunk pool)
+- [x] прогнать тесты Task 3 (только asr-методы) — должны проходить (GREEN)
 
 ### Task 5: Обернуть `_transcribe_direct` в `recog/live.py`
 
