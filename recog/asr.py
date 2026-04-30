@@ -77,11 +77,18 @@ class ASRModule:
     def _maybe_empty_mps_cache(self) -> None:
         """Best-effort throttled MPS allocator cache release.
 
-        Counter increment is not atomic across threads (3 bytecodes); the race
-        may cause occasional duplicate `torch.mps.empty_cache()` calls in
-        immediate succession (e.g. two threads both crossing the threshold)
-        or a single skipped tick — both idempotent and harmless for
-        cache-release accounting (not correctness-critical).
+        Counter increment is not atomic across threads (3 bytecodes); without
+        a lock concurrent increments can lose multiple updates, so the actual
+        firing interval may stretch well beyond `_MPS_EMPTY_CACHE_EVERY` (e.g.
+        if many threads race repeatedly, the next fire can land 100+ inferences
+        late). Conversely, two threads both observing the threshold can fire
+        `torch.mps.empty_cache()` back-to-back. Both are idempotent and
+        harmless — accuracy is not a correctness invariant.
+
+        `torch.mps.empty_cache()` thread-safety is not documented as part of
+        PyTorch's public contract; current implementations serialise via the
+        MPS allocator's internal lock, so concurrent calls are safe in
+        practice. If this changes upstream we may need an explicit guard.
         """
         if self.device != "mps":
             return
@@ -178,6 +185,11 @@ class ASRModule:
                 wav = chunk.to(device).to(dtype).unsqueeze(0)
                 length = torch.full([1], wav.shape[-1], device=device)
 
+                # Offline CLI only: this method is invoked by `mp4_notes.py`
+                # for one-shot file transcription, never from the live loop or
+                # RefineWorker. There are no concurrent `model.forward` users
+                # in this path, so `self._model_lock` is omitted intentionally;
+                # the other three hot paths serialise via that lock.
                 with torch.inference_mode(), _mps_autoreleasepool(self.device):
                     encoded, encoded_len = model.forward(wav, length)
                     # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
