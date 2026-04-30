@@ -268,9 +268,9 @@ finally:
 ### Task 7: ADR заметка
 
 **Files:**
-- Modify: `adr/ADR-0019.md`
+- Modify: `adr/0019-stream-refine.md`
 
-- [ ] добавить в "Notes" / "Operational concerns" один параграф: ссылка на этот план, краткое описание leak'а (5.7 ГБ Apple Metal objects через 3 суток), упоминание `_mps_autoreleasepool` + throttled `empty_cache` как митигации
+- [x] добавить в "Notes" / "Operational concerns" один параграф: ссылка на этот план, краткое описание leak'а (5.7 ГБ Apple Metal objects через 3 суток), упоминание `_mps_autoreleasepool` + throttled `empty_cache` как митигации
 
 ### Task 8: [Final] Перенести план в completed
 
