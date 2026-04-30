@@ -250,10 +250,10 @@ finally:
 **Files:**
 - Modify: `recog/live.py`
 
-- [ ] импортировать `_mps_autoreleasepool` из `recog.asr` (или через `from .asr import _mps_autoreleasepool`)
-- [ ] обернуть существующий `with self.asr._model_lock:` блок (lines 466-470) в дополнительный `_mps_autoreleasepool(self.asr.device)`: получится `with self.asr._model_lock, _mps_autoreleasepool(self.asr.device):`
-- [ ] вызвать `self.asr._maybe_empty_mps_cache()` после decode внутри `with`
-- [ ] прогнать тест `_transcribe_direct on mps ...` из Task 3 — должен проходить (GREEN)
+- [x] импортировать `_mps_autoreleasepool` из `recog.asr` (или через `from .asr import _mps_autoreleasepool`)
+- [x] обернуть существующий `with self.asr._model_lock:` блок (lines 466-470) в дополнительный `_mps_autoreleasepool(self.asr.device)`: получится `with self.asr._model_lock, _mps_autoreleasepool(self.asr.device):`
+- [x] вызвать `self.asr._maybe_empty_mps_cache()` после decode внутри `with`
+- [x] прогнать тест `_transcribe_direct on mps ...` из Task 3 — должен проходить (GREEN)
 
 ### Task 6: Smoke + regression — полный test suite
 
