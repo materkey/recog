@@ -427,6 +427,48 @@ def _install_pool_mock(monkeypatch) -> MagicMock:
     return pool_factory
 
 
+def _install_cache_spy(monkeypatch, events: Optional[list] = None) -> list:
+    """Install a spy on `ASRModule._maybe_empty_mps_cache`.
+
+    Returns a list whose append timing reflects when the helper was invoked.
+    If `events` is provided (a shared sequence list for ordering assertions),
+    the spy appends ``"cache"`` to it in addition to its own counter list,
+    so the caller can assert it fires WHILE the autorelease pool is open
+    (i.e. between `pool_enter` and `pool_exit` markers).
+    """
+    cache_calls: list = []
+
+    def _spy(self) -> None:
+        cache_calls.append(1)
+        if events is not None:
+            events.append("cache")
+
+    monkeypatch.setattr(ASRModule, "_maybe_empty_mps_cache", _spy)
+    return cache_calls
+
+
+def _instrument_pool_for_ordering(pool_factory: MagicMock, events: list) -> None:
+    """Wrap `__enter__`/`__exit__` on the pool's context manager so they
+    append ``"pool_enter"`` / ``"pool_exit"`` to the shared `events` list.
+    Used together with `_install_cache_spy(monkeypatch, events)` to verify
+    that the cache helper fires while the pool is still open.
+    """
+    cm = pool_factory.return_value
+    original_enter = cm.__enter__
+    original_exit = cm.__exit__
+
+    def _enter(*args, **kwargs):
+        events.append("pool_enter")
+        return original_enter(*args, **kwargs)
+
+    def _exit(*args, **kwargs):
+        events.append("pool_exit")
+        return original_exit(*args, **kwargs)
+
+    cm.__enter__ = MagicMock(side_effect=_enter)
+    cm.__exit__ = MagicMock(side_effect=_exit)
+
+
 def test_mps_autoreleasepool_mps_device_with_pyobjc_enters_and_exits(monkeypatch):
     """
     given: device == "mps" and PyObjC is available
@@ -552,6 +594,84 @@ def test_maybe_empty_mps_cache_cpu_device_is_noop_even_after_many_calls(monkeypa
     assert asr._mps_inference_count == 0
 
 
+def test_maybe_empty_mps_cache_mps_device_without_pyobjc_still_throttles(monkeypatch):
+    """
+    given: ASRModule with device == "mps" and _HAS_AUTORELEASE = False
+    when: _maybe_empty_mps_cache is invoked 100 times
+    then: torch.mps.empty_cache fires once on the threshold call and the
+          counter resets — the throttle is independent of PyObjC availability
+
+    Pins the contract that the counter / empty_cache logic only depends on
+    `device == "mps"`, not on `_HAS_AUTORELEASE`. Regression guard against a
+    refactor that gates the throttle behind `_HAS_AUTORELEASE`.
+    """
+    from recog import asr as asr_module
+
+    asr, _ = _make_mocked_asr(decoded_texts=[])
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    monkeypatch.setattr(asr_module, "_HAS_AUTORELEASE", False)
+    empty_cache = MagicMock()
+    monkeypatch.setattr(torch.mps, "empty_cache", empty_cache)
+
+    for _ in range(ASRModule._MPS_EMPTY_CACHE_EVERY):
+        asr._maybe_empty_mps_cache()
+
+    empty_cache.assert_called_once_with()
+    assert asr._mps_inference_count == 0
+
+
+def test_maybe_empty_mps_cache_concurrent_threads_remain_within_tolerance(monkeypatch):
+    """
+    given: ASRModule with device == "mps" and 2 threads each calling the
+           helper 200 times (400 total invocations)
+    when: threads run concurrently without external locking
+    then: torch.mps.empty_cache fires between 1 and 4 times — best-effort
+          tolerance for the documented non-atomic counter race
+
+    Lower bound: 400 / 100 == 4 ideal; race may lose increments and stretch
+    the interval, so even 1 fire is acceptable. Upper bound: two threads
+    crossing the threshold simultaneously can fire back-to-back, but the
+    cumulative count of fires cannot exceed (400 / threshold) by much under
+    realistic contention — 4 is a generous ceiling.
+    """
+    asr, _ = _make_mocked_asr(decoded_texts=[])
+    asr.device = "mps"
+    asr._mps_inference_count = 0
+
+    fire_count = [0]
+    fire_lock = threading.Lock()
+
+    def _empty_cache():
+        with fire_lock:
+            fire_count[0] += 1
+
+    monkeypatch.setattr(torch.mps, "empty_cache", _empty_cache)
+
+    barrier = threading.Barrier(2)
+    errors: list = []
+
+    def _hammer():
+        try:
+            barrier.wait(timeout=2)
+            for _ in range(200):
+                asr._maybe_empty_mps_cache()
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=_hammer) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert errors == []
+    assert 1 <= fire_count[0] <= 4, (
+        f"empty_cache fire count {fire_count[0]} outside best-effort tolerance [1, 4]"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Hot-path wrapping: transcribe_batch / transcribe_with_timestamps /
 # transcribe_simple wrap each inference in _mps_autoreleasepool and call
@@ -564,8 +684,9 @@ def test_transcribe_batch_on_mps_wraps_inference_in_pool_and_calls_cache_helper(
     """
     given: ASRModule with device == "mps", PyObjC patched in
     when: transcribe_batch runs a single batch
-    then: objc.autorelease_pool is entered and exited exactly once and
-          _maybe_empty_mps_cache is called exactly once after decode
+    then: objc.autorelease_pool is entered and exited exactly once,
+          _maybe_empty_mps_cache is called exactly once after decode AND
+          while the pool is still open (ordering: enter → cache → exit)
     """
     pool_factory = _install_pool_mock(monkeypatch)
 
@@ -573,12 +694,9 @@ def test_transcribe_batch_on_mps_wraps_inference_in_pool_and_calls_cache_helper(
     asr.device = "mps"
     asr._mps_inference_count = 0
 
-    cache_calls = []
-    monkeypatch.setattr(
-        ASRModule,
-        "_maybe_empty_mps_cache",
-        lambda self: cache_calls.append(1),
-    )
+    events: list = []
+    _instrument_pool_for_ordering(pool_factory, events)
+    cache_calls = _install_cache_spy(monkeypatch, events)
 
     asr.transcribe_batch([np.full(16000, 100, dtype=np.int16)])
 
@@ -587,6 +705,9 @@ def test_transcribe_batch_on_mps_wraps_inference_in_pool_and_calls_cache_helper(
     cm.__enter__.assert_called_once()
     cm.__exit__.assert_called_once()
     assert len(cache_calls) == 1, "expected one cache-helper call after decode"
+    assert events == ["pool_enter", "cache", "pool_exit"], (
+        f"cache helper must fire WHILE pool is open; got {events}"
+    )
     model.forward.assert_called_once()
     model.decoding.decode.assert_called_once()
 
@@ -616,8 +737,8 @@ def test_transcribe_with_timestamps_str_path_on_mps_wraps_in_pool_and_calls_cach
     """
     given: ASRModule with device == "mps", str audio path
     when: transcribe_with_timestamps runs
-    then: objc.autorelease_pool is entered/exited once and
-          _maybe_empty_mps_cache is called once
+    then: objc.autorelease_pool is entered/exited once,
+          _maybe_empty_mps_cache is called once AND while pool is still open
     """
     pool_factory = _install_pool_mock(monkeypatch)
 
@@ -628,12 +749,9 @@ def test_transcribe_with_timestamps_str_path_on_mps_wraps_in_pool_and_calls_cach
     wav_path = tmp_path / "input.wav"
     sf.write(str(wav_path), np.zeros(16000, dtype=np.float32), 16000, subtype="FLOAT")
 
-    cache_calls = []
-    monkeypatch.setattr(
-        ASRModule,
-        "_maybe_empty_mps_cache",
-        lambda self: cache_calls.append(1),
-    )
+    events: list = []
+    _instrument_pool_for_ordering(pool_factory, events)
+    cache_calls = _install_cache_spy(monkeypatch, events)
 
     asr.transcribe_with_timestamps(str(wav_path))
 
@@ -642,6 +760,9 @@ def test_transcribe_with_timestamps_str_path_on_mps_wraps_in_pool_and_calls_cach
     cm.__enter__.assert_called_once()
     cm.__exit__.assert_called_once()
     assert len(cache_calls) == 1
+    assert events == ["pool_enter", "cache", "pool_exit"], (
+        f"cache helper must fire WHILE pool is open; got {events}"
+    )
     model.transcribe.assert_called_once()
 
 
@@ -669,8 +790,8 @@ def test_transcribe_with_timestamps_ndarray_on_mps_wraps_in_pool_and_calls_cache
     """
     given: ASRModule with device == "mps", numpy audio array
     when: transcribe_with_timestamps runs (writes temp WAV, then calls model)
-    then: objc.autorelease_pool is entered/exited once around model.transcribe
-          and _maybe_empty_mps_cache is called once
+    then: objc.autorelease_pool is entered/exited once around model.transcribe,
+          _maybe_empty_mps_cache fires while the pool is still open
     """
     pool_factory = _install_pool_mock(monkeypatch)
 
@@ -678,12 +799,9 @@ def test_transcribe_with_timestamps_ndarray_on_mps_wraps_in_pool_and_calls_cache
     asr.device = "mps"
     asr._mps_inference_count = 0
 
-    cache_calls = []
-    monkeypatch.setattr(
-        ASRModule,
-        "_maybe_empty_mps_cache",
-        lambda self: cache_calls.append(1),
-    )
+    events: list = []
+    _instrument_pool_for_ordering(pool_factory, events)
+    cache_calls = _install_cache_spy(monkeypatch, events)
 
     asr.transcribe_with_timestamps(np.zeros(16000, dtype=np.float32))
 
@@ -692,6 +810,9 @@ def test_transcribe_with_timestamps_ndarray_on_mps_wraps_in_pool_and_calls_cache
     cm.__enter__.assert_called_once()
     cm.__exit__.assert_called_once()
     assert len(cache_calls) == 1
+    assert events == ["pool_enter", "cache", "pool_exit"], (
+        f"cache helper must fire WHILE pool is open; got {events}"
+    )
     model.transcribe.assert_called_once()
 
 
@@ -716,8 +837,9 @@ def test_transcribe_simple_on_mps_one_pool_entry_per_chunk(monkeypatch, tmp_path
     """
     given: ASRModule with device == "mps" and audio long enough for 3 chunks
     when: transcribe_simple is invoked
-    then: objc.autorelease_pool is entered N times (one per chunk) and
-          _maybe_empty_mps_cache is called N times
+    then: objc.autorelease_pool is entered N times (one per chunk),
+          _maybe_empty_mps_cache is called N times, and each cache call
+          lands BETWEEN its chunk's pool_enter / pool_exit
     """
     import types
 
@@ -734,12 +856,9 @@ def test_transcribe_simple_on_mps_one_pool_entry_per_chunk(monkeypatch, tmp_path
     fake_preprocess.SAMPLE_RATE = 16000
     monkeypatch.setitem(sys.modules, "gigaam.preprocess", fake_preprocess)
 
-    cache_calls = []
-    monkeypatch.setattr(
-        ASRModule,
-        "_maybe_empty_mps_cache",
-        lambda self: cache_calls.append(1),
-    )
+    events: list = []
+    _instrument_pool_for_ordering(pool_factory, events)
+    cache_calls = _install_cache_spy(monkeypatch, events)
 
     asr.transcribe_simple(
         str(tmp_path / "dummy.wav"),
@@ -756,6 +875,10 @@ def test_transcribe_simple_on_mps_one_pool_entry_per_chunk(monkeypatch, tmp_path
     assert cm.__enter__.call_count == expected_chunks
     assert cm.__exit__.call_count == expected_chunks
     assert len(cache_calls) == expected_chunks
+    # Each chunk: pool_enter → cache → pool_exit, repeated 3×.
+    assert events == ["pool_enter", "cache", "pool_exit"] * expected_chunks, (
+        f"per-chunk ordering broken; got {events}"
+    )
     assert model.forward.call_count == expected_chunks
 
 
@@ -809,8 +932,8 @@ def test_transcribe_direct_on_mps_wraps_inference_in_pool_and_calls_cache_helper
     """
     given: LiveTranscriber whose ASR is on device == "mps", PyObjC patched in
     when: _transcribe_direct runs on a 1 s float32 chunk
-    then: objc.autorelease_pool is entered/exited once and
-          asr._maybe_empty_mps_cache is called once
+    then: objc.autorelease_pool is entered/exited once,
+          asr._maybe_empty_mps_cache is called once AND while pool is open
 
     Mirrors the live mic / fallback-mixed path that bypasses transcribe_batch
     and goes straight to model.forward + decode under self.asr._model_lock.
@@ -821,12 +944,9 @@ def test_transcribe_direct_on_mps_wraps_inference_in_pool_and_calls_cache_helper
     asr.device = "mps"
     asr._mps_inference_count = 0
 
-    cache_calls = []
-    monkeypatch.setattr(
-        ASRModule,
-        "_maybe_empty_mps_cache",
-        lambda self: cache_calls.append(1),
-    )
+    events: list = []
+    _instrument_pool_for_ordering(pool_factory, events)
+    cache_calls = _install_cache_spy(monkeypatch, events)
 
     transcriber = _make_live_transcriber_for_direct(asr)
     audio = np.zeros(16000, dtype=np.float32)
@@ -838,6 +958,9 @@ def test_transcribe_direct_on_mps_wraps_inference_in_pool_and_calls_cache_helper
     cm.__enter__.assert_called_once()
     cm.__exit__.assert_called_once()
     assert len(cache_calls) == 1
+    assert events == ["pool_enter", "cache", "pool_exit"], (
+        f"cache helper must fire WHILE pool is open; got {events}"
+    )
     model.forward.assert_called_once()
     model.decoding.decode.assert_called_once()
 
