@@ -274,8 +274,8 @@ finally:
 
 ### Task 8: [Final] Перенести план в completed
 
-- [ ] `mkdir -p docs/plans/completed`
-- [ ] `git mv docs/plans/2026-04-30-mps-autoreleasepool-leak-fix.md docs/plans/completed/`
+- [x] `mkdir -p docs/plans/completed`
+- [x] `git mv docs/plans/2026-04-30-mps-autoreleasepool-leak-fix.md docs/plans/completed/`
 
 ## Post-Completion
 
