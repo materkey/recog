@@ -15,6 +15,41 @@ from pathlib import Path
 
 from recog.node_env import get_node_env, version_key
 
+CCS_AUTOMATION_MARKER_PREFIX = "<!-- ccs-automation:recog"
+
+
+def _sanitize_ccs_task(task: str) -> str:
+    normalized = (task or "analysis").strip().lower()
+    safe = "".join(
+        ch if ch.isalnum() or ch in "._:-" else "-"
+        for ch in normalized
+    ).strip("-")
+    return safe or "analysis"
+
+
+def mark_ccs_automation(prompt: str, task: str = "analysis") -> str:
+    """Mark a Recog-generated prompt so session search can classify it as automation."""
+    if prompt.lstrip().startswith(CCS_AUTOMATION_MARKER_PREFIX):
+        return prompt
+    return f"{CCS_AUTOMATION_MARKER_PREFIX} task={_sanitize_ccs_task(task)} -->\n{prompt}"
+
+
+def build_codex_exec_command(
+    cli: str,
+    model: str,
+    reasoning_effort: str | None = None,
+    *,
+    ephemeral: bool = True,
+) -> list[str]:
+    """Build a Codex CLI command for Recog automation calls."""
+    cmd = [cli, "exec", "-m", model]
+    if "spark" not in model and reasoning_effort:
+        cmd += ["-c", f"model_reasoning_effort=\"{reasoning_effort}\""]
+    if ephemeral:
+        cmd.append("--ephemeral")
+    cmd += ["--json", "-"]
+    return cmd
+
 
 def _nvm_version_key(path: str) -> tuple:
     """Extract semver tuple from nvm path for correct sorting (not lexicographic)."""
@@ -77,9 +112,10 @@ class AIProvider(ABC):
 class CodexCliProvider(AIProvider):
     """Codex CLI - uses ChatGPT Pro subscription."""
 
-    def __init__(self):
+    def __init__(self, task: str = "analysis"):
         self.model = os.getenv("CODEX_MODEL", "gpt-5.4")
         self.reasoning_effort = os.getenv("CODEX_REASONING_EFFORT", "xhigh")
+        self.task = task
         self._cli = resolve_cli("codex")
 
     @property
@@ -96,10 +132,8 @@ class CodexCliProvider(AIProvider):
         import json as json_module
 
         # Codex exec expects prompt via stdin when using "-"
-        cmd = [self._cli, "exec", "-m", self.model]
-        if "spark" not in self.model:
-            cmd += ["-c", f"model_reasoning_effort=\"{self.reasoning_effort}\""]
-        cmd += ["--json", "-"]
+        cmd = build_codex_exec_command(self._cli, self.model, self.reasoning_effort)
+        marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
@@ -107,7 +141,7 @@ class CodexCliProvider(AIProvider):
             stderr=asyncio.subprocess.PIPE,
             env=get_node_env()
         )
-        stdout, stderr = await proc.communicate(input=prompt.encode())
+        stdout, stderr = await proc.communicate(input=marked_prompt.encode())
 
         if proc.returncode != 0:
             error_msg = stderr.decode().strip() if stderr else "Unknown error"
@@ -138,10 +172,8 @@ class CodexCliProvider(AIProvider):
         """Stream Codex CLI response."""
         import json as json_module
 
-        cmd = [self._cli, "exec", "-m", self.model]
-        if "spark" not in self.model:
-            cmd += ["-c", f"model_reasoning_effort=\"{self.reasoning_effort}\""]
-        cmd += ["--json", "-"]
+        cmd = build_codex_exec_command(self._cli, self.model, self.reasoning_effort)
+        marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
@@ -151,7 +183,7 @@ class CodexCliProvider(AIProvider):
         )
 
         # Write prompt to stdin
-        proc.stdin.write(prompt.encode())
+        proc.stdin.write(marked_prompt.encode())
         await proc.stdin.drain()
         proc.stdin.close()
 

@@ -95,10 +95,11 @@ async def test_generate_v1_creates_increment_files(tmp_path):
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="## Задачи\n- Сделать ревью\n")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.CodexCliProvider", return_value=mock_provider) as mock_cls:
         version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version == 1
+    mock_cls.assert_called_with(task="increment")
 
     # Files are now in increments/<prompt_id>/ subdirectory
     inc_dir = meeting_path / "increments" / "my-increment"

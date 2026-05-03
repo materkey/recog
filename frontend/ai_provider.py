@@ -20,7 +20,7 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from recog.node_env import get_node_env
-from recog.ai_provider import AIProvider, CodexCliProvider, resolve_cli
+from recog.ai_provider import AIProvider, CodexCliProvider, mark_ccs_automation, resolve_cli
 
 
 # Prompts
@@ -98,8 +98,9 @@ ANCHOR_PROMPT = """Ты — помощник для быстрого восст�
 class ClaudeCliProvider(AIProvider):
     """Claude CLI - uses Max/Pro subscription."""
 
-    def __init__(self):
+    def __init__(self, task: str = "analysis"):
         self.model = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
+        self.task = task
         self._cli = resolve_cli("claude")
 
     @property
@@ -111,8 +112,9 @@ class ClaudeCliProvider(AIProvider):
         return f"Claude ({self.model})"
 
     async def complete(self, prompt: str) -> str:
+        marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
-            self._cli, "-p", prompt,
+            self._cli, "-p", marked_prompt,
             "--model", self.model,
             "--output-format", "text",
             stdout=asyncio.subprocess.PIPE,
@@ -131,8 +133,9 @@ class ClaudeCliProvider(AIProvider):
         """Stream Claude CLI response."""
         import json as json_module
 
+        marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
-            self._cli, "-p", prompt,
+            self._cli, "-p", marked_prompt,
             "--model", self.model,
             "--output-format", "stream-json",
             "--verbose",
@@ -217,26 +220,26 @@ class OpenRouterProvider(AIProvider):
             return data["choices"][0]["message"]["content"]
 
 
-def get_provider() -> AIProvider:
+def get_provider(task: str = "analysis") -> AIProvider:
     """Get configured AI provider."""
     provider_name = os.getenv("AI_PROVIDER", "claude")
 
     if provider_name == "claude":
-        return ClaudeCliProvider()
+        return ClaudeCliProvider(task=task)
     elif provider_name == "codex":
-        return CodexCliProvider()
+        return CodexCliProvider(task=task)
     elif provider_name == "openrouter":
         return OpenRouterProvider()
     else:
         raise ValueError(f"Unknown AI provider: {provider_name}. Use: claude, codex, openrouter")
 
 
-def get_all_providers() -> list[AIProvider]:
+def get_all_providers(task: str = "analysis") -> list[AIProvider]:
     """Get all CLI-based providers that are installed (Claude and/or Codex)."""
     providers: list[AIProvider] = []
     for cls in (ClaudeCliProvider, CodexCliProvider):
         try:
-            providers.append(cls())
+            providers.append(cls(task=task))
         except FileNotFoundError:
             pass
     return providers

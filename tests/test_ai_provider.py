@@ -2,13 +2,20 @@
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from recog.ai_provider import CodexCliProvider, resolve_cli, AIProvider
+from recog.ai_provider import (
+    CCS_AUTOMATION_MARKER_PREFIX,
+    AIProvider,
+    CodexCliProvider,
+    build_codex_exec_command,
+    mark_ccs_automation,
+    resolve_cli,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -113,3 +120,85 @@ class TestCodexCliProvider:
             provider = CodexCliProvider()
         mock_resolve.assert_called_once_with("codex")
         assert provider._cli == "/mock/codex"
+
+    def test_mark_ccs_automation_prepends_marker_once(self):
+        marked = mark_ccs_automation("hello", "Increment Prompt")
+
+        assert marked.startswith("<!-- ccs-automation:recog task=increment-prompt -->\n")
+        assert mark_ccs_automation(marked, "title") == marked
+
+    def test_build_codex_exec_command_uses_ephemeral(self):
+        cmd = build_codex_exec_command("/usr/bin/codex", "gpt-5.4", "xhigh")
+
+        assert cmd == [
+            "/usr/bin/codex",
+            "exec",
+            "-m",
+            "gpt-5.4",
+            "-c",
+            'model_reasoning_effort="xhigh"',
+            "--ephemeral",
+            "--json",
+            "-",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_complete_marks_prompt_and_runs_ephemeral_codex(self):
+        """given: CodexCliProvider - when: complete - then: prompt is marked and command is ephemeral"""
+        created = {}
+
+        class FakeProcess:
+            returncode = 0
+
+            async def communicate(self, input=None):
+                created["input"] = input
+                return (
+                    b'{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}\n',
+                    b"",
+                )
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            created["cmd"] = cmd
+            created["kwargs"] = kwargs
+            return FakeProcess()
+
+        with patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"), \
+             patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=fake_create_subprocess_exec)):
+            provider = CodexCliProvider(task="increment")
+            answer = await provider.complete("hello")
+
+        assert answer == "answer"
+        assert "--ephemeral" in created["cmd"]
+        assert created["cmd"][-2:] == ("--json", "-")
+        assert created["input"].decode().startswith(
+            f"{CCS_AUTOMATION_MARKER_PREFIX} task=increment -->\nhello"
+        )
+
+
+class TestFrontendClaudeProvider:
+
+    @pytest.mark.asyncio
+    async def test_complete_marks_prompt_for_claude_cli(self):
+        from frontend.ai_provider import ClaudeCliProvider
+
+        created = {}
+
+        class FakeProcess:
+            returncode = 0
+
+            async def communicate(self):
+                return b"answer\n", b""
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            created["cmd"] = cmd
+            return FakeProcess()
+
+        with patch("frontend.ai_provider.resolve_cli", return_value="/mock/claude"), \
+             patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=fake_create_subprocess_exec)):
+            provider = ClaudeCliProvider(task="anchor")
+            answer = await provider.complete("hello")
+
+        assert answer == "answer"
+        prompt = created["cmd"][2]
+        assert created["cmd"][:2] == ("/mock/claude", "-p")
+        assert prompt.startswith("<!-- ccs-automation:recog task=anchor -->\nhello")
