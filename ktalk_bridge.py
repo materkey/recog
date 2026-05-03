@@ -33,7 +33,7 @@ from typing import Optional, Dict, List, Callable, TYPE_CHECKING
 import sys
 from pathlib import Path
 from recog.node_env import get_node_env
-from recog.ai_provider import resolve_cli
+from recog.ai_provider import build_codex_exec_command, mark_ccs_automation, resolve_cli
 from recog.config import load_dotenv, MIC_SPEAKER_NAME
 
 if TYPE_CHECKING:
@@ -1022,13 +1022,16 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
 
-    async def _call_codex_cli(self, prompt: str, model: str = "gpt-5.4") -> str:
+    async def _call_codex_cli(
+        self,
+        prompt: str,
+        model: str = "gpt-5.4",
+        task: str = "analysis",
+    ) -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
         codex_path = resolve_cli("codex")
-        cmd = [codex_path, "exec", "-m", model]
-        if "spark" not in model:
-            cmd += ["-c", "model_reasoning_effort=xhigh"]
-        cmd += ["--json", "-"]
+        cmd = build_codex_exec_command(codex_path, model, "xhigh")
+        marked_prompt = mark_ccs_automation(prompt, task)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
@@ -1036,7 +1039,7 @@ class KTalkBridge:
             stderr=asyncio.subprocess.PIPE,
             env=get_node_env()
         )
-        stdout, stderr = await proc.communicate(input=prompt.encode())
+        stdout, stderr = await proc.communicate(input=marked_prompt.encode())
 
         if proc.returncode != 0:
             raise Exception(f"Codex CLI error: {stderr.decode().strip()}")
@@ -1055,11 +1058,17 @@ class KTalkBridge:
 
         raise Exception("No response from Codex")
 
-    async def _call_claude_cli(self, prompt: str, model: str = "opus") -> str:
+    async def _call_claude_cli(
+        self,
+        prompt: str,
+        model: str = "opus",
+        task: str = "analysis",
+    ) -> str:
         """Call Claude CLI (uses Max/Pro subscription)."""
         claude_path = resolve_cli("claude")
+        marked_prompt = mark_ccs_automation(prompt, task)
         proc = await asyncio.create_subprocess_exec(
-            claude_path, "-p", prompt,
+            claude_path, "-p", marked_prompt,
             "--model", model,
             "--output-format", "text",
             stdout=asyncio.subprocess.PIPE,
@@ -1183,13 +1192,13 @@ class KTalkBridge:
                 # Codex CLI (uses ChatGPT Pro subscription)
                 codex_model = model.split(":")[1] if ":" in model else "gpt-5.4"
                 print(f"[KTalk Bridge] Using Codex CLI with model: {codex_model}", file=sys.stderr)
-                summary = await self._call_codex_cli(prompt, codex_model)
+                summary = await self._call_codex_cli(prompt, codex_model, task="summarize")
 
             elif model.startswith("claude"):
                 # Claude CLI (uses Max/Pro subscription)
                 claude_model = model.split(":")[1] if ":" in model else "opus"
                 print(f"[KTalk Bridge] Using Claude CLI with model: {claude_model}", file=sys.stderr)
-                summary = await self._call_claude_cli(prompt, claude_model)
+                summary = await self._call_claude_cli(prompt, claude_model, task="summarize")
 
             else:
                 # Gemini API (default)
@@ -1339,13 +1348,13 @@ class KTalkBridge:
                 # Codex CLI (uses ChatGPT Pro subscription)
                 codex_model = model.split(":")[1] if ":" in model else "gpt-5.4"
                 print(f"[KTalk Bridge] Anchor using Codex CLI with model: {codex_model}", file=sys.stderr)
-                raw_text = await self._call_codex_cli(prompt, codex_model)
+                raw_text = await self._call_codex_cli(prompt, codex_model, task="anchor")
 
             elif model.startswith("claude"):
                 # Claude CLI (uses Max/Pro subscription)
                 claude_model = model.split(":")[1] if ":" in model else "opus"
                 print(f"[KTalk Bridge] Anchor using Claude CLI with model: {claude_model}", file=sys.stderr)
-                raw_text = await self._call_claude_cli(prompt, claude_model)
+                raw_text = await self._call_claude_cli(prompt, claude_model, task="anchor")
 
             else:
                 # Gemini API (default for gemini-* models)

@@ -369,7 +369,7 @@ class IncrementGenerator:
                 inc_dir.mkdir(parents=True, exist_ok=True)
 
                 # Generate
-                provider = CodexCliProvider()
+                provider = CodexCliProvider(task="increment")
                 version_meta = {
                     "version": version,
                     "prompt_id": prompt_id,

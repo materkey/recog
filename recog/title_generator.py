@@ -9,7 +9,7 @@ import json
 import os
 from typing import Optional
 
-from recog.ai_provider import resolve_cli
+from recog.ai_provider import build_codex_exec_command, mark_ccs_automation, resolve_cli
 from recog.node_env import get_node_env
 
 
@@ -46,14 +46,12 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
         transcript = transcript[:2000] + "\n..."
 
     model = model or os.getenv("CODEX_MODEL", "gpt-5.4")
-    prompt = TITLE_PROMPT.format(transcript=transcript)
+    prompt = mark_ccs_automation(TITLE_PROMPT.format(transcript=transcript), "title")
+    cmd = build_codex_exec_command(resolve_cli("codex"), model)
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            resolve_cli("codex"), "exec",
-            "-m", model,
-            "--json",
-            "-",
+            *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

@@ -1094,7 +1094,7 @@ async def live_anchor(request: AnchorRequest):
             custom_prompt=None
         )
 
-        provider = get_provider()
+        provider = get_provider(task="anchor")
         approximate = False
 
         try:
@@ -1162,7 +1162,7 @@ async def analyze_meeting(meeting_id: str, request: AnalyzeRequest):
         )
 
         # 5. Call AI provider
-        provider = get_provider()
+        provider = get_provider(task=request.question)
         answer = await provider.complete(prompt)
 
         return AnalyzeResponse(answer=answer, provider=provider.name)
@@ -1195,7 +1195,7 @@ async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
         )
 
         # 5. Call all providers in parallel
-        providers = get_all_providers()
+        providers = get_all_providers(task=request.question)
 
         async def call_provider(provider):
             try:
@@ -1247,7 +1247,7 @@ async def analyze_meeting_stream(
             )
 
             # 5. Stream from all providers in parallel
-            providers = get_all_providers()
+            providers = get_all_providers(task=question)
 
             # Send provider info
             for provider in providers:
