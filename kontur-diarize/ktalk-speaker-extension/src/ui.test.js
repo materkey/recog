@@ -653,4 +653,102 @@ describe('updateTranscriptUI scroll anchor', () => {
     expect(container.scrollTop).not.toBe(0);
     expect(Math.abs(container.scrollTop - 120)).toBeLessThanOrEqual(1);
   });
+
+  test('paused-mode preserves anchor across refine batch when bubble above grows', () => {
+    // Refine integration: handleTranscriptRefine rewrites bubble text in place
+    // (no full re-render). When a refined bubble ABOVE the anchor grows
+    // (longer text → taller bubble), browsers reflow and shift everything below
+    // it down. Without a scroll anchor, the user's top-visible row visually
+    // jumps. With captureScrollAnchor before the for-loop and
+    // restoreScrollAnchor after, scrollTop is bumped so the anchor row stays
+    // pinned at its viewport offset.
+    //
+    // Setup: 5 rows segment_id=11..15, scrollTop=100, baseline offsets
+    // [0, 50, 100, 150, 200] → anchor (top - 1 = 99) is idx=2 / sid=13.
+    // Simulated post-refine layout: anchor row idx=2 moves to offsetTop=200
+    // (segments 11 and 12 grew by 50px each). Expected scrollTop after:
+    //   100 + (200 - 100) = 200.
+    //
+    // This test runs LAST in the describe because it replaces the
+    // prototype-level offsetTop getter installed by `mockOffsets` with a
+    // call-count-aware variant; running it earlier would leak the custom
+    // getter into subsequent tests (mockOffsets skips redefinition when
+    // `__ktalkOffsetTopMocked` is already set).
+    state.autoScrollEnabled = false;
+    state.transcriptLines = [
+      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' } },
+      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' } },
+      { speaker: 'C', text: 'c', time: '10:00:03', segment_id: 13, segment_ids: [13], segment_texts: { 13: 'c' } },
+      { speaker: 'D', text: 'd', time: '10:00:04', segment_id: 14, segment_ids: [14], segment_texts: { 14: 'd' } },
+      { speaker: 'E', text: 'e', time: '10:00:05', segment_id: 15, segment_ids: [15], segment_texts: { 15: 'e' } },
+    ];
+    document.body.innerHTML = `
+      <div class="ktalk-transcript-messages">
+        <div class="ktalk-msg remote" data-segment-id="11"><div class="ktalk-msg-text">a</div></div>
+        <div class="ktalk-msg remote" data-segment-id="12"><div class="ktalk-msg-text">b</div></div>
+        <div class="ktalk-msg remote" data-segment-id="13"><div class="ktalk-msg-text">c</div></div>
+        <div class="ktalk-msg remote" data-segment-id="14"><div class="ktalk-msg-text">d</div></div>
+        <div class="ktalk-msg remote" data-segment-id="15"><div class="ktalk-msg-text">e</div></div>
+      </div>
+    `;
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    const baseOffsets = [0, 50, 100, 150, 200];
+    const grownOffsets = [0, 100, 200, 250, 300];
+    const reads = new WeakMap();
+
+    // Per-element call-count getter. The anchor element (idx=2) is read 3
+    // times across capture + restore: 2 reads inside captureScrollAnchor
+    // (loop check + final `anchorEl.offsetTop` store) and 1 read inside
+    // restoreScrollAnchor (`el.offsetTop` formula). Reads 1 and 2 must see
+    // the BASELINE layout so the anchor is correctly chosen and offset
+    // captured at 100; read 3 must see the GROWN layout so the formula
+    // computes the post-refine scrollTop. Other rows are read at most once
+    // (loop check before break) and always see baseline — accurate enough
+    // since they aren't used in the formula.
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+      configurable: true,
+      get() {
+        const parent = this.parentNode;
+        if (!parent || !this.classList || !this.classList.contains('ktalk-msg')) return 0;
+        const siblings = parent.querySelectorAll(':scope > .ktalk-msg');
+        let idx = -1;
+        for (let i = 0; i < siblings.length; i++) {
+          if (siblings[i] === this) { idx = i; break; }
+        }
+        if (idx < 0) return 0;
+        const count = (reads.get(this) || 0) + 1;
+        reads.set(this, count);
+        // Anchor element (idx=2): grown layout from the 3rd read onwards.
+        if (idx === 2 && count >= 3) return grownOffsets[idx];
+        return baseOffsets[idx];
+      },
+    });
+
+    container.scrollTop = 100;
+
+    // Sanity: before refine, scrollTop is exactly 100.
+    expect(container.scrollTop).toBe(100);
+
+    handleTranscriptRefine({
+      type: 'transcript_refine',
+      updates: [
+        { segment_id: 11, text: 'aaa очень длинный текст' },
+        { segment_id: 14, text: 'ddd более длинный текст' },
+      ],
+    });
+
+    // After refine + simulated bubble growth, the anchor (sid=13) stays at the
+    // same viewport offset: scrollTop = oldScrollTop + (newOffsetTop - oldOffsetTop)
+    //                                = 100          + (200            - 100)
+    //                                = 200.
+    expect(Math.abs(container.scrollTop - 200)).toBeLessThanOrEqual(1);
+
+    // Verify the in-place text rewrites still happened (defence assertion —
+    // ensures the for-loop didn't get short-circuited).
+    expect(document.querySelector('.ktalk-msg[data-segment-id="11"] .ktalk-msg-text').innerHTML)
+      .toBe('aaa очень длинный текст');
+    expect(document.querySelector('.ktalk-msg[data-segment-id="14"] .ktalk-msg-text').innerHTML)
+      .toBe('ddd более длинный текст');
+  });
 });
