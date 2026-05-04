@@ -788,11 +788,11 @@ describe('updateTranscriptUI scroll anchor', () => {
     // property — not a prototype mutation.
     state.autoScrollEnabled = false;
     state.transcriptLines = [
-      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' } },
-      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' } },
-      { speaker: 'C', text: 'c', time: '10:00:03', segment_id: 13, segment_ids: [13], segment_texts: { 13: 'c' } },
-      { speaker: 'D', text: 'd', time: '10:00:04', segment_id: 14, segment_ids: [14], segment_texts: { 14: 'd' } },
-      { speaker: 'E', text: 'e', time: '10:00:05', segment_id: 15, segment_ids: [15], segment_texts: { 15: 'e' } },
+      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'C', text: 'c', time: '10:00:03', segment_id: 13, segment_ids: [13], segment_texts: { 13: 'c' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'D', text: 'd', time: '10:00:04', segment_id: 14, segment_ids: [14], segment_texts: { 14: 'd' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'E', text: 'e', time: '10:00:05', segment_id: 15, segment_ids: [15], segment_texts: { 15: 'e' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
     ];
     document.body.innerHTML = `
       <div class="ktalk-transcript-messages">
@@ -847,8 +847,8 @@ describe('updateTranscriptUI scroll anchor', () => {
     // null and restore is a no-op, so scrollTop must be unchanged by refine.
     state.autoScrollEnabled = true;
     state.transcriptLines = [
-      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' } },
-      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' } },
+      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
     ];
     document.body.innerHTML = `
       <div class="ktalk-transcript-messages">
@@ -878,8 +878,8 @@ describe('updateTranscriptUI scroll anchor', () => {
     // stay at the captured value.
     state.autoScrollEnabled = false;
     state.transcriptLines = [
-      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' } },
-      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' } },
+      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
     ];
     document.body.innerHTML = `
       <div class="ktalk-transcript-messages">

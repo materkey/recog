@@ -2327,15 +2327,16 @@ function isNearBottom(container) {
 /**
  * Capture top-visible .ktalk-msg in Paused mode as a scroll anchor; returns
  * null in Follow mode or when no rows match (caller skips compensation).
- * `top - 1` tolerance avoids picking the wrong row at sub-pixel boundaries.
+ * `subPixelTolerancePx` avoids picking the wrong row at sub-pixel boundaries.
  */
 function captureScrollAnchor(container) {
   if (state.autoScrollEnabled) return null;
+  const subPixelTolerancePx = 1;
   const top = container.scrollTop;
   const msgs = container.querySelectorAll('.ktalk-msg');
   let anchorEl = null;
   for (const el of msgs) {
-    if (el.offsetTop >= top - 1) { anchorEl = el; break; }
+    if (el.offsetTop >= top - subPixelTolerancePx) { anchorEl = el; break; }
   }
   if (!anchorEl) return null;
   const sidRaw = anchorEl.dataset.segmentId;
