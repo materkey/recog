@@ -6700,6 +6700,11 @@ function handleTranscriptRefine(data) {
   } else {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) {
+      // Paused-mode anchor compensation: a refined bubble above the viewport
+      // can grow (longer text → taller bubble) and shift everything below
+      // down. captureScrollAnchor returns null in Follow mode, so the helper
+      // is a no-op there. See ADR / docs/plans/2026-05-04-ktalk-paused-scroll-anchor.md.
+      const anchor = captureScrollAnchor(container);
       // Ktalk path rebuilds the container from state.transcriptLines, so
       // merged continuation bubbles only expose `data-segment-id` of the
       // primary (first) chunk. Look up by primary id but render the
@@ -6715,6 +6720,7 @@ function handleTranscriptRefine(data) {
         textEl.classList.add('refine-fade');
         setTimeout(() => textEl.classList.remove('refine-fade'), 200);
       }
+      restoreScrollAnchor(container, anchor);
     }
   }
 
@@ -6750,6 +6756,7 @@ function updateTranscriptUI() {
   const container = document.querySelector('.ktalk-transcript-messages');
   if (!container) return;
 
+  const anchor = captureScrollAnchor(container);
   const shouldAutoScroll = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled && isNearBottom(container);
 
   updateFollowButton();
@@ -6770,7 +6777,7 @@ function updateTranscriptUI() {
     return;
   }
 
-  container.innerHTML = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map(line => {
+  container.innerHTML = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map((line, i) => {
     const classes = [
       'ktalk-msg',
       line.is_local ? 'local' : 'remote',
@@ -6786,7 +6793,7 @@ function updateTranscriptUI() {
       ? ` data-segment-id="${line.segment_id}"`
       : '';
 
-    return `<div class="${classes}" data-ts="${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(timeValue)}"${segmentIdAttr}>
+    return `<div class="${classes}" data-ts="${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(timeValue)}" data-line-index="${i}"${segmentIdAttr}>
         <div class="ktalk-msg-header">
           <span class="ktalk-msg-speaker">${speakerDisplay}</span>
           <span class="ktalk-msg-time">${line.time}</span>
@@ -6797,6 +6804,8 @@ function updateTranscriptUI() {
 
   if (shouldAutoScroll) {
     container.scrollTop = container.scrollHeight;
+  } else if (anchor) {
+    restoreScrollAnchor(container, anchor);
   }
 }
 
@@ -6804,6 +6813,76 @@ function isNearBottom(container) {
   const thresholdPx = 80;
   const distance = container.scrollHeight - (container.scrollTop + container.clientHeight);
   return distance <= thresholdPx;
+}
+
+/**
+ * Capture top-visible .ktalk-msg as scroll anchor for compensation across
+ * `innerHTML = ...` rewrite in updateTranscriptUI (which resets scrollTop)
+ * and across in-place refine in handleTranscriptRefine (which can grow
+ * a bubble above the viewport and shift content below).
+ *
+ * Returns three states:
+ *   - null              — Follow mode (autoScrollEnabled true); no compensation needed.
+ *   - { top, segmentId: null, lineIndex: null, offsetTop: 0 } — Paused mode but
+ *     no rows yet; restoreScrollAnchor will preserve scrollTop verbatim.
+ *   - full anchor       — Paused with rows; restore via offsetTop diff.
+ *
+ * Anchor key fallback chain: data-segment-id (backend id) → data-line-index
+ * (per-render-stable index) → best-effort scrollTop preserve. data-ts is
+ * NOT used as a key — wall-clock seconds collide on back-to-back PCM chunks.
+ *
+ * `top - 1` tolerance: avoids picking the wrong row when scrollTop falls
+ * exactly on a row boundary due to sub-pixel rounding.
+ */
+function captureScrollAnchor(container) {
+  if (!container || _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled) return null;
+  const top = container.scrollTop;
+  const msgs = container.querySelectorAll('.ktalk-msg');
+  let anchorEl = null;
+  for (const el of msgs) {
+    if (el.offsetTop >= top - 1) { anchorEl = el; break; }
+  }
+  if (!anchorEl) return { top, segmentId: null, lineIndex: null, offsetTop: 0 };
+  const sidRaw = anchorEl.dataset.segmentId;
+  const sid = sidRaw && Number(sidRaw) > 0 ? sidRaw : null;
+  const idxRaw = anchorEl.dataset.lineIndex;
+  const idx = idxRaw !== undefined && idxRaw !== '' ? Number(idxRaw) : null;
+  return {
+    top,
+    segmentId: sid,
+    lineIndex: Number.isFinite(idx) ? idx : null,
+    offsetTop: anchorEl.offsetTop,
+  };
+}
+
+/**
+ * Restore scrollTop after DOM update by re-finding the anchor element and
+ * compensating offsetTop drift. Falls back to anchor.top preservation when
+ * the anchor element is gone (meeting_change, history reset, etc.) — this is
+ * still better than the current bug, which yanks the user to scrollTop=0.
+ */
+function restoreScrollAnchor(container, anchor) {
+  if (!container || !anchor) return;
+  if (anchor.segmentId == null && anchor.lineIndex == null) {
+    container.scrollTop = anchor.top;
+    return;
+  }
+  let el = null;
+  if (anchor.segmentId != null) {
+    el = container.querySelector(
+      `.ktalk-msg[data-segment-id="${CSS.escape(anchor.segmentId)}"]`
+    );
+  }
+  if (!el && anchor.lineIndex != null) {
+    el = container.querySelector(
+      `.ktalk-msg[data-line-index="${anchor.lineIndex}"]`
+    );
+  }
+  if (!el) {
+    container.scrollTop = anchor.top;
+    return;
+  }
+  container.scrollTop = anchor.top + (el.offsetTop - anchor.offsetTop);
 }
 
 function toggleAutoFollow() {

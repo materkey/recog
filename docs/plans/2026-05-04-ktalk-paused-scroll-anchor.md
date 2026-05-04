@@ -229,14 +229,14 @@ if (container) {
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.js`
 
-- [ ] Добавить failing-тест: state с 5 строк (segment_id=11..15), `state.autoScrollEnabled = false`. Контейнер с `scrollTop = 100` (между 2-м и 3-м баблом по моку). Замокать `offsetTop` через `Object.defineProperty(el, 'offsetTop', { get: () => baseOffsets[idx], configurable: true })`, baseOffsets = [0, 50, 100, 150, 200].
-- [ ] **Симулировать рост**: переопределить getter ПОСЛЕ `handleTranscriptRefine` так, чтобы offsetTop баблов выше якоря выросли (например, для idx=0 и idx=1: `100` и `150` вместо `0` и `50`). Якорь (idx=2) перейдёт с `offsetTop=100` на `offsetTop=200`.
-- [ ] Прислать `handleTranscriptRefine` с batch: обновления для segment_id=11 (выше якоря) и segment_id=14 (ниже якоря) с длинным текстом.
-- [ ] Assert: до refine — `scrollTop === 100`; после — `scrollTop === 100 + (200 - 100) === 200` (anchor element остался в том же viewport-offset). Допуск ±1px.
-- [ ] Прогнать `npm test` — тест красный (refine integration ещё не сделана).
-- [ ] В `handleTranscriptRefine` KTalk-ветка (`src/ui.js:2212–2231`), внутри `if (container)`, перед циклом `for (const line of touchedLines)` добавить `const anchor = captureScrollAnchor(container);`.
-- [ ] После цикла добавить `restoreScrollAnchor(container, anchor);` (всё ещё внутри `if (container)`).
-- [ ] Прогнать `npm test` — тест зелёный, существующие `describe('handleTranscriptRefine')` тесты (rewrites bubble in place, drops refine when meeting differs, и т.д.) не сломались.
+- [x] Добавить failing-тест: state с 5 строк (segment_id=11..15), `state.autoScrollEnabled = false`. Контейнер с `scrollTop = 100` (между 2-м и 3-м баблом по моку). Замокать `offsetTop` через `Object.defineProperty(el, 'offsetTop', { get: () => baseOffsets[idx], configurable: true })`, baseOffsets = [0, 50, 100, 150, 200].
+- [x] **Симулировать рост**: переопределить getter ПОСЛЕ `handleTranscriptRefine` так, чтобы offsetTop баблов выше якоря выросли (например, для idx=0 и idx=1: `100` и `150` вместо `0` и `50`). Якорь (idx=2) перейдёт с `offsetTop=100` на `offsetTop=200`. ➕ Реализовано через per-element call-count getter (WeakMap reads counter): первые 2 чтения якоря возвращают base 100, 3-е чтение (внутри `restoreScrollAnchor`) возвращает grown 200. Тест размещён последним в `describe`, чтобы кастомный getter не перетёк в другие тесты (`mockOffsets` пропускает redefine при выставленном `__ktalkOffsetTopMocked`).
+- [x] Прислать `handleTranscriptRefine` с batch: обновления для segment_id=11 (выше якоря) и segment_id=14 (ниже якоря) с длинным текстом.
+- [x] Assert: до refine — `scrollTop === 100`; после — `scrollTop === 100 + (200 - 100) === 200` (anchor element остался в том же viewport-offset). Допуск ±1px.
+- [x] Прогнать `npm test` — тест красный (refine integration ещё не сделана).
+- [x] В `handleTranscriptRefine` KTalk-ветка (`src/ui.js:2212–2231`), внутри `if (container)`, перед циклом `for (const line of touchedLines)` добавить `const anchor = captureScrollAnchor(container);`.
+- [x] После цикла добавить `restoreScrollAnchor(container, anchor);` (всё ещё внутри `if (container)`).
+- [x] Прогнать `npm test` — тест зелёный, существующие `describe('handleTranscriptRefine')` тесты (rewrites bubble in place, drops refine when meeting differs, и т.д.) не сломались. Pre-existing vas3k failures (`vas3k path rewrites`, `refine updates continuation child segment_id on vas3k`) — не регрессия от этой задачи.
 
 ### Task 5: Smoke test — Follow mode sticky-bottom unchanged
 

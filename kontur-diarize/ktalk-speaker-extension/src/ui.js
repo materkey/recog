@@ -2212,6 +2212,11 @@ export function handleTranscriptRefine(data) {
   } else {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) {
+      // Paused-mode anchor compensation: a refined bubble above the viewport
+      // can grow (longer text → taller bubble) and shift everything below
+      // down. captureScrollAnchor returns null in Follow mode, so the helper
+      // is a no-op there. See ADR / docs/plans/2026-05-04-ktalk-paused-scroll-anchor.md.
+      const anchor = captureScrollAnchor(container);
       // Ktalk path rebuilds the container from state.transcriptLines, so
       // merged continuation bubbles only expose `data-segment-id` of the
       // primary (first) chunk. Look up by primary id but render the
@@ -2227,6 +2232,7 @@ export function handleTranscriptRefine(data) {
         textEl.classList.add('refine-fade');
         setTimeout(() => textEl.classList.remove('refine-fade'), 200);
       }
+      restoreScrollAnchor(container, anchor);
     }
   }
 
