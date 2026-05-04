@@ -53,6 +53,15 @@ else
     fi
 fi
 
+# === Frontend deps (frontend/server.py runs on the same venv) ===
+echo ""
+echo "=== Installing frontend dependencies into venv-gigaam ==="
+if [ -f "frontend/requirements.txt" ]; then
+    ./venv-gigaam/bin/pip install -r frontend/requirements.txt
+else
+    echo "WARNING: frontend/requirements.txt not found, skipping."
+fi
+
 # === .env file ===
 echo ""
 echo "=== Checking .env ==="
