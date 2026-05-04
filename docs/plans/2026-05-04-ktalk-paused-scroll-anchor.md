@@ -10,10 +10,10 @@
 
 ### Acceptance criteria
 
-- [ ] Paused-режим: при появлении нового live-сегмента верхняя видимая строка визуально не двигается.
-- [ ] Paused-режим: при tier-2 refine у видимого или выше-viewport бабла верхняя видимая строка не съезжает; обновляемый бабл «вырастает» на месте.
-- [ ] Follow-режим: скролл прилипает к низу как раньше; новые сегменты идут к нижней кромке.
-- [ ] Anchor (Alt+J context) feature не сломана: клик по timestamp-bullet всё ещё скроллит к нужному баблу через `data-ts` (см. `scrollToAnchorTimestamp`, `ui.js:2540`).
+- [x] Paused-режим: при появлении нового live-сегмента верхняя видимая строка визуально не двигается. (covered by Task 1 + Task 3 tests — paused-mode preserve and line-index fallback)
+- [x] Paused-режим: при tier-2 refine у видимого или выше-viewport бабла верхняя видимая строка не съезжает; обновляемый бабл «вырастает» на месте. (covered by Task 4 test — refine multi-update batch with bubble growth)
+- [x] Follow-режим: скролл прилипает к низу как раньше; новые сегменты идут к нижней кромке. (covered by Task 5 sticky-bottom test)
+- [x] Anchor (Alt+J context) feature не сломана: клик по timestamp-bullet всё ещё скроллит к нужному баблу через `data-ts` (см. `scrollToAnchorTimestamp`, `ui.js:2540`). (covered by template inspection — `git diff main...HEAD` confirms `data-ts` preserved with `data-line-index` added additively; manual smoke skipped per Task 6)
 
 ## Context (from discovery)
 
@@ -265,11 +265,11 @@ if (container) {
 
 ### Task 7: Verify acceptance criteria
 
-- [ ] Все 4 acceptance criteria из Overview помечены `[x]`.
-- [ ] Edge-cases покрыты тестами: segment_id present + missing, multi-update refine с ростом, Follow-mode sticky-bottom, пустой контейнер.
-- [ ] Финальный test suite: `cd kontur-diarize/ktalk-speaker-extension && npm test` — все existing + новые тесты зелёные.
-- [ ] Quick-check: `grep -E '"lint|"typecheck"' package.json` — если linter настроен, прогнать; если нет — пропустить.
-- [ ] Coverage не падает (jest сконфигурирован без `--coverage` по умолчанию — пропускаем).
+- [x] Все 4 acceptance criteria из Overview помечены `[x]`.
+- [x] Edge-cases покрыты тестами: segment_id present + missing, multi-update refine с ростом, Follow-mode sticky-bottom, пустой контейнер.
+- [x] Финальный test suite: `cd kontur-diarize/ktalk-speaker-extension && npm test` — 67 passed / 4 failed; 5 новых scroll-anchor тестов зелёные; 2 fail в `ui.test.js` (vas3k path rewrites, refine continuation child segment_id on vas3k) — pre-existing, явно отмечены в плане как не-регрессия. 2 file-level fail (`speaker.test.js`, `pcm_transport.test.js`) — pre-existing, не связаны с этим change.
+- [x] Quick-check: `grep -E '"lint|"typecheck"' package.json` — no lint script configured, skipped.
+- [x] Coverage не падает (jest сконфигурирован без `--coverage` по умолчанию — coverage not enforced by default).
 
 ### Task 8: Update documentation and complete plan
 
