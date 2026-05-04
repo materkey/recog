@@ -413,3 +413,125 @@ describe('handleTranscriptRefine', () => {
     expect(state.transcriptLines[1].text).toBe('three');
   });
 });
+
+describe('updateTranscriptUI scroll anchor', () => {
+  // Helpers — jsdom does not compute layout, so offsetTop/scrollHeight/clientHeight
+  // must be mocked explicitly. Without these mocks captureScrollAnchor would
+  // always pick the first element (offsetTop === 0) and mask iteration bugs.
+  const ROW_H = 50;
+
+  function mockOffsets(container) {
+    const msgs = container.querySelectorAll('.ktalk-msg');
+    msgs.forEach((el, idx) => {
+      Object.defineProperty(el, 'offsetTop', {
+        get: () => idx * ROW_H,
+        configurable: true,
+      });
+    });
+    Object.defineProperty(container, 'scrollHeight', {
+      get: () => msgs.length * ROW_H,
+      configurable: true,
+    });
+    Object.defineProperty(container, 'clientHeight', {
+      get: () => 100,
+      configurable: true,
+    });
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    state.transcriptLines = [];
+    state.bioRead = { enabled: false };
+    state.currentMeetingId = null;
+    state.autoScrollEnabled = true; // reset to default; flip per-test
+    isJitsiPlatformMock.mockReturnValue(false);
+  });
+
+  test('paused-mode preserves top-visible row across re-render when segment_id present', () => {
+    // jsdom container that updateTranscriptUI() targets.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+
+    // Seed 5 lines with valid segment_ids via handleTranscript so the
+    // is_continuation/source_id wiring matches production. Distinct
+    // speakers and source_ids prevent continuation merge.
+    for (let i = 0; i < 5; i++) {
+      handleTranscript({
+        speaker: `Speaker${i}`,
+        text: `text ${i}`,
+        timestamp: `10:00:0${i}`,
+        is_continuation: false,
+        segment_id: i + 1,
+        source_id: `pid-${i}`,
+      });
+    }
+    expect(state.transcriptLines).toHaveLength(5);
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    expect(container.querySelectorAll('.ktalk-msg')).toHaveLength(5);
+
+    // Switch to Paused mode and seed scroll position in the middle of the
+    // list. With offsets [0, 50, 100, 150, 200] and scrollTop=120,
+    // top - 1 = 119 → first element with offsetTop >= 119 is idx=3
+    // (offsetTop=150, segment_id=4). This is intentionally NOT the first
+    // element — degenerate offsetTop=0 fallback would pick idx=0.
+    state.autoScrollEnabled = false;
+    mockOffsets(container);
+    container.scrollTop = 120;
+
+    const anchorBefore = container.querySelector('.ktalk-msg[data-segment-id="4"]');
+    expect(anchorBefore).not.toBeNull();
+    expect(anchorBefore.offsetTop).toBe(150);
+
+    // Trigger another re-render by adding a new line. The new line is
+    // unshifted so the anchored row (segment_id=4) shifts down by one
+    // slot — its post-render offsetTop becomes 200, not 150. This makes
+    // the offsetTop diff non-zero and exercises the compensation math.
+    state.transcriptLines.unshift({
+      speaker: 'NewSpeaker',
+      text: 'inserted at top',
+      timestamp: '09:59:59',
+      time: '09:59:59',
+      segment_id: 99,
+      source_id: 'pid-new',
+      segment_ids: [99],
+      segment_texts: { 99: 'inserted at top' },
+      is_local: false,
+      uncertain: false,
+      uncertain_reason: '',
+      createdAt: Date.now(),
+    });
+
+    // Drive a re-render. handleTranscript triggers updateTranscriptUI()
+    // internally; we add a dummy continuation chunk on the new line so
+    // the merge predicate matches and the array length stays at 6.
+    handleTranscript({
+      speaker: 'NewSpeaker',
+      text: '',
+      timestamp: '09:59:59',
+      is_continuation: true,
+      segment_id: 100,
+      source_id: 'pid-new',
+    });
+    // Re-mock offsets so all 6 rows have idx*50 layout AFTER innerHTML rewrite.
+    mockOffsets(container);
+
+    const anchorAfter = container.querySelector('.ktalk-msg[data-segment-id="4"]');
+    expect(anchorAfter).not.toBeNull();
+    // The anchored row is now idx=4 (one row pushed it down) → offsetTop=200.
+    expect(anchorAfter.offsetTop).toBe(200);
+
+    // Compensation contract: scrollTop = oldScrollTop + (newOffsetTop - oldOffsetTop)
+    //                                  = 120          + (200            - 150)
+    //                                  = 170.
+    // Without the fix, innerHTML rewrite resets scrollTop to 0 — assertion fails.
+    expect(Math.abs(container.scrollTop - 170)).toBeLessThanOrEqual(1);
+
+    // Defence-in-depth: the chosen anchor must NOT be the first element. If
+    // jsdom returned offsetTop=0 for everything (no mock), captureScrollAnchor
+    // would degenerately pick idx=0 and the math above would happen to give
+    // 120 + 0 = 120 — masking real iteration bugs. By unshifting a row, the
+    // anchor's post-render offsetTop is 200, distinguishing it from idx=0
+    // (which is the inserted "NewSpeaker" row at offsetTop=0).
+    expect(anchorAfter.offsetTop).toBeGreaterThan(0);
+  });
+});

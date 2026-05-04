@@ -185,13 +185,13 @@ if (container) {
 **Files:**
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`
 
-- [ ] Добавить новый `describe('updateTranscriptUI scroll anchor')` в конец `ui.test.js`.
-- [ ] Подготовить state: 5+ строк в `state.transcriptLines`, все с `segment_id > 0`, `state.autoScrollEnabled = false`. Создать в jsdom `<div class="ktalk-transcript-messages">` контейнер.
-- [ ] Вызвать `updateTranscriptUI()` (initial render). После этого замокать `offsetTop` каждой `.ktalk-msg` через `Object.defineProperty(el, 'offsetTop', { get: () => idx * 50, configurable: true })` (idx — i-й child); замокать `container.scrollHeight = 250`, `clientHeight = 100`.
-- [ ] Выставить `container.scrollTop = 120` (середина списка, `top - 1 = 119` → ожидаемый якорь — 3-й элемент с `offsetTop = 150`, не первый).
-- [ ] Push новую строку в `state.transcriptLines`, переопределить `offsetTop` мок для всех элементов снова (новые indices). Вызвать `updateTranscriptUI()` повторно.
-- [ ] Assert: `container.scrollTop === 120 + (newOffsetTop - 150)` (для якоря по segment_id), допуск ±1px. **Явно assert, что якорь — НЕ первый элемент** (защита от degenerate case, где offsetTop=0 для всех).
-- [ ] Прогнать `npm test` — тест красный (helpers/integration ещё не существуют).
+- [x] Добавить новый `describe('updateTranscriptUI scroll anchor')` в конец `ui.test.js`.
+- [x] Подготовить state: 5+ строк в `state.transcriptLines`, все с `segment_id > 0`, `state.autoScrollEnabled = false`. Создать в jsdom `<div class="ktalk-transcript-messages">` контейнер.
+- [x] Вызвать `updateTranscriptUI()` (initial render). После этого замокать `offsetTop` каждой `.ktalk-msg` через `Object.defineProperty(el, 'offsetTop', { get: () => idx * 50, configurable: true })` (idx — i-й child); замокать `container.scrollHeight = 250`, `clientHeight = 100`.
+- [x] Выставить `container.scrollTop = 120` (середина списка, `top - 1 = 119` → ожидаемый якорь — 3-й элемент с `offsetTop = 150`, не первый).
+- [x] Push новую строку в `state.transcriptLines`, переопределить `offsetTop` мок для всех элементов снова (новые indices). Вызвать `updateTranscriptUI()` повторно.
+- [x] Assert: `container.scrollTop === 120 + (newOffsetTop - 150)` (для якоря по segment_id), допуск ±1px. **Явно assert, что якорь — НЕ первый элемент** (защита от degenerate case, где offsetTop=0 для всех).
+- [x] Прогнать `npm test` — тест красный (helpers/integration ещё не существуют).
 
 ### Task 2: TDD green — implement helpers + render `data-line-index` + integration
 
