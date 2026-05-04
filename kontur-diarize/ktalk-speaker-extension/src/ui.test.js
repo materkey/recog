@@ -704,7 +704,12 @@ describe('updateTranscriptUI scroll anchor', () => {
 
     const container = document.querySelector('.ktalk-transcript-messages');
     state.autoScrollEnabled = false;
-    stampScrollMetrics(container, 250);
+    // scrollHeight=400, clientHeight=100 → max scrollTop=300, so 220 is a
+    // realistic Chrome value (scrollTop is clamped to scrollHeight-clientHeight
+    // in real browsers; jsdom does not enforce the clamp, but we keep the test
+    // within the achievable range so the scenario reflects what Chrome can
+    // actually produce).
+    stampScrollMetrics(container, 400);
     container.scrollTop = 220;
     simulateChromeScrollReset(container);
 
@@ -723,14 +728,15 @@ describe('updateTranscriptUI scroll anchor', () => {
     expect(Math.abs(container.scrollTop - 220)).toBeLessThanOrEqual(1);
   });
 
-  test('Paused-mode anchor follows the last row when it grows after refine', () => {
-    // Scenario A with growth: viewport sits inside the last bubble; a refine
-    // grows that same bubble, shifting its bottom edge but keeping its top
-    // (offsetTop) where it was. The point is that the helper picks the
-    // last row even though scrollTop > all offsetTops, and the compensation
-    // math walks correctly through restoreScrollAnchor. Here we induce the
-    // bubble to "grow" its own offsetTop on the second read (post-rewrite)
-    // to exercise the +(new - old) arithmetic explicitly.
+  test('Paused-mode anchor follows the last row when an above row grows after refine', () => {
+    // Scenario A with realistic reflow: viewport sits inside the last bubble
+    // (sid=25, anchor). A refine grows a DIFFERENT bubble above the anchor
+    // (sid=21). In real Chrome layout, growing an element changes its own
+    // height but not its own offsetTop — every row BELOW it shifts down by Δ.
+    // So the anchor (sid=25) experiences offsetTop 200 → 250 because sid=21
+    // grew by 50, even though we did not touch sid=25's bubble.
+    // The helper must pick sid=25 as the anchor (scrollTop=220 lands inside
+    // its bubble at start) and apply +(new - old) compensation correctly.
     state.autoScrollEnabled = false;
     state.transcriptLines = [
       { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 21, segment_ids: [21], segment_texts: { 21: 'a' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
@@ -751,27 +757,30 @@ describe('updateTranscriptUI scroll anchor', () => {
 
     const container = document.querySelector('.ktalk-transcript-messages');
     // Offsets via prototype: [0,50,100,150,200]; scrollTop=220 lands inside
-    // the last bubble. The last row (sid=25) is the anchor.
+    // the last bubble (sid=25, offsetTop=200, height=50 → spans 200..250).
+    // After sid=21 grows by 50, sid=25's offsetTop reflows to 250. We shadow
+    // ONLY the anchor's offsetTop with a 2-phase getter (same pattern as the
+    // canonical bubble-grow test below): captureScrollAnchor reads twice
+    // (search walk + return construction) and must see 200; restoreScrollAnchor
+    // reads once after the in-place rewrite and must see 250.
     const lastRow = container.querySelector('.ktalk-msg[data-segment-id="25"]');
     let lastReadCount = 0;
     Object.defineProperty(lastRow, 'offsetTop', {
       configurable: true,
       get() {
         lastReadCount += 1;
-        // captureScrollAnchor reads offsetTop twice (once during the search
-        // walk, once when constructing the return) — both must see 200.
-        // restoreScrollAnchor reads it once after the in-place rewrite —
-        // that read returns the grown 250.
         return lastReadCount <= 2 ? 200 : 250;
       },
     });
 
-    stampScrollMetrics(container, 260);
+    // scrollHeight=400, clientHeight=100 → max scrollTop=300, so 220 is a
+    // realistic Chrome value within the clamp range.
+    stampScrollMetrics(container, 400);
     container.scrollTop = 220;
 
     handleTranscriptRefine({
       type: 'transcript_refine',
-      updates: [{ segment_id: 25, text: 'eeee гораздо длиннее' }],
+      updates: [{ segment_id: 21, text: 'aaa гораздо длиннее' }],
     });
 
     // scrollTop = 220 + (250 - 200) = 270.
