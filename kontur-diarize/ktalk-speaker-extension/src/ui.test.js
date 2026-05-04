@@ -785,6 +785,19 @@ describe('updateTranscriptUI scroll anchor', () => {
 
     // scrollTop = 220 + (250 - 200) = 270.
     expect(Math.abs(container.scrollTop - 270)).toBeLessThanOrEqual(1);
+
+    // Guard against false-positives: the scrollTop math above is satisfied by
+    // the mocked offsetTop transition alone, even if the refine never reached
+    // the bubble (e.g. wrong segment_id, dropped update). Assert the refine
+    // actually rewrote the row above the anchor in the DOM and flipped the
+    // state line's `refined` flag.
+    const refinedRow = container.querySelector('.ktalk-msg[data-segment-id="21"] .ktalk-msg-text');
+    expect(refinedRow).not.toBeNull();
+    expect(refinedRow.innerHTML).toBe('aaa гораздо длиннее');
+    const refinedLine = state.transcriptLines.find(l => l.segment_id === 21);
+    expect(refinedLine).toBeDefined();
+    expect(refinedLine.refined).toBe(true);
+    expect(refinedLine.text).toBe('aaa гораздо длиннее');
   });
 
   test('Paused-mode anchor stays on the partially-visible top row when it is refined', () => {
