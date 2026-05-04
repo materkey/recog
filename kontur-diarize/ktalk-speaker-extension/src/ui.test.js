@@ -463,6 +463,27 @@ describe('updateTranscriptUI scroll anchor', () => {
     });
   }
 
+  // Real Chrome resets scrollTop=0 when innerHTML is reassigned on the
+  // container. jsdom does not, so the helper-restore code path silently
+  // appears to "work" via the unmodified value. Wrap the container's innerHTML
+  // setter to simulate Chrome behaviour: any assignment that produces new
+  // markup resets scrollTop to 0 immediately. The helper is then the ONLY way
+  // scrollTop returns to its captured value, which is what the assertions
+  // actually verify.
+  function simulateChromeScrollReset(container) {
+    const proto = Object.getPrototypeOf(container);
+    const desc = Object.getOwnPropertyDescriptor(proto, 'innerHTML') ||
+      Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+    Object.defineProperty(container, 'innerHTML', {
+      configurable: true,
+      get() { return desc.get.call(this); },
+      set(v) {
+        desc.set.call(this, v);
+        this.scrollTop = 0;
+      },
+    });
+  }
+
   beforeEach(() => {
     document.body.innerHTML = '';
     state.transcriptLines = [];
@@ -498,6 +519,7 @@ describe('updateTranscriptUI scroll anchor', () => {
     state.autoScrollEnabled = false;
     stampScrollMetrics(container, 250);
     container.scrollTop = 120;
+    simulateChromeScrollReset(container);
 
     const anchorBefore = container.querySelector('.ktalk-msg[data-segment-id="4"]');
     expect(anchorBefore).not.toBeNull();
@@ -579,7 +601,9 @@ describe('updateTranscriptUI scroll anchor', () => {
     // F4 coverage: when autoScrollEnabled=true but the user has scrolled away
     // from the bottom (isNearBottom returns false), shouldAutoScroll is false
     // and captureScrollAnchor returns null in Follow mode — so neither branch
-    // restores scrollTop. This pins the (pre-existing) contract.
+    // restores scrollTop. simulateChromeScrollReset replicates real Chrome's
+    // post-innerHTML behaviour, so a passing assertion of `scrollTop === 0`
+    // pins that the helper genuinely did not engage.
     document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
     state.autoScrollEnabled = true;
     for (let i = 0; i < 5; i++) {
@@ -597,6 +621,7 @@ describe('updateTranscriptUI scroll anchor', () => {
     // scrollHeight=10000, scrollTop=42, clientHeight=100 → distance = 9858 → not near bottom.
     stampScrollMetrics(container, 10000);
     container.scrollTop = 42;
+    simulateChromeScrollReset(container);
 
     handleTranscript({
       speaker: 'Speaker5',
@@ -607,11 +632,11 @@ describe('updateTranscriptUI scroll anchor', () => {
       source_id: 'pid-5',
     });
 
-    // Neither anchor-restore nor sticky-bottom ran → in jsdom (which does NOT
-    // reset scrollTop on innerHTML), the captured value is preserved as a
-    // side effect. In real Chrome the rewrite resets scrollTop to 0; this
-    // test pins that the helper does not interfere either way.
-    expect(container.scrollTop).toBe(42);
+    // Helper does not engage in Follow mode (capture returns null) and the
+    // Follow-branch only sticks to bottom when isNearBottom is true. Chrome
+    // simulator already reset scrollTop to 0 after innerHTML; nothing
+    // re-applied a value, so it stays at 0.
+    expect(container.scrollTop).toBe(0);
   });
 
   test('Paused-mode preserves scrollTop when anchor element disappears', () => {
@@ -635,6 +660,7 @@ describe('updateTranscriptUI scroll anchor', () => {
     state.autoScrollEnabled = false;
     stampScrollMetrics(container, 250);
     container.scrollTop = 120;
+    simulateChromeScrollReset(container);
 
     // Wipe and replace with a fresh set; segment_id deliberately disjoint
     // from any previous row.
@@ -650,15 +676,17 @@ describe('updateTranscriptUI scroll anchor', () => {
 
     // Captured anchor.segmentId='4' is gone after replacement →
     // restoreScrollAnchor falls through to `container.scrollTop = anchor.top`.
+    // Chrome simulator zeroed scrollTop after innerHTML rewrite, so the
+    // assertion only passes if the helper actively restored 120.
     expect(Math.abs(container.scrollTop - 120)).toBeLessThanOrEqual(1);
   });
 
-  test('Paused-mode preserves scrollTop when scrolled past last row', () => {
+  test('Paused-mode does not synthesize a position when scrolled past last row', () => {
     // F6 coverage: when scrollTop exceeds every row's offsetTop, no element
     // satisfies offsetTop >= scrollTop - 1 → captureScrollAnchor returns null
     // and updateTranscriptUI does NOT call restoreScrollAnchor. Contract:
-    // no crash, no synthesized position. (jsdom does not reset scrollTop on
-    // innerHTML rewrite, so the originally-set value is observed.)
+    // no crash, helper genuinely does not engage. After Chrome reset zeroes
+    // scrollTop post-innerHTML, nothing re-applies a value, so it stays at 0.
     document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
     for (let i = 0; i < 5; i++) {
       handleTranscript({
@@ -675,6 +703,7 @@ describe('updateTranscriptUI scroll anchor', () => {
     state.autoScrollEnabled = false;
     stampScrollMetrics(container, 250);
     container.scrollTop = 9999;
+    simulateChromeScrollReset(container);
 
     expect(() => handleTranscript({
       speaker: 'Speaker5',
@@ -685,7 +714,54 @@ describe('updateTranscriptUI scroll anchor', () => {
       source_id: 'pid-5',
     })).not.toThrow();
 
-    expect(container.scrollTop).toBe(9999);
+    // Helper did not engage (captureScrollAnchor returned null because no
+    // anchor row matched). Chrome simulator already zeroed scrollTop.
+    expect(container.scrollTop).toBe(0);
+  });
+
+  test('Paused-mode preserves scrollTop when anchor row has no data-segment-id', () => {
+    // Coverage gap: rows without a valid backend segment_id (e.g. history rows
+    // where segment_id=0) render WITHOUT data-segment-id. captureScrollAnchor
+    // must produce an anchor with segmentId=null (the `> 0` guard kicks in),
+    // and restoreScrollAnchor must fall back to anchor.top. A regression that
+    // drops the `> 0` guard would silently match `[data-segment-id="0"]` and
+    // break this contract.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    for (let i = 0; i < 5; i++) {
+      handleTranscript({
+        speaker: `Speaker${i}`,
+        text: `text ${i}`,
+        timestamp: `10:00:0${i}`,
+        is_continuation: false,
+        segment_id: 0,
+        source_id: `pid-${i}`,
+      });
+    }
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    expect(container.querySelectorAll('.ktalk-msg')).toHaveLength(5);
+    // Render template emits data-segment-id only when segment_id > 0.
+    container.querySelectorAll('.ktalk-msg').forEach(el => {
+      expect(el.hasAttribute('data-segment-id')).toBe(false);
+    });
+
+    state.autoScrollEnabled = false;
+    stampScrollMetrics(container, 250);
+    container.scrollTop = 120;
+    simulateChromeScrollReset(container);
+
+    handleTranscript({
+      speaker: 'Speaker5',
+      text: 'text 5',
+      timestamp: '10:00:05',
+      is_continuation: false,
+      segment_id: 0,
+      source_id: 'pid-5',
+    });
+
+    // Anchor has segmentId=null → restoreScrollAnchor sets scrollTop=anchor.top.
+    // Without the helper, Chrome simulator would leave scrollTop=0.
+    expect(Math.abs(container.scrollTop - 120)).toBeLessThanOrEqual(1);
   });
 
   test('Paused-mode does not crash on empty transcriptLines', () => {
