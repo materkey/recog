@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>/Users/vkkovalev/projects/recog/venv-gigaam/bin/python3</string>
         <string>/Users/vkkovalev/projects/recog/frontend/server.py</string>
     </array>
 
