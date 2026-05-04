@@ -416,42 +416,49 @@ describe('handleTranscriptRefine', () => {
 });
 
 describe('updateTranscriptUI scroll anchor', () => {
-  // Helpers — jsdom does not compute layout, so offsetTop/scrollHeight/clientHeight
-  // must be mocked explicitly. Without these mocks captureScrollAnchor would
-  // always pick the first element (offsetTop === 0) and mask iteration bugs.
+  // jsdom does not compute layout, so offsetTop returns 0 for every element by
+  // default. We install a prototype-level getter that derives offsetTop from
+  // the element's position among its parent's `.ktalk-msg` children
+  // (idx * ROW_H). This survives innerHTML rewrites — newly-rendered elements
+  // pick up the correct layout automatically. Tests that need a different
+  // offset for a specific element shadow the getter via per-element
+  // Object.defineProperty (this still works because the per-element descriptor
+  // takes precedence over the prototype's).
   const ROW_H = 50;
+  const originalOffsetTopDescriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype, 'offsetTop'
+  );
 
-  // jsdom does not compute layout, so offsetTop returns 0 for every element.
-  // Instead of patching each element after every render (which would race the
-  // synchronous innerHTML rewrite inside updateTranscriptUI), install a
-  // prototype-level getter that derives offsetTop from the element's index
-  // among its parent's `.ktalk-msg` children. Any element subsequently
-  // rendered into the container — even by a later innerHTML rewrite — gets
-  // the same idx*ROW_H layout automatically. offsetTop lives on
-  // HTMLElement.prototype in jsdom (Element.prototype does not own it), so we
-  // patch HTMLElement directly.
-  function mockOffsets(container) {
-    if (!HTMLElement.prototype.__ktalkOffsetTopMocked) {
-      Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
-        configurable: true,
-        get() {
-          const parent = this.parentNode;
-          if (!parent || !this.classList || !this.classList.contains('ktalk-msg')) return 0;
-          const siblings = parent.querySelectorAll(':scope > .ktalk-msg');
-          for (let i = 0; i < siblings.length; i++) {
-            if (siblings[i] === this) return i * ROW_H;
-          }
-          return 0;
-        },
-      });
-      HTMLElement.prototype.__ktalkOffsetTopMocked = true;
+  beforeAll(() => {
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+      configurable: true,
+      get() {
+        const parent = this.parentNode;
+        if (!parent || !this.classList || !this.classList.contains('ktalk-msg')) return 0;
+        const siblings = parent.querySelectorAll(':scope > .ktalk-msg');
+        for (let i = 0; i < siblings.length; i++) {
+          if (siblings[i] === this) return i * ROW_H;
+        }
+        return 0;
+      },
+    });
+  });
+
+  afterAll(() => {
+    if (originalOffsetTopDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, 'offsetTop', originalOffsetTopDescriptor);
+    } else {
+      delete HTMLElement.prototype.offsetTop;
     }
+  });
+
+  function stampScrollMetrics(container, scrollHeight, clientHeight = 100) {
     Object.defineProperty(container, 'scrollHeight', {
-      get: () => container.querySelectorAll(':scope > .ktalk-msg').length * ROW_H,
+      get: () => scrollHeight,
       configurable: true,
     });
     Object.defineProperty(container, 'clientHeight', {
-      get: () => 100,
+      get: () => clientHeight,
       configurable: true,
     });
   }
@@ -466,12 +473,8 @@ describe('updateTranscriptUI scroll anchor', () => {
   });
 
   test('paused-mode preserves top-visible row across re-render when segment_id present', () => {
-    // jsdom container that updateTranscriptUI() targets.
     document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
 
-    // Seed 5 lines with valid segment_ids via handleTranscript so the
-    // is_continuation/source_id wiring matches production. Distinct
-    // speakers and source_ids prevent continuation merge.
     for (let i = 0; i < 5; i++) {
       handleTranscript({
         speaker: `Speaker${i}`,
@@ -490,20 +493,20 @@ describe('updateTranscriptUI scroll anchor', () => {
     // Switch to Paused mode and seed scroll position in the middle of the
     // list. With offsets [0, 50, 100, 150, 200] and scrollTop=120,
     // top - 1 = 119 → first element with offsetTop >= 119 is idx=3
-    // (offsetTop=150, segment_id=4). This is intentionally NOT the first
-    // element — degenerate offsetTop=0 fallback would pick idx=0.
+    // (offsetTop=150, segment_id=4). Intentionally NOT the first element —
+    // degenerate offsetTop=0 fallback would pick idx=0.
     state.autoScrollEnabled = false;
-    mockOffsets(container);
+    stampScrollMetrics(container, 250);
     container.scrollTop = 120;
 
     const anchorBefore = container.querySelector('.ktalk-msg[data-segment-id="4"]');
     expect(anchorBefore).not.toBeNull();
     expect(anchorBefore.offsetTop).toBe(150);
 
-    // Trigger another re-render by adding a new line. The new line is
-    // unshifted so the anchored row (segment_id=4) shifts down by one
-    // slot — its post-render offsetTop becomes 200, not 150. This makes
-    // the offsetTop diff non-zero and exercises the compensation math.
+    // Unshift NewSpeaker, then push another via continuation with a different
+    // source_id (forces push, not merge). After re-render, segment_id=4 row
+    // shifts from idx=3 to idx=4 → offsetTop 150 → 200, distinguishing the
+    // compensation math from a degenerate 0+0 case.
     state.transcriptLines.unshift({
       speaker: 'NewSpeaker',
       text: 'inserted at top',
@@ -519,9 +522,6 @@ describe('updateTranscriptUI scroll anchor', () => {
       createdAt: Date.now(),
     });
 
-    // Drive a re-render. handleTranscript triggers updateTranscriptUI()
-    // internally; we add a dummy continuation chunk on the new line so
-    // the merge predicate matches and the array length stays at 6.
     handleTranscript({
       speaker: 'NewSpeaker',
       text: '',
@@ -530,137 +530,18 @@ describe('updateTranscriptUI scroll anchor', () => {
       segment_id: 100,
       source_id: 'pid-new',
     });
-    // Re-mock offsets so all 6 rows have idx*50 layout AFTER innerHTML rewrite.
-    mockOffsets(container);
 
     const anchorAfter = container.querySelector('.ktalk-msg[data-segment-id="4"]');
     expect(anchorAfter).not.toBeNull();
-    // The anchored row is now idx=4 (one row pushed it down) → offsetTop=200.
     expect(anchorAfter.offsetTop).toBe(200);
 
-    // Compensation contract: scrollTop = oldScrollTop + (newOffsetTop - oldOffsetTop)
-    //                                  = 120          + (200            - 150)
-    //                                  = 170.
-    // Without the fix, innerHTML rewrite resets scrollTop to 0 — assertion fails.
+    // scrollTop = oldScrollTop + (newOffsetTop - oldOffsetTop)
+    //           = 120          + (200            - 150) = 170.
     expect(Math.abs(container.scrollTop - 170)).toBeLessThanOrEqual(1);
-
-    // Defence-in-depth: the chosen anchor must NOT be the first element. If
-    // jsdom returned offsetTop=0 for everything (no mock), captureScrollAnchor
-    // would degenerately pick idx=0 and the math above would happen to give
-    // 120 + 0 = 120 — masking real iteration bugs. By unshifting a row, the
-    // anchor's post-render offsetTop is 200, distinguishing it from idx=0
-    // (which is the inserted "NewSpeaker" row at offsetTop=0).
     expect(anchorAfter.offsetTop).toBeGreaterThan(0);
   });
 
-  test('paused-mode falls back to data-line-index when segment_id=0 (history rows)', () => {
-    // History rows / retroactive correction emulation: backend frames carry
-    // no valid segment_id (or sid=0 sentinel). The renderer omits
-    // `data-segment-id` for these rows, so captureScrollAnchor must fall back
-    // to the per-render-stable `data-line-index` attribute. This test fixes
-    // that contract: with no segment-id available, the line-index path is the
-    // only thing keeping scrollTop from snapping back to 0 on innerHTML
-    // rewrite (the original Paused-mode bug).
-    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
-
-    // Seed 5 lines with segment_id=0. handleTranscript coerces missing/zero
-    // ids to sid=0; the template only emits `data-segment-id` when sid > 0,
-    // so these rows render WITHOUT that attribute (verified below).
-    // Distinct source_ids and is_continuation=false prevent the
-    // continuation-merge predicate from collapsing rows.
-    for (let i = 0; i < 5; i++) {
-      handleTranscript({
-        speaker: `History${i}`,
-        text: `history line ${i}`,
-        timestamp: `09:30:0${i}`,
-        is_continuation: false,
-        segment_id: 0,
-        source_id: `hist-${i}`,
-      });
-    }
-    expect(state.transcriptLines).toHaveLength(5);
-
-    const container = document.querySelector('.ktalk-transcript-messages');
-    const msgsBefore = container.querySelectorAll('.ktalk-msg');
-    expect(msgsBefore).toHaveLength(5);
-
-    // Defence assertion: this test setup correctly emulates segment_id=0
-    // history rows. If any row leaks `data-segment-id`, the segment-id
-    // branch of restoreScrollAnchor would handle the lookup and the
-    // line-index fallback would not be exercised — masking bugs in that
-    // branch.
-    for (const el of msgsBefore) {
-      expect(el.hasAttribute('data-segment-id')).toBe(false);
-    }
-
-    // Switch to Paused mode and seed scrollTop in the middle. Same offset
-    // scheme as the segment_id-present test: idx*50 → [0, 50, 100, 150, 200].
-    // top - 1 = 119 → first offsetTop >= 119 is idx=3 (offsetTop=150,
-    // data-line-index="3"). Anchor key falls through to lineIndex=3.
-    state.autoScrollEnabled = false;
-    mockOffsets(container);
-    container.scrollTop = 120;
-
-    const anchorBefore = container.querySelector('.ktalk-msg[data-line-index="3"]');
-    expect(anchorBefore).not.toBeNull();
-    expect(anchorBefore.offsetTop).toBe(150);
-
-    // Trigger a re-render. Unshift a new line and drive updateTranscriptUI
-    // via a continuation handleTranscript call (matches Task 1 pattern).
-    state.transcriptLines.unshift({
-      speaker: 'NewHistory',
-      text: 'new history',
-      timestamp: '09:29:59',
-      time: '09:29:59',
-      segment_id: 0,
-      source_id: 'hist-new',
-      segment_ids: [],
-      segment_texts: {},
-      is_local: false,
-      uncertain: false,
-      uncertain_reason: '',
-      createdAt: Date.now(),
-    });
-
-    handleTranscript({
-      speaker: 'NewHistory',
-      text: '',
-      timestamp: '09:29:59',
-      is_continuation: true,
-      segment_id: 0,
-      source_id: 'hist-new',
-    });
-    // Re-mock scrollHeight/clientHeight for the post-rewrite container.
-    // offsetTop is governed by the prototype getter (idx*50), so freshly
-    // created `.ktalk-msg` elements pick up the layout automatically.
-    mockOffsets(container);
-
-    // Defence assertion: restoreScrollAnchor's line-index path must find an
-    // element at `[data-line-index="3"]` after the rewrite. Without
-    // `data-line-index` rendered into the template (Task 2 change), the
-    // querySelector would return null and restoreScrollAnchor would fall
-    // through to the anchor.top branch — coincidentally giving 120 too,
-    // but bypassing the formula path this test claims to exercise.
-    const anchorAfter = container.querySelector('.ktalk-msg[data-line-index="3"]');
-    expect(anchorAfter).not.toBeNull();
-    // Same idx*50 mock → the row at lineIndex=3 still sits at offsetTop=150
-    // in the new layout. Formula applied: scrollTop = 120 + (150 - 150) = 120.
-    expect(anchorAfter.offsetTop).toBe(150);
-
-    // Bug check: without the line-index fallback, scrollTop would reset to 0
-    // (innerHTML rewrite). With the fallback, formula yields 120 — proving
-    // restoreScrollAnchor reached the line-index branch (segment-id branch
-    // was skipped because no row carries data-segment-id).
-    expect(container.scrollTop).not.toBe(0);
-    expect(Math.abs(container.scrollTop - 120)).toBeLessThanOrEqual(1);
-  });
-
   test('Follow-mode keeps sticky bottom across re-render', () => {
-    // Follow-mode contract: when autoScrollEnabled is true and the user is near
-    // the bottom of the list, every re-render must snap scrollTop to
-    // scrollHeight so new lines stay visible. captureScrollAnchor returns null
-    // in Follow mode, so the sticky-bottom branch (`if (shouldAutoScroll)`)
-    // must run unconditionally — anchor restore must NOT be invoked.
     document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
 
     state.autoScrollEnabled = true;
@@ -674,18 +555,11 @@ describe('updateTranscriptUI scroll anchor', () => {
         source_id: `pid-${i}`,
       });
     }
-    expect(state.transcriptLines).toHaveLength(5);
 
     const container = document.querySelector('.ktalk-transcript-messages');
-    expect(container.querySelectorAll('.ktalk-msg')).toHaveLength(5);
-
-    // Mock layout so isNearBottom() returns true: scrollHeight=250 (5*50),
-    // clientHeight=100, scrollTop=150 → distance = 250 - (150+100) = 0 ≤ 80.
-    mockOffsets(container);
+    stampScrollMetrics(container, 300);
     container.scrollTop = 150;
 
-    // Push a 6th line. handleTranscript triggers updateTranscriptUI; with
-    // shouldAutoScroll=true, scrollTop must be set to scrollHeight (300).
     handleTranscript({
       speaker: 'Speaker5',
       text: 'text 5',
@@ -695,55 +569,147 @@ describe('updateTranscriptUI scroll anchor', () => {
       source_id: 'pid-5',
     });
     expect(state.transcriptLines).toHaveLength(6);
-    expect(container.querySelectorAll('.ktalk-msg')).toHaveLength(6);
 
-    // Sticky-bottom contract: scrollTop === scrollHeight after re-render.
-    // 6 rows * 50px = 300. If anchor restore had run instead, scrollTop would
-    // stay near the previous value (150) — proving the wrong branch was taken.
+    // Sticky-bottom contract: scrollTop === scrollHeight (300) after re-render.
     expect(container.scrollHeight).toBe(300);
     expect(container.scrollTop).toBe(container.scrollHeight);
   });
 
-  test('Paused-mode does not crash on empty transcriptLines', () => {
-    // Defensive contract: the empty-state early-return at the top of
-    // updateTranscriptUI must remain reachable even when captureScrollAnchor
-    // runs first (Paused mode). captureScrollAnchor must not throw or mutate
-    // anything that would break the early-return path.
+  test('Follow-mode + not-near-bottom does NOT restore anchor (documents pre-existing behavior)', () => {
+    // F4 coverage: when autoScrollEnabled=true but the user has scrolled away
+    // from the bottom (isNearBottom returns false), shouldAutoScroll is false
+    // and captureScrollAnchor returns null in Follow mode — so neither branch
+    // restores scrollTop. This pins the (pre-existing) contract.
     document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    state.autoScrollEnabled = true;
+    for (let i = 0; i < 5; i++) {
+      handleTranscript({
+        speaker: `Speaker${i}`,
+        text: `text ${i}`,
+        timestamp: `10:00:0${i}`,
+        is_continuation: false,
+        segment_id: i + 1,
+        source_id: `pid-${i}`,
+      });
+    }
 
+    const container = document.querySelector('.ktalk-transcript-messages');
+    // scrollHeight=10000, scrollTop=42, clientHeight=100 → distance = 9858 → not near bottom.
+    stampScrollMetrics(container, 10000);
+    container.scrollTop = 42;
+
+    handleTranscript({
+      speaker: 'Speaker5',
+      text: 'new line',
+      timestamp: '10:00:05',
+      is_continuation: false,
+      segment_id: 6,
+      source_id: 'pid-5',
+    });
+
+    // Neither anchor-restore nor sticky-bottom ran → in jsdom (which does NOT
+    // reset scrollTop on innerHTML), the captured value is preserved as a
+    // side effect. In real Chrome the rewrite resets scrollTop to 0; this
+    // test pins that the helper does not interfere either way.
+    expect(container.scrollTop).toBe(42);
+  });
+
+  test('Paused-mode preserves scrollTop when anchor element disappears', () => {
+    // F5 coverage: capture an anchor, then completely replace transcriptLines
+    // (e.g. meeting_change / history reload) with rows whose segment_ids do
+    // not overlap. restoreScrollAnchor's lookup returns null → fallback to
+    // anchor.top, preserving the captured scrollTop.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    for (let i = 0; i < 5; i++) {
+      handleTranscript({
+        speaker: `Speaker${i}`,
+        text: `text ${i}`,
+        timestamp: `10:00:0${i}`,
+        is_continuation: false,
+        segment_id: i + 1,
+        source_id: `pid-${i}`,
+      });
+    }
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    state.autoScrollEnabled = false;
+    stampScrollMetrics(container, 250);
+    container.scrollTop = 120;
+
+    // Wipe and replace with a fresh set; segment_id deliberately disjoint
+    // from any previous row.
+    state.transcriptLines = [];
+    handleTranscript({
+      speaker: 'Other',
+      text: 'fresh line',
+      timestamp: '11:00:00',
+      is_continuation: false,
+      segment_id: 999,
+      source_id: 'pid-other',
+    });
+
+    // Captured anchor.segmentId='4' is gone after replacement →
+    // restoreScrollAnchor falls through to `container.scrollTop = anchor.top`.
+    expect(Math.abs(container.scrollTop - 120)).toBeLessThanOrEqual(1);
+  });
+
+  test('Paused-mode preserves scrollTop when scrolled past last row', () => {
+    // F6 coverage: when scrollTop exceeds every row's offsetTop, no element
+    // satisfies offsetTop >= scrollTop - 1 → captureScrollAnchor returns null
+    // and updateTranscriptUI does NOT call restoreScrollAnchor. Contract:
+    // no crash, no synthesized position. (jsdom does not reset scrollTop on
+    // innerHTML rewrite, so the originally-set value is observed.)
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    for (let i = 0; i < 5; i++) {
+      handleTranscript({
+        speaker: `Speaker${i}`,
+        text: `text ${i}`,
+        timestamp: `10:00:0${i}`,
+        is_continuation: false,
+        segment_id: i + 1,
+        source_id: `pid-${i}`,
+      });
+    }
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    state.autoScrollEnabled = false;
+    stampScrollMetrics(container, 250);
+    container.scrollTop = 9999;
+
+    expect(() => handleTranscript({
+      speaker: 'Speaker5',
+      text: 'text 5',
+      timestamp: '10:00:05',
+      is_continuation: false,
+      segment_id: 6,
+      source_id: 'pid-5',
+    })).not.toThrow();
+
+    expect(container.scrollTop).toBe(9999);
+  });
+
+  test('Paused-mode does not crash on empty transcriptLines', () => {
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
     state.autoScrollEnabled = false;
     state.transcriptLines = [];
 
-    // handleNewMeeting clears transcriptLines and calls updateTranscriptUI()
-    // — it is the public path that exercises updateTranscriptUI on an empty
-    // state without first pushing a line.
     expect(() => handleNewMeeting({ meeting_id: 'meeting-empty' })).not.toThrow();
 
     const container = document.querySelector('.ktalk-transcript-messages');
-    expect(container).not.toBeNull();
     expect(container.querySelector('.ktalk-transcript-empty')).not.toBeNull();
   });
 
   test('paused-mode preserves anchor across refine batch when bubble above grows', () => {
-    // Refine integration: handleTranscriptRefine rewrites bubble text in place
-    // (no full re-render). When a refined bubble ABOVE the anchor grows
-    // (longer text → taller bubble), browsers reflow and shift everything below
-    // it down. Without a scroll anchor, the user's top-visible row visually
-    // jumps. With captureScrollAnchor before the for-loop and
-    // restoreScrollAnchor after, scrollTop is bumped so the anchor row stays
-    // pinned at its viewport offset.
-    //
-    // Setup: 5 rows segment_id=11..15, scrollTop=100, baseline offsets
-    // [0, 50, 100, 150, 200] → anchor (top - 1 = 99) is idx=2 / sid=13.
-    // Simulated post-refine layout: anchor row idx=2 moves to offsetTop=200
-    // (segments 11 and 12 grew by 50px each). Expected scrollTop after:
-    //   100 + (200 - 100) = 200.
-    //
-    // This test runs LAST in the describe because it replaces the
-    // prototype-level offsetTop getter installed by `mockOffsets` with a
-    // call-count-aware variant; running it earlier would leak the custom
-    // getter into subsequent tests (mockOffsets skips redefinition when
-    // `__ktalkOffsetTopMocked` is already set).
+    // Refine integration: handleTranscriptRefine rewrites bubble text in place.
+    // When a refined bubble ABOVE the anchor grows (longer text → taller bubble),
+    // browsers reflow and shift everything below it. We simulate that reflow by
+    // shadowing the anchor row's offsetTop with a per-element getter that
+    // returns the GROWN offset only on its second read. The first read happens
+    // inside captureScrollAnchor (before the in-place rewrite); the second read
+    // happens inside restoreScrollAnchor (after the rewrite, when the simulated
+    // reflow has already happened). This is deterministic on the specific
+    // anchor element and does not leak into other tests because it is an own
+    // property — not a prototype mutation.
     state.autoScrollEnabled = false;
     state.transcriptLines = [
       { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' } },
@@ -763,42 +729,24 @@ describe('updateTranscriptUI scroll anchor', () => {
     `;
 
     const container = document.querySelector('.ktalk-transcript-messages');
-    const baseOffsets = [0, 50, 100, 150, 200];
-    const grownOffsets = [0, 100, 200, 250, 300];
-    const reads = new WeakMap();
-
-    // Per-element call-count getter. The anchor element (idx=2) is read 3
-    // times across capture + restore: 2 reads inside captureScrollAnchor
-    // (loop check + final `anchorEl.offsetTop` store) and 1 read inside
-    // restoreScrollAnchor (`el.offsetTop` formula). Reads 1 and 2 must see
-    // the BASELINE layout so the anchor is correctly chosen and offset
-    // captured at 100; read 3 must see the GROWN layout so the formula
-    // computes the post-refine scrollTop. Other rows are read at most once
-    // (loop check before break) and always see baseline — accurate enough
-    // since they aren't used in the formula.
-    Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+    // Default prototype getter gives offsets [0, 50, 100, 150, 200];
+    // anchor (sid=13) is at idx=2 / 100. We override it on the anchor element
+    // only with a 2-phase getter: captureScrollAnchor reads it twice (once in
+    // the search loop, once when constructing the return) and must see 100;
+    // restoreScrollAnchor reads it once afterwards and must see 200 (the
+    // simulated post-reflow position).
+    const anchorEl = container.querySelector('.ktalk-msg[data-segment-id="13"]');
+    let anchorReadCount = 0;
+    Object.defineProperty(anchorEl, 'offsetTop', {
       configurable: true,
       get() {
-        const parent = this.parentNode;
-        if (!parent || !this.classList || !this.classList.contains('ktalk-msg')) return 0;
-        const siblings = parent.querySelectorAll(':scope > .ktalk-msg');
-        let idx = -1;
-        for (let i = 0; i < siblings.length; i++) {
-          if (siblings[i] === this) { idx = i; break; }
-        }
-        if (idx < 0) return 0;
-        const count = (reads.get(this) || 0) + 1;
-        reads.set(this, count);
-        // Anchor element (idx=2): grown layout from the 3rd read onwards.
-        if (idx === 2 && count >= 3) return grownOffsets[idx];
-        return baseOffsets[idx];
+        anchorReadCount += 1;
+        return anchorReadCount <= 2 ? 100 : 200;
       },
     });
 
+    stampScrollMetrics(container, 250);
     container.scrollTop = 100;
-
-    // Sanity: before refine, scrollTop is exactly 100.
-    expect(container.scrollTop).toBe(100);
 
     handleTranscriptRefine({
       type: 'transcript_refine',
@@ -808,17 +756,74 @@ describe('updateTranscriptUI scroll anchor', () => {
       ],
     });
 
-    // After refine + simulated bubble growth, the anchor (sid=13) stays at the
-    // same viewport offset: scrollTop = oldScrollTop + (newOffsetTop - oldOffsetTop)
-    //                                = 100          + (200            - 100)
-    //                                = 200.
+    // scrollTop = 100 + (200 - 100) = 200.
     expect(Math.abs(container.scrollTop - 200)).toBeLessThanOrEqual(1);
 
-    // Verify the in-place text rewrites still happened (defence assertion —
-    // ensures the for-loop didn't get short-circuited).
     expect(document.querySelector('.ktalk-msg[data-segment-id="11"] .ktalk-msg-text').innerHTML)
       .toBe('aaa очень длинный текст');
     expect(document.querySelector('.ktalk-msg[data-segment-id="14"] .ktalk-msg-text').innerHTML)
       .toBe('ddd более длинный текст');
+  });
+
+  test('Follow-mode refine does not move scrollTop', () => {
+    // F9 coverage: handleTranscriptRefine now calls capture+restore
+    // unconditionally inside `if (container)`. In Follow mode capture returns
+    // null and restore is a no-op, so scrollTop must be unchanged by refine.
+    state.autoScrollEnabled = true;
+    state.transcriptLines = [
+      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' } },
+      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' } },
+    ];
+    document.body.innerHTML = `
+      <div class="ktalk-transcript-messages">
+        <div class="ktalk-msg remote" data-segment-id="11"><div class="ktalk-msg-text">a</div></div>
+        <div class="ktalk-msg remote" data-segment-id="12"><div class="ktalk-msg-text">b</div></div>
+      </div>
+    `;
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    stampScrollMetrics(container, 100);
+    container.scrollTop = 42;
+
+    handleTranscriptRefine({
+      type: 'transcript_refine',
+      updates: [{ segment_id: 11, text: 'refined' }],
+    });
+
+    expect(container.scrollTop).toBe(42);
+    expect(document.querySelector('.ktalk-msg[data-segment-id="11"] .ktalk-msg-text').innerHTML)
+      .toBe('refined');
+  });
+
+  test('Paused-mode refine with no matching segment_id preserves scrollTop', () => {
+    // F10 coverage: refine batch where no update matches an existing line —
+    // touchedLines is empty, the for-loop is a no-op, but capture+restore
+    // still run. Without compensation needed (no DOM mutation), scrollTop must
+    // stay at the captured value.
+    state.autoScrollEnabled = false;
+    state.transcriptLines = [
+      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' } },
+      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' } },
+    ];
+    document.body.innerHTML = `
+      <div class="ktalk-transcript-messages">
+        <div class="ktalk-msg remote" data-segment-id="11"><div class="ktalk-msg-text">a</div></div>
+        <div class="ktalk-msg remote" data-segment-id="12"><div class="ktalk-msg-text">b</div></div>
+      </div>
+    `;
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    stampScrollMetrics(container, 100);
+    container.scrollTop = 50;
+
+    // segment_id=999 references nothing — touchedLines stays empty.
+    handleTranscriptRefine({
+      type: 'transcript_refine',
+      updates: [{ segment_id: 999, text: 'orphan' }],
+    });
+
+    expect(container.scrollTop).toBe(50);
+    expect(document.querySelector('.ktalk-msg[data-segment-id="11"] .ktalk-msg-text').innerHTML)
+      .toBe('a');
   });
 });

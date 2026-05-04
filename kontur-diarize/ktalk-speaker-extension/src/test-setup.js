@@ -27,11 +27,3 @@ globalThis.jest = jest;
 
 // Mock scrollIntoView for jsdom
 Element.prototype.scrollIntoView = jest.fn();
-
-// jsdom does not expose the CSS interface; provide a minimal CSS.escape
-// polyfill so code paths that build attribute selectors (e.g. scroll-anchor
-// restoration) can run under tests. Real Chrome (MV3) ships CSS.escape natively.
-if (typeof globalThis.CSS === 'undefined' || typeof globalThis.CSS.escape !== 'function') {
-  globalThis.CSS = globalThis.CSS || {};
-  globalThis.CSS.escape = (value) => String(value).replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
-}
