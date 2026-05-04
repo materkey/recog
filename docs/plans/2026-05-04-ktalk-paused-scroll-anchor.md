@@ -1,5 +1,20 @@
 # KTalk Paused-mode scroll anchor
 
+> **Post-iteration-1 amendment (2026-05-04)**: After Task 8 completed, code review iteration 1 simplified the design and **dropped `data-line-index` entirely**. The current implementation in `src/ui.js` uses only the `data-segment-id` anchor key with a best-effort `scrollTop = anchor.top` fallback when the anchor row is gone. Old plan sections that still mention `data-line-index` (the `Solution Overview` design-decision #1, the `Technical Details` code block, Task 2 sub-bullet about adding the attribute, Task 3 in its entirety, etc.) are historical — see `kontur-diarize/ktalk-speaker-extension/src/ui.js:2330-2367` for the live source of truth.
+>
+> Iteration-1 simplifications applied:
+> - Helpers no longer carry `lineIndex` in the anchor object; `captureScrollAnchor` returns `null` (not a sentinel) when no row matches.
+> - Render template did **not** add `data-line-index` (rolled back to original `data-ts="..." {segmentIdAttr}`).
+> - `CSS.escape` and its jsdom polyfill were removed; `data-segment-id` interpolation matches the existing pattern at `ui.js:2227`.
+> - JSDoc on the helpers was trimmed (~25 lines → ~6 lines).
+> - Task 3 (`data-line-index` fallback test) was removed; instead, paused-mode coverage when `segment_id=0` exercises the `restoreScrollAnchor` fallback to `anchor.top`.
+>
+> Iteration-2 fixes (2026-05-04, this commit):
+> - `captureScrollAnchor` now runs **after** the empty-state early-return in `updateTranscriptUI` to avoid a wasted `querySelectorAll` + offsetTop layout read on empty state.
+> - Dead `!container ||` guards dropped from helpers (call sites already gate).
+> - F4/F5/F6 tests now wrap the container with a `simulateChromeScrollReset` helper so `scrollTop` is zeroed after `innerHTML` rewrite (matching real Chrome). Assertions therefore exercise the production helper instead of relying on jsdom's no-op innerHTML.
+> - Added paused-mode coverage for rows without `data-segment-id` (i.e. `segment_id=0`) — guards against accidental match on `[data-segment-id="0"]`.
+
 ## Overview
 
 В оверлее KTalk-расширения (`kontur-diarize/ktalk-speaker-extension`) переключатель Follow → Paused должен останавливать движение скролла. Сейчас в Paused-режиме верхняя видимая строка транскрипта «прыгает» (обычно — резко уезжает к самому верху списка) при появлении нового live-сегмента или при tier-2 refine.
