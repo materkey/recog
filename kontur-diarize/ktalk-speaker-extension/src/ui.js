@@ -2325,9 +2325,12 @@ function isNearBottom(container) {
 }
 
 /**
- * Capture top-visible .ktalk-msg in Paused mode as a scroll anchor; returns
- * null in Follow mode or when no rows match (caller skips compensation).
- * `subPixelTolerancePx` avoids picking the wrong row at sub-pixel boundaries.
+ * Capture the .ktalk-msg row whose vertical extent contains the top of the
+ * viewport (i.e. the last row whose offsetTop is at or above scrollTop). This
+ * is the row a paused user is reading; restoring it after a DOM update keeps
+ * the visible content stable. Returns null in Follow mode or when no rows
+ * exist. `subPixelTolerancePx` accepts a row whose offsetTop sits a sub-pixel
+ * fraction below scrollTop instead of falling back to the previous row.
  */
 function captureScrollAnchor(container) {
   if (state.autoScrollEnabled) return null;
@@ -2335,9 +2338,14 @@ function captureScrollAnchor(container) {
   const top = container.scrollTop;
   const msgs = container.querySelectorAll('.ktalk-msg');
   let anchorEl = null;
-  for (const el of msgs) {
-    if (el.offsetTop >= top - subPixelTolerancePx) { anchorEl = el; break; }
+  // msgs are in DOM order = vertical order. Walk from the end and pick the
+  // first row whose top is at or above scrollTop — that row contains (or
+  // begins at) the viewport top. Falls back to the first row when scrollTop
+  // is above all rows (e.g. negative scroll on overscroll, or empty top gap).
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].offsetTop <= top + subPixelTolerancePx) { anchorEl = msgs[i]; break; }
   }
+  if (!anchorEl && msgs.length > 0) anchorEl = msgs[0];
   if (!anchorEl) return null;
   const sidRaw = anchorEl.dataset.segmentId;
   return {
