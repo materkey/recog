@@ -6700,10 +6700,7 @@ function handleTranscriptRefine(data) {
   } else {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) {
-      // Paused-mode anchor compensation: a refined bubble above the viewport
-      // can grow (longer text → taller bubble) and shift everything below
-      // down. captureScrollAnchor returns null in Follow mode, so the helper
-      // is a no-op there. See ADR / docs/plans/2026-05-04-ktalk-paused-scroll-anchor.md.
+      // Paused-mode anchor compensation for in-place bubble growth (no-op in Follow).
       const anchor = captureScrollAnchor(container);
       // Ktalk path rebuilds the container from state.transcriptLines, so
       // merged continuation bubbles only expose `data-segment-id` of the
@@ -6756,9 +6753,6 @@ function updateTranscriptUI() {
   const container = document.querySelector('.ktalk-transcript-messages');
   if (!container) return;
 
-  const anchor = captureScrollAnchor(container);
-  const shouldAutoScroll = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled && isNearBottom(container);
-
   updateFollowButton();
 
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) {
@@ -6776,6 +6770,9 @@ function updateTranscriptUI() {
       `;
     return;
   }
+
+  const anchor = captureScrollAnchor(container);
+  const shouldAutoScroll = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled && isNearBottom(container);
 
   container.innerHTML = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map(line => {
     const classes = [
@@ -6821,7 +6818,7 @@ function isNearBottom(container) {
  * `top - 1` tolerance avoids picking the wrong row at sub-pixel boundaries.
  */
 function captureScrollAnchor(container) {
-  if (!container || _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled) return null;
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled) return null;
   const top = container.scrollTop;
   const msgs = container.querySelectorAll('.ktalk-msg');
   let anchorEl = null;
@@ -6842,7 +6839,7 @@ function captureScrollAnchor(container) {
  * offsetTop drift. Falls back to anchor.top when the anchor row is gone.
  */
 function restoreScrollAnchor(container, anchor) {
-  if (!container || !anchor) return;
+  if (!anchor) return;
   let el = null;
   if (anchor.segmentId != null) {
     el = container.querySelector(`.ktalk-msg[data-segment-id="${anchor.segmentId}"]`);
