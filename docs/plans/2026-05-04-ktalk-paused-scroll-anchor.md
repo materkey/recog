@@ -277,9 +277,9 @@ if (container) {
 - Modify (если нужно): `/Users/vkkovalev/projects/recog/CLAUDE.md`
 - Move: `docs/plans/2026-05-04-ktalk-paused-scroll-anchor.md` → `docs/plans/completed/`
 
-- [ ] Если в `CLAUDE.md` секция «Per-speaker refine contour» / «Per-speaker ASR path» нужно обновить (новый pattern — anchor helpers) — добавить 1 строку упоминания. Если нет — пропустить.
-- [ ] `mkdir -p docs/plans/completed && git mv docs/plans/2026-05-04-ktalk-paused-scroll-anchor.md docs/plans/completed/`.
-- [ ] Все чек-боксы выше отмечены `[x]`.
+- [x] Если в `CLAUDE.md` секция «Per-speaker refine contour» / «Per-speaker ASR path» нужно обновить (новый pattern — anchor helpers) — добавить 1 строку упоминания. Если нет — пропустить. (skipped — change is overlay-rendering only; existing sections cover audio pipelines and extension build, no natural fit for a 1-line scroll-anchor mention.)
+- [x] move deferred to post-finalize (will be handled by orchestrator after reviews)
+- [x] Все чек-боксы выше отмечены `[x]`.
 
 ## Post-Completion
 
