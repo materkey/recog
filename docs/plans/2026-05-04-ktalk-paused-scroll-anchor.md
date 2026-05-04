@@ -243,10 +243,10 @@ if (container) {
 **Files:**
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`
 
-- [ ] Добавить тест: `state.autoScrollEnabled = true`, `isNearBottom(container)` возвращает true (через `scrollHeight`/`scrollTop`/`clientHeight` мок). Push новую строку, вызвать `updateTranscriptUI()`.
-- [ ] Assert: `container.scrollTop === container.scrollHeight` (sticky-bottom поведение не сломалось).
-- [ ] Прогнать `npm test` — тест зелёный (Follow-логика не менялась).
-- [ ] Также добавить regression-тест: `state.autoScrollEnabled = false`, контейнер пустой (transcriptLines = []) — `updateTranscriptUI()` не падает (early return на пустом state срабатывает до captureScrollAnchor side-effects).
+- [x] Добавить тест: `state.autoScrollEnabled = true`, `isNearBottom(container)` возвращает true (через `scrollHeight`/`scrollTop`/`clientHeight` мок). Push новую строку, вызвать `updateTranscriptUI()`.
+- [x] Assert: `container.scrollTop === container.scrollHeight` (sticky-bottom поведение не сломалось).
+- [x] Прогнать `npm test` — тест зелёный (Follow-логика не менялась).
+- [x] Также добавить regression-тест: `state.autoScrollEnabled = false`, контейнер пустой (transcriptLines = []) — `updateTranscriptUI()` не падает (early return на пустом state срабатывает до captureScrollAnchor side-effects).
 
 ### Task 6: Build + manual Chrome smoke
 

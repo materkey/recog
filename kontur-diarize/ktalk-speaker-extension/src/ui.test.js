@@ -10,6 +10,7 @@ import { jest } from '@jest/globals';
 let state;
 let handleTranscript;
 let handleTranscriptRefine;
+let handleNewMeeting;
 
 // `isJitsiPlatform` lives in `platforms/index.js` and is derived from
 // `window.location.hostname`. jsdom forbids mutating `location` after setup,
@@ -28,7 +29,7 @@ beforeAll(async () => {
   }));
 
   state = (await import('./state.js')).state;
-  ({ handleTranscript, handleTranscriptRefine } = await import('./ui.js'));
+  ({ handleTranscript, handleTranscriptRefine, handleNewMeeting } = await import('./ui.js'));
 });
 
 describe('handleTranscriptRefine', () => {
@@ -652,6 +653,75 @@ describe('updateTranscriptUI scroll anchor', () => {
     // was skipped because no row carries data-segment-id).
     expect(container.scrollTop).not.toBe(0);
     expect(Math.abs(container.scrollTop - 120)).toBeLessThanOrEqual(1);
+  });
+
+  test('Follow-mode keeps sticky bottom across re-render', () => {
+    // Follow-mode contract: when autoScrollEnabled is true and the user is near
+    // the bottom of the list, every re-render must snap scrollTop to
+    // scrollHeight so new lines stay visible. captureScrollAnchor returns null
+    // in Follow mode, so the sticky-bottom branch (`if (shouldAutoScroll)`)
+    // must run unconditionally — anchor restore must NOT be invoked.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+
+    state.autoScrollEnabled = true;
+    for (let i = 0; i < 5; i++) {
+      handleTranscript({
+        speaker: `Speaker${i}`,
+        text: `text ${i}`,
+        timestamp: `10:00:0${i}`,
+        is_continuation: false,
+        segment_id: i + 1,
+        source_id: `pid-${i}`,
+      });
+    }
+    expect(state.transcriptLines).toHaveLength(5);
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    expect(container.querySelectorAll('.ktalk-msg')).toHaveLength(5);
+
+    // Mock layout so isNearBottom() returns true: scrollHeight=250 (5*50),
+    // clientHeight=100, scrollTop=150 → distance = 250 - (150+100) = 0 ≤ 80.
+    mockOffsets(container);
+    container.scrollTop = 150;
+
+    // Push a 6th line. handleTranscript triggers updateTranscriptUI; with
+    // shouldAutoScroll=true, scrollTop must be set to scrollHeight (300).
+    handleTranscript({
+      speaker: 'Speaker5',
+      text: 'text 5',
+      timestamp: '10:00:05',
+      is_continuation: false,
+      segment_id: 6,
+      source_id: 'pid-5',
+    });
+    expect(state.transcriptLines).toHaveLength(6);
+    expect(container.querySelectorAll('.ktalk-msg')).toHaveLength(6);
+
+    // Sticky-bottom contract: scrollTop === scrollHeight after re-render.
+    // 6 rows * 50px = 300. If anchor restore had run instead, scrollTop would
+    // stay near the previous value (150) — proving the wrong branch was taken.
+    expect(container.scrollHeight).toBe(300);
+    expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+
+  test('Paused-mode does not crash on empty transcriptLines', () => {
+    // Defensive contract: the empty-state early-return at the top of
+    // updateTranscriptUI must remain reachable even when captureScrollAnchor
+    // runs first (Paused mode). captureScrollAnchor must not throw or mutate
+    // anything that would break the early-return path.
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+
+    state.autoScrollEnabled = false;
+    state.transcriptLines = [];
+
+    // handleNewMeeting clears transcriptLines and calls updateTranscriptUI()
+    // — it is the public path that exercises updateTranscriptUI on an empty
+    // state without first pushing a line.
+    expect(() => handleNewMeeting({ meeting_id: 'meeting-empty' })).not.toThrow();
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    expect(container).not.toBeNull();
+    expect(container.querySelector('.ktalk-transcript-empty')).not.toBeNull();
   });
 
   test('paused-mode preserves anchor across refine batch when bubble above grows', () => {
