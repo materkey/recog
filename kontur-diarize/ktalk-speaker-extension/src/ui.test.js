@@ -420,16 +420,33 @@ describe('updateTranscriptUI scroll anchor', () => {
   // always pick the first element (offsetTop === 0) and mask iteration bugs.
   const ROW_H = 50;
 
+  // jsdom does not compute layout, so offsetTop returns 0 for every element.
+  // Instead of patching each element after every render (which would race the
+  // synchronous innerHTML rewrite inside updateTranscriptUI), install a
+  // prototype-level getter that derives offsetTop from the element's index
+  // among its parent's `.ktalk-msg` children. Any element subsequently
+  // rendered into the container — even by a later innerHTML rewrite — gets
+  // the same idx*ROW_H layout automatically. offsetTop lives on
+  // HTMLElement.prototype in jsdom (Element.prototype does not own it), so we
+  // patch HTMLElement directly.
   function mockOffsets(container) {
-    const msgs = container.querySelectorAll('.ktalk-msg');
-    msgs.forEach((el, idx) => {
-      Object.defineProperty(el, 'offsetTop', {
-        get: () => idx * ROW_H,
+    if (!HTMLElement.prototype.__ktalkOffsetTopMocked) {
+      Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
         configurable: true,
+        get() {
+          const parent = this.parentNode;
+          if (!parent || !this.classList || !this.classList.contains('ktalk-msg')) return 0;
+          const siblings = parent.querySelectorAll(':scope > .ktalk-msg');
+          for (let i = 0; i < siblings.length; i++) {
+            if (siblings[i] === this) return i * ROW_H;
+          }
+          return 0;
+        },
       });
-    });
+      HTMLElement.prototype.__ktalkOffsetTopMocked = true;
+    }
     Object.defineProperty(container, 'scrollHeight', {
-      get: () => msgs.length * ROW_H,
+      get: () => container.querySelectorAll(':scope > .ktalk-msg').length * ROW_H,
       configurable: true,
     });
     Object.defineProperty(container, 'clientHeight', {

@@ -198,12 +198,12 @@ if (container) {
 **Files:**
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.js`
 
-- [ ] Реализовать `captureScrollAnchor` и `restoreScrollAnchor` в `src/ui.js` рядом с `isNearBottom` (≈ 2315). **Приватные функции** (без `export`) в стиле `isNearBottom`/`toggleAutoFollow`. Снабдить JSDoc-блоками (см. Technical Details).
-- [ ] Использовать `CSS.escape(anchor.segmentId)` напрямую (не вводить `cssEscapeAttr` helper — `CSS.escape` доступен в MV3).
-- [ ] В `src/ui.js:2285` изменить `.map(line => {` на `.map((line, i) => {`.
-- [ ] В шаблоне `.ktalk-msg` (строка 2301) **добавить** `data-line-index="${i}"` рядом с `data-ts` — `data-ts` НЕ удаляем (используется в `scrollToAnchorTimestamp`, `ui.js:2545`).
-- [ ] В `updateTranscriptUI`, после `if (!container) return;`, добавить `const anchor = captureScrollAnchor(container);`.
-- [ ] Заменить хвост `if (shouldAutoScroll) { container.scrollTop = container.scrollHeight; }` на:
+- [x] Реализовать `captureScrollAnchor` и `restoreScrollAnchor` в `src/ui.js` рядом с `isNearBottom` (≈ 2315). **Приватные функции** (без `export`) в стиле `isNearBottom`/`toggleAutoFollow`. Снабдить JSDoc-блоками (см. Technical Details).
+- [x] Использовать `CSS.escape(anchor.segmentId)` напрямую (не вводить `cssEscapeAttr` helper — `CSS.escape` доступен в MV3). ➕ jsdom не имеет `CSS.escape` — добавлен polyfill в `test-setup.js`.
+- [x] В `src/ui.js:2285` изменить `.map(line => {` на `.map((line, i) => {`.
+- [x] В шаблоне `.ktalk-msg` (строка 2301) **добавить** `data-line-index="${i}"` рядом с `data-ts` — `data-ts` НЕ удаляем (используется в `scrollToAnchorTimestamp`, `ui.js:2545`).
+- [x] В `updateTranscriptUI`, после `if (!container) return;`, добавить `const anchor = captureScrollAnchor(container);`.
+- [x] Заменить хвост `if (shouldAutoScroll) { container.scrollTop = container.scrollHeight; }` на:
   ```js
   if (shouldAutoScroll) {
     container.scrollTop = container.scrollHeight;
@@ -211,7 +211,7 @@ if (container) {
     restoreScrollAnchor(container, anchor);
   }
   ```
-- [ ] Прогнать `npm test` — тест из Task 1 зелёный, существующие тесты (`handleTranscriptRefine` describe и т.д.) не сломались.
+- [x] Прогнать `npm test` — тест из Task 1 зелёный, существующие тесты (`handleTranscriptRefine` describe и т.д.) не сломались. ➕ `mockOffsets` в `ui.test.js` патчился per-element, но новые элементы после `innerHTML` rewrite моков не получали; заменён на prototype-level getter `HTMLElement.prototype.offsetTop` (idx*ROW_H по `:scope > .ktalk-msg`), чтобы любой свежий бабл получал layout автоматически. Pre-existing vas3k test failures (`vas3k path rewrites` и `refine updates continuation child segment_id on vas3k`) не связаны с этим change.
 
 ### Task 3: TDD — `updateTranscriptUI` paused-mode line-index fallback (segment_id=0)
 
