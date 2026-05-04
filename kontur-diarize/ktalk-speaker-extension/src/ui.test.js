@@ -551,4 +551,106 @@ describe('updateTranscriptUI scroll anchor', () => {
     // (which is the inserted "NewSpeaker" row at offsetTop=0).
     expect(anchorAfter.offsetTop).toBeGreaterThan(0);
   });
+
+  test('paused-mode falls back to data-line-index when segment_id=0 (history rows)', () => {
+    // History rows / retroactive correction emulation: backend frames carry
+    // no valid segment_id (or sid=0 sentinel). The renderer omits
+    // `data-segment-id` for these rows, so captureScrollAnchor must fall back
+    // to the per-render-stable `data-line-index` attribute. This test fixes
+    // that contract: with no segment-id available, the line-index path is the
+    // only thing keeping scrollTop from snapping back to 0 on innerHTML
+    // rewrite (the original Paused-mode bug).
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+
+    // Seed 5 lines with segment_id=0. handleTranscript coerces missing/zero
+    // ids to sid=0; the template only emits `data-segment-id` when sid > 0,
+    // so these rows render WITHOUT that attribute (verified below).
+    // Distinct source_ids and is_continuation=false prevent the
+    // continuation-merge predicate from collapsing rows.
+    for (let i = 0; i < 5; i++) {
+      handleTranscript({
+        speaker: `History${i}`,
+        text: `history line ${i}`,
+        timestamp: `09:30:0${i}`,
+        is_continuation: false,
+        segment_id: 0,
+        source_id: `hist-${i}`,
+      });
+    }
+    expect(state.transcriptLines).toHaveLength(5);
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    const msgsBefore = container.querySelectorAll('.ktalk-msg');
+    expect(msgsBefore).toHaveLength(5);
+
+    // Defence assertion: this test setup correctly emulates segment_id=0
+    // history rows. If any row leaks `data-segment-id`, the segment-id
+    // branch of restoreScrollAnchor would handle the lookup and the
+    // line-index fallback would not be exercised — masking bugs in that
+    // branch.
+    for (const el of msgsBefore) {
+      expect(el.hasAttribute('data-segment-id')).toBe(false);
+    }
+
+    // Switch to Paused mode and seed scrollTop in the middle. Same offset
+    // scheme as the segment_id-present test: idx*50 → [0, 50, 100, 150, 200].
+    // top - 1 = 119 → first offsetTop >= 119 is idx=3 (offsetTop=150,
+    // data-line-index="3"). Anchor key falls through to lineIndex=3.
+    state.autoScrollEnabled = false;
+    mockOffsets(container);
+    container.scrollTop = 120;
+
+    const anchorBefore = container.querySelector('.ktalk-msg[data-line-index="3"]');
+    expect(anchorBefore).not.toBeNull();
+    expect(anchorBefore.offsetTop).toBe(150);
+
+    // Trigger a re-render. Unshift a new line and drive updateTranscriptUI
+    // via a continuation handleTranscript call (matches Task 1 pattern).
+    state.transcriptLines.unshift({
+      speaker: 'NewHistory',
+      text: 'new history',
+      timestamp: '09:29:59',
+      time: '09:29:59',
+      segment_id: 0,
+      source_id: 'hist-new',
+      segment_ids: [],
+      segment_texts: {},
+      is_local: false,
+      uncertain: false,
+      uncertain_reason: '',
+      createdAt: Date.now(),
+    });
+
+    handleTranscript({
+      speaker: 'NewHistory',
+      text: '',
+      timestamp: '09:29:59',
+      is_continuation: true,
+      segment_id: 0,
+      source_id: 'hist-new',
+    });
+    // Re-mock scrollHeight/clientHeight for the post-rewrite container.
+    // offsetTop is governed by the prototype getter (idx*50), so freshly
+    // created `.ktalk-msg` elements pick up the layout automatically.
+    mockOffsets(container);
+
+    // Defence assertion: restoreScrollAnchor's line-index path must find an
+    // element at `[data-line-index="3"]` after the rewrite. Without
+    // `data-line-index` rendered into the template (Task 2 change), the
+    // querySelector would return null and restoreScrollAnchor would fall
+    // through to the anchor.top branch — coincidentally giving 120 too,
+    // but bypassing the formula path this test claims to exercise.
+    const anchorAfter = container.querySelector('.ktalk-msg[data-line-index="3"]');
+    expect(anchorAfter).not.toBeNull();
+    // Same idx*50 mock → the row at lineIndex=3 still sits at offsetTop=150
+    // in the new layout. Formula applied: scrollTop = 120 + (150 - 150) = 120.
+    expect(anchorAfter.offsetTop).toBe(150);
+
+    // Bug check: without the line-index fallback, scrollTop would reset to 0
+    // (innerHTML rewrite). With the fallback, formula yields 120 — proving
+    // restoreScrollAnchor reached the line-index branch (segment-id branch
+    // was skipped because no row carries data-segment-id).
+    expect(container.scrollTop).not.toBe(0);
+    expect(Math.abs(container.scrollTop - 120)).toBeLessThanOrEqual(1);
+  });
 });
