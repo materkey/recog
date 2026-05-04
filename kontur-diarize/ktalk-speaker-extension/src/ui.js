@@ -2289,7 +2289,7 @@ function updateTranscriptUI() {
     return;
   }
 
-  container.innerHTML = state.transcriptLines.map((line, i) => {
+  container.innerHTML = state.transcriptLines.map(line => {
     const classes = [
       'ktalk-msg',
       line.is_local ? 'local' : 'remote',
@@ -2305,7 +2305,7 @@ function updateTranscriptUI() {
       ? ` data-segment-id="${line.segment_id}"`
       : '';
 
-    return `<div class="${classes}" data-ts="${escapeHtml(timeValue)}" data-line-index="${i}"${segmentIdAttr}>
+    return `<div class="${classes}" data-ts="${escapeHtml(timeValue)}"${segmentIdAttr}>
         <div class="ktalk-msg-header">
           <span class="ktalk-msg-speaker">${speakerDisplay}</span>
           <span class="ktalk-msg-time">${line.time}</span>
@@ -2328,23 +2328,9 @@ function isNearBottom(container) {
 }
 
 /**
- * Capture top-visible .ktalk-msg as scroll anchor for compensation across
- * `innerHTML = ...` rewrite in updateTranscriptUI (which resets scrollTop)
- * and across in-place refine in handleTranscriptRefine (which can grow
- * a bubble above the viewport and shift content below).
- *
- * Returns three states:
- *   - null              — Follow mode (autoScrollEnabled true); no compensation needed.
- *   - { top, segmentId: null, lineIndex: null, offsetTop: 0 } — Paused mode but
- *     no rows yet; restoreScrollAnchor will preserve scrollTop verbatim.
- *   - full anchor       — Paused with rows; restore via offsetTop diff.
- *
- * Anchor key fallback chain: data-segment-id (backend id) → data-line-index
- * (per-render-stable index) → best-effort scrollTop preserve. data-ts is
- * NOT used as a key — wall-clock seconds collide on back-to-back PCM chunks.
- *
- * `top - 1` tolerance: avoids picking the wrong row when scrollTop falls
- * exactly on a row boundary due to sub-pixel rounding.
+ * Capture top-visible .ktalk-msg in Paused mode as a scroll anchor; returns
+ * null in Follow mode or when no rows match (caller skips compensation).
+ * `top - 1` tolerance avoids picking the wrong row at sub-pixel boundaries.
  */
 function captureScrollAnchor(container) {
   if (!container || state.autoScrollEnabled) return null;
@@ -2354,41 +2340,24 @@ function captureScrollAnchor(container) {
   for (const el of msgs) {
     if (el.offsetTop >= top - 1) { anchorEl = el; break; }
   }
-  if (!anchorEl) return { top, segmentId: null, lineIndex: null, offsetTop: 0 };
+  if (!anchorEl) return null;
   const sidRaw = anchorEl.dataset.segmentId;
-  const sid = sidRaw && Number(sidRaw) > 0 ? sidRaw : null;
-  const idxRaw = anchorEl.dataset.lineIndex;
-  const idx = idxRaw !== undefined && idxRaw !== '' ? Number(idxRaw) : null;
   return {
     top,
-    segmentId: sid,
-    lineIndex: Number.isFinite(idx) ? idx : null,
+    segmentId: sidRaw && Number(sidRaw) > 0 ? sidRaw : null,
     offsetTop: anchorEl.offsetTop,
   };
 }
 
 /**
- * Restore scrollTop after DOM update by re-finding the anchor element and
- * compensating offsetTop drift. Falls back to anchor.top preservation when
- * the anchor element is gone (meeting_change, history reset, etc.) — this is
- * still better than the current bug, which yanks the user to scrollTop=0.
+ * Restore scrollTop after a DOM update by re-finding the anchor and applying
+ * offsetTop drift. Falls back to anchor.top when the anchor row is gone.
  */
 function restoreScrollAnchor(container, anchor) {
   if (!container || !anchor) return;
-  if (anchor.segmentId == null && anchor.lineIndex == null) {
-    container.scrollTop = anchor.top;
-    return;
-  }
   let el = null;
   if (anchor.segmentId != null) {
-    el = container.querySelector(
-      `.ktalk-msg[data-segment-id="${CSS.escape(anchor.segmentId)}"]`
-    );
-  }
-  if (!el && anchor.lineIndex != null) {
-    el = container.querySelector(
-      `.ktalk-msg[data-line-index="${anchor.lineIndex}"]`
-    );
+    el = container.querySelector(`.ktalk-msg[data-segment-id="${anchor.segmentId}"]`);
   }
   if (!el) {
     container.scrollTop = anchor.top;
