@@ -511,23 +511,23 @@ describe('updateTranscriptUI scroll anchor', () => {
     const container = document.querySelector('.ktalk-transcript-messages');
     expect(container.querySelectorAll('.ktalk-msg')).toHaveLength(5);
 
-    // Switch to Paused mode and seed scroll position in the middle of the
-    // list. With offsets [0, 50, 100, 150, 200] and scrollTop=120,
-    // top - 1 = 119 → first element with offsetTop >= 119 is idx=3
-    // (offsetTop=150, segment_id=4). Intentionally NOT the first element —
-    // degenerate offsetTop=0 fallback would pick idx=0.
+    // Switch to Paused mode and seed scroll position partway through the
+    // list. Offsets [0, 50, 100, 150, 200] and scrollTop=120: the row that
+    // contains the viewport top is the last row whose offsetTop ≤ 120, i.e.
+    // idx=2 (offsetTop=100, segment_id=3). The next row (idx=3, offsetTop=150)
+    // begins below the viewport top, so it is NOT the anchor.
     state.autoScrollEnabled = false;
     stampScrollMetrics(container, 250);
     container.scrollTop = 120;
     simulateChromeScrollReset(container);
 
-    const anchorBefore = container.querySelector('.ktalk-msg[data-segment-id="4"]');
+    const anchorBefore = container.querySelector('.ktalk-msg[data-segment-id="3"]');
     expect(anchorBefore).not.toBeNull();
-    expect(anchorBefore.offsetTop).toBe(150);
+    expect(anchorBefore.offsetTop).toBe(100);
 
     // Unshift NewSpeaker, then push another via continuation with a different
-    // source_id (forces push, not merge). After re-render, segment_id=4 row
-    // shifts from idx=3 to idx=4 → offsetTop 150 → 200, distinguishing the
+    // source_id (forces push, not merge). After re-render, segment_id=3 row
+    // shifts from idx=2 to idx=3 → offsetTop 100 → 150, distinguishing the
     // compensation math from a degenerate 0+0 case.
     state.transcriptLines.unshift({
       speaker: 'NewSpeaker',
@@ -553,12 +553,12 @@ describe('updateTranscriptUI scroll anchor', () => {
       source_id: 'pid-new',
     });
 
-    const anchorAfter = container.querySelector('.ktalk-msg[data-segment-id="4"]');
+    const anchorAfter = container.querySelector('.ktalk-msg[data-segment-id="3"]');
     expect(anchorAfter).not.toBeNull();
-    expect(anchorAfter.offsetTop).toBe(200);
+    expect(anchorAfter.offsetTop).toBe(150);
 
     // scrollTop = oldScrollTop + (newOffsetTop - oldOffsetTop)
-    //           = 120          + (200            - 150) = 170.
+    //           = 120          + (150            - 100) = 170.
     expect(Math.abs(container.scrollTop - 170)).toBeLessThanOrEqual(1);
     expect(anchorAfter.offsetTop).toBeGreaterThan(0);
   });
@@ -681,12 +681,15 @@ describe('updateTranscriptUI scroll anchor', () => {
     expect(Math.abs(container.scrollTop - 120)).toBeLessThanOrEqual(1);
   });
 
-  test('Paused-mode does not synthesize a position when scrolled past last row', () => {
-    // F6 coverage: when scrollTop exceeds every row's offsetTop, no element
-    // satisfies offsetTop >= scrollTop - 1 → captureScrollAnchor returns null
-    // and updateTranscriptUI does NOT call restoreScrollAnchor. Contract:
-    // no crash, helper genuinely does not engage. After Chrome reset zeroes
-    // scrollTop post-innerHTML, nothing re-applies a value, so it stays at 0.
+  test('Paused-mode anchors the last row when viewport sits inside the final bubble', () => {
+    // Scenario A: viewport top is past every row's offsetTop except the last.
+    // Offsets [0,50,100,150,200] and scrollTop=220 → the only row with
+    // offsetTop ≤ 221 from the end is idx=4 (offsetTop=200, segment_id=5).
+    // Push a fresh row: new row lands at idx=5, the anchor (sid=5) stays at
+    // idx=4 with offsetTop=200, so compensation = 220 + (200 - 200) = 220.
+    // Without the "anchor is last row when viewport is inside it" contract,
+    // captureScrollAnchor would return null and the Chrome reset would leave
+    // scrollTop at 0 after innerHTML rewrite.
     document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
     for (let i = 0; i < 5; i++) {
       handleTranscript({
@@ -702,7 +705,7 @@ describe('updateTranscriptUI scroll anchor', () => {
     const container = document.querySelector('.ktalk-transcript-messages');
     state.autoScrollEnabled = false;
     stampScrollMetrics(container, 250);
-    container.scrollTop = 9999;
+    container.scrollTop = 220;
     simulateChromeScrollReset(container);
 
     expect(() => handleTranscript({
@@ -714,9 +717,116 @@ describe('updateTranscriptUI scroll anchor', () => {
       source_id: 'pid-5',
     })).not.toThrow();
 
-    // Helper did not engage (captureScrollAnchor returned null because no
-    // anchor row matched). Chrome simulator already zeroed scrollTop.
-    expect(container.scrollTop).toBe(0);
+    // Helper engaged on the last row (sid=5, offsetTop=200 before and after).
+    // Compensation 220 + (200 - 200) = 220 — proves the anchor was found and
+    // restoreScrollAnchor wrote the value back after Chrome's reset.
+    expect(Math.abs(container.scrollTop - 220)).toBeLessThanOrEqual(1);
+  });
+
+  test('Paused-mode anchor follows the last row when it grows after refine', () => {
+    // Scenario A with growth: viewport sits inside the last bubble; a refine
+    // grows that same bubble, shifting its bottom edge but keeping its top
+    // (offsetTop) where it was. The point is that the helper picks the
+    // last row even though scrollTop > all offsetTops, and the compensation
+    // math walks correctly through restoreScrollAnchor. Here we induce the
+    // bubble to "grow" its own offsetTop on the second read (post-rewrite)
+    // to exercise the +(new - old) arithmetic explicitly.
+    state.autoScrollEnabled = false;
+    state.transcriptLines = [
+      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 21, segment_ids: [21], segment_texts: { 21: 'a' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 22, segment_ids: [22], segment_texts: { 22: 'b' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'C', text: 'c', time: '10:00:03', segment_id: 23, segment_ids: [23], segment_texts: { 23: 'c' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'D', text: 'd', time: '10:00:04', segment_id: 24, segment_ids: [24], segment_texts: { 24: 'd' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'E', text: 'e', time: '10:00:05', segment_id: 25, segment_ids: [25], segment_texts: { 25: 'e' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+    ];
+    document.body.innerHTML = `
+      <div class="ktalk-transcript-messages">
+        <div class="ktalk-msg remote" data-segment-id="21"><div class="ktalk-msg-text">a</div></div>
+        <div class="ktalk-msg remote" data-segment-id="22"><div class="ktalk-msg-text">b</div></div>
+        <div class="ktalk-msg remote" data-segment-id="23"><div class="ktalk-msg-text">c</div></div>
+        <div class="ktalk-msg remote" data-segment-id="24"><div class="ktalk-msg-text">d</div></div>
+        <div class="ktalk-msg remote" data-segment-id="25"><div class="ktalk-msg-text">e</div></div>
+      </div>
+    `;
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    // Offsets via prototype: [0,50,100,150,200]; scrollTop=220 lands inside
+    // the last bubble. The last row (sid=25) is the anchor.
+    const lastRow = container.querySelector('.ktalk-msg[data-segment-id="25"]');
+    let lastReadCount = 0;
+    Object.defineProperty(lastRow, 'offsetTop', {
+      configurable: true,
+      get() {
+        lastReadCount += 1;
+        // captureScrollAnchor reads offsetTop twice (once during the search
+        // walk, once when constructing the return) — both must see 200.
+        // restoreScrollAnchor reads it once after the in-place rewrite —
+        // that read returns the grown 250.
+        return lastReadCount <= 2 ? 200 : 250;
+      },
+    });
+
+    stampScrollMetrics(container, 260);
+    container.scrollTop = 220;
+
+    handleTranscriptRefine({
+      type: 'transcript_refine',
+      updates: [{ segment_id: 25, text: 'eeee гораздо длиннее' }],
+    });
+
+    // scrollTop = 220 + (250 - 200) = 270.
+    expect(Math.abs(container.scrollTop - 270)).toBeLessThanOrEqual(1);
+  });
+
+  test('Paused-mode anchor stays on the partially-visible top row when it is refined', () => {
+    // The viewport top is inside row idx=1 (offsetTop=50), not idx=2: scrollTop=70
+    // is between 50 and 100, so the row that contains the viewport top is idx=1
+    // (segment_id=12). That row gets refined; its own offsetTop is unchanged
+    // (only rows below shift down when it grows). Compensation = 70 + (50 - 50) = 70.
+    // Under the *old* "first row >= scrollTop" algorithm, anchor would be idx=2
+    // (offsetTop=100); if idx=2's offsetTop drifted down to 200 because idx=1
+    // grew, scrollTop would be set to 70 + (200 - 100) = 170 — moving the
+    // viewport even though the user was reading inside the unchanged top row.
+    state.autoScrollEnabled = false;
+    state.transcriptLines = [
+      { speaker: 'A', text: 'a', time: '10:00:01', segment_id: 11, segment_ids: [11], segment_texts: { 11: 'a' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'B', text: 'b', time: '10:00:02', segment_id: 12, segment_ids: [12], segment_texts: { 12: 'b' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'C', text: 'c', time: '10:00:03', segment_id: 13, segment_ids: [13], segment_texts: { 13: 'c' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'D', text: 'd', time: '10:00:04', segment_id: 14, segment_ids: [14], segment_texts: { 14: 'd' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+      { speaker: 'E', text: 'e', time: '10:00:05', segment_id: 15, segment_ids: [15], segment_texts: { 15: 'e' }, is_local: false, uncertain: false, uncertain_reason: '', createdAt: Date.now() },
+    ];
+    document.body.innerHTML = `
+      <div class="ktalk-transcript-messages">
+        <div class="ktalk-msg remote" data-segment-id="11"><div class="ktalk-msg-text">a</div></div>
+        <div class="ktalk-msg remote" data-segment-id="12"><div class="ktalk-msg-text">b</div></div>
+        <div class="ktalk-msg remote" data-segment-id="13"><div class="ktalk-msg-text">c</div></div>
+        <div class="ktalk-msg remote" data-segment-id="14"><div class="ktalk-msg-text">d</div></div>
+        <div class="ktalk-msg remote" data-segment-id="15"><div class="ktalk-msg-text">e</div></div>
+      </div>
+    `;
+
+    const container = document.querySelector('.ktalk-transcript-messages');
+    // Pin sid=12's offsetTop at 50 (its own top doesn't move when its bubble
+    // grows; only later rows shift down). The prototype mock computes idx*50
+    // for the others, so [0, 50, 100, 150, 200] — idx=1 (sid=12) is the
+    // anchor when scrollTop=70 (50 ≤ 70 < 100).
+    const topRow = container.querySelector('.ktalk-msg[data-segment-id="12"]');
+    Object.defineProperty(topRow, 'offsetTop', {
+      configurable: true,
+      get() { return 50; },
+    });
+
+    stampScrollMetrics(container, 250);
+    container.scrollTop = 70;
+
+    handleTranscriptRefine({
+      type: 'transcript_refine',
+      updates: [{ segment_id: 12, text: 'bbbb growing in place' }],
+    });
+
+    // Anchor is the partially-visible top row (idx=1, sid=12). Its own
+    // offsetTop did not change, so scrollTop stays at 70.
+    expect(Math.abs(container.scrollTop - 70)).toBeLessThanOrEqual(1);
   });
 
   test('Paused-mode preserves scrollTop when anchor row has no data-segment-id', () => {
