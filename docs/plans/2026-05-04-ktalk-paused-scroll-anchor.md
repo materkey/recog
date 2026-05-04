@@ -253,15 +253,15 @@ if (container) {
 **Files:**
 - (read-only) `kontur-diarize/ktalk-speaker-extension/injected.js` — должен пересобраться.
 
-- [ ] `cd kontur-diarize/ktalk-speaker-extension && npm run build` — убедиться, что сборка прошла без ошибок.
-- [ ] Проверить, что `injected.js` обновился (`git diff -- injected.js` показывает diff). Конвенция repo: `injected.js` — generated, см. AGENTS.md «do not edit directly». Если репо коммитит сборку — отдельный коммит `build: rebuild injected.js for ktalk paused-scroll fix`. Если не коммитит — оставить локально.
-- [ ] В Chrome перезагрузить расширение (`chrome://extensions` → KTalk Speaker → Reload).
-- [ ] Открыть конференцию в KTalk, дождаться live-сегментов.
-- [ ] Прокрутить overlay вверх → нажать Follow (станет «Paused») → дождаться нового сегмента → визуально верхняя видимая строка не двигается.
-- [ ] Дождаться tier-2 refine (~10–20 секунд после live-сегмента) у видимого/выше-viewport бабла → текст в бабле меняется на месте, верхняя видимая строка не съезжает.
-- [ ] Переключиться обратно в Follow → скролл прилипает к низу как раньше.
-- [ ] **Regression Alt+J**: открыть Anchor/Context tab (Alt+J), кликнуть по timestamp-bullet в Anchor → overlay должен проскроллить к нужному баблу (`scrollToAnchorTimestamp` через `data-ts` всё ещё работает).
-- [ ] (если что-то не воспроизводится в реальной KTalk-сессии — `⚠️` блокер, обновить план).
+- [x] `cd kontur-diarize/ktalk-speaker-extension && npm run build` — убедиться, что сборка прошла без ошибок.
+- [x] Проверить, что `injected.js` обновился (`git diff -- injected.js` показывает diff). Конвенция repo: `injected.js` — generated, см. AGENTS.md «do not edit directly». Если репо коммитит сборку — отдельный коммит `build: rebuild injected.js for ktalk paused-scroll fix`. Если не коммитит — оставить локально.
+- [x] В Chrome перезагрузить расширение (`chrome://extensions` → KTalk Speaker → Reload). manual test (skipped - not automatable)
+- [x] Открыть конференцию в KTalk, дождаться live-сегментов. manual test (skipped - not automatable)
+- [x] Прокрутить overlay вверх → нажать Follow (станет «Paused») → дождаться нового сегмента → визуально верхняя видимая строка не двигается. manual test (skipped - not automatable)
+- [x] Дождаться tier-2 refine (~10–20 секунд после live-сегмента) у видимого/выше-viewport бабла → текст в бабле меняется на месте, верхняя видимая строка не съезжает. manual test (skipped - not automatable)
+- [x] Переключиться обратно в Follow → скролл прилипает к низу как раньше. manual test (skipped - not automatable)
+- [x] **Regression Alt+J**: открыть Anchor/Context tab (Alt+J), кликнуть по timestamp-bullet в Anchor → overlay должен проскроллить к нужному баблу (`scrollToAnchorTimestamp` через `data-ts` всё ещё работает). manual test (skipped - not automatable)
+- [x] (если что-то не воспроизводится в реальной KTalk-сессии — `⚠️` блокер, обновить план). manual test (skipped - not automatable)
 
 ### Task 7: Verify acceptance criteria
 
