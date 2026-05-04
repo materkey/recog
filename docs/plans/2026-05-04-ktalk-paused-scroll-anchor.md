@@ -218,10 +218,10 @@ if (container) {
 **Files:**
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`
 
-- [ ] Добавить failing-тест: state с 5 строк, у всех `segment_id: 0` (имитирует history-rows и retroactive correction). `state.autoScrollEnabled = false`, scrollTop в середине. Те же `offsetTop`-моки (`idx * 50`), `scrollTop = 120`.
-- [ ] Проверить, что у `.ktalk-msg` НЕТ `data-segment-id` (проверка через `el.hasAttribute('data-segment-id') === false`).
-- [ ] Push новую строку, перерисовать. Assert: anchor найден через `data-line-index`, `container.scrollTop` пересчитан корректно (не 0, не initial).
-- [ ] Прогнать `npm test` — тест зелёный (line-index-fallback уже реализован в Task 2; этот тест валидирует ветку).
+- [x] Добавить failing-тест: state с 5 строк, у всех `segment_id: 0` (имитирует history-rows и retroactive correction). `state.autoScrollEnabled = false`, scrollTop в середине. Те же `offsetTop`-моки (`idx * 50`), `scrollTop = 120`.
+- [x] Проверить, что у `.ktalk-msg` НЕТ `data-segment-id` (проверка через `el.hasAttribute('data-segment-id') === false`).
+- [x] Push новую строку, перерисовать. Assert: anchor найден через `data-line-index`, `container.scrollTop` пересчитан корректно (не 0, не initial).
+- [x] Прогнать `npm test` — тест зелёный (line-index-fallback уже реализован в Task 2; этот тест валидирует ветку).
 
 ### Task 4: TDD — `handleTranscriptRefine` paused-mode multi-update batch with bubble growth
 
