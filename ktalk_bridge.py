@@ -1025,7 +1025,7 @@ class KTalkBridge:
     async def _call_codex_cli(
         self,
         prompt: str,
-        model: str = "gpt-5.4",
+        model: str = "gpt-5.5",
         task: str = "analysis",
     ) -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
@@ -1190,7 +1190,7 @@ class KTalkBridge:
 
             if model.startswith("codex"):
                 # Codex CLI (uses ChatGPT Pro subscription)
-                codex_model = model.split(":")[1] if ":" in model else "gpt-5.4"
+                codex_model = model.split(":")[1] if ":" in model else "gpt-5.5"
                 print(f"[KTalk Bridge] Using Codex CLI with model: {codex_model}", file=sys.stderr)
                 summary = await self._call_codex_cli(prompt, codex_model, task="summarize")
 
@@ -1346,7 +1346,7 @@ class KTalkBridge:
 
             if model.startswith("codex"):
                 # Codex CLI (uses ChatGPT Pro subscription)
-                codex_model = model.split(":")[1] if ":" in model else "gpt-5.4"
+                codex_model = model.split(":")[1] if ":" in model else "gpt-5.5"
                 print(f"[KTalk Bridge] Anchor using Codex CLI with model: {codex_model}", file=sys.stderr)
                 raw_text = await self._call_codex_cli(prompt, codex_model, task="anchor")
 
