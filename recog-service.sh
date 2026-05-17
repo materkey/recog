@@ -30,6 +30,13 @@ FRONTEND_PLIST_NAME="com.recog.frontend"
 FRONTEND_PLIST_SRC="$SCRIPT_DIR/$FRONTEND_PLIST_NAME.plist"
 FRONTEND_PLIST_DST="$HOME/Library/LaunchAgents/$FRONTEND_PLIST_NAME.plist"
 
+# Copilot channel daemon (recog.copilot_channel: MCP HTTP <-> bridge WS).
+# Without this Claude Code receives no notifications/claude/channel events
+# (transcript_tick / copilot_user_message), so the in-meeting Copilot is dead.
+COPILOT_PLIST_NAME="com.recog.copilot-channel"
+COPILOT_PLIST_SRC="$SCRIPT_DIR/$COPILOT_PLIST_NAME.plist"
+COPILOT_PLIST_DST="$HOME/Library/LaunchAgents/$COPILOT_PLIST_NAME.plist"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -43,6 +50,22 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 ensure_logs_dir() {
     mkdir -p "$LOG_DIR"
+}
+
+# Probe the copilot channel MCP daemon with a real `initialize` call.
+# Returns 0 if the server responds within 1s, non-zero otherwise.
+probe_copilot_daemon() {
+    curl -sS --max-time 1 -X POST http://127.0.0.1:8767/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"recog-service","version":"0"}}}' \
+        > /dev/null 2>&1
+}
+
+tail_log() {
+    local f="$LOG_DIR/$1"
+    [ -f "$f" ] || error "Log file not found: $f"
+    tail -f "$f"
 }
 
 install_service() {
@@ -97,6 +120,18 @@ stop_service() {
     launchctl unload "$dst" 2>/dev/null || true
 }
 
+# Stop, settle, then start one service. The 1 s gap matters: launchctl
+# unload returns before launchd reaps the process, and a back-to-back
+# load can race the still-bound port / log fd.
+restart_one() {
+    local name="$1" src="$2" dst="$3" label="$4" tail="${5-}"
+    info "Restarting $label..."
+    stop_service "$name" "$dst"
+    sleep 1
+    start_service "$name" "$src" "$dst"
+    info "$label restarted.${tail:+ $tail}"
+}
+
 check_service_status() {
     local name="$1"
     local dst="$2"
@@ -129,6 +164,7 @@ cmd_install() {
 
     install_service "live transcription" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
     install_service "frontend" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
+    install_service "copilot channel" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST"
 
     info "Services installed. Use './recog-service.sh start' to start them."
     info "Logs will be written to: $LOG_DIR/"
@@ -139,6 +175,7 @@ cmd_uninstall() {
 
     uninstall_service "live transcription" "$LIVE_PLIST_DST"
     uninstall_service "frontend" "$FRONTEND_PLIST_DST"
+    uninstall_service "copilot channel" "$COPILOT_PLIST_DST"
 
     info "Services uninstalled."
 }
@@ -149,6 +186,7 @@ cmd_start() {
 
     start_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
     start_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
+    start_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST"
 
     sleep 1
     cmd_status
@@ -162,6 +200,7 @@ cmd_stop() {
 
     stop_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST"
     stop_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST"
+    stop_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_DST"
 
     info "Services stopped."
 }
@@ -173,19 +212,18 @@ cmd_restart() {
 }
 
 cmd_restart_web() {
-    info "Restarting frontend service..."
-    stop_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST"
-    sleep 1
-    start_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
-    info "Frontend restarted. Available at: http://127.0.0.1:9080"
+    restart_one "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST" \
+        "frontend service" "Available at: http://127.0.0.1:9080"
 }
 
 cmd_restart_live() {
-    info "Restarting live transcription service..."
-    stop_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST"
-    sleep 1
-    start_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
-    info "Live transcription restarted."
+    restart_one "$LIVE_PLIST_NAME" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST" \
+        "live transcription"
+}
+
+cmd_restart_copilot() {
+    restart_one "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST" \
+        "copilot channel daemon" "(http://127.0.0.1:8767/mcp)"
 }
 
 cmd_status() {
@@ -195,10 +233,12 @@ cmd_status() {
     check_service_status "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST" "Live Transcription"
     echo ""
     check_service_status "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST" "Frontend"
+    echo ""
+    check_service_status "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_DST" "Copilot Channel"
 
     echo ""
     echo "=== Logs ==="
-    for log in live.stderr.log live.stdout.log frontend.stderr.log frontend.stdout.log; do
+    for log in live.stderr.log live.stdout.log frontend.stderr.log frontend.stdout.log copilot-channel.stderr.log copilot-channel.stdout.log; do
         if [ -f "$LOG_DIR/$log" ]; then
             SIZE=$(du -h "$LOG_DIR/$log" | cut -f1)
             LINES=$(wc -l < "$LOG_DIR/$log" | tr -d ' ')
@@ -215,29 +255,10 @@ cmd_status() {
     fi
 }
 
-cmd_logs() {
-    LOG_FILE="$LOG_DIR/live.stderr.log"
-    if [ ! -f "$LOG_FILE" ]; then
-        error "Log file not found: $LOG_FILE"
-    fi
-    tail -f "$LOG_FILE"
-}
-
-cmd_logs_out() {
-    LOG_FILE="$LOG_DIR/live.stdout.log"
-    if [ ! -f "$LOG_FILE" ]; then
-        error "Log file not found: $LOG_FILE"
-    fi
-    tail -f "$LOG_FILE"
-}
-
-cmd_logs_web() {
-    LOG_FILE="$LOG_DIR/frontend.stderr.log"
-    if [ ! -f "$LOG_FILE" ]; then
-        error "Log file not found: $LOG_FILE"
-    fi
-    tail -f "$LOG_FILE"
-}
+cmd_logs()         { tail_log live.stderr.log; }
+cmd_logs_out()     { tail_log live.stdout.log; }
+cmd_logs_web()     { tail_log frontend.stderr.log; }
+cmd_logs_copilot() { tail_log copilot-channel.stderr.log; }
 
 cmd_debug() {
     echo "=== Recog Debug Status ==="
@@ -264,23 +285,34 @@ cmd_claude() {
     # Two preconditions it cannot self-fix:
     #   1. The copilot_channel daemon must be running on :8767 — Claude
     #      Code spawns the channel handler from --channels but cannot start
-    #      our HTTP MCP server itself.
+    #      our HTTP MCP server itself. Normally launchd keeps it up via
+    #      `com.recog.copilot-channel` (installed by `./recog-service.sh
+    #      install`); we still probe the port here as a sanity check, and
+    #      try to (re)load the plist if the probe fails.
     #   2. CWD must be the recog project dir so Claude reads the
     #      project-scope mcpServers entry (`copilot` → http://127.0.0.1:8767/mcp).
     #      Launching from $HOME silently produces "no MCP server configured
     #      with that name" because the project entry is invisible there.
-    if ! curl -sS --max-time 1 -X POST http://127.0.0.1:8767/mcp \
-        -H "Content-Type: application/json" \
-        -H "Accept: application/json, text/event-stream" \
-        -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"recog-service","version":"0"}}}' \
-        > /dev/null 2>&1; then
+    if probe_copilot_daemon; then
+        info "Copilot channel daemon is up at http://127.0.0.1:8767/mcp"
+    elif [ ! -f "$COPILOT_PLIST_SRC" ]; then
         warn "Copilot channel daemon is NOT responding at http://127.0.0.1:8767/mcp"
-        warn "Start it in a separate terminal first:"
+        warn "Plist not found at $COPILOT_PLIST_SRC — start manually:"
         warn "  cd $SCRIPT_DIR && ./venv-gigaam/bin/python -m recog.copilot_channel"
         warn ""
         warn "Launching Claude Code anyway — channel push will be a no-op until the daemon comes up."
     else
-        info "Copilot channel daemon is up at http://127.0.0.1:8767/mcp"
+        warn "Copilot channel daemon is NOT responding at http://127.0.0.1:8767/mcp"
+        warn "Attempting to (re)load $COPILOT_PLIST_NAME via launchd..."
+        start_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST"
+        sleep 1
+        if probe_copilot_daemon; then
+            info "Copilot channel daemon is up at http://127.0.0.1:8767/mcp"
+        else
+            warn "Daemon still not responding. Check logs:"
+            warn "  ./recog-service.sh logs-copilot"
+            warn "Launching Claude Code anyway — channel push will be a no-op until the daemon comes up."
+        fi
     fi
 
     if ! command -v claude > /dev/null 2>&1; then
@@ -379,42 +411,46 @@ cmd_help() {
     echo "Usage: $0 <command>"
     echo ""
     echo "Commands:"
-    echo "  install      - Install and enable both services"
-    echo "  uninstall    - Stop and remove both services"
-    echo "  start        - Start both services"
-    echo "  stop         - Stop both services"
-    echo "  restart      - Restart both services"
-    echo "  restart-web  - Restart frontend only"
-    echo "  restart-live - Restart live transcription only"
-    echo "  status       - Show status of both services"
-    echo "  debug        - Show debug info (participants, speaker, mics)"
-    echo "  logs         - Tail live stderr logs"
-    echo "  logs-out     - Tail live stdout logs (transcripts)"
-    echo "  logs-web     - Tail frontend logs"
-    echo "  claude       - Launch Claude Code wired to the Copilot channel"
+    echo "  install         - Install and enable all services"
+    echo "  uninstall       - Stop and remove all services"
+    echo "  start           - Start all services"
+    echo "  stop            - Stop all services"
+    echo "  restart         - Restart all services"
+    echo "  restart-web     - Restart frontend only"
+    echo "  restart-live    - Restart live transcription only"
+    echo "  restart-copilot - Restart copilot channel daemon only"
+    echo "  status          - Show status of all services"
+    echo "  debug           - Show debug info (participants, speaker, mics)"
+    echo "  logs            - Tail live stderr logs"
+    echo "  logs-out        - Tail live stdout logs (transcripts)"
+    echo "  logs-web        - Tail frontend logs"
+    echo "  logs-copilot    - Tail copilot channel daemon logs"
+    echo "  claude          - Launch Claude Code wired to the Copilot channel"
     echo ""
     echo "Services:"
     echo "  - Live transcription: mp4_notes.py live --screencapture --ktalk"
     echo "  - Frontend: http://127.0.0.1:9080"
-    echo "  - Copilot channel daemon: ./venv-gigaam/bin/python -m recog.copilot_channel"
+    echo "  - Copilot channel daemon: python -m recog.copilot_channel (http://127.0.0.1:8767/mcp)"
 }
 
 # Main
 case "${1:-}" in
-    install)      cmd_install ;;
-    uninstall)    cmd_uninstall ;;
-    start)        cmd_start ;;
-    stop)         cmd_stop ;;
-    restart)      cmd_restart ;;
-    restart-web)  cmd_restart_web ;;
-    restart-live) cmd_restart_live ;;
-    status)       cmd_status ;;
-    debug)        cmd_debug ;;
-    logs)         cmd_logs ;;
-    logs-out)     cmd_logs_out ;;
-    logs-web)     cmd_logs_web ;;
-    claude)       cmd_claude ;;
-    help|--help|-h) cmd_help ;;
+    install)         cmd_install ;;
+    uninstall)       cmd_uninstall ;;
+    start)           cmd_start ;;
+    stop)            cmd_stop ;;
+    restart)         cmd_restart ;;
+    restart-web)     cmd_restart_web ;;
+    restart-live)    cmd_restart_live ;;
+    restart-copilot) cmd_restart_copilot ;;
+    status)          cmd_status ;;
+    debug)           cmd_debug ;;
+    logs)            cmd_logs ;;
+    logs-out)        cmd_logs_out ;;
+    logs-web)        cmd_logs_web ;;
+    logs-copilot)    cmd_logs_copilot ;;
+    claude)          cmd_claude ;;
+    help|--help|-h)  cmd_help ;;
     *)
         cmd_help
         exit 1
