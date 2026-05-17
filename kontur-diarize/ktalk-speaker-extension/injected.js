@@ -4138,7 +4138,7 @@ function createVas3kSummaryModal() {
     </div>
     <div class="jitsi-summary-footer">
       <select class="jitsi-model-selector">
-        <option value="codex">Codex (GPT-5.4)</option>
+        <option value="codex">Codex (GPT-5.5)</option>
         <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
         <option value="codex:gpt-5.3-codex-spark">Codex Spark</option>
         <option value="claude:opus">Claude Opus</option>
@@ -6925,7 +6925,7 @@ function setupSummaryMenu(container) {
 
 function getAnchorModelOptions() {
   return [
-    { value: 'codex', label: 'Codex (GPT-5.4)' },
+    { value: 'codex', label: 'Codex (GPT-5.5)' },
     { value: 'codex:gpt-4.1', label: 'Codex (GPT-4.1)' },
     { value: 'codex:gpt-5.3-codex-spark', label: 'Codex Spark' },
     { value: 'claude:opus', label: 'Claude Opus' },

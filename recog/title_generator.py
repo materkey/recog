@@ -33,7 +33,7 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
 
     Args:
         transcript: Meeting transcript text
-        model: Codex model to use (default from CODEX_MODEL env or gpt-5.4)
+        model: Codex model to use (default from CODEX_MODEL env or gpt-5.5)
 
     Returns:
         Generated title or None if generation failed
@@ -45,7 +45,7 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
     if len(transcript) > 2000:
         transcript = transcript[:2000] + "\n..."
 
-    model = model or os.getenv("CODEX_MODEL", "gpt-5.4")
+    model = model or os.getenv("CODEX_MODEL", "gpt-5.5")
     prompt = mark_ccs_automation(TITLE_PROMPT.format(transcript=transcript), "title")
     cmd = build_codex_exec_command(resolve_cli("codex"), model)
 
