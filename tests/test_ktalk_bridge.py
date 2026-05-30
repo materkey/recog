@@ -476,6 +476,60 @@ async def test_pcm_chunk_empty_payload_rejected_at_ingress(capsys):
 
 
 @pytest.mark.asyncio
+async def test_pcm_chunk_cross_meeting_dropped(capsys):
+    """
+    given: bridge with active meeting "current-meeting-id" and a callback
+    when: _process_message receives a pcm_chunk frame whose `meeting_id`
+          belongs to a different meeting (sibling KTalk tab still streaming
+          its own participants while this tab joined a newer meeting)
+    then: the chunk is dropped before reaching the callback so audio from
+          the sibling tab does not get written into the current meeting's
+          transcript.jsonl
+    """
+    bridge = KTalkBridge()
+    storage = _attach_meeting_storage(bridge)
+    storage.get_current_meeting_id = Mock(return_value="current-meeting-id")
+    received: list[PcmChunk] = []
+    bridge.set_pcm_chunk_callback(received.append)
+
+    cross_message = _make_pcm_chunk_message(pid="pid-sibling")
+    cross_message["meeting_id"] = "sibling-tab-meeting-id"
+    await bridge._process_message(cross_message)
+
+    assert received == []
+    err_out = capsys.readouterr().err
+    assert "cross-meeting" in err_out
+
+    # Frame with matching meeting_id still passes.
+    own_message = _make_pcm_chunk_message(pid="pid-self")
+    own_message["meeting_id"] = "current-meeting-id"
+    await bridge._process_message(own_message)
+    assert len(received) == 1
+    assert received[0].pid == "pid-self"
+
+
+@pytest.mark.asyncio
+async def test_pcm_chunk_without_meeting_id_passes_through():
+    """
+    given: bridge with active meeting and a callback
+    when: _process_message receives a pcm_chunk frame WITHOUT a meeting_id
+          field (older extension build that hasn't been rebuilt yet)
+    then: the chunk passes through the cross-meeting guard (missing field
+          == no filter), preserving the pre-fix single-tab behaviour
+    """
+    bridge = KTalkBridge()
+    storage = _attach_meeting_storage(bridge)
+    storage.get_current_meeting_id = Mock(return_value="current-meeting-id")
+    received: list[PcmChunk] = []
+    bridge.set_pcm_chunk_callback(received.append)
+
+    legacy_message = _make_pcm_chunk_message()
+    assert "meeting_id" not in legacy_message
+    await bridge._process_message(legacy_message)
+    assert len(received) == 1
+
+
+@pytest.mark.asyncio
 async def test_pcm_chunk_unsupported_sample_rate_rejected(capsys):
     """
     given: bridge with pcm_chunk callback registered

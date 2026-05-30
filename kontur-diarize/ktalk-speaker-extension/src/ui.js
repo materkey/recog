@@ -2014,6 +2014,15 @@ export function handleNewMeeting(data) {
 }
 
 export function handleTranscript(data) {
+  // Drop segments produced from a sibling tab's audio when two KTalk
+  // tabs are open at the same time. Mirrors the cross-meeting guard in
+  // `handleTranscriptRefine`. Older bridge builds that don't tag the
+  // frame still pass through (missing field == no filter).
+  if (data && data.meeting_id && state.currentMeetingId
+      && data.meeting_id !== state.currentMeetingId) {
+    return;
+  }
+
   const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction, segment_id, source_id } = data;
 
   const sid = segment_id || 0;

@@ -415,6 +415,85 @@ describe('handleTranscriptRefine', () => {
   });
 });
 
+describe('handleTranscript cross-meeting filter', () => {
+  beforeEach(() => {
+    document.body.innerHTML = `<div class="ktalk-transcript-messages"></div>`;
+    state.transcriptLines = [];
+    state.bioRead = { enabled: false };
+    state.currentMeetingId = null;
+    isJitsiPlatformMock.mockReturnValue(false);
+  });
+
+  test('drops live segment when meeting_id differs from tab currentMeetingId', () => {
+    // Tab is in meeting B. A sibling tab in meeting A produced this segment
+    // and the bridge fanned it out to all extensions; without the meeting_id
+    // guard it would appear in this tab's overlay as a duplicate.
+    state.currentMeetingId = 'meeting-B';
+
+    handleTranscript({
+      type: 'transcript',
+      meeting_id: 'meeting-A',
+      speaker: 'Alice',
+      text: 'sibling-tab segment',
+      timestamp: '10:00:01',
+      segment_id: 5,
+    });
+
+    expect(state.transcriptLines).toHaveLength(0);
+  });
+
+  test('accepts live segment when meeting_id matches', () => {
+    state.currentMeetingId = 'meeting-B';
+
+    handleTranscript({
+      type: 'transcript',
+      meeting_id: 'meeting-B',
+      speaker: 'Bob',
+      text: 'own-meeting segment',
+      timestamp: '10:00:02',
+      segment_id: 6,
+    });
+
+    expect(state.transcriptLines).toHaveLength(1);
+    expect(state.transcriptLines[0].text).toBe('own-meeting segment');
+  });
+
+  test('passes through legacy frames without meeting_id', () => {
+    // Older bridge build doesn't tag the frame. Don't break the existing
+    // single-tab flow — only newer bridges enforce the boundary.
+    state.currentMeetingId = 'meeting-B';
+
+    handleTranscript({
+      type: 'transcript',
+      speaker: 'Carol',
+      text: 'legacy frame',
+      timestamp: '10:00:03',
+      segment_id: 7,
+    });
+
+    expect(state.transcriptLines).toHaveLength(1);
+    expect(state.transcriptLines[0].text).toBe('legacy frame');
+  });
+
+  test('passes through when tab has no currentMeetingId yet', () => {
+    // The very first segment can race the meeting_join round-trip — if
+    // currentMeetingId hasn't been seeded yet, the existing pre-fix
+    // behaviour was to accept the segment. Keep that.
+    state.currentMeetingId = null;
+
+    handleTranscript({
+      type: 'transcript',
+      meeting_id: 'meeting-A',
+      speaker: 'Dora',
+      text: 'pre-join segment',
+      timestamp: '10:00:04',
+      segment_id: 8,
+    });
+
+    expect(state.transcriptLines).toHaveLength(1);
+  });
+});
+
 describe('updateTranscriptUI scroll anchor', () => {
   // jsdom does not compute layout, so offsetTop returns 0 for every element by
   // default. We install a prototype-level getter that derives offsetTop from
