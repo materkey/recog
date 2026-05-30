@@ -33,6 +33,11 @@ export function sendWsConnectionStatus(connected) {
 }
 
 export function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, pcmBase64) {
+  // Tag every chunk with the tab's current meeting_id so the bridge can
+  // drop sibling-tab PCM when two KTalk tabs are open at once. Without
+  // this, audio from an older tab keeps flowing into whichever meeting
+  // joined the bridge most recently and contaminates its transcript.jsonl.
+  const meetingId = state.currentMeetingId || null;
   sendWsMessage({
     type: 'pcm_chunk',
     pid: pid,
@@ -43,6 +48,7 @@ export function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, p
     chunk_end_ms: endMs,
     sample_rate: 16000,
     pcm_base64: pcmBase64,
+    meeting_id: meetingId,
   });
 }
 

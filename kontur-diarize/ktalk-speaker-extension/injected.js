@@ -893,6 +893,7 @@ function init() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   handleMeetingJoinRejected: () => (/* binding */ handleMeetingJoinRejected),
 /* harmony export */   sendMeetingJoin: () => (/* binding */ sendMeetingJoin),
 /* harmony export */   sendMeetingLeave: () => (/* binding */ sendMeetingLeave),
 /* harmony export */   startMeetingCheck: () => (/* binding */ startMeetingCheck)
@@ -937,6 +938,20 @@ function sendMeetingJoin() {
     console.log(`[${platform} Transcript] Sent meeting_join:`, url);
     sendDelayedTitle();
   }
+}
+
+function handleMeetingJoinRejected(data) {
+  // Bridge сообщает, что активная встреча уже занята другим табом.
+  // Очищаем local-кеш `currentMeetingUrl`, чтобы startMeetingCheck() через
+  // ~2 с повторил sendMeetingJoin (когда owner-tab может уже закрыться),
+  // и не сетим `state.currentMeetingId` — handleTranscript filter тогда
+  // дропнет броадкасты соседнего таба и не загрязнит нашу UI стеной.
+  const activeId = data && data.active_meeting_id ? data.active_meeting_id : 'unknown';
+  console.log(
+    `[KTalk Transcript] meeting_join rejected by bridge — another tab owns meeting ${activeId}. Will retry on next poll.`
+  );
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl = null;
+  titleSentForUrl = null;
 }
 
 function sendMeetingLeave(reason = 'user_left') {
@@ -6502,6 +6517,15 @@ function handleNewMeeting(data) {
 }
 
 function handleTranscript(data) {
+  // Drop segments produced from a sibling tab's audio when two KTalk
+  // tabs are open at the same time. Mirrors the cross-meeting guard in
+  // `handleTranscriptRefine`. Older bridge builds that don't tag the
+  // frame still pass through (missing field == no filter).
+  if (data && data.meeting_id && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId
+      && data.meeting_id !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId) {
+    return;
+  }
+
   const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction, segment_id, source_id } = data;
 
   const sid = segment_id || 0;
@@ -7654,11 +7678,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 /* harmony import */ var _ui_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./ui.js */ "./src/ui.js");
-/* harmony import */ var _ui_vas3k_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./ui-vas3k.js */ "./src/ui-vas3k.js");
-/* harmony import */ var _speaker_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./speaker.js */ "./src/speaker.js");
-/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
-/* harmony import */ var _meeting_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./meeting.js */ "./src/meeting.js");
+/* harmony import */ var _meeting_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./meeting.js */ "./src/meeting.js");
+/* harmony import */ var _ui_vas3k_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./ui-vas3k.js */ "./src/ui-vas3k.js");
+/* harmony import */ var _speaker_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./speaker.js */ "./src/speaker.js");
+/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
 /* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
+
 
 
 
@@ -7693,26 +7718,26 @@ function connectWebSocket() {
       if (adapter) {
         const conf = adapter.getConference();
         if (conf) {
-          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
-          const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getActiveSpeaker)(conf);
-          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendFilteredSpeakerUpdate)(activeSpeaker);
-          (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.sendMeetingJoin)();
+          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendParticipantsUpdate)(conf);
+          const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.getActiveSpeaker)(conf);
+          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendFilteredSpeakerUpdate)(activeSpeaker);
+          (0,_meeting_js__WEBPACK_IMPORTED_MODULE_2__.sendMeetingJoin)();
         }
       } else if (window.$conf) {
-        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(window.$conf);
-        const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getActiveSpeaker)(window.$conf);
-        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendFilteredSpeakerUpdate)(activeSpeaker);
-        (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.sendMeetingJoin)();
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendParticipantsUpdate)(window.$conf);
+        const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.getActiveSpeaker)(window.$conf);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendFilteredSpeakerUpdate)(activeSpeaker);
+        (0,_meeting_js__WEBPACK_IMPORTED_MODULE_2__.sendMeetingJoin)();
       }
 
-      (0,_meeting_js__WEBPACK_IMPORTED_MODULE_5__.startMeetingCheck)();
+      (0,_meeting_js__WEBPACK_IMPORTED_MODULE_2__.startMeetingCheck)();
 
       // Clock sync for accurate timestamp correlation
-      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
+      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_5__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
 
       // Re-sync clock every 30 seconds
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer = setInterval(() => {
-        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
+        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_5__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
       }, 30000);
     };
 
@@ -7759,7 +7784,7 @@ function connectWebSocket() {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleNewMeeting)(data);
         } else if (data.type === 'summarize_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleSummaryResponse)(data);
-          (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_2__.handleVas3kSummaryResponse)(data);
+          (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_3__.handleVas3kSummaryResponse)(data);
         } else if (data.type === 'anchor_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
         } else if (data.type === 'copilot_reply') {
@@ -7771,6 +7796,8 @@ function connectWebSocket() {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)(`Встреча началась${title}`);
         } else if (data.type === 'meeting_ended') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)('Встреча закончилась');
+        } else if (data.type === 'meeting_join_rejected') {
+          (0,_meeting_js__WEBPACK_IMPORTED_MODULE_2__.handleMeetingJoinRejected)(data);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);
@@ -7837,6 +7864,11 @@ function sendWsConnectionStatus(connected) {
 }
 
 function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, pcmBase64) {
+  // Tag every chunk with the tab's current meeting_id so the bridge can
+  // drop sibling-tab PCM when two KTalk tabs are open at once. Without
+  // this, audio from an older tab keeps flowing into whichever meeting
+  // joined the bridge most recently and contaminates its transcript.jsonl.
+  const meetingId = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId || null;
   sendWsMessage({
     type: 'pcm_chunk',
     pid: pid,
@@ -7847,6 +7879,7 @@ function sendWsPcmChunk(pid, speakerName, isLocal, seq, startMs, endMs, pcmBase6
     chunk_end_ms: endMs,
     sample_rate: 16000,
     pcm_base64: pcmBase64,
+    meeting_id: meetingId,
   });
 }
 

@@ -37,6 +37,20 @@ export function sendMeetingJoin() {
   }
 }
 
+export function handleMeetingJoinRejected(data) {
+  // Bridge сообщает, что активная встреча уже занята другим табом.
+  // Очищаем local-кеш `currentMeetingUrl`, чтобы startMeetingCheck() через
+  // ~2 с повторил sendMeetingJoin (когда owner-tab может уже закрыться),
+  // и не сетим `state.currentMeetingId` — handleTranscript filter тогда
+  // дропнет броадкасты соседнего таба и не загрязнит нашу UI стеной.
+  const activeId = data && data.active_meeting_id ? data.active_meeting_id : 'unknown';
+  console.log(
+    `[KTalk Transcript] meeting_join rejected by bridge — another tab owns meeting ${activeId}. Will retry on next poll.`
+  );
+  state.currentMeetingUrl = null;
+  titleSentForUrl = null;
+}
+
 export function sendMeetingLeave(reason = 'user_left') {
   if (state.currentMeetingUrl) {
     sendWsMessage({

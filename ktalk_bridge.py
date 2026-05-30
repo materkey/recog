@@ -364,6 +364,19 @@ class KTalkBridge:
         # extension (`pcm_transport_stats`). Kept separate from PerSpeakerIngest
         # stats because it describes browser graph / RTP health, not Python ASR.
         self._pcm_transport_stats: dict = {}
+        # Per-pid throttle for cross-meeting pcm_chunk drop logs. A sibling
+        # KTalk tab fires ~one chunk per speaker per 3 s, so logging every
+        # drop floods stderr — keyed by pid, value is the last log timestamp.
+        self._pcm_cross_meeting_drop_log_ts: Dict[str, float] = {}
+        # Extension WS that owns the currently active meeting. Used to
+        # reject `meeting_join` from a *second* simultaneously-open KTalk
+        # tab: there is exactly ONE audio capture pipeline + storage, so
+        # allowing a sibling tab to silently flip `current_meeting_id`
+        # leaves the original tab stranded — its `state.currentMeetingId`
+        # is now stale and `handleTranscript`'s meeting_id filter drops
+        # every new segment. Cleared when the owner WS disconnects or the
+        # owner sends `meeting_leave`.
+        self._meeting_owner_ws = None
 
         # Meeting storage для сохранения транскриптов
         self._meeting_storage: Optional['MeetingStorage'] = None
@@ -738,6 +751,15 @@ class KTalkBridge:
         предикате, чтобы chunks от разных источников не склеивались в один
         bubble (см. `2026-04-24-per-speaker-refine-bugs.md`, Bug 1).
         """
+        # Tag every live transcript with the storage's current meeting_id so
+        # a second extension tab (joined to a different meeting) can drop
+        # segments that belong to a sibling tab's meeting in `handleTranscript`.
+        # Mirrors the meeting_id field on `transcript_refine` / `transcript_history`.
+        current_meeting_id = (
+            self._meeting_storage.get_current_meeting_id()
+            if self._meeting_storage is not None
+            else None
+        )
         payload = {
             "type": "transcript",
             "speaker": speaker,
@@ -748,6 +770,7 @@ class KTalkBridge:
             "uncertain": uncertain,  # True = непонятно кто говорит
             "uncertain_reason": uncertain_reason,  # "local" = системный звук + локальный спикер, "mics_off" = все микрофоны выключены
             "correction": correction,  # True = retroactive correction of previously Unknown segment
+            "meeting_id": current_meeting_id,
         }
         if segment_id > 0:
             payload["segment_id"] = segment_id
@@ -974,19 +997,37 @@ class KTalkBridge:
                 entry["text"] = text
                 entry["refined"] = True
 
-    async def _send_transcript_history(self):
-        """Отправляет историю транскрипта текущей встречи всем подключённым клиентам."""
+    async def _send_transcript_history(self, websocket=None):
+        """Отправляет историю транскрипта текущей встречи.
+
+        Если передан `websocket` — отправляем только инициатору запроса
+        (например, табу, который только что присоединился через `meeting_join`).
+        Иначе — broadcast всем extension-клиентам.
+
+        Per-WS адресация принципиальна для случая двух параллельных KTalk-табов:
+        `handleTranscriptHistory` в extension'е перетирает `state.currentMeetingId`
+        полученным `meeting_id`, и broadcast при `meeting_join` из второго таба
+        утаскивает первый таб в чужую встречу, ломая клиентскую фильтрацию
+        `handleTranscript` / `handleTranscriptRefine`.
+        """
         if not self._meeting_storage:
             return
 
         segments = self._meeting_storage.get_current_transcript()
         meeting_id = self._meeting_storage.get_current_meeting_id()
 
-        await self._broadcast_message({
+        frame = {
             "type": "transcript_history",
             "meeting_id": meeting_id,
-            "segments": segments
-        })
+            "segments": segments,
+        }
+        if websocket is not None:
+            try:
+                await websocket.send(json.dumps(frame, ensure_ascii=False))
+            except Exception:
+                pass
+            return
+        await self._broadcast_message(frame)
 
     async def _broadcast_message(self, data: dict):
         """Отправляет сообщение всем подключённым клиентам."""
@@ -1533,6 +1574,13 @@ class KTalkBridge:
                 self._connected_clients.discard(websocket)
                 self._subscriber_clients.discard(websocket)
                 self._copilot_channel_clients.discard(websocket)
+                # Release meeting ownership if the owner WS just dropped —
+                # otherwise the rejection gate would permanently block every
+                # subsequent meeting_join from a fresh tab (the dead WS
+                # reference would still match nothing in _connected_clients
+                # but the comparison check happens before that read).
+                if websocket is self._meeting_owner_ws:
+                    self._meeting_owner_ws = None
                 no_extension_clients = not self._connected_clients
                 no_channel_clients_left = not self._copilot_channel_clients
             if was_copilot_channel:
@@ -1853,6 +1901,36 @@ class KTalkBridge:
             url = data.get("url")
             title = data.get("title")
             platform = data.get("platform", "ktalk")
+            # Single-meeting-at-a-time enforcement: if another extension WS
+            # already owns the active meeting and that WS is still alive,
+            # reject this join instead of silently flipping current_meeting_id.
+            # Without this gate the older tab is left with a stale
+            # state.currentMeetingId — its handleTranscript meeting_id
+            # filter then drops every new segment broadcast by the bridge.
+            # The audio pipeline + storage are singletons, so there is no
+            # honest way to transcribe two meetings in parallel; reject is
+            # the only consistent option.
+            if (self._meeting_storage and url
+                    and self._meeting_owner_ws is not None
+                    and self._meeting_owner_ws is not websocket
+                    and self._meeting_owner_ws in self._connected_clients
+                    and self._meeting_storage.current_meeting_path is not None):
+                owner_addr = getattr(self._meeting_owner_ws, 'remote_address', 'unknown')
+                print(
+                    f"[KTalk Bridge] Rejecting meeting_join from second tab "
+                    f"(url={url}); owner={owner_addr} still active",
+                    file=sys.stderr,
+                )
+                if websocket is not None:
+                    try:
+                        await websocket.send(json.dumps({
+                            "type": "meeting_join_rejected",
+                            "reason": "another_tab_active",
+                            "active_meeting_id": self._meeting_storage.current_meeting_id,
+                        }, ensure_ascii=False))
+                    except Exception:
+                        pass
+                return
             if self._meeting_storage and url:
                 old_meeting_path = self._meeting_storage.current_meeting_path
                 prev_meeting_id = self._meeting_storage.current_meeting_id
@@ -1934,12 +2012,23 @@ class KTalkBridge:
                         "last_seg_count": 0,
                         "last_emit_ts": time.time(),
                     }
-                # Отправляем историю транскрипта в extension
-                await self._send_transcript_history()
+                # Mark this WS as the owner of the active meeting so that a
+                # parallel `meeting_join` from a second tab will be rejected
+                # rather than silently flipping `current_meeting_id`.
+                if websocket is not None:
+                    self._meeting_owner_ws = websocket
+                # Отправляем историю транскрипта только инициатору join —
+                # broadcast перетёр бы `state.currentMeetingId` в соседнем
+                # табе, если он сидит в другой встрече.
+                await self._send_transcript_history(websocket=websocket)
 
         elif msg_type == "meeting_leave":
             # Extension сообщает о выходе из встречи
             reason = data.get("reason", "user_left")
+            # Release meeting ownership on explicit leave so the next
+            # `meeting_join` (this WS or another tab) can claim it.
+            if websocket is self._meeting_owner_ws:
+                self._meeting_owner_ws = None
             # Clear stale speaker state BEFORE bumping the generation.
             # _on_pre_meeting_switch() increments _meeting_generation; after
             # that, the live thread's next chunk will carry the new generation
@@ -2006,10 +2095,25 @@ class KTalkBridge:
                 # Notify extension about new meeting (safe to await here —
                 # speaker state is already clean).
                 await self._broadcast_message(meeting_ended_frame)
-                await self._broadcast_message({
+                # `new_meeting` адресуется ТОЛЬКО табу, который инициировал
+                # leave. `handleNewMeeting` в extension'е сбрасывает
+                # `state.currentMeetingId = null` и очищает transcriptLines —
+                # broadcast одного `meeting_leave` второго таба обнулил бы
+                # стейт всех других открытых табов и сломал бы фильтр в
+                # `handleTranscript` для них.
+                new_meeting_frame = {
                     "type": "new_meeting",
-                    "meeting_id": new_meeting_id
-                })
+                    "meeting_id": new_meeting_id,
+                }
+                if websocket is not None:
+                    try:
+                        await websocket.send(
+                            json.dumps(new_meeting_frame, ensure_ascii=False)
+                        )
+                    except Exception:
+                        pass
+                else:
+                    await self._broadcast_message(new_meeting_frame)
 
         elif msg_type == "meeting_title_update":
             # Extension отправляет обновлённый title (после "Joining..." -> реальный)
@@ -2019,8 +2123,10 @@ class KTalkBridge:
                 print(f"[KTalk Bridge] Updated meeting title: {title}", file=sys.stderr)
 
         elif msg_type == "request_transcript":
-            # Extension запрашивает историю транскрипта (при reconnect)
-            await self._send_transcript_history()
+            # Extension запрашивает историю транскрипта (при reconnect) —
+            # отвечаем только запросившему WS, не broadcast'ом, чтобы не
+            # подменить чужому табу `state.currentMeetingId`.
+            await self._send_transcript_history(websocket=websocket)
 
         elif msg_type == "ping":
             # Heartbeat
@@ -2155,6 +2261,30 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
                 return
+
+            # Per-tab meeting attribution: when two KTalk tabs are open at the
+            # same time, a sibling tab's PCM would otherwise be written into
+            # the most-recently-joined meeting's storage and contaminate it.
+            # If the frame carries a meeting_id that does not match the
+            # bridge's current meeting, drop it. Older builds that don't tag
+            # the frame still pass the gate (no field == no filter).
+            chunk_meeting_id = data.get("meeting_id")
+            if isinstance(chunk_meeting_id, str) and chunk_meeting_id:
+                current_meeting_id = self._meeting_storage.get_current_meeting_id()
+                if current_meeting_id and chunk_meeting_id != current_meeting_id:
+                    # Per-pid throttle: a sibling tab fires ~one chunk per
+                    # speaker per 3 s, so unthrottled this can flood stderr.
+                    last = self._pcm_cross_meeting_drop_log_ts.get(pid, 0.0)
+                    now_ts = time.time()
+                    if now_ts - last > 10.0:
+                        self._pcm_cross_meeting_drop_log_ts[pid] = now_ts
+                        print(
+                            f"[KTalk Bridge] pcm_chunk cross-meeting dropped "
+                            f"(pid={pid}, seq={seq}, chunk={chunk_meeting_id}, "
+                            f"current={current_meeting_id})",
+                            file=sys.stderr,
+                        )
+                    return
 
             if self._on_pcm_chunk is not None:
                 try:
