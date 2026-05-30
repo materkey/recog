@@ -2104,6 +2104,8 @@ class KTalkAdapter {
     const conf = this.getConference();
     if (!conf) return true;
 
+    const isLocal = conf.localParticipant?.id === participantId;
+
     // Check Jitsi participant tracks
     const jitsiParticipants = conf.jitsiConf?.getParticipants?.() || [];
     const jitsiParticipant = jitsiParticipants.find(p => p._id === participantId);
@@ -2117,12 +2119,27 @@ class KTalkAdapter {
     }
 
     // Check local participant
-    if (conf.localParticipant?.id === participantId) {
+    if (isLocal) {
       const localTracks = conf.jitsiConf?.getLocalTracks?.() || [];
       const localAudio = localTracks.find(t => t.getType?.() === 'audio');
       if (localAudio) {
         const muted = localAudio.isMuted?.();
         if (muted !== undefined) return muted === true;
+      }
+      // Some KTalk builds expose a top-level helper on jitsiConf instead
+      // of (or in addition to) per-track isMuted. Try it before falling
+      // through to RxJS / default.
+      if (typeof conf.jitsiConf?.isLocalAudioMuted === 'function') {
+        try {
+          return conf.jitsiConf.isLocalAudioMuted() === true;
+        } catch (_) { /* fall through */ }
+      }
+      const lp = conf.localParticipant;
+      if (lp?._audioMuted$?.value !== undefined) {
+        return lp._audioMuted$.value === true;
+      }
+      if (lp?._audioMuted !== undefined) {
+        return lp._audioMuted === true;
       }
     }
 
@@ -2143,7 +2160,19 @@ class KTalkAdapter {
       return false;
     }
 
-    return true;
+    // Fallback splits by isLocal:
+    //  - remote: assume muted. Speaker-attribution code uses this signal to
+    //    decide who to attribute audio to; defaulting to unmuted would let
+    //    a participant whose mute state is unknown grab attribution.
+    //  - local: assume UNMUTED. is_local_mic_muted() on the bridge gates
+    //    mic chunk ingestion in recog/live.py; if it answers True before
+    //    the local audio track has bound (initial WS-open / first poll),
+    //    the user's voice is silently dropped from the transcript until
+    //    they manually toggle mute and back. The conservative-true default
+    //    here was the reason "после mute-toggle транскрипты появились".
+    //    trackAdded/trackMuteChanged still corrects this within ~1 s if
+    //    the user actually IS muted.
+    return !isLocal;
   }
 
   /**
