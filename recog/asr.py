@@ -271,6 +271,37 @@ class ASRModule:
 
         return [entry[0] for entry in decoded]
 
+    def transcribe_chunk(
+        self, audio: np.ndarray, sample_rate: int = 16000
+    ) -> Optional[str]:
+        """Single-clip direct forward+decode for the live mic/mixed path.
+
+        Extracted from ``LiveTranscriber._transcribe_direct``: loads the model
+        (quiet), moves the clip to the model device/dtype, runs one
+        ``model.forward`` + ``model.decoding.decode`` under ``self._model_lock``
+        + ``torch.inference_mode`` + ``_mps_autoreleasepool``, and returns the
+        stripped text (``None`` if empty). Best-effort — returns ``None`` on any
+        exception, matching the live path's outer ``try/except``.
+        """
+        try:
+            model = self.load_model(quiet=True)
+            device = model._device
+            dtype = model._dtype
+
+            wav = torch.from_numpy(audio).float()
+            wav = wav.to(device).to(dtype).unsqueeze(0)
+            length = torch.tensor([wav.shape[-1]], device=device, dtype=torch.long)
+
+            with self._model_lock, torch.inference_mode(), _mps_autoreleasepool(self.device):
+                encoded, encoded_len = model.forward(wav, length)
+                # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
+                # we only need the first sample's text.
+                text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
+                self._maybe_empty_mps_cache()
+            return text.strip() if text else None
+        except Exception:
+            return None
+
     def transcribe_with_timestamps(
         self,
         audio: Union[np.ndarray, torch.Tensor, str],

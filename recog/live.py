@@ -22,6 +22,7 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S)
 from .asr import ASRModule, _mps_autoreleasepool
+from .remote_asr import build_asr
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
 
@@ -375,7 +376,7 @@ class LiveTranscriber:
         else:
             self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
 
-        self.asr = ASRModule()
+        self.asr = build_asr()
         self.speaker_db = SpeakerDatabase(speaker_db_path) if speaker_db_path else None
         self.chunk_duration = chunk_duration
         self.output_file = output_file
@@ -441,19 +442,6 @@ class LiveTranscriber:
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Транскрибирует напрямую через tensor без temp файлов."""
         try:
-            model = self.asr.model
-            if model is None:
-                return None
-
-            # Кешируем device/dtype при первом вызове
-            if self._model_device is None:
-                self._model_device = model._device
-                self._model_dtype = model._dtype
-
-            wav = torch.from_numpy(audio_chunk).float()
-            wav = wav.to(self._model_device).to(self._model_dtype).unsqueeze(0)
-            length = torch.tensor([wav.shape[-1]], device=self._model_device, dtype=torch.long)
-
             # Serialize with PerSpeakerIngest worker's transcribe_batch: both
             # paths share self.asr.model, and PyTorch modules are not safe for
             # concurrent forward on a shared instance. Signal live priority
@@ -463,16 +451,13 @@ class LiveTranscriber:
             if refine_worker is not None:
                 refine_worker.set_live_pending()
             try:
-                with self.asr._model_lock, _mps_autoreleasepool(self.asr.device):
-                    encoded, encoded_len = model.forward(wav, length)
-                    # Upstream decode() returns List[Tuple[str, token_ids, token_frames)];
-                    # we only need the first sample's text.
-                    text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
-                    self.asr._maybe_empty_mps_cache()
+                # The forward+decode body lives in ASRModule.transcribe_chunk so
+                # the remote-offload FallbackASR can route this path too; the
+                # _model_lock / inference_mode / autoreleasepool live inside.
+                return self.asr.transcribe_chunk(audio_chunk)
             finally:
                 if refine_worker is not None:
                     refine_worker.clear_live_pending()
-            return text.strip() if text else None
 
         except Exception as e:
             # Fallback на temp file если direct не работает
@@ -817,9 +802,31 @@ class LiveTranscriber:
         `RefineWorker._process_task` holds `asr._model_lock` across this
         call, so no other caller can observe the replaced decoder.
         """
+        # Coarse mode: no abort hook by contract.
         if should_abort is None:
             return self.asr.transcribe_with_timestamps(pcm_samples)
-        model = self.asr.load_model(quiet=True)
+
+        # Install the abort hook whenever a LOCAL model is (or will be) the one
+        # decoding — independent of the advisory `using_remote` read. In remote
+        # mode the gateway decode is a plain HTTP call with nothing to patch,
+        # but `FallbackASR` can flip to a local decode between this guard and the
+        # call (`using_remote` and `_decide()` are intentionally separate), so a
+        # full local refine could otherwise run uninterruptible while
+        # RefineWorker holds `_model_lock`. Patching the local decoder up front
+        # keeps that fallback decode cooperatively abortable.
+        #
+        # `self.asr.model` is the local GigaAM model (None until loaded) for both
+        # ASRModule and FallbackASR (the latter delegates `.model` to its local
+        # module). Only load eagerly in pure-local mode; in remote mode a
+        # not-yet-loaded model means the gateway will serve this call, so leave
+        # weights unloaded (preserves remote-mode's zero local cost).
+        model = getattr(self.asr, "model", None)
+        if model is None and not getattr(self.asr, "using_remote", False):
+            model = self.asr.load_model(quiet=True)
+        if model is None:
+            # Remote path, no local weights resident: nothing to patch.
+            return self.asr.transcribe_with_timestamps(pcm_samples)
+
         original_decode = model.decoding.decode
         abortable = make_abortable_decode(model.decoding, should_abort)
         try:
@@ -895,6 +902,18 @@ class LiveTranscriber:
                 if self._wav_writer_system
                 else 0
             )
+        # transcribe_batch must return one text per input (both local and
+        # remote backends guarantee this). zip() would silently truncate to
+        # the shorter sequence on a mismatch, dropping the tail speakers'
+        # utterances with no signal — drop the whole batch loudly instead of
+        # risking misattribution.
+        if len(texts) != len(batch):
+            print(
+                f"[PerSpeaker] transcribe_batch returned {len(texts)} text(s) for "
+                f"{len(batch)} input(s) — dropping batch to avoid misattribution",
+                file=sys.stderr,
+            )
+            return
         for (pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms, pid_audio_ms_start, pid_audio_ms_end), raw_text in zip(batch, texts):
             text = (raw_text or "").strip()
             if not text:

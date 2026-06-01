@@ -433,6 +433,16 @@ class RefineWorker:
         if self._abort_mode == "cooperative":
             self._wait_for_live_released()
 
+        # NOTE (ADR-0020 remote offload): in remote mode `_transcribe_fn` is a
+        # synchronous gateway HTTP call, not a local decode. We still take
+        # `_model_lock` here, but the cooperative-abort / `_live_pending`
+        # machinery is INERT by design in that mode — there is no local decode
+        # loop polling `should_abort`, and the live `transcribe_batch` also goes
+        # remote, so it never contends on this lock. Holding it across the
+        # (≤ timeout_s) remote refine is harmless: no live waiter to starve.
+        # If a future caller reintroduces a LOCAL forward that contends on
+        # `_model_lock` while a remote refine is in flight, revisit — the remote
+        # branch would then need to drop the lock around the HTTP call.
         with self._model_lock:
             if self._stopped.is_set():
                 return

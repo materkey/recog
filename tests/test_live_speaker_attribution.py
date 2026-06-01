@@ -843,87 +843,61 @@ def test_use_pcm_transport_on_with_ktalk():
     assert transcriber.use_pcm_transport is True
 
 
-def test_transcribe_direct_unpacks_decode_tuple():
+def test_transcribe_direct_delegates_to_asr_transcribe_chunk():
     """
-    given: model.decoding.decode returns List[Tuple[str, List[int], List[int]]]
-          (post-GigaAM commit a755fec tuple shape)
+    given: the forward+decode body moved to ASRModule.transcribe_chunk (so the
+          remote-offload FallbackASR can route the mic/mixed path too)
     when:  _transcribe_direct runs
-    then:  the first tuple's text field is extracted and stripped
+    then:  it delegates to self.asr.transcribe_chunk and returns its result
 
-    Regression guard for recog/live.py:443. The method wraps the decode
-    call in `except Exception: return None`, so any malformed unpack would
-    silently degrade live transcription to None rather than surfacing the
-    error.
+    The decode-tuple unpacking itself is covered at the ASR layer by
+    tests/test_asr.py (test_transcribe_direct_on_* via _make_mocked_asr); this
+    is the live-layer delegation guard for recog/live.py:457.
     """
     import numpy as np
-    import torch
-    from unittest.mock import MagicMock
-
-    model = MagicMock()
-    model._device = torch.device("cpu")
-    model._dtype = torch.float32
-    model.forward = MagicMock(return_value=("ENCODED", "ENCODED_LEN"))
-    model.head = "HEAD"
-    model.decoding = MagicMock()
-    model.decoding.decode = MagicMock(return_value=[("hello world", [], [])])
 
     asr = Mock()
-    asr.model = model
-    asr._model_lock = threading.Lock()
+    asr.transcribe_chunk = Mock(return_value="hello world")
 
     transcriber = LiveTranscriber.__new__(LiveTranscriber)
     transcriber.asr = asr
-    transcriber._model_device = None
-    transcriber._model_dtype = None
+    transcriber._refine_worker = None
 
-    text = transcriber._transcribe_direct(np.zeros(16000, dtype=np.float32))
+    audio = np.zeros(16000, dtype=np.float32)
+    text = transcriber._transcribe_direct(audio)
 
     assert text == "hello world"
-    model.decoding.decode.assert_called_once_with("HEAD", "ENCODED", "ENCODED_LEN")
+    assert asr.transcribe_chunk.call_count == 1
+    # avoid ndarray == in Mock arg matching: assert identity of the passed clip
+    assert asr.transcribe_chunk.call_args[0][0] is audio
 
 
-def test_transcribe_direct_signals_refine_live_pending_before_model_lock():
+def test_transcribe_direct_signals_refine_live_pending_around_transcribe_chunk():
     """
     given: direct live ASR runs while a RefineWorker exists
-    when:  _transcribe_direct contends for the shared model lock
-    then:  it sets live_pending before lock acquisition and clears it after
-           releasing the lock
+    when:  _transcribe_direct delegates to asr.transcribe_chunk
+    then:  set_live_pending fires BEFORE transcribe_chunk and clear_live_pending
+           AFTER it returns
+
+    The shared model lock now lives inside ASRModule.transcribe_chunk, so the
+    live-priority signal must bracket the whole delegated call (recog/live.py
+    _transcribe_direct set/clear try/finally).
     """
     import numpy as np
-    import torch
 
     refine_worker = Mock()
+    observed: dict = {}
 
-    class RecordingLock:
-        def __init__(self):
-            self.entered_after_signal = False
-            self.exited_before_clear = False
+    def fake_transcribe_chunk(audio):
+        observed["set_called_before"] = refine_worker.set_live_pending.called
+        observed["clear_called_during"] = refine_worker.clear_live_pending.called
+        return "prioritized live"
 
-        def __enter__(self):
-            self.entered_after_signal = refine_worker.set_live_pending.called
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            self.exited_before_clear = not refine_worker.clear_live_pending.called
-            return False
-
-    model = Mock()
-    model._device = torch.device("cpu")
-    model._dtype = torch.float32
-    model.forward = Mock(return_value=("ENCODED", "ENCODED_LEN"))
-    model.head = "HEAD"
-    model.decoding = Mock()
-    model.decoding.decode = Mock(return_value=[("prioritized live", [], [])])
-
-    lock = RecordingLock()
     asr = Mock()
-    asr.model = model
-    asr._model_lock = lock
+    asr.transcribe_chunk = Mock(side_effect=fake_transcribe_chunk)
 
     transcriber = LiveTranscriber.__new__(LiveTranscriber)
     transcriber.asr = asr
-    transcriber._model_device = None
-    transcriber._model_dtype = None
     transcriber._refine_worker = refine_worker
 
     text = transcriber._transcribe_direct(np.zeros(16000, dtype=np.float32))
@@ -931,5 +905,5 @@ def test_transcribe_direct_signals_refine_live_pending_before_model_lock():
     assert text == "prioritized live"
     refine_worker.set_live_pending.assert_called_once_with()
     refine_worker.clear_live_pending.assert_called_once_with()
-    assert lock.entered_after_signal is True
-    assert lock.exited_before_clear is True
+    assert observed["set_called_before"] is True, "set_live_pending must fire before transcribe_chunk"
+    assert observed["clear_called_during"] is False, "clear must not fire until transcribe_chunk returns"

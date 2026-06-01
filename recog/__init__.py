@@ -28,6 +28,9 @@ __all__ = [
     "SpeakerInfo",
     # ASR
     "ASRModule",
+    "build_asr",
+    "RemoteASRClient",
+    "FallbackASR",
     # Speaker DB
     "SpeakerDatabase",
     # Output
@@ -47,6 +50,9 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "SpeakerInfo": ("recog.models", "SpeakerInfo"),
     # ASR
     "ASRModule": ("recog.asr", "ASRModule"),
+    "build_asr": ("recog.remote_asr", "build_asr"),
+    "RemoteASRClient": ("recog.remote_asr", "RemoteASRClient"),
+    "FallbackASR": ("recog.remote_asr", "FallbackASR"),
     # Speaker DB
     "SpeakerDatabase": ("recog.speaker_db", "SpeakerDatabase"),
     # Output
