@@ -79,6 +79,9 @@ swiftc -o sck_audio_capture sck_audio_capture.swift \
 ### Single-venv Architecture
 The project uses a single `venv-gigaam` virtual environment. Speaker identification is handled via the KTalk Chrome extension (real-time) and SpeechBrain ECAPA-TDNN embeddings (enrollment). The former dual-venv pyannote subprocess architecture (ADR-0006) is obsolete.
 
+### Remote ASR offload (opt-in)
+`FallbackASR` implements all four GigaAM paths (`transcribe_batch` per-speaker, `transcribe_simple` offline, `transcribe_with_timestamps` refine, and the direct mic/mixed `transcribe_chunk`) over a network gateway (Z270XX, OpenAI-Whisper-compatible). Three are reached today through `build_asr()` (the single constructor, `recog/remote_asr.py`) via the live pipeline; the offline `transcribe_simple` path is implemented but not yet wired to a CLI command (`mp4_notes.py` has only `live`/`meetings`). When constructed, ASR comes exclusively from `build_asr()`: `RECOG_ASR_BACKEND="local"` (committed default — repo behavior unchanged) returns a plain `ASRModule`; `"remote"` returns a `FallbackASR` wrapping a `RemoteASRClient`. `FallbackASR` constructs the local `ASRModule` eagerly but loads its weights **lazily** — only on the first remote failure — and trips a thread-safe circuit breaker after `RECOG_ASR_CIRCUIT_FAILS` consecutive failures (open for `RECOG_ASR_CIRCUIT_OPEN_S`, then one half-open probe). It delegates `model` / `device` / `_model_lock` / `_maybe_empty_mps_cache` to the local module so `RefineWorker` keeps working; refine skips the abortable-decode monkey-patch when `asr.using_remote`. Gateway patch + deploy steps live in-repo at `deploy/z270xx/`.
+
 ### Per-speaker ASR path (ADR-0018)
 For any active KTalk meeting the pipeline routes through per-participant PCM streams (no mixed-audio fallback as a configurable mode):
 
@@ -142,6 +145,12 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env`:
 - `OPENROUTER_API_KEY` - Required if using OpenRouter
 - `MIC_SPEAKER_NAME` - Speaker label for microphone input in live mode (default: `Me`)
 - `RECOG_BRIDGE_WS_URL` - Overrides the bridge WebSocket URL the frontend subscriber connects to (default `ws://localhost:8766`). Used by `frontend/bridge_subscriber.py` to forward `transcript_refine` events from `ktalk_bridge.py` to webapp clients (D10 — JSONL tail cannot see refine rewrites).
+- `RECOG_ASR_BACKEND` - `local` (default — repo behavior unchanged) | `remote` (offload GigaAM to the Z270XX gateway via `recog/remote_asr.py`'s `build_asr()`, with lazy local fallback + circuit breaker).
+- `RECOG_ASR_REMOTE_URL` - Gateway base URL (default `https://materkey-z270x-1.tail4799d.ts.net/asr`). Only read when `RECOG_ASR_BACKEND=remote`.
+- `RECOG_ASR_REMOTE_MODEL` - Model alias sent to the gateway (default `gigaam`).
+- `RECOG_ASR_REMOTE_TIMEOUT_S` - Per-request HTTP timeout (default `15`).
+- `RECOG_ASR_CIRCUIT_FAILS` - Consecutive remote failures before the circuit opens (default `3`).
+- `RECOG_ASR_CIRCUIT_OPEN_S` - Seconds the circuit stays open before a half-open probe (default `60`).
 
 ## Data Files
 
