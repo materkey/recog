@@ -21,10 +21,14 @@ import subprocess
 import threading
 import os
 import sys
+import time
 import numpy as np
 from collections import deque
-from typing import Optional
+from typing import Optional, Tuple
 from pathlib import Path
+
+from recog.config import ASR_PENDING_BUFFER_CAP_S
+from recog.log_utils import log_rate_limited
 
 
 class ScreenCaptureAudio:
@@ -48,6 +52,14 @@ class ScreenCaptureAudio:
         self._stderr_tail = deque(maxlen=200)
         self.running = False
         self.name = "screencapture"
+        # --- capture-время + буферизация при недоступном ASR -----------------
+        # Дизайн: docs/plans/2026-06-02-asr-fallback-buffering-design.md §2.
+        # Тот же контракт, что у SingleDeviceCapture (recog/live.py).
+        self._buffer_start_ts: Optional[float] = None
+        self._buffered_samples = 0
+        self._requeued: list = []
+        self._overlap_samples = int(0.5 * sample_rate)
+        self._max_buffered_samples = int(ASR_PENDING_BUFFER_CAP_S * sample_rate)
 
         # Find the Swift utility
         self._utility_path = self._find_utility()
@@ -123,8 +135,15 @@ class ScreenCaptureAudio:
                 if data:
                     # Convert bytes to float32 numpy array
                     samples = np.frombuffer(data, dtype=np.float32)
+                    captured_at = time.time() - len(samples) / self.sample_rate
                     with self._lock:
-                        self.buffer.append(samples)
+                        dropped = self._append_locked(samples, captured_at)
+                    if dropped:
+                        log_rate_limited(
+                            f"capture-overflow-{self.name}",
+                            f"[ScreenCaptureAudio:{self.name}] ASR unavailable too long — "
+                            f"dropped {dropped / self.sample_rate:.1f}s of oldest audio",
+                        )
                     # Reset restart count on successful read
                     restart_count = 0
             except Exception as e:
@@ -240,15 +259,46 @@ class ScreenCaptureAudio:
         """Discard all buffered audio (used on meeting boundary)."""
         with self._lock:
             self.buffer = []
+            self._requeued = []
+            self._buffer_start_ts = None
+            self._buffered_samples = 0
 
-    def get_chunk(self, duration: float) -> Optional[np.ndarray]:
-        """Get audio chunk of specified duration."""
+    def _append_locked(self, data: np.ndarray, captured_at: float) -> int:
+        """Добавляет data в буфер; возвращает число сэмплов, отброшенных по капу.
+
+        Вызывается с уже взятым _lock."""
+        if not self.buffer:
+            self._buffer_start_ts = captured_at
+        self.buffer.append(data)
+        self._buffered_samples += len(data)
+        dropped = 0
+        while self._buffered_samples > self._max_buffered_samples and self.buffer:
+            oldest = self.buffer.pop(0)
+            self._buffered_samples -= len(oldest)
+            if self._buffer_start_ts is not None:
+                self._buffer_start_ts += len(oldest) / self.sample_rate
+            dropped += len(oldest)
+        return dropped
+
+    def _append_locked_for_tests(self, data: np.ndarray, captured_at: float) -> int:
+        """Тестовый шов: _append_locked под собственным локом."""
+        with self._lock:
+            return self._append_locked(data, captured_at)
+
+    def get_chunk(self, duration: float) -> Optional[Tuple[np.ndarray, float]]:
+        """Get (audio chunk, epoch-время захвата первого сэмпла).
+
+        Сначала отдаёт чанки из _requeued (возвращённые после
+        ASRTemporarilyUnavailable), затем — накопленный буфер.
+        """
         if not self.running:
             return None
 
         samples_needed = int(duration * self.sample_rate)
 
         with self._lock:
+            if self._requeued:
+                return self._requeued.pop(0)
             if not self.buffer:
                 return None
 
@@ -260,13 +310,28 @@ class ScreenCaptureAudio:
 
             # Extract chunk
             chunk = audio[:samples_needed]
+            chunk_start_ts = (
+                self._buffer_start_ts
+                if self._buffer_start_ts is not None
+                else time.time() - duration
+            )
 
             # Keep overlap (0.5 seconds)
-            overlap_samples = int(0.5 * self.sample_rate)
-            overlap_start = max(0, samples_needed - overlap_samples)
+            overlap_start = max(0, samples_needed - self._overlap_samples)
             self.buffer = [audio[overlap_start:]]
+            self._buffered_samples = len(audio) - overlap_start
+            self._buffer_start_ts = chunk_start_ts + overlap_start / self.sample_rate
 
-            return chunk.astype(np.float32)
+            return chunk.astype(np.float32), chunk_start_ts
+
+    def requeue(self, chunk: np.ndarray, capture_start_ts: float):
+        """Возвращает уже вычитанный чанк обратно (ASR оказался недоступен).
+
+        Тот же контракт, что у SingleDeviceCapture.requeue: чанк будет отдан
+        первым же get_chunk с исходным capture-временем.
+        """
+        with self._lock:
+            self._requeued.insert(0, (chunk, capture_start_ts))
 
     def __enter__(self):
         self.start()

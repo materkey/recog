@@ -417,7 +417,7 @@ def test_pcm_healthy_skips_system_audio_ktalk_dispatch(monkeypatch):
     t.chunk_duration = 3.0
 
     capture = Mock()
-    capture.get_chunk.return_value = np.ones(48000, dtype=np.float32) * 0.1
+    capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1000.0)
 
     # Guard: these must not be called in healthy-PCM mode.
     t._transcribe_direct = Mock()
@@ -455,7 +455,7 @@ def test_pcm_pre_first_chunk_falls_through_to_mixed_path():
     t._ktalk_bridge.is_local_mic_muted.return_value = False
 
     capture = Mock()
-    capture.get_chunk.return_value = np.ones(48000, dtype=np.float32) * 0.1
+    capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1000.0)
 
     t._transcribe_direct = lambda _c: "hi"
     t._check_silence_split = Mock()
@@ -491,7 +491,7 @@ def test_pcm_degraded_dispatches_mixed_path_with_fallback_flag():
     t._ktalk_bridge.is_local_mic_muted.return_value = False
 
     capture = Mock()
-    capture.get_chunk.return_value = np.ones(48000, dtype=np.float32) * 0.1
+    capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1000.0)
 
     t._transcribe_direct = lambda _c: "hello"
     t._check_silence_split = Mock()
@@ -703,7 +703,7 @@ def test_pcm_transition_emits_marker():
     t._emit_pcm_transition_marker = Mock()
 
     capture = Mock()
-    capture.get_chunk.return_value = np.ones(48000, dtype=np.float32) * 0.1
+    capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1000.0)
 
     LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
 

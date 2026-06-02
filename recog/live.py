@@ -8,7 +8,7 @@ import time
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -20,9 +20,11 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
-                     PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S)
+                     PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
+                     DEDUP_MAX_GAP_S, ASR_PENDING_BUFFER_CAP_S)
 from .asr import ASRModule, _mps_autoreleasepool
-from .remote_asr import build_asr
+from .log_utils import log_rate_limited
+from .remote_asr import ASRTemporarilyUnavailable, build_asr
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
 
@@ -153,15 +155,55 @@ class SingleDeviceCapture:
         self.running = False
         self.stream = None
         self._lock = None
+        # --- capture-время + буферизация при недоступном ASR -----------------
+        # Дизайн: docs/plans/2026-06-02-asr-fallback-buffering-design.md §2.
+        # _buffer_start_ts — epoch-время захвата первого невычитанного сэмпла.
+        self._buffer_start_ts: Optional[float] = None
+        self._buffered_samples = 0
+        # Чанки, возвращённые requeue() (ASR был недоступен) — отдаются первыми.
+        self._requeued: list = []
+        self._overlap_samples = int(0.5 * sample_rate)
+        self._max_buffered_samples = int(ASR_PENDING_BUFFER_CAP_S * sample_rate)
 
-    def _callback(self, indata, frames, time, status):
+    def _callback(self, indata, frames, time_info, status):
         if status:
             print(f"Audio status ({self.name}): {status}", file=sys.stderr)
+        captured_at = time.time() - frames / self.sample_rate
         if self._lock:
             with self._lock:
-                self.buffer.append(indata.copy())
+                dropped = self._append_locked(indata.copy(), captured_at)
         else:
-            self.buffer.append(indata.copy())
+            dropped = self._append_locked(indata.copy(), captured_at)
+        if dropped:
+            log_rate_limited(
+                f"capture-overflow-{self.name}",
+                f"[SingleDeviceCapture:{self.name}] ASR unavailable too long — "
+                f"dropped {dropped / self.sample_rate:.1f}s of oldest audio",
+            )
+
+    def _append_locked(self, data: np.ndarray, captured_at: float) -> int:
+        """Добавляет data в буфер; возвращает число сэмплов, отброшенных по капу.
+
+        Вызывается с уже взятым _lock (или без лока до start())."""
+        if not self.buffer:
+            self._buffer_start_ts = captured_at
+        self.buffer.append(data)
+        self._buffered_samples += len(data)
+        dropped = 0
+        while self._buffered_samples > self._max_buffered_samples and self.buffer:
+            oldest = self.buffer.pop(0)
+            self._buffered_samples -= len(oldest)
+            if self._buffer_start_ts is not None:
+                self._buffer_start_ts += len(oldest) / self.sample_rate
+            dropped += len(oldest)
+        return dropped
+
+    def _append_locked_for_tests(self, data: np.ndarray, captured_at: float) -> int:
+        """Тестовый шов: _append_locked под собственным локом."""
+        if self._lock:
+            with self._lock:
+                return self._append_locked(data, captured_at)
+        return self._append_locked(data, captured_at)
 
     def start(self):
         import threading
@@ -193,18 +235,28 @@ class SingleDeviceCapture:
         if self._lock:
             with self._lock:
                 self.buffer = []
+                self._requeued = []
+                self._buffer_start_ts = None
+                self._buffered_samples = 0
         else:
             self.buffer = []
+            self._requeued = []
+            self._buffer_start_ts = None
+            self._buffered_samples = 0
 
-    def get_chunk(self, duration: float) -> Optional[np.ndarray]:
-        """Возвращает накопленный аудио чанк (моно)."""
+    def get_chunk(self, duration: float) -> Optional[Tuple[np.ndarray, float]]:
+        """Возвращает (аудио чанк (моно), epoch-время захвата первого сэмпла).
+
+        Сначала отдаёт чанки из _requeued (возвращённые после
+        ASRTemporarilyUnavailable), затем — накопленный буфер.
+        """
         samples_needed = int(duration * self.sample_rate)
-        if not self.buffer:
-            return None
 
         if self._lock:
             self._lock.acquire()
         try:
+            if self._requeued:
+                return self._requeued.pop(0)
             if not self.buffer:
                 return None
             audio = np.concatenate(self.buffer, axis=0)
@@ -212,9 +264,16 @@ class SingleDeviceCapture:
                 return None
 
             chunk = audio[:samples_needed]
-            overlap_samples = int(0.5 * self.sample_rate)  # 0.5 сек overlap для лучшего распознавания на границах
-            overlap_start = max(0, samples_needed - overlap_samples)
+            chunk_start_ts = (
+                self._buffer_start_ts
+                if self._buffer_start_ts is not None
+                else time.time() - duration
+            )
+            # 0.5 сек overlap для лучшего распознавания на границах
+            overlap_start = max(0, samples_needed - self._overlap_samples)
             self.buffer = [audio[overlap_start:]]
+            self._buffered_samples = len(audio) - overlap_start
+            self._buffer_start_ts = chunk_start_ts + overlap_start / self.sample_rate
         finally:
             if self._lock:
                 self._lock.release()
@@ -223,7 +282,21 @@ class SingleDeviceCapture:
         if chunk.ndim > 1 and chunk.shape[1] > 1:
             chunk = np.mean(chunk, axis=1)
 
-        return chunk.flatten()
+        return chunk.flatten(), chunk_start_ts
+
+    def requeue(self, chunk: np.ndarray, capture_start_ts: float):
+        """Возвращает уже вычитанный чанк обратно (ASR оказался недоступен).
+
+        Чанк хранится в отдельном списке _requeued (он уже моно и фиксированной
+        длины — обратно в покадровый буфер его не вставить из-за несовпадения
+        размерностей со стерео-кадрами callback'а) и будет отдан первым же
+        get_chunk. Порядок и capture-время сохраняются.
+        """
+        if self._lock:
+            with self._lock:
+                self._requeued.insert(0, (chunk, capture_start_ts))
+        else:
+            self._requeued.insert(0, (chunk, capture_start_ts))
 
     @staticmethod
     def list_devices():
@@ -294,6 +367,10 @@ class SourceState:
     segment_start_time: float = 0
     last_text_time: float = 0
     audio_offset: int = 0
+    # Capture-время (epoch) конца чанка, давшего последний записанный сегмент.
+    # Дедуп применяется только если новый чанк начинается в пределах
+    # DEDUP_MAX_GAP_S от этого времени (дизайн §4).
+    last_words_capture_end: float = 0.0
 
     def __post_init__(self):
         if self.pending_updates is None:
@@ -439,8 +516,22 @@ class LiveTranscriber:
         # marker only on actual flips (see plan §4.5).
         self._last_pcm_degraded: bool = False
 
+    def _asr_available(self) -> bool:
+        """True, когда ASR может обслужить запрос прямо сейчас.
+
+        FallbackASR выставляет .available (False = remote упал И локаль ещё
+        грузится — буферы трогать нельзя); чистый ASRModule свойства не имеет
+        и всегда доступен.
+        """
+        return bool(getattr(self.asr, "available", True))
+
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
-        """Транскрибирует напрямую через tensor без temp файлов."""
+        """Транскрибирует напрямую через tensor без temp файлов.
+
+        ASRTemporarilyUnavailable пробрасывается наверх (caller обязан вернуть
+        чанк в буфер через capture.requeue). Любое другое исключение — лог +
+        None (best-effort, контракт прежний).
+        """
         try:
             # Serialize with PerSpeakerIngest worker's transcribe_batch: both
             # paths share self.asr.model, and PyTorch modules are not safe for
@@ -459,8 +550,13 @@ class LiveTranscriber:
                 if refine_worker is not None:
                     refine_worker.clear_live_pending()
 
+        except ASRTemporarilyUnavailable:
+            raise
         except Exception as e:
-            # Fallback на temp file если direct не работает
+            log_rate_limited(
+                "live-transcribe-direct",
+                f"[LiveTranscriber] _transcribe_direct failed: {type(e).__name__}: {e}",
+            )
             return None
 
     # Кэш для модели embedding (загружается один раз)
@@ -1655,16 +1751,27 @@ class LiveTranscriber:
 
     def _process_chunk(self, capture, state, executor, is_mic=False):
         """Read audio chunk, run ASR, and dispatch to appropriate handler."""
+        # ASR availability gate (дизайн §2): пока FallbackASR не может обслужить
+        # запрос (remote упал, локаль грузится в фоне) — НЕ вычитываем буфер.
+        # Capture-буфер и есть спул: аудио копится там до восстановления.
+        if not self._asr_available():
+            return
+
         # Snapshot meeting generation BEFORE reading buffer so that audio
         # captured before a meeting switch is tagged with the old generation
         # and discarded by the generation check downstream.
         chunk_gen = self._meeting_generation
-        chunk = capture.get_chunk(self.chunk_duration)
-        if chunk is None or len(chunk) < 1000:
+        result = capture.get_chunk(self.chunk_duration)
+        if result is None:
             return
-        # Audio was captured during the PREVIOUS chunk_duration seconds
-        chunk_end_time = time.time()
-        chunk_start_time = chunk_end_time - self.chunk_duration
+        chunk, capture_start_ts = result
+        if len(chunk) < 1000:
+            return
+        # Времена чанка — от capture-времени (НЕ time.time()): при обработке
+        # бэклога после сбоя ASR сегменты должны лечь в то время, когда речь
+        # была произнесена.
+        chunk_start_time = capture_start_ts
+        chunk_end_time = capture_start_ts + self.chunk_duration
 
         # Capture audio offset BEFORE writing chunk (for segment playback)
         # This offset points to where this chunk's audio STARTS in the WAV file
@@ -1728,9 +1835,22 @@ class LiveTranscriber:
         if rms < VAD_RMS_THRESHOLD:
             return
 
-        text = self._transcribe_direct(chunk)
+        try:
+            text = self._transcribe_direct(chunk)
+        except ASRTemporarilyUnavailable:
+            # ASR отвалился между гейтом и вызовом (первый сбой remote).
+            # Чанк не теряем — возвращаем в буфер, он будет обработан после
+            # восстановления (фоновая загрузка локали / probe remote).
+            capture.requeue(chunk, capture_start_ts)
+            return
         if not text:
             return
+
+        # Дедуп-окно (дизайн §4): last_words применяются только к временно́
+        # смежным чанкам (audio overlap 0.5 s + джиттер). За пределами окна
+        # повторённая фраза — реальная речь, её нельзя выбрасывать.
+        if chunk_start_time - state.last_words_capture_end > DEDUP_MAX_GAP_S:
+            state.last_words = []
 
         text = deduplicate(text, state.last_words)
         if not text:
@@ -1743,11 +1863,12 @@ class LiveTranscriber:
             return
 
         state.last_words = text.split()[-5:]
+        state.last_words_capture_end = chunk_end_time
 
-        current_time = time.time()
+        current_time = chunk_end_time
         self._check_silence_split(state, current_time)
 
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = datetime.fromtimestamp(chunk_end_time).strftime("%H:%M:%S")
         chunk_time = current_time
 
         if self.transcript_lines:
