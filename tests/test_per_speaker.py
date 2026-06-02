@@ -990,3 +990,86 @@ def test_refine_candidate_caps_at_refine_window():
     assert ingest._refine_watermark_ms["p1"] == pytest.approx(
         float(total_seconds) * 1_000.0
     )
+
+
+# =============================================================================
+# ASR availability drain gate
+# (docs/plans/2026-06-02-asr-fallback-buffering-design.md §3)
+# =============================================================================
+
+from recog.remote_asr import ASRTemporarilyUnavailable
+
+
+def test_tick_does_not_drain_when_asr_unavailable():
+    """
+    given: ASR недоступен (asr_available_getter -> False)
+    when: tick()
+    then: transcribe_callback НЕ вызывается, чанки остаются в буферах;
+          после восстановления ASR следующий tick выгребает накопленное
+    """
+    received: List[List[BatchedChunk]] = []
+    asr_available = [False]
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda batch: received.append(batch),
+        generation_getter=lambda: 0,
+        meeting_active_getter=lambda: True,
+        asr_available_getter=lambda: asr_available[0],
+    )
+    ingest.enqueue(_make_chunk(pid="p1", seq=0))
+
+    ingest.tick()
+    assert received == []
+
+    # ASR вернулся -> следующий tick выгребает накопленное
+    asr_available[0] = True
+    ingest.tick()
+    assert len(received) == 1
+    assert len(received[0]) == 1
+    assert received[0][0][0] == "p1"  # pid первого BatchedChunk
+
+
+def test_unavailable_exception_holds_batch_for_retry():
+    """
+    given: callback кидает ASRTemporarilyUnavailable (гонка первого сбоя)
+    when: tick(), затем ASR восстановился и tick() снова
+    then: тот же батч диспатчится повторно — ничего не потеряно
+    """
+    calls: List[List[BatchedChunk]] = []
+    fail_first = [True]
+
+    def callback(batch):
+        calls.append(batch)
+        if fail_first[0]:
+            fail_first[0] = False
+            raise ASRTemporarilyUnavailable("remote just died")
+
+    ingest = PerSpeakerIngest(
+        transcribe_callback=callback,
+        generation_getter=lambda: 0,
+        meeting_active_getter=lambda: True,
+        asr_available_getter=lambda: True,
+    )
+    ingest.enqueue(_make_chunk(pid="p1", seq=0))
+
+    ingest.tick()   # callback падает с unavailable -> батч сохранён
+    ingest.tick()   # повторный диспатч того же батча
+
+    assert len(calls) == 2
+    assert calls[0] == calls[1]  # тот же батч (те же BatchedChunk кортежи)
+
+
+def test_default_asr_available_getter_keeps_existing_behavior():
+    """
+    given: PerSpeakerIngest без asr_available_getter (старый конструктор)
+    when: tick()
+    then: drain работает как раньше (обратная совместимость)
+    """
+    received: List[List[BatchedChunk]] = []
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda batch: received.append(batch),
+        generation_getter=lambda: 0,
+        meeting_active_getter=lambda: True,
+    )
+    ingest.enqueue(_make_chunk(pid="p1", seq=0))
+    ingest.tick()
+    assert len(received) == 1

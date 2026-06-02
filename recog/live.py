@@ -837,6 +837,7 @@ class LiveTranscriber:
                 self._meeting_storage
                 and self._meeting_storage.get_current_meeting_id()
             ),
+            asr_available_getter=self._asr_available,
         )
         self._ktalk_bridge.set_pcm_chunk_callback(self._per_speaker_ingest.enqueue)
         self._ktalk_bridge.set_pcm_stats_getter(self._per_speaker_ingest.get_stats)
@@ -977,6 +978,10 @@ class LiveTranscriber:
             refine_worker.set_live_pending()
         try:
             texts = self.asr.transcribe_batch(pcm_list)
+        except ASRTemporarilyUnavailable:
+            # Пробрасываем в PerSpeakerIngest.tick — он сохранит батч для
+            # повторного диспатча (дизайн §3, гонка первого сбоя).
+            raise
         except Exception as e:
             print(f"[PerSpeaker] transcribe_batch failed: {e}", file=sys.stderr)
             return
