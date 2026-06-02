@@ -42,6 +42,7 @@ from .config import (
     SPEAKER_TURN_GAP,
 )
 from .refine import RefineTask
+from .remote_asr import ASRTemporarilyUnavailable
 
 # The PcmChunk dataclass lives in `ktalk_bridge`; importing lazily inside
 # callers would break static type checkers, so we re-import at module level.
@@ -101,10 +102,19 @@ class PerSpeakerIngest:
         max_chunks_per_pid: int = 3 * PCM_MAX_BATCH_SIZE,
         time_fn: Callable[[], float] = time.time,
         refine_submit_callback: Optional[Callable[[RefineTask], None]] = None,
+        asr_available_getter: Optional[Callable[[], bool]] = None,
     ):
         self._transcribe_callback = transcribe_callback
         self._generation_getter = generation_getter or (lambda: 0)
         self._meeting_active_getter = meeting_active_getter or (lambda: False)
+        # ASR availability gate (дизайн 2026-06-02 §3): пока ASR не может
+        # обслужить batch (remote упал, локаль грузится) — drain не выгребает
+        # буферы, PCM копится в per-pid ring'ах (с их существующими капами).
+        self._asr_available_getter = asr_available_getter or (lambda: True)
+        # Однослотовый retry: батч, на котором callback кинул
+        # ASRTemporarilyUnavailable (гонка первого сбоя). Диспатчится первым
+        # при следующем tick с доступным ASR.
+        self._pending_retry_batch: Optional[List[BatchedChunk]] = None
         self._batch_interval_s = batch_interval_ms / 1000.0
         self._max_batch_size = max_batch_size
         self._silence_watchdog_s = silence_watchdog_s
@@ -431,7 +441,14 @@ class PerSpeakerIngest:
         active_pids: List[str] = []
         with self._lock:
             self._check_watchdog_locked(now)
-            batch = self._drain_batch_locked()
+            if self._asr_available_getter():
+                if self._pending_retry_batch is not None:
+                    batch = self._pending_retry_batch
+                    self._pending_retry_batch = None
+                else:
+                    batch = self._drain_batch_locked()
+            # else: ASR недоступен — гейт закрыт, PCM остаётся в буферах
+            # (drain деструктивен, выгребать без работающего ASR нельзя).
             # Advance per-pid silence counter for pids that did not see a new
             # chunk this interval. Runs unconditionally so Task 7's trigger
             # logic has fresh `_silence_ms` / `_continuous_speech_ms` numbers
@@ -445,6 +462,16 @@ class PerSpeakerIngest:
         if batch:
             try:
                 self._transcribe_callback(batch)
+            except ASRTemporarilyUnavailable:
+                # Гонка первого сбоя: available был True на входе в tick, но
+                # remote упал во время transcribe. Батч уже выгребен из буферов
+                # (drain деструктивен) — держим его для повторного диспатча.
+                with self._lock:
+                    self._pending_retry_batch = batch
+                print(
+                    "[PerSpeakerIngest] ASR unavailable — holding batch for retry",
+                    file=sys.stderr,
+                )
             except Exception as e:
                 print(
                     f"[PerSpeakerIngest] transcribe callback raised: {e}",
