@@ -39,7 +39,7 @@
 - Create: `recog/log_utils.py`
 - Test: `tests/test_log_utils.py`
 
-- [ ] **Step 1.1: Написать падающий тест**
+- [x] **Step 1.1: Написать падающий тест**
 
 ```python
 # tests/test_log_utils.py
@@ -94,12 +94,12 @@ def test_different_keys_do_not_interfere(capsys):
     assert "c-msg" in err and "d-msg" in err
 ```
 
-- [ ] **Step 1.2: Убедиться, что тест падает**
+- [x] **Step 1.2: Убедиться, что тест падает**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_log_utils.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'recog.log_utils'`
 
-- [ ] **Step 1.3: Реализация**
+- [x] **Step 1.3: Реализация**
 
 ```python
 # recog/log_utils.py
@@ -143,12 +143,12 @@ def _reset_for_tests() -> None:
         _state.clear()
 ```
 
-- [ ] **Step 1.4: Тесты зелёные**
+- [x] **Step 1.4: Тесты зелёные**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_log_utils.py -v`
 Expected: 3 passed
 
-- [ ] **Step 1.5: Commit**
+- [x] **Step 1.5: Commit**
 
 ```bash
 git add recog/log_utils.py tests/test_log_utils.py
@@ -163,7 +163,7 @@ git commit -m "feat(asr): add rate-limited stderr logger for hot paths" -- recog
 - Modify: `recog/config.py` (после строки 154, конец секции REMOTE ASR OFFLOAD)
 - Test: `tests/test_config.py`
 
-- [ ] **Step 2.1: Падающий тест**
+- [x] **Step 2.1: Падающий тест**
 
 Добавить в конец `tests/test_config.py`:
 
@@ -184,12 +184,12 @@ class TestAsrFallbackBufferingConfig:
         assert config.ASR_PENDING_BUFFER_CAP_S == 600.0
 ```
 
-- [ ] **Step 2.2: Тест падает**
+- [x] **Step 2.2: Тест падает**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_config.py -v -k Buffering`
 Expected: FAIL — `AttributeError: module 'recog.config' has no attribute 'RECOG_ASR_LIVE_TIMEOUT_S'`
 
-- [ ] **Step 2.3: Добавить константы в `recog/config.py`** (после строки 154 `RECOG_ASR_CIRCUIT_OPEN_S = ...`):
+- [x] **Step 2.3: Добавить константы в `recog/config.py`** (после строки 154 `RECOG_ASR_CIRCUIT_OPEN_S = ...`):
 
 ```python
 
@@ -213,12 +213,12 @@ DEDUP_MAX_GAP_S = float(os.environ.get("DEDUP_MAX_GAP_S", "2.0"))
 ASR_PENDING_BUFFER_CAP_S = float(os.environ.get("ASR_PENDING_BUFFER_CAP_S", "600"))
 ```
 
-- [ ] **Step 2.4: Тесты зелёные**
+- [x] **Step 2.4: Тесты зелёные**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_config.py -v`
 Expected: все passed (старые + 3 новых)
 
-- [ ] **Step 2.5: Commit**
+- [x] **Step 2.5: Commit**
 
 ```bash
 git add recog/config.py tests/test_config.py
@@ -233,7 +233,7 @@ git commit -m "feat(asr): add live-timeout, dedup-window and buffer-cap config" 
 - Modify: `recog/remote_asr.py`
 - Test: `tests/test_remote_asr.py`
 
-- [ ] **Step 3.1: Новые падающие тесты**
+- [x] **Step 3.1: Новые падающие тесты**
 
 Добавить в конец `tests/test_remote_asr.py`:
 
@@ -380,12 +380,12 @@ def test_live_timeout_passed_to_chunk_requests(monkeypatch):
 
 Примечание: `_FakeResponse` уже определён в файле (строка ~195) — проверить его конструктор (`grep -n "class _FakeResponse" -A 15 tests/test_remote_asr.py`) и подстроить вызов `_FakeResponse(json_data={"text": "ok"})` под его реальную сигнатуру.
 
-- [ ] **Step 3.2: Тесты падают**
+- [x] **Step 3.2: Тесты падают**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_remote_asr.py -v -k "unavailable or available or background or recovery or live_timeout or backoff"`
 Expected: FAIL — `ImportError: cannot import name 'ASRTemporarilyUnavailable'`
 
-- [ ] **Step 3.3: Реализация в `recog/remote_asr.py`**
+- [x] **Step 3.3: Реализация в `recog/remote_asr.py`**
 
 3.3.1. Добавить импорты в шапку (после `import time`):
 
@@ -605,7 +605,7 @@ class ASRTemporarilyUnavailable(Exception):
 
 3.3.11. Обновить module docstring (строки 12–25): пункт «1. Ленивый локальный fallback» дополнить — «ВЕСА грузятся в ФОНОВОМ потоке при первом сбое; пока они грузятся, FallbackASR поднимает ASRTemporarilyUnavailable и caller буферизует данные».
 
-- [ ] **Step 3.4: Обновить 5 существующих тестов под async-fallback**
+- [x] **Step 3.4: Обновить 5 существующих тестов под async-fallback**
 
 В `tests/test_remote_asr.py` найти и переписать (имена сохранить — меняется только given/when/then и тело):
 
@@ -685,12 +685,12 @@ def test_transcribe_batch_any_item_failure_falls_back_whole_batch_to_local():
 
 Тесты `test_half_open_probe_closes_circuit_on_success` / `test_half_open_probe_failure_reopens_circuit` (строки 385, 423): прочитать текущие тела. Probe-успех не зависит от локали — тест должен пройти без изменений. Probe-провал: заменить ожидание `LOCAL_CHUNK` на `pytest.raises(ASRTemporarilyUnavailable)` + `fb.wait_local_ready(timeout=2.0)` + повторный вызов → `LOCAL_CHUNK` (по образцу выше). Если тест уже падал в Step 3.2 — обновить; если проходил — не трогать.
 
-- [ ] **Step 3.5: Все тесты remote_asr зелёные**
+- [x] **Step 3.5: Все тесты remote_asr зелёные**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_remote_asr.py -v`
 Expected: все passed (существующие + 7 новых)
 
-- [ ] **Step 3.6: Commit**
+- [x] **Step 3.6: Commit**
 
 ```bash
 git add recog/remote_asr.py tests/test_remote_asr.py
@@ -712,7 +712,7 @@ Circuit close and probe failures are now logged." -- recog/remote_asr.py tests/t
 - Modify: `recog/asr.py:302-303` (except в `transcribe_chunk`)
 - Test: `tests/test_asr.py`
 
-- [ ] **Step 4.1: Падающий тест** (добавить в конец `tests/test_asr.py`)
+- [x] **Step 4.1: Падающий тест** (добавить в конец `tests/test_asr.py`)
 
 ```python
 def test_transcribe_chunk_logs_swallowed_exception(capsys, monkeypatch):
@@ -746,12 +746,12 @@ def test_transcribe_chunk_logs_swallowed_exception(capsys, monkeypatch):
     assert "MPS command buffer error" in err
 ```
 
-- [ ] **Step 4.2: Тест падает**
+- [x] **Step 4.2: Тест падает**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_asr.py -v -k swallowed`
 Expected: FAIL — stderr пустой (`assert "transcribe_chunk failed" in err`)
 
-- [ ] **Step 4.3: Реализация** — в `recog/asr.py`:
+- [x] **Step 4.3: Реализация** — в `recog/asr.py`:
 
 Добавить импорт после `from .models import Segment`:
 
@@ -773,12 +773,12 @@ from .log_utils import log_rate_limited
             return None
 ```
 
-- [ ] **Step 4.4: Тесты зелёные**
+- [x] **Step 4.4: Тесты зелёные**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_asr.py -v`
 Expected: все passed
 
-- [ ] **Step 4.5: Commit**
+- [x] **Step 4.5: Commit**
 
 ```bash
 git add recog/asr.py tests/test_asr.py
@@ -793,7 +793,7 @@ git commit -m "feat(asr): log swallowed exceptions in ASRModule.transcribe_chunk
 - Modify: `recog/live.py:146-230` (класс AudioCapture; точные строки сместятся)
 - Test: `tests/test_live_buffering.py` (create)
 
-- [ ] **Step 5.1: Падающие тесты**
+- [x] **Step 5.1: Падающие тесты**
 
 ```python
 # tests/test_live_buffering.py
@@ -929,12 +929,12 @@ class TestBufferCap:
         assert ts >= pytest.approx(1004.0, abs=0.1)
 ```
 
-- [ ] **Step 5.2: Тесты падают**
+- [x] **Step 5.2: Тесты падают**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_live_buffering.py -v`
 Expected: FAIL — `AttributeError: ... no attribute '_append_locked_for_tests'` / `'_requeued'` / tuple unpack
 
-- [ ] **Step 5.3: Реализация AudioCapture в `recog/live.py`**
+- [x] **Step 5.3: Реализация AudioCapture в `recog/live.py`**
 
 5.3.1. Импорты: в строку 19–23 (`from .config import (...)`) добавить `DEDUP_MAX_GAP_S, ASR_PENDING_BUFFER_CAP_S` (DEDUP понадобится в Task 6, добавить сразу). После строки 26 (`from .speaker_db import SpeakerDatabase`) добавить:
 
@@ -1088,12 +1088,12 @@ from .remote_asr import ASRTemporarilyUnavailable
             self._requeued.insert(0, (chunk, capture_start_ts))
 ```
 
-- [ ] **Step 5.4: Тесты зелёные**
+- [x] **Step 5.4: Тесты зелёные**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_live_buffering.py -v`
 Expected: 8 passed
 
-- [ ] **Step 5.5: Найти и обновить существующие вызовы `get_chunk`**
+- [x] **Step 5.5: Найти и обновить существующие вызовы `get_chunk`**
 
 Run: `grep -rn "get_chunk" recog/ tests/ frontend/ *.py`
 
@@ -1117,7 +1117,7 @@ Run: `grep -rn "get_chunk" recog/ tests/ frontend/ *.py`
 - Modify: `recog/live.py` — `SourceState` (~290), `_transcribe_direct` (~442), `_process_chunk` (~1656)
 - Test: `tests/test_live_buffering.py` (дополнить), `tests/test_live_speaker_attribution.py` (моки)
 
-- [ ] **Step 6.1: Падающие тесты** (добавить в `tests/test_live_buffering.py`)
+- [x] **Step 6.1: Падающие тесты** (добавить в `tests/test_live_buffering.py`)
 
 ```python
 # --- гейт _process_chunk + дедуп-окно ----------------------------------------
@@ -1248,12 +1248,12 @@ class TestDedupWindow:
 
 Примечание: `Mock(spec=LiveTranscriber)` не позволяет задавать произвольные атрибуты, которых нет в классе — если упадёт `AttributeError` на `t._asr_available = ...`, заменить `Mock(spec=LiveTranscriber)` на обычный `Mock()` и присвоить атрибуты так же.
 
-- [ ] **Step 6.2: Тесты падают**
+- [x] **Step 6.2: Тесты падают**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_live_buffering.py -v -k "Gate or DedupWindow"`
 Expected: FAIL (нет гейта; tuple unpack ломается; нет дедуп-окна)
 
-- [ ] **Step 6.3: Реализация в `recog/live.py`**
+- [x] **Step 6.3: Реализация в `recog/live.py`**
 
 6.3.1. `SourceState` — добавить поле после `audio_offset: int = 0` (строка 296):
 
@@ -1459,7 +1459,7 @@ Expected: FAIL (нет гейта; tuple unpack ломается; нет дед�
 
 (Изменения относительно текущего кода: гейт `_asr_available` в начале; `get_chunk` → кортеж; `chunk_start_time/chunk_end_time` из capture-времени вместо `time.time()`; try/except вокруг `_transcribe_direct` с requeue; дедуп-окно перед `deduplicate`; `state.last_words_capture_end` после записи; `current_time`/`timestamp` из capture-времени. Всё остальное — без изменений.)
 
-- [ ] **Step 6.4: Обновить моки в `tests/test_live_speaker_attribution.py`**
+- [x] **Step 6.4: Обновить моки в `tests/test_live_speaker_attribution.py`**
 
 В строках 420, 458, 494, 706 заменить:
 
@@ -1479,12 +1479,12 @@ Expected: FAIL (нет гейта; tuple unpack ломается; нет дед�
     t._asr_available = lambda: True
 ```
 
-- [ ] **Step 6.5: Все тесты зелёные**
+- [x] **Step 6.5: Все тесты зелёные**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_live_buffering.py tests/test_live_speaker_attribution.py tests/test_asr.py tests/test_live_decomposed.py -v`
 Expected: все passed
 
-- [ ] **Step 6.6: Commit (Task 5 + Task 6 вместе)**
+- [x] **Step 6.6: Commit (Task 5 + Task 6 вместе)**
 
 ```bash
 git add recog/live.py tests/test_live_buffering.py tests/test_live_speaker_attribution.py
@@ -1509,7 +1509,7 @@ silently ate the user's speech in the 2026-06-02 incident." -- recog/live.py tes
 - Modify: `recog/live.py` — `_setup_per_speaker_ingest` (~737), `_on_pcm_batch` (~882)
 - Test: `tests/test_per_speaker.py`
 
-- [ ] **Step 7.1: Падающие тесты** (добавить в конец `tests/test_per_speaker.py`)
+- [x] **Step 7.1: Падающие тесты** (добавить в конец `tests/test_per_speaker.py`)
 
 Перед написанием посмотреть существующие тесты (например `test_batch_collector_fires_on_timeout`, строка 147) — как конструируется `PerSpeakerIngest` и как ему скармливаются чанки (`PcmChunk`), и переиспользовать тот же паттерн/хелперы:
 
@@ -1573,12 +1573,12 @@ def test_unavailable_exception_holds_batch_for_retry():
 
 `_make_chunk` — это НЕ существующий хелпер: создать его в этом же блоке по образцу того, как существующие тесты конструируют `PcmChunk` (посмотреть `grep -n "PcmChunk(" tests/test_per_speaker.py | head -3` и скопировать поля с минимальными значениями).
 
-- [ ] **Step 7.2: Тесты падают**
+- [x] **Step 7.2: Тесты падают**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_per_speaker.py -v -k "drain_when_asr or holds_batch"`
 Expected: FAIL — `TypeError: __init__() got an unexpected keyword argument 'asr_available_getter'`
 
-- [ ] **Step 7.3: Реализация `recog/per_speaker.py`**
+- [x] **Step 7.3: Реализация `recog/per_speaker.py`**
 
 7.3.1. Импорт (в шапке файла, после существующих импортов из `.`):
 
@@ -1649,7 +1649,7 @@ from .remote_asr import ASRTemporarilyUnavailable
                 )
 ```
 
-- [ ] **Step 7.4: Реализация в `recog/live.py`**
+- [x] **Step 7.4: Реализация в `recog/live.py`**
 
 7.4.1. `_setup_per_speaker_ingest` (~строка 737) — добавить getter:
 
@@ -1682,12 +1682,12 @@ from .remote_asr import ASRTemporarilyUnavailable
                 refine_worker.clear_live_pending()
 ```
 
-- [ ] **Step 7.5: Тесты зелёные**
+- [x] **Step 7.5: Тесты зелёные**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_per_speaker.py tests/test_live_speaker_attribution.py -v`
 Expected: все passed (существующие тесты per_speaker не задеты — новый параметр опционален)
 
-- [ ] **Step 7.6: Commit**
+- [x] **Step 7.6: Commit**
 
 ```bash
 git add recog/per_speaker.py recog/live.py tests/test_per_speaker.py
@@ -1708,7 +1708,7 @@ being dropped with only a log line." -- recog/per_speaker.py recog/live.py tests
 - Modify: `recog/refine.py` — `_process_task` (~412-480)
 - Test: `tests/test_refine_fallback.py`
 
-- [ ] **Step 8.1: Падающий тест**
+- [x] **Step 8.1: Падающий тест**
 
 Сначала посмотреть существующие тесты: `grep -n "def test_\|RefineWorker(" tests/test_refine_fallback.py` — переиспользовать их паттерн конструирования `RefineWorker` и `RefineTask`. Добавить:
 
@@ -1740,12 +1740,12 @@ def test_unavailable_asr_requeues_task_with_delay(monkeypatch):
 
 `_make_worker_and_task` — хелпер, который нужно написать в этом тест-файле по образцу setup-кода существующих тестов (worker строится с `_transcribe_fn`, `_apply_fn`, `abort_mode`; task — `RefineTask` с минимальными полями). Если в файле уже есть подходящий хелпер/fixture — использовать его и не создавать новый.
 
-- [ ] **Step 8.2: Тест падает**
+- [x] **Step 8.2: Тест падает**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_refine_fallback.py -v -k unavailable`
 Expected: FAIL — исключение ASRTemporarilyUnavailable не поймано (вылетает из `_process_task`) или задача не в очереди
 
-- [ ] **Step 8.3: Реализация `recog/refine.py`**
+- [x] **Step 8.3: Реализация `recog/refine.py`**
 
 8.3.1. Импорты (в шапке):
 
@@ -1791,12 +1791,12 @@ from .remote_asr import ASRTemporarilyUnavailable
 
 (Конкретно: объявить `unavailable = False` рядом с `aborted = False` в начале `_process_task`; добавить `except ASRTemporarilyUnavailable: unavailable = True` после `except RefineAborted: aborted = True` (строка ~473-474); добавить блок `if unavailable:` ПЕРЕД существующим `if aborted:` (строка ~476).)
 
-- [ ] **Step 8.4: Тесты зелёные**
+- [x] **Step 8.4: Тесты зелёные**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/test_refine_fallback.py tests/test_refine.py tests/test_refine_integration.py -v`
 Expected: все passed
 
-- [ ] **Step 8.5: Commit**
+- [x] **Step 8.5: Commit**
 
 ```bash
 git add recog/refine.py tests/test_refine_fallback.py
@@ -1812,12 +1812,12 @@ git commit -m "feat(refine): re-enqueue refine task with delay when ASR temporar
 - Modify: `.env.example`
 - Modify: `docs/plans/2026-06-02-asr-fallback-buffering-plan.md` (отметить чекбоксы)
 
-- [ ] **Step 9.1: Полный прогон тестов и компиляция**
+- [x] **Step 9.1: Полный прогон тестов и компиляция**
 
 Run: `./venv-gigaam/bin/python -m pytest tests/ -v -x --ignore=tests/e2e && ./venv-gigaam/bin/python -m compileall recog frontend -q`
 Expected: все passed, компиляция без ошибок. Если что-то падает — чинить ДО доков.
 
-- [ ] **Step 9.2: Обновить CLAUDE.md**
+- [x] **Step 9.2: Обновить CLAUDE.md**
 
 В секции "### Remote ASR offload (opt-in)" заменить предложение про lazy load:
 
@@ -1833,7 +1833,7 @@ Expected: все passed, компиляция без ошибок. Если чт
 - `ASR_PENDING_BUFFER_CAP_S` - Max audio buffered in memory while ASR is unavailable (default `600`).
 ```
 
-- [ ] **Step 9.3: Обновить `.env.example`**
+- [x] **Step 9.3: Обновить `.env.example`**
 
 Посмотреть текущее содержимое (`cat .env.example`), добавить в секцию ASR (или создать её по образцу существующих комментариев):
 
@@ -1844,14 +1844,14 @@ Expected: все passed, компиляция без ошибок. Если чт
 # ASR_PENDING_BUFFER_CAP_S=600
 ```
 
-- [ ] **Step 9.4: Commit доков**
+- [x] **Step 9.4: Commit доков**
 
 ```bash
 git add CLAUDE.md .env.example docs/plans/2026-06-02-asr-fallback-buffering-plan.md
 git commit -m "docs(asr): document fallback buffering env vars and behavior" -- CLAUDE.md .env.example docs/plans/2026-06-02-asr-fallback-buffering-plan.md
 ```
 
-- [ ] **Step 9.5: Перезапуск сервиса и smoke-проверка**
+- [x] **Step 9.5: Перезапуск сервиса и smoke-проверка**
 
 ```bash
 ./recog-service.sh restart
@@ -1867,7 +1867,7 @@ tail -3 logs/live.stdout.log
 
 Expected: реплика появилась. Также проверить отсутствие новых ошибок: `tail -20 logs/live.stderr.log | grep -v "Clock sync"`.
 
-- [ ] **Step 9.6: Финальная проверка инцидент-сценария (опционально, при доступе к Z270XX)**
+- [x] **Step 9.6: Финальная проверка инцидент-сценария (опционально, при доступе к Z270XX)**
 
 Эмулировать сбой remote: на Z270XX выполнить `ssh Z270XX 'systemctl --user stop asr-gateway'`, сказать 2–3 фразы в течение минуты, затем `ssh Z270XX 'systemctl --user start asr-gateway'`. Проверить:
 1. В stderr: `loading local GigaAM in background` (один раз), затем `local GigaAM ready`
