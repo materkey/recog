@@ -250,3 +250,60 @@ class TestFallbackDropsRefineRewrites:
             assert by_id[seg_id].get("refined", False) is False
         finally:
             worker.stop(timeout=1.0)
+
+
+# =============================================================================
+# ASR temporarily unavailable -> re-enqueue with delay
+# (docs/plans/2026-06-02-asr-fallback-buffering-design.md §3)
+# =============================================================================
+
+
+class TestUnavailableAsrRequeue:
+    def test_unavailable_asr_requeues_task_with_delay(self, monkeypatch):
+        """
+        given: _transcribe_fn кидает ASRTemporarilyUnavailable (remote упал,
+               локаль грузится)
+        when: _process_task
+        then: задача возвращается в очередь (не потеряна), перед этим выдержана
+              пауза (no busy-spin)
+        """
+        from recog.remote_asr import ASRTemporarilyUnavailable
+        import recog.refine as refine_mod
+
+        sleeps: List[float] = []
+        monkeypatch.setattr(refine_mod.time, "sleep", lambda s: sleeps.append(s))
+
+        worker = RefineWorker(
+            model_lock=threading.RLock(),
+            transcribe_fn=Mock(side_effect=ASRTemporarilyUnavailable("loading")),
+            apply_fn=Mock(),
+            abort_mode="coarse",
+        )
+        task = _make_task()
+
+        worker._process_task(task)
+
+        assert worker._queue.qsize() == 1, "task must be re-enqueued, not lost"
+        assert worker._queue.get_nowait() is task
+        assert sleeps and sleeps[0] >= 2.0, "must pause before re-enqueue (no busy-spin)"
+
+    def test_unavailable_does_not_call_apply_fn(self, monkeypatch):
+        """
+        given: ASR недоступен
+        when: _process_task
+        then: apply_fn НЕ вызывается (нет результата для применения)
+        """
+        from recog.remote_asr import ASRTemporarilyUnavailable
+        import recog.refine as refine_mod
+
+        monkeypatch.setattr(refine_mod.time, "sleep", lambda s: None)
+
+        apply_fn = Mock()
+        worker = RefineWorker(
+            model_lock=threading.RLock(),
+            transcribe_fn=Mock(side_effect=ASRTemporarilyUnavailable("loading")),
+            apply_fn=apply_fn,
+            abort_mode="coarse",
+        )
+        worker._process_task(_make_task())
+        apply_fn.assert_not_called()
