@@ -35,7 +35,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gigaam.types import TranscriptionResult, Word
 
 import recog.remote_asr as remote_asr_mod
-from recog.remote_asr import FallbackASR, RemoteASRClient, RemoteASRError
+from recog.remote_asr import (
+    ASRTemporarilyUnavailable,
+    FallbackASR,
+    RemoteASRClient,
+    RemoteASRError,
+)
 
 
 SAMPLE_RATE = 16000
@@ -186,6 +191,27 @@ def _make_fallback(
     return fb, remote, local
 
 
+def _gate_local_load(local: FakeLocal) -> tuple[threading.Event, threading.Event]:
+    """Делает local.load_model блокирующимся до release.set().
+
+    FakeLocal грузится мгновенно, поэтому фоновый поток _load_local_weights
+    успевает выставить _local_ready=True до проверки в _run() — и вместо
+    ASRTemporarilyUnavailable вызов отдаёт LOCAL_CHUNK. Для продакшена это
+    правильное поведение (загрузилась — обслуживай), но тестам нужен
+    детерминизм. Возвращает (started, release)."""
+    started = threading.Event()
+    release = threading.Event()
+    real_load = local.load_model
+
+    def gated_load(quiet=False):
+        started.set()
+        release.wait(timeout=5.0)
+        return real_load(quiet)
+
+    local.load_model = gated_load
+    return started, release
+
+
 # -----------------------------------------------------------------------------
 # Fake httpx layer for exercising the REAL RemoteASRClient (no network)
 # -----------------------------------------------------------------------------
@@ -298,45 +324,61 @@ def test_repeated_remote_success_keeps_circuit_closed_and_local_cold():
 
 def test_remote_failure_falls_back_to_local_and_logs_mode_switch(capsys):
     """
-    given: a remote that raises RemoteASRError on the next call
-    when: transcribe_chunk is called
-    then: the local backend is lazily loaded and serves the result, and a
-          one-line mode-switch is logged to stderr on the first fallback
+    given: a remote that raises RemoteASRError on the next two calls
+    when: the first transcribe_chunk fails (unavailable + background load
+          starts) and a second call is made after the load completes
+    then: the second call is served locally, and a one-line mode-switch is
+          logged to stderr exactly once
     """
     remote = FakeRemote()
-    remote.fail_next = 1
+    remote.fail_next = 2
     fb, remote, local = _make_fallback(remote=remote)
+    started, release = _gate_local_load(local)
+    audio = np.zeros(SAMPLE_RATE, dtype=np.int16)
 
-    result = fb.transcribe_chunk(np.zeros(SAMPLE_RATE, dtype=np.int16))
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_chunk(audio)
+    assert started.wait(timeout=2.0), "background load must start"
+    release.set()
+    assert fb.wait_local_ready(timeout=2.0), "background load must complete"
+
+    result = fb.transcribe_chunk(audio)
 
     assert result == "LOCAL_CHUNK"
-    assert remote.calls["transcribe_chunk"] == 1
+    assert remote.calls["transcribe_chunk"] == 2
     assert local.calls["transcribe_chunk"] == 1
-    assert local.calls["load_model"] >= 1, "local model must be loaded on first fallback"
+    assert local.calls["load_model"] == 1, "local model loaded once, in background"
 
     err = capsys.readouterr().err
-    assert "FallbackASR" in err, f"expected a mode-switch log line on stderr; got: {err!r}"
+    assert err.count("loading local GigaAM in background") == 1, (
+        f"expected exactly one mode-switch log line on stderr; got: {err!r}"
+    )
 
 
 def test_remote_failure_then_recovery_resets_circuit_and_returns_to_remote():
     """
     given: remote fails once (below fail_threshold) then recovers
-    when: two transcribe_chunk calls are made
-    then: first falls back to local, second is served by remote again
-          (a single failure does not open the circuit)
+    when: a failing transcribe_chunk (unavailable) is followed by another call
+    then: the failing call raises ASRTemporarilyUnavailable (nothing served),
+          the next call is served by remote again, failure counter reset
     """
     remote = FakeRemote()
     remote.fail_next = 1
     fb, remote, local = _make_fallback(remote=remote, fail_threshold=3)
+    started, release = _gate_local_load(local)
+    audio = np.zeros(800, dtype=np.int16)
 
-    first = fb.transcribe_chunk(np.zeros(800, dtype=np.int16))
-    second = fb.transcribe_chunk(np.zeros(800, dtype=np.int16))
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_chunk(audio)
+    release.set()
+    fb.wait_local_ready(timeout=2.0)
 
-    assert first == "LOCAL_CHUNK"
+    second = fb.transcribe_chunk(audio)
+
     assert second == "REMOTE_CHUNK"
     assert remote.calls["transcribe_chunk"] == 2
-    assert local.calls["transcribe_chunk"] == 1
     assert fb.using_remote is True
+    assert fb._failures == 0
 
 
 # =============================================================================
@@ -356,22 +398,28 @@ def test_circuit_opens_after_fail_threshold_and_routes_straight_to_local(capsys)
     remote = FakeRemote()
     remote.fail_next = 100  # never recovers
     fb, remote, local = _make_fallback(remote=remote, fail_threshold=3, open_seconds=60.0)
+    started, release = _gate_local_load(local)
+    audio = np.zeros(800, dtype=np.int16)
 
     # 3 failing calls cross the threshold (each still consults remote once).
+    # Локаль грузится в фоне (заблокирована гейтом) — каждый сбой даёт unavailable.
     for _ in range(3):
-        assert fb.transcribe_chunk(np.zeros(800, dtype=np.int16)) == "LOCAL_CHUNK"
+        with pytest.raises(ASRTemporarilyUnavailable):
+            fb.transcribe_chunk(audio)
 
     assert remote.calls["transcribe_chunk"] == 3
     assert fb.using_remote is False, "circuit must be OPEN after fail_threshold failures"
+    release.set()
+    assert fb.wait_local_ready(timeout=2.0), "background load must complete"
 
-    # Further calls while OPEN must bypass remote entirely.
+    # Further calls while OPEN must bypass remote entirely (served locally).
     remote_calls_before = remote.calls["transcribe_chunk"]
     for _ in range(5):
-        assert fb.transcribe_chunk(np.zeros(800, dtype=np.int16)) == "LOCAL_CHUNK"
+        assert fb.transcribe_chunk(audio) == "LOCAL_CHUNK"
     assert remote.calls["transcribe_chunk"] == remote_calls_before, (
         "open circuit must route straight to local without consulting remote"
     )
-    assert local.calls["transcribe_chunk"] == 8
+    assert local.calls["transcribe_chunk"] == 5
 
     err = capsys.readouterr().err
     assert "OPEN" in err, f"expected an OPEN-circuit log line; got: {err!r}"
@@ -397,27 +445,32 @@ def test_half_open_probe_closes_circuit_on_success(monkeypatch):
     remote = FakeRemote()
     remote.fail_next = 3  # exactly enough to open with fail_threshold=3
     fb, remote, local = _make_fallback(remote=remote, fail_threshold=3, open_seconds=60.0)
+    audio = np.zeros(800, dtype=np.int16)
 
     for _ in range(3):
-        fb.transcribe_chunk(np.zeros(800, dtype=np.int16))
+        try:
+            fb.transcribe_chunk(audio)
+        except ASRTemporarilyUnavailable:
+            pass
     assert fb.using_remote is False  # circuit OPEN
+    assert fb.wait_local_ready(timeout=2.0)
     remote_calls_open = remote.calls["transcribe_chunk"]
 
-    # Still inside the open window: no probe.
+    # Still inside the open window: no probe (served locally).
     clock["t"] += 30.0
-    fb.transcribe_chunk(np.zeros(800, dtype=np.int16))
+    assert fb.transcribe_chunk(audio) == "LOCAL_CHUNK"
     assert remote.calls["transcribe_chunk"] == remote_calls_open, "no probe before open_seconds elapse"
 
     # Window elapsed -> half-open: one probe allowed. Remote has recovered.
     clock["t"] += 31.0  # total elapsed 61s > 60s
-    result = fb.transcribe_chunk(np.zeros(800, dtype=np.int16))
+    result = fb.transcribe_chunk(audio)
 
     assert result == "REMOTE_CHUNK", "half-open probe served by recovered remote"
     assert remote.calls["transcribe_chunk"] == remote_calls_open + 1
     assert fb.using_remote is True, "successful probe must CLOSE the circuit"
 
     # Circuit closed: next call goes straight to remote.
-    assert fb.transcribe_chunk(np.zeros(800, dtype=np.int16)) == "REMOTE_CHUNK"
+    assert fb.transcribe_chunk(audio) == "REMOTE_CHUNK"
 
 
 def test_half_open_probe_failure_reopens_circuit(monkeypatch):
@@ -433,15 +486,20 @@ def test_half_open_probe_failure_reopens_circuit(monkeypatch):
     remote = FakeRemote()
     remote.fail_next = 100  # never recovers
     fb, remote, local = _make_fallback(remote=remote, fail_threshold=3, open_seconds=60.0)
+    audio = np.zeros(800, dtype=np.int16)
 
     for _ in range(3):
-        fb.transcribe_chunk(np.zeros(800, dtype=np.int16))
+        try:
+            fb.transcribe_chunk(audio)
+        except ASRTemporarilyUnavailable:
+            pass
     assert fb.using_remote is False
+    assert fb.wait_local_ready(timeout=2.0)
 
     clock["t"] += 61.0  # window elapsed -> one probe allowed
-    result = fb.transcribe_chunk(np.zeros(800, dtype=np.int16))
+    result = fb.transcribe_chunk(audio)
 
-    assert result == "LOCAL_CHUNK", "failed probe falls back to local"
+    assert result == "LOCAL_CHUNK", "failed probe falls back to local (already loaded)"
     assert fb.using_remote is False, "failed half-open probe must RE-OPEN the circuit"
 
 
@@ -482,16 +540,25 @@ def test_transcribe_batch_any_item_failure_falls_back_whole_batch_to_local():
           local result (order-preserving) is returned
     """
     remote = FakeRemote()
-    remote.fail_next = 1  # the single transcribe_batch call raises
+    remote.fail_next = 2  # обе попытки remote batch падают
     fb, remote, local = _make_fallback(remote=remote)
+    started, release = _gate_local_load(local)
 
     batch = [np.zeros(800, dtype=np.int16) for _ in range(3)]
+
+    # Первый сбой: unavailable (локаль грузится в фоне), батч сохраняет caller.
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_batch(batch)
+    release.set()
+    assert fb.wait_local_ready(timeout=2.0)
+
+    # Повторный диспатч того же батча: remote снова падает -> локаль.
     texts = fb.transcribe_batch(batch)
 
     assert texts == ["LOCAL_0", "LOCAL_1", "LOCAL_2"], "whole batch must be served locally, in order"
-    assert remote.calls["transcribe_batch"] == 1
+    assert remote.calls["transcribe_batch"] == 2
     assert local.calls["transcribe_batch"] == 1
-    assert local.calls["load_model"] >= 1
+    assert local.calls["load_model"] == 1
 
 
 # =============================================================================
@@ -728,3 +795,162 @@ def test_load_model_in_remote_mode_healthchecks_without_loading_local():
     assert returned is None
     assert remote.calls["healthz"] >= 1
     assert local.calls["load_model"] == 0, "remote-mode load_model must not load local"
+
+
+# =============================================================================
+# Non-blocking fallback (docs/plans/2026-06-02-asr-fallback-buffering-design.md)
+# =============================================================================
+
+from recog.remote_asr import ASRTemporarilyUnavailable
+
+
+def test_first_remote_failure_raises_unavailable_and_starts_background_load():
+    """
+    given: remote падает, локальная модель не загружена
+    when: transcribe_chunk
+    then: ASRTemporarilyUnavailable + фоновый поток загрузки запущен
+          (вызывающий поток НЕ блокируется на load_model)
+    """
+    fb, remote, local = _make_fallback()
+    started, release = _gate_local_load(local)
+    remote.fail_next = 1
+    audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
+
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_chunk(audio)
+
+    assert started.wait(timeout=2.0), "background load thread must start"
+    release.set()
+    assert fb.wait_local_ready(timeout=2.0) is True
+    assert local.calls["load_model"] == 1
+
+
+def test_after_background_load_local_serves_calls():
+    """
+    given: circuit открыт, фоновая загрузка завершена
+    when: transcribe_chunk
+    then: LOCAL_CHUNK без обращения к remote
+    """
+    fb, remote, local = _make_fallback(fail_threshold=1)
+    started, release = _gate_local_load(local)
+    remote.fail_next = 1
+    audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
+
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_chunk(audio)  # сбой + открытие circuit + старт загрузки
+    release.set()
+    assert fb.wait_local_ready(timeout=2.0)
+
+    remote_calls_before = remote.calls["transcribe_chunk"]
+    assert fb.transcribe_chunk(audio) == "LOCAL_CHUNK"
+    assert remote.calls["transcribe_chunk"] == remote_calls_before  # remote не трогали
+
+
+def test_available_false_while_circuit_open_and_local_cold():
+    """
+    given: circuit открыт, локаль не готова (загрузка заблокирована)
+    then: available == False (потребители не вычитывают буферы)
+    """
+    fb, remote, local = _make_fallback(fail_threshold=1, open_seconds=60.0)
+    # Блокируем фоновую загрузку, чтобы детерминированно поймать "не готова"
+    load_started = threading.Event()
+    load_release = threading.Event()
+
+    real_load = local.load_model
+
+    def slow_load(quiet=False):
+        load_started.set()
+        load_release.wait(timeout=5.0)
+        return real_load(quiet)
+
+    local.load_model = slow_load
+
+    remote.fail_next = 1
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_chunk(np.zeros(SAMPLE_RATE, dtype=np.float32))
+
+    assert load_started.wait(timeout=2.0)
+    assert fb.available is False  # circuit открыт И локаль ещё грузится
+    load_release.set()
+    assert fb.wait_local_ready(timeout=2.0)
+    assert fb.available is True  # локаль готова
+
+
+def test_available_true_when_circuit_closed():
+    """
+    given: свежий FallbackASR (circuit закрыт, локаль холодная)
+    then: available == True (remote presumed alive)
+    """
+    fb, _, _ = _make_fallback()
+    assert fb.available is True
+
+
+def test_failed_local_load_logged_and_not_retried_within_backoff(capsys):
+    """
+    given: load_model локали кидает исключение
+    when: повторный сбой remote внутри окна LOCAL_LOAD_RETRY_S
+    then: загрузка НЕ перезапускается (backoff), ошибка залогирована
+    """
+    fb, remote, local = _make_fallback(fail_threshold=1)
+
+    def broken_load(quiet=False):
+        raise RuntimeError("MPS boom")
+
+    local.load_model = broken_load
+
+    remote.fail_next = 10
+    audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_chunk(audio)
+    # Дождаться завершения (упавшего) потока загрузки
+    fb._local_load_thread.join(timeout=2.0)
+    assert "load FAILED" in capsys.readouterr().err
+
+    thread_before = fb._local_load_thread
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_chunk(audio)
+    assert fb._local_load_thread is thread_before  # новый поток не создан
+
+
+def test_circuit_close_logged_on_remote_recovery(capsys, monkeypatch):
+    """
+    given: circuit открыт после сбоев
+    when: окно истекло и probe удался
+    then: '[FallbackASR] remote recovered' в stderr
+    """
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(remote_asr_mod.time, "monotonic", lambda: clock["t"])
+
+    fb, remote, local = _make_fallback(fail_threshold=1, open_seconds=60.0)
+    started, release = _gate_local_load(local)
+    remote.fail_next = 1
+    audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
+
+    with pytest.raises(ASRTemporarilyUnavailable):
+        fb.transcribe_chunk(audio)
+    release.set()
+    fb.wait_local_ready(timeout=2.0)
+    capsys.readouterr()
+
+    clock["t"] += 61.0  # окно истекло -> probe
+    assert fb.transcribe_chunk(audio) == "REMOTE_CHUNK"
+    assert "remote recovered" in capsys.readouterr().err
+
+
+def test_live_timeout_passed_to_chunk_requests():
+    """
+    given: RemoteASRClient с live_timeout_s=5
+    when: transcribe_chunk
+    then: POST вызывается с timeout=5 (а не дефолтным таймаутом клиента)
+    """
+    client = RemoteASRClient(
+        base_url="https://example.test/asr", model="gigaam",
+        timeout_s=15.0, live_timeout_s=5.0,
+    )
+    fake = _FakeHttpxClient()
+    fake.post_response = _FakeResponse(status_code=200, _json={"text": "ok"})
+    client._client = fake
+
+    client.transcribe_chunk(np.zeros(SAMPLE_RATE, dtype=np.float32))
+
+    assert fake.posts[0]["timeout"] == 5.0

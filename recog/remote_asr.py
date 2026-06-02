@@ -13,8 +13,11 @@ CLI (``mp4_notes.py`` — только ``live``/``meetings``).
 
 1. **Ленивый локальный fallback.** ``FallbackASR`` СОЗДАЁТ локальный
    ``ASRModule`` сразу (это дёшево — ``ASRModule.__init__`` модель не
-   грузит), но ВЕСА грузит только при первом сбое удалённого шлюза. Пока
-   шлюз жив, тяжёлая модель на Mac не поднимается вовсе.
+   грузит), но ВЕСА грузит в ФОНОВОМ потоке — триггер первый сбой удалённого
+   шлюза. Пока шлюз жив, тяжёлая модель на Mac не поднимается вовсе. Пока
+   веса грузятся (а remote лежит), методы поднимают
+   ``ASRTemporarilyUnavailable`` и caller буферизует данные у себя —
+   ничего не блокируется и не теряется.
 
 2. **Circuit breaker.** Каждый сбой удалёнки накапливается; после
    ``fail_threshold`` подряд circuit «открывается» на ``open_seconds`` —
@@ -32,6 +35,7 @@ import io
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, List, Optional, Union
 
@@ -42,11 +46,23 @@ import soundfile as sf
 from gigaam.types import TranscriptionResult, Word
 
 from .asr import ASRModule
+from .log_utils import log_rate_limited
 from .models import Segment
 
 
 class RemoteASRError(Exception):
     """Поднимается при любом сбое удалённого шлюза (HTTP/parse/empty)."""
+    pass
+
+
+class ASRTemporarilyUnavailable(Exception):
+    """ASR прямо сейчас не может обслужить запрос: remote упал/недоступен, а
+    локальная модель ещё грузится (или её загрузка недавно упала).
+
+    Контракт для caller'а: данные НЕ потеряны — сохрани их (requeue в свой
+    буфер) и повтори позже. Поднимается только из FallbackASR; чистый
+    ASRModule его никогда не кидает.
+    """
     pass
 
 
@@ -98,10 +114,13 @@ class RemoteASRClient:
         model: str = "gigaam",
         timeout_s: float = 15.0,
         max_workers: int = 8,
+        live_timeout_s: Optional[float] = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
+        # Live-пути (chunk/batch) ждут меньше: 3 s чанк не должен висеть 15 s.
+        self.live_timeout_s = live_timeout_s if live_timeout_s is not None else timeout_s
         self.max_workers = max_workers
         self._client = httpx.Client(timeout=timeout_s)
 
@@ -138,7 +157,10 @@ class RemoteASRClient:
         data = {"model": self.model, "response_format": "json"}
         try:
             resp = self._client.post(
-                f"{self.base_url}/v1/audio/transcriptions", files=files, data=data
+                f"{self.base_url}/v1/audio/transcriptions",
+                files=files,
+                data=data,
+                timeout=self.live_timeout_s,
             )
             resp.raise_for_status()
             return resp.json()["text"]
@@ -244,11 +266,19 @@ class FallbackASR:
     """Маршрутизатор remote→local с thread-safe circuit breaker'ом.
 
     Локальный ``ASRModule`` СОЗДАЁТСЯ сразу (дёшево), но его ВЕСА грузятся
-    лениво — только на первом fallback'е. Делегирует
+    лениво — в ФОНОВОМ потоке, триггер — первый сбой remote. Пока ни один
+    бэкенд не может обслужить запрос (circuit открыт + локаль ещё грузится),
+    методы поднимают ``ASRTemporarilyUnavailable``, а ``available`` отдаёт
+    False — потребители обязаны буферизовать данные, а не выбрасывать их
+    (см. docs/plans/2026-06-02-asr-fallback-buffering-design.md). Делегирует
     ``model`` / ``device`` / ``_model_lock`` / ``_maybe_empty_mps_cache``
     в локальный модуль, чтобы существующие caller'ы и ``RefineWorker``
     (который берёт тот же ``_model_lock`` извне) продолжали работать.
     """
+
+    # Повторная попытка фоновой загрузки локали после провала — не раньше чем
+    # через это число секунд (защита от спама загрузками при битой модели).
+    LOCAL_LOAD_RETRY_S = 300.0
 
     def __init__(
         self,
@@ -267,6 +297,12 @@ class FallbackASR:
         self._opened_until = 0.0  # monotonic deadline; 0 => circuit closed
         self._epoch = 0  # bumped on each closed->open transition; guards stale-success reset
         self._announced_fallback = False
+        # --- Фоновая загрузка локальной модели (non-blocking fallback) ------
+        # Дизайн: docs/plans/2026-06-02-asr-fallback-buffering-design.md §1.
+        self._load_lock = threading.Lock()
+        self._local_load_thread: Optional[threading.Thread] = None
+        self._local_ready = False
+        self._local_load_failed_at = 0.0  # monotonic; 0 => не падала
 
     # ------------------------------------------------------------------ #
     # Делегирование в локальный модуль (для caller'ов и RefineWorker).
@@ -300,6 +336,27 @@ class FallbackASR:
         with self._cb_lock:
             return self._opened_until == 0.0 or time.monotonic() >= self._opened_until
 
+    @property
+    def available(self) -> bool:
+        """True, когда запрос можно обслужить прямо сейчас.
+
+        Либо remote presumed alive (circuit закрыт или его окно истекло —
+        можно пробовать probe), либо локальная модель уже загружена.
+        Потребители (live loop, PerSpeakerIngest) гейтят на этом флаге
+        вычитку своих буферов — False означает «не трогай буфер, копи».
+        """
+        if self._local_ready:
+            return True
+        with self._cb_lock:
+            return self._opened_until == 0.0 or time.monotonic() >= self._opened_until
+
+    def wait_local_ready(self, timeout: Optional[float] = None) -> bool:
+        """Блокирующее ожидание завершения фоновой загрузки (тесты/диагностика)."""
+        t = self._local_load_thread
+        if t is not None:
+            t.join(timeout)
+        return self._local_ready
+
     def _decide(self) -> tuple[bool, int]:
         """Решает remote-vs-local И резервирует единственный half-open probe.
 
@@ -320,12 +377,16 @@ class FallbackASR:
             return False, self._epoch
 
     def _record_success(self, epoch: int) -> None:
+        was_open = False
         with self._cb_lock:
             if epoch != self._epoch:
                 return  # stale: circuit re-opened after we started — не отменяем
+            was_open = self._opened_until != 0.0
             self._failures = 0
             self._opened_until = 0.0
             self._announced_fallback = False
+        if was_open:
+            print("[FallbackASR] remote recovered — circuit CLOSED", file=sys.stderr)
 
     def _record_failure(self, epoch: int) -> None:
         with self._cb_lock:
@@ -341,15 +402,52 @@ class FallbackASR:
                     file=sys.stderr,
                 )
 
-    def _ensure_local_loaded(self) -> None:
-        """Грузит локальные веса (лениво) и логирует первый mode-switch."""
-        if not self._announced_fallback:
+    def _start_local_load(self) -> None:
+        """Идемпотентно запускает фоновую загрузку локальных весов.
+
+        Никогда не блокирует вызывающий поток (загрузка GigaAM на MPS — это
+        30–60 s; до фикса 2026-06-02 она выполнялась синхронно в live loop и
+        замораживала пайплайн). Повторная попытка после провала — не раньше
+        чем через LOCAL_LOAD_RETRY_S.
+        """
+        with self._load_lock:
+            if self._local_ready:
+                return
+            if self._local_load_thread is not None and self._local_load_thread.is_alive():
+                return
+            if (
+                self._local_load_failed_at > 0.0
+                and time.monotonic() - self._local_load_failed_at < self.LOCAL_LOAD_RETRY_S
+            ):
+                return
+            if not self._announced_fallback:
+                print(
+                    "[FallbackASR] remote failed — loading local GigaAM in background",
+                    file=sys.stderr,
+                )
+                self._announced_fallback = True
+            self._local_load_thread = threading.Thread(
+                target=self._load_local_weights,
+                daemon=True,
+                name="fallback-asr-local-load",
+            )
+            self._local_load_thread.start()
+
+    def _load_local_weights(self) -> None:
+        """Тело фонового потока: грузит веса, выставляет _local_ready."""
+        try:
+            self._local.load_model(quiet=True)
+        except Exception as exc:
+            with self._load_lock:
+                self._local_load_failed_at = time.monotonic()
             print(
-                "[FallbackASR] remote failed — switching to local GigaAM",
+                f"[FallbackASR] local GigaAM load FAILED: {type(exc).__name__}: {exc}",
                 file=sys.stderr,
             )
-            self._announced_fallback = True
-        self._local.load_model(quiet=True)
+            traceback.print_exc()
+            return
+        self._local_ready = True
+        print("[FallbackASR] local GigaAM ready — fallback active", file=sys.stderr)
 
     # ------------------------------------------------------------------ #
     # Загрузка модели — для обоих режимов.
@@ -371,13 +469,15 @@ class FallbackASR:
     # Dispatch: remote с circuit breaker'ом, локаль как резерв.
     # ------------------------------------------------------------------ #
     def _run(self, remote_call: Callable[[], Any], local_call: Callable[[], Any]) -> Any:
-        """Общий dispatch: remote под breaker'ом, иначе/при сбое — локаль.
+        """Общий dispatch: remote под breaker'ом; локаль — только если уже загружена.
 
         Решение remote-vs-local и запись success/failure epoch-защищены (см.
         ``_decide``), так что запоздавший success не отменяет свежий open и в
-        half-open окне probe'ит ровно один поток. ``local_call`` сам решает,
-        что вернуть при своём сбое: ``transcribe_chunk`` отдаёт None,
-        остальные пере-поднимают исключение.
+        half-open окне probe'ит ровно один поток.
+
+        Если обслужить некому (remote упал/circuit открыт И локаль не готова) —
+        поднимает ``ASRTemporarilyUnavailable``. Caller обязан сохранить данные
+        и повторить позже; ни один путь больше не блокируется на load_model.
         """
         try_remote, epoch = self._decide()
         if try_remote:
@@ -385,12 +485,22 @@ class FallbackASR:
                 out = remote_call()
                 self._record_success(epoch)
                 return out
-            except (RemoteASRError, httpx.HTTPError):
+            except (RemoteASRError, httpx.HTTPError) as exc:
                 self._record_failure(epoch)
-                self._ensure_local_loaded()
-        else:
-            self._ensure_local_loaded()
-        return local_call()
+                log_rate_limited(
+                    "fallback-remote-fail",
+                    f"[FallbackASR] remote call failed: {type(exc).__name__}: {exc}",
+                )
+                self._start_local_load()
+                if self._local_ready:
+                    return local_call()
+                raise ASRTemporarilyUnavailable(
+                    f"remote failed and local model is not loaded yet: {exc}"
+                ) from exc
+        if self._local_ready:
+            return local_call()
+        self._start_local_load()
+        raise ASRTemporarilyUnavailable("circuit open and local model is not loaded yet")
 
     def transcribe_chunk(self, audio: np.ndarray, sample_rate: int = 16000) -> Optional[str]:
         """Один клип. На полном двустороннем сбое возвращает None (локаль best-effort)."""
@@ -437,6 +547,7 @@ def build_asr() -> "Union[ASRModule, FallbackASR]":
             config.RECOG_ASR_REMOTE_URL,
             config.RECOG_ASR_REMOTE_MODEL,
             config.RECOG_ASR_REMOTE_TIMEOUT_S,
+            live_timeout_s=config.RECOG_ASR_LIVE_TIMEOUT_S,
         )
         return FallbackASR(
             remote,
