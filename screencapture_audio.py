@@ -123,7 +123,9 @@ class ScreenCaptureAudio:
                 try:
                     self._restart_process()
                     restart_count += 1
-                    import time
+                    # NB: модульный `import time` (строка 24); локальный импорт
+                    # здесь делал `time` локальной переменной всей функции и
+                    # ломал capture-timestamp код выше по телу цикла.
                     time.sleep(1)  # Wait for process to stabilize
                     continue
                 except Exception as e:
