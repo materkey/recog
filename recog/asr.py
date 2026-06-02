@@ -14,6 +14,7 @@ import numpy as np
 import torch
 
 from .config import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP
+from .log_utils import log_rate_limited
 from .models import Segment
 
 try:
@@ -299,7 +300,14 @@ class ASRModule:
                 text = model.decoding.decode(model.head, encoded, encoded_len)[0][0]
                 self._maybe_empty_mps_cache()
             return text.strip() if text else None
-        except Exception:
+        except Exception as e:
+            # Контракт прежний (best-effort None), но след в логах обязателен —
+            # молчаливое проглатывание скрыло инцидент 2026-06-02 (см.
+            # docs/plans/2026-06-02-asr-fallback-buffering-design.md).
+            log_rate_limited(
+                "asr-transcribe-chunk",
+                f"[ASRModule] transcribe_chunk failed: {type(e).__name__}: {e}",
+            )
             return None
 
     def transcribe_with_timestamps(

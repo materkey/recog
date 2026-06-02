@@ -1013,3 +1013,35 @@ def test_transcribe_direct_on_cpu_does_not_enter_pool(monkeypatch):
     transcriber._transcribe_direct(audio)
 
     pool_factory.assert_not_called()
+
+
+def test_transcribe_chunk_logs_swallowed_exception(capsys, monkeypatch):
+    """
+    given: model.forward кидает исключение внутри transcribe_chunk
+    when: transcribe_chunk вызывается
+    then: возвращается None (контракт прежний), но ошибка попадает в stderr
+          (молчаливое проглатывание скрыло инцидент 2026-06-02)
+    """
+    from recog.log_utils import _reset_for_tests
+    _reset_for_tests()
+
+    asr = ASRModule.__new__(ASRModule)  # без __init__ (не грузим gigaam)
+    asr.device = "cpu"
+    asr._model_lock = threading.RLock()
+    asr._mps_inference_count = 0
+
+    class _BrokenModel:
+        _device = "cpu"
+        _dtype = torch.float32
+
+        def forward(self, wav, length):
+            raise RuntimeError("MPS command buffer error")
+
+    monkeypatch.setattr(asr, "load_model", lambda quiet=False: _BrokenModel())
+
+    result = asr.transcribe_chunk(np.zeros(16000, dtype=np.float32))
+
+    assert result is None
+    err = capsys.readouterr().err
+    assert "transcribe_chunk failed" in err
+    assert "MPS command buffer error" in err
