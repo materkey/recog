@@ -24,6 +24,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, List, Literal, Optional, Union
@@ -31,6 +32,8 @@ from typing import Any, Callable, List, Literal, Optional, Union
 import numpy as np
 
 from gigaam.types import TranscriptionResult, Word
+
+from .remote_asr import ASRTemporarilyUnavailable
 
 
 AbortMode = Literal["cooperative", "coarse"]
@@ -248,6 +251,10 @@ class RefineWorker:
     # immediately-aborted retry. 50 ms polls keep wasted wake-ups low while
     # still reacting quickly once live completes its batch (~200-500 ms).
     _LIVE_POLL_S: float = 0.05
+    # Пауза перед возвратом задачи в очередь, когда ASR временно недоступен
+    # (remote упал + локаль грузится). Без неё worker крутится в busy-loop:
+    # get -> unavailable -> put -> get -> ...
+    _UNAVAILABLE_RETRY_DELAY_S: float = 2.0
 
     def __init__(
         self,
@@ -411,6 +418,7 @@ class RefineWorker:
 
     def _process_task(self, task: RefineTask) -> None:
         aborted = False
+        unavailable = False
         result: Optional[TranscriptionResult] = None
 
         # Cooperative pre-lock gate: if live has already signalled intent to
@@ -472,6 +480,17 @@ class RefineWorker:
                         result = self._transcribe_fn(task.pcm_samples)
                 except RefineAborted:
                     aborted = True
+                except ASRTemporarilyUnavailable:
+                    unavailable = True
+
+        if unavailable:
+            # ASR (remote + локаль) сейчас не может обслужить refine. Это
+            # tier-2 контур — просто вернуть задачу в очередь после паузы
+            # (без паузы worker крутится в busy-loop); live-путь тем временем
+            # буферизует своё аудио независимо.
+            time.sleep(self._UNAVAILABLE_RETRY_DELAY_S)
+            self._queue.put(task)
+            return
 
         if aborted:
             # Re-enqueue; the pre-lock gate on the next iteration will wait
