@@ -152,3 +152,23 @@ RECOG_ASR_REMOTE_MODEL = os.environ.get("RECOG_ASR_REMOTE_MODEL", "gigaam")
 RECOG_ASR_REMOTE_TIMEOUT_S = float(os.environ.get("RECOG_ASR_REMOTE_TIMEOUT_S", "15"))
 RECOG_ASR_CIRCUIT_FAILS = int(os.environ.get("RECOG_ASR_CIRCUIT_FAILS", "3"))
 RECOG_ASR_CIRCUIT_OPEN_S = float(os.environ.get("RECOG_ASR_CIRCUIT_OPEN_S", "60"))
+
+
+# ============================================================================
+# ASR FALLBACK BUFFERING (docs/plans/2026-06-02-asr-fallback-buffering-design.md)
+# ============================================================================
+
+# Таймаут remote-запроса для live-путей (transcribe_chunk / transcribe_batch).
+# Короче RECOG_ASR_REMOTE_TIMEOUT_S: 3-секундный live-чанк не должен блокировать
+# пайплайн на 15 s, когда шлюз лежит. Refine/offline остаются на длинном таймауте.
+RECOG_ASR_LIVE_TIMEOUT_S = float(os.environ.get("RECOG_ASR_LIVE_TIMEOUT_S", "5"))
+
+# Окно дедупликации live-сегментов: last_words применяются только если разрыв
+# (по capture-времени) между концом предыдущего сегмента и началом нового чанка
+# меньше этого значения. Дедуп существует для 0.5 s audio-overlap соседних
+# чанков; за пределами окна повторённая фраза — это реальная речь.
+DEDUP_MAX_GAP_S = float(os.environ.get("DEDUP_MAX_GAP_S", "2.0"))
+
+# Кап аудио-буфера AudioCapture, пока ASR недоступен (секунды). При превышении
+# старейшее аудио отбрасывается с rate-limited логом.
+ASR_PENDING_BUFFER_CAP_S = float(os.environ.get("ASR_PENDING_BUFFER_CAP_S", "600"))
