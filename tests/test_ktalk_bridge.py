@@ -1665,6 +1665,58 @@ async def test_meeting_leave_emits_meeting_ended_to_channel_and_extension():
     assert extension_ended[0]["meeting_id"] == "m-prev"
 
 
+def _reconnect_storage_mock(meeting_id="m-live"):
+    """MeetingStorage mock whose `on_meeting_join` keeps the path unchanged.
+
+    Models a no-op reconnect to the *same* active meeting (KTalk emits these
+    during tab focus / socket churn): `current_meeting_path` before and after
+    `on_meeting_join` are identical, so the bridge takes the reconnect branch.
+    """
+    storage = Mock()
+    path = Path(f"/tmp/{meeting_id}.jsonl")
+    storage.current_meeting_path = path
+    storage.current_meeting_id = meeting_id
+
+    def _on_join(url, *args, **kwargs):
+        storage.current_meeting_path = path  # unchanged — same meeting
+        return meeting_id
+
+    storage.on_meeting_join = Mock(side_effect=_on_join)
+    storage.on_ktalk_leave = Mock(return_value="m-next")
+    storage.get_current_transcript = Mock(return_value=[])
+    storage.get_current_meeting_id = Mock(return_value=meeting_id)
+    storage._load_meta = Mock(return_value={"source": "ktalk"})
+    return storage
+
+
+@pytest.mark.asyncio
+async def test_meeting_join_reconnect_rearms_nulled_tick_state():
+    """
+    given: an active meeting whose `_copilot_tick_state` was nulled by a
+           prior (possibly spurious) meeting_leave during KTalk join/leave
+           churn, then a meeting_join reconnect that does NOT change the
+           meeting path
+    when:  the bridge processes the `meeting_join` frame
+    then:  `_copilot_tick_state` is re-armed for the active meeting so that
+           proactive transcript_tick emission resumes — regression guard for
+           the bug where tick-state was seeded only on a real path change,
+           leaving a reconnected meeting permanently tick-blind
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_reconnect_storage_mock(meeting_id="m-live"))
+    bridge._copilot_tick_state = None  # nulled by a prior meeting_leave
+
+    await bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/live",
+        "title": "Live interview",
+        "platform": "ktalk",
+    })
+
+    assert bridge._copilot_tick_state is not None
+    assert bridge._copilot_tick_state["meeting_id"] == "m-live"
+
+
 # --- stale request_id: late replies dropped after meeting_leave ---
 
 

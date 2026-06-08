@@ -2012,6 +2012,25 @@ class KTalkBridge:
                         "last_seg_count": 0,
                         "last_emit_ts": time.time(),
                     }
+                else:
+                    # No-op reconnect (same meeting path) — KTalk emits these
+                    # during tab focus / socket churn. We deliberately keep the
+                    # running tick counters untouched. But a prior (possibly
+                    # spurious) `meeting_leave` may have nulled
+                    # `_copilot_tick_state`; without re-arming here the active
+                    # meeting stays permanently tick-blind — transcript keeps
+                    # recording, yet no proactive `transcript_tick` ever fires.
+                    # Re-seed only when it is missing or points at a stale
+                    # meeting, so a healthy reconnect never resets live counters.
+                    tick_state = self._copilot_tick_state
+                    if tick_state is None or tick_state.get("meeting_id") != meeting_id:
+                        self._copilot_tick_state = {
+                            "meeting_id": meeting_id,
+                            "meeting_title": title,
+                            "seg_count": 0,
+                            "last_seg_count": 0,
+                            "last_emit_ts": time.time(),
+                        }
                 # Mark this WS as the owner of the active meeting so that a
                 # parallel `meeting_join` from a second tab will be rejected
                 # rather than silently flipping `current_meeting_id`.
