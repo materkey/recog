@@ -1,8 +1,10 @@
 """Тесты буферизации аудио при недоступном ASR.
 
 Дизайн: docs/plans/2026-06-02-asr-fallback-buffering-design.md §2, §4.
+Отличие от дизайна: retry-слот живёт в SourceState.pending_chunk (consumer),
+а не в capture.requeue() — см. коммит-историю.
 
-Покрывает оба capture-класса с одинаковым контрактом get_chunk/requeue:
+Покрывает оба capture-класса с одинаковым контрактом get_chunk:
 - SingleDeviceCapture (recog/live.py) — микрофон/sounddevice
 - ScreenCaptureAudio (screencapture_audio.py) — системный звук/ScreenCaptureKit
 
@@ -29,12 +31,11 @@ SR = 16000
 
 
 def _init_buffer_fields(cap, max_buffer_s: float = 10.0):
-    """Общие поля буферизации (capture-время, requeue, кап)."""
+    """Общие поля буферизации (capture-время, кап)."""
     cap.buffer = []
     cap._lock = threading.Lock()
     cap._buffer_start_ts = None
     cap._buffered_samples = 0
-    cap._requeued = []
     cap._overlap_samples = int(0.5 * SR)
     cap._max_buffered_samples = int(max_buffer_s * SR)
 
@@ -84,7 +85,7 @@ def _feed(cap, seconds: float, captured_at: float):
 
 
 # =============================================================================
-# Capture-классы: capture-время, requeue, кап (оба класса)
+# Capture-классы: capture-время, кап (оба класса)
 # =============================================================================
 
 
@@ -112,41 +113,6 @@ class TestCaptureTimestamps:
 
     def test_not_enough_audio_returns_none(self, capture):
         _feed(capture, 1.0, captured_at=1000.0)
-        assert capture.get_chunk(3.0) is None
-
-
-class TestRequeue:
-    def test_requeued_chunk_returned_first_with_original_timestamp(self, capture):
-        """given: чанк вычитан (ASR оказался недоступен) и возвращён requeue
-        when: следующий get_chunk
-        then: возвращается тот же чанк с исходным capture-временем"""
-        _feed(capture, 6.0, captured_at=1000.0)
-        chunk1, ts1 = capture.get_chunk(3.0)
-
-        capture.requeue(chunk1, ts1)
-        chunk_again, ts_again = capture.get_chunk(3.0)
-
-        assert ts_again == pytest.approx(ts1)
-        np.testing.assert_array_equal(chunk_again, chunk1)
-
-    def test_after_requeued_chunk_consumed_buffer_continues_in_order(self, capture):
-        """given: requeue + остаток в буфере
-        when: get_chunk дважды
-        then: первый — requeued (t=1000.0), второй — продолжение буфера (t=1002.5)"""
-        _feed(capture, 6.0, captured_at=1000.0)
-        chunk1, ts1 = capture.get_chunk(3.0)
-        capture.requeue(chunk1, ts1)
-
-        _, ts_first = capture.get_chunk(3.0)
-        _, ts_second = capture.get_chunk(3.0)
-        assert ts_first == pytest.approx(1000.0)
-        assert ts_second == pytest.approx(1002.5)
-
-    def test_clear_buffer_drops_requeued_too(self, capture):
-        _feed(capture, 3.0, captured_at=1000.0)
-        chunk, ts = capture.get_chunk(3.0)
-        capture.requeue(chunk, ts)
-        capture.clear_buffer()
         assert capture.get_chunk(3.0) is None
 
 
@@ -201,22 +167,75 @@ class TestAsrAvailabilityGate:
         LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=True)
         capture.get_chunk.assert_not_called()
 
-    def test_unavailable_exception_requeues_chunk(self):
+    def test_unavailable_exception_holds_chunk_in_pending_slot(self):
         """given: ASR стал недоступен между get_chunk и transcribe
         when: _transcribe_direct кидает ASRTemporarilyUnavailable
-        then: чанк возвращается в capture.requeue с исходным временем"""
+        then: чанк сохраняется в state.pending_chunk с исходным временем"""
         t = _make_transcriber_stub(asr_available=True)
         chunk = np.ones(48000, dtype=np.float32) * 0.1
         capture = Mock()
         capture.get_chunk.return_value = (chunk, 1000.0)
         t._transcribe_direct = Mock(side_effect=ASRTemporarilyUnavailable("loading"))
+        state = SourceState()
 
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
 
-        capture.requeue.assert_called_once()
-        requeued_chunk, requeued_ts = capture.requeue.call_args[0]
-        np.testing.assert_array_equal(requeued_chunk, chunk)
-        assert requeued_ts == pytest.approx(1000.0)
+        assert state.pending_chunk is not None
+        pend_chunk, pend_ts, pend_gen = state.pending_chunk
+        np.testing.assert_array_equal(pend_chunk, chunk)
+        assert pend_ts == pytest.approx(1000.0)
+        assert pend_gen == t._meeting_generation
+
+    def test_pending_chunk_retried_without_rereading_or_rewriting_wav(self):
+        """given: первая попытка записала чанк в WAV и упала (pending_chunk)
+        when: следующий _process_chunk с доступным ASR
+        then: capture.get_chunk не зовётся, WAV не пишется второй раз,
+              сегмент получает исходное capture-время"""
+        t = _make_transcriber_stub(asr_available=True)
+        chunk = np.ones(48000, dtype=np.float32) * 0.1
+        capture = Mock()
+        capture.get_chunk.return_value = (chunk, 1000.0)
+        wav_writer = Mock()
+        wav_writer.get_offset_ms.return_value = 0
+        t._wav_writer_mic = wav_writer
+        t._check_silence_split = Mock()
+        t._handle_mic_chunk = Mock()
+        state = SourceState()
+
+        # Попытка 1: WAV записан, ASR упал -> pending_chunk
+        t._transcribe_direct = Mock(side_effect=ASRTemporarilyUnavailable("loading"))
+        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        assert wav_writer.write_chunk.call_count == 1
+        assert state.pending_chunk is not None
+
+        # Попытка 2: ASR ожил — ретрай из слота, без повторного чтения/записи
+        t._transcribe_direct = Mock(return_value="привет мир")
+        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+
+        capture.get_chunk.assert_called_once()  # только попытка 1
+        assert wav_writer.write_chunk.call_count == 1  # не вырос
+        assert state.pending_chunk is None
+        t._handle_mic_chunk.assert_called_once()
+        chunk_time_arg = t._handle_mic_chunk.call_args[0][2]
+        assert chunk_time_arg == pytest.approx(1000.0 + 3.0, abs=0.1)
+
+    def test_pending_chunk_from_old_meeting_generation_dropped(self):
+        """given: pending_chunk из прошлой встречи (generation сменился)
+        when: _process_chunk
+        then: чанк выброшен, обработка продолжается с capture-буфера"""
+        t = _make_transcriber_stub(asr_available=True)
+        capture = Mock()
+        capture.get_chunk.return_value = None
+        t._transcribe_direct = Mock()
+        state = SourceState()
+        state.pending_chunk = (np.ones(48000, dtype=np.float32), 1000.0, 0)
+        t._meeting_generation = 1  # встреча сменилась
+
+        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+
+        assert state.pending_chunk is None
+        capture.get_chunk.assert_called_once()
+        t._transcribe_direct.assert_not_called()
 
     def test_segment_timestamp_uses_capture_time_not_processing_time(self):
         """given: чанк, захваченный час назад (бэклог после сбоя)

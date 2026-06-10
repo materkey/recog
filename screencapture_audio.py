@@ -57,7 +57,6 @@ class ScreenCaptureAudio:
         # Тот же контракт, что у SingleDeviceCapture (recog/live.py).
         self._buffer_start_ts: Optional[float] = None
         self._buffered_samples = 0
-        self._requeued: list = []
         self._overlap_samples = int(0.5 * sample_rate)
         self._max_buffered_samples = int(ASR_PENDING_BUFFER_CAP_S * sample_rate)
 
@@ -261,7 +260,6 @@ class ScreenCaptureAudio:
         """Discard all buffered audio (used on meeting boundary)."""
         with self._lock:
             self.buffer = []
-            self._requeued = []
             self._buffer_start_ts = None
             self._buffered_samples = 0
 
@@ -288,19 +286,13 @@ class ScreenCaptureAudio:
             return self._append_locked(data, captured_at)
 
     def get_chunk(self, duration: float) -> Optional[Tuple[np.ndarray, float]]:
-        """Get (audio chunk, epoch-время захвата первого сэмпла).
-
-        Сначала отдаёт чанки из _requeued (возвращённые после
-        ASRTemporarilyUnavailable), затем — накопленный буфер.
-        """
+        """Get (audio chunk, epoch-время захвата первого сэмпла)."""
         if not self.running:
             return None
 
         samples_needed = int(duration * self.sample_rate)
 
         with self._lock:
-            if self._requeued:
-                return self._requeued.pop(0)
             if not self.buffer:
                 return None
 
@@ -325,15 +317,6 @@ class ScreenCaptureAudio:
             self._buffer_start_ts = chunk_start_ts + overlap_start / self.sample_rate
 
             return chunk.astype(np.float32), chunk_start_ts
-
-    def requeue(self, chunk: np.ndarray, capture_start_ts: float):
-        """Возвращает уже вычитанный чанк обратно (ASR оказался недоступен).
-
-        Тот же контракт, что у SingleDeviceCapture.requeue: чанк будет отдан
-        первым же get_chunk с исходным capture-временем.
-        """
-        with self._lock:
-            self._requeued.insert(0, (chunk, capture_start_ts))
 
     def __enter__(self):
         self.start()
