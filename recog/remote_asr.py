@@ -123,6 +123,12 @@ class RemoteASRClient:
         self.live_timeout_s = live_timeout_s if live_timeout_s is not None else timeout_s
         self.max_workers = max_workers
         self._client = httpx.Client(timeout=timeout_s)
+        # Один долгоживущий пул на клиент: transcribe_batch зовётся ~5 раз/с
+        # (батч-окно 200 ms), создавать/сносить по 8 потоков на каждый вызов —
+        # лишний churn в горячем live-пути.
+        self._pool = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="remote-asr"
+        )
 
     def healthz(self) -> bool:
         """GET /healthz — True только если шлюз достижим И вернул ok.
@@ -177,10 +183,9 @@ class RemoteASRClient:
         if not pcm_list:
             return []
         try:
-            with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-                # `map` сохраняет входной порядок и пробрасывает первое
-                # исключение при материализации списка.
-                return list(pool.map(self.transcribe_chunk, pcm_list))
+            # `map` сохраняет входной порядок и пробрасывает первое
+            # исключение при материализации списка.
+            return list(self._pool.map(self.transcribe_chunk, pcm_list))
         except RemoteASRError:
             raise
         except Exception as e:
@@ -345,10 +350,7 @@ class FallbackASR:
         Потребители (live loop, PerSpeakerIngest) гейтят на этом флаге
         вычитку своих буферов — False означает «не трогай буфер, копи».
         """
-        if self._local_ready:
-            return True
-        with self._cb_lock:
-            return self._opened_until == 0.0 or time.monotonic() >= self._opened_until
+        return self._local_ready or self.using_remote
 
     def wait_local_ready(self, timeout: Optional[float] = None) -> bool:
         """Блокирующее ожидание завершения фоновой загрузки (тесты/диагностика)."""
