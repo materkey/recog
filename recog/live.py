@@ -160,8 +160,6 @@ class SingleDeviceCapture:
         # _buffer_start_ts — epoch-время захвата первого невычитанного сэмпла.
         self._buffer_start_ts: Optional[float] = None
         self._buffered_samples = 0
-        # Чанки, возвращённые requeue() (ASR был недоступен) — отдаются первыми.
-        self._requeued: list = []
         self._overlap_samples = int(0.5 * sample_rate)
         self._max_buffered_samples = int(ASR_PENDING_BUFFER_CAP_S * sample_rate)
 
@@ -235,28 +233,20 @@ class SingleDeviceCapture:
         if self._lock:
             with self._lock:
                 self.buffer = []
-                self._requeued = []
                 self._buffer_start_ts = None
                 self._buffered_samples = 0
         else:
             self.buffer = []
-            self._requeued = []
             self._buffer_start_ts = None
             self._buffered_samples = 0
 
     def get_chunk(self, duration: float) -> Optional[Tuple[np.ndarray, float]]:
-        """Возвращает (аудио чанк (моно), epoch-время захвата первого сэмпла).
-
-        Сначала отдаёт чанки из _requeued (возвращённые после
-        ASRTemporarilyUnavailable), затем — накопленный буфер.
-        """
+        """Возвращает (аудио чанк (моно), epoch-время захвата первого сэмпла)."""
         samples_needed = int(duration * self.sample_rate)
 
         if self._lock:
             self._lock.acquire()
         try:
-            if self._requeued:
-                return self._requeued.pop(0)
             if not self.buffer:
                 return None
             audio = np.concatenate(self.buffer, axis=0)
@@ -283,20 +273,6 @@ class SingleDeviceCapture:
             chunk = np.mean(chunk, axis=1)
 
         return chunk.flatten(), chunk_start_ts
-
-    def requeue(self, chunk: np.ndarray, capture_start_ts: float):
-        """Возвращает уже вычитанный чанк обратно (ASR оказался недоступен).
-
-        Чанк хранится в отдельном списке _requeued (он уже моно и фиксированной
-        длины — обратно в покадровый буфер его не вставить из-за несовпадения
-        размерностей со стерео-кадрами callback'а) и будет отдан первым же
-        get_chunk. Порядок и capture-время сохраняются.
-        """
-        if self._lock:
-            with self._lock:
-                self._requeued.insert(0, (chunk, capture_start_ts))
-        else:
-            self._requeued.insert(0, (chunk, capture_start_ts))
 
     @staticmethod
     def list_devices():
@@ -371,6 +347,12 @@ class SourceState:
     # Дедуп применяется только если новый чанк начинается в пределах
     # DEDUP_MAX_GAP_S от этого времени (дизайн §4).
     last_words_capture_end: float = 0.0
+    # Однослотовый retry: чанк, на котором ASR кинул ASRTemporarilyUnavailable
+    # (гонка первого сбоя). Хранится как (chunk, capture_start_ts, generation)
+    # и диспатчится первым при следующем _process_chunk с доступным ASR —
+    # тот же паттерн, что _pending_retry_batch в PerSpeakerIngest. Чанк уже
+    # записан в WAV первой попыткой, поэтому ретрай запись пропускает.
+    pending_chunk: Optional[tuple] = None
 
     def __post_init__(self):
         if self.pending_updates is None:
@@ -528,8 +510,8 @@ class LiveTranscriber:
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Транскрибирует напрямую через tensor без temp файлов.
 
-        ASRTemporarilyUnavailable пробрасывается наверх (caller обязан вернуть
-        чанк в буфер через capture.requeue). Любое другое исключение — лог +
+        ASRTemporarilyUnavailable пробрасывается наверх (caller обязан сохранить
+        чанк в state.pending_chunk для ретрая). Любое другое исключение — лог +
         None (best-effort, контракт прежний).
         """
         try:
@@ -1766,12 +1748,24 @@ class LiveTranscriber:
         # captured before a meeting switch is tagged with the old generation
         # and discarded by the generation check downstream.
         chunk_gen = self._meeting_generation
-        result = capture.get_chunk(self.chunk_duration)
-        if result is None:
-            return
-        chunk, capture_start_ts = result
-        if len(chunk) < 1000:
-            return
+
+        # Сначала — retry-слот: чанк, не обслуженный прошлой попыткой
+        # (ASRTemporarilyUnavailable). Он старше всего в capture-буфере и уже
+        # записан в WAV, поэтому запись ниже пропускается. Чанк из другого
+        # поколения (встреча сменилась) молча выбрасывается.
+        retry_pending = state.pending_chunk
+        state.pending_chunk = None
+        if retry_pending is not None and retry_pending[2] != chunk_gen:
+            retry_pending = None
+        if retry_pending is not None:
+            chunk, capture_start_ts, _ = retry_pending
+        else:
+            result = capture.get_chunk(self.chunk_duration)
+            if result is None:
+                return
+            chunk, capture_start_ts = result
+            if len(chunk) < 1000:
+                return
         # Времена чанка — от capture-времени (НЕ time.time()): при обработке
         # бэклога после сбоя ASR сегменты должны лечь в то время, когда речь
         # была произнесена.
@@ -1788,7 +1782,12 @@ class LiveTranscriber:
         with self._wav_lock:
             if self._meeting_generation != chunk_gen:
                 return
-            if is_mic and self._wav_writer_mic:
+            if retry_pending is not None:
+                # Чанк уже записан первой попыткой; state.audio_offset тоже
+                # выставлен ей и с тех пор не перезаписывался (этот код — его
+                # единственный писатель для данного state).
+                pass
+            elif is_mic and self._wav_writer_mic:
                 state.audio_offset = self._wav_writer_mic.get_offset_ms()
                 self._wav_writer_mic.write_chunk(chunk)
             elif not is_mic and self._wav_writer_system:
@@ -1844,9 +1843,9 @@ class LiveTranscriber:
             text = self._transcribe_direct(chunk)
         except ASRTemporarilyUnavailable:
             # ASR отвалился между гейтом и вызовом (первый сбой remote).
-            # Чанк не теряем — возвращаем в буфер, он будет обработан после
+            # Чанк не теряем — кладём в retry-слот, он будет обработан после
             # восстановления (фоновая загрузка локали / probe remote).
-            capture.requeue(chunk, capture_start_ts)
+            state.pending_chunk = (chunk, capture_start_ts, chunk_gen)
             return
         if not text:
             return
