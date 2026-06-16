@@ -85,8 +85,7 @@ const router = {
     routes: {
         '/': 'meetings',
         '/live': 'live',
-        '/meeting/:id': 'meeting',
-        '/speakers': 'speakers'
+        '/meeting/:id': 'meeting'
     },
 
     init() {
@@ -120,9 +119,6 @@ const router = {
             const id = hash.replace('/meeting/', '');
             this.showView('meeting');
             views.meeting.load(id);
-        } else if (hash === '/speakers') {
-            this.showView('speakers');
-            views.speakers.load();
         }
     },
 
@@ -348,14 +344,9 @@ const views = {
         meta: null,
         segments: [],
         _searchListenerInitialized: false,
-        enrollMode: false,
-        selectedSegments: [],  // Array of segment indices for enrollment
         privacyMode: localStorage.getItem('meetingPrivacyMode') === 'true',
 
         async load(id) {
-            // Reset enrollment state
-            this.enrollMode = false;
-            this.selectedSegments = [];
             this.id = id;
             const titleEl = document.getElementById('meeting-title');
             const metaEl = document.getElementById('meeting-meta');
@@ -489,11 +480,10 @@ const views = {
                 return;
             }
 
-            // Group by speaker, but preserve segment indices for enrollment
+            // Group by speaker, preserving segment indices for audio playback
             const grouped = this.groupSegments(segments);
 
-            const enrollModeClass = this.enrollMode ? 'enroll-mode' : '';
-            container.className = `transcript ${enrollModeClass}`;
+            container.className = 'transcript';
 
             container.innerHTML = grouped.map(group => {
                 // Системные события отображаются как разделители
@@ -511,30 +501,16 @@ const views = {
                     ? highlightSearch(group.text, searchTerm)
                     : escapeHtml(group.text);
 
-                // For enrollment: check if segment has audio data
+                // Check if segment has audio data
                 const hasAudio = group.segmentIndices && group.segmentIndices.some(idx => {
                     const seg = segments[idx];
                     return seg && seg.audio_offset_ms !== undefined;
                 });
                 const segmentIndices = group.segmentIndices ? group.segmentIndices.join(',') : '';
-                const isSelected = group.segmentIndices && group.segmentIndices.some(idx =>
-                    this.selectedSegments.includes(idx)
-                );
-
-                // Checkbox for enrollment mode
-                const checkbox = this.enrollMode ? `
-                    <label class="segment-checkbox ${hasAudio ? '' : 'disabled'}" title="${hasAudio ? 'Select for enrollment' : 'No audio data'}">
-                        <input type="checkbox"
-                            ${hasAudio ? '' : 'disabled'}
-                            ${isSelected ? 'checked' : ''}
-                            onchange="toggleSegmentSelection(${segmentIndices})"
-                        >
-                    </label>
-                ` : '';
 
                 // Play button for segments with audio (only first segment in group)
                 const firstSegmentIdx = group.segmentIndices ? group.segmentIndices[0] : null;
-                const playButton = hasAudio && !this.enrollMode && firstSegmentIdx !== null ? `
+                const playButton = hasAudio && firstSegmentIdx !== null ? `
                     <button class="btn-play-segment" onclick="playSegmentAudio(${firstSegmentIdx}, this)" title="Play audio">
                         <svg class="play-icon" viewBox="0 0 24 24" width="16" height="16">
                             <polygon points="5,3 19,12 5,21" fill="currentColor"/>
@@ -543,9 +519,8 @@ const views = {
                 ` : '';
 
                 return `
-                    <div class="transcript-segment ${speakerClass} ${isSelected ? 'segment-selected' : ''}"
+                    <div class="transcript-segment ${speakerClass}"
                          data-segment-indices="${segmentIndices}">
-                        ${checkbox}
                         <div class="segment-content">
                             <div class="segment-header">
                                 <span class="segment-speaker">${escapeHtml(group.speaker)}</span>
@@ -557,9 +532,6 @@ const views = {
                     </div>
                 `;
             }).join('');
-
-            // Render enrollment action bar if segments selected
-            this.renderEnrollmentBar();
         },
 
         groupSegments(segments) {
@@ -602,48 +574,6 @@ const views = {
             if (current) groups.push(current);
 
             return groups;
-        },
-
-        renderEnrollmentBar() {
-            // Remove existing bar if any
-            const existingBar = document.getElementById('enrollment-bar');
-            if (existingBar) existingBar.remove();
-
-            if (!this.enrollMode) return;
-
-            const container = document.getElementById('view-meeting');
-            const bar = document.createElement('div');
-            bar.id = 'enrollment-bar';
-            bar.className = 'enrollment-bar';
-
-            const count = this.selectedSegments.length;
-            bar.innerHTML = `
-                <span class="enrollment-count">${count} segment(s) selected</span>
-                <div class="enrollment-actions">
-                    <button class="btn" onclick="clearEnrollSelection()">Clear</button>
-                    <button class="btn btn-primary" onclick="openEnrollModal()" ${count === 0 ? 'disabled' : ''}>
-                        Add as Speaker
-                    </button>
-                </div>
-            `;
-
-            container.appendChild(bar);
-        },
-
-        toggleEnrollMode() {
-            this.enrollMode = !this.enrollMode;
-            this.selectedSegments = [];
-
-            // Update button
-            const btn = document.getElementById('enroll-mode-btn');
-            if (btn) {
-                btn.textContent = this.enrollMode ? 'Cancel Selection' : 'Select for Enrollment';
-                btn.classList.toggle('active', this.enrollMode);
-            }
-
-            // Re-render transcript
-            const transcriptEl = document.getElementById('transcript');
-            this.renderTranscript(this.segments, transcriptEl);
         },
 
         filterTranscript(searchTerm) {
@@ -936,67 +866,6 @@ const views = {
                     container.scrollTop = container.scrollHeight;
                 }
             }
-        }
-    },
-
-    // --- Speakers View ---
-    speakers: {
-        speakers: [],
-
-        async load() {
-            const container = document.getElementById('speakers-list');
-            const countEl = document.getElementById('speakers-count');
-            container.innerHTML = '<div class="loading">Loading speakers...</div>';
-
-            try {
-                const res = await fetch('/api/speakers');
-                if (!res.ok) throw new Error('Failed to fetch speakers');
-                this.speakers = await res.json();
-                countEl.textContent = `${this.speakers.length} speakers`;
-                this.render();
-            } catch (e) {
-                container.innerHTML = `<div class="error">Error: ${e.message}</div>`;
-            }
-        },
-
-        render() {
-            const container = document.getElementById('speakers-list');
-
-            if (this.speakers.length === 0) {
-                container.innerHTML = '<div class="empty-state">No speakers in database. Add speakers from meeting transcripts.</div>';
-                return;
-            }
-
-            container.innerHTML = this.speakers.map(speaker => `
-                <div class="speaker-card" data-speaker-id="${escapeHtml(speaker.id)}">
-                    <div class="speaker-header">
-                        <div class="speaker-info">
-                            <span class="speaker-name">${escapeHtml(speaker.display_name)}</span>
-                            <span class="speaker-id">${escapeHtml(speaker.id)}</span>
-                        </div>
-                        <div class="speaker-actions">
-                            <button class="btn btn-small" onclick="renameSpeaker('${escapeHtml(speaker.id)}', '${escapeHtml(speaker.display_name)}')">Rename</button>
-                            <button class="btn btn-small btn-danger" onclick="deleteSpeaker('${escapeHtml(speaker.id)}', '${escapeHtml(speaker.display_name)}')">Delete</button>
-                        </div>
-                    </div>
-                    <div class="speaker-embeddings">
-                        <span class="embedding-count">${speaker.embedding_count} embedding(s)</span>
-                        <button class="btn btn-small btn-toggle" onclick="toggleEmbeddings('${escapeHtml(speaker.id)}')">Show Details</button>
-                    </div>
-                    <div class="embeddings-list" id="embeddings-${escapeHtml(speaker.id)}" style="display: none;">
-                        ${speaker.embeddings.map((emb, idx) => `
-                            <div class="embedding-item">
-                                <div class="embedding-info">
-                                    <span class="embedding-source">${escapeHtml(emb.source_file)}</span>
-                                    <span class="embedding-time">${formatTime(emb.start_time)} - ${formatTime(emb.end_time)}</span>
-                                    <span class="embedding-transcript">${escapeHtml(emb.transcript)}</span>
-                                </div>
-                                <button class="btn btn-small btn-danger" onclick="deleteEmbedding('${escapeHtml(speaker.id)}', ${idx})">Remove</button>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `).join('');
         }
     }
 };
@@ -2128,235 +1997,6 @@ function formatTime(seconds) {
     const s = Math.floor(seconds % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
-
-function toggleEmbeddings(speakerId) {
-    const list = document.getElementById(`embeddings-${speakerId}`);
-    if (list) {
-        const isHidden = list.style.display === 'none';
-        list.style.display = isHidden ? 'block' : 'none';
-
-        // Update button text
-        const card = list.closest('.speaker-card');
-        const btn = card?.querySelector('.btn-toggle');
-        if (btn) {
-            btn.textContent = isHidden ? 'Hide Details' : 'Show Details';
-        }
-    }
-}
-
-async function renameSpeaker(speakerId, currentName) {
-    const newName = prompt('Enter new name for speaker:', currentName);
-    if (!newName || newName === currentName) return;
-
-    try {
-        const res = await fetch(`/api/speakers/${encodeURIComponent(speakerId)}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ display_name: newName })
-        });
-        if (!res.ok) {
-            const error = await res.json().catch(() => ({}));
-            throw new Error(error.detail || 'Failed to rename speaker');
-        }
-        showNotification(`Speaker renamed to "${newName}"`, 'success');
-        views.speakers.load();
-    } catch (e) {
-        showNotification(`Error: ${e.message}`, 'error');
-    }
-}
-
-async function deleteSpeaker(speakerId, displayName) {
-    if (!confirm(`Delete speaker "${displayName}" and all their embeddings?`)) return;
-
-    try {
-        const res = await fetch(`/api/speakers/${encodeURIComponent(speakerId)}`, {
-            method: 'DELETE'
-        });
-        if (!res.ok) {
-            const error = await res.json().catch(() => ({}));
-            throw new Error(error.detail || 'Failed to delete speaker');
-        }
-        showNotification(`Speaker "${displayName}" deleted`, 'success');
-        views.speakers.load();
-    } catch (e) {
-        showNotification(`Error: ${e.message}`, 'error');
-    }
-}
-
-async function deleteEmbedding(speakerId, index) {
-    if (!confirm('Delete this embedding?')) return;
-
-    try {
-        const res = await fetch(`/api/speakers/${encodeURIComponent(speakerId)}/embeddings/${index}`, {
-            method: 'DELETE'
-        });
-        if (!res.ok) {
-            const error = await res.json().catch(() => ({}));
-            throw new Error(error.detail || 'Failed to delete embedding');
-        }
-        showNotification('Embedding deleted', 'success');
-        views.speakers.load();
-    } catch (e) {
-        showNotification(`Error: ${e.message}`, 'error');
-    }
-}
-
-
-// --- Enrollment Functions ---
-
-function toggleEnrollMode() {
-    views.meeting.toggleEnrollMode();
-}
-
-function toggleSegmentSelection(...indices) {
-    const meeting = views.meeting;
-    for (const idx of indices) {
-        const i = meeting.selectedSegments.indexOf(idx);
-        if (i === -1) {
-            meeting.selectedSegments.push(idx);
-        } else {
-            meeting.selectedSegments.splice(i, 1);
-        }
-    }
-
-    // Update segment visual state
-    const transcriptEl = document.getElementById('transcript');
-    transcriptEl.querySelectorAll('.transcript-segment').forEach(el => {
-        const segIndices = (el.dataset.segmentIndices || '').split(',').map(Number);
-        const isSelected = segIndices.some(idx => meeting.selectedSegments.includes(idx));
-        el.classList.toggle('segment-selected', isSelected);
-    });
-
-    // Update enrollment bar
-    meeting.renderEnrollmentBar();
-}
-
-function clearEnrollSelection() {
-    views.meeting.selectedSegments = [];
-    const transcriptEl = document.getElementById('transcript');
-    transcriptEl.querySelectorAll('.transcript-segment').forEach(el => {
-        el.classList.remove('segment-selected');
-        const checkbox = el.querySelector('input[type="checkbox"]');
-        if (checkbox) checkbox.checked = false;
-    });
-    views.meeting.renderEnrollmentBar();
-}
-
-async function openEnrollModal() {
-    const meeting = views.meeting;
-    if (meeting.selectedSegments.length === 0) return;
-
-    // Update segment count
-    document.getElementById('enroll-segment-count').textContent = meeting.selectedSegments.length;
-
-    // Load existing speakers for dropdown
-    try {
-        const res = await fetch('/api/speakers');
-        if (res.ok) {
-            const speakers = await res.json();
-            const select = document.getElementById('existing-speaker-select');
-            select.innerHTML = speakers.map(s =>
-                `<option value="${escapeHtml(s.id)}">${escapeHtml(s.display_name)}</option>`
-            ).join('');
-
-            if (speakers.length === 0) {
-                select.innerHTML = '<option value="">No speakers available</option>';
-            }
-        }
-    } catch (e) {
-        console.error('Failed to load speakers:', e);
-    }
-
-    // Reset form
-    document.getElementById('enroll-speaker-name').value = '';
-    document.querySelector('input[name="speaker-type"][value="new"]').checked = true;
-    toggleSpeakerType();
-
-    // Show modal
-    document.getElementById('enroll-modal').style.display = 'flex';
-}
-
-function closeEnrollModal() {
-    document.getElementById('enroll-modal').style.display = 'none';
-}
-
-function toggleSpeakerType() {
-    const isNew = document.querySelector('input[name="speaker-type"]:checked').value === 'new';
-    document.getElementById('new-speaker-form').style.display = isNew ? 'block' : 'none';
-    document.getElementById('existing-speaker-form').style.display = isNew ? 'none' : 'block';
-}
-
-async function submitEnrollment() {
-    const meeting = views.meeting;
-    const isNew = document.querySelector('input[name="speaker-type"]:checked').value === 'new';
-    const track = document.getElementById('enroll-track-select').value;
-
-    let speakerId = null;
-    let speakerName = null;
-
-    if (isNew) {
-        speakerName = document.getElementById('enroll-speaker-name').value.trim();
-        if (!speakerName) {
-            showNotification('Please enter a speaker name', 'error');
-            return;
-        }
-    } else {
-        speakerId = document.getElementById('existing-speaker-select').value;
-        if (!speakerId) {
-            showNotification('Please select a speaker', 'error');
-            return;
-        }
-    }
-
-    // Collect segment IDs (we need the actual segment indices from the original array)
-    const segmentIndices = meeting.selectedSegments;
-
-    // Build request payload
-    const payload = {
-        meeting_id: meeting.id,
-        segment_indices: segmentIndices,
-        track: track
-    };
-
-    if (isNew) {
-        payload.display_name = speakerName;
-    } else {
-        payload.speaker_id = speakerId;
-    }
-
-    // Disable submit button
-    const submitBtn = document.getElementById('enroll-submit-btn');
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Enrolling...';
-
-    try {
-        const res = await fetch('/api/speakers/enroll-from-segments', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (!res.ok) {
-            const error = await res.json().catch(() => ({}));
-            throw new Error(error.detail || 'Enrollment failed');
-        }
-
-        const result = await res.json();
-        showNotification(`Speaker enrolled: ${result.display_name}`, 'success');
-
-        // Close modal and clear selection
-        closeEnrollModal();
-        clearEnrollSelection();
-        views.meeting.toggleEnrollMode();
-
-    } catch (e) {
-        showNotification(`Error: ${e.message}`, 'error');
-    } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Add Speaker';
-    }
-}
-
 
 // --- Init ---
 
