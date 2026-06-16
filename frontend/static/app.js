@@ -350,6 +350,7 @@ const views = {
         _searchListenerInitialized: false,
         enrollMode: false,
         selectedSegments: [],  // Array of segment indices for enrollment
+        privacyMode: localStorage.getItem('meetingPrivacyMode') === 'true',
 
         async load(id) {
             // Reset enrollment state
@@ -376,6 +377,9 @@ const views = {
                 titleEl.textContent = meta.title || 'Untitled Meeting';
                 this.renderMeta(meta, metaEl);
                 this.renderTranscript(segments, transcriptEl);
+
+                // Sync privacy toggle button with persisted state
+                syncPrivacyButtons();
 
                 // Setup search (only once)
                 if (!this._searchListenerInitialized) {
@@ -670,6 +674,7 @@ const views = {
 
         connect() {
             this.updateFollowButton();
+            syncPrivacyButtons();
             const statusEl = document.getElementById('live-status');
             const infoEl = document.getElementById('live-meeting-info');
             const transcriptEl = document.getElementById('live-transcript');
@@ -1181,10 +1186,49 @@ function highlightSearch(text, term) {
     return escaped.replace(regex, '<mark>$1</mark>');
 }
 
-function copyToClipboard() {
-    const meeting = views.meeting;
-    if (!meeting.meta || !meeting.segments) return;
+// Fallback when an alias lookup misses while privacy is on. Fail closed to a
+// generic label rather than leaking the real speaker name.
+const PRIVACY_ALIAS_FALLBACK = 'speaker_?';
 
+// Privacy is a single shared state across the meeting and live views, persisted
+// in localStorage. Sync every privacy button currently in the DOM.
+function syncPrivacyButtons() {
+    const on = views.meeting.privacyMode;
+    for (const id of ['privacy-mode-btn', 'live-privacy-btn']) {
+        const btn = document.getElementById(id);
+        if (btn) btn.classList.toggle('active', on);
+    }
+}
+
+function togglePrivacy() {
+    views.meeting.privacyMode = !views.meeting.privacyMode;
+    localStorage.setItem('meetingPrivacyMode', views.meeting.privacyMode);
+    syncPrivacyButtons();
+}
+
+// Build speaker -> speaker_N aliases in order of first appearance. System event
+// rows (event_type) are not speakers and are excluded from numbering.
+function buildSpeakerAliasMap(segments) {
+    const map = new Map();
+    let n = 0;
+    for (const seg of segments) {
+        if (seg.event_type) continue;
+        const key = seg.speaker_id || seg.speaker;
+        if (key == null) continue;
+        if (!map.has(key)) map.set(key, `speaker_${n++}`);
+    }
+    return map;
+}
+
+// Resolve a group's display name, anonymizing via the alias map when privacy is on.
+function privacyName(group, alias) {
+    if (!alias) return group.speaker;
+    return alias.get(group.speaker_id || group.speaker) ?? PRIVACY_ALIAS_FALLBACK;
+}
+
+// Shared markdown builder for Copy and Export. When privacy is on, speaker
+// names are replaced with speaker_0, speaker_1, ... consistently.
+function buildMeetingMarkdown(meeting, privacy) {
     const date = new Date(meeting.meta.created_at);
     const dateStr = date.toLocaleDateString('ru-RU', {
         day: 'numeric',
@@ -1196,10 +1240,48 @@ function copyToClipboard() {
     md += `**Date:** ${dateStr}\n\n`;
     md += `---\n\n`;
 
+    const alias = privacy ? buildSpeakerAliasMap(meeting.segments) : null;
     const grouped = meeting.groupSegments(meeting.segments);
     for (const group of grouped) {
-        md += `**${group.speaker}** *[${group.ts_display}]*: ${group.text}\n\n`;
+        if (group.event_type) {
+            md += `*[${group.ts_display}] ${group.text}*\n\n`;
+        } else {
+            md += `**${privacyName(group, alias)}** *[${group.ts_display}]*: ${group.text}\n\n`;
+        }
     }
+    return md;
+}
+
+// Shared markdown builder for the live view's Copy / Download. Event rows stay
+// as italic system lines; speaker rows honor the same privacy alias map.
+function buildLiveMarkdown(segments, title, privacy) {
+    const dateStr = new Date().toLocaleDateString('ru-RU', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+    });
+
+    let md = `# ${title}\n\n`;
+    md += `**Date:** ${dateStr}\n\n`;
+    md += `---\n\n`;
+
+    const alias = privacy ? buildSpeakerAliasMap(segments) : null;
+    const grouped = views.meeting.groupSegments(segments);
+    for (const group of grouped) {
+        if (group.event_type) {
+            md += `*[${group.ts_display}] ${group.text}*\n\n`;
+        } else {
+            md += `**${privacyName(group, alias)}** *[${group.ts_display}]*: ${group.text}\n\n`;
+        }
+    }
+    return md;
+}
+
+function copyToClipboard() {
+    const meeting = views.meeting;
+    if (!meeting.meta || !meeting.segments) return;
+
+    const md = buildMeetingMarkdown(meeting, meeting.privacyMode);
 
     navigator.clipboard.writeText(md).then(() => {
         // Show brief feedback
@@ -1218,24 +1300,7 @@ function copyLiveToClipboard() {
 
     const meeting = views.live.currentMeeting;
     const title = meeting?.title || 'Live Transcription';
-    const dateStr = new Date().toLocaleDateString('ru-RU', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-    });
-
-    let md = `# ${title}\n\n`;
-    md += `**Date:** ${dateStr}\n\n`;
-    md += `---\n\n`;
-
-    const grouped = views.meeting.groupSegments(segments);
-    for (const group of grouped) {
-        if (group.event_type) {
-            md += `*[${group.ts_display}] ${group.text}*\n\n`;
-        } else {
-            md += `**${group.speaker}** *[${group.ts_display}]*: ${group.text}\n\n`;
-        }
-    }
+    const md = buildLiveMarkdown(segments, title, views.meeting.privacyMode);
 
     navigator.clipboard.writeText(md).then(() => {
         const btn = document.getElementById('copy-live-btn');
@@ -1253,24 +1318,7 @@ function downloadLiveMarkdown() {
 
     const meeting = views.live.currentMeeting;
     const title = meeting?.title || 'Live Transcription';
-    const dateStr = new Date().toLocaleDateString('ru-RU', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-    });
-
-    let md = `# ${title}\n\n`;
-    md += `**Date:** ${dateStr}\n\n`;
-    md += `---\n\n`;
-
-    const grouped = views.meeting.groupSegments(segments);
-    for (const group of grouped) {
-        if (group.event_type) {
-            md += `*[${group.ts_display}] ${group.text}*\n\n`;
-        } else {
-            md += `**${group.speaker}** *[${group.ts_display}]*: ${group.text}\n\n`;
-        }
-    }
+    const md = buildLiveMarkdown(segments, title, views.meeting.privacyMode);
 
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
@@ -1286,21 +1334,7 @@ function exportMarkdown() {
     const meeting = views.meeting;
     if (!meeting.meta || !meeting.segments) return;
 
-    const date = new Date(meeting.meta.created_at);
-    const dateStr = date.toLocaleDateString('ru-RU', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-    });
-
-    let md = `# ${meeting.meta.title || 'Untitled Meeting'}\n\n`;
-    md += `**Date:** ${dateStr}\n\n`;
-    md += `---\n\n`;
-
-    const grouped = meeting.groupSegments(meeting.segments);
-    for (const group of grouped) {
-        md += `**${group.speaker}** *[${group.ts_display}]*: ${group.text}\n\n`;
-    }
+    const md = buildMeetingMarkdown(meeting, meeting.privacyMode);
 
     // Download
     const blob = new Blob([md], { type: 'text/markdown' });

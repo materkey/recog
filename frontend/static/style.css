@@ -1688,6 +1688,12 @@ a:hover {
     border-color: var(--accent);
 }
 
+.btn-privacy.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
 /* Enrollment Bar */
 .enrollment-bar {
     position: fixed;
