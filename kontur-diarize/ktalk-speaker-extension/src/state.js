@@ -53,6 +53,7 @@ export const state = {
   lastJitsiParticipantsCount: 0,
   lastJitsiParticipantsMapCount: 0,
   autoScrollEnabled: true,
+  privacyMode: localStorage.getItem('ktalk-privacy-mode') === 'true',
   participantsRefreshTimer: null,
   clockSyncTimer: null,
   activeConfRef: null,
