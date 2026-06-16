@@ -1334,7 +1334,7 @@ async def live_stream(websocket: WebSocket):
         current = active_meetings[0] if active_meetings else None
 
         if current:
-            live_watcher.set_current_meeting(current["id"])
+            live_watcher.set_current_meeting(current["id"], current.get("source"))
             meeting_data = storage.get_meeting(current["id"])
             init_segments = meeting_data.get("segments", []) if meeting_data else []
             # Populate the watermark with the segment_ids we're about to
@@ -1350,7 +1350,11 @@ async def live_stream(websocket: WebSocket):
                 "meeting": current,
                 "segments": init_segments,
                 "active_meetings": active_meetings,
-                "refine_enabled": True,
+                # Tier-2 refine only runs for per-speaker PCM (KTalk
+                # conferences). orphan/mic/mixed-path meetings never emit a
+                # transcript_refine, so advertising refine here would leave
+                # every segment stuck in the preliminary (tier-1) state.
+                "refine_enabled": current.get("source") == "ktalk",
             }))
         else:
             await websocket.send_text(json.dumps({
@@ -1358,7 +1362,7 @@ async def live_stream(websocket: WebSocket):
                 "meeting": None,
                 "segments": [],
                 "active_meetings": [],
-                "refine_enabled": True,
+                "refine_enabled": False,
             }))
     except Exception as e:
         await websocket.send_text(json.dumps({

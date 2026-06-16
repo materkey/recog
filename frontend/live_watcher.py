@@ -36,6 +36,10 @@ class LiveWatcher(FileSystemEventHandler):
     def __init__(self):
         self.clients: set[Any] = set()
         self.current_meeting_id: Optional[str] = None
+        # Last source broadcast for the current meeting. Tracked so an
+        # in-place orphan -> KTalk promotion (same meeting id, see
+        # on_meeting_join case 3) can resend the refine flag.
+        self.current_meeting_source: Optional[str] = None
         self.file_position: int = 0
         # Watermark so we do not re-broadcast rows after an atomic rewrite
         # (`MeetingStorage.update_segments` -> `os.replace`). See D10.
@@ -52,7 +56,7 @@ class LiveWatcher(FileSystemEventHandler):
     def unregister(self, websocket: Any):
         self.clients.discard(websocket)
 
-    def set_current_meeting(self, meeting_id: Optional[str]):
+    def set_current_meeting(self, meeting_id: Optional[str], source: Optional[str] = None):
         """Point the watcher at `meeting_id`, resetting watermark on change.
 
         Must be used instead of assigning `self.current_meeting_id`
@@ -63,12 +67,20 @@ class LiveWatcher(FileSystemEventHandler):
         Without this, a `live_stream` WS connect that races the watchdog's
         `_check_current_meeting` can pre-set the id and make the later
         watchdog call skip the reset.
+
+        `current_meeting_source` is seeded only on a genuine id change.
+        A same-id reconnect must NOT overwrite it: otherwise a second
+        `live_stream` connect landing between an in-place orphan -> KTalk
+        promotion and the queued `_check_source_change` would clobber the
+        tracked `orphan`, making that check see no change and suppress the
+        `refine_state` broadcast to already-connected clients.
         """
         if meeting_id != self.current_meeting_id:
             self.current_meeting_id = meeting_id
             self.file_position = 0
             self._seen_segment_ids = set()
             self._file_inode = None
+            self.current_meeting_source = source
 
     def seed_post_init_watermark(self, known_segment_ids):
         """Pre-populate the seen-id watermark with segment_ids already
@@ -99,6 +111,17 @@ class LiveWatcher(FileSystemEventHandler):
                 self._loop
             )
 
+        # Watch meta.json of current meeting for an in-place source flip
+        # (empty orphan -> KTalk). on_meeting_join rewrites only meta.json
+        # for that promotion, so index.json never fires _check_current_meeting.
+        if path.name == "meta.json" and self._loop:
+            meeting_id = path.parent.name
+            if meeting_id == self.current_meeting_id:
+                asyncio.run_coroutine_threadsafe(
+                    self._check_source_change(meeting_id),
+                    self._loop
+                )
+
         # Watch transcript of current meeting
         if path.name == "transcript.jsonl" and self._loop:
             meeting_id = path.parent.name
@@ -119,15 +142,57 @@ class LiveWatcher(FileSystemEventHandler):
             current = active_meetings[0] if active_meetings else None
 
             if current and current["id"] != self.current_meeting_id:
-                self.set_current_meeting(current["id"])
+                source = current.get("source")
+                self.set_current_meeting(current["id"], source)
 
                 message = json.dumps({
                     "type": "meeting_change",
-                    "meeting": current
+                    "meeting": current,
+                    # Keep refine availability in sync on meeting rotation:
+                    # a KTalk call ending into an orphan (or an orphan
+                    # promoted to a KTalk conference) must update whether the
+                    # preliminary/tier-1 cue applies. Mirrors the init logic
+                    # in server.live_stream.
+                    "refine_enabled": source == "ktalk",
                 })
                 await self._broadcast(message)
         except Exception as e:
             print(f"Error checking current meeting: {e}")
+
+    async def _check_source_change(self, meeting_id: str):
+        """Resend the refine flag when the current meeting's source flips
+        in place (empty orphan -> KTalk via on_meeting_join case 3).
+
+        That promotion rewrites only the meeting's meta.json — not
+        index.json — so the index-driven `_check_current_meeting` never
+        observes it. We read just the small meta.json (not the heavy
+        active-meeting list) since this fires on every meta write.
+        """
+        if meeting_id != self.current_meeting_id:
+            return
+        try:
+            from server import get_storage  # type: ignore
+
+            meta_path = get_storage().base_path / meeting_id / "meta.json"
+            if not meta_path.exists():
+                return
+            source = json.loads(meta_path.read_text(encoding="utf-8")).get("source")
+        except Exception as e:
+            print(f"Error checking source change: {e}")
+            return
+
+        if source == self.current_meeting_source:
+            return
+
+        self.current_meeting_source = source
+        # Resend ONLY the refine flag: a meeting_change here would wipe the
+        # transcript the client has already rendered.
+        message = json.dumps({
+            "type": "refine_state",
+            "meeting_id": meeting_id,
+            "refine_enabled": source == "ktalk",
+        })
+        await self._broadcast(message)
 
     async def _notify_new_segments(self, transcript_path: Path):
         """Read new lines and send to connected clients.
