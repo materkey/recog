@@ -66,6 +66,7 @@
                     <div class="meeting-actions">
                         <button class="btn" onclick="copyToClipboard()">Copy</button>
                         <button class="btn" onclick="exportMarkdown()">Export MD</button>
+                        <button class="btn btn-privacy" id="privacy-mode-btn" onclick="togglePrivacy()" title="Replace names with speaker_N in Copy/Export">Privacy</button>
                         <button class="btn btn-ai" onclick="analyzeIncrement()">AI Analysis</button>
                         <button class="btn btn-enroll" id="enroll-mode-btn" onclick="toggleEnrollMode()">Select for Enrollment</button>
                     </div>
@@ -85,6 +86,7 @@
                     <button class="btn btn-follow active" id="follow-btn" onclick="toggleFollowMode()" title="Auto-scroll to new messages">Follow</button>
                     <button class="btn" id="copy-live-btn" onclick="copyLiveToClipboard()" title="Copy transcript as Markdown">Copy MD</button>
                     <button class="btn" id="download-live-btn" onclick="downloadLiveMarkdown()" title="Download transcript as Markdown file">↓ MD</button>
+                    <button class="btn btn-privacy" id="live-privacy-btn" onclick="togglePrivacy()" title="Replace names with speaker_N in Copy/Download">Privacy</button>
                     <div class="live-status" id="live-status">
                         <span class="status-dot"></span>
                         <span class="status-text">Connecting...</span>
