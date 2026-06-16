@@ -11,6 +11,8 @@ let state;
 let handleTranscript;
 let handleTranscriptRefine;
 let handleNewMeeting;
+let handleTranscriptHistory;
+let buildSpeakerAliasMap;
 
 // `isJitsiPlatform` lives in `platforms/index.js` and is derived from
 // `window.location.hostname`. jsdom forbids mutating `location` after setup,
@@ -29,7 +31,7 @@ beforeAll(async () => {
   }));
 
   state = (await import('./state.js')).state;
-  ({ handleTranscript, handleTranscriptRefine, handleNewMeeting } = await import('./ui.js'));
+  ({ handleTranscript, handleTranscriptRefine, handleNewMeeting, handleTranscriptHistory, buildSpeakerAliasMap } = await import('./ui.js'));
 });
 
 describe('handleTranscriptRefine', () => {
@@ -1112,5 +1114,106 @@ describe('updateTranscriptUI scroll anchor', () => {
     expect(container.scrollTop).toBe(50);
     expect(document.querySelector('.ktalk-msg[data-segment-id="11"] .ktalk-msg-text').innerHTML)
       .toBe('a');
+  });
+});
+
+describe('buildSpeakerAliasMap (privacy)', () => {
+  test('two speakers in two sources - assigns speaker_N by first appearance', () => {
+    const alias = buildSpeakerAliasMap([
+      { source_id: 'a', speaker: 'Alice' },
+      { source_id: 'b', speaker: 'Bob' },
+      { source_id: 'a', speaker: 'Alice' },
+    ]);
+    expect(alias.get('a')).toBe('speaker_0');
+    expect(alias.get('b')).toBe('speaker_1');
+    expect(alias.size).toBe(2);
+  });
+
+  test('same source repeated - maps to a single stable alias', () => {
+    const alias = buildSpeakerAliasMap([
+      { source_id: 'me', speaker: 'Me' },
+      { source_id: 'me', speaker: 'Me' },
+    ]);
+    expect(alias.get('me')).toBe('speaker_0');
+    expect(alias.size).toBe(1);
+  });
+
+  test('missing source_id - falls back to speaker name as the key', () => {
+    const alias = buildSpeakerAliasMap([
+      { speaker: 'Alice' },
+      { speaker: 'Bob' },
+      { speaker: 'Alice' },
+    ]);
+    expect(alias.get('Alice')).toBe('speaker_0');
+    expect(alias.get('Bob')).toBe('speaker_1');
+  });
+
+  test('null key rows - are skipped, do not consume an index', () => {
+    const alias = buildSpeakerAliasMap([
+      { source_id: null, speaker: null },
+      { source_id: 'a', speaker: 'Alice' },
+    ]);
+    expect(alias.get('a')).toBe('speaker_0');
+    expect(alias.size).toBe(1);
+  });
+
+  test('system rows - are skipped and do not shift real participant indices', () => {
+    const alias = buildSpeakerAliasMap([
+      { source_id: '__system__', speaker: 'Система' },
+      { source_id: 'a', speaker: 'Alice' },
+      { speaker_id: '__system__', speaker: 'Система' },
+      { source_id: 'b', speaker: 'Bob' },
+    ]);
+    expect(alias.has('__system__')).toBe(false);
+    expect(alias.get('a')).toBe('speaker_0');
+    expect(alias.get('b')).toBe('speaker_1');
+    expect(alias.size).toBe(2);
+  });
+});
+
+describe('handleTranscriptHistory privacy identity', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    state.transcriptLines = [];
+    state.currentMeetingId = null;
+  });
+
+  test('two Unknown speakers with distinct speaker_id - stay distinct after history reload', () => {
+    handleTranscriptHistory({
+      meeting_id: 'm1',
+      segments: [
+        { id: 1, speaker: 'Unknown', speaker_id: 'pid-1', text: 'a', ts_display: '00:00:01' },
+        { id: 2, speaker: 'Unknown', speaker_id: 'pid-2', text: 'b', ts_display: '00:00:02' },
+      ],
+    });
+
+    // Stable identity goes to privacy_id; source_id stays empty so the legacy
+    // continuation-merge path is not broken for no-source live streams.
+    expect(state.transcriptLines.map(l => l.source_id)).toEqual(['', '']);
+    expect(state.transcriptLines.map(l => l.privacy_id)).toEqual(['pid-1', 'pid-2']);
+
+    // Privacy aliasing keys on identity, so the two Unknowns do not collapse.
+    const alias = buildSpeakerAliasMap(state.transcriptLines);
+    expect(alias.get('pid-1')).toBe('speaker_0');
+    expect(alias.get('pid-2')).toBe('speaker_1');
+    expect(alias.size).toBe(2);
+  });
+
+  test('legacy no-source row restored from history - next continuation still merges', () => {
+    handleTranscriptHistory({
+      meeting_id: 'm1',
+      segments: [
+        { id: 1, speaker: 'Me', speaker_id: 'local', text: 'hello', ts_display: '00:00:01' },
+      ],
+    });
+    expect(state.transcriptLines).toHaveLength(1);
+    expect(state.transcriptLines[0].source_id).toBe('');
+
+    // A legacy live continuation arrives with no source_id; the restored row's
+    // empty source_id must keep it on the `!prev.source_id` merge path.
+    handleTranscript({ speaker: 'Me', text: 'world', is_continuation: true });
+
+    expect(state.transcriptLines).toHaveLength(1);
+    expect(state.transcriptLines[0].text).toBe('hello world');
   });
 });

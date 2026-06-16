@@ -248,6 +248,26 @@ export function injectStyles() {
       .ktalk-transcript-copy-btn.copied {
         background: #22c55e;
       }
+      .ktalk-transcript-privacy-btn {
+        padding: 0 8px;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        border-radius: 4px;
+        color: rgba(255,255,255,0.8);
+        font-size: 11px;
+        cursor: pointer;
+        transition: background 0.15s;
+        height: 22px;
+        line-height: 22px;
+        white-space: nowrap;
+      }
+      .ktalk-transcript-privacy-btn:hover {
+        background: rgba(255,255,255,0.2);
+      }
+      .ktalk-transcript-privacy-btn.active {
+        background: rgba(0, 138, 255, 0.8);
+        color: #fff;
+      }
       .ktalk-transcript-follow-btn {
         padding: 0 8px;
         background: rgba(255,255,255,0.1);
@@ -1117,6 +1137,7 @@ export function createTranscriptContent() {
           </div>
           <button class="ktalk-transcript-follow-btn" title="Auto-follow latest">Follow</button>
           <button class="ktalk-transcript-copy-btn" title="Copy all transcript">Copy</button>
+          <button class="ktalk-transcript-privacy-btn" title="Replace names with speaker_N when copying">Privacy</button>
           <button class="ktalk-bioread-toggle" title="BioRead">Bio</button>
           <button class="ktalk-bioread-settings-btn" title="BioRead settings">⚙</button>
         </div>
@@ -1163,6 +1184,13 @@ export function createTranscriptContent() {
     `;
 
   state.transcriptContentElement.querySelector('.ktalk-transcript-copy-btn').addEventListener('click', copyAllTranscript);
+  const privacyBtn = state.transcriptContentElement.querySelector('.ktalk-transcript-privacy-btn');
+  privacyBtn.classList.toggle('active', state.privacyMode);
+  privacyBtn.addEventListener('click', () => {
+    state.privacyMode = !state.privacyMode;
+    localStorage.setItem('ktalk-privacy-mode', state.privacyMode);
+    privacyBtn.classList.toggle('active', state.privacyMode);
+  });
   state.transcriptContentElement.querySelector('.ktalk-transcript-follow-btn').addEventListener('click', toggleAutoFollow);
   updateFollowButton();
   state.transcriptContentElement.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
@@ -1968,6 +1996,14 @@ export function handleTranscriptHistory(data) {
       text: seg.text,
       timestamp: seg.timestamp || seg.ts_display,
       segment_id: seg.id || 0,
+      // Preserve real source_id semantics: it must stay empty for legacy /
+      // no-source streams (local mic, mixed call sites) so the next live
+      // continuation still takes handleTranscript's `!prev.source_id` merge
+      // path. Fabricating one from speaker_id breaks that merge.
+      source_id: seg.source_id || '',
+      // Stable identity used ONLY for privacy aliasing, kept separate from
+      // source_id so duplicate/Unknown labels don't collapse after a reload.
+      privacy_id: seg.source_id || seg.speaker_id || '',
       is_local: seg.is_local || false,
       uncertain: seg.uncertain || false,
       uncertain_reason: seg.uncertain_reason || "",
@@ -2247,11 +2283,51 @@ export function handleTranscriptRefine(data) {
   }));
 }
 
+// Fail closed: if an alias lookup misses while privacy is on, use a generic
+// label rather than leaking the real speaker name.
+const PRIVACY_ALIAS_FALLBACK = 'speaker_?';
+
+// System-event rows (pause/resume/join markers, restored from transcript
+// history with speaker_id "__system__") are not participants: they must not be
+// anonymized or consume a speaker_N index.
+const SYSTEM_SOURCE_ID = '__system__';
+function isSystemRow(line) {
+  return line.source_id === SYSTEM_SOURCE_ID
+    || line.privacy_id === SYSTEM_SOURCE_ID
+    || line.speaker_id === SYSTEM_SOURCE_ID;
+}
+
+// Identity key for privacy aliasing. Live rows carry source_id; restored
+// history rows carry privacy_id (their persisted speaker id). Display name is
+// the last-resort fallback for legacy/no-source frames.
+function aliasKey(line) {
+  return line.source_id || line.privacy_id || line.speaker;
+}
+
+// Build identity -> speaker_N aliases in order of first appearance.
+// Exported as a pure function so it can be unit-tested without the DOM.
+export function buildSpeakerAliasMap(lines) {
+  const map = new Map();
+  let n = 0;
+  for (const line of lines) {
+    if (isSystemRow(line)) continue;
+    const key = aliasKey(line);
+    if (key == null) continue;
+    if (!map.has(key)) map.set(key, `speaker_${n++}`);
+  }
+  return map;
+}
+
 function copyAllTranscript() {
   if (state.transcriptLines.length === 0) return;
 
+  const alias = state.privacyMode ? buildSpeakerAliasMap(state.transcriptLines) : null;
+
   const text = state.transcriptLines.map(line => {
-    const speaker = line.speaker + getUncertainSuffix(line);
+    const base = (alias && !isSystemRow(line))
+      ? (alias.get(aliasKey(line)) ?? PRIVACY_ALIAS_FALLBACK)
+      : line.speaker;
+    const speaker = base + getUncertainSuffix(line);
     return `**${speaker}** *[${line.time}]*: ${line.text}`;
   }).join('\n\n');
 
