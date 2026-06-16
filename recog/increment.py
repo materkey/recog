@@ -362,7 +362,9 @@ class IncrementGenerator:
                     .replace("{user_name}", user_name)
                     .replace("{transcript}", transcript_text)
                     .replace("{participants}", ", ".join(participants))
-                    .replace("{meeting_title}", meta.get("title", ""))
+                    # `title` is stored as null for untitled meetings, so the
+                    # get-default ("") does not apply — guard the None explicitly.
+                    .replace("{meeting_title}", meta.get("title") or "")
                 )
 
                 # Ensure increments directory exists
