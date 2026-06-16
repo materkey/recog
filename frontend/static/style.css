@@ -685,8 +685,8 @@ a:hover {
 
 /* --- Transcript Tiers (data-refined: false=tier-1 live, true=tier-2 refined) --- */
 .transcript-segment[data-refined="false"] {
-    opacity: 0.6;
-    border-left-style: dashed;
+    opacity: 0.7;
+    border-left-style: solid;
     transition: opacity var(--transition), border-left-color var(--transition);
 }
 

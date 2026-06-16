@@ -688,6 +688,7 @@ const views = {
 
                 case 'meeting_change':
                     this.currentMeeting = msg.meeting;
+                    this.refineEnabled = msg.refine_enabled === true;
                     this.segments = [];
                     this.pendingRefines.clear();
                     lastAnchorPayload = null;
@@ -698,6 +699,16 @@ const views = {
                 case 'segments':
                     this.segments.push(...msg.data);
                     this.appendSegments(msg.data, transcriptEl);
+                    break;
+
+                case 'refine_state':
+                    // In-place orphan -> KTalk promotion: update the refine
+                    // flag so newly appended segments get the tier-1 cue,
+                    // without clearing the rendered transcript.
+                    if (!msg.meeting_id || !this.currentMeeting
+                            || msg.meeting_id === this.currentMeeting.id) {
+                        this.refineEnabled = msg.refine_enabled === true;
+                    }
                     break;
 
                 case 'transcript_refine':
