@@ -27,6 +27,37 @@ TITLE_PROMPT = """Придумай короткое название (3-7 сло
 Название:"""
 
 
+def _sample_transcript(transcript: str, max_chars: int = 6000, blocks: int = 6) -> str:
+    """Sample a long transcript into evenly-spaced blocks covering the whole
+    meeting (beginning, middle, end), so the title reflects the overall content
+    rather than just the opening lines.
+
+    Short transcripts (<= max_chars) are returned unchanged. Sampling is done at
+    line granularity to avoid cutting through "[ts] Speaker: text" lines.
+    """
+    if len(transcript) <= max_chars:
+        return transcript
+
+    lines = [ln for ln in transcript.split("\n") if ln.strip()]
+    if not lines:
+        return transcript[:max_chars]
+
+    budget_per_block = max(1, max_chars // blocks)
+    n = len(lines)
+    out_blocks = []
+    for b in range(blocks):
+        start = (n * b) // blocks
+        block, size, i = [], 0, start
+        while i < n and size < budget_per_block:
+            block.append(lines[i])
+            size += len(lines[i]) + 1
+            i += 1
+        if block:
+            out_blocks.append("\n".join(block))
+
+    return "\n[...]\n".join(out_blocks)
+
+
 async def generate_title_async(transcript: str, model: str = None) -> Optional[str]:
     """
     Generate a title for transcript using Codex CLI.
@@ -41,9 +72,10 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
     if not transcript or len(transcript.strip()) < 50:
         return None
 
-    # Truncate very long transcripts (keep first ~2000 chars for title generation)
-    if len(transcript) > 2000:
-        transcript = transcript[:2000] + "\n..."
+    # Sample evenly across the whole meeting instead of only the head: a long
+    # call's first lines are usual warm-up/small-talk, so head-only truncation
+    # produced titles about the opening topic, not the meeting.
+    transcript = _sample_transcript(transcript)
 
     model = model or os.getenv("CODEX_MODEL", "gpt-5.5")
     prompt = mark_ccs_automation(TITLE_PROMPT.format(transcript=transcript), "title")
@@ -57,9 +89,12 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
             stderr=asyncio.subprocess.PIPE,
             env=get_node_env()
         )
+        # Codex CLI cold start + inference routinely runs ~30s (the increment
+        # provider has no timeout and takes ~28s); 30s here intermittently
+        # timed out -> 500 "Failed to generate title". Give it real headroom.
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(input=prompt.encode()),
-            timeout=30
+            timeout=90
         )
 
         if proc.returncode != 0:
