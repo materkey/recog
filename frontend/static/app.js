@@ -1536,6 +1536,15 @@ async function loadIncrementContent(meetingId, promptId, version) {
 
         if (meta.status === 'generating') {
             container.innerHTML = '<div class="loading">Generation in progress...</div>';
+            // The placeholder resolves to completed/failed once the backend
+            // finishes. Poll until then — otherwise this view stays on this
+            // message until a manual page refresh. The clearInterval at the
+            // top of this function makes each re-entry cancel the previous
+            // tick, so no timers stack. (incrementPollTimer was declared and
+            // cleared everywhere but never actually started.)
+            incrementPollTimer = setInterval(function() {
+                loadIncrementContent(meetingId, promptId, version);
+            }, 2000);
             return;
         }
 
@@ -1577,8 +1586,11 @@ async function regeneratePrompt() {
     if (container) container.innerHTML = '<div class="loading">Generating...</div>';
 
     try {
+        // force=true: regenerate over the full transcript. Without it a finished
+        // meeting (last version already covers every segment) skips with
+        // "No new segments to process".
         var res = await fetch('/api/meetings/' + encodeURIComponent(meetingId) +
-            '/increments/' + encodeURIComponent(promptId) + '/generate', { method: 'POST' });
+            '/increments/' + encodeURIComponent(promptId) + '/generate?force=true', { method: 'POST' });
         if (!res.ok) {
             var err = await res.json().catch(function() { return {}; });
             throw new Error(err.detail || 'Generation failed');
