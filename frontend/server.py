@@ -675,8 +675,12 @@ async def get_increment(meeting_id: str, prompt_id: str, version: int):
 
 
 @app.post("/api/meetings/{meeting_id}/increments/{prompt_id}/generate")
-async def generate_prompt_increment(meeting_id: str, prompt_id: str):
-    """Trigger generation for a specific prompt in a meeting."""
+async def generate_prompt_increment(meeting_id: str, prompt_id: str, force: bool = False):
+    """Trigger generation for a specific prompt in a meeting.
+
+    force=true regenerates over the full transcript (manual Regenerate),
+    rather than only the delta since the last version.
+    """
     if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
         raise HTTPException(status_code=400, detail="Invalid meeting ID")
     if '..' in prompt_id or '/' in prompt_id or '\\' in prompt_id:
@@ -702,7 +706,7 @@ async def generate_prompt_increment(meeting_id: str, prompt_id: str):
 
         gen = IncrementGenerator(MEETINGS_DIR, prompts_dir=prompts_dir)
         gen.migrate_flat_increments(meeting_path)
-        version = await gen.generate(meeting_id, meeting_path, prompt)
+        version = await gen.generate(meeting_id, meeting_path, prompt, force=force)
 
         if version is None:
             # Check if a failed meta was written (generate returns None for both skip and failure)

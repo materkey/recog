@@ -78,13 +78,17 @@ class IncrementGenerator:
         return cls._locks[key]
 
     def _claim_version(
-        self, meeting_id: str, prompt_id: str, all_segments: list[dict]
+        self, meeting_id: str, prompt_id: str, all_segments: list[dict], force: bool = False
     ) -> Optional[tuple[int, list[dict], int, int]]:
         """Atomically claim the next version number with segment_range in placeholder.
 
         Computes delta segments from all_segments and includes segment_range in
         the 'generating' placeholder from the start, preventing cross-process
         duplicate delta windows.  Uses O_CREAT|O_EXCL to prevent version collisions.
+
+        force=True ignores the delta and uses the full transcript (manual
+        regenerate), so a finished meeting whose last version already covers
+        every segment still produces a fresh version instead of skipping.
 
         Returns (version, delta_segments, seg_start, seg_end) or None if no delta.
         Raises RuntimeError if version claim fails after retries.
@@ -95,8 +99,8 @@ class IncrementGenerator:
         for _ in range(5):
             version, last_segment_id = self._next_version(meeting_id, prompt_id)
 
-            # Compute delta for this version's base
-            if last_segment_id is not None:
+            # Compute delta for this version's base (full transcript when forced)
+            if last_segment_id is not None and not force:
                 delta_segments = [s for s in all_segments if s.get("id", 0) > last_segment_id]
             else:
                 delta_segments = all_segments
@@ -280,7 +284,7 @@ class IncrementGenerator:
             "---\n\n"
         )
 
-    async def generate(self, meeting_id: str, meeting_path: Path, prompt: PromptConfig) -> Optional[int]:
+    async def generate(self, meeting_id: str, meeting_path: Path, prompt: PromptConfig, force: bool = False) -> Optional[int]:
         """Generate next increment version for a meeting using the given prompt.
 
         Returns version number on success, None if skipped (zero delta
@@ -288,6 +292,11 @@ class IncrementGenerator:
         Raises RuntimeError if version claim fails (filesystem collision).
         Raises ValueError/OSError if transcript exists but cannot be parsed.
         Failures after version claim write failed meta and return None.
+
+        force=True regenerates over the FULL transcript instead of only the
+        delta since the last version. Used by the manual "Regenerate" action:
+        on a finished meeting the last version already covers every segment, so
+        delta-only generation would always skip with "no new segments".
         """
         prompt_id = prompt.id
 
@@ -325,7 +334,7 @@ class IncrementGenerator:
             # Atomically claim version on the filesystem with segment_range
             # in the placeholder from the start, preventing cross-process
             # duplicate delta windows.
-            claim = self._claim_version(meeting_id, prompt_id, segments)
+            claim = self._claim_version(meeting_id, prompt_id, segments, force=force)
             if claim is None:
                 print(f"[increment] {prompt_id} skipped: 0 delta segments", file=sys.stderr)
                 return None
