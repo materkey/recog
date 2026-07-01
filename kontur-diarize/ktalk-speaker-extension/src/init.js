@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { injectStyles, addTranscriptTab, addContextTab, addCopilotTab, createTranscriptContent, createContextContent, createCopilotContent, watchTabChanges, updateWsIndicator, initPlatformUI } from './ui.js';
+import { injectStyles, addAiTab, createTranscriptContent, createContextContent, createCopilotContent, watchTabChanges, updateWsIndicator, initPlatformUI } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
@@ -143,10 +143,8 @@ function setupUI() {
   }
 
   // KTalk: Use tab injection
-  const transcriptTabAdded = addTranscriptTab();
-  const contextTabAdded = addContextTab();
-  const copilotTabAdded = addCopilotTab();
-  if (transcriptTabAdded || contextTabAdded || copilotTabAdded) {
+  const aiTabAdded = addAiTab();
+  if (aiTabAdded) {
     createTranscriptContent();
     createContextContent();
     createCopilotContent();
@@ -155,7 +153,7 @@ function setupUI() {
   }
 
   ensureDebugPanel();
-  return transcriptTabAdded || contextTabAdded || copilotTabAdded;
+  return aiTabAdded;
 }
 
 function subscribeToDominantSpeaker(conf) {
@@ -327,8 +325,8 @@ export function init() {
         setupUI();
       }
     } else {
-      // For KTalk: check tabs exist
-      if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab') || !document.querySelector('.ktalk-copilot-tab')) {
+      // For KTalk: check tab exists
+      if (!document.querySelector('.ktalk-ai-tab')) {
         state.transcriptTabAdded = false;
         setupUI();
       }
