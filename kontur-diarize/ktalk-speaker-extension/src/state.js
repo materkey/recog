@@ -78,5 +78,7 @@ export const state = {
   copilotChannelStatus: 'unknown',
   copilotLastProactiveAt: 0,
   copilotContentElement: null,
-  isCopilotActive: false
+  isCopilotActive: false,
+  copilotUnread: false,
+  lastAiView: localStorage.getItem('ktalk-ai-last-view') || 'transcript'
 };

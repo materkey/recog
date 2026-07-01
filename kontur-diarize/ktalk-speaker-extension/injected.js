@@ -662,10 +662,8 @@ function setupUI() {
   }
 
   // KTalk: Use tab injection
-  const transcriptTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addTranscriptTab)();
-  const contextTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addContextTab)();
-  const copilotTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addCopilotTab)();
-  if (transcriptTabAdded || contextTabAdded || copilotTabAdded) {
+  const aiTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addAiTab)();
+  if (aiTabAdded) {
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent)();
@@ -674,7 +672,7 @@ function setupUI() {
   }
 
   (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.ensureDebugPanel)();
-  return transcriptTabAdded || contextTabAdded || copilotTabAdded;
+  return aiTabAdded;
 }
 
 function subscribeToDominantSpeaker(conf) {
@@ -846,8 +844,8 @@ function init() {
         setupUI();
       }
     } else {
-      // For KTalk: check tabs exist
-      if (!document.querySelector('.ktalk-transcript-tab') || !document.querySelector('.ktalk-context-tab') || !document.querySelector('.ktalk-copilot-tab')) {
+      // For KTalk: check tab exists
+      if (!document.querySelector('.ktalk-ai-tab')) {
         _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = false;
         setupUI();
       }
@@ -3475,7 +3473,9 @@ const state = {
   copilotChannelStatus: 'unknown',
   copilotLastProactiveAt: 0,
   copilotContentElement: null,
-  isCopilotActive: false
+  isCopilotActive: false,
+  copilotUnread: false,
+  lastAiView: localStorage.getItem('ktalk-ai-last-view') || 'transcript'
 };
 
 
@@ -4500,10 +4500,8 @@ function initVas3kUI() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   addContextTab: () => (/* binding */ addContextTab),
-/* harmony export */   addCopilotTab: () => (/* binding */ addCopilotTab),
+/* harmony export */   addAiTab: () => (/* binding */ addAiTab),
 /* harmony export */   addTranscriptLinePlatform: () => (/* binding */ addTranscriptLinePlatform),
-/* harmony export */   addTranscriptTab: () => (/* binding */ addTranscriptTab),
 /* harmony export */   appendCopilotSystemMessage: () => (/* binding */ appendCopilotSystemMessage),
 /* harmony export */   buildSpeakerAliasMap: () => (/* binding */ buildSpeakerAliasMap),
 /* harmony export */   createContextContent: () => (/* binding */ createContextContent),
@@ -4554,23 +4552,15 @@ function injectStyles() {
   const styles = document.createElement('style');
   styles.id = 'ktalk-transcript-styles';
   styles.textContent = `
-      /* Transcript tab - exact match of KTalk's PRIVATE button */
-      .ktalk-transcript-tab-wrapper.tl-tab,
-      .ktalk-context-tab-wrapper.tl-tab,
-      .ktalk-copilot-tab-wrapper.tl-tab {
+      /* AI tab - exact match of KTalk's PRIVATE button */
+      .ktalk-ai-tab-wrapper.tl-tab {
         display: inline-block !important;
         height: 32px;
         padding: 0;
         margin: 0;
       }
-      .ktalk-transcript-tab-wrapper.tl-tab,
-      .ktalk-context-tab-wrapper.tl-tab {
-        margin-right: 8px;
-      }
 
-      .ktalk-transcript-tab.link,
-      .ktalk-context-tab.link,
-      .ktalk-copilot-tab.link {
+      .ktalk-ai-tab.link {
         display: block;
         height: 32px;
         padding: 0;
@@ -4590,24 +4580,86 @@ function injectStyles() {
         vertical-align: middle;
         transition: color 0.15s;
       }
-      .ktalk-transcript-tab.link:hover,
-      .ktalk-context-tab.link:hover,
-      .ktalk-copilot-tab.link:hover {
+      .ktalk-ai-tab.link:hover {
         color: rgba(255, 255, 255, 0.85);
       }
-      .ktalk-transcript-tab.link._active,
-      .ktalk-context-tab.link._active,
-      .ktalk-copilot-tab.link._active {
+      .ktalk-ai-tab.link._active {
         color: rgba(255, 255, 255, 0.85);
       }
-      .ktalk-transcript-tab .tab-content,
-      .ktalk-context-tab .tab-content,
-      .ktalk-copilot-tab .tab-content {
+      .ktalk-ai-tab .tab-content {
         display: flex;
         align-items: center;
         height: 32px;
         line-height: 16px;
         gap: 4px;
+      }
+      .ktalk-ai-unread {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #4ade80;
+        display: inline-block;
+      }
+      .ktalk-ai-unread[hidden] {
+        display: none;
+      }
+
+      /* AI panel: sub-navigation + active view (Transcript | Context | Copilot) */
+      .ktalk-ai-panel {
+        display: none;
+        flex-direction: column;
+        height: 100%;
+        background: rgb(52, 52, 52);
+      }
+      .ktalk-ai-panel.active {
+        display: flex;
+      }
+      .ktalk-ai-subnav {
+        display: flex;
+        gap: 4px;
+        padding: 8px 12px;
+        background: rgb(60, 60, 60);
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        flex: 0 0 auto;
+      }
+      .ktalk-ai-subtab {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 12px;
+        height: 26px;
+        border: none;
+        border-radius: 13px;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 12px;
+        font-weight: 600;
+        font-family: "Lab Grotesque", Arial, Helvetica, "Tahoma sans-serif";
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+      }
+      .ktalk-ai-subtab:hover {
+        color: rgba(255, 255, 255, 0.85);
+      }
+      .ktalk-ai-subtab.active {
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.9);
+      }
+      .ktalk-ai-subtab-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #4ade80;
+      }
+      .ktalk-ai-subtab-dot[hidden] {
+        display: none;
+      }
+      .ktalk-ai-panel-body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        position: relative;
       }
 
       /* Transcript content area - match KTalk's native chat style */
@@ -5538,8 +5590,8 @@ function injectStyles() {
   document.head.appendChild(styles);
 }
 
-function addTranscriptTab() {
-  if (document.querySelector('.ktalk-transcript-tab')) {
+function addAiTab() {
+  if (document.querySelector('.ktalk-ai-tab')) {
     return true;
   }
 
@@ -5548,14 +5600,15 @@ function addTranscriptTab() {
     return false;
   }
 
-  console.log('[KTalk Transcript] Adding tab to tabset');
+  console.log('[KTalk Transcript] Adding AI tab to tabset');
 
   const tab = document.createElement('div');
-  tab.className = 'tl-tab _switchable ktalk-transcript-tab-wrapper';
+  tab.className = 'tl-tab _switchable ktalk-ai-tab-wrapper';
   tab.innerHTML = `
-      <button type="button" class="ktalk-transcript-tab link">
+      <button type="button" class="ktalk-ai-tab link">
         <span class="tab-content">
-          <span class="title">Transcript</span>
+          <span class="title">Recog</span>
+          <span class="ktalk-ai-unread" hidden></span>
         </span>
       </button>
     `;
@@ -5563,73 +5616,53 @@ function addTranscriptTab() {
   tabsContainer.appendChild(tab);
 
   tab.querySelector('button').addEventListener('click', () => {
-    activateTranscriptTab();
+    activateAiTab();
   });
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = true;
   return true;
 }
 
-function addContextTab() {
-  if (document.querySelector('.ktalk-context-tab')) {
-    return true;
+function captureOriginalChatContent(contentArea) {
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent && document.body.contains(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent)) return;
+  const first = contentArea.firstElementChild;
+  if (first && !first.classList.contains('ktalk-ai-panel')) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = first;
   }
-
-  const tabsContainer = document.querySelector('.tl-tabset__content');
-  if (!tabsContainer) {
-    return false;
-  }
-
-  console.log('[KTalk Transcript] Adding context tab to tabset');
-
-  const tab = document.createElement('div');
-  tab.className = 'tl-tab _switchable ktalk-context-tab-wrapper';
-  tab.innerHTML = `
-      <button type="button" class="ktalk-context-tab link">
-        <span class="tab-content">
-          <span class="title">Context</span>
-        </span>
-      </button>
-    `;
-
-  tabsContainer.appendChild(tab);
-
-  tab.querySelector('button').addEventListener('click', () => {
-    activateContextTab();
-  });
-
-  return true;
 }
 
-function addCopilotTab() {
-  if (document.querySelector('.ktalk-copilot-tab')) {
-    return true;
-  }
-
-  const tabsContainer = document.querySelector('.tl-tabset__content');
-  if (!tabsContainer) {
-    return false;
-  }
-
-  console.log('[KTalk Transcript] Adding copilot tab to tabset');
-
-  const tab = document.createElement('div');
-  tab.className = 'tl-tab _switchable ktalk-copilot-tab-wrapper';
-  tab.innerHTML = `
-      <button type="button" class="ktalk-copilot-tab link">
-        <span class="tab-content">
-          <span class="title">Copilot</span>
-        </span>
-      </button>
-    `;
-
-  tabsContainer.appendChild(tab);
-
-  tab.querySelector('button').addEventListener('click', () => {
+function activateSubView(view) {
+  if (view === 'context') {
+    activateContextTab();
+  } else if (view === 'copilot') {
     activateCopilotTab();
-  });
+  } else {
+    activateTranscriptTab();
+  }
+}
 
-  return true;
+function ensureAiPanelBody() {
+  const contentArea = document.querySelector('.slide-menu-wrapper .content');
+  if (!contentArea) return null;
+
+  let panel = contentArea.querySelector('.ktalk-ai-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'ktalk-ai-panel';
+    panel.innerHTML = `
+        <div class="ktalk-ai-subnav">
+          <button type="button" class="ktalk-ai-subtab" data-view="transcript">Transcript</button>
+          <button type="button" class="ktalk-ai-subtab" data-view="context">Context</button>
+          <button type="button" class="ktalk-ai-subtab" data-view="copilot">Copilot<span class="ktalk-ai-subtab-dot" hidden></span></button>
+        </div>
+        <div class="ktalk-ai-panel-body"></div>
+      `;
+    panel.querySelectorAll('.ktalk-ai-subtab').forEach((btn) => {
+      btn.addEventListener('click', () => activateSubView(btn.dataset.view));
+    });
+    contentArea.appendChild(panel);
+  }
+  return panel.querySelector('.ktalk-ai-panel-body');
 }
 
 function createTranscriptContent() {
@@ -5643,7 +5676,9 @@ function createTranscriptContent() {
     return null;
   }
 
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = contentArea.firstElementChild;
+  captureOriginalChatContent(contentArea);
+  const panelBody = ensureAiPanelBody();
+  if (!panelBody) return null;
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = document.createElement('div');
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.className = 'ktalk-transcript-content';
@@ -5747,7 +5782,7 @@ function createTranscriptContent() {
   setupBioReadControls(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
   createSummaryModal();
 
-  contentArea.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
+  panelBody.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
 
   console.log('[KTalk Transcript] Content element created');
   return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement;
@@ -5764,9 +5799,9 @@ function createContextContent() {
     return null;
   }
 
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = contentArea.firstElementChild;
-  }
+  captureOriginalChatContent(contentArea);
+  const panelBody = ensureAiPanelBody();
+  if (!panelBody) return null;
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = document.createElement('div');
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.className = 'ktalk-context-content';
@@ -5803,7 +5838,7 @@ function createContextContent() {
     requestAnchor();
   });
 
-  contentArea.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement);
+  panelBody.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement);
   console.log('[KTalk Transcript] Context element created');
   return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement;
 }
@@ -5839,9 +5874,9 @@ function createCopilotContent() {
     return null;
   }
 
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = contentArea.firstElementChild;
-  }
+  captureOriginalChatContent(contentArea);
+  const panelBody = ensureAiPanelBody();
+  if (!panelBody) return null;
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement = document.createElement('div');
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.className = 'ktalk-copilot-content';
@@ -5879,7 +5914,7 @@ function createCopilotContent() {
   const sendBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.querySelector('.ktalk-copilot-send-btn');
   sendBtn.addEventListener('click', () => submitCopilotInput());
 
-  contentArea.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement);
+  panelBody.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement);
   updateCopilotStatusIndicator();
   console.log('[KTalk Transcript] Copilot element created');
   return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement;
@@ -6057,6 +6092,9 @@ function appendCopilotMessage(msg) {
   const rendered = renderCopilotMessage(msg);
   if (!rendered) return;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages.push(msg);
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive && (msg.kind === 'proactive' || msg.kind === 'assistant')) {
+    setCopilotUnread(true);
+  }
 }
 
 function findCopilotMessageElement(id) {
@@ -6254,6 +6292,7 @@ function handleCopilotReply(data) {
     });
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.delete(requestId);
     setCopilotInputBusy(false);
+    if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive) setCopilotUnread(true);
     return;
   }
   appendCopilotMessage({
@@ -6423,28 +6462,27 @@ function handleCopilotBridgeDisconnect() {
 }
 
 function setActiveView(view) {
-  const transcriptTabBtn = document.querySelector('.ktalk-transcript-tab');
-  const contextTabBtn = document.querySelector('.ktalk-context-tab');
-  const copilotTabBtn = document.querySelector('.ktalk-copilot-tab');
-
-  const transcriptTab = transcriptTabBtn?.closest('.tl-tab');
-  const contextTab = contextTabBtn?.closest('.tl-tab');
-  const copilotTab = copilotTabBtn?.closest('.tl-tab');
+  const aiTabBtn = document.querySelector('.ktalk-ai-tab');
+  const aiTab = aiTabBtn?.closest('.tl-tab');
 
   const isTranscript = view === 'transcript';
   const isContext = view === 'context';
   const isCopilot = view === 'copilot';
+  const isAnyActive = isTranscript || isContext || isCopilot;
 
-  if (transcriptTab) transcriptTab.classList.toggle('_active', isTranscript);
-  if (contextTab) contextTab.classList.toggle('_active', isContext);
-  if (copilotTab) copilotTab.classList.toggle('_active', isCopilot);
+  if (aiTab) aiTab.classList.toggle('_active', isAnyActive);
+  if (aiTabBtn) aiTabBtn.classList.toggle('_active', isAnyActive);
 
-  if (transcriptTabBtn) transcriptTabBtn.classList.toggle('_active', isTranscript);
-  if (contextTabBtn) contextTabBtn.classList.toggle('_active', isContext);
-  if (copilotTabBtn) copilotTabBtn.classList.toggle('_active', isCopilot);
+  const panel = document.querySelector('.ktalk-ai-panel');
+  if (panel) {
+    panel.classList.toggle('active', isAnyActive);
+    panel.querySelectorAll('.ktalk-ai-subtab').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.view === view);
+    });
+  }
 
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent.style.display = isTranscript || isContext || isCopilot ? 'none' : '';
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent.style.display = isAnyActive ? 'none' : '';
   }
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.classList.toggle('active', isTranscript);
@@ -6459,6 +6497,28 @@ function setActiveView(view) {
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isTranscriptActive = isTranscript;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isContextActive = isContext;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive = isCopilot;
+
+  if (isAnyActive) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastAiView = view;
+    try {
+      localStorage.setItem('ktalk-ai-last-view', view);
+    } catch (err) {
+      void err;
+    }
+  }
+  if (isCopilot) setCopilotUnread(false);
+}
+
+function setCopilotUnread(unread) {
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotUnread = unread;
+  const dot = document.querySelector('.ktalk-ai-tab .ktalk-ai-unread');
+  if (dot) dot.hidden = !unread;
+  const subDot = document.querySelector('.ktalk-ai-subtab[data-view="copilot"] .ktalk-ai-subtab-dot');
+  if (subDot) subDot.hidden = !unread;
+}
+
+function activateAiTab() {
+  activateSubView(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastAiView || 'transcript');
 }
 
 function activateTranscriptTab() {
@@ -6495,17 +6555,14 @@ function watchTabChanges() {
     const clickedTab = e.target.closest('.tl-tab');
     if (!clickedTab) return;
 
-    const isTranscriptTab = clickedTab.querySelector('.ktalk-transcript-tab');
-    const isContextTab = clickedTab.querySelector('.ktalk-context-tab');
-    const isCopilotTab = clickedTab.querySelector('.ktalk-copilot-tab');
-    if (!isTranscriptTab && !isContextTab && !isCopilotTab) {
+    if (!clickedTab.querySelector('.ktalk-ai-tab')) {
       deactivateCustomTabs();
     }
   });
 }
 
 function updateWsIndicator(connected) {
-  document.querySelectorAll('.ktalk-transcript-tab-wrapper .ws-dot, .ktalk-context-tab-wrapper .ws-dot, .ktalk-copilot-tab-wrapper .ws-dot')
+  document.querySelectorAll('.ktalk-ai-tab-wrapper .ws-dot')
     .forEach((dot) => {
       dot.classList.toggle('connected', connected);
     });
@@ -7649,7 +7706,7 @@ function initPlatformUI() {
     return (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.initVas3kUI)();
   }
 
-  // For KTalk, return false - tabs are handled by addTranscriptTab/addContextTab
+  // For KTalk, return false - tabs are handled by addAiTab
   return false;
 }
 
