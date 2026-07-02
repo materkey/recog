@@ -74,6 +74,7 @@ export const state = {
   copilotPending: new Map(),
   copilotProactiveMutedUntil: 0,
   copilotChannelStatus: 'unknown',
+  copilotAgentState: 'offline',
   copilotLastProactiveAt: 0,
   copilotContentElement: null,
   isCopilotActive: false,

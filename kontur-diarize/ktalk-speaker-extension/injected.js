@@ -3559,6 +3559,7 @@ const state = {
   copilotPending: new Map(),
   copilotProactiveMutedUntil: 0,
   copilotChannelStatus: 'unknown',
+  copilotAgentState: 'offline',
   copilotLastProactiveAt: 0,
   copilotContentElement: null,
   isCopilotActive: false,
@@ -5487,6 +5488,32 @@ function injectStyles() {
       .ktalk-copilot-status.disconnected {
         color: #f87171;
       }
+      /* Agent lifecycle chip — reflects the auto-spawned copilot session
+         health (supervisor screen state merged with daemon MCP-session
+         count in the bridge). Independent from .ktalk-copilot-status, which
+         describes channel / per-request health. */
+      .ktalk-copilot-agent-chip {
+        font-size: 11px;
+        padding: 0 8px;
+        height: 22px;
+        line-height: 22px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.75);
+        white-space: nowrap;
+      }
+      .ktalk-copilot-agent-chip.online {
+        color: #4ade80;
+      }
+      .ktalk-copilot-agent-chip.working {
+        color: #fbbf24;
+      }
+      .ktalk-copilot-agent-chip.blocked {
+        color: #f87171;
+      }
+      .ktalk-copilot-agent-chip.offline {
+        color: rgba(255, 255, 255, 0.5);
+      }
       .ktalk-copilot-actions {
         margin-left: auto;
         display: flex;
@@ -5956,6 +5983,7 @@ function createCopilotContent() {
         <span class="ktalk-copilot-title">Copilot</span>
         <span class="ktalk-copilot-status">…</span>
         <div class="ktalk-copilot-actions">
+          <span class="ktalk-copilot-agent-chip offline" title="Copilot session: offline">⚫ offline</span>
           <button type="button" class="ktalk-copilot-mute-btn" title="Mute proactive messages for 10 minutes">Mute proactive 10m</button>
         </div>
       </div>
@@ -5987,6 +6015,7 @@ function createCopilotContent() {
 
   panelBody.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement);
   updateCopilotStatusIndicator();
+  updateCopilotAgentChip();
   console.log('[KTalk Transcript] Copilot element created');
   return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement;
 }
@@ -6046,6 +6075,26 @@ function updateCopilotStatusIndicator() {
   } else {
     el.textContent = status;
   }
+}
+
+// Agent lifecycle chip states (from the bridge merge — D4). `spawning` is a
+// transitional working-variant so a cold start shows 🟡 rather than ⚫.
+const COPILOT_AGENT_CHIP = {
+  online: { icon: '🟢', label: 'online', cls: 'online' },
+  working: { icon: '🟡', label: 'working', cls: 'working' },
+  spawning: { icon: '🟡', label: 'spawning', cls: 'working' },
+  blocked: { icon: '🔴', label: 'blocked', cls: 'blocked' },
+  offline: { icon: '⚫', label: 'offline', cls: 'offline' },
+};
+
+function updateCopilotAgentChip() {
+  const el = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement?.querySelector('.ktalk-copilot-agent-chip');
+  if (!el) return;
+  const meta = COPILOT_AGENT_CHIP[_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotAgentState] || COPILOT_AGENT_CHIP.offline;
+  el.classList.remove('online', 'working', 'blocked', 'offline');
+  el.classList.add(meta.cls);
+  el.textContent = `${meta.icon} ${meta.label}`;
+  el.title = `Copilot session: ${meta.label}`;
 }
 
 function escapeCopilotText(value) {
@@ -6377,6 +6426,21 @@ function handleCopilotStatus(data) {
   ensureCopilotContent();
   const requestId = data && data.request_id;
   const status = (data && data.status) || 'unknown';
+
+  if (status === 'agent_state') {
+    // Agent lifecycle status from the bridge merge (supervisor screen state +
+    // daemon MCP-session count). Drives the standalone chip only — independent
+    // from the channel/per-request indicator. Reset to ⚫ is delivered as an
+    // explicit `agent_state: offline` frame (never on `meeting_ended`, whose
+    // last-extension-gone path fires after the extension is already gone).
+    const next = data && data.agent_state;
+    if (COPILOT_AGENT_CHIP[next]) {
+      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotAgentState = next;
+      updateCopilotAgentChip();
+    }
+    // Unknown agent_state (SDK drift) — ignore, keep the last known chip.
+    return;
+  }
 
   if (status === 'channel_connected') {
     // Channel-level recovery signal — bridge emits this on the 0→1 channel
