@@ -83,6 +83,12 @@ def main():
         default=MIC_SPEAKER_NAME,
         help=f"Имя спикера для микрофонного ввода (по умолчанию: {MIC_SPEAKER_NAME})"
     )
+    live_parser.add_argument(
+        "--no-save-audio",
+        action="store_true",
+        help="Не записывать аудио встреч (playback сегментов будет недоступен; "
+             "по умолчанию аудио пишется и хранится 24 часа)"
+    )
 
     # Команда: meetings (просмотр сохранённых митингов)
     meetings_parser = subparsers.add_parser(
@@ -129,7 +135,8 @@ def main():
             list_devices=args.list_devices,
             use_ktalk=args.ktalk,
             use_screencapture=args.screencapture,
-            mic_speaker_name=args.mic_speaker_name
+            mic_speaker_name=args.mic_speaker_name,
+            save_audio=not args.no_save_audio
         )
 
     elif args.command == "meetings":

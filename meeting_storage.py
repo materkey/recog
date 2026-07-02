@@ -22,6 +22,7 @@ import hashlib
 import os
 import sys
 import threading
+import time
 
 
 UTC = timezone.utc
@@ -116,7 +117,7 @@ class MeetingStorage:
         # Закрыть все предыдущие незавершённые сессии
         self._close_stale_sessions()
 
-        # Cleanup old audio files (7-day retention)
+        # Cleanup old audio files (24h retention)
         self.cleanup_old_audio()
 
         self._mode = {
@@ -1249,61 +1250,61 @@ class MeetingStorage:
 
         return True
 
-    def cleanup_old_audio(self, retention_days: int = 7) -> int:
+    def cleanup_old_audio(self, retention_hours: float = 24.0) -> int:
         """
-        Delete audio files older than retention period.
+        Delete per-meeting audio WAVs whose last write is older than retention.
+
+        Age is based on file mtime, not meta created_at: an actively-recorded
+        file always has a fresh mtime, so the current meeting's audio can
+        never be deleted mid-write. The scan is stat-only per meeting dir;
+        meta.json is parsed only for dirs that still contain audio files, so
+        a periodic call over thousands of meeting dirs stays cheap.
 
         Args:
-            retention_days: Number of days to keep audio files
+            retention_hours: Hours to keep audio files after last write
 
         Returns:
             Number of files deleted
         """
-        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        cutoff_ts = time.time() - retention_hours * 3600
         deleted_count = 0
 
         for meeting_dir in self.base_path.iterdir():
             if not meeting_dir.is_dir():
                 continue
 
-            meta_path = meeting_dir / "meta.json"
-            if not meta_path.exists():
+            stale_tracks = []
+            for track in ("mic", "system"):
+                wav_path = meeting_dir / f"audio_{track}.wav"
+                try:
+                    if wav_path.exists() and wav_path.stat().st_mtime < cutoff_ts:
+                        stale_tracks.append((track, wav_path))
+                except OSError:
+                    continue
+
+            if not stale_tracks:
                 continue
 
             try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                for _track, wav_path in stale_tracks:
+                    wav_path.unlink()
+                    deleted_count += 1
 
-                # Check creation date
-                created_at = datetime.fromisoformat(meta["created_at"])
-                if created_at >= cutoff:
-                    continue  # Too recent, keep audio
-
-                # Delete mic audio if exists
-                meeting_deleted = 0
-                mic_path = meta.get("audio_mic_path")
-                if mic_path and Path(mic_path).exists():
-                    Path(mic_path).unlink()
-                    meta["audio_mic_path"] = None
-                    meeting_deleted += 1
-
-                # Delete system audio if exists
-                system_path = meta.get("audio_system_path")
-                if system_path and Path(system_path).exists():
-                    Path(system_path).unlink()
-                    meta["audio_system_path"] = None
-                    meeting_deleted += 1
-
-                deleted_count += meeting_deleted
-                if meeting_deleted > 0:
+                meta_path = meeting_dir / "meta.json"
+                if meta_path.exists():
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    for track, _wav_path in stale_tracks:
+                        meta[f"audio_{track}_path"] = None
                     meta["audio_deleted_at"] = datetime.now(UTC).isoformat()
+                    meta["updated_at"] = datetime.now(UTC).isoformat()
                     self._save_json(meta_path, meta)
 
-            except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
+            except (json.JSONDecodeError, OSError) as e:
                 print(f"Warning: Cleanup error for {meeting_dir.name}: {e}")
                 continue
 
         if deleted_count > 0:
-            print(f"Cleaned up {deleted_count} audio file(s) older than {retention_days} days")
+            print(f"Cleaned up {deleted_count} audio file(s) older than {retention_hours:g}h")
 
         return deleted_count
 

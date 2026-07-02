@@ -85,6 +85,14 @@ The project uses a single `venv-gigaam` virtual environment. Speaker identificat
 ### ASR fallback buffering (always-on)
 No speech is lost when ASR is temporarily unavailable (remote down + local loading): capture buffers (`SingleDeviceCapture`, `ScreenCaptureAudio`) are not consumed while `asr.available` is False (capped at `ASR_PENDING_BUFFER_CAP_S`), `get_chunk()` returns `(chunk, capture_start_ts)` so backlog segments get spoken-time timestamps, and a chunk caught mid-failure is held in a single-slot retry (`SourceState.pending_chunk`, mirrors `PerSpeakerIngest._pending_retry_batch`) and re-dispatched first once ASR recovers — without re-writing it to the meeting WAV. Live dedup applies only within `DEDUP_MAX_GAP_S` of the previous segment (a phrase repeated after a pause is real speech). Swallowed ASR exceptions are logged via `recog/log_utils.py` (rate-limited).
 
+### Meeting audio recording (24h retention, on by default)
+`live` records per-meeting WAVs (`audio_mic.wav` / `audio_system.wav`, 16 kHz mono int16) for segment playback via `GET /api/meetings/{id}/audio/{segment_index}`; disable with `--no-save-audio`. Load-conscious design:
+- Silent chunks (`rms < VAD_RMS_THRESHOLD`) are not written — EXCEPT while PCM-primary, where `_on_pcm_batch` offset arithmetic (`wav_offset_now - chunk_age`) needs a continuous real-time timeline in `audio_system.wav`. Mixed-path segments capture their offset at write time, so gaps are safe for them.
+- WAV headers are re-patched after every chunk (`IncrementalWavWriter._patch_header_sizes`), so a SIGKILL (launchd restart does not run teardown — sessions end as `stale_session`) never leaves a header claiming 0 data bytes. Per-file cap `MAX_WAV_DATA_BYTES` (2 GiB) protects the format's 32-bit sizes.
+- Retention: `MeetingStorage.cleanup_old_audio(retention_hours=24)` deletes WAVs by file mtime (an actively-written file is always fresh — the current meeting is safe) with a stat-only scan (meta.json parsed only for dirs that still have audio). Runs at `start_session` and hourly from the live loop.
+- Every meeting switch must rotate writers via `_on_meeting_change`: the KTalk bridge callback does it, and `_check_silence_split` does it for orphan silence-splits (with `continuation=True` + re-writing the triggering chunk so the first segment points into the new meeting's own file). A switch path that skips rotation reproduces "No audio file available for this meeting".
+- Playback slice duration is bounded per track (`compute_segment_duration_ms` in `frontend/server.py`): mic/system WAV timelines diverge under silence-skip, so only same-`is_local` segments bound each other.
+
 ### Per-speaker ASR path (ADR-0018)
 For any active KTalk meeting the pipeline routes through per-participant PCM streams (no mixed-audio fallback as a configurable mode):
 

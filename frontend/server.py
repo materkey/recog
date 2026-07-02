@@ -1438,6 +1438,47 @@ async def delete_speaker(speaker_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def compute_segment_duration_ms(segments: list, segment_index: int) -> int:
+    """
+    Slice duration for a transcript segment inside its track's WAV.
+
+    Mic and system WAVs are written independently (silence is skipped per
+    track), so their timelines differ: only segments with the same is_local
+    flag can bound each other's duration. Event rows carry no meaningful
+    offset and are skipped.
+    """
+    default_chunk_duration = 3000
+    segment = segments[segment_index]
+    audio_offset_ms = segment.get("audio_offset_ms") or 0
+    track_local = segment.get("is_local", False)
+
+    # Walk forward: extend over same-speaker continuations, then bound the
+    # slice by the first same-track segment after the group.
+    last_valid_offset = audio_offset_ms
+    next_offset = None
+    idx = segment_index + 1
+    while idx < len(segments):
+        next_seg = segments[idx]
+        if next_seg.get("event_type") or next_seg.get("is_local", False) != track_local:
+            idx += 1
+            continue
+        if next_seg.get("cont") and next_seg.get("speaker_id") == segment.get("speaker_id"):
+            seg_offset = next_seg.get("audio_offset_ms")
+            if seg_offset is not None:
+                last_valid_offset = seg_offset
+            idx += 1
+        else:
+            next_offset = next_seg.get("audio_offset_ms")
+            break
+
+    if next_offset is not None:
+        segment_duration_ms = next_offset - audio_offset_ms
+    else:
+        segment_duration_ms = (last_valid_offset - audio_offset_ms) + default_chunk_duration
+
+    return max(1000, min(segment_duration_ms, 30000))
+
+
 @app.get("/api/meetings/{meeting_id}/audio/{segment_index}")
 async def get_segment_audio(
     meeting_id: str,
@@ -1496,10 +1537,12 @@ async def get_segment_audio(
                 if folder_audio.exists():
                     audio_path = str(folder_audio)
                 else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="No audio file available for this meeting"
+                    detail = (
+                        "Audio expired (older than 24h retention)"
+                        if meta.get("audio_deleted_at")
+                        else "No audio file available for this meeting"
                     )
+                    raise HTTPException(status_code=400, detail=detail)
 
     audio_path = Path(audio_path)
     if not audio_path.exists():
@@ -1508,38 +1551,9 @@ async def get_segment_audio(
             detail="Audio file not found (may have been cleaned up)"
         )
 
-    # Calculate segment duration (default 3 seconds, but extend for continuations)
-    segment_duration_ms = 3000
-    default_chunk_duration = 3000  # Typical chunk duration
-
-    # Look ahead for continuations to extend duration
-    extended_end = segment_index + 1
-    last_valid_offset = audio_offset_ms
-    while extended_end < len(segments):
-        next_seg = segments[extended_end]
-        if next_seg.get("cont") and next_seg.get("speaker_id") == segment.get("speaker_id"):
-            # Track last valid offset for fallback
-            seg_offset = next_seg.get("audio_offset_ms")
-            if seg_offset is not None:
-                last_valid_offset = seg_offset
-            extended_end += 1
-        else:
-            break
-
-    # Calculate total duration based on next segment's offset
-    if extended_end < len(segments):
-        next_offset = segments[extended_end].get("audio_offset_ms")
-        if next_offset is not None:
-            segment_duration_ms = next_offset - audio_offset_ms
-        else:
-            # Next segment has no offset (e.g., system event) - use last valid + default
-            segment_duration_ms = (last_valid_offset - audio_offset_ms) + default_chunk_duration
-    else:
-        # Last segment - use last valid offset + default
-        segment_duration_ms = (last_valid_offset - audio_offset_ms) + default_chunk_duration
-
-    # Ensure minimum and maximum duration
-    segment_duration_ms = max(1000, min(segment_duration_ms, 30000))
+    # Slice length: bounded by the next same-track segment (continuations
+    # extend the group) — see compute_segment_duration_ms.
+    segment_duration_ms = compute_segment_duration_ms(segments, segment_index)
 
     # Extract audio slice using ffmpeg
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
