@@ -2,14 +2,21 @@
 
 > **Разгадка (2026-07-02):** space-yank-trace показал, что через ~0.5с
 > после ухода на другой Space Chrome сам вызывает SetFrontProcessWithInfo
-> (его собственный conn id). Причина — Chrome-настройка «Automatic
-> picture-in-picture», разрешённая для example.ktalk.ru: при скрытии
-> вкладки со звонком Chrome открывает PiP-окно, что активирует Chrome
-> и триггерит переключение Space. Фикс в расширении: focus guard глушит
-> регистрацию mediaSession-хендлера `enterpictureinpicture` (без него
-> сайт не подходит под auto-PiP). Дублирующий фикс на уровне Chrome:
-> Settings → Site settings → Automatic picture-in-picture → Block для
-> example.ktalk.ru (та же настройка стоит и для meet.google.com).
+> (его собственный conn id). Причина — PiP-окно, которое KTalk открывает
+> при visibility=hidden (в консоли это его же «Can't open PIP:
+> NotAllowedError», код 7514.js). Открытие PiP активирует Chrome →
+> macOS переключает Space. Дёргает «часто, но не всегда», потому что
+> PiP без user gesture проходит только пока жива transient activation
+> (~5с после последнего взаимодействия с вкладкой).
+> Фикс в расширении (focus guard):
+> - глушится регистрация mediaSession-хендлера `enterpictureinpicture`
+>   (авто-PiP Chrome для видеозвонков);
+> - `documentPictureInPicture.requestWindow` и
+>   `video.requestPictureInPicture` отклоняются c NotAllowedError, когда
+>   документ скрыт — ручной PiP с видимой страницы работает как раньше.
+> Дублирующий фикс на уровне Chrome: Settings → Site settings →
+> Automatic picture-in-picture → Block для example.ktalk.ru (та же
+> настройка стоит и для meet.google.com).
 
 Симптом: во время KTalk-встречи переключаешься на другой Mac workspace
 (kitty), и через какое-то время macOS сам возвращает на Space с Chrome.

@@ -565,12 +565,39 @@ function installFocusGuard(win = window) {
     };
   });
 
+  // PiP-on-hide is the Space-yank vector: KTalk opens a PiP window when
+  // the tab loses visibility (a macOS Space switch qualifies), and the
+  // PiP window activates Chrome. Block PiP only while the document is
+  // hidden — manual PiP from a visible page keeps working.
+  const pipBlockedWhileHidden = (api) => {
+    console.log(`[KTalk Recog] ${api} blocked while hidden (auto-PiP guard)`);
+    return Promise.reject(new DOMException('Blocked by KTalk Recog focus guard', 'NotAllowedError'));
+  };
+
   const videoProto = win.HTMLVideoElement && win.HTMLVideoElement.prototype;
   if (videoProto && typeof videoProto.requestPictureInPicture === 'function') {
     const origRequestPip = videoProto.requestPictureInPicture;
     videoProto.requestPictureInPicture = function (...args) {
+      if (win.document && win.document.visibilityState === 'hidden') {
+        return pipBlockedWhileHidden('requestPictureInPicture');
+      }
       console.log('[KTalk Recog] requestPictureInPicture called');
       return origRequestPip.apply(this, args);
+    };
+  }
+
+  // Document Picture-in-Picture — the path KTalk actually uses on
+  // visibilitychange (its PiP open does not go through
+  // HTMLVideoElement.requestPictureInPicture).
+  const docPip = win.documentPictureInPicture;
+  if (docPip && typeof docPip.requestWindow === 'function') {
+    const origRequestWindow = docPip.requestWindow.bind(docPip);
+    docPip.requestWindow = function (...args) {
+      if (win.document && win.document.visibilityState === 'hidden') {
+        return pipBlockedWhileHidden('documentPictureInPicture.requestWindow');
+      }
+      console.log('[KTalk Recog] documentPictureInPicture.requestWindow called');
+      return origRequestWindow(...args);
     };
   }
 
