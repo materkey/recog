@@ -1213,12 +1213,55 @@ function injectRecogIntoKtalkPip(pipWin) {
   });
 }
 
-async function toggleTranscriptPip() {
+// Open KTalk's NATIVE popup (tiles / participants / chat, with the
+// injected Recog tab) on demand: KTalk only builds it in its own
+// visibilitychange->hidden handler, so spoof the hidden state for the
+// duration of one synthetic event and give the focus guard a one-shot
+// pass. The click's transient user activation lets requestWindow
+// through. Falls back to the transcript-only popup if KTalk's handler
+// did not open anything.
+function toggleKtalkPip() {
+  const docPip = window.documentPictureInPicture;
+  if (docPip && docPip.window) {
+    docPip.window.close();
+    // KTalk was told the tab is hidden when the popup was opened; fire
+    // a real-state visibilitychange so its UI (video quality, wake
+    // lock) fully restores.
+    document.dispatchEvent(new Event('visibilitychange'));
+    return;
+  }
+  if (!docPip) {
+    console.log('[KTalk Recog] PiP: documentPictureInPicture API unavailable');
+    flashPipButton('нет API');
+    return;
+  }
+
+  window.__ktalkAllowPipOnce = true;
+  Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+  Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
   try {
-    if (state.pipWindow) {
-      state.pipWindow.close();
-      return;
+    document.dispatchEvent(new Event('visibilitychange'));
+  } finally {
+    // KTalk's handler may re-check visibilityState asynchronously
+    // before calling requestWindow - keep the spoof briefly.
+    setTimeout(() => {
+      delete document.visibilityState;
+      delete document.hidden;
+    }, 800);
+  }
+
+  setTimeout(() => {
+    window.__ktalkAllowPipOnce = false;
+    const opened = window.documentPictureInPicture && window.documentPictureInPicture.window;
+    if (!opened) {
+      console.log('[KTalk Recog] Native KTalk PiP did not open, falling back to transcript popup');
+      openTranscriptPip();
     }
+  }, 1000);
+}
+
+async function openTranscriptPip() {
+  try {
     if (!window.documentPictureInPicture) {
       console.log('[KTalk Recog] PiP: documentPictureInPicture API unavailable');
       flashPipButton('нет API');
@@ -1320,7 +1363,7 @@ export function createTranscriptContent() {
         <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
         <div class="ktalk-speaker-bar-nav">
-          <button class="ktalk-transcript-scroll-btn ktalk-pip-btn" title="Транскрипт в плавающем окне поверх всех Spaces (повторный клик закрывает)">PiP</button>
+          <button class="ktalk-transcript-scroll-btn ktalk-pip-btn" title="Окно звонка KTalk (PiP) с вкладкой Recog; повторный клик закрывает">PiP</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓</button>
         </div>
@@ -1407,7 +1450,7 @@ export function createTranscriptContent() {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) container.scrollTop = container.scrollHeight;
   });
-  state.transcriptContentElement.querySelector('.ktalk-pip-btn').addEventListener('click', toggleTranscriptPip);
+  state.transcriptContentElement.querySelector('.ktalk-pip-btn').addEventListener('click', toggleKtalkPip);
 
   setupSummaryMenu(state.transcriptContentElement);
   setupAnchorControls();

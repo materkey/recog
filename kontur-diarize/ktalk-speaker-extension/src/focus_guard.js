@@ -58,17 +58,27 @@ export function installFocusGuard(win = window) {
   // PiP-on-hide is the Space-yank vector: KTalk opens a PiP window when
   // the tab loses visibility (a macOS Space switch qualifies), and the
   // PiP window activates Chrome. Block PiP only while the document is
-  // hidden — manual PiP from a visible page keeps working.
+  // hidden — manual PiP from a visible page keeps working, and the
+  // extension's own PiP button can grant a one-shot pass
+  // (window.__ktalkAllowPipOnce) to open KTalk's native popup on demand.
   const pipBlockedWhileHidden = (api) => {
     console.log(`[KTalk Recog] ${api} blocked while hidden (auto-PiP guard)`);
     return Promise.reject(new DOMException('Blocked by KTalk Recog focus guard', 'NotAllowedError'));
+  };
+  const isPipBlocked = () => {
+    if (win.__ktalkAllowPipOnce) {
+      win.__ktalkAllowPipOnce = false;
+      console.log('[KTalk Recog] PiP allowed once (manual open)');
+      return false;
+    }
+    return win.document && win.document.visibilityState === 'hidden';
   };
 
   const videoProto = win.HTMLVideoElement && win.HTMLVideoElement.prototype;
   if (videoProto && typeof videoProto.requestPictureInPicture === 'function') {
     const origRequestPip = videoProto.requestPictureInPicture;
     videoProto.requestPictureInPicture = function (...args) {
-      if (win.document && win.document.visibilityState === 'hidden') {
+      if (isPipBlocked()) {
         return pipBlockedWhileHidden('requestPictureInPicture');
       }
       console.log('[KTalk Recog] requestPictureInPicture called');
@@ -83,7 +93,7 @@ export function installFocusGuard(win = window) {
   if (docPip && typeof docPip.requestWindow === 'function') {
     const origRequestWindow = docPip.requestWindow.bind(docPip);
     docPip.requestWindow = function (...args) {
-      if (win.document && win.document.visibilityState === 'hidden') {
+      if (isPipBlocked()) {
         return pipBlockedWhileHidden('documentPictureInPicture.requestWindow');
       }
       console.log('[KTalk Recog] documentPictureInPicture.requestWindow called');

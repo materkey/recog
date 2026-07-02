@@ -141,6 +141,25 @@ describe('installFocusGuard', () => {
     );
   });
 
+  it('one-shot __ktalkAllowPipOnce pass opens PiP while hidden, then re-blocks', () => {
+    const win = buildFakeWindow();
+    const origRequestWindow = win.documentPictureInPicture.requestWindow;
+    win.document.visibilityState = 'hidden';
+
+    installFocusGuard(win);
+    win.__ktalkAllowPipOnce = true;
+
+    return win.documentPictureInPicture.requestWindow().then((result) => {
+      expect(result).toBe('pip-window');
+      expect(origRequestWindow).toHaveBeenCalledTimes(1);
+      expect(win.__ktalkAllowPipOnce).toBe(false);
+      return win.documentPictureInPicture.requestWindow().then(
+        () => { throw new Error('expected rejection'); },
+        (err) => expect(err.name).toBe('NotAllowedError')
+      );
+    });
+  });
+
   it('allows documentPictureInPicture.requestWindow while visible', () => {
     const win = buildFakeWindow();
     const origRequestWindow = win.documentPictureInPicture.requestWindow;
