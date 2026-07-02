@@ -241,23 +241,19 @@ export function injectStyles() {
       }
       .ktalk-transcript-toolbar {
         display: flex;
+        align-items: center;
         justify-content: flex-start;
         padding: 8px 12px;
         background: rgb(56, 56, 56);
         border-bottom: 1px solid rgba(255,255,255,0.1);
         flex-wrap: wrap;
-        gap: 6px 8px;
+        gap: 6px;
         position: relative;
       }
-      .ktalk-transcript-toolbar-left {
+      .ktalk-speaker-bar-nav {
+        margin-left: auto;
         display: flex;
         gap: 6px;
-        flex-wrap: wrap;
-        align-items: center;
-      }
-      .ktalk-transcript-toolbar-actions {
-        margin-left: auto;
-        justify-content: flex-end;
       }
       .ktalk-transcript-scroll-btn {
         padding: 0 8px;
@@ -1155,29 +1151,27 @@ export function createTranscriptContent() {
       <div class="ktalk-transcript-speaker-bar">
         <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
-      </div>
-      <div class="ktalk-transcript-toolbar">
-        <div class="ktalk-transcript-toolbar-left">
+        <div class="ktalk-speaker-bar-nav">
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓</button>
         </div>
-        <div class="ktalk-transcript-toolbar-left ktalk-transcript-toolbar-actions">
-          <div class="ktalk-summary-menu">
-            <button class="ktalk-summary-menu-toggle" title="Summary actions">
-              Summary <span class="ktalk-summary-caret">▾</span>
-            </button>
-            <div class="ktalk-summary-menu-panel">
-              <button class="ktalk-transcript-summary-btn" data-type="catchup" title="Catch up - включиться в дискуссию">🎯 Catch up</button>
-              <button class="ktalk-transcript-summary-btn" data-type="brief" title="Краткое за 2 мин">📋 Brief</button>
-              <button class="ktalk-transcript-summary-btn" data-type="full" title="Вся встреча + вопрос">💬 Full</button>
-            </div>
+      </div>
+      <div class="ktalk-transcript-toolbar">
+        <div class="ktalk-summary-menu">
+          <button class="ktalk-summary-menu-toggle" title="Summary actions">
+            Summary <span class="ktalk-summary-caret">▾</span>
+          </button>
+          <div class="ktalk-summary-menu-panel">
+            <button class="ktalk-transcript-summary-btn" data-type="catchup" title="Catch up - включиться в дискуссию">🎯 Catch up</button>
+            <button class="ktalk-transcript-summary-btn" data-type="brief" title="Краткое за 2 мин">📋 Brief</button>
+            <button class="ktalk-transcript-summary-btn" data-type="full" title="Вся встреча + вопрос">💬 Full</button>
           </div>
-          <button class="ktalk-transcript-follow-btn" title="Auto-follow latest">Follow</button>
-          <button class="ktalk-transcript-copy-btn" title="Copy all transcript">Copy</button>
-          <button class="ktalk-transcript-privacy-btn" title="Replace names with speaker_N when copying">Privacy</button>
-          <button class="ktalk-bioread-toggle" title="BioRead">Bio</button>
-          <button class="ktalk-bioread-settings-btn" title="BioRead settings">⚙</button>
         </div>
+        <button class="ktalk-transcript-follow-btn" title="Auto-follow latest">Follow</button>
+        <button class="ktalk-transcript-copy-btn" title="Copy all transcript">Copy</button>
+        <button class="ktalk-transcript-privacy-btn" title="Replace names with speaker_N when copying">Privacy</button>
+        <button class="ktalk-bioread-toggle" title="BioRead">Bio</button>
+        <button class="ktalk-bioread-settings-btn" title="BioRead settings">⚙</button>
         <div class="ktalk-bioread-panel">
           <div class="ktalk-bioread-panel-header">BioRead</div>
           <label class="ktalk-bioread-control">
