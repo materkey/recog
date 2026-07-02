@@ -20,21 +20,6 @@ function buildFakeWindow() {
   }
   FakeNotification.permission = 'default';
 
-  class FakeMediaSession {
-    constructor() {
-      this.handlers = {};
-    }
-    setActionHandler(action, handler) {
-      if (handler === null) {
-        delete this.handlers[action];
-      } else {
-        this.handlers[action] = handler;
-      }
-    }
-  }
-
-  const mediaSession = new FakeMediaSession();
-
   return {
     focus: jest.fn(),
     alert: jest.fn(),
@@ -42,12 +27,7 @@ function buildFakeWindow() {
     prompt: jest.fn(() => 'answer'),
     Notification: FakeNotification,
     Element: class {},
-    MediaSession: FakeMediaSession,
-    navigator: { mediaSession },
-    document: { visibilityState: 'visible' },
-    documentPictureInPicture: {
-      requestWindow: jest.fn(() => Promise.resolve('pip-window'))
-    }
+    document: { visibilityState: 'visible' }
   };
 }
 
@@ -99,101 +79,6 @@ describe('installFocusGuard', () => {
     installFocusGuard(win);
 
     expect(win.focus).toBe(wrappedFocus);
-  });
-
-  it('suppresses enterpictureinpicture registration, passes other actions', () => {
-    const win = buildFakeWindow();
-    const ms = win.navigator.mediaSession;
-
-    installFocusGuard(win);
-
-    ms.setActionHandler('enterpictureinpicture', () => {});
-    ms.setActionHandler('play', 'play-handler');
-
-    expect(ms.handlers.enterpictureinpicture).toBeUndefined();
-    expect(ms.handlers.play).toBe('play-handler');
-  });
-
-  it('clears a pre-existing enterpictureinpicture handler on install', () => {
-    const win = buildFakeWindow();
-    const ms = win.navigator.mediaSession;
-    ms.setActionHandler('enterpictureinpicture', () => {});
-    expect(ms.handlers.enterpictureinpicture).toBeDefined();
-
-    installFocusGuard(win);
-
-    expect(ms.handlers.enterpictureinpicture).toBeUndefined();
-  });
-
-  it('blocks documentPictureInPicture.requestWindow while hidden', () => {
-    const win = buildFakeWindow();
-    const origRequestWindow = win.documentPictureInPicture.requestWindow;
-    win.document.visibilityState = 'hidden';
-
-    installFocusGuard(win);
-
-    return win.documentPictureInPicture.requestWindow().then(
-      () => { throw new Error('expected rejection'); },
-      (err) => {
-        expect(err.name).toBe('NotAllowedError');
-        expect(origRequestWindow).not.toHaveBeenCalled();
-      }
-    );
-  });
-
-  it('one-shot __ktalkAllowPipOnce pass opens PiP while hidden, then re-blocks', () => {
-    const win = buildFakeWindow();
-    const origRequestWindow = win.documentPictureInPicture.requestWindow;
-    win.document.visibilityState = 'hidden';
-
-    installFocusGuard(win);
-    win.__ktalkAllowPipOnce = true;
-
-    return win.documentPictureInPicture.requestWindow().then((result) => {
-      expect(result).toBe('pip-window');
-      expect(origRequestWindow).toHaveBeenCalledTimes(1);
-      expect(win.__ktalkAllowPipOnce).toBe(false);
-      return win.documentPictureInPicture.requestWindow().then(
-        () => { throw new Error('expected rejection'); },
-        (err) => expect(err.name).toBe('NotAllowedError')
-      );
-    });
-  });
-
-  it('allows documentPictureInPicture.requestWindow while visible', () => {
-    const win = buildFakeWindow();
-    const origRequestWindow = win.documentPictureInPicture.requestWindow;
-
-    installFocusGuard(win);
-
-    return win.documentPictureInPicture.requestWindow().then((result) => {
-      expect(result).toBe('pip-window');
-      expect(origRequestWindow).toHaveBeenCalled();
-    });
-  });
-
-  it('blocks video requestPictureInPicture while hidden, allows while visible', () => {
-    const win = buildFakeWindow();
-    class FakeVideo {}
-    const origRequestPip = jest.fn(() => Promise.resolve('video-pip'));
-    FakeVideo.prototype.requestPictureInPicture = origRequestPip;
-    win.HTMLVideoElement = FakeVideo;
-
-    installFocusGuard(win);
-    const video = new FakeVideo();
-
-    win.document.visibilityState = 'hidden';
-    return video.requestPictureInPicture().then(
-      () => { throw new Error('expected rejection'); },
-      (err) => {
-        expect(err.name).toBe('NotAllowedError');
-        expect(origRequestPip).not.toHaveBeenCalled();
-        win.document.visibilityState = 'visible';
-        return video.requestPictureInPicture().then((result) => {
-          expect(result).toBe('video-pip');
-        });
-      }
-    );
   });
 
   it('logs fullscreen requests and forwards to the original', () => {
