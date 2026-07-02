@@ -1096,6 +1096,29 @@ function activateSubView(view) {
   }
 }
 
+// Manual PiP: opened from a click on a visible page, so the focus guard
+// lets it through, and the floating PiP window follows the user across
+// Spaces without re-activating Chrome (unlike KTalk's blocked
+// PiP-on-hide, which is what caused the Space yank).
+async function toggleVideoPip() {
+  try {
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture();
+      return;
+    }
+    const video = Array.from(document.querySelectorAll('video'))
+      .filter((v) => v.readyState >= 2 && !v.paused && v.videoWidth > 0)
+      .sort((a, b) => (b.videoWidth * b.videoHeight) - (a.videoWidth * a.videoHeight))[0];
+    if (!video) {
+      console.log('[KTalk Recog] PiP: no active video to pop out');
+      return;
+    }
+    await video.requestPictureInPicture();
+  } catch (e) {
+    console.log('[KTalk Recog] PiP toggle failed:', e);
+  }
+}
+
 function ensureAiPanelBody(contentArea) {
   if (!contentArea) return null;
 
@@ -1144,6 +1167,7 @@ export function createTranscriptContent() {
         <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
         <div class="ktalk-speaker-bar-nav">
+          <button class="ktalk-transcript-scroll-btn ktalk-pip-btn" title="Открыть звонок в плавающем PiP-окне (или закрыть его)">PiP</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓</button>
         </div>
@@ -1230,6 +1254,7 @@ export function createTranscriptContent() {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) container.scrollTop = container.scrollHeight;
   });
+  state.transcriptContentElement.querySelector('.ktalk-pip-btn').addEventListener('click', toggleVideoPip);
 
   setupSummaryMenu(state.transcriptContentElement);
   setupAnchorControls();
