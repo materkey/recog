@@ -50,6 +50,18 @@ COPILOT_TICK_NEW_SEGMENTS = 5      # at least N new buffered segments
 COPILOT_TICK_INTERVAL_SECONDS = 15.0  # OR at least T seconds since the last tick
 COPILOT_TICK_RECENT_SEGMENTS = 10  # how many trailing segments to include as context
 
+# Copilot auto-session (recog/copilot_supervisor.py) agent-state merge (D4).
+# The supervisor reports the TUI screen state and the copilot channel daemon
+# reports its live MCP-session count; the bridge merges them into one
+# effective chip status broadcast to extensions.
+# The supervisor repeats its status as an idempotent heartbeat every ~5 s;
+# two missed heartbeats (>10 s of silence) mean it crashed → offline.
+AGENT_SILENCE_THRESHOLD_S = 10.0
+# `claude_sessions == 0` during an active meeting means "TUI up but copilot
+# never connected". Debounced so a supervisor leaving `spawning` before the
+# daemon's first `claude_sessions` poll (5 s) cannot flap the chip to offline.
+AGENT_SESSIONS_ZERO_DEBOUNCE_S = 10.0
+
 def _truncate_text(text: str, max_len: int) -> str:
     clean = " ".join(text.split())
     if len(clean) <= max_len:
@@ -309,6 +321,28 @@ class KTalkBridge:
         # "last extension disconnect -> end meeting". Populated when a
         # client sends `copilot_channel_hello`.
         self._copilot_channel_clients: set = set()
+
+        # Copilot supervisor client (recog/copilot_supervisor.py) connects as
+        # the auto-session lifecycle driver. Like channel/subscriber clients it
+        # is isolated from the KTalk meeting lifecycle (its presence must not
+        # block "last extension disconnect -> end meeting"). Populated when a
+        # client sends `supervisor_hello`. Meeting `meeting_started` /
+        # `meeting_ended` frames fan out to it via `_emit_lifecycle`.
+        self._supervisor_clients: set = set()
+
+        # Agent-state merge (D4). Last status reported by the supervisor
+        # (screen classification) and by the copilot channel daemon (live MCP
+        # session count), reduced to one effective chip status. `None` status
+        # = no supervisor report yet; `None` session count = unknown (SDK
+        # private attr missing) — merge must not treat it as a confident 0.
+        self._supervisor_agent_status: Optional[str] = None
+        self._supervisor_status_ts: float = 0.0  # time.monotonic of last report
+        self._claude_sessions_count: Optional[int] = None
+        self._sessions_zero_since: Optional[float] = None  # when count first hit 0
+        # Last effective status broadcast to extensions. Seeded to "offline"
+        # so a boot-time recompute with no supervisor is a no-op (the chip
+        # already defaults to offline) — only real transitions broadcast.
+        self._last_effective_agent_state: str = "offline"
 
         # Tracks `copilot_chat_message` request_id -> meeting_id at the
         # moment the request was forwarded to channel clients. On
@@ -1063,6 +1097,143 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
 
+    async def _emit_lifecycle(self, frame: dict):
+        """Fan a meeting-lifecycle frame out to every consumer.
+
+        Single fan-out point for `meeting_started` / `meeting_ended`: channel
+        clients (context for the next Claude turn), extension clients (system
+        entry in the Copilot tab), AND the copilot supervisor (auto-session
+        spawn/kill trigger). Routing all three sites through one helper means
+        a future emit site cannot silently skip the supervisor — which would
+        never wake up. Supervisor send errors are swallowed with a log so a
+        dead supervisor socket cannot crash the lifecycle handlers on the
+        transcription path.
+        """
+        await self._broadcast_to_channel_clients(frame)
+        await self._broadcast_message(frame)
+        with self._lock:
+            supervisors = list(self._supervisor_clients)
+        if not supervisors:
+            return
+        message = json.dumps(frame, ensure_ascii=False)
+        for client in supervisors:
+            try:
+                await client.send(message)
+            except Exception as e:
+                print(
+                    f"[KTalk Bridge] Failed to send {frame.get('type')} to supervisor: {e}",
+                    file=sys.stderr,
+                )
+
+    def _is_meeting_active(self) -> bool:
+        """True when a KTalk meeting is genuinely in progress.
+
+        Deliberately NOT `current_meeting_path is not None` — that field is
+        never None (`on_ktalk_leave` immediately creates an orphan). A meeting
+        is active only when the current meeting was opened by KTalk
+        (`meta["source"] == "ktalk"`) AND at least one extension client is
+        connected to drive it.
+        """
+        storage = self._meeting_storage
+        if storage is None or not storage.current_meeting_path:
+            return False
+        try:
+            meta = storage._load_meta()
+        except Exception as e:
+            print(
+                f"[KTalk Bridge] _load_meta failed computing meeting-active: {e}",
+                file=sys.stderr,
+            )
+            return False
+        if not (meta and meta.get("source") == "ktalk"):
+            return False
+        with self._lock:
+            return bool(self._connected_clients)
+
+    def _compute_meeting_state(self) -> dict:
+        """Build the `meeting_state` reconciliation reply for `supervisor_hello`.
+
+        `active` follows `_is_meeting_active`; meeting_id / meeting_title are
+        only populated when active so a stale orphan meeting never looks live
+        to the supervisor.
+        """
+        active = self._is_meeting_active()
+        meeting_id = None
+        meeting_title = None
+        if active:
+            storage = self._meeting_storage
+            meeting_id = storage.current_meeting_id
+            try:
+                meeting_title = storage._load_meta().get("title")
+            except Exception:
+                meeting_title = None
+        return {
+            "type": "meeting_state",
+            "active": active,
+            "meeting_id": meeting_id,
+            "meeting_title": meeting_title,
+        }
+
+    def _set_claude_sessions(self, count: Optional[int], now: Optional[float] = None):
+        """Record the daemon's live MCP-session count for the merge.
+
+        Tracks when the count first reaches 0 so the merge can debounce the
+        `sessions==0 -> offline` decision (see `AGENT_SESSIONS_ZERO_DEBOUNCE_S`).
+        """
+        self._claude_sessions_count = count
+        if count == 0:
+            if self._sessions_zero_since is None:
+                self._sessions_zero_since = now if now is not None else time.monotonic()
+        else:
+            self._sessions_zero_since = None
+
+    def _effective_agent_state(self, now: float) -> str:
+        """Merge supervisor status + daemon session count into a chip status (D4)."""
+        status = self._supervisor_agent_status
+        # Supervisor absent, explicitly offline, or silent past two missed
+        # heartbeats → offline regardless of the last screen state.
+        if (
+            status is None
+            or status == "offline"
+            or (now - self._supervisor_status_ts) > AGENT_SILENCE_THRESHOLD_S
+        ):
+            return "offline"
+        # Daemon reports a confident zero live MCP sessions during an active
+        # meeting while the supervisor is past `spawning`: the TUI is up but
+        # the copilot never connected. Debounced so leaving `spawning` before
+        # the daemon's first poll does not flap the chip. `None` count is
+        # unknown (not a confident 0) and never forces offline here.
+        if (
+            self._claude_sessions_count == 0
+            and status != "spawning"
+            and self._sessions_zero_since is not None
+            and (now - self._sessions_zero_since) >= AGENT_SESSIONS_ZERO_DEBOUNCE_S
+            and self._is_meeting_active()
+        ):
+            return "offline"
+        return status
+
+    async def _recompute_agent_state(self, now: Optional[float] = None):
+        """Recompute the effective chip status and broadcast on change only.
+
+        Called on every `copilot_agent_status` / `claude_sessions` frame and
+        periodically from the server loop (so supervisor silence flips the
+        chip to offline even with no incoming frame). Heartbeats that do not
+        change the effective status are not broadcast to extensions.
+        """
+        if now is None:
+            now = time.monotonic()
+        effective = self._effective_agent_state(now)
+        if effective == self._last_effective_agent_state:
+            return
+        self._last_effective_agent_state = effective
+        await self._broadcast_message({
+            "type": "copilot_status",
+            "request_id": "",
+            "status": "agent_state",
+            "agent_state": effective,
+        })
+
     async def _call_codex_cli(
         self,
         prompt: str,
@@ -1571,9 +1742,11 @@ class KTalkBridge:
             with self._lock:
                 was_subscriber = websocket in self._subscriber_clients
                 was_copilot_channel = websocket in self._copilot_channel_clients
+                was_supervisor = websocket in self._supervisor_clients
                 self._connected_clients.discard(websocket)
                 self._subscriber_clients.discard(websocket)
                 self._copilot_channel_clients.discard(websocket)
+                self._supervisor_clients.discard(websocket)
                 # Release meeting ownership if the owner WS just dropped —
                 # otherwise the rejection gate would permanently block every
                 # subsequent meeting_join from a fresh tab (the dead WS
@@ -1583,7 +1756,10 @@ class KTalkBridge:
                     self._meeting_owner_ws = None
                 no_extension_clients = not self._connected_clients
                 no_channel_clients_left = not self._copilot_channel_clients
-            if was_copilot_channel:
+                no_supervisor_clients_left = not self._supervisor_clients
+            if was_supervisor:
+                role = "Copilot supervisor"
+            elif was_copilot_channel:
                 role = "Copilot channel"
             elif was_subscriber:
                 role = "Subscriber"
@@ -1621,6 +1797,12 @@ class KTalkBridge:
                     "status": "channel_disconnected",
                     "message": "Copilot channel server disconnected",
                 })
+            # Supervisor departure: drop its last reported status so the merge
+            # flips the chip to offline promptly instead of waiting out the
+            # silence window. Only on the last supervisor leaving (1→0).
+            if was_supervisor and no_supervisor_clients_left:
+                self._supervisor_agent_status = None
+                await self._recompute_agent_state()
             # Only extension clients count for lifecycle — subscribers are
             # passive listeners and must not block "last extension gone".
             if no_extension_clients:
@@ -1698,7 +1880,11 @@ class KTalkBridge:
             self._copilot_transcript_buffer.clear()
             self._copilot_transcript_order.clear()
         if prev_meeting_id:
-            await self._broadcast_to_channel_clients({
+            # Extensions are already gone here (this path fires on the last
+            # extension disconnect), but `_emit_lifecycle` still reaches
+            # channel clients and the supervisor; the empty extension
+            # broadcast is a harmless no-op.
+            await self._emit_lifecycle({
                 "type": "meeting_ended",
                 "meeting_id": prev_meeting_id,
                 "created_at": time.time() * 1000,
@@ -1993,8 +2179,7 @@ class KTalkBridge:
                         "meeting_title": title,
                         "created_at": time.time() * 1000,
                     }
-                    await self._broadcast_to_channel_clients(meeting_started_frame)
-                    await self._broadcast_message(meeting_started_frame)
+                    await self._emit_lifecycle(meeting_started_frame)
                     # Reset proactive transcript-tick state for the new
                     # meeting. `send_transcript` consults this on every
                     # broadcast; seeding `last_emit_ts` to the join time
@@ -2110,10 +2295,9 @@ class KTalkBridge:
                 with self._lock:
                     self._copilot_transcript_buffer.clear()
                     self._copilot_transcript_order.clear()
-                await self._broadcast_to_channel_clients(meeting_ended_frame)
-                # Notify extension about new meeting (safe to await here —
-                # speaker state is already clean).
-                await self._broadcast_message(meeting_ended_frame)
+                # Notify channel clients, extension clients, and the copilot
+                # supervisor (safe to await here — speaker state is clean).
+                await self._emit_lifecycle(meeting_ended_frame)
                 # `new_meeting` адресуется ТОЛЬКО табу, который инициировал
                 # leave. `handleNewMeeting` в extension'е сбрасывает
                 # `state.currentMeetingId = null` и очищает transcriptLines —
@@ -2649,6 +2833,78 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
 
+        elif msg_type == "supervisor_hello":
+            # Copilot supervisor (recog/copilot_supervisor.py) announces
+            # itself. Move the connection out of `_connected_clients` into
+            # the dedicated supervisor set so the meeting-lifecycle path
+            # ("last extension disconnect -> end meeting") does not count it
+            # as an extension. Modelled on `copilot_channel_hello`. Reply with
+            # `meeting_state` so the supervisor can reconcile after a
+            # (re)connect (adopt / spawn / GRACE) instead of blindly killing a
+            # live session.
+            if websocket is None:
+                print(
+                    "[KTalk Bridge] supervisor_hello without websocket — ignored",
+                    file=sys.stderr,
+                )
+                return
+            with self._lock:
+                self._connected_clients.discard(websocket)
+                self._supervisor_clients.add(websocket)
+                no_extension_clients = not self._connected_clients
+            print(
+                f"[KTalk Bridge] Copilot supervisor registered from "
+                f"{getattr(websocket, 'remote_address', 'unknown')}",
+                file=sys.stderr,
+            )
+            # Race recovery: between this socket's WS-open and hello-processing
+            # it sat in `_connected_clients`. If an extension disconnected in
+            # that window, its finally-block saw `_connected_clients={sup_ws}`
+            # and skipped the meeting-end lifecycle. Re-run the check now that
+            # the supervisor has been unmasked. Same pattern as the other
+            # hellos — and it must run BEFORE `_compute_meeting_state` so the
+            # reply reflects the reconciled (possibly ended) meeting.
+            if no_extension_clients:
+                await self._end_meeting_on_last_extension_gone()
+            state_frame = self._compute_meeting_state()
+            try:
+                await websocket.send(json.dumps(state_frame, ensure_ascii=False))
+            except Exception as e:
+                print(
+                    f"[KTalk Bridge] Failed to send meeting_state to supervisor: {e}",
+                    file=sys.stderr,
+                )
+
+        elif msg_type == "copilot_agent_status":
+            # Supervisor reports the classified TUI screen state
+            # (spawning/online/working/blocked/offline). Store it with a
+            # monotonic timestamp — the merge treats a stale timestamp (two
+            # missed heartbeats) as offline — and recompute the effective chip.
+            status = data.get("status")
+            if not isinstance(status, str) or not status:
+                print(
+                    "[KTalk Bridge] copilot_agent_status missing/invalid status — ignored",
+                    file=sys.stderr,
+                )
+                return
+            self._supervisor_agent_status = status
+            self._supervisor_status_ts = time.monotonic()
+            await self._recompute_agent_state()
+
+        elif msg_type == "claude_sessions":
+            # Copilot channel daemon reports its live MCP-session count.
+            # `null` = unknown (SDK private attr missing) — kept distinct from
+            # a confident 0 so an SDK refactor cannot force a false offline.
+            count = data.get("count")
+            if count is not None and not isinstance(count, int):
+                print(
+                    "[KTalk Bridge] claude_sessions invalid count — ignored",
+                    file=sys.stderr,
+                )
+                return
+            self._set_claude_sessions(count)
+            await self._recompute_agent_state()
+
     async def _run_server(self):
         """Запускает WebSocket сервер."""
         try:
@@ -2671,6 +2927,10 @@ class KTalkBridge:
                     # Каждую ~1 секунду проверяем таймаут сегмента
                     if _flush_counter % 10 == 0:
                         self._check_segment_timeout()
+                        # Recompute the agent-state chip so supervisor silence
+                        # (crash) flips it to offline even without an incoming
+                        # frame to trigger the merge. Broadcasts only on change.
+                        await self._recompute_agent_state()
 
                     # Периодически обновляем debug state даже без событий
                     self._write_debug_state()

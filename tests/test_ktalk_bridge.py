@@ -5,6 +5,7 @@ import collections
 import json
 import time
 import pytest
+import websockets
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch
 
@@ -2837,3 +2838,397 @@ async def test_get_recent_transcript_snapshots_decouple_from_buffer():
     assert len(segs) == 1
     assert segs[0]["text"] == "live text"
     assert segs[0]["refined"] is False
+
+
+# --- Task 4: copilot supervisor — hello / meeting_state / lifecycle / merge ---
+
+
+async def _serve_bridge(bridge):
+    """Serve a real KTalkBridge on an ephemeral port; return (server, url)."""
+    server = await websockets.serve(bridge._handle_client, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, f"ws://127.0.0.1:{port}"
+
+
+async def _recv_type(ws, want, timeout=5.0):
+    """Read frames from `ws` until one of type `want` arrives (or timeout)."""
+    while True:
+        raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+        frame = json.loads(raw)
+        if frame.get("type") == want:
+            return frame
+
+
+@pytest.mark.asyncio
+async def test_real_bridge_delivers_meeting_started_to_supervisor():
+    """
+    given: a REAL bridge WS server, a registered supervisor client
+           (`supervisor_hello`), and no active meeting at connect time
+    when:  an extension client joins a KTalk meeting
+    then:  the supervisor receives `meeting_started` for the new meeting_id
+           through the real WS fan-out — guards against a fake-bridge unit
+           test masking a missing supervisor emit path (meeting_join)
+    """
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="m-join")
+    storage.current_meeting_path = None  # no active meeting at connect
+    bridge.set_meeting_storage(storage)
+
+    server, url = await _serve_bridge(bridge)
+    supervisor = extension = None
+    try:
+        supervisor = await websockets.connect(url)
+        await supervisor.send(json.dumps({"type": "supervisor_hello"}))
+        state = await _recv_type(supervisor, "meeting_state")
+        assert state["active"] is False
+
+        extension = await websockets.connect(url)
+        await extension.send(json.dumps({
+            "type": "meeting_join",
+            "url": "https://ktalk.test/abc",
+            "title": "Sprint review",
+            "platform": "ktalk",
+        }))
+        started = await _recv_type(supervisor, "meeting_started")
+        assert started["meeting_id"] == "m-join"
+        assert started["meeting_title"] == "Sprint review"
+    finally:
+        if extension is not None:
+            await extension.close()
+        if supervisor is not None:
+            await supervisor.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_real_bridge_delivers_meeting_ended_on_leave_to_supervisor():
+    """
+    given: a REAL bridge, a registered supervisor, and an active meeting
+    when:  the extension sends an explicit `meeting_leave`
+    then:  the supervisor receives `meeting_ended` for the previous meeting_id
+           (second of the three emit paths)
+    """
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="m-prev", new_meeting_id="m-next")
+    storage.current_meeting_path = None
+    bridge.set_meeting_storage(storage)
+
+    server, url = await _serve_bridge(bridge)
+    supervisor = extension = None
+    try:
+        supervisor = await websockets.connect(url)
+        await supervisor.send(json.dumps({"type": "supervisor_hello"}))
+        await _recv_type(supervisor, "meeting_state")
+
+        extension = await websockets.connect(url)
+        await extension.send(json.dumps({
+            "type": "meeting_join",
+            "url": "https://ktalk.test/abc",
+            "title": "Standup",
+            "platform": "ktalk",
+        }))
+        await _recv_type(supervisor, "meeting_started")
+
+        await extension.send(json.dumps({"type": "meeting_leave", "reason": "user_left"}))
+        ended = await _recv_type(supervisor, "meeting_ended")
+        assert ended["meeting_id"] == "m-prev"
+    finally:
+        if extension is not None:
+            await extension.close()
+        if supervisor is not None:
+            await supervisor.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_real_bridge_delivers_meeting_ended_on_last_extension_gone_to_supervisor():
+    """
+    given: a REAL bridge, a registered supervisor, and an active meeting
+    when:  the only extension client abruptly disconnects (no meeting_leave)
+    then:  the supervisor receives `meeting_ended` via the
+           last-extension-gone path — the third emit path, and proof that
+           `supervisor_hello` isolates the supervisor from the extension
+           count (else `no_extension_clients` would be False and no end fires)
+    """
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="m-live")
+    storage.current_meeting_path = None
+    bridge.set_meeting_storage(storage)
+
+    server, url = await _serve_bridge(bridge)
+    supervisor = extension = None
+    try:
+        supervisor = await websockets.connect(url)
+        await supervisor.send(json.dumps({"type": "supervisor_hello"}))
+        await _recv_type(supervisor, "meeting_state")
+
+        extension = await websockets.connect(url)
+        await extension.send(json.dumps({
+            "type": "meeting_join",
+            "url": "https://ktalk.test/abc",
+            "title": "Standup",
+            "platform": "ktalk",
+        }))
+        await _recv_type(supervisor, "meeting_started")
+
+        await extension.close()  # abrupt disconnect — page crash / network drop
+        extension = None
+        ended = await _recv_type(supervisor, "meeting_ended")
+        assert ended["meeting_id"] == "m-live"
+    finally:
+        if extension is not None:
+            await extension.close()
+        if supervisor is not None:
+            await supervisor.close()
+        server.close()
+        await server.wait_closed()
+
+
+def _ktalk_storage(meeting_id="m-1", title="Standup", source="ktalk"):
+    storage = Mock()
+    storage.current_meeting_path = Path(f"/tmp/{meeting_id}.jsonl")
+    storage.current_meeting_id = meeting_id
+    storage._load_meta = Mock(return_value={"source": source, "title": title})
+    return storage
+
+
+def test_meeting_state_active_true_for_ktalk_with_extension():
+    """
+    given: a ktalk meeting in storage and one connected extension client
+    when:  the bridge builds a meeting_state reply
+    then:  active is True with the meeting_id and title populated
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1", title="Standup"))
+    bridge._connected_clients.add(RecordingClient())
+
+    frame = bridge._compute_meeting_state()
+
+    assert frame["type"] == "meeting_state"
+    assert frame["active"] is True
+    assert frame["meeting_id"] == "m-1"
+    assert frame["meeting_title"] == "Standup"
+
+
+def test_meeting_state_orphan_after_leave_is_inactive():
+    """
+    given: an orphan meeting (post-leave: current_meeting_path is never None)
+           with a connected extension client
+    when:  the bridge builds a meeting_state reply
+    then:  active is False and no meeting_id leaks — orphan is not "in a
+           meeting", so the supervisor must not treat it as one
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="orphan-1", source="orphan"))
+    bridge._connected_clients.add(RecordingClient())
+
+    frame = bridge._compute_meeting_state()
+
+    assert frame["active"] is False
+    assert frame["meeting_id"] is None
+    assert frame["meeting_title"] is None
+
+
+def test_meeting_state_ktalk_without_extension_is_inactive():
+    """
+    given: a ktalk meeting in storage but NO connected extension client
+    when:  the bridge builds a meeting_state reply
+    then:  active is False — a ktalk meta without a live extension driving it
+           is a stale record, not an active meeting
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1"))
+    # no extension clients
+
+    frame = bridge._compute_meeting_state()
+
+    assert frame["active"] is False
+    assert frame["meeting_id"] is None
+
+
+def _bridge_with_active_ktalk():
+    """Bridge with an active ktalk meeting + one extension client (recorder)."""
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1"))
+    ext = RecordingClient()
+    bridge._connected_clients.add(ext)
+    return bridge, ext
+
+
+def _agent_states(client):
+    """Extract the sequence of broadcast agent_state values from a client."""
+    out = []
+    for m in client.sent:
+        f = json.loads(m)
+        if f.get("type") == "copilot_status" and f.get("status") == "agent_state":
+            out.append(f["agent_state"])
+    return out
+
+
+@pytest.mark.asyncio
+async def test_merge_working_with_one_session_is_working():
+    """
+    given: supervisor reports `working` and the daemon reports 1 live session
+    when:  the effective agent state is recomputed
+    then:  the chip broadcasts `working` (supervisor status passes through)
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = "working"
+    bridge._supervisor_status_ts = 50.0
+    bridge._set_claude_sessions(1, now=50.0)
+
+    await bridge._recompute_agent_state(now=50.0)
+
+    assert _agent_states(ext) == ["working"]
+
+
+@pytest.mark.asyncio
+async def test_merge_online_with_sessions_zero_sustained_goes_offline():
+    """
+    given: supervisor stays `online` (fresh heartbeats) but the daemon reports
+           zero live sessions during an active meeting
+    when:  the zero-session condition holds past the debounce window
+    then:  the chip flips online -> offline (TUI up, copilot never connected),
+           and stays online while the condition is younger than the debounce
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = 100.0
+    bridge._set_claude_sessions(0, now=100.0)
+
+    await bridge._recompute_agent_state(now=100.0)   # zero just started → online
+    bridge._supervisor_status_ts = 105.0             # heartbeat keeps supervisor fresh
+    await bridge._recompute_agent_state(now=105.0)   # 5s < debounce → still online
+    bridge._supervisor_status_ts = 111.0
+    await bridge._recompute_agent_state(now=111.0)   # 11s ≥ debounce → offline
+
+    assert _agent_states(ext) == ["online", "offline"]
+
+
+@pytest.mark.asyncio
+async def test_merge_supervisor_silence_goes_offline():
+    """
+    given: supervisor reported `online`, then falls silent (no heartbeat)
+    when:  more than two heartbeat intervals elapse without a report
+    then:  the chip flips online -> offline on the silence threshold
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = 10.0
+
+    await bridge._recompute_agent_state(now=15.0)   # 5s silence → online
+    await bridge._recompute_agent_state(now=25.0)   # 15s silence → offline
+
+    assert _agent_states(ext) == ["online", "offline"]
+
+
+@pytest.mark.asyncio
+async def test_merge_spawning_to_online_with_young_sessions_zero_does_not_flap():
+    """
+    given: supervisor is `spawning` with zero sessions, then flips to `online`
+           while the daemon has not yet reported any session (still 0, young)
+    when:  the effective state is recomputed on the transition
+    then:  the chip goes spawning -> online WITHOUT a spurious offline —
+           the sessions-zero debounce absorbs the startup gap (no flap)
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = "spawning"
+    bridge._supervisor_status_ts = 200.0
+    bridge._set_claude_sessions(0, now=200.0)
+
+    await bridge._recompute_agent_state(now=200.0)   # spawning (zero branch needs !=spawning)
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = 202.0
+    await bridge._recompute_agent_state(now=202.0)   # sessions 0 for 2s < debounce → online
+
+    assert _agent_states(ext) == ["spawning", "online"]
+
+
+@pytest.mark.asyncio
+async def test_merge_unknown_session_count_does_not_force_offline():
+    """
+    given: supervisor reports `online` and the daemon reports an unknown
+           (null) session count during an active meeting
+    when:  the effective state is recomputed
+    then:  the chip stays `online` — null is not a confident 0 and must not
+           force offline (an SDK refactor renaming the private attr)
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = 300.0
+    bridge._set_claude_sessions(None, now=300.0)
+
+    await bridge._recompute_agent_state(now=300.0)
+
+    assert _agent_states(ext) == ["online"]
+
+
+@pytest.mark.asyncio
+async def test_merge_broadcasts_only_on_effective_change():
+    """
+    given: a stable effective agent state
+    when:  the merge is recomputed repeatedly with no change (heartbeat)
+    then:  the chip is broadcast exactly once — heartbeats that do not change
+           the effective status are not transmitted to extensions
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = "working"
+    bridge._supervisor_status_ts = 50.0
+    bridge._set_claude_sessions(2, now=50.0)
+
+    await bridge._recompute_agent_state(now=50.0)
+    bridge._supervisor_status_ts = 51.0
+    await bridge._recompute_agent_state(now=51.0)   # same effective → no broadcast
+    bridge._supervisor_status_ts = 52.0
+    await bridge._recompute_agent_state(now=52.0)   # still same → no broadcast
+
+    assert _agent_states(ext) == ["working"]
+
+
+@pytest.mark.asyncio
+async def test_copilot_agent_status_frame_updates_and_broadcasts():
+    """
+    given: a bridge with an active ktalk meeting and an extension client
+    when:  a `copilot_agent_status` frame arrives from the supervisor
+    then:  the status is stored and an effective agent_state is broadcast
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+
+    await bridge._process_message({"type": "copilot_agent_status", "status": "online"})
+
+    assert bridge._supervisor_agent_status == "online"
+    assert _agent_states(ext) == ["online"]
+
+
+@pytest.mark.asyncio
+async def test_copilot_agent_status_invalid_is_ignored(capsys):
+    """
+    given: a bridge with an active meeting
+    when:  a `copilot_agent_status` frame carries a missing/blank status
+    then:  it is ignored (no stored status, no broadcast)
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+
+    await bridge._process_message({"type": "copilot_agent_status", "status": ""})
+
+    assert bridge._supervisor_agent_status is None
+    assert _agent_states(ext) == []
+
+
+@pytest.mark.asyncio
+async def test_claude_sessions_null_count_kept_unknown():
+    """
+    given: a bridge with an active meeting and supervisor reporting online
+    when:  a `claude_sessions` frame carries an explicit null count
+    then:  the count is stored as None (unknown) and does not force offline
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = time.monotonic()
+
+    await bridge._process_message({"type": "claude_sessions", "count": None})
+
+    assert bridge._claude_sessions_count is None
+    assert _agent_states(ext) == ["online"]
