@@ -1110,6 +1110,109 @@ function flashPipButton(text) {
   }, 1800);
 }
 
+// KTalk's native Document-PiP window (tiles / participants / chat)
+// renders the same .tl-tabset__content tab bar as the main page. When
+// it opens, inject a Recog tab with a live transcript mirror into it,
+// so the built-in popup carries the transcript too.
+let pipEnterHookInstalled = false;
+
+export function watchDocumentPip() {
+  if (pipEnterHookInstalled) return;
+  const docPip = window.documentPictureInPicture;
+  if (!docPip || typeof docPip.addEventListener !== 'function') return;
+  pipEnterHookInstalled = true;
+  docPip.addEventListener('enter', (event) => {
+    injectRecogIntoKtalkPip(event.window);
+  });
+}
+
+function injectRecogIntoKtalkPip(pipWin) {
+  const doc = pipWin.document;
+  let mirrorObserver = null;
+
+  const ensureInjected = () => {
+    const tabset = doc.querySelector('.tl-tabset__content');
+    if (!tabset || tabset.querySelector('.ktalk-ai-tab')) return;
+
+    const contentArea = doc.querySelector('.slide-menu-wrapper .content');
+    if (!contentArea) {
+      console.log('[KTalk Recog] PiP: KTalk content area not found, Recog tab skipped');
+      return;
+    }
+
+    if (!doc.querySelector('#ktalk-transcript-styles')) {
+      const styleEl = doc.createElement('style');
+      styleEl.id = 'ktalk-transcript-styles';
+      const mainStyles = document.querySelector('#ktalk-transcript-styles');
+      styleEl.textContent = mainStyles ? mainStyles.textContent : '';
+      doc.head.appendChild(styleEl);
+    }
+
+    const tab = doc.createElement('div');
+    tab.className = 'tl-tab _switchable ktalk-ai-tab-wrapper';
+    tab.innerHTML = `
+        <button type="button" class="ktalk-ai-tab link">
+          <span class="tab-content"><span class="title">Recog</span></span>
+        </button>
+      `;
+    tabset.appendChild(tab);
+
+    const mirror = doc.createElement('div');
+    mirror.className = 'ktalk-transcript-content';
+    mirror.innerHTML = '<div class="ktalk-transcript-messages"></div>';
+    const nativeContent = contentArea.firstElementChild;
+    contentArea.appendChild(mirror);
+
+    const mirrorMessages = mirror.querySelector('.ktalk-transcript-messages');
+    const syncMirror = () => {
+      const src = document.querySelector('.ktalk-transcript-messages');
+      if (!src) return;
+      mirrorMessages.innerHTML = src.innerHTML;
+      mirrorMessages.scrollTop = mirrorMessages.scrollHeight;
+    };
+
+    const setMirrorActive = (active) => {
+      tab.classList.toggle('_active', active);
+      tab.querySelector('.ktalk-ai-tab').classList.toggle('_active', active);
+      mirror.classList.toggle('active', active);
+      if (nativeContent && nativeContent !== mirror) {
+        nativeContent.style.display = active ? 'none' : '';
+      }
+      if (active) {
+        syncMirror();
+        if (!mirrorObserver) {
+          const src = document.querySelector('.ktalk-transcript-messages');
+          if (src) {
+            mirrorObserver = new MutationObserver(syncMirror);
+            mirrorObserver.observe(src, { childList: true, subtree: true, characterData: true });
+          }
+        }
+      } else if (mirrorObserver) {
+        mirrorObserver.disconnect();
+        mirrorObserver = null;
+      }
+    };
+
+    tab.querySelector('button').addEventListener('click', () => setMirrorActive(true));
+    tabset.addEventListener('click', (e) => {
+      const clicked = e.target.closest('.tl-tab');
+      if (clicked && clicked !== tab) setMirrorActive(false);
+    });
+  };
+
+  // KTalk populates the PiP document asynchronously, and the tab bar
+  // only exists while the chat view is shown - keep watching and
+  // re-inject whenever it (re)appears.
+  ensureInjected();
+  const domObserver = new MutationObserver(ensureInjected);
+  domObserver.observe(doc.documentElement, { childList: true, subtree: true });
+
+  pipWin.addEventListener('pagehide', () => {
+    domObserver.disconnect();
+    if (mirrorObserver) mirrorObserver.disconnect();
+  });
+}
+
 async function toggleTranscriptPip() {
   try {
     if (state.pipWindow) {

@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { injectStyles, addAiTab, createTranscriptContent, createContextContent, createCopilotContent, watchTabChanges, initPlatformUI } from './ui.js';
+import { injectStyles, addAiTab, createTranscriptContent, createContextContent, createCopilotContent, watchTabChanges, watchDocumentPip, initPlatformUI } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
@@ -155,6 +155,7 @@ function setupUI() {
     createContextContent();
     createCopilotContent();
     watchTabChanges();
+    watchDocumentPip();
   }
 
   ensureDebugPanel();
