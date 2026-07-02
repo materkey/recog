@@ -564,6 +564,38 @@ function installFocusGuard(win = window) {
       return orig(...args);
     };
   });
+
+  const videoProto = win.HTMLVideoElement && win.HTMLVideoElement.prototype;
+  if (videoProto && typeof videoProto.requestPictureInPicture === 'function') {
+    const origRequestPip = videoProto.requestPictureInPicture;
+    videoProto.requestPictureInPicture = function (...args) {
+      console.log('[KTalk Recog] requestPictureInPicture called');
+      return origRequestPip.apply(this, args);
+    };
+  }
+
+  // Timestamped window-activation trace: when macOS yanks the user back
+  // to Chrome's Space, this window gains focus — the log pinpoints the
+  // moment so it can be correlated with front-app-monitor.sh and the
+  // vector logs above (see test-stand/).
+  if (typeof win.addEventListener === 'function') {
+    const stamp = () => {
+      const d = new Date();
+      return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    };
+    win.addEventListener('focus', () => console.log(`[KTalk Recog] window FOCUS at ${stamp()}`));
+    win.addEventListener('blur', () => console.log(`[KTalk Recog] window blur at ${stamp()}`));
+    const doc = win.document;
+    if (doc && typeof doc.addEventListener === 'function') {
+      doc.addEventListener('visibilitychange', () => {
+        console.log(`[KTalk Recog] visibility=${doc.visibilityState} at ${stamp()}`);
+      });
+      doc.addEventListener('fullscreenchange', () => {
+        const el = doc.fullscreenElement;
+        console.log(`[KTalk Recog] fullscreenchange element=${el ? el.tagName : 'none'} at ${stamp()}`);
+      });
+    }
+  }
 }
 
 
