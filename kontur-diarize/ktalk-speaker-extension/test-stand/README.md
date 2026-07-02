@@ -1,5 +1,16 @@
 # Стенд воспроизведения: «macOS утаскивает обратно на Space с Chrome»
 
+> **Разгадка (2026-07-02):** space-yank-trace показал, что через ~0.5с
+> после ухода на другой Space Chrome сам вызывает SetFrontProcessWithInfo
+> (его собственный conn id). Причина — Chrome-настройка «Automatic
+> picture-in-picture», разрешённая для example.ktalk.ru: при скрытии
+> вкладки со звонком Chrome открывает PiP-окно, что активирует Chrome
+> и триггерит переключение Space. Фикс в расширении: focus guard глушит
+> регистрацию mediaSession-хендлера `enterpictureinpicture` (без него
+> сайт не подходит под auto-PiP). Дублирующий фикс на уровне Chrome:
+> Settings → Site settings → Automatic picture-in-picture → Block для
+> example.ktalk.ru (та же настройка стоит и для meet.google.com).
+
 Симптом: во время KTalk-встречи переключаешься на другой Mac workspace
 (kitty), и через какое-то время macOS сам возвращает на Space с Chrome.
 Это значит, что «кто-то» активировал окно Chrome. Стенд отвечает на два
