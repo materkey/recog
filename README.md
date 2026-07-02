@@ -13,6 +13,11 @@ Russian speech recognition with speaker diarization and identification.
 - Python 3.12
 - macOS (tested on Darwin)
 - ~4GB disk space for models
+- `tmux` (`brew install tmux`) and the Claude Code `claude` CLI on `PATH` —
+  required by the auto-spawn Copilot supervisor, which is installed by
+  `./recog-service.sh install` and enabled by default. Without them the
+  supervisor logs a spawn error and no copilot starts; set
+  `RECOG_COPILOT_AUTOSPAWN=0` in `.env` to disable it entirely.
 
 ## Installation
 

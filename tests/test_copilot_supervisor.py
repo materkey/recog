@@ -773,7 +773,9 @@ class FakeClock:
         self.now += dt
 
 
-def _make_watchdog(runner, *, state=State.SPAWNING, meeting_id="A", clock=None):
+def _make_watchdog(
+    runner, *, state=State.SPAWNING, meeting_id="A", clock=None, spawn_in_flight=None
+):
     lifecycle = SessionLifecycle()
     lifecycle.state = state
     lifecycle.meeting_id = meeting_id
@@ -792,6 +794,7 @@ def _make_watchdog(runner, *, state=State.SPAWNING, meeting_id="A", clock=None):
         send_status=send_status,
         on_session_died=on_died,
         clock=clock or (lambda: 0.0),
+        spawn_in_flight=spawn_in_flight or (lambda: False),
     )
     return watchdog, lifecycle, statuses, died
 
@@ -888,6 +891,41 @@ async def test_watchdog_reports_session_died_when_pane_gone():
     assert died == [True]
 
 
+async def test_watchdog_offline_during_spawn_is_not_death():
+    """given: a spawn command is in-flight (tmux session not created yet)
+    when: the watchdog ticks and observes the pane as offline
+    then: it reports spawning (not offline) and does NOT fire session_died —
+          the pre-spawn gap must not burn a respawn attempt or flicker the chip
+    """
+    runner = WatchdogRunner(alive=False)
+    watchdog, lifecycle, statuses, died = _make_watchdog(
+        runner, state=State.SPAWNING, spawn_in_flight=lambda: True
+    )
+
+    await watchdog.tick()
+
+    assert statuses == [AgentState.SPAWNING]
+    assert died == []
+    assert lifecycle.state is State.SPAWNING
+
+
+async def test_watchdog_offline_after_spawn_completes_is_death():
+    """given: no spawn is in-flight (the session should be up) but the pane is gone
+    when: the watchdog ticks
+    then: it reports offline and feeds session_died back — a genuine post-spawn
+          crash is still detected once the in-flight flag has cleared
+    """
+    runner = WatchdogRunner(alive=False)
+    watchdog, _lifecycle, statuses, died = _make_watchdog(
+        runner, state=State.RUNNING, spawn_in_flight=lambda: False
+    )
+
+    await watchdog.tick()
+
+    assert statuses == [AgentState.OFFLINE]
+    assert died == [True]
+
+
 async def test_watchdog_spawning_past_deadline_reports_blocked():
     """given: the pane stays in the transitional spawning state
     when: it exceeds the spawn deadline
@@ -930,6 +968,34 @@ async def test_watchdog_idle_reports_offline_once_then_silent():
 # ---------------------------------------------------------------------------
 
 
+async def test_execute_marks_spawn_in_flight_during_spawn():
+    """given: a runner whose spawn blocks partway through
+    when: _execute runs a Spawn command
+    then: _spawn_in_flight is True while spawn awaits and cleared once it
+          returns — so a concurrent watchdog tick can suppress the pre-spawn
+          OFFLINE gap (the supervisor wires this flag into its watchdog)
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingRunner(FakeRunner):
+        async def spawn(self, meeting_id):
+            await super().spawn(meeting_id)
+            started.set()
+            await release.wait()
+
+    sup = Supervisor(runner=BlockingRunner())
+    assert sup._spawn_in_flight is False
+    task = asyncio.create_task(sup._execute((Spawn("A"),)))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert sup._spawn_in_flight is True
+    finally:
+        release.set()
+        await task
+    assert sup._spawn_in_flight is False
+
+
 async def test_send_agent_status_uses_connected_ws():
     """given: the supervisor is connected (self._ws set)
     when: the watchdog callback reports a status
@@ -956,13 +1022,25 @@ async def test_send_agent_status_uses_connected_ws():
 
 
 async def test_send_agent_status_dropped_when_disconnected():
-    """given: no live bridge connection
+    """given: no live bridge connection (self._ws is None)
     when: the watchdog reports a status
-    then: it is dropped silently (bridge merge reads silence as offline)
+    then: it is dropped silently — no frame reaches the (detached) socket and
+          the call does not raise (the bridge merge reads silence as offline)
     """
+    sent = []
+
+    class FakeWS:
+        async def send(self, payload):
+            sent.append(payload)
+
+    detached = FakeWS()
     sup = Supervisor(runner=FakeRunner())
-    sup._ws = None
+    sup._ws = detached
+    sup._ws = None  # connection dropped before the report
+
     await sup._send_agent_status(AgentState.ONLINE)  # must not raise
+
+    assert sent == []
 
 
 async def test_run_tracks_ws_and_starts_watchdog():

@@ -1174,18 +1174,41 @@ class KTalkBridge:
             "meeting_title": meeting_title,
         }
 
-    def _set_claude_sessions(self, count: Optional[int], now: Optional[float] = None):
+    def _set_claude_sessions(self, count: Optional[int]):
         """Record the daemon's live MCP-session count for the merge.
 
-        Tracks when the count first reaches 0 so the merge can debounce the
-        `sessions==0 -> offline` decision (see `AGENT_SESSIONS_ZERO_DEBOUNCE_S`).
+        The `sessions==0 -> offline` debounce anchor lives in
+        `_update_sessions_zero_anchor`, NOT here: the always-on daemon reports
+        `count=0` at its own startup — long before any meeting — so anchoring
+        on the raw count would leave the debounce clock stale (already elapsed)
+        by the time a copilot comes up, defeating the anti-flap cushion.
         """
         self._claude_sessions_count = count
-        if count == 0:
-            if self._sessions_zero_since is None:
-                self._sessions_zero_since = now if now is not None else time.monotonic()
-        else:
+
+    def _update_sessions_zero_anchor(self, now: float) -> None:
+        """Track when the sessions-zero *offline* condition began holding.
+
+        The offline verdict fires only when the daemon reports a confident 0
+        live sessions AND the supervisor is past `spawning` AND a meeting is
+        active. Anchoring `_sessions_zero_since` to when that combined
+        condition *begins* (rather than to the raw count) means the debounce
+        window starts when the copilot comes online with no MCP session yet —
+        giving the daemon's 5 s poll time to report the fresh session before
+        the chip could flip to offline. Reset to None whenever any component
+        drops (copilot connects, meeting ends, supervisor re-enters spawning)
+        so the debounce restarts cleanly on the next occurrence.
+        """
+        status = self._supervisor_agent_status
+        eligible = (
+            self._claude_sessions_count == 0
+            and status is not None
+            and status not in ("offline", "spawning")
+            and self._is_meeting_active()
+        )
+        if not eligible:
             self._sessions_zero_since = None
+        elif self._sessions_zero_since is None:
+            self._sessions_zero_since = now
 
     def _effective_agent_state(self, now: float) -> str:
         """Merge supervisor status + daemon session count into a chip status (D4)."""
@@ -1223,6 +1246,7 @@ class KTalkBridge:
         """
         if now is None:
             now = time.monotonic()
+        self._update_sessions_zero_anchor(now)
         effective = self._effective_agent_state(now)
         if effective == self._last_effective_agent_state:
             return
@@ -1702,6 +1726,25 @@ class KTalkBridge:
                     f"[KTalk Bridge] Failed to send channel_connected primer to new client: {e}",
                     file=sys.stderr,
                 )
+        # Agent-state primer: the chip broadcast is change-only, so an
+        # extension that reloads mid-meeting reconnects with its default
+        # ⚫ offline chip and — if the effective status has not changed since —
+        # never receives an `agent_state` frame, showing a wrong offline for
+        # the rest of the meeting. Send the current effective status now so a
+        # reloaded tab reflects the live chip immediately. Harmless to
+        # non-extension clients (subscriber/channel/supervisor all ignore it).
+        try:
+            await websocket.send(json.dumps({
+                "type": "copilot_status",
+                "request_id": "",
+                "status": "agent_state",
+                "agent_state": self._last_effective_agent_state,
+            }, ensure_ascii=False))
+        except Exception as e:
+            print(
+                f"[KTalk Bridge] Failed to send agent_state primer to new client: {e}",
+                file=sys.stderr,
+            )
 
         try:
             async for message in websocket:

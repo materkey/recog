@@ -197,14 +197,15 @@ class SessionCountReporter:
         self._warned_missing_attr = False
 
     def _current_count(self) -> Optional[int]:
-        # `session_manager` is a FastMCP property that raises until the
-        # Streamable HTTP loop is up; `hasattr` collapses that into False, so
-        # before the server is serving we report a genuine 0 (no sessions yet).
-        manager = (
-            self._mcp.session_manager
-            if hasattr(self._mcp, "session_manager")
-            else None
-        )
+        # `session_manager` is a FastMCP property that raises RuntimeError until
+        # the Streamable HTTP loop is up. `hasattr` does NOT collapse that into
+        # False — in Python 3 it only swallows AttributeError, so a RuntimeError
+        # would propagate. Guard the access explicitly and treat "not serving
+        # yet" as a genuine 0 (no sessions yet).
+        try:
+            manager = self._mcp.session_manager
+        except (RuntimeError, AttributeError):
+            return 0
         if manager is None:
             return 0
         sentinel = object()
@@ -281,7 +282,12 @@ async def _broadcast_channel_notification(
     Returns the number of sessions the notification was successfully written
     to. Zero is normal at startup before any client has initialized.
     """
-    manager = mcp.session_manager if hasattr(mcp, "session_manager") else None
+    # `session_manager` raises RuntimeError before the HTTP loop is up;
+    # `hasattr` does not swallow that (only AttributeError) — guard explicitly.
+    try:
+        manager = mcp.session_manager
+    except (RuntimeError, AttributeError):
+        return 0
     if manager is None:
         return 0
     transports = getattr(manager, "_server_instances", None) or {}
