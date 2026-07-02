@@ -1,6 +1,7 @@
 """Tests for recog/copilot_supervisor.py — lifecycle state machine + bridge glue."""
 import asyncio
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -10,11 +11,13 @@ import websockets
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recog.copilot_supervisor import (
+    DEFAULT_MCP_URL,
     Kill,
     SessionLifecycle,
     Spawn,
     State,
     Supervisor,
+    TmuxRunner,
 )
 
 
@@ -30,6 +33,27 @@ class FakeRunner:
 
     async def kill(self):
         self.kills += 1
+
+
+class FakeTmux:
+    """Injectable subprocess runner recording tmux invocations."""
+
+    def __init__(self, has_session=False):
+        self.calls = []
+        self.has_session = has_session
+        self.responses = {}  # tmux subcommand -> (rc, stdout)
+
+    async def __call__(self, args):
+        self.calls.append(list(args))
+        sub = args[3]
+        if sub in self.responses:
+            return self.responses[sub]
+        if sub == "has-session":
+            return (0, "") if self.has_session else (1, "can't find session: copilot")
+        return (0, "")
+
+    def subcommands(self):
+        return [call[3] for call in self.calls]
 
 
 # ---------------------------------------------------------------------------
@@ -437,3 +461,220 @@ async def test_supervisor_drops_malformed_frames():
         await sup.stop()
         server.close()
         await server.wait_closed()
+
+
+# ---------------------------------------------------------------------------
+# TmuxRunner: command building + tmux invocations via injected runner
+# ---------------------------------------------------------------------------
+
+
+def test_build_claude_command_flags_and_json():
+    """given: a TmuxRunner with an explicit MCP URL
+    when: the claude command line is built
+    then: it carries all required flags and the --mcp-config value survives
+          shell quoting as valid JSON pointing at the copilot daemon
+    """
+    runner = TmuxRunner(mcp_url="http://127.0.0.1:8767/mcp", run=FakeTmux())
+    tokens = shlex.split(runner.build_claude_command())
+
+    assert tokens[0] == "claude"
+    assert tokens[1:3] == ["--agent", "copilot-session"]
+    assert "--strict-mcp-config" in tokens
+    config = json.loads(tokens[tokens.index("--mcp-config") + 1])
+    assert config == {
+        "mcpServers": {
+            "copilot": {"type": "http", "url": "http://127.0.0.1:8767/mcp"}
+        }
+    }
+    dev = tokens.index("--dangerously-load-development-channels")
+    assert tokens[dev + 1] == "server:copilot"
+
+
+def test_mcp_url_from_env(monkeypatch):
+    monkeypatch.setenv("RECOG_COPILOT_MCP_URL", "http://127.0.0.1:9999/mcp")
+    assert TmuxRunner(run=FakeTmux()).mcp_url == "http://127.0.0.1:9999/mcp"
+    monkeypatch.delenv("RECOG_COPILOT_MCP_URL")
+    assert TmuxRunner(run=FakeTmux()).mcp_url == DEFAULT_MCP_URL
+
+
+async def test_spawn_runs_new_session_with_socket_and_cwd(tmp_path):
+    fake = FakeTmux(has_session=False)
+    runner = TmuxRunner(repo_root=tmp_path, mcp_url="http://x/mcp", run=fake)
+
+    created = await runner.spawn("A")
+
+    assert created is True
+    assert fake.subcommands() == ["has-session", "new-session"]
+    new_session = fake.calls[1]
+    assert new_session[:3] == ["tmux", "-L", "recog-copilot"]
+    assert new_session[3:9] == ["new-session", "-d", "-s", "copilot", "-c", str(tmp_path)]
+    assert new_session[9] == runner.build_claude_command()
+
+
+async def test_spawn_adopts_live_session_without_new_session():
+    """given: a tmux session named copilot is already alive
+    when: spawn() is called
+    then: no new-session is issued (duplicate name would error and waste
+          a respawn-backoff attempt) — the live session is adopted
+    """
+    fake = FakeTmux(has_session=True)
+
+    created = await TmuxRunner(run=fake).spawn("A")
+
+    assert created is False
+    assert fake.subcommands() == ["has-session"]
+
+
+async def test_spawn_raises_on_tmux_failure():
+    fake = FakeTmux()
+    fake.responses["new-session"] = (1, "error connecting to socket")
+
+    with pytest.raises(RuntimeError, match="new-session failed"):
+        await TmuxRunner(run=fake).spawn("A")
+
+
+async def test_kill_targets_named_session_and_ignores_missing():
+    fake = FakeTmux()
+    fake.responses["kill-session"] = (1, "no server running")
+
+    await TmuxRunner(run=fake).kill()  # must not raise
+
+    assert fake.calls == [["tmux", "-L", "recog-copilot", "kill-session", "-t", "copilot"]]
+
+
+async def test_alive_reflects_has_session():
+    assert await TmuxRunner(run=FakeTmux(has_session=True)).alive() is True
+    assert await TmuxRunner(run=FakeTmux(has_session=False)).alive() is False
+
+
+async def test_send_keys_and_capture():
+    fake = FakeTmux()
+    fake.responses["capture-pane"] = (0, "❯ prompt line")
+    runner = TmuxRunner(run=fake)
+
+    await runner.send_keys("1")
+    text = await runner.capture()
+
+    assert fake.calls[0] == ["tmux", "-L", "recog-copilot", "send-keys", "-t", "copilot", "1"]
+    assert fake.calls[1] == ["tmux", "-L", "recog-copilot", "capture-pane", "-p", "-t", "copilot"]
+    assert text == "❯ prompt line"
+
+
+async def test_capture_returns_empty_when_session_gone():
+    fake = FakeTmux()
+    fake.responses["capture-pane"] = (1, "no server running")
+    assert await TmuxRunner(run=fake).capture() == ""
+
+
+# ---------------------------------------------------------------------------
+# Respawn with backoff (session_died glue)
+# ---------------------------------------------------------------------------
+
+
+async def test_respawn_backoff_exhausts_after_three_attempts():
+    """given: a running meeting whose session keeps dying
+    when: session_died is reported more times than the backoff budget
+    then: exactly 3 respawns happen (initial spawn + 3), then the
+          supervisor gives up for this meeting
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
+    sup.RESPAWN_BACKOFF_S = (0.01, 0.01, 0.01)
+
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "A"})
+    assert runner.spawned == ["A"]
+
+    for _ in range(6):
+        await sup.on_session_died()
+        await asyncio.sleep(0.05)
+
+    assert runner.spawned == ["A"] * 4  # initial + 3 respawns, then gave up
+    assert sup.lifecycle.state is State.SPAWNING
+    await sup.stop()
+
+
+async def test_respawn_pending_absorbs_repeat_reports():
+    """given: a respawn is already scheduled (backoff sleep in progress)
+    when: session_died is reported again before it fires
+    then: no extra respawn is scheduled — one respawn total"""
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
+    sup.RESPAWN_BACKOFF_S = (0.05, 0.05, 0.05)
+
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "A"})
+    await sup.on_session_died()
+    await sup.on_session_died()
+    await sup.on_session_died()
+    await asyncio.sleep(0.15)
+
+    assert runner.spawned == ["A", "A"]  # initial + single respawn
+    await sup.stop()
+
+
+async def test_meeting_change_cancels_pending_respawn_and_resets_budget():
+    """given: a respawn for meeting A is pending
+    when: meeting B starts
+    then: the pending respawn is cancelled (no late spawn of A) and the
+          backoff budget is fresh for B"""
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
+    sup.RESPAWN_BACKOFF_S = (0.05, 0.05, 0.05)
+
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "A"})
+    await sup.on_session_died()
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "B"})
+    await asyncio.sleep(0.15)
+
+    assert runner.spawned == ["A", "B"]
+    assert runner.kills == 1
+    assert sup._respawn_attempts == 0
+
+    await sup.on_session_died()
+    await asyncio.sleep(0.15)
+    assert runner.spawned == ["A", "B", "B"]  # budget reset — respawn works for B
+    await sup.stop()
+
+
+async def test_respawn_aborted_when_meeting_ends_during_backoff():
+    """given: a respawn is pending after session death
+    when: the meeting ends during the backoff sleep (state leaves SPAWNING)
+    then: the respawn does not fire into GRACE"""
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
+    sup.RESPAWN_BACKOFF_S = (0.05, 0.05, 0.05)
+
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "A"})
+    await sup.on_session_died()
+    await sup.handle_frame({"type": "meeting_ended", "meeting_id": "A"})
+    assert sup.lifecycle.state is State.GRACE
+
+    await asyncio.sleep(0.15)
+    assert runner.spawned == ["A"]  # no respawn after the meeting ended
+    await sup.stop()
+
+
+async def test_session_died_with_autospawn_off_is_noop():
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
+
+    await sup.on_session_died()
+    await asyncio.sleep(0.02)
+
+    assert runner.spawned == []
+    assert sup.lifecycle.state is State.IDLE
+
+
+async def test_reconcile_uses_async_runner_alive_probe():
+    """given: no explicit session_alive_probe — the supervisor defaults to
+           the runner's async alive()
+    when: meeting_state reports an active meeting and tmux has a session
+    then: the live session is adopted instead of respawned"""
+    fake = FakeTmux(has_session=True)
+    runner = TmuxRunner(run=fake)
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
+
+    await sup.handle_frame({"type": "meeting_state", "active": True, "meeting_id": "A"})
+
+    assert sup.lifecycle.state is State.RUNNING
+    assert sup.lifecycle.meeting_id == "A"
+    assert "new-session" not in fake.subcommands()

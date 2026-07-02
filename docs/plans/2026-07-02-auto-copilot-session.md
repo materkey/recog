@@ -221,20 +221,20 @@ Key design decisions:
 - Modify: `recog/copilot_supervisor.py`
 - Modify: `tests/test_copilot_supervisor.py`
 
-- [ ] `TmuxRunner` с инъектируемым subprocess-раннером: `spawn()` (new-session -d, socket
+- [x] `TmuxRunner` с инъектируемым subprocess-раннером: `spawn()` (new-session -d, socket
       `-L recog-copilot`, cwd репо, команда claude с флагами из D2/Context), `kill()`,
       `alive()` (has-session), `send_keys()`, `capture()` (capture-pane -p)
-- [ ] сборка команды claude: `--agent copilot-session --strict-mcp-config --mcp-config <json>
+- [x] сборка команды claude: `--agent copilot-session --strict-mcp-config --mcp-config <json>
       --dangerously-load-development-channels server:copilot`; URL демона из env
       (`RECOG_COPILOT_MCP_URL`, default `http://127.0.0.1:8767/mcp`)
-- [ ] подключить runner к выходам state machine (spawn/kill), respawn с backoff
+- [x] подключить runner к выходам state machine (spawn/kill), respawn с backoff
       (≤3 попыток на встречу, интервалы 5/15/30 с); **spawn гейтится на `alive()`** —
       если сессия с таким именем уже жива, adopt вместо `new-session`
       (дубликат имени в tmux — ошибка, которая зря съедала бы respawn-backoff)
-- [ ] write tests: сборка командной строки (флаги, экранирование JSON), spawn/kill вызывают
+- [x] write tests: сборка командной строки (флаги, экранирование JSON), spawn/kill вызывают
       правильные tmux-аргументы, respawn-backoff исчерпывается после 3 неудач,
       spawn при живой сессии не вызывает new-session
-- [ ] run tests - must pass before next task
+- [x] run tests - must pass before next task
 
 ### Task 3: Watchdog — классификация экрана, авто-диалог, статус-события
 
