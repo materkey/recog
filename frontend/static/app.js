@@ -511,7 +511,7 @@ const views = {
                 // Play button for segments with audio (only first segment in group)
                 const firstSegmentIdx = group.segmentIndices ? group.segmentIndices[0] : null;
                 const playButton = hasAudio && firstSegmentIdx !== null ? `
-                    <button class="btn-play-segment" onclick="playSegmentAudio(${firstSegmentIdx}, this)" title="Play audio">
+                    <button class="btn-play-segment" onclick="playSegmentAudio('${this.id}', ${firstSegmentIdx}, this)" title="Play audio">
                         <svg class="play-icon" viewBox="0 0 24 24" width="16" height="16">
                             <polygon points="5,3 19,12 5,21" fill="currentColor"/>
                         </svg>
@@ -838,13 +838,37 @@ const views = {
                         div.title = 'Предварительная расшифровка — будет уточнена';
                     }
                 }
+
+                // Audio playback: the init frame delivers the same full
+                // segment list the /audio/{segment_index} endpoint indexes
+                // into, and `segments` frames append rows in file order, so
+                // the position in this.segments is the API's segment_index.
+                const hasAudio = !seg.event_type && seg.audio_offset_ms != null;
+                const playButton = hasAudio ? `
+                    <button class="btn-play-segment" title="Play audio">
+                        <svg class="play-icon" viewBox="0 0 24 24" width="16" height="16">
+                            <polygon points="5,3 19,12 5,21" fill="currentColor"/>
+                        </svg>
+                    </button>
+                ` : '';
+
                 div.innerHTML = `
                     <div class="segment-header">
                         <span class="segment-speaker">${escapeHtml(seg.speaker)}</span>
+                        ${playButton}
                         <span class="segment-time">${seg.ts_display}</span>
                     </div>
                     <div class="segment-text">${escapeHtml(seg.text)}</div>
                 `;
+
+                const playBtn = div.querySelector('.btn-play-segment');
+                if (playBtn) {
+                    const segmentIndex = this.segments.indexOf(seg);
+                    playBtn.addEventListener('click', () => {
+                        const meetingId = this.currentMeeting && this.currentMeeting.id;
+                        playSegmentAudio(meetingId, segmentIndex, playBtn);
+                    });
+                }
 
                 container.appendChild(div);
 
@@ -893,9 +917,8 @@ let currentPlayButton = null;
 let currentAudioUrl = null;
 let audioLoadingFor = null;  // Track which segment is loading to prevent race conditions
 
-async function playSegmentAudio(segmentIndex, buttonEl) {
-    const meeting = views.meeting;
-    if (!meeting.id) return;
+async function playSegmentAudio(meetingId, segmentIndex, buttonEl) {
+    if (!meetingId) return;
 
     // If already loading for this button, ignore
     if (audioLoadingFor === buttonEl) {
@@ -919,7 +942,7 @@ async function playSegmentAudio(segmentIndex, buttonEl) {
     buttonEl.disabled = true;
 
     try {
-        const audioApiUrl = `/api/meetings/${meeting.id}/audio/${segmentIndex}`;
+        const audioApiUrl = `/api/meetings/${meetingId}/audio/${segmentIndex}`;
         const response = await fetch(audioApiUrl);
 
         // Check if we're still supposed to be loading for this button
