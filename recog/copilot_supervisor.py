@@ -251,6 +251,148 @@ class TmuxRunner:
         return out if rc == 0 else ""
 
 
+# --- screen classification (watchdog) ---
+
+
+class AgentState(enum.Enum):
+    SPAWNING = "spawning"
+    ONLINE = "online"
+    WORKING = "working"
+    BLOCKED = "blocked"
+    OFFLINE = "offline"
+
+
+# Markers frozen on claude 2.1.197 rendered screens (spike fixtures); after a
+# claude update re-capture the fixtures and re-run the classify tests.
+BLOCKED_MARKERS = ("enter to confirm", "esc to cancel", "❯ 1.")
+WORKING_MARKER = "esc to interrupt"
+PROMPT_CHAR = "❯"
+DEV_CHANNELS_MARKER = "local development"
+PROMPT_TAIL_LINES = 15
+
+
+def classify_screen(text: Optional[str]) -> AgentState:
+    """Map a captured tmux pane to an agent state.
+
+    Order is fixed — first match wins (see plan Technical Details):
+    no session → dialog footer → spinner → prompt → transitional.
+    `None` means the tmux session itself is gone; an *empty* pane is a
+    transitional startup screen, not offline.
+    """
+    if text is None:
+        return AgentState.OFFLINE
+    lowered = text.lower()
+    if any(marker in lowered for marker in BLOCKED_MARKERS):
+        return AgentState.BLOCKED
+    if WORKING_MARKER in lowered:
+        return AgentState.WORKING
+    tail = text.rstrip().splitlines()[-PROMPT_TAIL_LINES:]
+    if any(PROMPT_CHAR in line for line in tail):
+        return AgentState.ONLINE
+    return AgentState.SPAWNING
+
+
+class Watchdog:
+    """Polls the copilot tmux screen while a session is expected to live.
+
+    Each tick: classify the pane (`offline` when the session is gone),
+    auto-dismiss the known dev-channels dialog (`send-keys 1`, once per
+    dialog occurrence, reported as `spawning` — not `blocked`), report
+    `copilot_agent_status` to the bridge on every state change plus an
+    idempotent heartbeat every ~HEARTBEAT_S (the bridge merge measures
+    freshness by it), and feed `session_ready` / `session_died` back into
+    the lifecycle. A screen stuck in `spawning` past SPAWN_DEADLINE_S is
+    reported as `blocked` (fail-visible; respawn would not help).
+    """
+
+    POLL_INTERVAL_S = 2.0
+    HEARTBEAT_S = 5.0
+    SPAWN_DEADLINE_S = 60.0
+
+    def __init__(
+        self,
+        *,
+        runner,
+        lifecycle: SessionLifecycle,
+        send_status: Callable,
+        on_session_died: Callable,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.runner = runner
+        self.lifecycle = lifecycle
+        self._send_status = send_status
+        self._on_session_died = on_session_died
+        self._clock = clock
+        self._last_reported: Optional[AgentState] = None
+        self._last_report_ts: float = 0.0
+        self._dialog_dismissed = False
+        self._spawning_since: Optional[float] = None
+
+    async def run(self) -> None:
+        while True:
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(
+                    f"[copilot-supervisor] watchdog tick failed: {exc!r}",
+                    file=sys.stderr,
+                )
+            await asyncio.sleep(self.POLL_INTERVAL_S)
+
+    async def tick(self) -> None:
+        now = self._clock()
+        if self.lifecycle.state is State.IDLE:
+            # No session should exist: no probing, no heartbeats (the bridge
+            # merge treats silence as offline) — just close out the chip once.
+            self._dialog_dismissed = False
+            self._spawning_since = None
+            if self._last_reported not in (None, AgentState.OFFLINE):
+                await self._report(AgentState.OFFLINE, now)
+            return
+
+        observed = await self._observe()
+        if observed in (AgentState.ONLINE, AgentState.WORKING):
+            self.lifecycle.session_ready()
+
+        effective = observed
+        if observed is AgentState.SPAWNING:
+            if self._spawning_since is None:
+                self._spawning_since = now
+            if now - self._spawning_since >= self.SPAWN_DEADLINE_S:
+                effective = AgentState.BLOCKED
+        else:
+            self._spawning_since = None
+
+        if effective is not self._last_reported or (
+            now - self._last_report_ts >= self.HEARTBEAT_S
+        ):
+            await self._report(effective, now)
+
+        if observed is AgentState.OFFLINE:
+            await self._on_session_died()
+
+    async def _observe(self) -> AgentState:
+        if not await self.runner.alive():
+            self._dialog_dismissed = False
+            return AgentState.OFFLINE
+        text = await self.runner.capture()
+        state = classify_screen(text)
+        if state is AgentState.BLOCKED and DEV_CHANNELS_MARKER in text.lower():
+            if not self._dialog_dismissed:
+                self._dialog_dismissed = True
+                await self.runner.send_keys("1")
+            return AgentState.SPAWNING
+        self._dialog_dismissed = False
+        return state
+
+    async def _report(self, state: AgentState, now: float) -> None:
+        self._last_reported = state
+        self._last_report_ts = now
+        await self._send_status(state)
+
+
 class Supervisor:
     """WS glue around SessionLifecycle: bridge connection, grace timer, runner.
 
@@ -301,10 +443,23 @@ class Supervisor:
         self._respawn_task: Optional[asyncio.Task] = None
         self._grace_task: Optional[asyncio.Task] = None
         self._task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
         self._connected_once = False
         self._last_failure_log_ts: float = 0.0
         self._failure_streak = 0
+        self._ws = None
+        if runner is not None and all(
+            hasattr(runner, name) for name in ("alive", "capture", "send_keys")
+        ):
+            self.watchdog: Optional[Watchdog] = Watchdog(
+                runner=runner,
+                lifecycle=self.lifecycle,
+                send_status=self._send_agent_status,
+                on_session_died=self.on_session_died,
+            )
+        else:
+            self.watchdog = None
 
     # --- lifecycle event plumbing ---
 
@@ -394,6 +549,25 @@ class Supervisor:
                     file=sys.stderr,
                 )
 
+    async def _send_agent_status(self, status: AgentState) -> None:
+        """Report `copilot_agent_status` to the bridge (watchdog callback).
+
+        Dropped silently while disconnected — the bridge merge treats
+        supervisor silence as offline, which is the truthful state anyway.
+        """
+        ws = self._ws
+        if ws is None:
+            return
+        frame = {
+            "type": "copilot_agent_status",
+            "status": status.value,
+            "meeting_id": self.lifecycle.meeting_id,
+        }
+        try:
+            await ws.send(json.dumps(frame))
+        except Exception as exc:
+            print(f"{self._log_prefix} status send failed: {exc!r}", file=sys.stderr)
+
     # --- respawn with backoff (session_died input from the watchdog) ---
 
     async def on_session_died(self) -> None:
@@ -480,6 +654,7 @@ class Supervisor:
         if self._respawn_task is not None:
             self._respawn_task.cancel()
             self._respawn_task = None
+        self._stop_watchdog()
         if self._task is not None:
             self._task.cancel()
             try:
@@ -495,35 +670,56 @@ class Supervisor:
         delay = self.INITIAL_BACKOFF_S
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
-        while not self._stop_event.is_set():
-            try:
-                async with websockets.connect(self.bridge_url) as ws:
-                    # Announce ourselves so the bridge moves this socket into
-                    # its supervisor set (does not count as an extension
-                    # client) and replies with `meeting_state` for
-                    # reconciliation. A bridge that predates the protocol
-                    # simply never replies — lifecycle frames still arrive
-                    # once Task 4 lands.
-                    await ws.send(json.dumps({"type": "supervisor_hello"}))
-                    self._on_connected()
-                    delay = self.INITIAL_BACKOFF_S
-                    async for raw in ws:
-                        data = self._decode(raw)
-                        if data is not None:
-                            await self.handle_frame(data)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self._on_failure(exc, delay)
+        # The watchdog polls tmux for the supervisor's whole lifetime; it
+        # sends status only while `self._ws` is connected and drops silently
+        # otherwise (bridge merge reads silence as offline).
+        self._start_watchdog()
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    async with websockets.connect(self.bridge_url) as ws:
+                        # Announce ourselves so the bridge moves this socket
+                        # into its supervisor set (does not count as an
+                        # extension client) and replies with `meeting_state`
+                        # for reconciliation. A bridge that predates the
+                        # protocol simply never replies — lifecycle frames
+                        # still arrive once Task 4 lands.
+                        self._ws = ws
+                        await ws.send(json.dumps({"type": "supervisor_hello"}))
+                        self._on_connected()
+                        delay = self.INITIAL_BACKOFF_S
+                        async for raw in ws:
+                            data = self._decode(raw)
+                            if data is not None:
+                                await self.handle_frame(data)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._on_failure(exc, delay)
+                finally:
+                    self._ws = None
 
-            if self._stop_event.is_set():
-                return
-            try:
-                await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
-                return
-            except asyncio.TimeoutError:
-                pass
-            delay = min(delay * 2, self.MAX_BACKOFF_S)
+                if self._stop_event.is_set():
+                    return
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+                delay = min(delay * 2, self.MAX_BACKOFF_S)
+        finally:
+            self._stop_watchdog()
+
+    def _start_watchdog(self) -> None:
+        if self.watchdog is None:
+            return
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self.watchdog.run())
+
+    def _stop_watchdog(self) -> None:
+        if self._watchdog_task is not None:
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
 
     @staticmethod
     def _decode(raw) -> Optional[dict]:

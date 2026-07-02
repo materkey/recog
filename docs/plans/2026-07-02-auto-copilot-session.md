@@ -242,22 +242,22 @@ Key design decisions:
 - Modify: `recog/copilot_supervisor.py`
 - Modify: `tests/test_copilot_supervisor.py`
 
-- [ ] `classify_screen(text) -> AgentState` по правилам из Technical Details (порядок фиксирован)
-- [ ] watchdog-цикл (~2 с, только пока lifecycle ожидает живую сессию): classify → при
+- [x] `classify_screen(text) -> AgentState` по правилам из Technical Details (порядок фиксирован)
+- [x] watchdog-цикл (~2 с, только пока lifecycle ожидает живую сессию): classify → при
       dev-channels диалоге авто-`send-keys 1` → слать `copilot_agent_status` в bridge
       при смене состояния И повторять текущий статус каждые ~5 с (идемпотентный
       heartbeat — по нему merge из Task 4 меряет свежесть; ">10 с молчания" = два
       пропущенных heartbeat) → `session_died` в state machine при `offline`
-- [ ] spawn-deadline: если classify даёт `spawning` дольше 60 с подряд — репортить
+- [x] spawn-deadline: если classify даёт `spawning` дольше 60 с подряд — репортить
       `copilot_agent_status = blocked` вместо `spawning` (fail-visible: незнакомый
       стартовый экран не должен вечно висеть 🟡; respawn не триггерится — он бы не помог;
       60 с — модульная константа, не env)
-- [ ] write tests: classify_screen на фикстурах (dev-channels диалог, `/model` диалог,
+- [x] write tests: classify_screen на фикстурах (dev-channels диалог, `/model` диалог,
       REPL prompt, спиннер `esc to interrupt`, пустой экран)
-- [ ] write tests: авто-dismiss шлёт "1" ровно один раз на диалог; статус-фрейм уходит на
+- [x] write tests: авто-dismiss шлёт "1" ровно один раз на диалог; статус-фрейм уходит на
       смене состояния, а при стабильном состоянии повторяется как heartbeat (~5 с);
       session_died триггерит respawn; spawning дольше deadline → blocked
-- [ ] run tests - must pass before next task
+- [x] run tests - must pass before next task
 
 ### Task 4: Bridge — supervisor_hello, meeting_state, merge и broadcast статуса
 

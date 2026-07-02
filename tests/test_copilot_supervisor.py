@@ -12,12 +12,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recog.copilot_supervisor import (
     DEFAULT_MCP_URL,
+    AgentState,
     Kill,
     SessionLifecycle,
     Spawn,
     State,
     Supervisor,
     TmuxRunner,
+    Watchdog,
+    classify_screen,
 )
 
 
@@ -678,3 +681,315 @@ async def test_reconcile_uses_async_runner_alive_probe():
     assert sup.lifecycle.state is State.RUNNING
     assert sup.lifecycle.meeting_id == "A"
     assert "new-session" not in fake.subcommands()
+
+
+# ---------------------------------------------------------------------------
+# Watchdog: screen classification + tick behaviour
+# ---------------------------------------------------------------------------
+
+# Fixtures approximate real claude 2.1.197 rendered panes (spike captures).
+DEV_CHANNELS_SCREEN = (
+    "╭──────────────────────────────────────────────╮\n"
+    "│ Load local development channels?             │\n"
+    "│                                              │\n"
+    "│ ❯ 1. Yes, load them                          │\n"
+    "│   2. No                                      │\n"
+    "│                                              │\n"
+    "│ Enter to confirm · Esc to cancel             │\n"
+    "╰──────────────────────────────────────────────╯\n"
+)
+MODEL_DIALOG_SCREEN = (
+    "╭──────────────────────────────────────────────╮\n"
+    "│ Select a model                               │\n"
+    "│                                              │\n"
+    "│ ❯ 1. Default (recommended)                   │\n"
+    "│   2. Opus                                    │\n"
+    "│   3. Sonnet                                  │\n"
+    "│                                              │\n"
+    "│ Enter to confirm · Esc to cancel             │\n"
+    "╰──────────────────────────────────────────────╯\n"
+)
+REPL_PROMPT_SCREEN = (
+    " ▐▛███▜▌   Claude Code v2.1.197\n"
+    " ▝▜█████▛▘\n"
+    "\n"
+    "╭──────────────────────────────────────────────╮\n"
+    "│ ❯                                            │\n"
+    "╰──────────────────────────────────────────────╯\n"
+    "  ? for shortcuts\n"
+)
+SPINNER_SCREEN = (
+    "✻ Baking… (12s · esc to interrupt)\n"
+    "\n"
+    "╭──────────────────────────────────────────────╮\n"
+    "│ ❯                                            │\n"
+    "╰──────────────────────────────────────────────╯\n"
+)
+STARTUP_SCREEN = "\n\n  Starting up…\n"
+
+
+@pytest.mark.parametrize(
+    "screen,expected",
+    [
+        (DEV_CHANNELS_SCREEN, AgentState.BLOCKED),   # known dev-channels dialog
+        (MODEL_DIALOG_SCREEN, AgentState.BLOCKED),   # unknown selection dialog
+        (SPINNER_SCREEN, AgentState.WORKING),        # spinner beats the prompt line
+        (REPL_PROMPT_SCREEN, AgentState.ONLINE),     # idle prompt
+        ("", AgentState.SPAWNING),                   # empty pane is transitional
+        (STARTUP_SCREEN, AgentState.SPAWNING),       # startup, no markers yet
+        (None, AgentState.OFFLINE),                  # tmux session gone
+    ],
+)
+def test_classify_screen(screen, expected):
+    assert classify_screen(screen) is expected
+
+
+class WatchdogRunner:
+    """Programmable runner for the watchdog: alive flag + pane text + key log."""
+
+    def __init__(self, *, alive=True, screen=""):
+        self._alive = alive
+        self.screen = screen
+        self.sent_keys = []
+
+    async def alive(self):
+        return self._alive
+
+    async def capture(self):
+        return self.screen
+
+    async def send_keys(self, *keys):
+        self.sent_keys.append(keys)
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, dt):
+        self.now += dt
+
+
+def _make_watchdog(runner, *, state=State.SPAWNING, meeting_id="A", clock=None):
+    lifecycle = SessionLifecycle()
+    lifecycle.state = state
+    lifecycle.meeting_id = meeting_id
+    statuses = []
+    died = []
+
+    async def send_status(status):
+        statuses.append(status)
+
+    async def on_died():
+        died.append(True)
+
+    watchdog = Watchdog(
+        runner=runner,
+        lifecycle=lifecycle,
+        send_status=send_status,
+        on_session_died=on_died,
+        clock=clock or (lambda: 0.0),
+    )
+    return watchdog, lifecycle, statuses, died
+
+
+async def test_watchdog_auto_dismisses_dev_channels_once():
+    """given: the copilot pane shows the known dev-channels dialog
+    when: the watchdog ticks twice on the same dialog
+    then: it sends "1" exactly once and reports spawning (never blocked)
+    """
+    clock = FakeClock()
+    runner = WatchdogRunner(screen=DEV_CHANNELS_SCREEN)
+    watchdog, _lifecycle, statuses, _died = _make_watchdog(runner, clock=clock)
+
+    await watchdog.tick()
+    await watchdog.tick()
+
+    assert runner.sent_keys == [("1",)]
+    assert AgentState.BLOCKED not in statuses
+    assert statuses == [AgentState.SPAWNING]
+
+
+async def test_watchdog_redismisses_when_dialog_reappears():
+    """given: the dialog was dismissed and the prompt returned
+    when: the dialog appears again
+    then: "1" is sent a second time (once per occurrence)
+    """
+    clock = FakeClock()
+    runner = WatchdogRunner(screen=DEV_CHANNELS_SCREEN)
+    watchdog, _lifecycle, _statuses, _died = _make_watchdog(runner, clock=clock)
+
+    await watchdog.tick()                 # dialog → send "1"
+    runner.screen = REPL_PROMPT_SCREEN
+    await watchdog.tick()                 # prompt → clears the dismiss latch
+    runner.screen = DEV_CHANNELS_SCREEN
+    await watchdog.tick()                 # dialog again → send "1" again
+
+    assert runner.sent_keys == [("1",), ("1",)]
+
+
+async def test_watchdog_unknown_dialog_reports_blocked_without_dismiss():
+    """given: an unknown selection dialog (e.g. /model)
+    when: the watchdog ticks
+    then: it surfaces blocked and does NOT auto-answer it
+    """
+    runner = WatchdogRunner(screen=MODEL_DIALOG_SCREEN)
+    watchdog, _lifecycle, statuses, _died = _make_watchdog(runner)
+
+    await watchdog.tick()
+
+    assert statuses == [AgentState.BLOCKED]
+    assert runner.sent_keys == []
+
+
+async def test_watchdog_reports_on_change_and_heartbeat():
+    """given: a stable online prompt
+    when: the watchdog ticks below and at the heartbeat interval
+    then: it reports on the first observation, stays silent below the
+          interval, repeats as a heartbeat at the interval, and reports
+          again when the state changes
+    """
+    clock = FakeClock()
+    runner = WatchdogRunner(screen=REPL_PROMPT_SCREEN)
+    watchdog, lifecycle, statuses, _died = _make_watchdog(runner, clock=clock)
+
+    await watchdog.tick()                         # t=0: online (first report)
+    assert statuses == [AgentState.ONLINE]
+    assert lifecycle.state is State.RUNNING       # online confirms session_ready
+
+    clock.advance(2.0)
+    await watchdog.tick()                         # t=2: below heartbeat → silent
+    assert statuses == [AgentState.ONLINE]
+
+    clock.advance(3.0)
+    await watchdog.tick()                         # t=5: heartbeat repeats status
+    assert statuses == [AgentState.ONLINE, AgentState.ONLINE]
+
+    runner.screen = SPINNER_SCREEN
+    clock.advance(1.0)
+    await watchdog.tick()                         # t=6: working (state change)
+    assert statuses[-1] is AgentState.WORKING
+
+
+async def test_watchdog_reports_session_died_when_pane_gone():
+    """given: the tmux session vanished
+    when: the watchdog ticks
+    then: it reports offline and feeds session_died back to the lifecycle
+    """
+    runner = WatchdogRunner(alive=False)
+    watchdog, _lifecycle, statuses, died = _make_watchdog(runner, state=State.RUNNING)
+
+    await watchdog.tick()
+
+    assert statuses == [AgentState.OFFLINE]
+    assert died == [True]
+
+
+async def test_watchdog_spawning_past_deadline_reports_blocked():
+    """given: the pane stays in the transitional spawning state
+    when: it exceeds the spawn deadline
+    then: the watchdog reports blocked (fail-visible) without respawning
+    """
+    clock = FakeClock()
+    runner = WatchdogRunner(screen=STARTUP_SCREEN)
+    watchdog, lifecycle, statuses, died = _make_watchdog(runner, clock=clock)
+
+    await watchdog.tick()                                 # t=0: spawning
+    assert statuses == [AgentState.SPAWNING]
+
+    clock.advance(Watchdog.SPAWN_DEADLINE_S)
+    await watchdog.tick()                                 # t=60: blocked
+    assert statuses[-1] is AgentState.BLOCKED
+    assert lifecycle.state is State.SPAWNING              # respawn NOT triggered
+    assert died == []
+
+
+async def test_watchdog_idle_reports_offline_once_then_silent():
+    """given: the lifecycle is IDLE (no session should exist)
+    when: the watchdog ticks repeatedly
+    then: it closes the chip to offline once and never probes tmux
+    """
+    runner = WatchdogRunner(alive=True, screen=REPL_PROMPT_SCREEN)
+    watchdog, _lifecycle, statuses, _died = _make_watchdog(
+        runner, state=State.IDLE, meeting_id=None
+    )
+    watchdog._last_reported = AgentState.ONLINE  # a prior live report to close out
+
+    await watchdog.tick()
+    await watchdog.tick()
+
+    assert statuses == [AgentState.OFFLINE]
+    assert runner.sent_keys == []
+
+
+# ---------------------------------------------------------------------------
+# Supervisor ↔ watchdog wiring: status send over the bridge socket, run loop
+# ---------------------------------------------------------------------------
+
+
+async def test_send_agent_status_uses_connected_ws():
+    """given: the supervisor is connected (self._ws set)
+    when: the watchdog callback reports a status
+    then: a copilot_agent_status frame with the current meeting id is sent
+    """
+    sent = []
+
+    class FakeWS:
+        async def send(self, payload):
+            sent.append(payload)
+
+    sup = Supervisor(runner=FakeRunner())
+    sup.lifecycle.adopt("mtg-9")
+    sup._ws = FakeWS()
+
+    await sup._send_agent_status(AgentState.WORKING)
+
+    assert len(sent) == 1
+    assert json.loads(sent[0]) == {
+        "type": "copilot_agent_status",
+        "status": "working",
+        "meeting_id": "mtg-9",
+    }
+
+
+async def test_send_agent_status_dropped_when_disconnected():
+    """given: no live bridge connection
+    when: the watchdog reports a status
+    then: it is dropped silently (bridge merge reads silence as offline)
+    """
+    sup = Supervisor(runner=FakeRunner())
+    sup._ws = None
+    await sup._send_agent_status(AgentState.ONLINE)  # must not raise
+
+
+async def test_run_tracks_ws_and_starts_watchdog():
+    """given: a watchdog-capable runner and a mock bridge
+    when: the supervisor connects
+    then: self._ws is set so status can flow and the watchdog task is live;
+          stop() tears the watchdog task down
+    """
+    fake_tmux = FakeTmux(has_session=True)
+    fake_tmux.responses["capture-pane"] = (0, REPL_PROMPT_SCREEN)
+    runner = TmuxRunner(run=fake_tmux)
+
+    async def handler(websocket):
+        await websocket.recv()  # supervisor_hello
+        await asyncio.sleep(0.3)
+
+    server, port = await _start_mock_bridge(handler)
+    sup = Supervisor(f"ws://127.0.0.1:{port}", runner=runner)
+    assert sup.watchdog is not None
+    await sup.start()
+    try:
+        for _ in range(20):
+            if sup._ws is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert sup._ws is not None
+        assert sup._watchdog_task is not None and not sup._watchdog_task.done()
+    finally:
+        await sup.stop()
+    assert sup._watchdog_task is None
