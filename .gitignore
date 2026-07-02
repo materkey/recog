@@ -43,5 +43,8 @@ meetings/
 .coverage
 htmlcov/
 
+# Agent tooling state
+_bmad/
+
 # Override global ignore (~/.config/git/ignore lists openspec/)
 !openspec/
