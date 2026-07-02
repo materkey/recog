@@ -384,10 +384,10 @@ Key design decisions:
 
 ### Task 9: [Final] Update documentation
 
-- [ ] CLAUDE.md: секция macOS Services (+супервизор), новые env vars, краткое описание
+- [x] CLAUDE.md: секция macOS Services (+супервизор), новые env vars, краткое описание
       auto-copilot архитектуры (по образцу существующих секций)
-- [ ] README.md: упоминание автозапуска копайлота, если README описывает сервисы
-- [ ] move this plan to `docs/plans/completed/`
+- [x] README.md: упоминание автозапуска копайлота, если README описывает сервисы
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
