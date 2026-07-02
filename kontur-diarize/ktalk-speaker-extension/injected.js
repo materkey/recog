@@ -568,17 +568,27 @@ function installFocusGuard(win = window) {
   // PiP-on-hide is the Space-yank vector: KTalk opens a PiP window when
   // the tab loses visibility (a macOS Space switch qualifies), and the
   // PiP window activates Chrome. Block PiP only while the document is
-  // hidden — manual PiP from a visible page keeps working.
+  // hidden — manual PiP from a visible page keeps working, and the
+  // extension's own PiP button can grant a one-shot pass
+  // (window.__ktalkAllowPipOnce) to open KTalk's native popup on demand.
   const pipBlockedWhileHidden = (api) => {
     console.log(`[KTalk Recog] ${api} blocked while hidden (auto-PiP guard)`);
     return Promise.reject(new DOMException('Blocked by KTalk Recog focus guard', 'NotAllowedError'));
+  };
+  const isPipBlocked = () => {
+    if (win.__ktalkAllowPipOnce) {
+      win.__ktalkAllowPipOnce = false;
+      console.log('[KTalk Recog] PiP allowed once (manual open)');
+      return false;
+    }
+    return win.document && win.document.visibilityState === 'hidden';
   };
 
   const videoProto = win.HTMLVideoElement && win.HTMLVideoElement.prototype;
   if (videoProto && typeof videoProto.requestPictureInPicture === 'function') {
     const origRequestPip = videoProto.requestPictureInPicture;
     videoProto.requestPictureInPicture = function (...args) {
-      if (win.document && win.document.visibilityState === 'hidden') {
+      if (isPipBlocked()) {
         return pipBlockedWhileHidden('requestPictureInPicture');
       }
       console.log('[KTalk Recog] requestPictureInPicture called');
@@ -593,7 +603,7 @@ function installFocusGuard(win = window) {
   if (docPip && typeof docPip.requestWindow === 'function') {
     const origRequestWindow = docPip.requestWindow.bind(docPip);
     docPip.requestWindow = function (...args) {
-      if (win.document && win.document.visibilityState === 'hidden') {
+      if (isPipBlocked()) {
         return pipBlockedWhileHidden('documentPictureInPicture.requestWindow');
       }
       console.log('[KTalk Recog] documentPictureInPicture.requestWindow called');
@@ -5898,12 +5908,55 @@ function injectRecogIntoKtalkPip(pipWin) {
   });
 }
 
-async function toggleTranscriptPip() {
+// Open KTalk's NATIVE popup (tiles / participants / chat, with the
+// injected Recog tab) on demand: KTalk only builds it in its own
+// visibilitychange->hidden handler, so spoof the hidden state for the
+// duration of one synthetic event and give the focus guard a one-shot
+// pass. The click's transient user activation lets requestWindow
+// through. Falls back to the transcript-only popup if KTalk's handler
+// did not open anything.
+function toggleKtalkPip() {
+  const docPip = window.documentPictureInPicture;
+  if (docPip && docPip.window) {
+    docPip.window.close();
+    // KTalk was told the tab is hidden when the popup was opened; fire
+    // a real-state visibilitychange so its UI (video quality, wake
+    // lock) fully restores.
+    document.dispatchEvent(new Event('visibilitychange'));
+    return;
+  }
+  if (!docPip) {
+    console.log('[KTalk Recog] PiP: documentPictureInPicture API unavailable');
+    flashPipButton('нет API');
+    return;
+  }
+
+  window.__ktalkAllowPipOnce = true;
+  Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+  Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
   try {
-    if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.pipWindow) {
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.pipWindow.close();
-      return;
+    document.dispatchEvent(new Event('visibilitychange'));
+  } finally {
+    // KTalk's handler may re-check visibilityState asynchronously
+    // before calling requestWindow - keep the spoof briefly.
+    setTimeout(() => {
+      delete document.visibilityState;
+      delete document.hidden;
+    }, 800);
+  }
+
+  setTimeout(() => {
+    window.__ktalkAllowPipOnce = false;
+    const opened = window.documentPictureInPicture && window.documentPictureInPicture.window;
+    if (!opened) {
+      console.log('[KTalk Recog] Native KTalk PiP did not open, falling back to transcript popup');
+      openTranscriptPip();
     }
+  }, 1000);
+}
+
+async function openTranscriptPip() {
+  try {
     if (!window.documentPictureInPicture) {
       console.log('[KTalk Recog] PiP: documentPictureInPicture API unavailable');
       flashPipButton('нет API');
@@ -6005,7 +6058,7 @@ function createTranscriptContent() {
         <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
         <div class="ktalk-speaker-bar-nav">
-          <button class="ktalk-transcript-scroll-btn ktalk-pip-btn" title="Транскрипт в плавающем окне поверх всех Spaces (повторный клик закрывает)">PiP</button>
+          <button class="ktalk-transcript-scroll-btn ktalk-pip-btn" title="Окно звонка KTalk (PiP) с вкладкой Recog; повторный клик закрывает">PiP</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓</button>
         </div>
@@ -6092,7 +6145,7 @@ function createTranscriptContent() {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) container.scrollTop = container.scrollHeight;
   });
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-pip-btn').addEventListener('click', toggleTranscriptPip);
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-pip-btn').addEventListener('click', toggleKtalkPip);
 
   setupSummaryMenu(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
   setupAnchorControls();
