@@ -9,14 +9,13 @@ export const constants = {
   PCM_WEBRTC_DIAGNOSTICS_ENABLED: true,
   PCM_STATS_INTERVAL_MS: 1000,
   PCM_STATS_SEND_INTERVAL_MS: 2000,
-  PCM_REBIND_COOLDOWN_MS: 4000
+  PCM_REBIND_COOLDOWN_MS: 4000,
+  AI_LAST_VIEW_KEY: 'ktalk-ai-last-view'
 };
 
 export const state = {
-  transcriptTabAdded: false,
   transcriptContentElement: null,
   originalChatContent: null,
-  isTranscriptActive: false,
 
   speakerHistory: [],
   currentSpeaker: null,
@@ -40,7 +39,6 @@ export const state = {
   summaryRequestPending: false,
   currentSummaryType: 'catchup',
   contextContentElement: null,
-  isContextActive: false,
   anchorRequestPending: false,
   currentAnchorData: null,
   anchorLastUpdated: 0,
@@ -80,5 +78,5 @@ export const state = {
   copilotContentElement: null,
   isCopilotActive: false,
   copilotUnread: false,
-  lastAiView: localStorage.getItem('ktalk-ai-last-view') || 'transcript'
+  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript'
 };

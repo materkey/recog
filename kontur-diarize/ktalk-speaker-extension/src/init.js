@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { injectStyles, addAiTab, createTranscriptContent, createContextContent, createCopilotContent, watchTabChanges, updateWsIndicator, initPlatformUI } from './ui.js';
+import { injectStyles, addAiTab, createTranscriptContent, createContextContent, createCopilotContent, watchTabChanges, initPlatformUI } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
@@ -7,6 +7,12 @@ import { sendWsConnectionStatus } from './ws_api.js';
 import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
 import { getPlatformAdapter, getPlatform, getPlatformDisplayName, isJitsiPlatform } from './platforms/index.js';
 import { showVas3kPrejoinState, showVas3kWaitingState } from './ui-vas3k.js';
+
+const AI_CONTENT_RECOVERY = [
+  { selector: '.ktalk-transcript-content', stateKey: 'transcriptContentElement', create: createTranscriptContent },
+  { selector: '.ktalk-context-content', stateKey: 'contextContentElement', create: createContextContent },
+  { selector: '.ktalk-copilot-content', stateKey: 'copilotContentElement', create: createCopilotContent }
+];
 
 function sendConnectionStatus(connected) {
   window.dispatchEvent(new CustomEvent('ktalk-connection-status', { detail: { connected } }));
@@ -149,7 +155,6 @@ function setupUI() {
     createContextContent();
     createCopilotContent();
     watchTabChanges();
-    updateWsIndicator(state.wsConnected);
   }
 
   ensureDebugPanel();
@@ -327,23 +332,14 @@ export function init() {
     } else {
       // For KTalk: check tab exists
       if (!document.querySelector('.ktalk-ai-tab')) {
-        state.transcriptTabAdded = false;
         setupUI();
       }
-      if (!document.querySelector('.ktalk-transcript-content')) {
-        state.transcriptContentElement = null;
-        state.originalChatContent = null;
-        createTranscriptContent();
-      }
-      if (!document.querySelector('.ktalk-context-content')) {
-        state.contextContentElement = null;
-        state.originalChatContent = null;
-        createContextContent();
-      }
-      if (!document.querySelector('.ktalk-copilot-content')) {
-        state.copilotContentElement = null;
-        state.originalChatContent = null;
-        createCopilotContent();
+      for (const { selector, stateKey, create } of AI_CONTENT_RECOVERY) {
+        if (!document.querySelector(selector)) {
+          state[stateKey] = null;
+          state.originalChatContent = null;
+          create();
+        }
       }
     }
     tryAttachConference();
