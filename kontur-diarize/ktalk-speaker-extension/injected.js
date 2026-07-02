@@ -684,6 +684,12 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+const AI_CONTENT_RECOVERY = [
+  { selector: '.ktalk-transcript-content', stateKey: 'transcriptContentElement', create: _ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent },
+  { selector: '.ktalk-context-content', stateKey: 'contextContentElement', create: _ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent },
+  { selector: '.ktalk-copilot-content', stateKey: 'copilotContentElement', create: _ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent }
+];
+
 function sendConnectionStatus(connected) {
   window.dispatchEvent(new CustomEvent('ktalk-connection-status', { detail: { connected } }));
   (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_5__.sendWsConnectionStatus)(connected);
@@ -825,7 +831,6 @@ function setupUI() {
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.watchTabChanges)();
-    (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.updateWsIndicator)(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnected);
   }
 
   (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.ensureDebugPanel)();
@@ -1003,23 +1008,14 @@ function init() {
     } else {
       // For KTalk: check tab exists
       if (!document.querySelector('.ktalk-ai-tab')) {
-        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = false;
         setupUI();
       }
-      if (!document.querySelector('.ktalk-transcript-content')) {
-        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = null;
-        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
-        (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
-      }
-      if (!document.querySelector('.ktalk-context-content')) {
-        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = null;
-        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
-        (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
-      }
-      if (!document.querySelector('.ktalk-copilot-content')) {
-        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement = null;
-        _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
-        (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent)();
+      for (const { selector, stateKey, create } of AI_CONTENT_RECOVERY) {
+        if (!document.querySelector(selector)) {
+          _state_js__WEBPACK_IMPORTED_MODULE_0__.state[stateKey] = null;
+          _state_js__WEBPACK_IMPORTED_MODULE_0__.state.originalChatContent = null;
+          create();
+        }
       }
     }
     tryAttachConference();
@@ -3561,14 +3557,13 @@ const constants = {
   PCM_WEBRTC_DIAGNOSTICS_ENABLED: true,
   PCM_STATS_INTERVAL_MS: 1000,
   PCM_STATS_SEND_INTERVAL_MS: 2000,
-  PCM_REBIND_COOLDOWN_MS: 4000
+  PCM_REBIND_COOLDOWN_MS: 4000,
+  AI_LAST_VIEW_KEY: 'ktalk-ai-last-view'
 };
 
 const state = {
-  transcriptTabAdded: false,
   transcriptContentElement: null,
   originalChatContent: null,
-  isTranscriptActive: false,
 
   speakerHistory: [],
   currentSpeaker: null,
@@ -3592,7 +3587,6 @@ const state = {
   summaryRequestPending: false,
   currentSummaryType: 'catchup',
   contextContentElement: null,
-  isContextActive: false,
   anchorRequestPending: false,
   currentAnchorData: null,
   anchorLastUpdated: 0,
@@ -3632,7 +3626,7 @@ const state = {
   copilotContentElement: null,
   isCopilotActive: false,
   copilotUnread: false,
-  lastAiView: localStorage.getItem('ktalk-ai-last-view') || 'transcript'
+  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript'
 };
 
 
@@ -4677,7 +4671,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   injectStyles: () => (/* binding */ injectStyles),
 /* harmony export */   isCopilotProactiveMuted: () => (/* binding */ isCopilotProactiveMuted),
 /* harmony export */   renderCopilotMessage: () => (/* binding */ renderCopilotMessage),
-/* harmony export */   updateWsIndicator: () => (/* binding */ updateWsIndicator),
 /* harmony export */   updateWsIndicatorPlatform: () => (/* binding */ updateWsIndicatorPlatform),
 /* harmony export */   watchTabChanges: () => (/* binding */ watchTabChanges)
 /* harmony export */ });
@@ -4801,15 +4794,6 @@ function injectStyles() {
       .ktalk-ai-subtab.active {
         background: rgba(255, 255, 255, 0.12);
         color: rgba(255, 255, 255, 0.9);
-      }
-      .ktalk-ai-subtab-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: #4ade80;
-      }
-      .ktalk-ai-subtab-dot[hidden] {
-        display: none;
       }
       .ktalk-ai-panel-body {
         flex: 1;
@@ -5766,13 +5750,13 @@ function addAiTab() {
       </button>
     `;
 
+  tab.querySelector('.ktalk-ai-unread').hidden = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotUnread;
   tabsContainer.appendChild(tab);
 
   tab.querySelector('button').addEventListener('click', () => {
-    activateAiTab();
+    activateSubView(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastAiView);
   });
 
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptTabAdded = true;
   return true;
 }
 
@@ -5790,13 +5774,14 @@ function activateSubView(view) {
   } else if (view === 'copilot') {
     activateCopilotTab();
   } else {
-    activateTranscriptTab();
+    setActiveView('transcript');
   }
 }
 
-function ensureAiPanelBody() {
-  const contentArea = document.querySelector('.slide-menu-wrapper .content');
+function ensureAiPanelBody(contentArea) {
   if (!contentArea) return null;
+
+  captureOriginalChatContent(contentArea);
 
   let panel = contentArea.querySelector('.ktalk-ai-panel');
   if (!panel) {
@@ -5806,13 +5791,14 @@ function ensureAiPanelBody() {
         <div class="ktalk-ai-subnav">
           <button type="button" class="ktalk-ai-subtab" data-view="transcript">Transcript</button>
           <button type="button" class="ktalk-ai-subtab" data-view="context">Context</button>
-          <button type="button" class="ktalk-ai-subtab" data-view="copilot">Copilot<span class="ktalk-ai-subtab-dot" hidden></span></button>
+          <button type="button" class="ktalk-ai-subtab" data-view="copilot">Copilot<span class="ktalk-ai-unread" hidden></span></button>
         </div>
         <div class="ktalk-ai-panel-body"></div>
       `;
     panel.querySelectorAll('.ktalk-ai-subtab').forEach((btn) => {
       btn.addEventListener('click', () => activateSubView(btn.dataset.view));
     });
+    panel.querySelector('.ktalk-ai-unread').hidden = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotUnread;
     contentArea.appendChild(panel);
   }
   return panel.querySelector('.ktalk-ai-panel-body');
@@ -5829,8 +5815,7 @@ function createTranscriptContent() {
     return null;
   }
 
-  captureOriginalChatContent(contentArea);
-  const panelBody = ensureAiPanelBody();
+  const panelBody = ensureAiPanelBody(contentArea);
   if (!panelBody) return null;
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = document.createElement('div');
@@ -5950,8 +5935,7 @@ function createContextContent() {
     return null;
   }
 
-  captureOriginalChatContent(contentArea);
-  const panelBody = ensureAiPanelBody();
+  const panelBody = ensureAiPanelBody(contentArea);
   if (!panelBody) return null;
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = document.createElement('div');
@@ -6025,8 +6009,7 @@ function createCopilotContent() {
     return null;
   }
 
-  captureOriginalChatContent(contentArea);
-  const panelBody = ensureAiPanelBody();
+  const panelBody = ensureAiPanelBody(contentArea);
   if (!panelBody) return null;
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement = document.createElement('div');
@@ -6243,9 +6226,7 @@ function appendCopilotMessage(msg) {
   const rendered = renderCopilotMessage(msg);
   if (!rendered) return;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages.push(msg);
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive && (msg.kind === 'proactive' || msg.kind === 'assistant')) {
-    setCopilotUnread(true);
-  }
+  noteCopilotUnread(msg.kind);
 }
 
 function findCopilotMessageElement(id) {
@@ -6443,7 +6424,7 @@ function handleCopilotReply(data) {
     });
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotPending.delete(requestId);
     setCopilotInputBusy(false);
-    if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive) setCopilotUnread(true);
+    noteCopilotUnread('assistant');
     return;
   }
   appendCopilotMessage({
@@ -6645,14 +6626,12 @@ function setActiveView(view) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.classList.toggle('active', isCopilot);
   }
 
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isTranscriptActive = isTranscript;
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isContextActive = isContext;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive = isCopilot;
 
   if (isAnyActive) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastAiView = view;
     try {
-      localStorage.setItem('ktalk-ai-last-view', view);
+      localStorage.setItem(_state_js__WEBPACK_IMPORTED_MODULE_0__.constants.AI_LAST_VIEW_KEY, view);
     } catch (err) {
       void err;
     }
@@ -6661,19 +6640,17 @@ function setActiveView(view) {
 }
 
 function setCopilotUnread(unread) {
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotUnread === unread) return;
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotUnread = unread;
-  const dot = document.querySelector('.ktalk-ai-tab .ktalk-ai-unread');
-  if (dot) dot.hidden = !unread;
-  const subDot = document.querySelector('.ktalk-ai-subtab[data-view="copilot"] .ktalk-ai-subtab-dot');
-  if (subDot) subDot.hidden = !unread;
+  document.querySelectorAll('.ktalk-ai-unread').forEach((dot) => {
+    dot.hidden = !unread;
+  });
 }
 
-function activateAiTab() {
-  activateSubView(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastAiView || 'transcript');
-}
-
-function activateTranscriptTab() {
-  setActiveView('transcript');
+function noteCopilotUnread(kind) {
+  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive && (kind === 'proactive' || kind === 'assistant')) {
+    setCopilotUnread(true);
+  }
 }
 
 function activateContextTab() {
@@ -6710,13 +6687,6 @@ function watchTabChanges() {
       deactivateCustomTabs();
     }
   });
-}
-
-function updateWsIndicator(connected) {
-  document.querySelectorAll('.ktalk-ai-tab-wrapper .ws-dot')
-    .forEach((dot) => {
-      dot.classList.toggle('connected', connected);
-    });
 }
 
 function handleTranscriptHistory(data) {
@@ -7867,8 +7837,6 @@ function initPlatformUI() {
 function updateWsIndicatorPlatform(connected) {
   if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
     (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.updateVas3kWsIndicator)(connected);
-  } else {
-    updateWsIndicator(connected);
   }
 }
 
