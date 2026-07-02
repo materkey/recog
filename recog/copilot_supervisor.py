@@ -22,11 +22,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import enum
+import inspect
 import json
 import os
+import shlex
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 import websockets
@@ -34,6 +37,10 @@ import websockets
 
 DEFAULT_BRIDGE_URL = "ws://127.0.0.1:8766"
 DEFAULT_GRACE_S = 90.0
+DEFAULT_MCP_URL = "http://127.0.0.1:8767/mcp"
+TMUX_SOCKET = "recog-copilot"
+TMUX_SESSION = "copilot"
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -139,18 +146,125 @@ class SessionLifecycle:
         return ()
 
 
+# --- tmux driver ---
+
+
+async def _run_subprocess(args: list) -> tuple:
+    """Default subprocess runner: (returncode, combined stdout+stderr text)."""
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await proc.communicate()
+    return proc.returncode, out.decode("utf-8", errors="replace")
+
+
+class TmuxRunner:
+    """Drives the copilot Claude session in detached tmux on a dedicated
+    socket (`tmux -L recog-copilot`), isolated from the user's personal tmux.
+
+    The subprocess runner is injectable for tests: an async callable
+    `run(args) -> (returncode, output)`.
+    """
+
+    def __init__(
+        self,
+        *,
+        repo_root: Optional[Path] = None,
+        mcp_url: Optional[str] = None,
+        run: Optional[Callable] = None,
+        socket_name: str = TMUX_SOCKET,
+        session_name: str = TMUX_SESSION,
+    ) -> None:
+        self.repo_root = Path(repo_root) if repo_root is not None else REPO_ROOT
+        self.mcp_url = mcp_url or os.environ.get("RECOG_COPILOT_MCP_URL", DEFAULT_MCP_URL)
+        self._run = run or _run_subprocess
+        self.socket_name = socket_name
+        self.session_name = session_name
+
+    def _tmux(self, *args: str) -> list:
+        return ["tmux", "-L", self.socket_name, *args]
+
+    def build_claude_command(self) -> str:
+        """Claude invocation for `tmux new-session` (single shell string).
+
+        `--strict-mcp-config --mcp-config` limits the session to built-ins +
+        the copilot daemon (no user MCP servers); the dev-channels flag makes
+        the daemon's channel pushes reach the TUI (see plan Context).
+        """
+        mcp_config = json.dumps(
+            {"mcpServers": {"copilot": {"type": "http", "url": self.mcp_url}}}
+        )
+        return shlex.join(
+            [
+                "claude",
+                "--agent",
+                "copilot-session",
+                "--strict-mcp-config",
+                "--mcp-config",
+                mcp_config,
+                "--dangerously-load-development-channels",
+                "server:copilot",
+            ]
+        )
+
+    async def spawn(self, meeting_id: Optional[str] = None) -> bool:
+        """Start the copilot session; adopt a live one instead of erroring.
+
+        tmux treats a duplicate session name as an error, which would burn a
+        respawn-backoff attempt for nothing — spawn is gated on `alive()`.
+        Returns True if a new session was created, False if adopted.
+        """
+        if await self.alive():
+            return False
+        rc, out = await self._run(
+            self._tmux(
+                "new-session",
+                "-d",
+                "-s",
+                self.session_name,
+                "-c",
+                str(self.repo_root),
+                self.build_claude_command(),
+            )
+        )
+        if rc != 0:
+            raise RuntimeError(f"tmux new-session failed (rc={rc}): {out.strip()}")
+        return True
+
+    async def kill(self) -> None:
+        # Missing session is fine — kill is idempotent (D5: no graceful stop).
+        await self._run(self._tmux("kill-session", "-t", self.session_name))
+
+    async def alive(self) -> bool:
+        rc, _ = await self._run(self._tmux("has-session", "-t", self.session_name))
+        return rc == 0
+
+    async def send_keys(self, *keys: str) -> None:
+        await self._run(self._tmux("send-keys", "-t", self.session_name, *keys))
+
+    async def capture(self) -> str:
+        rc, out = await self._run(
+            self._tmux("capture-pane", "-p", "-t", self.session_name)
+        )
+        return out if rc == 0 else ""
+
+
 class Supervisor:
     """WS glue around SessionLifecycle: bridge connection, grace timer, runner.
 
-    `runner` (spawn/kill target, wired to TmuxRunner in a later task) must
-    expose `async spawn(meeting_id)` and `async kill()`. `session_alive_probe`
+    `runner` (spawn/kill target, TmuxRunner in production) must expose
+    `async spawn(meeting_id)` and `async kill()`. `session_alive_probe`
     reports whether a copilot tmux session already exists — used only for
-    reconciliation after a supervisor restart.
+    reconciliation after a supervisor restart; defaults to `runner.alive`
+    when the runner provides one.
     """
 
     INITIAL_BACKOFF_S = 1.0
     MAX_BACKOFF_S = 30.0
     LOG_THROTTLE_S = 60.0
+    RESPAWN_BACKOFF_S = (5.0, 15.0, 30.0)  # ≤3 respawn attempts per meeting
 
     def __init__(
         self,
@@ -175,8 +289,16 @@ class Supervisor:
             if autospawn is not None
             else _env_flag("RECOG_COPILOT_AUTOSPAWN", True)
         )
-        self._session_alive_probe = session_alive_probe or (lambda: False)
+        if session_alive_probe is not None:
+            self._session_alive_probe = session_alive_probe
+        elif runner is not None and hasattr(runner, "alive"):
+            self._session_alive_probe = runner.alive
+        else:
+            self._session_alive_probe = lambda: False
         self._log_prefix = log_prefix
+        self._respawn_attempts = 0
+        self._respawn_exhausted_logged = False
+        self._respawn_task: Optional[asyncio.Task] = None
         self._grace_task: Optional[asyncio.Task] = None
         self._task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
@@ -193,8 +315,11 @@ class Supervisor:
             return
         ftype = data.get("type")
         if ftype == "meeting_state":
+            session_alive = await self._probe_session_alive()
             await self._apply(
-                self._reconcile(bool(data.get("active")), data.get("meeting_id"))
+                self._reconcile(
+                    bool(data.get("active")), data.get("meeting_id"), session_alive
+                )
             )
         elif ftype == "meeting_started":
             meeting_id = data.get("meeting_id")
@@ -203,7 +328,19 @@ class Supervisor:
         elif ftype == "meeting_ended":
             await self._apply(self.lifecycle.meeting_ended(data.get("meeting_id")))
 
-    def _reconcile(self, active: bool, meeting_id: Optional[str]) -> tuple:
+    async def _probe_session_alive(self) -> bool:
+        try:
+            result = self._session_alive_probe()
+            if inspect.isawaitable(result):
+                result = await result
+            return bool(result)
+        except Exception as exc:
+            print(f"{self._log_prefix} session probe failed: {exc!r}", file=sys.stderr)
+            return False
+
+    def _reconcile(
+        self, active: bool, meeting_id: Optional[str], session_alive: bool
+    ) -> tuple:
         """React to the bridge's `meeting_state` reply after (re)connect.
 
         Three branches (see plan, Task 1):
@@ -217,7 +354,7 @@ class Supervisor:
           restart mid-meeting must not kill a live copilot.
         """
         machine = self.lifecycle
-        session_exists = machine.state is not State.IDLE or self._session_alive_probe()
+        session_exists = machine.state is not State.IDLE or session_alive
 
         if active and meeting_id:
             if not session_exists:
@@ -235,6 +372,10 @@ class Supervisor:
         return ()
 
     async def _apply(self, commands: tuple) -> None:
+        if any(isinstance(command, Spawn) for command in commands):
+            # A meeting-driven spawn starts a fresh session: reset the respawn
+            # budget and drop any pending respawn left over from the old one.
+            self._reset_respawn_backoff()
         self._sync_grace_timer()
         await self._execute(commands)
 
@@ -252,6 +393,58 @@ class Supervisor:
                     f"{self._log_prefix} command {command!r} failed: {exc!r}",
                     file=sys.stderr,
                 )
+
+    # --- respawn with backoff (session_died input from the watchdog) ---
+
+    async def on_session_died(self) -> None:
+        """The copilot tmux session vanished while it should be alive.
+
+        Respawns with per-meeting backoff (`RESPAWN_BACKOFF_S`, ≤3 attempts).
+        A pending respawn absorbs repeated reports; the budget resets on
+        every fresh meeting-driven spawn (see `_apply`).
+        """
+        if not self.autospawn:
+            return
+        if self._respawn_task is not None and not self._respawn_task.done():
+            return
+        commands = self.lifecycle.session_died()
+        self._sync_grace_timer()
+        if not any(isinstance(command, Spawn) for command in commands):
+            return
+        if self._respawn_attempts >= len(self.RESPAWN_BACKOFF_S):
+            if not self._respawn_exhausted_logged:
+                self._respawn_exhausted_logged = True
+                print(
+                    f"{self._log_prefix} respawn attempts exhausted for meeting "
+                    f"{self.lifecycle.meeting_id!r} — leaving session down",
+                    file=sys.stderr,
+                )
+            return
+        delay = self.RESPAWN_BACKOFF_S[self._respawn_attempts]
+        self._respawn_attempts += 1
+        self._respawn_task = asyncio.create_task(
+            self._respawn_after(delay, self.lifecycle.meeting_id, commands)
+        )
+
+    async def _respawn_after(
+        self, delay: float, meeting_id: Optional[str], commands: tuple
+    ) -> None:
+        await asyncio.sleep(delay)
+        self._respawn_task = None
+        # The meeting may have ended or changed during the backoff sleep —
+        # only respawn if the machine still waits for this very session.
+        if (
+            self.lifecycle.state is State.SPAWNING
+            and self.lifecycle.meeting_id == meeting_id
+        ):
+            await self._execute(commands)
+
+    def _reset_respawn_backoff(self) -> None:
+        self._respawn_attempts = 0
+        self._respawn_exhausted_logged = False
+        if self._respawn_task is not None:
+            self._respawn_task.cancel()
+            self._respawn_task = None
 
     # --- grace timer ---
 
@@ -284,6 +477,9 @@ class Supervisor:
         if self._grace_task is not None:
             self._grace_task.cancel()
             self._grace_task = None
+        if self._respawn_task is not None:
+            self._respawn_task.cancel()
+            self._respawn_task = None
         if self._task is not None:
             self._task.cancel()
             try:
@@ -374,7 +570,7 @@ def main(argv: Optional[list] = None) -> None:
         help=f"ktalk_bridge WebSocket URL (default: {DEFAULT_BRIDGE_URL})",
     )
     args = parser.parse_args(argv)
-    supervisor = Supervisor(args.bridge_url)
+    supervisor = Supervisor(args.bridge_url, runner=TmuxRunner())
     if not supervisor.autospawn:
         print(
             "[copilot-supervisor] RECOG_COPILOT_AUTOSPAWN is off — "
