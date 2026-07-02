@@ -45,6 +45,7 @@ htmlcov/
 
 # Agent tooling state
 _bmad/
+.codex/
 
 # Override global ignore (~/.config/git/ignore lists openspec/)
 !openspec/
