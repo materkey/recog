@@ -4940,7 +4940,7 @@ function injectStyles() {
       .ktalk-summary-menu-panel {
         position: absolute;
         top: calc(100% + 6px);
-        right: 0;
+        left: 0;
         min-width: 160px;
         padding: 6px;
         background: rgb(44, 44, 44);
