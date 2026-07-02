@@ -195,17 +195,17 @@ Key design decisions:
 - Create: `recog/copilot_supervisor.py`
 - Create: `tests/test_copilot_supervisor.py`
 
-- [ ] каркас `copilot_supervisor.py`: argparse (`--bridge-url`, default `ws://127.0.0.1:8766`),
+- [x] каркас `copilot_supervisor.py`: argparse (`--bridge-url`, default `ws://127.0.0.1:8766`),
       reconnect-loop с экспоненциальным backoff (по образцу `frontend/bridge_subscriber.py`),
       `supervisor_hello` при коннекте
-- [ ] state machine `SessionLifecycle` (чистый класс без I/O): состояния
+- [x] state machine `SessionLifecycle` (чистый класс без I/O): состояния
       `IDLE/SPAWNING/RUNNING/GRACE`, входы `meeting_started(id)/meeting_ended(id)/timer/session_died`,
       выходы-команды `spawn(id)/kill/none` — по диаграмме из Solution Overview
-- [ ] grace-таймер (`RECOG_COPILOT_GRACE_S`, default 90) и master switch
+- [x] grace-таймер (`RECOG_COPILOT_GRACE_S`, default 90) и master switch
       (`RECOG_COPILOT_AUTOSPAWN`, default on) в обвязке
-- [ ] write tests: state machine table-driven — флап тем же id (GRACE→RUNNING без kill),
+- [x] write tests: state machine table-driven — флап тем же id (GRACE→RUNNING без kill),
       смена встречи из GRACE и из RUNNING (kill+spawn), истечение grace (kill), autospawn=0 (no-op)
-- [ ] write tests: hello + реакция на `meeting_state` при реконсиляции — три ветки:
+- [x] write tests: hello + реакция на `meeting_state` при реконсиляции — три ветки:
       **сессия есть + встречи нет → синтетический `meeting_ended` → RUNNING→GRACE
       (НЕ мгновенный kill)** — после рестарта bridge `active=false` временно
       (расширение ещё не переслало `meeting_join`), grace даёт ему время вернуть
@@ -213,7 +213,7 @@ Key design decisions:
       сессии нет + встреча активна → spawn;
       **сессия жива + встреча активна → adopt (no-op, без respawn)** — рестарт супервизора
       посреди встречи не должен убивать живой копайлот
-- [ ] run tests - must pass before next task
+- [x] run tests - must pass before next task
 
 ### Task 2: TmuxRunner — spawn/kill/inspect через выделенный сокет
 
