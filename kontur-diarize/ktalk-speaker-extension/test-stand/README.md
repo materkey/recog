@@ -19,6 +19,15 @@
   KTalk-странице глушит `window.focus()` и логирует с таймстампами:
   `window FOCUS/blur`, `visibilitychange`, `fullscreenchange`,
   `requestPictureInPicture`, `alert/confirm/prompt`, `Notification`.
+- `space-yank-trace.sh` — атрибуция на уровне WindowServer: каждая
+  активация приложения печатает `<CONN>[SetFrontProcess]` (кто
+  запросил) и `frontmostProcess: ... (App) mainConnectionID: ...`
+  (кто стал фронтом). Если при «дёргании» CONN совпадает с
+  mainConnectionID самого Chrome — Chrome активировал сам себя
+  (страница, расширение с chrome.windows.update, клик по нотификации,
+  диалог). Если CONN — это Dock, Space переключила система (жест,
+  hot corner, Mission Control). Сначала откалибруйте: кликните на
+  Chrome вручную и запомните его CONN.
 
 ## Протокол A: изоляция вектора (без KTalk)
 
@@ -38,15 +47,19 @@
 
 ## Протокол B: ловля на реальной встрече
 
-1. В kitty: `./front-app-monitor.sh`
+1. В kitty: `./space-yank-trace.sh` (он же покрывает роль
+   front-app-monitor, но с атрибуцией). Кликнуть на Chrome один раз —
+   откалибровать его CONN.
 2. Идёшь на встречу KTalk как обычно, переключаешься на kitty.
-3. Когда дёрнуло: смотришь таймстамп перехода `-> Google Chrome` в
-   мониторе, затем в консоли KTalk-таба ищешь `[KTalk Recog]` записи
-   в ±2 секунды от него.
-4. Если рядом есть `suppressed`/`Notification`/`alert` — виновник
-   найден, гасим точечно. Если в консоли тишина — активация пришла не
-   из страницы (Chrome-native: клик по нотификации, PiP-окно, диалог
-   браузера, или вовсе другое приложение перед Chrome) — тогда лечится
-   на уровне macOS: System Settings → Desktop & Dock → выключить
-   «When switching to an application, switch to a Space with open
-   windows for the application».
+3. Когда дёрнуло: смотришь последний `SetFrontProcess` для Chrome.
+   - CONN == mainConnectionID Chrome → Chrome активировал сам себя.
+     Дальше смотри консоль KTalk-таба (`[KTalk Recog]` в ±2 секунды):
+     есть записи — гасим вектор точечно; тишина — виновник другое
+     расширение или Chrome-native (следующий шаг: временно выключить
+     все расширения кроме KTalk-овского в chrome://extensions и
+     воспроизвести снова).
+   - CONN == Dock → Space переключила система (жест, hot corner,
+     Mission Control, поведение «switch to a Space with open
+     windows»). Лечится на уровне macOS: System Settings → Desktop &
+     Dock → выключить «When switching to an application, switch to a
+     Space with open windows for the application».
