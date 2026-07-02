@@ -48,14 +48,18 @@ python server.py  # http://127.0.0.1:9080
 
 ### macOS Services
 ```bash
-./recog-service.sh install   # Install launchd services
-./recog-service.sh start     # Start both live + frontend
-./recog-service.sh status    # Show service status
-./recog-service.sh logs      # Tail live transcription logs
-./recog-service.sh restart   # Restart after code changes
+./recog-service.sh install            # Install launchd services (live + frontend + copilot-channel + copilot-supervisor)
+./recog-service.sh start              # Start all services
+./recog-service.sh status             # Show service status
+./recog-service.sh logs               # Tail live transcription logs
+./recog-service.sh restart            # Restart after code changes
+./recog-service.sh restart-supervisor # Restart copilot supervisor daemon only
+./recog-service.sh logs-supervisor    # Tail copilot supervisor daemon logs
 ```
 
-**Important**: After modifying `frontend/server.py` or other backend code, run `./recog-service.sh restart` to apply changes.
+**Important**: After modifying `frontend/server.py` or other backend code, run `./recog-service.sh restart` to apply changes. After modifying `recog/copilot_supervisor.py`, run `./recog-service.sh restart-supervisor`.
+
+Manual copilot launch (`./recog-service.sh claude`) stays available for debugging; it now passes the same `--strict-mcp-config --mcp-config` flags the supervisor uses, so the `copilot` MCP server is registered.
 
 ### Chrome Extension (KTalk speaker detection)
 ```bash
@@ -119,6 +123,18 @@ On refine arrival the webapp renders tier-1 (opacity 0.6, dashed border) → tie
 
 See `docs/plans/2026-04-24-per-speaker-refine-backend.md`, `openspec/changes/per-speaker-stream-refine/`, and ADR-0019 for the decisions table and task breakdown.
 
+### Auto-spawn Copilot supervisor (meeting-triggered, on by default)
+A launchd daemon (`com.recog.copilot-supervisor.plist` → `recog/copilot_supervisor.py`) spawns a fresh headless Claude Code copilot session per KTalk meeting and tears it down after the meeting, so the manual `./recog-service.sh claude` step disappears. Lifecycle model is "по триггеру" (variant B): fresh session per meeting, zero cost between meetings, ~6–10 s cold start.
+
+- `claude -p` is impossible (`--dangerously-load-development-channels` isn't parsed by print mode, `channel_enable` needs a marketplace plugin) — the only path is an interactive TUI in a PTY. The supervisor runs it in a detached tmux on a dedicated socket (`tmux -L recog-copilot`) so its env is deterministic (from the plist) and isolated from the personal tmux.
+- **State machine** (`SessionLifecycle`, pure/no-I/O): `IDLE → SPAWNING → RUNNING → GRACE`. Inputs `meeting_started(id)/meeting_ended(id)/timer/session_died` yield commands `spawn(id)/kill/none`. A flap (`meeting_ended` then `meeting_started` with the **same** id within grace — guaranteed by `meeting_storage._find_same_day_meeting`) keeps the session alive; a different id kills + respawns. `RECOG_COPILOT_GRACE_S` (default 90) is the kill delay after `meeting_ended`.
+- **BridgeClient**: WS to `ktalk_bridge` (default `ws://127.0.0.1:8766`) with reconnect/backoff. On connect sends `supervisor_hello`; bridge replies `meeting_state {active, meeting_id, meeting_title}` for reconciliation (`active` = `meta["source"]=="ktalk"` AND a live extension client exists — **not** `current_meeting_path`, which is never None). Reconcile branches: live session + no meeting → synthetic `meeting_ended` → GRACE (not instant kill, so a bridge restart mid-meeting doesn't kill the copilot — rejoin returns the same id); no session + active meeting → spawn; live session + active meeting → adopt (no respawn).
+- **Watchdog** (~2 s while a session should live): `classify_screen(text) → spawning|online|working|blocked|offline` by fixed-order rules; the known dev-channels dialog is auto-dismissed tmux-natively (`send-keys 1`); `spawning` past a 60 s deadline → `blocked` (fail-visible). Reports `copilot_agent_status {status, meeting_id}` on change + a ~5 s heartbeat; `offline` feeds `session_died` → respawn with backoff (5/15/30 s, ≤3/meeting).
+- **Status merge lives in bridge (D4)**: two authors — supervisor (screen) via `copilot_agent_status`, and `recog/copilot_channel.py` (MCP-session count) via `claude_sessions {count|null}` (`null` = unknown, not a confident 0). Bridge computes the effective status (`offline` if the supervisor is silent > 10 s OR a debounced `sessions==0` during an active meeting) and broadcasts `copilot_status {status: "agent_state", ...}` to the extension only on effective-status change. The extension renders a chip in the Copilot tab (🟢 online / 🟡 working / 🔴 blocked / ⚫ offline), independent of the existing per-request indicator.
+- **Master switch** `RECOG_COPILOT_AUTOSPAWN=1|0` (default 1) keeps the daemon connected but disables auto-spawn without uninstalling.
+
+See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state machine diagram, decisions table (D1–D7), and known v1 limitations (one copilot per machine, unknown startup screen → `blocked`, positive classifiers frozen on claude 2.1.197).
+
 ### Module Organization
 - `recog/` - Core Python package
   - `ai_provider.py` - AIProvider ABC, CodexCliProvider, resolve_cli() — shared AI provider interface used by increment.py and title_generator.py
@@ -128,8 +144,10 @@ See `docs/plans/2026-04-24-per-speaker-refine-backend.md`, `openspec/changes/per
   - `increment.py` - Auto-generate versioned AI summaries on ktalk_leave; multi-prompt support via generate_all(), stores per-prompt results in meetings/<id>/increments/<prompt-id>/vN.md
   - `prompt_registry.py` - Load and filter prompt definitions from prompts/*.md files (YAML frontmatter + template body)
   - `node_env.py` - Node/nvm PATH utilities for subprocess calls under launchd (shared by frontend/, ktalk_bridge.py, and title_generator.py)
+  - `copilot_supervisor.py` - Auto-spawn Copilot supervisor: asyncio daemon (`SessionLifecycle` state machine + `TmuxRunner` + `Watchdog`) that spawns a headless Claude session per KTalk meeting via `tmux -L recog-copilot`, drives lifecycle from bridge `meeting_started/ended`, and reports `copilot_agent_status` to the bridge
+  - `copilot_channel.py` - copilot MCP daemon (channel push); `SessionCountReporter` polls `session_manager._server_instances` and reports `claude_sessions {count}` to the bridge for the status merge
 - `mp4_notes.py` - Main CLI entry point (commands: live, meetings)
-- `ktalk_bridge.py` - WebSocket server receiving speaker signals from Chrome extension
+- `ktalk_bridge.py` - WebSocket server receiving speaker signals from Chrome extension; merges `copilot_agent_status` (supervisor) + `claude_sessions` (daemon) into the effective agent status broadcast to the extension
 - `frontend/` - FastAPI server + SPA (WebSocket for live updates)
   - `bridge_subscriber.py` - WS client that connects to `ktalk_bridge` (default `ws://localhost:8766`, overridable via `RECOG_BRIDGE_WS_URL`) and forwards `transcript_refine` frames to webapp live-stream clients on port 9080. See D10 in `openspec/changes/per-speaker-stream-refine/design.md`.
   - `live_watcher.py` - JSONL tail watcher with inode + size-shrink rewrite detection and a seen-id watermark. Survives atomic `os.replace` rewrites from `MeetingStorage.update_segments` without stalling or re-broadcasting previously-seen rows.
@@ -165,6 +183,9 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env`:
 - `RECOG_ASR_LIVE_TIMEOUT_S` - Remote timeout for live chunk/batch requests (default `5`). Refine/offline keep `RECOG_ASR_REMOTE_TIMEOUT_S`.
 - `DEDUP_MAX_GAP_S` - Live dedup window (default `2.0`): last-words dedup applies only to chunks captured within this many seconds of the previous segment.
 - `ASR_PENDING_BUFFER_CAP_S` - Max audio buffered in memory while ASR is unavailable (default `600`).
+- `RECOG_COPILOT_AUTOSPAWN` - Master switch for the auto-spawn Copilot supervisor (`1` default | `0` keeps the daemon connected but disables per-meeting spawn). Read by `recog/copilot_supervisor.py`.
+- `RECOG_COPILOT_GRACE_S` - Seconds the supervisor waits after `meeting_ended` before killing the copilot tmux session (default `90`); cancelled by a same-id `meeting_started` (flap).
+- `RECOG_COPILOT_MCP_URL` - URL of the copilot MCP daemon the spawned Claude session connects to (default `http://127.0.0.1:8767/mcp`).
 
 ## Data Files
 

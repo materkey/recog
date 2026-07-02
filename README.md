@@ -121,10 +121,22 @@ Copy `.env.example` → `.env` and edit:
 - `MIC_SPEAKER_NAME` — speaker label for microphone input (default `Me`).
 - `RECOG_BRIDGE_WS_URL` — override the bridge WebSocket URL the frontend
   subscribes to (default `ws://localhost:8766`).
+- `RECOG_COPILOT_AUTOSPAWN` — master switch for the auto-spawn Copilot
+  supervisor (`1` default | `0` disables per-meeting spawn).
+- `RECOG_COPILOT_GRACE_S` — grace period (seconds) before the supervisor
+  kills the copilot session after a meeting ends (default `90`).
+- `RECOG_COPILOT_MCP_URL` — copilot MCP daemon URL for the spawned Claude
+  session (default `http://127.0.0.1:8767/mcp`).
 
 The per-speaker ASR path (per-participant PCM streams from the KTalk
 Chrome extension) and the tier-2 refine pass are always-on for KTalk
 meetings — no env flags. See `CLAUDE.md` for architectural notes.
+
+When installed as a macOS service (`./recog-service.sh install`), a
+supervisor daemon auto-spawns a headless Claude Code copilot session per
+KTalk meeting and tears it down after the meeting — the manual
+`./recog-service.sh claude` step is no longer required (it stays available
+for debugging). See `CLAUDE.md` → "Auto-spawn Copilot supervisor".
 
 ## Architecture
 
