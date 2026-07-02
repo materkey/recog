@@ -1100,22 +1100,39 @@ function activateSubView(view) {
 // lets it through, and the floating PiP window follows the user across
 // Spaces without re-activating Chrome (unlike KTalk's blocked
 // PiP-on-hide, which is what caused the Space yank).
+function flashPipButton(text) {
+  const btn = document.querySelector('.ktalk-pip-btn');
+  if (!btn) return;
+  btn.textContent = text;
+  setTimeout(() => {
+    btn.textContent = 'PiP';
+  }, 1800);
+}
+
 async function toggleVideoPip() {
   try {
     if (document.pictureInPictureElement) {
       await document.exitPictureInPicture();
       return;
     }
+    // Prefer a playing video, then the largest frame. Conference videos
+    // are often marked disablepictureinpicture - clear it, the flag only
+    // hides the browser's own PiP affordance.
     const video = Array.from(document.querySelectorAll('video'))
-      .filter((v) => v.readyState >= 2 && !v.paused && v.videoWidth > 0)
-      .sort((a, b) => (b.videoWidth * b.videoHeight) - (a.videoWidth * a.videoHeight))[0];
+      .filter((v) => v.readyState >= 2 && v.videoWidth > 0)
+      .sort((a, b) =>
+        (b.paused ? 0 : 1) - (a.paused ? 0 : 1)
+        || (b.videoWidth * b.videoHeight) - (a.videoWidth * a.videoHeight))[0];
     if (!video) {
-      console.log('[KTalk Recog] PiP: no active video to pop out');
+      console.log('[KTalk Recog] PiP: no active video to pop out (cameras off?)');
+      flashPipButton('нет видео');
       return;
     }
+    video.disablePictureInPicture = false;
     await video.requestPictureInPicture();
   } catch (e) {
     console.log('[KTalk Recog] PiP toggle failed:', e);
+    flashPipButton('PiP ✕');
   }
 }
 
