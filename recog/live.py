@@ -288,7 +288,7 @@ class SingleDeviceCapture:
         for i, dev in enumerate(devices):
             name = dev['name'].lower()
             # Ищем встроенный микрофон MacBook
-            if 'macbook' in name and 'microphone' in name and dev['max_input_channels'] > 0:
+            if 'macbook' in name and ('microphone' in name or 'микрофон' in name) and dev['max_input_channels'] > 0:
                 return i
         # Fallback: любое устройство с "built-in" или "internal"
         for i, dev in enumerate(devices):
