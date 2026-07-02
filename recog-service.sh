@@ -129,6 +129,30 @@ stop_service() {
     launchctl unload "$dst" 2>/dev/null || true
 }
 
+# Stop every launchd service without touching the copilot tmux session.
+# Shared by `stop` (which then reaps the session) and `restart` (which keeps
+# it — see kill_copilot_tmux).
+stop_all_services() {
+    stop_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST"
+    stop_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST"
+    stop_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_DST"
+    stop_service "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_DST"
+}
+
+# Reap the detached Claude copilot session the supervisor spawns in its own
+# tmux socket (`tmux -L recog-copilot`). Unloading the supervisor plist does
+# NOT kill it: launchd sends SIGTERM, which terminates the daemon before its
+# async teardown runs, and nothing else owns the session — so it would linger
+# indefinitely with no supervisor left to run the grace kill. Called on
+# `stop`/`uninstall` (terminal intent: leave nothing behind) but deliberately
+# NOT on `restart`: a mid-meeting restart must keep the live copilot, which the
+# supervisor re-adopts on reconnect via meeting_state reconciliation.
+kill_copilot_tmux() {
+    if command -v tmux > /dev/null 2>&1; then
+        tmux -L recog-copilot kill-session -t copilot 2>/dev/null || true
+    fi
+}
+
 # Stop, settle, then start one service. The 1 s gap matters: launchctl
 # unload returns before launchd reaps the process, and a back-to-back
 # load can race the still-bound port / log fd.
@@ -187,6 +211,7 @@ cmd_uninstall() {
     uninstall_service "frontend" "$FRONTEND_PLIST_DST"
     uninstall_service "copilot channel" "$COPILOT_PLIST_DST"
     uninstall_service "copilot supervisor" "$SUPERVISOR_PLIST_DST"
+    kill_copilot_tmux
 
     info "Services uninstalled."
 }
@@ -210,16 +235,18 @@ cmd_start() {
 cmd_stop() {
     info "Stopping services..."
 
-    stop_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST"
-    stop_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST"
-    stop_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_DST"
-    stop_service "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_DST"
+    stop_all_services
+    kill_copilot_tmux
 
     info "Services stopped."
 }
 
 cmd_restart() {
-    cmd_stop
+    # NOTE: intentionally does NOT go through cmd_stop — a mid-meeting restart
+    # must keep the live copilot tmux session (the supervisor re-adopts it on
+    # reconnect). Only cmd_stop/cmd_uninstall reap it via kill_copilot_tmux.
+    info "Stopping services..."
+    stop_all_services
     sleep 1
     cmd_start
 }
