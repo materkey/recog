@@ -87,6 +87,12 @@ MAX_BACKOFF_S = 30.0
 LOG_THROTTLE_S = 60.0
 LOG_PREFIX = "[copilot-channel]"
 
+# Cadence of the MCP-session-count poll that feeds the bridge status merge
+# (D4). 5 s matches the debounce window the bridge applies before letting a
+# steady `claude_sessions == 0` flip the chip to offline (see the
+# `claude_sessions` merge comment in ktalk_bridge.py).
+SESSION_COUNT_POLL_INTERVAL_S = 5.0
+
 
 class BridgeLink:
     """Hold the live WS connection to the bridge and expose `send` for tools.
@@ -107,6 +113,11 @@ class BridgeLink:
         self._ws: Optional[Any] = None
         self._lock = asyncio.Lock()
         self._pending: dict[str, "asyncio.Future[dict]"] = {}
+        # Monotonic counter bumped on every successful (re)connect. The
+        # session-count reporter watches it to re-announce the current count
+        # right after a reconnect (the bridge forgets state across restarts),
+        # even when the count itself has not changed.
+        self.connection_epoch = 0
         # Bounded backlog for bridge → Claude events (`copilot_user_message`,
         # `transcript_tick`, `meeting_started`, `meeting_ended`). Standard
         # MCP has no server-pushed event channel that would wake Claude
@@ -120,6 +131,8 @@ class BridgeLink:
 
     def set_socket(self, ws: Optional[Any]) -> None:
         self._ws = ws
+        if ws is not None:
+            self.connection_epoch += 1
         # Drop any in-flight futures — the underlying socket has been
         # replaced, so the responses they were waiting for can never arrive.
         if ws is None and self._pending:
@@ -159,6 +172,78 @@ class BridgeLink:
             return False
         future.set_result(result)
         return True
+
+
+class SessionCountReporter:
+    """Report the live MCP-session count to the bridge as `claude_sessions`.
+
+    The bridge status merge (D4) treats `claude_sessions == 0` during an
+    active meeting as "TUI up but the copilot MCP session never connected" →
+    offline chip. `count == null` means *unknown* (the SDK renamed the private
+    `_server_instances` attribute this reads) and is deliberately kept distinct
+    from a confident 0 so an SDK refactor cannot force a false offline.
+
+    A frame is sent only when the count changes, plus once right after every
+    (re)connect — tracked via `BridgeLink.connection_epoch` — so the bridge
+    learns the current state before the first 0↔n transition; otherwise a
+    bridge restart mid-session would leave it blind until the next change.
+    """
+
+    def __init__(self, mcp: FastMCP, link: BridgeLink) -> None:
+        self._mcp = mcp
+        self._link = link
+        self._last_count: Optional[int] = None
+        self._reported_epoch = 0
+        self._warned_missing_attr = False
+
+    def _current_count(self) -> Optional[int]:
+        # `session_manager` is a FastMCP property that raises until the
+        # Streamable HTTP loop is up; `hasattr` collapses that into False, so
+        # before the server is serving we report a genuine 0 (no sessions yet).
+        manager = (
+            self._mcp.session_manager
+            if hasattr(self._mcp, "session_manager")
+            else None
+        )
+        if manager is None:
+            return 0
+        sentinel = object()
+        instances = getattr(manager, "_server_instances", sentinel)
+        if instances is sentinel:
+            # SDK renamed the private field: report unknown (null), not a
+            # confident 0 that the bridge would trust as a real offline.
+            if not self._warned_missing_attr:
+                print(
+                    f"{LOG_PREFIX} session_manager has no `_server_instances` "
+                    f"attribute — reporting claude_sessions count=null "
+                    f"(unknown); the MCP SDK likely renamed the private field.",
+                    file=sys.stderr,
+                )
+                self._warned_missing_attr = True
+            return None
+        return len(instances or {})
+
+    async def poll_once(self) -> Optional[dict]:
+        """One poll iteration.
+
+        Sends a `claude_sessions` frame when the count changed since the last
+        send or a (re)connect happened since then. Returns the `link.send`
+        result dict when a frame was sent, else None (disconnected, or no
+        change on the same connection).
+        """
+        if not self._link.is_connected():
+            return None
+        epoch = self._link.connection_epoch
+        count = self._current_count()
+        reconnected = epoch != self._reported_epoch
+        if not reconnected and count == self._last_count:
+            return None
+        result = await self._link.send(
+            {"type": "claude_sessions", "count": count}
+        )
+        self._last_count = count
+        self._reported_epoch = epoch
+        return result
 
 
 def _attach_channel_capability(mcp: FastMCP) -> None:
@@ -656,10 +741,39 @@ async def _handle_inbound(
                 )
 
 
+async def _session_count_poll_loop(
+    reporter: SessionCountReporter, stop_event: asyncio.Event
+) -> None:
+    """Poll the MCP-session count every `SESSION_COUNT_POLL_INTERVAL_S`.
+
+    `reporter.poll_once` only emits a frame on a change or a reconnect, so a
+    steady session count produces no bridge traffic. Exceptions inside a poll
+    are logged and swallowed — a transient reporting failure must not tear
+    down the channel server.
+    """
+    while not stop_event.is_set():
+        try:
+            await reporter.poll_once()
+        except Exception as exc:
+            print(
+                f"{LOG_PREFIX} session-count poll failed: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=SESSION_COUNT_POLL_INTERVAL_S
+            )
+            return
+        except asyncio.TimeoutError:
+            pass
+
+
 async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
     link = BridgeLink()
     mcp = _build_mcp(link, mcp_host, mcp_port)
     stop_event = asyncio.Event()
+    reporter = SessionCountReporter(mcp, link)
 
     print(
         f"{LOG_PREFIX} MCP Streamable HTTP listening on "
@@ -669,6 +783,9 @@ async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
 
     ws_task = asyncio.create_task(_ws_loop(bridge_url, link, stop_event, mcp))
     mcp_task = asyncio.create_task(mcp.run_streamable_http_async())
+    poll_task = asyncio.create_task(
+        _session_count_poll_loop(reporter, stop_event)
+    )
     try:
         done, _pending = await asyncio.wait(
             {ws_task, mcp_task}, return_when=asyncio.FIRST_COMPLETED
@@ -679,10 +796,10 @@ async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
                 print(f"{LOG_PREFIX} task crashed: {exc!r}", file=sys.stderr)
     finally:
         stop_event.set()
-        for task in (ws_task, mcp_task):
+        for task in (ws_task, mcp_task, poll_task):
             if not task.done():
                 task.cancel()
-        for task in (ws_task, mcp_task):
+        for task in (ws_task, mcp_task, poll_task):
             try:
                 await task
             except asyncio.CancelledError:

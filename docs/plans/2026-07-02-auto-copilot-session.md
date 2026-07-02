@@ -300,17 +300,17 @@ Key design decisions:
 - Modify: `recog/copilot_channel.py`
 - Modify: `tests/test_copilot_channel.py`
 
-- [ ] poll-task (каждые 5 с): count из `getattr(session_manager, "_server_instances", None)`;
+- [x] poll-task (каждые 5 с): count из `getattr(session_manager, "_server_instances", None)`;
       если атрибут отсутствует (SDK переименовал приватное поле) — один громкий лог и
       `claude_sessions {count: null}` (unknown, НЕ 0 — merge не должен показать уверенный ⚫
       из-за рефакторинга SDK); на изменении count — фрейм `claude_sessions {count}` через
       существующий `BridgeLink.send`
-- [ ] отправка текущего count сразу после (ре)коннекта к bridge (иначе bridge после рестарта
+- [x] отправка текущего count сразу после (ре)коннекта к bridge (иначе bridge после рестарта
       не знает состояние до первого перехода)
-- [ ] write tests: переход 0→1 и 1→0 шлёт фрейм, отсутствие изменений не шлёт,
+- [x] write tests: переход 0→1 и 1→0 шлёт фрейм, отсутствие изменений не шлёт,
       повторная отправка после reconnect; отсутствие `_server_instances` →
       `count: null` + однократный лог
-- [ ] run tests - must pass before next task
+- [x] run tests - must pass before next task
 
 ### Task 6: Extension — статус-чип агента в Copilot-табе
 
