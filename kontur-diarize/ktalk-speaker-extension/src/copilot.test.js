@@ -49,6 +49,7 @@ function resetCopilotState() {
   state.copilotPending = new Map();
   state.copilotProactiveMutedUntil = 0;
   state.copilotChannelStatus = 'unknown';
+  state.copilotAgentState = 'offline';
   state.copilotLastProactiveAt = 0;
   state.copilotContentElement = null;
   state.isCopilotActive = false;
@@ -331,6 +332,123 @@ describe('Copilot DOM panel', () => {
       status: 'channel_connected',
     });
     expect(state.copilotChannelStatus).toBe('connected');
+  });
+
+  test('agent_state chip renders offline by default when the panel is created', () => {
+    // createCopilotContent runs via ensureCopilotContent inside the handler;
+    // before any frame the chip reflects the default state.copilotAgentState.
+    handleCopilotStatus({
+      type: 'copilot_status',
+      request_id: '',
+      status: 'agent_state',
+      agent_state: 'offline',
+    });
+    const chip = document.querySelector('.ktalk-copilot-agent-chip');
+    expect(chip).not.toBeNull();
+    expect(chip.classList.contains('offline')).toBe(true);
+    expect(chip.textContent).toBe('⚫ offline');
+  });
+
+  test('agent_state chip renders every known lifecycle state', () => {
+    const cases = [
+      { agent_state: 'online', cls: 'online', text: '🟢 online' },
+      { agent_state: 'working', cls: 'working', text: '🟡 working' },
+      { agent_state: 'spawning', cls: 'working', text: '🟡 spawning' },
+      { agent_state: 'blocked', cls: 'blocked', text: '🔴 blocked' },
+      { agent_state: 'offline', cls: 'offline', text: '⚫ offline' },
+    ];
+    for (const c of cases) {
+      handleCopilotStatus({
+        type: 'copilot_status',
+        request_id: '',
+        status: 'agent_state',
+        agent_state: c.agent_state,
+      });
+      const chip = document.querySelector('.ktalk-copilot-agent-chip');
+      expect(chip.classList.contains(c.cls)).toBe(true);
+      expect(chip.textContent).toBe(c.text);
+      expect(state.copilotAgentState).toBe(c.agent_state);
+    }
+  });
+
+  test('agent_state chip transitions swap the single active class', () => {
+    handleCopilotStatus({
+      type: 'copilot_status',
+      status: 'agent_state',
+      agent_state: 'working',
+    });
+    let chip = document.querySelector('.ktalk-copilot-agent-chip');
+    expect(chip.classList.contains('working')).toBe(true);
+
+    handleCopilotStatus({
+      type: 'copilot_status',
+      status: 'agent_state',
+      agent_state: 'blocked',
+    });
+    chip = document.querySelector('.ktalk-copilot-agent-chip');
+    expect(chip.classList.contains('blocked')).toBe(true);
+    // Previous state's class must not linger — otherwise the chip color would
+    // be ambiguous between working and blocked.
+    expect(chip.classList.contains('working')).toBe(false);
+  });
+
+  test('agent_state offline frame resets the chip from a live state', () => {
+    // Reset is driven by an explicit bridge-merge offline frame, NOT by
+    // meeting_ended: the last-extension-gone path emits meeting_ended after
+    // the extension is already gone, so the chip must not depend on it.
+    handleCopilotStatus({
+      type: 'copilot_status',
+      status: 'agent_state',
+      agent_state: 'online',
+    });
+    expect(document.querySelector('.ktalk-copilot-agent-chip').classList.contains('online')).toBe(true);
+
+    handleCopilotStatus({
+      type: 'copilot_status',
+      status: 'agent_state',
+      agent_state: 'offline',
+    });
+    const chip = document.querySelector('.ktalk-copilot-agent-chip');
+    expect(chip.classList.contains('offline')).toBe(true);
+    expect(chip.textContent).toBe('⚫ offline');
+    expect(state.copilotAgentState).toBe('offline');
+  });
+
+  test('unknown agent_state value does not break the handler or change the chip', () => {
+    handleCopilotStatus({
+      type: 'copilot_status',
+      status: 'agent_state',
+      agent_state: 'online',
+    });
+    expect(state.copilotAgentState).toBe('online');
+
+    // SDK drift could send an unrecognized token — the handler must ignore it
+    // and keep the last known chip rather than throwing or blanking out.
+    expect(() =>
+      handleCopilotStatus({
+        type: 'copilot_status',
+        status: 'agent_state',
+        agent_state: 'quantum-flux',
+      })
+    ).not.toThrow();
+    const chip = document.querySelector('.ktalk-copilot-agent-chip');
+    expect(state.copilotAgentState).toBe('online');
+    expect(chip.classList.contains('online')).toBe(true);
+    expect(chip.textContent).toBe('🟢 online');
+  });
+
+  test('agent_state does not touch the channel connectivity indicator', () => {
+    // The chip is independent from state.copilotChannelStatus, which drives
+    // the .ktalk-copilot-status label (channel / per-request health).
+    state.copilotChannelStatus = 'connected';
+    handleCopilotStatus({
+      type: 'copilot_status',
+      status: 'agent_state',
+      agent_state: 'blocked',
+    });
+    expect(state.copilotChannelStatus).toBe('connected');
+    const indicator = document.querySelector('.ktalk-copilot-status');
+    expect(indicator.classList.contains('connected')).toBe(true);
   });
 
   test('handleCopilotStatus channel_disconnected without request_id flips all pending placeholders', () => {

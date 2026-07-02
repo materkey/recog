@@ -318,22 +318,22 @@ Key design decisions:
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.js`
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/copilot.test.js`
 
-- [ ] обработка `copilot_status {status: "agent_state"}`: чип у заголовка Copilot-таба,
+- [x] обработка `copilot_status {status: "agent_state"}`: чип у заголовка Copilot-таба,
       состояния 🟢 online / 🟡 working / 🔴 blocked / ⚫ offline (+ spawning как working-вариант);
       **отдельный DOM-элемент**, не `.ktalk-copilot-status` — существующий индикатор
       (`updateCopilotStatusIndicator`, `ui.js:~1414`) остаётся про channel/per-request и
       тоже умеет «working…», визуально не смешивать (разные подписи/позиции)
-- [ ] начальное состояние `⚫ offline` до первого фрейма; **сброс — по `agent_state: offline`
+- [x] начальное состояние `⚫ offline` до первого фрейма; **сброс — по `agent_state: offline`
       от bridge-merge, не по `meeting_ended`**: last-extension-gone путь
       (`ktalk_bridge.py:1701`) эмитит meeting_ended когда расширений уже нет — фрейм до
       расширения не дойдёт, и чип завис бы; merge же надёжно доводит offline при следующем
       подключении
-- [ ] существующая per-request индикация («Жду ответа Claude…» / «Claude думает…»,
+- [x] существующая per-request индикация («Жду ответа Claude…» / «Claude думает…»,
       `ui.js:1404-1871`) не трогается — чип независим
-- [ ] write tests (jest): рендер чипа по каждому состоянию, переходы, сброс по agent_state
+- [x] write tests (jest): рендер чипа по каждому состоянию, переходы, сброс по agent_state
       offline, незнакомое agent_state не ломает обработчик
-- [ ] `npm run build` — пересобрать `injected.js`
-- [ ] run tests (`npm test`) - must pass before next task
+- [x] `npm run build` — пересобрать `injected.js`
+- [x] run tests (`npm test`) - must pass before next task
 
 ### Task 7: launchd-интеграция и фикс ручного запуска
 
