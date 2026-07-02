@@ -78,5 +78,6 @@ export const state = {
   copilotContentElement: null,
   isCopilotActive: false,
   copilotUnread: false,
-  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript'
+  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript',
+  pipWindow: null
 };
