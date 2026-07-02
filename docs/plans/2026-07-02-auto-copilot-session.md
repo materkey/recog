@@ -358,19 +358,29 @@ Key design decisions:
 
 ### Task 8: Verify acceptance criteria
 
-- [ ] verify: супервизор поднимает сессию на meeting_started и гасит после grace на meeting_ended
+- [x] verify: супервизор поднимает сессию на meeting_started и гасит после grace на meeting_ended
       (юнит-уровень: полный сценарий через фейковый bridge + фейковый tmux)
-- [ ] verify: **реальный** bridge доставляет lifecycle-фреймы supervisor-клиенту
+      — `test_lifecycle_full_meeting_cycle` + `test_grace_expiry_kills_session` (fake tmux)
+      + `test_supervisor_hello_then_meeting_state_spawns` (fake bridge + fake tmux)
+- [x] verify: **реальный** bridge доставляет lifecycle-фреймы supervisor-клиенту
       (тесты Task 4 — против маскировки фейковым bridge)
-- [ ] verify: флап (ended→started тот же id в пределах grace) не убивает сессию
-- [ ] verify: рестарт bridge посреди встречи не убивает сессию — reconcile уводит в GRACE,
+      — `test_real_bridge_delivers_meeting_started/ended_on_leave/on_last_extension_gone_to_supervisor`
+- [x] verify: флап (ended→started тот же id в пределах grace) не убивает сессию
+      — `test_lifecycle_flap_preserves_session` + `test_flap_within_grace_cancels_kill`
+- [x] verify: рестарт bridge посреди встречи не убивает сессию — reconcile уводит в GRACE,
       rejoin расширения в пределах grace возвращает RUNNING (тот же meeting_id)
-- [ ] verify: реконсиляция — orphan-встреча не считается активной (не спавнит между встречами)
-- [ ] verify: статус-цепочка супервизор→bridge→extension покрыта тестами на каждом звене
-- [ ] verify: ручной `./recog-service.sh claude` содержит --strict-mcp-config (grep)
-- [ ] run full test suite: `python -m pytest tests/ -v`
-- [ ] run extension tests: `cd kontur-diarize/ktalk-speaker-extension && npm test`
-- [ ] `python -m compileall recog frontend`
+      — `test_reconcile_live_session_no_meeting_goes_grace_not_kill`
+      + `test_reconcile_adopts_live_session_mid_meeting`
+- [x] verify: реконсиляция — orphan-встреча не считается активной (не спавнит между встречами)
+      — `test_meeting_state_orphan_after_leave_is_inactive` + `test_reconcile_orphan_session_grace_then_kill`
+- [x] verify: статус-цепочка супервизор→bridge→extension покрыта тестами на каждом звене
+      — супервизор→bridge: `test_send_agent_status_uses_connected_ws`, `test_watchdog_reports_on_change_and_heartbeat`;
+      bridge merge/broadcast: `test_merge_*`, `test_copilot_agent_status_frame_updates_and_broadcasts`;
+      extension: `copilot.test.js` agent_state chip тесты (8 шт.)
+- [x] verify: ручной `./recog-service.sh claude` содержит --strict-mcp-config (grep) — строки 388, 425
+- [x] run full test suite: `python -m pytest tests/ -v` — 542 passed, 2 deselected
+- [x] run extension tests: `cd kontur-diarize/ktalk-speaker-extension && npm test` — 123 passed
+- [x] `python -m compileall recog frontend` — OK
 
 ### Task 9: [Final] Update documentation
 
