@@ -1096,8 +1096,9 @@ function activateSubView(view) {
   }
 }
 
-// Manual PiP: opened from a click on a visible page, so the focus guard
-// lets it through, and the floating PiP window follows the user across
+// Manual transcript popup: a Document-PiP window mirroring the live
+// transcript. Opened from a click on a visible page, so the focus guard
+// lets it through, and the floating window then follows the user across
 // Spaces without re-activating Chrome (unlike KTalk's blocked
 // PiP-on-hide, which is what caused the Space yank).
 function flashPipButton(text) {
@@ -1109,27 +1110,59 @@ function flashPipButton(text) {
   }, 1800);
 }
 
-async function toggleVideoPip() {
+async function toggleTranscriptPip() {
   try {
-    if (document.pictureInPictureElement) {
-      await document.exitPictureInPicture();
+    if (state.pipWindow) {
+      state.pipWindow.close();
       return;
     }
-    // Prefer a playing video, then the largest frame. Conference videos
-    // are often marked disablepictureinpicture - clear it, the flag only
-    // hides the browser's own PiP affordance.
-    const video = Array.from(document.querySelectorAll('video'))
-      .filter((v) => v.readyState >= 2 && v.videoWidth > 0)
-      .sort((a, b) =>
-        (b.paused ? 0 : 1) - (a.paused ? 0 : 1)
-        || (b.videoWidth * b.videoHeight) - (a.videoWidth * a.videoHeight))[0];
-    if (!video) {
-      console.log('[KTalk Recog] PiP: no active video to pop out (cameras off?)');
-      flashPipButton('нет видео');
+    if (!window.documentPictureInPicture) {
+      console.log('[KTalk Recog] PiP: documentPictureInPicture API unavailable');
+      flashPipButton('нет API');
       return;
     }
-    video.disablePictureInPicture = false;
-    await video.requestPictureInPicture();
+
+    const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 420, height: 640 });
+    state.pipWindow = pipWindow;
+
+    const doc = pipWindow.document;
+    const mainStyles = document.querySelector('#ktalk-transcript-styles');
+    const styleEl = doc.createElement('style');
+    styleEl.textContent = (mainStyles ? mainStyles.textContent : '') + `
+        body { margin: 0; background: rgb(52, 52, 52); font-family: Arial, Helvetica, sans-serif; }
+        .ktalk-transcript-content.active { height: 100vh; }
+      `;
+    doc.head.appendChild(styleEl);
+    doc.title = 'Recog — transcript';
+    doc.body.innerHTML = `
+        <div class="ktalk-transcript-content active">
+          <div class="ktalk-transcript-messages"></div>
+        </div>
+      `;
+
+    // Mirror whatever the main transcript container renders — catches
+    // new lines, refine rewrites, corrections and privacy re-renders
+    // without duplicating the renderer. Listeners are not cloned; the
+    // popup is a viewer.
+    const pipMessages = doc.querySelector('.ktalk-transcript-messages');
+    const syncPip = () => {
+      const src = document.querySelector('.ktalk-transcript-messages');
+      if (!src || !state.pipWindow) return;
+      pipMessages.innerHTML = src.innerHTML;
+      pipMessages.scrollTop = pipMessages.scrollHeight;
+    };
+    syncPip();
+
+    const observer = new MutationObserver(syncPip);
+    const src = document.querySelector('.ktalk-transcript-messages');
+    if (src) {
+      observer.observe(src, { childList: true, subtree: true, characterData: true });
+    }
+
+    pipWindow.addEventListener('pagehide', () => {
+      observer.disconnect();
+      state.pipWindow = null;
+    });
   } catch (e) {
     console.log('[KTalk Recog] PiP toggle failed:', e);
     flashPipButton('PiP ✕');
@@ -1184,7 +1217,7 @@ export function createTranscriptContent() {
         <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
         <div class="ktalk-speaker-bar-nav">
-          <button class="ktalk-transcript-scroll-btn ktalk-pip-btn" title="Открыть звонок в плавающем PiP-окне (или закрыть его)">PiP</button>
+          <button class="ktalk-transcript-scroll-btn ktalk-pip-btn" title="Транскрипт в плавающем окне поверх всех Spaces (повторный клик закрывает)">PiP</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓</button>
         </div>
@@ -1271,7 +1304,7 @@ export function createTranscriptContent() {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) container.scrollTop = container.scrollHeight;
   });
-  state.transcriptContentElement.querySelector('.ktalk-pip-btn').addEventListener('click', toggleVideoPip);
+  state.transcriptContentElement.querySelector('.ktalk-pip-btn').addEventListener('click', toggleTranscriptPip);
 
   setupSummaryMenu(state.transcriptContentElement);
   setupAnchorControls();
