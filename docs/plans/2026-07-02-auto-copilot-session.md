@@ -342,17 +342,19 @@ Key design decisions:
 - Modify: `recog-service.sh`
 - Modify: `.env.example`
 
-- [ ] plist по образцу `com.recog.copilot-channel.plist`: `ProgramArguments` →
+- [x] plist по образцу `com.recog.copilot-channel.plist`: `ProgramArguments` →
       `venv-gigaam/bin/python3 -m recog.copilot_supervisor`, `PATH` с `/opt/homebrew/bin` и
       `$HOME/.local/bin` (claude), `KeepAlive`, логи в `logs/copilot-supervisor.{stdout,stderr}.log`
-- [ ] `recog-service.sh`: супервизор в install/uninstall/start/stop/restart/status,
+- [x] `recog-service.sh`: супервизор в install/uninstall/start/stop/restart/status,
       `restart-supervisor`, `logs-supervisor`
-- [ ] `cmd_claude`: добавить `--strict-mcp-config --mcp-config <json>` (фикс исчезнувшей
+- [x] `cmd_claude`: добавить `--strict-mcp-config --mcp-config <json>` (фикс исчезнувшей
       регистрации copilot MCP для ручного запуска); expect-блок оставить как есть
-- [ ] `.env.example`: `RECOG_COPILOT_AUTOSPAWN`, `RECOG_COPILOT_GRACE_S`, `RECOG_COPILOT_MCP_URL`
-- [ ] write tests: n/a для plist/shell — вместо тестов: `bash -n recog-service.sh`,
+      (JSON завёрнут в Tcl-скобки `{$mcp_config}` — bash подставляет, Tcl снимает один
+      уровень скобок, кавычки внутри литеральны; проверено симуляцией Tcl-парсинга)
+- [x] `.env.example`: `RECOG_COPILOT_AUTOSPAWN`, `RECOG_COPILOT_GRACE_S`, `RECOG_COPILOT_MCP_URL`
+- [x] write tests: n/a для plist/shell — вместо тестов: `bash -n recog-service.sh`,
       `plutil -lint com.recog.copilot-supervisor.plist`, `python -m compileall recog`
-- [ ] run tests - must pass before next task
+- [x] run tests - must pass before next task
 
 ### Task 8: Verify acceptance criteria
 
