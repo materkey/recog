@@ -19,7 +19,12 @@ import websockets
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from recog.copilot_channel import BridgeLink, _build_mcp, _ws_loop
+from recog.copilot_channel import (
+    BridgeLink,
+    SessionCountReporter,
+    _build_mcp,
+    _ws_loop,
+)
 
 
 class FakeBridgeServer:
@@ -573,3 +578,139 @@ async def test_handle_inbound_enqueues_all_four_event_types():
     while not link.event_queue.empty():
         drained.append(link.event_queue.get_nowait())
     assert [e["type"] for e in drained] == types
+
+
+class _RecordingWS:
+    """Minimal stand-in for a websockets connection that records sends.
+
+    `BridgeLink.send` only needs an object with an async `send(str)`; this
+    lets a test drive a real BridgeLink (real epoch/connection tracking)
+    without a fake bridge server.
+    """
+
+    def __init__(self):
+        self.sent: list[dict] = []
+
+    async def send(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+
+class _FakeSessionManager:
+    def __init__(self, instances: dict | None = None):
+        self._server_instances = instances if instances is not None else {}
+
+
+class _FakeSessionManagerNoAttr:
+    """A session manager missing `_server_instances` — models an SDK rename."""
+
+
+async def test_session_count_reporter_emits_on_transitions_not_on_steady():
+    """
+    given: a channel server connected to a bridge (recording socket) with a
+           fake session manager whose live-session count can be mutated
+    when:  the reporter polls across 0 → 1 → 1 → 0 count transitions
+    then:  a `claude_sessions` frame is sent on the first poll (post-connect
+           announce), on 0→1 and on 1→0, but the steady 1→1 poll sends
+           nothing.
+    """
+    link = BridgeLink()
+    mcp = _build_mcp(link, "127.0.0.1", 0)
+    manager = _FakeSessionManager()
+    mcp._session_manager = manager  # type: ignore[attr-defined]
+    reporter = SessionCountReporter(mcp, link)
+
+    ws = _RecordingWS()
+    link.set_socket(ws)  # epoch → 1, connected
+
+    # First poll after connect announces the current count (0).
+    assert await reporter.poll_once() == {"ok": True}
+    # 0 → 1
+    manager._server_instances["s1"] = object()
+    assert await reporter.poll_once() == {"ok": True}
+    # steady 1 → 1: no frame
+    assert await reporter.poll_once() is None
+    # 1 → 0
+    manager._server_instances.clear()
+    assert await reporter.poll_once() == {"ok": True}
+    # steady 0 → 0: no frame
+    assert await reporter.poll_once() is None
+
+    assert ws.sent == [
+        {"type": "claude_sessions", "count": 0},
+        {"type": "claude_sessions", "count": 1},
+        {"type": "claude_sessions", "count": 0},
+    ]
+
+
+async def test_session_count_reporter_reannounces_after_reconnect():
+    """
+    given: a reporter that already announced count=1 on one connection
+    when:  the socket drops and a fresh one connects (new epoch) with the
+           count unchanged
+    then:  the reporter re-sends the current count on the next poll despite
+           no count change — the bridge forgets state across restarts, so a
+           reconnect must re-announce (`connection_epoch` gate).
+    """
+    link = BridgeLink()
+    mcp = _build_mcp(link, "127.0.0.1", 0)
+    manager = _FakeSessionManager({"s1": object()})
+    mcp._session_manager = manager  # type: ignore[attr-defined]
+    reporter = SessionCountReporter(mcp, link)
+
+    ws1 = _RecordingWS()
+    link.set_socket(ws1)  # epoch → 1
+    assert await reporter.poll_once() == {"ok": True}
+    assert ws1.sent == [{"type": "claude_sessions", "count": 1}]
+
+    # Disconnect: poll is a no-op (nothing to report to).
+    link.set_socket(None)
+    assert await reporter.poll_once() is None
+
+    # Reconnect on a new socket (epoch → 2); count is still 1.
+    ws2 = _RecordingWS()
+    link.set_socket(ws2)
+    assert await reporter.poll_once() == {"ok": True}
+    assert ws2.sent == [{"type": "claude_sessions", "count": 1}]
+
+
+async def test_session_count_reporter_missing_attr_reports_null_once(capsys):
+    """
+    given: a session manager missing `_server_instances` (SDK renamed the
+           private field)
+    when:  the reporter polls twice
+    then:  the first poll sends `claude_sessions {count: null}` and logs a
+           single loud warning; the second poll (still unknown, unchanged)
+           sends nothing and does not re-log — `null` is kept distinct from a
+           confident 0 so an SDK refactor cannot force a false offline.
+    """
+    link = BridgeLink()
+    mcp = _build_mcp(link, "127.0.0.1", 0)
+    mcp._session_manager = _FakeSessionManagerNoAttr()  # type: ignore[attr-defined]
+    reporter = SessionCountReporter(mcp, link)
+
+    ws = _RecordingWS()
+    link.set_socket(ws)
+    capsys.readouterr()  # drop anything emitted during setup
+
+    assert await reporter.poll_once() == {"ok": True}
+    assert await reporter.poll_once() is None  # unchanged unknown → no resend
+
+    assert ws.sent == [{"type": "claude_sessions", "count": None}]
+    err = capsys.readouterr().err
+    assert err.count("no `_server_instances`") == 1
+
+
+async def test_session_count_reporter_disconnected_is_noop():
+    """
+    given: a reporter whose link never connected
+    when:  it polls
+    then:  no frame is sent and no error is raised — there is nothing to
+           report to.
+    """
+    link = BridgeLink()
+    mcp = _build_mcp(link, "127.0.0.1", 0)
+    mcp._session_manager = _FakeSessionManager()  # type: ignore[attr-defined]
+    reporter = SessionCountReporter(mcp, link)
+
+    assert link.is_connected() is False
+    assert await reporter.poll_once() is None
