@@ -265,34 +265,34 @@ Key design decisions:
 - Modify: `ktalk_bridge.py`
 - Modify: `tests/test_ktalk_bridge.py`
 
-- [ ] обработчик `supervisor_hello`: перевод сокета в `_supervisor_clients` (по образцу
+- [x] обработчик `supervisor_hello`: перевод сокета в `_supervisor_clients` (по образцу
       `copilot_channel_hello`), ответ `meeting_state`; `active` = `meta["source"]=="ktalk"`
       И `_connected_clients` непуст (НЕ `current_meeting_path` — см. Technical Details)
-- [ ] **helper `_emit_lifecycle(frame)`** (fan-out: channel-клиенты + расширения +
+- [x] **helper `_emit_lifecycle(frame)`** (fan-out: channel-клиенты + расширения +
       `_supervisor_clients`; send-ошибки супервизору глотаются с логом) и перевод трёх
       emit-сайтов (`ktalk_bridge.py:1701, 1996, 2113`) на него — без этого супервизор
       не получает триггеры вообще
-- [ ] приём `copilot_agent_status` от супервизора и `claude_sessions` от channel-клиента;
+- [x] приём `copilot_agent_status` от супервизора и `claude_sessions` от channel-клиента;
       хранение последних значений
-- [ ] merge-правило (D4): effective = `offline` если supervisor offline/молчит>10 с (два
+- [x] merge-правило (D4): effective = `offline` если supervisor offline/молчит>10 с (два
       пропущенных heartbeat из Task 3) ИЛИ (известный sessions==0 (не null) при активной
       встрече и статусе не spawning, и это условие держится ≥10 с — дебаунс на
       poll-интервал демона, чтобы выход из spawning до первого `claude_sessions` не
       флапал чип в ⚫), иначе статус супервизора; broadcast расширениям
       `copilot_status {status: "agent_state", ...}` на каждом изменении effective-статуса
       (heartbeat без смены статуса наружу не транслируется)
-- [ ] write tests: **зарегистрированный supervisor-клиент реального bridge получает
+- [x] write tests: **зарегистрированный supervisor-клиент реального bridge получает
       `meeting_started`/`meeting_ended` со всех трёх emit-путей** (meeting_join-переход,
       meeting_leave, last-extension-gone)
-- [ ] write tests: hello→meeting_state — активная ktalk-встреча → active=true;
+- [x] write tests: hello→meeting_state — активная ktalk-встреча → active=true;
       **orphan-встреча (после leave) → active=false**; ktalk-meta без extension-клиентов →
       active=false
-- [ ] write tests: merge-таблица (supervisor online + sessions 0 устойчиво >10 с → offline;
+- [x] write tests: merge-таблица (supervisor online + sessions 0 устойчиво >10 с → offline;
       working + 1 → working; молчание >10 с → offline;
       spawning→online при sessions==0 младше 10 с → НЕ offline — нет флапа на старте;
       sessions=null (unknown) при активной встрече → статус супервизора, не offline),
       broadcast только на изменении effective-статуса
-- [ ] run tests - must pass before next task
+- [x] run tests - must pass before next task
 
 ### Task 5: Демон copilot_channel — репорт количества MCP-сессий
 
