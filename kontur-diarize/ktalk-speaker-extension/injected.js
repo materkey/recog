@@ -574,6 +574,33 @@ function installFocusGuard(win = window) {
     };
   }
 
+  // Auto-PiP kill switch. Chrome's "Automatic picture-in-picture" for
+  // video-call sites fires when the tab loses visibility (including a
+  // macOS Space switch), and the PiP window activates Chrome — which
+  // yanks the user back to Chrome's Space. Eligibility requires the
+  // site to register a mediaSession "enterpictureinpicture" handler:
+  // drop existing and future registrations.
+  const msProto = win.MediaSession && win.MediaSession.prototype;
+  if (msProto && typeof msProto.setActionHandler === 'function') {
+    const origSetActionHandler = msProto.setActionHandler;
+    msProto.setActionHandler = function (action, handler) {
+      if (action === 'enterpictureinpicture') {
+        console.log('[KTalk Recog] mediaSession enterpictureinpicture registration suppressed (auto-PiP guard)');
+        return undefined;
+      }
+      return origSetActionHandler.call(this, action, handler);
+    };
+    const mediaSession = win.navigator && win.navigator.mediaSession;
+    if (mediaSession) {
+      try {
+        origSetActionHandler.call(mediaSession, 'enterpictureinpicture', null);
+        console.log('[KTalk Recog] existing enterpictureinpicture handler cleared (auto-PiP guard)');
+      } catch (e) {
+        void e;
+      }
+    }
+  }
+
   // Timestamped window-activation trace: when macOS yanks the user back
   // to Chrome's Space, this window gains focus — the log pinpoints the
   // moment so it can be correlated with front-app-monitor.sh and the

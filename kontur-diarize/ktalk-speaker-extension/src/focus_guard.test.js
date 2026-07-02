@@ -20,13 +20,30 @@ function buildFakeWindow() {
   }
   FakeNotification.permission = 'default';
 
+  class FakeMediaSession {
+    constructor() {
+      this.handlers = {};
+    }
+    setActionHandler(action, handler) {
+      if (handler === null) {
+        delete this.handlers[action];
+      } else {
+        this.handlers[action] = handler;
+      }
+    }
+  }
+
+  const mediaSession = new FakeMediaSession();
+
   return {
     focus: jest.fn(),
     alert: jest.fn(),
     confirm: jest.fn(() => true),
     prompt: jest.fn(() => 'answer'),
     Notification: FakeNotification,
-    Element: class {}
+    Element: class {},
+    MediaSession: FakeMediaSession,
+    navigator: { mediaSession }
   };
 }
 
@@ -78,6 +95,30 @@ describe('installFocusGuard', () => {
     installFocusGuard(win);
 
     expect(win.focus).toBe(wrappedFocus);
+  });
+
+  it('suppresses enterpictureinpicture registration, passes other actions', () => {
+    const win = buildFakeWindow();
+    const ms = win.navigator.mediaSession;
+
+    installFocusGuard(win);
+
+    ms.setActionHandler('enterpictureinpicture', () => {});
+    ms.setActionHandler('play', 'play-handler');
+
+    expect(ms.handlers.enterpictureinpicture).toBeUndefined();
+    expect(ms.handlers.play).toBe('play-handler');
+  });
+
+  it('clears a pre-existing enterpictureinpicture handler on install', () => {
+    const win = buildFakeWindow();
+    const ms = win.navigator.mediaSession;
+    ms.setActionHandler('enterpictureinpicture', () => {});
+    expect(ms.handlers.enterpictureinpicture).toBeDefined();
+
+    installFocusGuard(win);
+
+    expect(ms.handlers.enterpictureinpicture).toBeUndefined();
   });
 
   it('logs fullscreen requests and forwards to the original', () => {
