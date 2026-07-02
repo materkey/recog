@@ -565,79 +565,6 @@ function installFocusGuard(win = window) {
     };
   });
 
-  // PiP-on-hide is the Space-yank vector: KTalk opens a PiP window when
-  // the tab loses visibility (a macOS Space switch qualifies), and the
-  // PiP window activates Chrome. Block PiP only while the document is
-  // hidden — manual PiP from a visible page keeps working, and the
-  // extension's own PiP button can grant a one-shot pass
-  // (window.__ktalkAllowPipOnce) to open KTalk's native popup on demand.
-  const pipBlockedWhileHidden = (api) => {
-    console.log(`[KTalk Recog] ${api} blocked while hidden (auto-PiP guard)`);
-    return Promise.reject(new DOMException('Blocked by KTalk Recog focus guard', 'NotAllowedError'));
-  };
-  const isPipBlocked = () => {
-    if (win.__ktalkAllowPipOnce) {
-      win.__ktalkAllowPipOnce = false;
-      console.log('[KTalk Recog] PiP allowed once (manual open)');
-      return false;
-    }
-    return win.document && win.document.visibilityState === 'hidden';
-  };
-
-  const videoProto = win.HTMLVideoElement && win.HTMLVideoElement.prototype;
-  if (videoProto && typeof videoProto.requestPictureInPicture === 'function') {
-    const origRequestPip = videoProto.requestPictureInPicture;
-    videoProto.requestPictureInPicture = function (...args) {
-      if (isPipBlocked()) {
-        return pipBlockedWhileHidden('requestPictureInPicture');
-      }
-      console.log('[KTalk Recog] requestPictureInPicture called');
-      return origRequestPip.apply(this, args);
-    };
-  }
-
-  // Document Picture-in-Picture — the path KTalk actually uses on
-  // visibilitychange (its PiP open does not go through
-  // HTMLVideoElement.requestPictureInPicture).
-  const docPip = win.documentPictureInPicture;
-  if (docPip && typeof docPip.requestWindow === 'function') {
-    const origRequestWindow = docPip.requestWindow.bind(docPip);
-    docPip.requestWindow = function (...args) {
-      if (isPipBlocked()) {
-        return pipBlockedWhileHidden('documentPictureInPicture.requestWindow');
-      }
-      console.log('[KTalk Recog] documentPictureInPicture.requestWindow called');
-      return origRequestWindow(...args);
-    };
-  }
-
-  // Auto-PiP kill switch. Chrome's "Automatic picture-in-picture" for
-  // video-call sites fires when the tab loses visibility (including a
-  // macOS Space switch), and the PiP window activates Chrome — which
-  // yanks the user back to Chrome's Space. Eligibility requires the
-  // site to register a mediaSession "enterpictureinpicture" handler:
-  // drop existing and future registrations.
-  const msProto = win.MediaSession && win.MediaSession.prototype;
-  if (msProto && typeof msProto.setActionHandler === 'function') {
-    const origSetActionHandler = msProto.setActionHandler;
-    msProto.setActionHandler = function (action, handler) {
-      if (action === 'enterpictureinpicture') {
-        console.log('[KTalk Recog] mediaSession enterpictureinpicture registration suppressed (auto-PiP guard)');
-        return undefined;
-      }
-      return origSetActionHandler.call(this, action, handler);
-    };
-    const mediaSession = win.navigator && win.navigator.mediaSession;
-    if (mediaSession) {
-      try {
-        origSetActionHandler.call(mediaSession, 'enterpictureinpicture', null);
-        console.log('[KTalk Recog] existing enterpictureinpicture handler cleared (auto-PiP guard)');
-      } catch (e) {
-        void e;
-      }
-    }
-  }
-
   // Timestamped window-activation trace: when macOS yanks the user back
   // to Chrome's Space, this window gains focus — the log pinpoints the
   // moment so it can be correlated with front-app-monitor.sh and the
@@ -841,7 +768,6 @@ function setupUI() {
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.watchTabChanges)();
-    (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.watchDocumentPip)();
   }
 
   (0,_debug_panel_js__WEBPACK_IMPORTED_MODULE_6__.ensureDebugPanel)();
@@ -3637,8 +3563,7 @@ const state = {
   copilotContentElement: null,
   isCopilotActive: false,
   copilotUnread: false,
-  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript',
-  pipWindow: null
+  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript'
 };
 
 
@@ -4684,7 +4609,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   isCopilotProactiveMuted: () => (/* binding */ isCopilotProactiveMuted),
 /* harmony export */   renderCopilotMessage: () => (/* binding */ renderCopilotMessage),
 /* harmony export */   updateWsIndicatorPlatform: () => (/* binding */ updateWsIndicatorPlatform),
-/* harmony export */   watchDocumentPip: () => (/* binding */ watchDocumentPip),
 /* harmony export */   watchTabChanges: () => (/* binding */ watchTabChanges)
 /* harmony export */ });
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
@@ -5791,225 +5715,6 @@ function activateSubView(view) {
   }
 }
 
-// Manual transcript popup: a Document-PiP window mirroring the live
-// transcript. Opened from a click on a visible page, so the focus guard
-// lets it through, and the floating window then follows the user across
-// Spaces without re-activating Chrome (unlike KTalk's blocked
-// PiP-on-hide, which is what caused the Space yank).
-function flashPipButton(text) {
-  const btn = document.querySelector('.ktalk-pip-btn');
-  if (!btn) return;
-  btn.textContent = text;
-  setTimeout(() => {
-    btn.textContent = 'PiP';
-  }, 1800);
-}
-
-// KTalk's native Document-PiP window (tiles / participants / chat)
-// renders the same .tl-tabset__content tab bar as the main page. When
-// it opens, inject a Recog tab with a live transcript mirror into it,
-// so the built-in popup carries the transcript too.
-let pipEnterHookInstalled = false;
-
-function watchDocumentPip() {
-  if (pipEnterHookInstalled) return;
-  const docPip = window.documentPictureInPicture;
-  if (!docPip || typeof docPip.addEventListener !== 'function') return;
-  pipEnterHookInstalled = true;
-  docPip.addEventListener('enter', (event) => {
-    injectRecogIntoKtalkPip(event.window);
-  });
-}
-
-function injectRecogIntoKtalkPip(pipWin) {
-  const doc = pipWin.document;
-  let mirrorObserver = null;
-
-  const ensureInjected = () => {
-    const tabset = doc.querySelector('.tl-tabset__content');
-    if (!tabset || tabset.querySelector('.ktalk-ai-tab')) return;
-
-    const contentArea = doc.querySelector('.slide-menu-wrapper .content');
-    if (!contentArea) {
-      console.log('[KTalk Recog] PiP: KTalk content area not found, Recog tab skipped');
-      return;
-    }
-
-    if (!doc.querySelector('#ktalk-transcript-styles')) {
-      const styleEl = doc.createElement('style');
-      styleEl.id = 'ktalk-transcript-styles';
-      const mainStyles = document.querySelector('#ktalk-transcript-styles');
-      styleEl.textContent = mainStyles ? mainStyles.textContent : '';
-      doc.head.appendChild(styleEl);
-    }
-
-    const tab = doc.createElement('div');
-    tab.className = 'tl-tab _switchable ktalk-ai-tab-wrapper';
-    tab.innerHTML = `
-        <button type="button" class="ktalk-ai-tab link">
-          <span class="tab-content"><span class="title">Recog</span></span>
-        </button>
-      `;
-    tabset.appendChild(tab);
-
-    const mirror = doc.createElement('div');
-    mirror.className = 'ktalk-transcript-content';
-    mirror.innerHTML = '<div class="ktalk-transcript-messages"></div>';
-    const nativeContent = contentArea.firstElementChild;
-    contentArea.appendChild(mirror);
-
-    const mirrorMessages = mirror.querySelector('.ktalk-transcript-messages');
-    const syncMirror = () => {
-      const src = document.querySelector('.ktalk-transcript-messages');
-      if (!src) return;
-      mirrorMessages.innerHTML = src.innerHTML;
-      mirrorMessages.scrollTop = mirrorMessages.scrollHeight;
-    };
-
-    const setMirrorActive = (active) => {
-      tab.classList.toggle('_active', active);
-      tab.querySelector('.ktalk-ai-tab').classList.toggle('_active', active);
-      mirror.classList.toggle('active', active);
-      if (nativeContent && nativeContent !== mirror) {
-        nativeContent.style.display = active ? 'none' : '';
-      }
-      if (active) {
-        syncMirror();
-        if (!mirrorObserver) {
-          const src = document.querySelector('.ktalk-transcript-messages');
-          if (src) {
-            mirrorObserver = new MutationObserver(syncMirror);
-            mirrorObserver.observe(src, { childList: true, subtree: true, characterData: true });
-          }
-        }
-      } else if (mirrorObserver) {
-        mirrorObserver.disconnect();
-        mirrorObserver = null;
-      }
-    };
-
-    tab.querySelector('button').addEventListener('click', () => setMirrorActive(true));
-    tabset.addEventListener('click', (e) => {
-      const clicked = e.target.closest('.tl-tab');
-      if (clicked && clicked !== tab) setMirrorActive(false);
-    });
-  };
-
-  // KTalk populates the PiP document asynchronously, and the tab bar
-  // only exists while the chat view is shown - keep watching and
-  // re-inject whenever it (re)appears.
-  ensureInjected();
-  const domObserver = new MutationObserver(ensureInjected);
-  domObserver.observe(doc.documentElement, { childList: true, subtree: true });
-
-  pipWin.addEventListener('pagehide', () => {
-    domObserver.disconnect();
-    if (mirrorObserver) mirrorObserver.disconnect();
-  });
-}
-
-// Open KTalk's NATIVE popup (tiles / participants / chat, with the
-// injected Recog tab) on demand: KTalk only builds it in its own
-// visibilitychange->hidden handler, so spoof the hidden state for the
-// duration of one synthetic event and give the focus guard a one-shot
-// pass. The click's transient user activation lets requestWindow
-// through. Falls back to the transcript-only popup if KTalk's handler
-// did not open anything.
-function toggleKtalkPip() {
-  const docPip = window.documentPictureInPicture;
-  if (docPip && docPip.window) {
-    docPip.window.close();
-    // KTalk was told the tab is hidden when the popup was opened; fire
-    // a real-state visibilitychange so its UI (video quality, wake
-    // lock) fully restores.
-    document.dispatchEvent(new Event('visibilitychange'));
-    return;
-  }
-  if (!docPip) {
-    console.log('[KTalk Recog] PiP: documentPictureInPicture API unavailable');
-    flashPipButton('нет API');
-    return;
-  }
-
-  window.__ktalkAllowPipOnce = true;
-  Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
-  Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
-  try {
-    document.dispatchEvent(new Event('visibilitychange'));
-  } finally {
-    // KTalk's handler may re-check visibilityState asynchronously
-    // before calling requestWindow - keep the spoof briefly.
-    setTimeout(() => {
-      delete document.visibilityState;
-      delete document.hidden;
-    }, 800);
-  }
-
-  setTimeout(() => {
-    window.__ktalkAllowPipOnce = false;
-    const opened = window.documentPictureInPicture && window.documentPictureInPicture.window;
-    if (!opened) {
-      console.log('[KTalk Recog] Native KTalk PiP did not open, falling back to transcript popup');
-      openTranscriptPip();
-    }
-  }, 1000);
-}
-
-async function openTranscriptPip() {
-  try {
-    if (!window.documentPictureInPicture) {
-      console.log('[KTalk Recog] PiP: documentPictureInPicture API unavailable');
-      flashPipButton('нет API');
-      return;
-    }
-
-    const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 420, height: 640 });
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.pipWindow = pipWindow;
-
-    const doc = pipWindow.document;
-    const mainStyles = document.querySelector('#ktalk-transcript-styles');
-    const styleEl = doc.createElement('style');
-    styleEl.textContent = (mainStyles ? mainStyles.textContent : '') + `
-        body { margin: 0; background: rgb(52, 52, 52); font-family: Arial, Helvetica, sans-serif; }
-        .ktalk-transcript-content.active { height: 100vh; }
-      `;
-    doc.head.appendChild(styleEl);
-    doc.title = 'Recog — transcript';
-    doc.body.innerHTML = `
-        <div class="ktalk-transcript-content active">
-          <div class="ktalk-transcript-messages"></div>
-        </div>
-      `;
-
-    // Mirror whatever the main transcript container renders — catches
-    // new lines, refine rewrites, corrections and privacy re-renders
-    // without duplicating the renderer. Listeners are not cloned; the
-    // popup is a viewer.
-    const pipMessages = doc.querySelector('.ktalk-transcript-messages');
-    const syncPip = () => {
-      const src = document.querySelector('.ktalk-transcript-messages');
-      if (!src || !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.pipWindow) return;
-      pipMessages.innerHTML = src.innerHTML;
-      pipMessages.scrollTop = pipMessages.scrollHeight;
-    };
-    syncPip();
-
-    const observer = new MutationObserver(syncPip);
-    const src = document.querySelector('.ktalk-transcript-messages');
-    if (src) {
-      observer.observe(src, { childList: true, subtree: true, characterData: true });
-    }
-
-    pipWindow.addEventListener('pagehide', () => {
-      observer.disconnect();
-      _state_js__WEBPACK_IMPORTED_MODULE_0__.state.pipWindow = null;
-    });
-  } catch (e) {
-    console.log('[KTalk Recog] PiP toggle failed:', e);
-    flashPipButton('PiP ✕');
-  }
-}
-
 function ensureAiPanelBody(contentArea) {
   if (!contentArea) return null;
 
@@ -6058,7 +5763,6 @@ function createTranscriptContent() {
         <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
         <div class="ktalk-speaker-bar-nav">
-          <button class="ktalk-transcript-scroll-btn ktalk-pip-btn" title="Окно звонка KTalk (PiP) с вкладкой Recog; повторный клик закрывает">PiP</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-top" title="Scroll to top">↑</button>
           <button class="ktalk-transcript-scroll-btn ktalk-scroll-bottom" title="Scroll to bottom">↓</button>
         </div>
@@ -6145,7 +5849,6 @@ function createTranscriptContent() {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) container.scrollTop = container.scrollHeight;
   });
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-pip-btn').addEventListener('click', toggleKtalkPip);
 
   setupSummaryMenu(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
   setupAnchorControls();
