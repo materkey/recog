@@ -37,6 +37,15 @@ COPILOT_PLIST_NAME="com.recog.copilot-channel"
 COPILOT_PLIST_SRC="$SCRIPT_DIR/$COPILOT_PLIST_NAME.plist"
 COPILOT_PLIST_DST="$HOME/Library/LaunchAgents/$COPILOT_PLIST_NAME.plist"
 
+# Copilot supervisor daemon (recog.copilot_supervisor: auto-spawns the Claude
+# copilot tmux session per KTalk meeting). Connects to ktalk_bridge as a
+# supervisor client, drives spawn/kill via `tmux -L recog-copilot`, and reports
+# agent status to the Copilot-tab chip. Replaces the manual `./recog-service.sh
+# claude` step; disable auto-spawn without uninstalling via RECOG_COPILOT_AUTOSPAWN=0.
+SUPERVISOR_PLIST_NAME="com.recog.copilot-supervisor"
+SUPERVISOR_PLIST_SRC="$SCRIPT_DIR/$SUPERVISOR_PLIST_NAME.plist"
+SUPERVISOR_PLIST_DST="$HOME/Library/LaunchAgents/$SUPERVISOR_PLIST_NAME.plist"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -165,6 +174,7 @@ cmd_install() {
     install_service "live transcription" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
     install_service "frontend" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
     install_service "copilot channel" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST"
+    install_service "copilot supervisor" "$SUPERVISOR_PLIST_SRC" "$SUPERVISOR_PLIST_DST"
 
     info "Services installed. Use './recog-service.sh start' to start them."
     info "Logs will be written to: $LOG_DIR/"
@@ -176,6 +186,7 @@ cmd_uninstall() {
     uninstall_service "live transcription" "$LIVE_PLIST_DST"
     uninstall_service "frontend" "$FRONTEND_PLIST_DST"
     uninstall_service "copilot channel" "$COPILOT_PLIST_DST"
+    uninstall_service "copilot supervisor" "$SUPERVISOR_PLIST_DST"
 
     info "Services uninstalled."
 }
@@ -187,6 +198,7 @@ cmd_start() {
     start_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
     start_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
     start_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST"
+    start_service "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_SRC" "$SUPERVISOR_PLIST_DST"
 
     sleep 1
     cmd_status
@@ -201,6 +213,7 @@ cmd_stop() {
     stop_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST"
     stop_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST"
     stop_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_DST"
+    stop_service "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_DST"
 
     info "Services stopped."
 }
@@ -226,6 +239,11 @@ cmd_restart_copilot() {
         "copilot channel daemon" "(http://127.0.0.1:8767/mcp)"
 }
 
+cmd_restart_supervisor() {
+    restart_one "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_SRC" "$SUPERVISOR_PLIST_DST" \
+        "copilot supervisor daemon"
+}
+
 cmd_status() {
     echo "=== Service Status ==="
     echo ""
@@ -235,10 +253,12 @@ cmd_status() {
     check_service_status "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST" "Frontend"
     echo ""
     check_service_status "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_DST" "Copilot Channel"
+    echo ""
+    check_service_status "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_DST" "Copilot Supervisor"
 
     echo ""
     echo "=== Logs ==="
-    for log in live.stderr.log live.stdout.log frontend.stderr.log frontend.stdout.log copilot-channel.stderr.log copilot-channel.stdout.log; do
+    for log in live.stderr.log live.stdout.log frontend.stderr.log frontend.stdout.log copilot-channel.stderr.log copilot-channel.stdout.log copilot-supervisor.stderr.log copilot-supervisor.stdout.log; do
         if [ -f "$LOG_DIR/$log" ]; then
             SIZE=$(du -h "$LOG_DIR/$log" | cut -f1)
             LINES=$(wc -l < "$LOG_DIR/$log" | tr -d ' ')
@@ -255,10 +275,11 @@ cmd_status() {
     fi
 }
 
-cmd_logs()         { tail_log live.stderr.log; }
-cmd_logs_out()     { tail_log live.stdout.log; }
-cmd_logs_web()     { tail_log frontend.stderr.log; }
-cmd_logs_copilot() { tail_log copilot-channel.stderr.log; }
+cmd_logs()            { tail_log live.stderr.log; }
+cmd_logs_out()        { tail_log live.stdout.log; }
+cmd_logs_web()        { tail_log frontend.stderr.log; }
+cmd_logs_copilot()    { tail_log copilot-channel.stderr.log; }
+cmd_logs_supervisor() { tail_log copilot-supervisor.stderr.log; }
 
 cmd_debug() {
     echo "=== Recog Debug Status ==="
@@ -351,11 +372,20 @@ cmd_claude() {
         warn "RECOG_NO_AGENT=1 → skipping --agent copilot-session (skill not preloaded)"
     fi
 
+    # --strict-mcp-config + inline --mcp-config restore the copilot MCP server
+    # for the manual launch: the project-scope entry in ~/.claude.json
+    # disappeared, so without these flags Claude Code starts with no `copilot`
+    # server (channel push is a no-op). This mirrors what the supervisor spawns
+    # (recog/copilot_supervisor.py:build_claude_command) — built-ins + copilot
+    # only, no user MCP servers. URL overridable via RECOG_COPILOT_MCP_URL.
+    local mcp_url="${RECOG_COPILOT_MCP_URL:-http://127.0.0.1:8767/mcp}"
+    local mcp_config="{\"mcpServers\":{\"copilot\":{\"type\":\"http\",\"url\":\"$mcp_url\"}}}"
+
     if [ "${RECOG_NO_AUTO_CONFIRM:-0}" = "1" ] || ! command -v expect > /dev/null 2>&1; then
         if [ "${RECOG_NO_AUTO_CONFIRM:-0}" != "1" ]; then
             warn "expect(1) not found — falling back to interactive launch (manual Enter needed)"
         fi
-        exec claude --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
+        exec claude --strict-mcp-config --mcp-config "$mcp_config" --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
     fi
 
     # Two non-obvious facts dictate this script (verified against
@@ -385,10 +415,14 @@ cmd_claude() {
         warn "RECOG_CLAUDE_DEBUG=1 → expect will dump diagnostic trace to stderr"
     fi
 
+    # The JSON mcp-config is wrapped in Tcl braces ({$mcp_config}): bash
+    # substitutes the value, then Tcl strips one brace level, passing the JSON
+    # (with its literal double quotes) as a single argument without any Tcl
+    # substitution on `$`/`[`/`\` inside.
     exec env TERM=xterm-256color expect $expect_debug_arg -c "
         set timeout 30
         log_user 1
-        spawn -noecho claude --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
+        spawn -noecho claude --strict-mcp-config --mcp-config {$mcp_config} --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
         expect {
             -re {confirm.*Esc|Esc.*confirm} {
                 # 0.5 s settle: Ink ends the dialog with a synchronized-output
@@ -416,21 +450,24 @@ cmd_help() {
     echo "  start           - Start all services"
     echo "  stop            - Stop all services"
     echo "  restart         - Restart all services"
-    echo "  restart-web     - Restart frontend only"
-    echo "  restart-live    - Restart live transcription only"
-    echo "  restart-copilot - Restart copilot channel daemon only"
-    echo "  status          - Show status of all services"
-    echo "  debug           - Show debug info (participants, speaker, mics)"
-    echo "  logs            - Tail live stderr logs"
-    echo "  logs-out        - Tail live stdout logs (transcripts)"
-    echo "  logs-web        - Tail frontend logs"
-    echo "  logs-copilot    - Tail copilot channel daemon logs"
-    echo "  claude          - Launch Claude Code wired to the Copilot channel"
+    echo "  restart-web        - Restart frontend only"
+    echo "  restart-live       - Restart live transcription only"
+    echo "  restart-copilot    - Restart copilot channel daemon only"
+    echo "  restart-supervisor - Restart copilot supervisor daemon only"
+    echo "  status             - Show status of all services"
+    echo "  debug              - Show debug info (participants, speaker, mics)"
+    echo "  logs               - Tail live stderr logs"
+    echo "  logs-out           - Tail live stdout logs (transcripts)"
+    echo "  logs-web           - Tail frontend logs"
+    echo "  logs-copilot       - Tail copilot channel daemon logs"
+    echo "  logs-supervisor    - Tail copilot supervisor daemon logs"
+    echo "  claude             - Launch Claude Code wired to the Copilot channel"
     echo ""
     echo "Services:"
     echo "  - Live transcription: mp4_notes.py live --screencapture --ktalk"
     echo "  - Frontend: http://127.0.0.1:9080"
     echo "  - Copilot channel daemon: python -m recog.copilot_channel (http://127.0.0.1:8767/mcp)"
+    echo "  - Copilot supervisor: python -m recog.copilot_supervisor (auto-spawns Claude per meeting)"
 }
 
 # Main
@@ -440,16 +477,18 @@ case "${1:-}" in
     start)           cmd_start ;;
     stop)            cmd_stop ;;
     restart)         cmd_restart ;;
-    restart-web)     cmd_restart_web ;;
-    restart-live)    cmd_restart_live ;;
-    restart-copilot) cmd_restart_copilot ;;
-    status)          cmd_status ;;
-    debug)           cmd_debug ;;
-    logs)            cmd_logs ;;
-    logs-out)        cmd_logs_out ;;
-    logs-web)        cmd_logs_web ;;
-    logs-copilot)    cmd_logs_copilot ;;
-    claude)          cmd_claude ;;
+    restart-web)        cmd_restart_web ;;
+    restart-live)       cmd_restart_live ;;
+    restart-copilot)    cmd_restart_copilot ;;
+    restart-supervisor) cmd_restart_supervisor ;;
+    status)             cmd_status ;;
+    debug)              cmd_debug ;;
+    logs)               cmd_logs ;;
+    logs-out)           cmd_logs_out ;;
+    logs-web)           cmd_logs_web ;;
+    logs-copilot)       cmd_logs_copilot ;;
+    logs-supervisor)    cmd_logs_supervisor ;;
+    claude)             cmd_claude ;;
     help|--help|-h)  cmd_help ;;
     *)
         cmd_help
