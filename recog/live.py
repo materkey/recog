@@ -28,6 +28,15 @@ from .remote_asr import ASRTemporarilyUnavailable, build_asr
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
 
+# WAV stores RIFF/data sizes as 32-bit values — a data chunk beyond ~4 GiB
+# corrupts the header. Cap at 2 GiB (safe for signed-int32 parsers too);
+# at 16 kHz mono int16 that is ~18.6 h of continuous audio per meeting.
+MAX_WAV_DATA_BYTES = 2**31
+
+# How often the live loop rotates old meeting audio (mtime-based 24h
+# retention in MeetingStorage.cleanup_old_audio — a stat-only scan).
+AUDIO_CLEANUP_INTERVAL_S = 3600
+
 
 class IncrementalWavWriter:
     """
@@ -36,7 +45,8 @@ class IncrementalWavWriter:
     Handles overlap by skipping duplicate samples at chunk boundaries.
     """
 
-    def __init__(self, path: Path, sample_rate: int = 16000, channels: int = 1, overlap_seconds: float = 0.5):
+    def __init__(self, path: Path, sample_rate: int = 16000, channels: int = 1, overlap_seconds: float = 0.5,
+                 max_data_bytes: int = MAX_WAV_DATA_BYTES):
         self.path = Path(path)
         self.sample_rate = sample_rate
         self.channels = channels
@@ -46,6 +56,8 @@ class IncrementalWavWriter:
         # but we should only write non-overlapping samples to avoid duplication
         self._overlap_samples = int(overlap_seconds * sample_rate)
         self._first_chunk = True
+        self._max_data_bytes = max_data_bytes
+        self._cap_warned = False
 
     def open(self, continuation=False):
         """Opens file and writes WAV header placeholder. Appends if file exists.
@@ -94,10 +106,36 @@ class IncrementalWavWriter:
         if len(samples_to_write) == 0:
             return
 
+        # WAV format limit: sizes are 32-bit, so stop before the data chunk
+        # would exceed the cap instead of silently corrupting the header.
+        if (self._samples_written + len(samples_to_write)) * 2 > self._max_data_bytes:
+            if not self._cap_warned:
+                self._cap_warned = True
+                print(
+                    f"Warning: {self.path.name} reached max WAV size "
+                    f"({self._max_data_bytes} bytes), stopping audio recording",
+                    file=sys.stderr,
+                )
+            return
+
         # Convert float32 [-1, 1] to int16
         chunk_int16 = (samples_to_write * 32767).astype(np.int16)
         self._file.write(chunk_int16.tobytes())
         self._samples_written += len(samples_to_write)
+        # Keep the header valid after every write: a SIGKILL must not leave a
+        # WAV whose header claims 0 data bytes (strict parsers reject it, and
+        # finalize() may never run). Two in-place 4-byte patches per chunk.
+        self._patch_header_sizes()
+
+    def _patch_header_sizes(self):
+        """Update RIFF/data size fields in place, preserving file position."""
+        data_size = self._samples_written * 2
+        pos = self._file.tell()
+        self._file.seek(4)
+        self._file.write(struct.pack('<I', 36 + data_size))
+        self._file.seek(40)
+        self._file.write(struct.pack('<I', data_size))
+        self._file.seek(pos)
 
     def get_offset_ms(self) -> int:
         """Returns current offset in milliseconds based on actual samples written."""
@@ -1468,12 +1506,35 @@ class LiveTranscriber:
 
             state.pending_updates = still_pending
 
-    def _check_silence_split(self, state, current_time):
+    def _check_silence_split(self, state, current_time, chunk=None, is_mic=False):
         """Check silence duration and split meeting session if threshold exceeded."""
         if self._meeting_storage:
             silence_duration = current_time - state.last_text_time
             if silence_duration >= SILENCE_SPLIT_TIMEOUT:
-                self._meeting_storage.split_on_silence_timeout()
+                new_id = self._meeting_storage.split_on_silence_timeout()
+                if new_id is not None:
+                    # Сплит меняет current_meeting_path мимо KTalk-bridge
+                    # callback — ротируем WAV-writer'ы здесь, иначе сегменты
+                    # нового митинга ссылаются на файл старого.
+                    # continuation=True: capture-буферы не чистились, у
+                    # следующих чанков есть overlap от предыдущих.
+                    self._on_meeting_change(
+                        new_id,
+                        self._meeting_storage.base_path / new_id,
+                        continuation=True,
+                    )
+                    # Триггерный чанк уже записан в WAV старого митинга —
+                    # перезаписываем его в новый файл, чтобы первый сегмент
+                    # нового митинга указывал в собственное аудио.
+                    if chunk is not None:
+                        with self._wav_lock:
+                            writer = (
+                                self._wav_writer_mic if is_mic
+                                else self._wav_writer_system
+                            )
+                            if writer:
+                                state.audio_offset = writer.get_offset_ms()
+                                writer.write_chunk(chunk)
                 state.last_speaker = None
                 state.last_words = []
             state.last_text_time = current_time
@@ -1772,6 +1833,22 @@ class LiveTranscriber:
         chunk_start_time = capture_start_ts
         chunk_end_time = capture_start_ts + self.chunk_duration
 
+        # RMS считается один раз — и для решения о записи WAV здесь, и для
+        # VAD-гейта перед ASR ниже. Тишину на диск не пишем: 24/7-сервис между
+        # встречами иначе бесконечно раздувает WAV текущего orphan-митинга.
+        # Исключение — pcm-primary: оффсеты PCM-сегментов вычисляются как
+        # wav_offset_now - chunk_age (см. _on_pcm_batch) и требуют непрерывной
+        # real-time timeline в audio_system.wav. Mixed-path сегменты берут
+        # оффсет в момент записи своего чанка, им пропуски тишины не вредят.
+        rms = np.sqrt(np.mean(chunk ** 2))
+        pcm_primary = (
+            not is_mic
+            and self._per_speaker_ingest is not None
+            and self._per_speaker_ingest.pcm_ever_seen
+            and not self._per_speaker_ingest.degraded
+        )
+        skip_wav_write = rms < VAD_RMS_THRESHOLD and not pcm_primary
+
         # Capture audio offset BEFORE writing chunk (for segment playback)
         # This offset points to where this chunk's audio STARTS in the WAV file
         # Lock protects against _on_meeting_change swapping writers from KTalk thread.
@@ -1782,10 +1859,12 @@ class LiveTranscriber:
         with self._wav_lock:
             if self._meeting_generation != chunk_gen:
                 return
-            if retry_pending is not None:
-                # Чанк уже записан первой попыткой; state.audio_offset тоже
-                # выставлен ей и с тех пор не перезаписывался (этот код — его
-                # единственный писатель для данного state).
+            if retry_pending is not None or skip_wav_write:
+                # retry: чанк уже записан первой попыткой; state.audio_offset
+                # тоже выставлен ей и с тех пор не перезаписывался (этот код —
+                # его единственный писатель для данного state).
+                # skip: тихий чанк не породит сегмент (VAD-гейт ниже), значит
+                # его оффсет никто не прочитает — не трогаем state.audio_offset.
                 pass
             elif is_mic and self._wav_writer_mic:
                 state.audio_offset = self._wav_writer_mic.get_offset_ms()
@@ -1834,8 +1913,8 @@ class LiveTranscriber:
         if is_mic and self._ktalk_bridge and self._ktalk_bridge.is_local_mic_muted():
             return
 
-        # VAD: пропускаем тишину (не тратим CPU на inference)
-        rms = np.sqrt(np.mean(chunk ** 2))
+        # VAD: пропускаем тишину (не тратим CPU на inference); rms посчитан
+        # выше, перед решением о записи WAV
         if rms < VAD_RMS_THRESHOLD:
             return
 
@@ -1870,7 +1949,7 @@ class LiveTranscriber:
         state.last_words_capture_end = chunk_end_time
 
         current_time = chunk_end_time
-        self._check_silence_split(state, current_time)
+        self._check_silence_split(state, current_time, chunk, is_mic=is_mic)
 
         timestamp = datetime.fromtimestamp(chunk_end_time).strftime("%H:%M:%S")
         chunk_time = current_time
@@ -1939,9 +2018,22 @@ class LiveTranscriber:
         self._mic_state = SourceState()
         self._sys_state = SourceState()
 
+        last_audio_cleanup = time.monotonic()
+
         try:
             while self.running:
                 time.sleep(0.1)
+
+                # Ротация аудио старше 24 ч: сервис живёт неделями, а cleanup
+                # в start_session срабатывает только при старте. Скан stat-only
+                # (см. cleanup_old_audio), раз в час — нагрузки не даёт.
+                if time.monotonic() - last_audio_cleanup >= AUDIO_CLEANUP_INTERVAL_S:
+                    last_audio_cleanup = time.monotonic()
+                    if self._meeting_storage:
+                        try:
+                            self._meeting_storage.cleanup_old_audio()
+                        except Exception as e:
+                            print(f"Warning: audio cleanup failed: {e}", file=sys.stderr)
 
                 if self.mic_capture:
                     self._process_pending(self._mic_state, is_mic=True)
@@ -2024,8 +2116,15 @@ class LiveTranscriber:
         if self.system_capture:
             self.system_capture.clear_buffer()
 
-    def _on_meeting_change(self, meeting_id: str, meeting_path: Path):
-        """Called after meeting switch to reinitialize audio recording."""
+    def _on_meeting_change(self, meeting_id: str, meeting_path: Path, continuation: bool = False):
+        """Called after meeting switch to reinitialize audio recording.
+
+        Args:
+            continuation: True when audio capture keeps running across the
+                switch WITHOUT a buffer clear (silence split) — the next
+                chunk still carries the 0.5s overlap already written to the
+                previous meeting's WAV, so the writer must skip it.
+        """
         if not self.save_audio:
             return
 
@@ -2065,19 +2164,20 @@ class LiveTranscriber:
                     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
             # Open new wav writers for new meeting.
-            # continuation=False: _invalidate_pending_chunks() already cleared the
-            # capture buffers, so there is no overlap from the previous chunk.
-            # Using continuation=True here would incorrectly skip the first 0.5s
-            # of fresh audio (the overlap that no longer exists after clear_buffer).
+            # Bridge path (continuation=False): _invalidate_pending_chunks()
+            # already cleared the capture buffers, so there is no overlap from
+            # the previous chunk and skipping 0.5s would drop fresh audio.
+            # Silence-split path (continuation=True): buffers keep flowing, the
+            # overlap is already in the previous meeting's WAV — skip it.
             if self.mic_capture:
                 mic_audio_path = meeting_path / "audio_mic.wav"
                 self._wav_writer_mic = IncrementalWavWriter(mic_audio_path, self.sample_rate)
-                self._wav_writer_mic.open(continuation=False)
+                self._wav_writer_mic.open(continuation=continuation)
                 print(f"Recording mic audio: {mic_audio_path}")
             if self.system_capture:
                 system_audio_path = meeting_path / "audio_system.wav"
                 self._wav_writer_system = IncrementalWavWriter(system_audio_path, self.sample_rate)
-                self._wav_writer_system.open(continuation=False)
+                self._wav_writer_system.open(continuation=continuation)
                 print(f"Recording system audio: {system_audio_path}")
 
 
@@ -2092,6 +2192,7 @@ def live_pipeline(
     use_ktalk=False,
     use_screencapture=False,
     mic_speaker_name=MIC_SPEAKER_NAME,
+    save_audio=True,
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
@@ -2127,5 +2228,6 @@ def live_pipeline(
         use_ktalk=use_ktalk,
         use_screencapture=use_screencapture,
         mic_speaker_name=mic_speaker_name,
+        save_audio=save_audio,
     )
     transcriber.run(force_exit=True)

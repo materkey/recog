@@ -200,6 +200,10 @@ class TestCheckSilenceSplit:
         """given: silence > SILENCE_SPLIT_TIMEOUT - when: _check_silence_split - then: split_on_silence_timeout called"""
         transcriber = Mock(spec=LiveTranscriber)
         transcriber._meeting_storage = Mock()
+        # Сплит теперь ротирует WAV-writer'ы: возвращённый new_id склеивается
+        # с base_path и уходит в _on_meeting_change (замокан spec'ом)
+        transcriber._meeting_storage.split_on_silence_timeout.return_value = "new-id"
+        transcriber._meeting_storage.base_path = Path("/tmp/meetings")
 
         state = SourceState()
         state.last_text_time = time.time() - SILENCE_SPLIT_TIMEOUT - 1
