@@ -1259,11 +1259,16 @@ async def test_new_client_receives_channel_connected_primer_when_channel_already
         await asyncio.sleep(0.01)
 
     try:
-        assert len(new_ws.sent) == 1
-        payload = json.loads(new_ws.sent[0])
+        # A new connection is primed with both the channel_connected status
+        # and the current agent_state chip; assert the channel_connected
+        # primer is present and well-formed (the agent_state primer has its
+        # own dedicated test).
+        payloads = [json.loads(m) for m in new_ws.sent]
+        channel_primers = [p for p in payloads if p.get("status") == "channel_connected"]
+        assert len(channel_primers) == 1
+        payload = channel_primers[0]
         assert payload["type"] == "copilot_status"
         assert payload["request_id"] == ""
-        assert payload["status"] == "channel_connected"
     finally:
         new_ws.signal_close()
         await handler_task
@@ -3077,7 +3082,7 @@ async def test_merge_working_with_one_session_is_working():
     bridge, ext = _bridge_with_active_ktalk()
     bridge._supervisor_agent_status = "working"
     bridge._supervisor_status_ts = 50.0
-    bridge._set_claude_sessions(1, now=50.0)
+    bridge._set_claude_sessions(1)
 
     await bridge._recompute_agent_state(now=50.0)
 
@@ -3096,7 +3101,7 @@ async def test_merge_online_with_sessions_zero_sustained_goes_offline():
     bridge, ext = _bridge_with_active_ktalk()
     bridge._supervisor_agent_status = "online"
     bridge._supervisor_status_ts = 100.0
-    bridge._set_claude_sessions(0, now=100.0)
+    bridge._set_claude_sessions(0)
 
     await bridge._recompute_agent_state(now=100.0)   # zero just started → online
     bridge._supervisor_status_ts = 105.0             # heartbeat keeps supervisor fresh
@@ -3136,7 +3141,7 @@ async def test_merge_spawning_to_online_with_young_sessions_zero_does_not_flap()
     bridge, ext = _bridge_with_active_ktalk()
     bridge._supervisor_agent_status = "spawning"
     bridge._supervisor_status_ts = 200.0
-    bridge._set_claude_sessions(0, now=200.0)
+    bridge._set_claude_sessions(0)
 
     await bridge._recompute_agent_state(now=200.0)   # spawning (zero branch needs !=spawning)
     bridge._supervisor_agent_status = "online"
@@ -3144,6 +3149,61 @@ async def test_merge_spawning_to_online_with_young_sessions_zero_does_not_flap()
     await bridge._recompute_agent_state(now=202.0)   # sessions 0 for 2s < debounce → online
 
     assert _agent_states(ext) == ["spawning", "online"]
+
+
+@pytest.mark.asyncio
+async def test_merge_stale_sessions_zero_anchor_does_not_flap_at_meeting_start():
+    """
+    given: the always-on daemon reported 0 sessions at its own startup (long
+           before any meeting), then a meeting starts and the supervisor goes
+           spawning -> online while the daemon has not yet polled the new MCP
+           session (count still cached 0)
+    when:  the effective state is recomputed across the transition
+    then:  the chip goes spawning -> online WITHOUT a spurious offline — the
+           debounce is anchored to the online transition, not the stale
+           startup-time zero (regression: a startup-anchored clock is already
+           past the debounce and would flap the chip offline every meeting)
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    bridge._set_claude_sessions(0)                 # daemon startup poll, pre-meeting
+    bridge._sessions_zero_since = 0.0              # stale anchor from that early 0
+
+    bridge._supervisor_agent_status = "spawning"
+    bridge._supervisor_status_ts = 100.0
+    await bridge._recompute_agent_state(now=100.0)  # spawning clears the stale anchor
+
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = 103.0
+    await bridge._recompute_agent_state(now=103.0)  # anchor re-armed at 103 → online
+    bridge._supervisor_status_ts = 108.0
+    await bridge._recompute_agent_state(now=108.0)  # 5s < debounce → still online
+
+    assert _agent_states(ext) == ["spawning", "online"]
+
+
+@pytest.mark.asyncio
+async def test_merge_sessions_zero_without_active_meeting_does_not_force_offline():
+    """
+    given: the supervisor reports `online` and the daemon reports a sustained
+           confident 0 live sessions, but no KTalk meeting is active (an orphan
+           meeting — the copilot legitimately has no MCP session)
+    when:  the effective state is recomputed well past the debounce window
+    then:  the chip stays `online` — the sessions==0 -> offline verdict is
+           gated on an active meeting and must not fire outside one
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1", source="orphan"))
+    ext = RecordingClient()
+    bridge._connected_clients.add(ext)
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = 500.0
+    bridge._set_claude_sessions(0)
+
+    await bridge._recompute_agent_state(now=500.0)
+    bridge._supervisor_status_ts = 520.0
+    await bridge._recompute_agent_state(now=520.0)   # 20s zero but no meeting → online
+
+    assert _agent_states(ext) == ["online"]
 
 
 @pytest.mark.asyncio
@@ -3158,7 +3218,7 @@ async def test_merge_unknown_session_count_does_not_force_offline():
     bridge, ext = _bridge_with_active_ktalk()
     bridge._supervisor_agent_status = "online"
     bridge._supervisor_status_ts = 300.0
-    bridge._set_claude_sessions(None, now=300.0)
+    bridge._set_claude_sessions(None)
 
     await bridge._recompute_agent_state(now=300.0)
 
@@ -3176,7 +3236,7 @@ async def test_merge_broadcasts_only_on_effective_change():
     bridge, ext = _bridge_with_active_ktalk()
     bridge._supervisor_agent_status = "working"
     bridge._supervisor_status_ts = 50.0
-    bridge._set_claude_sessions(2, now=50.0)
+    bridge._set_claude_sessions(2)
 
     await bridge._recompute_agent_state(now=50.0)
     bridge._supervisor_status_ts = 51.0
@@ -3232,3 +3292,45 @@ async def test_claude_sessions_null_count_kept_unknown():
 
     assert bridge._claude_sessions_count is None
     assert _agent_states(ext) == ["online"]
+
+
+@pytest.mark.asyncio
+async def test_agent_state_primer_sent_to_reconnecting_client():
+    """
+    given: the effective agent chip is a steady `online` (mid-meeting copilot)
+           and an extension tab reloads, opening a fresh WS
+    when:  the new client connects (the chip broadcast is change-only, so no
+           `agent_state` frame would otherwise be sent for a steady state)
+    then:  the bridge primes the new connection with the current effective
+           `agent_state` so the reloaded tab shows the live chip immediately
+           instead of its default ⚫ offline for the rest of the meeting
+    """
+    bridge = KTalkBridge()
+    mock_storage = Mock()
+    mock_storage._load_meta = Mock(return_value={"source": "orphan"})
+    mock_storage.on_ktalk_leave = Mock()
+    bridge.set_meeting_storage(mock_storage)
+    bridge._last_effective_agent_state = "online"
+
+    class RecordingWS(FakeWebSocket):
+        def __init__(self):
+            super().__init__()
+            self.sent: list[str] = []
+
+        async def send(self, message: str):
+            self.sent.append(message)
+
+    ws = RecordingWS()
+    await bridge._handle_client(ws)
+
+    primers = [
+        json.loads(m)
+        for m in ws.sent
+        if json.loads(m).get("status") == "agent_state"
+    ]
+    assert primers == [{
+        "type": "copilot_status",
+        "request_id": "",
+        "status": "agent_state",
+        "agent_state": "online",
+    }]

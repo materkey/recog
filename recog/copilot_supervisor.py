@@ -317,12 +317,14 @@ class Watchdog:
         send_status: Callable,
         on_session_died: Callable,
         clock: Callable[[], float] = time.monotonic,
+        spawn_in_flight: Callable[[], bool] = lambda: False,
     ) -> None:
         self.runner = runner
         self.lifecycle = lifecycle
         self._send_status = send_status
         self._on_session_died = on_session_died
         self._clock = clock
+        self._spawn_in_flight = spawn_in_flight
         self._last_reported: Optional[AgentState] = None
         self._last_report_ts: float = 0.0
         self._dialog_dismissed = False
@@ -353,6 +355,14 @@ class Watchdog:
             return
 
         observed = await self._observe()
+        if observed is AgentState.OFFLINE and self._spawn_in_flight():
+            # A spawn command is mid-flight: the tmux session has not been
+            # created yet (or is being replaced), so an OFFLINE observation is
+            # the expected pre-spawn gap, not a death. Treat it as SPAWNING so
+            # the chip does not flicker offline and no respawn budget is burned
+            # by a spurious session_died. A genuine post-spawn crash is caught
+            # once the flag clears (the session then really is gone).
+            observed = AgentState.SPAWNING
         if observed in (AgentState.ONLINE, AgentState.WORKING):
             self.lifecycle.session_ready()
 
@@ -449,6 +459,10 @@ class Supervisor:
         self._last_failure_log_ts: float = 0.0
         self._failure_streak = 0
         self._ws = None
+        # True while `_execute` is running a spawn (and any preceding kill):
+        # during that window the tmux session is transiently absent, so the
+        # watchdog must not read OFFLINE as a death (see Watchdog.tick).
+        self._spawn_in_flight = False
         if runner is not None and all(
             hasattr(runner, name) for name in ("alive", "capture", "send_keys")
         ):
@@ -457,6 +471,7 @@ class Supervisor:
                 lifecycle=self.lifecycle,
                 send_status=self._send_agent_status,
                 on_session_died=self.on_session_died,
+                spawn_in_flight=lambda: self._spawn_in_flight,
             )
         else:
             self.watchdog = None
@@ -535,19 +550,29 @@ class Supervisor:
         await self._execute(commands)
 
     async def _execute(self, commands: tuple) -> None:
-        for command in commands:
-            try:
-                if isinstance(command, Kill):
-                    if self.runner is not None:
-                        await self.runner.kill()
-                elif isinstance(command, Spawn):
-                    if self.runner is not None:
-                        await self.runner.spawn(command.meeting_id)
-            except Exception as exc:
-                print(
-                    f"{self._log_prefix} command {command!r} failed: {exc!r}",
-                    file=sys.stderr,
-                )
+        # Mark the whole spawn (plus any preceding kill on a back-to-back
+        # meeting switch) in-flight so a concurrent watchdog tick treats the
+        # transient session-absent gap as SPAWNING, not a death.
+        spawning = any(isinstance(command, Spawn) for command in commands)
+        if spawning:
+            self._spawn_in_flight = True
+        try:
+            for command in commands:
+                try:
+                    if isinstance(command, Kill):
+                        if self.runner is not None:
+                            await self.runner.kill()
+                    elif isinstance(command, Spawn):
+                        if self.runner is not None:
+                            await self.runner.spawn(command.meeting_id)
+                except Exception as exc:
+                    print(
+                        f"{self._log_prefix} command {command!r} failed: {exc!r}",
+                        file=sys.stderr,
+                    )
+        finally:
+            if spawning:
+                self._spawn_in_flight = False
 
     async def _send_agent_status(self, status: AgentState) -> None:
         """Report `copilot_agent_status` to the bridge (watchdog callback).

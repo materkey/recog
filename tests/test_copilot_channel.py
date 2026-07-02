@@ -700,6 +700,27 @@ async def test_session_count_reporter_missing_attr_reports_null_once(capsys):
     assert err.count("no `_server_instances`") == 1
 
 
+async def test_session_count_reporter_reports_zero_before_server_serving():
+    """
+    given: the FastMCP HTTP loop has not started yet, so `session_manager` is
+           a property that raises RuntimeError (not AttributeError) on access
+    when:  the reporter polls right after the bridge socket connects
+    then:  it reports a genuine `claude_sessions {count: 0}` (no sessions yet)
+           instead of crashing the poll — `hasattr` does NOT swallow the
+           RuntimeError, so the property access must be guarded explicitly.
+    """
+    link = BridgeLink()
+    mcp = _build_mcp(link, "127.0.0.1", 0)
+    assert mcp._session_manager is None  # HTTP loop not started → property raises
+
+    reporter = SessionCountReporter(mcp, link)
+    ws = _RecordingWS()
+    link.set_socket(ws)
+
+    assert await reporter.poll_once() == {"ok": True}
+    assert ws.sent == [{"type": "claude_sessions", "count": 0}]
+
+
 async def test_session_count_reporter_disconnected_is_noop():
     """
     given: a reporter whose link never connected
