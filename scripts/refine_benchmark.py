@@ -177,6 +177,7 @@ def _build_pipeline(
     t._wav_lock = threading.Lock()
     t._wav_writer_system = None
     t._wav_writer_mic = None
+    t._system_wav_anchor = None
     t._refine_worker = None
     t.transcript_lines = []
     t.asr = asr

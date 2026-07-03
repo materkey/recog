@@ -112,6 +112,15 @@ PCM_CHUNK_OVERLAP_MS = 600
 # flap reconnect, но не упустить весь разговор.
 PCM_SILENCE_WATCHDOG_S = 30.0
 
+# Staleness-guard для wall-clock↔WAV якоря PCM-оффсетов (_system_wav_anchor).
+# Якорь корректен только пока system-WAV пишется непрерывно (pcm-primary не
+# пропускает тишину). В degraded-окне включается silence-skip и таймлайн
+# перед устаревшим якорем рвётся — тогда _on_pcm_batch откатывается на старую
+# формулу wav_offset_now - chunk_age вместо экстраполяции. Порог в тон
+# PCM_SILENCE_WATCHDOG_S: после recovery первый же pcm-primary write освежает
+# якорь в пределах chunk_duration.
+PCM_WAV_ANCHOR_MAX_AGE_MS = 30_000
+
 
 # ============================================================================
 # PER-SPEAKER REFINE

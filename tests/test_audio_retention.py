@@ -195,6 +195,58 @@ class TestWavWriterCap:
         assert data_size == SR * 2
 
 
+class TestWavWriterSkippedReturn:
+    """write_chunk возвращает число пропущенных head-сэмплов (или None),
+    чтобы _process_chunk мог привязать wall-clock захвата к позиции в WAV
+    (якорь _system_wav_anchor)."""
+
+    def test_first_chunk_returns_zero_skipped(self, tmp_path):
+        """given: свежий writer
+        when: первый write_chunk
+        then: overlap не срезается — возвращает 0"""
+        writer = IncrementalWavWriter(tmp_path / "audio.wav", SR)
+        writer.open()
+        assert writer.write_chunk(np.ones(SR, dtype=np.float32) * 0.1) == 0
+
+    def test_subsequent_chunk_returns_overlap_samples(self, tmp_path):
+        """given: writer после первого чанка
+        when: второй write_chunk
+        then: срезается overlap — возвращает _overlap_samples"""
+        writer = IncrementalWavWriter(tmp_path / "audio.wav", SR)
+        writer.open()
+        writer.write_chunk(np.ones(SR, dtype=np.float32) * 0.1)
+        skipped = writer.write_chunk(np.ones(SR, dtype=np.float32) * 0.1)
+        assert skipped == writer._overlap_samples
+
+    def test_cap_hit_returns_none(self, tmp_path):
+        """given: writer с cap на ~1 секунду
+        when: чанк, переполняющий cap
+        then: ничего не записано — None"""
+        writer = IncrementalWavWriter(
+            tmp_path / "audio.wav", SR, max_data_bytes=SR * 2
+        )
+        writer.open()
+        writer.write_chunk(np.ones(SR, dtype=np.float32) * 0.1)  # заполнил cap
+        assert writer.write_chunk(np.ones(SR, dtype=np.float32) * 0.1) is None
+
+    def test_chunk_shorter_than_overlap_returns_none(self, tmp_path):
+        """given: writer после первого чанка
+        when: второй чанк короче overlap (remainder пустой)
+        then: None"""
+        writer = IncrementalWavWriter(tmp_path / "audio.wav", SR)
+        writer.open()
+        writer.write_chunk(np.ones(SR, dtype=np.float32) * 0.1)
+        short = np.ones(writer._overlap_samples - 1, dtype=np.float32) * 0.1
+        assert writer.write_chunk(short) is None
+
+    def test_unopened_writer_returns_none(self, tmp_path):
+        """given: writer без open()
+        when: write_chunk
+        then: None"""
+        writer = IncrementalWavWriter(tmp_path / "audio.wav", SR)
+        assert writer.write_chunk(np.ones(SR, dtype=np.float32) * 0.1) is None
+
+
 # =============================================================================
 # _process_chunk: тишина не пишется в WAV (кроме pcm-primary)
 # =============================================================================
@@ -216,6 +268,8 @@ def _make_transcriber_stub() -> Mock:
     t.use_ktalk = False
     t.use_pcm_transport = False
     t.chunk_duration = 3.0
+    t.sample_rate = SR
+    t._system_wav_anchor = None
     t.transcript_lines = []
     t.mic_speaker_name = "Me"
     t._asr_available = lambda: True
@@ -268,6 +322,7 @@ class TestWavSilenceSkip:
         t = _make_transcriber_stub()
         t._wav_writer_system = Mock()
         t._wav_writer_system.get_offset_ms.return_value = 0
+        t._wav_writer_system.write_chunk.return_value = 0  # skipped samples
         ingest = Mock()
         ingest.pcm_ever_seen = True
         ingest.degraded = False
@@ -280,6 +335,114 @@ class TestWavSilenceSkip:
         )
 
         t._wav_writer_system.write_chunk.assert_called_once()
+
+
+# =============================================================================
+# _system_wav_anchor: привязка wall-clock захвата к позиции в WAV
+# =============================================================================
+
+
+def _pcm_primary_stub(tmp_path) -> Mock:
+    """Stub с pcm-primary ingest и реальным system-writer в tmp_path."""
+    t = _make_transcriber_stub()
+    writer = IncrementalWavWriter(tmp_path / "audio_system.wav", SR)
+    writer.open()
+    t._wav_writer_system = writer
+    ingest = Mock()
+    ingest.pcm_ever_seen = True
+    ingest.degraded = False
+    t._per_speaker_ingest = ingest
+    t._last_pcm_degraded = False
+    return t
+
+
+class TestSystemWavAnchor:
+    def test_process_chunk_sets_anchor_on_first_system_write(self, tmp_path):
+        """given: pcm-primary, первый system-чанк с capture_start_ts=1000.0
+        when: _process_chunk
+        then: якорь = (wall первого сэмпла в ms, WAV offset 0)"""
+        t = _pcm_primary_stub(tmp_path)
+        capture = Mock()
+        capture.get_chunk.return_value = (
+            np.ones(3 * SR, dtype=np.float32) * 0.1, 1000.0
+        )
+
+        LiveTranscriber._process_chunk(
+            t, capture, SourceState(), Mock(), is_mic=False
+        )
+
+        assert t._system_wav_anchor == (1000.0 * 1000.0, 0)
+
+    def test_anchor_advances_by_overlap_on_second_chunk(self, tmp_path):
+        """given: pcm-primary, два последовательных чанка (ts1, ts2)
+        when: два _process_chunk
+        then: второй якорь = ((ts2 + overlap/rate)*1000, samples после 1-го)
+        — overlap-голова уже записана первым чанком"""
+        t = _pcm_primary_stub(tmp_path)
+        overlap = t._wav_writer_system._overlap_samples
+        capture = Mock()
+        chunk = np.ones(3 * SR, dtype=np.float32) * 0.1
+        capture.get_chunk.side_effect = [(chunk, 1000.0), (chunk, 1003.0)]
+
+        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+
+        expected_wall = (1003.0 + overlap / SR) * 1000.0
+        expected_offset = int((3 * SR) / SR * 1000)  # первый чанк целиком
+        assert t._system_wav_anchor == (expected_wall, expected_offset)
+
+    def test_retry_pending_does_not_move_anchor(self, tmp_path):
+        """given: якорь-sentinel, retry-слот с чанком (уже записан ранее)
+        when: _process_chunk
+        then: якорь не тронут — повторная запись не идёт"""
+        t = _pcm_primary_stub(tmp_path)
+        sentinel = (12345.0, 999)
+        t._system_wav_anchor = sentinel
+        state = SourceState()
+        state.pending_chunk = (
+            np.ones(3 * SR, dtype=np.float32) * 0.1, 5000.0, 0
+        )
+
+        LiveTranscriber._process_chunk(t, Mock(), state, Mock(), is_mic=False)
+
+        assert t._system_wav_anchor == sentinel
+
+    def test_silent_skip_does_not_move_anchor(self, tmp_path):
+        """given: якорь-sentinel, НЕ pcm-primary, тихий чанк
+        when: _process_chunk
+        then: тишина не пишется → якорь не тронут"""
+        t = _make_transcriber_stub()
+        writer = IncrementalWavWriter(tmp_path / "audio_system.wav", SR)
+        writer.open()
+        t._wav_writer_system = writer
+        sentinel = (12345.0, 999)
+        t._system_wav_anchor = sentinel
+        silent = np.zeros(3 * SR, dtype=np.float32)
+
+        LiveTranscriber._process_chunk(
+            t, _capture_returning(silent), SourceState(), Mock(), is_mic=False
+        )
+
+        assert t._system_wav_anchor == sentinel
+
+    def test_mic_write_does_not_set_anchor(self, tmp_path):
+        """given: якорь-sentinel, mic-запись речевого чанка
+        when: _process_chunk is_mic=True
+        then: system-якорь не тронут (mic — отдельный трек)"""
+        t = _make_transcriber_stub()
+        writer = IncrementalWavWriter(tmp_path / "audio_mic.wav", SR)
+        writer.open()
+        t._wav_writer_mic = writer
+        t._transcribe_direct = Mock(return_value="")
+        sentinel = (12345.0, 999)
+        t._system_wav_anchor = sentinel
+        speech = np.ones(3 * SR, dtype=np.float32) * 0.1
+
+        LiveTranscriber._process_chunk(
+            t, _capture_returning(speech), SourceState(), Mock(), is_mic=True
+        )
+
+        assert t._system_wav_anchor == sentinel
 
 
 # =============================================================================
@@ -314,6 +477,8 @@ class TestSilenceSplitWavRotation:
         writer.open()
         writer.write_chunk(np.ones(3 * SR, dtype=np.float32) * 0.1)
         t._wav_writer_system = writer
+        # Якорь старого митинга — после ротации должен обнулиться
+        t._system_wav_anchor = (111.0, 222)
 
         # Реальная ротация вместо Mock-атрибута
         t._on_meeting_change = (
@@ -347,6 +512,8 @@ class TestSilenceSplitWavRotation:
         # указывать на валидный диапазон
         assert t._wav_writer_system._samples_written > 0
         assert state.audio_offset == 0
+        # Якорь старого митинга сброшен — новый WAV начинает свою timeline
+        assert t._system_wav_anchor is None
         # Старый митинг получил путь к финализированному аудио
         old_meta = json.loads(
             (storage.base_path / old_id / "meta.json").read_text(encoding="utf-8")
