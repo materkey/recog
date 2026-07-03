@@ -2991,6 +2991,93 @@ async def test_real_bridge_delivers_meeting_ended_on_last_extension_gone_to_supe
         await server.wait_closed()
 
 
+@pytest.mark.asyncio
+async def test_orphan_reuse_join_emits_meeting_started_to_supervisor():
+    """
+    given: a REAL bridge, a registered supervisor, and an empty orphan
+           meeting current at join time (created by a prior leave);
+           on_meeting_join reuses it in place — source flips orphan→ktalk,
+           current_meeting_path does NOT change (case 3 in meeting_storage)
+    when:  an extension joins a KTalk room
+    then:  the supervisor still receives `meeting_started` — the
+           path-change guard alone must not swallow the spawn trigger
+    """
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="m-orphan-reuse")
+    # Case-3 shape: the orphan dir already IS the meeting dir, so the
+    # default _on_join side effect sets the path to the same value —
+    # path unchanged across the join. Pre-join meta says "orphan".
+    storage.current_meeting_path = Path("/tmp/m-orphan-reuse.jsonl")
+    storage._load_meta = Mock(return_value={"source": "orphan"})
+    bridge.set_meeting_storage(storage)
+
+    server, url = await _serve_bridge(bridge)
+    supervisor = extension = None
+    try:
+        supervisor = await websockets.connect(url)
+        await supervisor.send(json.dumps({"type": "supervisor_hello"}))
+        await _recv_type(supervisor, "meeting_state")
+
+        extension = await websockets.connect(url)
+        await extension.send(json.dumps({
+            "type": "meeting_join",
+            "url": "https://ktalk.test/room-after-leave",
+            "title": "Обед — Толк",
+            "platform": "ktalk",
+        }))
+        started = await _recv_type(supervisor, "meeting_started")
+        assert started["meeting_id"] == "m-orphan-reuse"
+    finally:
+        if extension is not None:
+            await extension.close()
+        if supervisor is not None:
+            await supervisor.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_same_path_ktalk_reconnect_does_not_duplicate_meeting_started():
+    """
+    given: a REAL bridge, a registered supervisor, and an active ktalk
+           meeting (source already "ktalk")
+    when:  the extension re-sends meeting_join for the same room (no-op
+           reconnect: same live_id, current_meeting_path unchanged)
+    then:  the supervisor receives NO second `meeting_started` — the
+           orphan-reuse fix must not break reconnect dedup
+    """
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="m-reconnect")
+    # Meeting already active: path is the meeting dir, source is ktalk.
+    storage.current_meeting_path = Path("/tmp/m-reconnect.jsonl")
+    storage._load_meta = Mock(return_value={"source": "ktalk"})
+    bridge.set_meeting_storage(storage)
+
+    server, url = await _serve_bridge(bridge)
+    supervisor = extension = None
+    try:
+        supervisor = await websockets.connect(url)
+        await supervisor.send(json.dumps({"type": "supervisor_hello"}))
+        await _recv_type(supervisor, "meeting_state")
+
+        extension = await websockets.connect(url)
+        await extension.send(json.dumps({
+            "type": "meeting_join",
+            "url": "https://ktalk.test/same-room",
+            "title": "Standup",
+            "platform": "ktalk",
+        }))
+        with pytest.raises(asyncio.TimeoutError):
+            await _recv_type(supervisor, "meeting_started", timeout=1.0)
+    finally:
+        if extension is not None:
+            await extension.close()
+        if supervisor is not None:
+            await supervisor.close()
+        server.close()
+        await server.wait_closed()
+
+
 def _ktalk_storage(meeting_id="m-1", title="Standup", source="ktalk"):
     storage = Mock()
     storage.current_meeting_path = Path(f"/tmp/{meeting_id}.jsonl")

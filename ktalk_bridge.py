@@ -2163,6 +2163,18 @@ class KTalkBridge:
             if self._meeting_storage and url:
                 old_meeting_path = self._meeting_storage.current_meeting_path
                 prev_meeting_id = self._meeting_storage.current_meeting_id
+                # Capture the pre-join meta source: an empty orphan reused in
+                # place (on_meeting_join case 3: source flips orphan→ktalk,
+                # path unchanged) is a REAL meeting start, but the
+                # path-change guard below would skip the whole Copilot
+                # block — no `meeting_started` (supervisor never wakes), no
+                # tick-state seed (transcript_tick dead for the meeting).
+                prev_source = None
+                if old_meeting_path is not None:
+                    try:
+                        prev_source = (self._meeting_storage._load_meta() or {}).get("source")
+                    except Exception:
+                        prev_source = None
                 # Clear stale speaker state from previous meeting so that
                 # get_current_speaker / get_sole_unmuted_remote_participant
                 # cannot return old-meeting participants during the transition.
@@ -2181,8 +2193,18 @@ class KTalkBridge:
                 # reconnect (same live_id) must not duplicate
                 # `meeting_started` chips in the Copilot tab nor reset the
                 # proactive tick counters mid-conversation.
-                if self._meeting_storage.current_meeting_path != old_meeting_path:
-                    if self._on_meeting_change:
+                #
+                # "Real meeting change" is NOT only a path change: joining a
+                # room right after a leave reuses the empty orphan in place
+                # (path unchanged, source flips orphan→ktalk). That join must
+                # still run the Copilot block below — emit `meeting_started`
+                # (the supervisor's spawn trigger) and seed the tick state —
+                # but must NOT rotate audio writers (they already point at
+                # this meeting's directory since the leave).
+                path_changed = self._meeting_storage.current_meeting_path != old_meeting_path
+                became_active = not path_changed and prev_source == "orphan"
+                if path_changed or became_active:
+                    if path_changed and self._on_meeting_change:
                         meeting_path = self._meeting_storage.current_meeting_path
                         self._on_meeting_change(meeting_id, meeting_path)
                     # Mark every in-flight `copilot_chat_message` request
@@ -2192,8 +2214,10 @@ class KTalkBridge:
                     # meeting into the new meeting's Copilot tab — the
                     # cross-meeting `meeting_id` filter at the reply
                     # handler is best-effort and only fires when Claude
-                    # echoes `meeting_id` back.
-                    if prev_meeting_id:
+                    # echoes `meeting_id` back. (`!= meeting_id` guards the
+                    # became_active case where prev id IS the current id —
+                    # current-meeting requests must not be marked stale.)
+                    if prev_meeting_id and prev_meeting_id != meeting_id:
                         stale_count = 0
                         for req_id, mid in list(self._copilot_pending_requests.items()):
                             if mid == prev_meeting_id:
