@@ -202,6 +202,8 @@ def _fresh_transcriber_mock():
     t._pcm_segment_texts = {}
     t._last_pcm_degraded = False
     t._refine_worker = None
+    t._system_wav_anchor = None
+    t.sample_rate = 16000
     t.use_pcm_transport = False
     t.use_ktalk = True
     t.asr = Mock()
@@ -328,19 +330,19 @@ def test_pcm_on_batch_sanitizes_newlines_in_speaker_name():
     assert "Evil" in label and "Name" in label
 
 
-def test_pcm_on_batch_sets_audio_offset_from_wav_writer():
+def test_pcm_on_batch_falls_back_to_wav_writer_without_anchor():
     """
-    given: PCM batch arrives with chunk_start_ms ≈ 2s ago and wav writer
-           is at offset 10000 ms (meeting has been recording for ~10s)
+    given: no wall↔WAV anchor yet (before the first system write), PCM batch
+           with chunk_start_ms ≈ 2s ago and wav writer at offset 10000 ms
     when:  _on_pcm_batch persists the segment
-    then:  audio_offset_ms ≈ 10000 - 2000 = 8000 (points into
-           audio_system.wav where the chunk's audio actually lives),
-           not 0 — segment playback / "enroll from segments" relies
-           on this offset.
+    then:  falls back to `wav_offset_now - chunk_age` ≈ 10000 - 2000 = 8000
+           (points into audio_system.wav where the chunk's audio lives),
+           not 0 — segment playback / "enroll from segments" relies on it.
     """
     import numpy as np
 
     t = _fresh_transcriber_mock()
+    t._system_wav_anchor = None
     t.asr.transcribe_batch.return_value = ["hello"]
     captured_storage = Mock()
     captured_storage.append_segment.return_value = 1
@@ -391,6 +393,124 @@ def test_pcm_on_batch_audio_offset_clamped_to_zero_when_no_wav_writer():
         time.time() * 1000 - 500, time.time() * 1000 + 2800,
         0.0, 3300.0,
     )]
+
+    LiveTranscriber._on_pcm_batch(t, batch)
+
+    append_kwargs = captured_storage.append_segment.call_args.kwargs
+    assert append_kwargs["audio_offset_ms"] == 0
+
+
+def _anchor_batch(chunk_start_ms, end_ms=None):
+    import numpy as np
+    return (
+        "pid-1", "Alice", False,
+        np.zeros(48000, dtype=np.int16),
+        chunk_start_ms, (end_ms if end_ms is not None else chunk_start_ms + 3300),
+        0.0, 3300.0,
+    )
+
+
+def test_pcm_on_batch_offset_from_anchor_is_exact():
+    """
+    given: fresh anchor (wall T0, WAV offset 7000) and a chunk captured
+           1500 ms after the anchored sample
+    when:  _on_pcm_batch persists the segment
+    then:  audio_offset_ms == 7000 + 1500 == 8500 exactly — the offset is
+           extrapolated in one clock domain, no wall-clock drift.
+    """
+    t = _fresh_transcriber_mock()
+    t.asr.transcribe_batch.return_value = ["hello"]
+    captured_storage = Mock()
+    captured_storage.append_segment.return_value = 1
+    t._meeting_storage = captured_storage
+
+    now_ms = time.time() * 1000
+    # Anchor recent enough to be fresh; chunk 1500 ms past the anchor sample.
+    t._system_wav_anchor = (now_ms - 3000, 7000)
+    batch = [_anchor_batch(now_ms - 1500)]
+
+    LiveTranscriber._on_pcm_batch(t, batch)
+
+    append_kwargs = captured_storage.append_segment.call_args.kwargs
+    assert append_kwargs["audio_offset_ms"] == 8500
+
+
+def test_pcm_on_batch_consecutive_chunks_offsets_track_chunk_starts():
+    """
+    given: two chunks in one batch whose chunk_start_ms differ by 1000 ms
+    when:  _on_pcm_batch persists both segments
+    then:  their offsets differ by exactly 1000 — regression for the
+           sawtooth bug where consecutive PCM segments collapsed onto the
+           same offset (seg id=9 played seg id=6's audio).
+    """
+    t = _fresh_transcriber_mock()
+    t.asr.transcribe_batch.return_value = ["first", "second"]
+    captured_storage = Mock()
+    captured_storage.append_segment.return_value = 1
+    t._meeting_storage = captured_storage
+    # Distinct pids so dedup can't merge them.
+    now_ms = time.time() * 1000
+    t._system_wav_anchor = (now_ms - 5000, 0)
+    batch = [
+        ("pid-1", "Alice", False, __import__("numpy").zeros(48000, dtype="int16"),
+         now_ms - 2000, now_ms + 1300, 0.0, 3300.0),
+        ("pid-2", "Bob", False, __import__("numpy").zeros(48000, dtype="int16"),
+         now_ms - 1000, now_ms + 2300, 0.0, 3300.0),
+    ]
+
+    LiveTranscriber._on_pcm_batch(t, batch)
+
+    offsets = [c.kwargs["audio_offset_ms"]
+               for c in captured_storage.append_segment.call_args_list]
+    assert len(offsets) == 2
+    assert offsets[1] - offsets[0] == 1000
+
+
+def test_pcm_on_batch_falls_back_when_anchor_stale():
+    """
+    given: an anchor older than PCM_WAV_ANCHOR_MAX_AGE_MS (degraded-mode gap
+           broke the WAV timeline ahead of it) and wav writer at 10000 ms
+    when:  _on_pcm_batch persists the segment
+    then:  the stale anchor is ignored — offset comes from the fallback
+           `wav_offset_now - chunk_age` (≈ 8000), not the anchor.
+    """
+    t = _fresh_transcriber_mock()
+    t.asr.transcribe_batch.return_value = ["hello"]
+    captured_storage = Mock()
+    captured_storage.append_segment.return_value = 1
+    t._meeting_storage = captured_storage
+    wav_writer = Mock()
+    wav_writer.get_offset_ms.return_value = 10_000
+    t._wav_writer_system = wav_writer
+
+    now_ms = time.time() * 1000
+    # Anchor 60s old → stale; would extrapolate to a wildly wrong offset.
+    t._system_wav_anchor = (now_ms - 60_000, 5000)
+    batch = [_anchor_batch(now_ms - 2000)]
+
+    LiveTranscriber._on_pcm_batch(t, batch)
+
+    append_kwargs = captured_storage.append_segment.call_args.kwargs
+    assert abs(append_kwargs["audio_offset_ms"] - 8000) < 50
+
+
+def test_pcm_on_batch_anchor_offset_clamped_to_zero():
+    """
+    given: fresh anchor but chunk_start_ms far earlier than the anchor's
+           wall time (extrapolation would be negative)
+    when:  _on_pcm_batch persists the segment
+    then:  offset is clamped to 0 rather than going negative.
+    """
+    t = _fresh_transcriber_mock()
+    t.asr.transcribe_batch.return_value = ["hello"]
+    captured_storage = Mock()
+    captured_storage.append_segment.return_value = 1
+    t._meeting_storage = captured_storage
+
+    now_ms = time.time() * 1000
+    t._system_wav_anchor = (now_ms - 1000, 500)
+    # chunk captured 5s before the anchor sample → 500 + (-4000) < 0
+    batch = [_anchor_batch(now_ms - 5000)]
 
     LiveTranscriber._on_pcm_batch(t, batch)
 

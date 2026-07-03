@@ -21,6 +21,7 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
+                     PCM_WAV_ANCHOR_MAX_AGE_MS,
                      DEDUP_MAX_GAP_S, ASR_PENDING_BUFFER_CAP_S)
 from .asr import ASRModule, _mps_autoreleasepool
 from .log_utils import log_rate_limited
@@ -83,28 +84,37 @@ class IncrementalWavWriter:
             # (meeting change), skip overlap to avoid leaking old-meeting audio.
             self._first_chunk = not continuation
 
-    def write_chunk(self, chunk: np.ndarray):
+    def write_chunk(self, chunk: np.ndarray) -> Optional[int]:
         """
         Appends audio chunk to file, skipping overlap samples to avoid duplication.
 
         Args:
             chunk: Audio samples as float32 array (values in [-1, 1])
+
+        Returns:
+            Number of head samples skipped (0 for the first chunk,
+            _overlap_samples otherwise), or None if nothing was written
+            (writer not open, empty remainder after the overlap cut, or
+            size cap reached). Callers use this to anchor the written
+            audio's wall-clock time to its WAV position.
         """
         if self._file is None:
-            return
+            return None
 
         # Skip overlap samples (except for first chunk) to avoid audio duplication
         # Chunks from get_chunk() include 0.5s overlap for ASR quality,
         # but we only write non-overlapping portion to WAV
         if self._first_chunk:
             self._first_chunk = False
+            skipped_samples = 0
             samples_to_write = chunk
         else:
             # Skip first overlap_samples - they were already written in previous chunk
+            skipped_samples = self._overlap_samples
             samples_to_write = chunk[self._overlap_samples:]
 
         if len(samples_to_write) == 0:
-            return
+            return None
 
         # WAV format limit: sizes are 32-bit, so stop before the data chunk
         # would exceed the cap instead of silently corrupting the header.
@@ -116,7 +126,7 @@ class IncrementalWavWriter:
                     f"({self._max_data_bytes} bytes), stopping audio recording",
                     file=sys.stderr,
                 )
-            return
+            return None
 
         # Convert float32 [-1, 1] to int16
         chunk_int16 = (samples_to_write * 32767).astype(np.int16)
@@ -126,6 +136,7 @@ class IncrementalWavWriter:
         # WAV whose header claims 0 data bytes (strict parsers reject it, and
         # finalize() may never run). Two in-place 4-byte patches per chunk.
         self._patch_header_sizes()
+        return skipped_samples
 
     def _patch_header_sizes(self):
         """Update RIFF/data size fields in place, preserving file position."""
@@ -502,6 +513,13 @@ class LiveTranscriber:
         self._wav_writer_mic: Optional[IncrementalWavWriter] = None
         self._wav_writer_system: Optional[IncrementalWavWriter] = None
         self._wav_lock = threading.Lock()  # Guards _wav_writer_mic/_wav_writer_system
+        # Wall-clock↔WAV anchor for PCM-primary offsets: (wall_ms of the first
+        # sample actually written by the last system-audio write, WAV offset_ms
+        # before that write). PCM segments extrapolate their audio_offset_ms
+        # from this anchor instead of `wav_offset_now - chunk_age`, which drifts
+        # because the system WAV advances in ~chunk_duration steps (sawtooth lag)
+        # while chunk age runs on a continuous clock. Guarded by _wav_lock.
+        self._system_wav_anchor: Optional[Tuple[float, int]] = None
         self._state_lock = threading.Lock()  # Guards per-source state during meeting transitions
         self._meeting_generation = 0  # Incremented on meeting change; used to discard stale chunks
         self._mic_state: Optional[SourceState] = None
@@ -1011,13 +1029,16 @@ class LiveTranscriber:
 
         current_time = time.time()
         batch_now_ms = current_time * 1000.0
-        # Snapshot the system wav writer's current offset so each PCM
-        # segment can point at the correct byte range in audio_system.wav
-        # for playback ("extract clip") and "enroll from segments". The
-        # wav writer keeps advancing while PCM is primary (degraded-mode
-        # fallback still relies on it), so the live offset is a valid
-        # index into the file.
+        # Snapshot the wall-clock↔WAV anchor so each PCM segment can point at
+        # the correct byte range in audio_system.wav for playback ("extract
+        # clip") and "enroll from segments". The anchor ties a real captured
+        # sample's wall-clock to its WAV offset; extrapolating from it keeps
+        # consecutive PCM segments' offsets tracking their chunk_start times.
+        # wav_offset_now_ms is kept only as a fallback when the anchor is
+        # missing (before the first system write) or stale (degraded-mode
+        # silence-skip broke the WAV timeline ahead of it).
         with self._wav_lock:
+            anchor = self._system_wav_anchor
             wav_offset_now_ms = (
                 self._wav_writer_system.get_offset_ms()
                 if self._wav_writer_system
@@ -1082,12 +1103,25 @@ class LiveTranscriber:
                 timestamp = datetime.now().strftime("%H:%M:%S")
 
                 # Convert the chunk's wall-clock start (already carries the
-                # bridge's clock_offset) to an offset inside audio_system.wav
-                # by subtracting the chunk age from the just-sampled wav
-                # offset. This keeps segment playback / enrollment aligned
-                # with the real audio instead of always seeking from 0.
-                chunk_age_ms = int(batch_now_ms - chunk_start_ms)
-                audio_offset_ms = max(0, wav_offset_now_ms - chunk_age_ms)
+                # bridge's clock_offset) to an offset inside audio_system.wav.
+                # Preferred: extrapolate from the wall↔WAV anchor in one clock
+                # domain — audio_offset = anchor_wav + (chunk_start - anchor_wall).
+                # This tracks each chunk's real capture time, so consecutive
+                # segments get distinct offsets even when the WAV writer's
+                # sample count is mid-step (it advances in ~chunk_duration
+                # jumps). Fallback to `wav_offset_now - chunk_age` when there is
+                # no anchor yet or it is stale (degraded-mode silence-skip broke
+                # the timeline ahead of it). A negative delta (backlog replay
+                # after an ASR failure) is legal: the pcm-primary WAV is
+                # continuous, so extrapolating backwards still lands in-file.
+                if (
+                    anchor is not None
+                    and batch_now_ms - anchor[0] <= PCM_WAV_ANCHOR_MAX_AGE_MS
+                ):
+                    audio_offset_ms = max(0, int(anchor[1] + (chunk_start_ms - anchor[0])))
+                else:
+                    chunk_age_ms = int(batch_now_ms - chunk_start_ms)
+                    audio_offset_ms = max(0, wav_offset_now_ms - chunk_age_ms)
 
                 line = f"\n**{speaker_label}** *[{timestamp}]*: {deduped}\n"
                 sys.stdout.write(line)
@@ -1422,6 +1456,7 @@ class LiveTranscriber:
                 self._wav_writer_system.finalize()
                 system_audio_path = str(self._wav_writer_system.path)
                 print(f"System audio saved: {system_audio_path}")
+            self._system_wav_anchor = None
 
         # Store audio paths in meeting meta
         if self._meeting_storage and (mic_audio_path or system_audio_path):
@@ -1836,10 +1871,12 @@ class LiveTranscriber:
         # RMS считается один раз — и для решения о записи WAV здесь, и для
         # VAD-гейта перед ASR ниже. Тишину на диск не пишем: 24/7-сервис между
         # встречами иначе бесконечно раздувает WAV текущего orphan-митинга.
-        # Исключение — pcm-primary: оффсеты PCM-сегментов вычисляются как
-        # wav_offset_now - chunk_age (см. _on_pcm_batch) и требуют непрерывной
-        # real-time timeline в audio_system.wav. Mixed-path сегменты берут
-        # оффсет в момент записи своего чанка, им пропуски тишины не вредят.
+        # Исключение — pcm-primary: оффсеты PCM-сегментов экстраполируются от
+        # wall-clock↔WAV якоря _system_wav_anchor (см. _on_pcm_batch), а он
+        # корректен только при непрерывной real-time timeline в
+        # audio_system.wav — поэтому тишину здесь пишем. Mixed-path сегменты
+        # берут оффсет в момент записи своего чанка, им пропуски тишины не
+        # вредят.
         rms = np.sqrt(np.mean(chunk ** 2))
         pcm_primary = (
             not is_mic
@@ -1862,16 +1899,29 @@ class LiveTranscriber:
             if retry_pending is not None or skip_wav_write:
                 # retry: чанк уже записан первой попыткой; state.audio_offset
                 # тоже выставлен ей и с тех пор не перезаписывался (этот код —
-                # его единственный писатель для данного state).
+                # его единственный писатель для данного state). Якорь тоже
+                # выставлен первой попыткой — повторно не двигаем, иначе
+                # wall-часть уехала бы вперёд без записи новых сэмплов.
                 # skip: тихий чанк не породит сегмент (VAD-гейт ниже), значит
-                # его оффсет никто не прочитает — не трогаем state.audio_offset.
+                # его оффсет никто не прочитает — не трогаем state.audio_offset;
+                # запись не идёт, поэтому и якорь не обновляем.
                 pass
             elif is_mic and self._wav_writer_mic:
                 state.audio_offset = self._wav_writer_mic.get_offset_ms()
                 self._wav_writer_mic.write_chunk(chunk)
             elif not is_mic and self._wav_writer_system:
-                state.audio_offset = self._wav_writer_system.get_offset_ms()
-                self._wav_writer_system.write_chunk(chunk)
+                offset_before = self._wav_writer_system.get_offset_ms()
+                state.audio_offset = offset_before
+                skipped = self._wav_writer_system.write_chunk(chunk)
+                if skipped is not None:
+                    # Anchor the first actually-written sample's wall-clock to
+                    # its WAV offset. capture_start_ts is the epoch time of the
+                    # chunk's first sample; the overlap head was already written
+                    # by the previous chunk, so skip past it.
+                    self._system_wav_anchor = (
+                        (capture_start_ts + skipped / self.sample_rate) * 1000.0,
+                        offset_before,
+                    )
 
         # Per-speaker PCM primary-path gating for system-audio chunks
         # (see plan §4.5).  WAV writing above still runs so that the
@@ -2142,6 +2192,11 @@ class LiveTranscriber:
                 system_audio_path_old = str(self._wav_writer_system.path)
                 print(f"System audio saved: {system_audio_path_old}")
                 self._wav_writer_system = None
+            # Anchor belongs to the outgoing meeting's WAV — the new writer
+            # starts a fresh timeline, so drop it until the first system write
+            # of the new meeting re-seeds it. Covers both the bridge switch and
+            # the silence-split path (via _check_silence_split -> here).
+            self._system_wav_anchor = None
 
             # Persist audio paths for the outgoing meeting.
             # Note: MeetingStorage.current_meeting_path already points to the NEW meeting
