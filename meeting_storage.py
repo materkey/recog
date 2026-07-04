@@ -1308,6 +1308,61 @@ class MeetingStorage:
 
         return deleted_count
 
+    def delete_meeting(self, meeting_id: str) -> bool:
+        """Permanently delete a completed meeting: its whole directory tree and
+        its index.json entry. Returns True if deleted, False if the meeting dir
+        is not found under base_path (e.g. it is external/read-only or unknown).
+        Raises ValueError if the meeting is still active (being recorded)."""
+        meeting_path = self.base_path / meeting_id
+        if not meeting_path.is_dir():
+            return False
+
+        meta = None
+        meta_path = meeting_path / "meta.json"
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            # Guard: never delete a meeting the recorder is still writing to —
+            # it holds open WAV handles + current_meeting_path (would crash live.py).
+            if meta.get("ended_at") is None:
+                raise ValueError("Cannot delete an active meeting")
+
+        # Keep the prev/next linked list internally consistent (fields are
+        # currently vestigial — nothing reads them — but a proper delete should
+        # not leave dangling pointers). Best-effort.
+        if meta is not None:
+            self._relink_neighbors(meta)
+
+        # Drop from the completed-meetings index (no-op for active meetings,
+        # which are never indexed). Mirrors the removal in _reopen_meeting.
+        index_path = self.base_path / "index.json"
+        if index_path.exists():
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            kept = [m for m in index.get("meetings", []) if m.get("id") != meeting_id]
+            if len(kept) != len(index.get("meetings", [])):
+                index["meetings"] = kept
+                self._save_json(index_path, index)
+
+        shutil.rmtree(meeting_path, ignore_errors=True)
+        return True
+
+    def _relink_neighbors(self, meta: dict) -> None:
+        """Patch a deleted meeting's neighbors so the prev/next chain stays
+        consistent: prev.next -> deleted.next, next.prev -> deleted.prev."""
+        prev_id, next_id = meta.get("prev_meeting_id"), meta.get("next_meeting_id")
+        for nbr_id, field, target in (
+            (prev_id, "next_meeting_id", next_id),
+            (next_id, "prev_meeting_id", prev_id),
+        ):
+            if not nbr_id:
+                continue
+            p = self.base_path / nbr_id / "meta.json"
+            if not p.exists():
+                continue
+            nbr = json.loads(p.read_text(encoding="utf-8"))
+            if nbr.get(field) == meta.get("id"):
+                nbr[field] = target
+                self._save_json(p, nbr)
+
     def set_diarization_result(
         self,
         meeting_id: str,

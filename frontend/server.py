@@ -581,6 +581,30 @@ async def get_transcript(meeting_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/meetings/{meeting_id}")
+async def delete_meeting(meeting_id: str):
+    """Permanently delete a meeting (directory + index entry)."""
+    try:
+        if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
+            raise HTTPException(status_code=400, detail="Invalid meeting ID")
+        storage = get_storage()
+        try:
+            deleted = storage.delete_meeting(meeting_id)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        # Defensive: if the live watcher still points at the just-deleted id
+        # (meeting ended but watcher not yet refreshed), release it.
+        if live_watcher.current_meeting_id == meeting_id:
+            live_watcher.set_current_meeting(None)
+        return JSONResponse(content={"success": True})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/prompts")
 async def list_prompts():
     """List all available prompt definitions."""
