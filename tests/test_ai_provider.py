@@ -41,6 +41,18 @@ class TestResolveCli:
             result = resolve_cli("codex")
         assert result == str(fake_bin)
 
+    def test_falls_back_to_homebrew_bin(self):
+        """given: binary only in /opt/homebrew/bin (Apple Silicon Homebrew), not on
+        PATH - when: resolve_cli - then: returns the homebrew path"""
+        homebrew_path = "/opt/homebrew/bin/codex"
+
+        with patch("shutil.which", return_value=None), \
+             patch("glob.glob", return_value=[]), \
+             patch("os.path.isfile", side_effect=lambda p: p == homebrew_path), \
+             patch("os.access", side_effect=lambda p, _mode: p == homebrew_path):
+            result = resolve_cli("codex")
+        assert result == homebrew_path
+
     def test_nonexistent_binary_raises_file_not_found(self):
         """given: binary not found anywhere - when: resolve_cli - then: raises FileNotFoundError"""
         with patch("shutil.which", return_value=None), \
@@ -59,8 +71,13 @@ class TestResolveCli:
             codex.write_text("#!/bin/sh\n")
             codex.chmod(0o755)
 
+        # Treat only files inside tmp_path as existing, so fixed system paths
+        # (/opt/homebrew/bin, /usr/local/bin) that may hold a real codex on the
+        # dev machine don't shadow the nvm candidates under test.
+        real_isfile = os.path.isfile
         with patch("shutil.which", return_value=None), \
-             patch("os.path.expanduser", side_effect=lambda p: str(tmp_path / p.lstrip("~/"))):
+             patch("os.path.expanduser", side_effect=lambda p: str(tmp_path / p.lstrip("~/"))), \
+             patch("os.path.isfile", side_effect=lambda p: real_isfile(p) and str(tmp_path) in p):
             import glob as glob_module
             original_glob = glob_module.glob
 

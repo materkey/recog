@@ -65,6 +65,7 @@ def resolve_cli(name: str) -> str:
     import glob as glob_module
     candidates = [
         os.path.expanduser(f"~/.local/bin/{name}"),
+        f"/opt/homebrew/bin/{name}",  # Apple Silicon Homebrew (not in launchd PATH)
         f"/usr/local/bin/{name}",
     ]
     # nvm-installed binaries (codex, etc.)
