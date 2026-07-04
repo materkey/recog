@@ -59,6 +59,15 @@ const api = {
         return res.json();
     },
 
+    async deleteMeeting(id) {
+        const res = await fetch(`/api/meetings/${id}`, { method: 'DELETE' });
+        if (!res.ok) {
+            const error = await res.json().catch(() => ({}));
+            throw new Error(error.detail || 'Failed to delete meeting');
+        }
+        return res.json();
+    },
+
     async getPrompts() {
         const res = await fetch('/api/prompts');
         if (!res.ok) return [];
@@ -368,6 +377,10 @@ const views = {
                 titleEl.textContent = meta.title || 'Untitled Meeting';
                 this.renderMeta(meta, metaEl);
                 this.renderTranscript(segments, transcriptEl);
+
+                // Hide Delete while the meeting is still recording (ended_at === null)
+                const delBtn = document.getElementById('delete-meeting-btn');
+                if (delBtn) delBtn.style.display = meta.ended_at ? '' : 'none';
 
                 // Sync privacy toggle button with persisted state
                 syncPrivacyButtons();
@@ -1283,6 +1296,26 @@ async function generateTitle() {
             btn.textContent = originalText;
             btn.disabled = false;
         }, 3000);
+    }
+}
+
+
+async function deleteMeeting() {
+    const meeting = views.meeting;
+    if (!meeting.id) return;
+    const title = meeting.meta?.title || 'Untitled';
+    if (!window.confirm(`Удалить митинг «${title}»? Действие необратимо.`)) return;
+
+    const btn = document.getElementById('delete-meeting-btn');
+    if (btn) { btn.textContent = 'Deleting...'; btn.disabled = true; }
+    try {
+        await api.deleteMeeting(meeting.id);
+        showNotification('Митинг удалён', 'success');
+        views.meetings.meetings = null;   // сбросить кэш списка -> load() перечитает
+        router.navigate('/');
+    } catch (e) {
+        showNotification('Ошибка удаления: ' + e.message, 'error');
+        if (btn) { btn.textContent = 'Delete'; btn.disabled = false; }
     }
 }
 

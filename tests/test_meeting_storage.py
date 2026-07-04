@@ -4,6 +4,8 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from meeting_storage import MeetingStorage, TranscriptSegment
@@ -245,3 +247,88 @@ def test_reload_of_legacy_row_without_refined_key(tmp_path):
     # Dict deserialisation tolerates missing key; readers default to False.
     assert segments[0].get("refined", False) is False
     assert segments[0]["text"] == "old school"
+
+
+def _make_ended_meeting_dir(base: Path, meeting_id: str, prev=None, next_=None) -> Path:
+    """Create a minimal ENDED meeting dir with prev/next links (for delete tests)."""
+    d = base / meeting_id
+    d.mkdir(parents=True)
+    meta = {
+        "id": meeting_id,
+        "ended_at": "2026-07-04T10:00:00+00:00",
+        "prev_meeting_id": prev,
+        "next_meeting_id": next_,
+    }
+    (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    return d
+
+
+def test_delete_removes_directory_and_index_entry_for_an_ended_meeting(tmp_path):
+    """
+    given: an ended meeting with at least one segment (so it is indexed)
+    when: delete_meeting is called
+    then: returns True, its directory is gone and its index.json entry removed
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    meeting_id = storage.start_session(ktalk=True)
+    storage.append_segment(speaker="Alice", speaker_id="Alice", text="hi there")
+    storage.update_title("Test Meeting")  # avoid external title generation on end
+    storage.end_session()
+
+    meeting_dir = tmp_path / meeting_id
+    index_path = tmp_path / "index.json"
+    assert meeting_dir.is_dir()
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert any(m["id"] == meeting_id for m in index["meetings"])
+
+    assert storage.delete_meeting(meeting_id) is True
+
+    assert not meeting_dir.exists()
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert not any(m["id"] == meeting_id for m in index["meetings"])
+
+
+def test_delete_returns_false_for_unknown_meeting_id(tmp_path):
+    """
+    given: a storage with no such meeting
+    when: delete_meeting is called with an unknown id
+    then: returns False (maps to 404 at the HTTP layer)
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    assert storage.delete_meeting("2099-01-01_000000_deadbeef") is False
+
+
+def test_delete_raises_value_error_for_an_active_meeting(tmp_path):
+    """
+    given: an active (still recording, ended_at is None) meeting
+    when: delete_meeting is called on it
+    then: raises ValueError and the directory is left intact
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    meeting_id = storage.start_session(ktalk=True)
+
+    with pytest.raises(ValueError):
+        storage.delete_meeting(meeting_id)
+
+    assert (tmp_path / meeting_id).is_dir()
+
+
+def test_delete_relinks_prev_and_next_neighbors(tmp_path):
+    """
+    given: an ended chain A -> B -> C linked via prev/next meta fields
+    when: the middle meeting B is deleted
+    then: B's dir is gone and A.next == C, C.prev == A
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    a, b, c = "2026-07-04_090000_aaaaaaaa", "2026-07-04_100000_bbbbbbbb", "2026-07-04_110000_cccccccc"
+    _make_ended_meeting_dir(tmp_path, a, prev=None, next_=b)
+    _make_ended_meeting_dir(tmp_path, b, prev=a, next_=c)
+    _make_ended_meeting_dir(tmp_path, c, prev=b, next_=None)
+
+    assert storage.delete_meeting(b) is True
+
+    assert not (tmp_path / b).exists()
+    a_meta = json.loads((tmp_path / a / "meta.json").read_text(encoding="utf-8"))
+    c_meta = json.loads((tmp_path / c / "meta.json").read_text(encoding="utf-8"))
+    assert a_meta["next_meeting_id"] == c
+    assert c_meta["prev_meeting_id"] == a
