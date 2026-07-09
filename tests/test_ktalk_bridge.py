@@ -3140,6 +3140,121 @@ def test_meeting_state_ktalk_without_extension_is_inactive():
     assert frame["meeting_id"] is None
 
 
+# --- conference-source predicate: matrix / vas3k / vkkovalev parity with ktalk ---
+
+
+def test_is_conference_source_covers_all_four_platforms():
+    """
+    given: the four extension-driven conference platforms and the two
+           non-conference sources (orphan / local)
+    when:  is_conference_source is queried
+    then:  ktalk + vas3k + vkkovalev + matrix are conferences; orphan / local
+           / None are not — this is the single predicate that widens the
+           previously ktalk-only lifecycle gates to all conference platforms
+    """
+    from meeting_storage import is_conference_source
+
+    for source in ("ktalk", "vas3k", "vkkovalev", "matrix"):
+        assert is_conference_source(source) is True
+    for source in ("orphan", "local", None, "", "unknown"):
+        assert is_conference_source(source) is False
+
+
+@pytest.mark.parametrize("source", ["matrix", "vas3k", "vkkovalev"])
+def test_meeting_state_active_true_for_conference_source_with_extension(source):
+    """
+    given: a meeting opened by a conference platform other than ktalk
+           (matrix / vas3k / vkkovalev) and one connected extension client
+    when:  the bridge builds a meeting_state reply
+    then:  active is True with meeting_id/title populated — the supervisor
+           reconcile now adopts these meetings the same way it adopts ktalk
+           (previously only source=="ktalk" reported active, so a bridge
+           restart mid-matrix-meeting would kill the copilot)
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1", title="Standup", source=source))
+    bridge._connected_clients.add(RecordingClient())
+
+    frame = bridge._compute_meeting_state()
+
+    assert frame["active"] is True
+    assert frame["meeting_id"] == "m-1"
+    assert frame["meeting_title"] == "Standup"
+
+
+def test_meeting_state_local_source_is_inactive():
+    """
+    given: a `local` (non-conference) meeting with a connected extension client
+    when:  the bridge builds a meeting_state reply
+    then:  active is False — widening the gate to conference sources must NOT
+           make plain local recordings look like a live conference
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1", source="local"))
+    bridge._connected_clients.add(RecordingClient())
+
+    frame = bridge._compute_meeting_state()
+
+    assert frame["active"] is False
+    assert frame["meeting_id"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["matrix", "vas3k", "vkkovalev"])
+async def test_extension_disconnect_ends_conference_meeting_and_generates_increment(source):
+    """
+    given: an active conference meeting (matrix / vas3k / vkkovalev) with an
+           increment generator wired and the only extension client connected
+    when:  that last extension client disconnects (page reload / crash — no
+           explicit meeting_leave frame arrives)
+    then:  the meeting is ended via on_ktalk_leave("disconnected") AND an
+           increment is generated for the meeting just left — the same
+           end-on-last-extension-gone flow previously reserved for ktalk now
+           finishes wiring the half-connected conference platforms
+    """
+    bridge = KTalkBridge()
+
+    mock_storage = Mock()
+    mock_storage.current_meeting_path = Path("/tmp/m-prev.jsonl")
+    mock_storage.current_meeting_id = "m-prev"
+    mock_storage._load_meta = Mock(return_value={"source": source})
+    mock_storage.on_ktalk_leave = Mock(return_value="m-next")
+    bridge.set_meeting_storage(mock_storage)
+
+    increment_gen = Mock()
+    increment_gen.generate_all = AsyncMock()
+    bridge.set_increment_generator(increment_gen)
+
+    fake_ws = FakeWebSocket()
+    await bridge._handle_client(fake_ws)
+    await bridge._drain_background_tasks()
+
+    mock_storage.on_ktalk_leave.assert_called_once_with("disconnected")
+    increment_gen.generate_all.assert_awaited_once_with("m-prev", Path("/tmp/m-prev.jsonl"))
+
+
+@pytest.mark.asyncio
+async def test_local_meeting_not_ended_on_disconnect():
+    """
+    given: a `local` (non-conference) meeting and one extension client
+    when:  the last extension client disconnects
+    then:  on_ktalk_leave is NOT called — only conference meetings end on the
+           last extension leaving; plain local recordings keep running
+    """
+    bridge = KTalkBridge()
+
+    mock_storage = Mock()
+    mock_storage._load_meta = Mock(return_value={"source": "local"})
+    mock_storage.on_ktalk_leave = Mock()
+    bridge.set_meeting_storage(mock_storage)
+
+    fake_ws = FakeWebSocket()
+
+    await bridge._handle_client(fake_ws)
+
+    mock_storage.on_ktalk_leave.assert_not_called()
+
+
 def _bridge_with_active_ktalk():
     """Bridge with an active ktalk meeting + one extension client (recorder)."""
     bridge = KTalkBridge()

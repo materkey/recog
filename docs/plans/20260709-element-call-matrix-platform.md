@@ -91,10 +91,10 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 - Modify: `meeting_storage.py` (add `CONFERENCE_SOURCES` / `is_conference_source()`; `:484`)
 - Modify: `tests/test_ktalk_bridge.py`
 
-- [ ] write failing tests: meeting with `source="matrix"` → `_compute_meeting_state` reports `active=True` with a live extension client (supervisor reconcile adopts, does not kill); hard disconnect of last extension client ends a matrix meeting and triggers increment generation (mirror existing ktalk disconnect tests); **also assert `source="vas3k"` / `"vkkovalev"` now report active + end on disconnect** (locks the "finishes wiring the half-connected platforms" claim); `source="orphan"`/`"local"` still report inactive
-- [ ] add `is_conference_source(source)` over `{"ktalk", "vas3k", "vkkovalev", "matrix"}` in `meeting_storage.py`; use it at `ktalk_bridge.py:1148`, `:1887` and `meeting_storage.py:484`. Also widen `:518` (PCM gate) with the same predicate — a no-op for Tier 1 (matrix sends no PCM) but forward-compat for Tier 2 and keeps all four gates consistent
-- [ ] note in the PR description that this deliberately activates copilot auto-spawn + end-on-disconnect + increment generation for vas3k/vkkovalev (previously half-wired, ktalk-only); the copilot half is still globally gated by `RECOG_COPILOT_AUTOSPAWN`, the increment half is not — this is intended and tested above
-- [ ] run full pytest — must pass before task 3
+- [x] write failing tests: meeting with `source="matrix"` → `_compute_meeting_state` reports `active=True` with a live extension client (supervisor reconcile adopts, does not kill); hard disconnect of last extension client ends a matrix meeting and triggers increment generation (mirror existing ktalk disconnect tests); **also assert `source="vas3k"` / `"vkkovalev"` now report active + end on disconnect** (locks the "finishes wiring the half-connected platforms" claim); `source="orphan"`/`"local"` still report inactive
+- [x] add `is_conference_source(source)` over `{"ktalk", "vas3k", "vkkovalev", "matrix"}` in `meeting_storage.py`; use it at `ktalk_bridge.py:1148`, `:1887` and `meeting_storage.py:484`. Also widen `:518` (PCM gate) with the same predicate — a no-op for Tier 1 (matrix sends no PCM) but forward-compat for Tier 2 and keeps all four gates consistent
+- [x] note in the PR description that this deliberately activates copilot auto-spawn + end-on-disconnect + increment generation for vas3k/vkkovalev (previously half-wired, ktalk-only); the copilot half is still globally gated by `RECOG_COPILOT_AUTOSPAWN`, the increment half is not — this is intended and tested above (captured in the commit body of this task)
+- [x] run full pytest — must pass before task 3
 
 ### Task 3: frontend "matrix" category
 

@@ -35,6 +35,7 @@ from pathlib import Path
 from recog.node_env import get_node_env
 from recog.ai_provider import build_codex_exec_command, mark_ccs_automation, resolve_cli
 from recog.config import load_dotenv, MIC_SPEAKER_NAME
+from meeting_storage import is_conference_source
 
 if TYPE_CHECKING:
     from meeting_storage import MeetingStorage
@@ -507,7 +508,7 @@ class KTalkBridge:
         self._increment_generator = generator
 
     def _has_active_ktalk_meeting(self) -> bool:
-        """Return True only while current storage points at a KTalk meeting."""
+        """Return True only while current storage points at a conference meeting."""
         if not self._meeting_storage or not self._meeting_storage.current_meeting_path:
             return False
         try:
@@ -515,7 +516,10 @@ class KTalkBridge:
         except Exception as e:
             print(f"[KTalk Bridge] pcm_chunk meeting guard failed: {e}", file=sys.stderr)
             return False
-        return bool(meta and meta.get("source") == "ktalk")
+        # Widened from ktalk-only to every conference source: a no-op for
+        # Tier-1 matrix (no PCM without a worklet) but keeps the PCM gate
+        # consistent and forward-compatible with Tier-2 per-participant PCM.
+        return bool(meta and is_conference_source(meta.get("source")))
 
     async def _safe_generate_increment(self, meeting_id: str, meeting_path):
         """Wrapper for increment generation that logs unexpected errors."""
@@ -1126,13 +1130,14 @@ class KTalkBridge:
                 )
 
     def _is_meeting_active(self) -> bool:
-        """True when a KTalk meeting is genuinely in progress.
+        """True when a conference meeting is genuinely in progress.
 
         Deliberately NOT `current_meeting_path is not None` — that field is
         never None (`on_ktalk_leave` immediately creates an orphan). A meeting
-        is active only when the current meeting was opened by KTalk
-        (`meta["source"] == "ktalk"`) AND at least one extension client is
-        connected to drive it.
+        is active only when the current meeting was opened by a conference
+        platform (`is_conference_source(meta["source"])` — ktalk / vas3k /
+        vkkovalev / matrix) AND at least one extension client is connected to
+        drive it.
         """
         storage = self._meeting_storage
         if storage is None or not storage.current_meeting_path:
@@ -1145,7 +1150,7 @@ class KTalkBridge:
                 file=sys.stderr,
             )
             return False
-        if not (meta and meta.get("source") == "ktalk"):
+        if not (meta and is_conference_source(meta.get("source"))):
             return False
         with self._lock:
             return bool(self._connected_clients)
@@ -1884,7 +1889,7 @@ class KTalkBridge:
                 file=sys.stderr,
             )
             return
-        if not (meta and meta.get("source") == "ktalk"):
+        if not (meta and is_conference_source(meta.get("source"))):
             return
         # Capture prev meeting context BEFORE on_ktalk_leave switches it
         prev_meeting_id = self._meeting_storage.current_meeting_id
