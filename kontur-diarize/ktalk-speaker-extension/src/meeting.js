@@ -3,6 +3,12 @@ import { sendWsMessage } from './ws_api.js';
 import { getPlatformAdapter, getPlatform } from './platforms/index.js';
 
 let titleSentForUrl = null;
+// Per-join generation token: bumped on every `sendMeetingJoin()` so a pending
+// title-retry chain from a previous join (same OR different url) invalidates
+// itself instead of leaking its near-exhausted `attempt` count into the fresh
+// join. The `scheduledUrl` guard alone cannot catch a leave+rejoin of the same
+// room (e.g. after `meeting_join_rejected`).
+let titleRetryGen = 0;
 
 // The adapter's authoritative title (matrix → room name) can resolve after the
 // initial 2 s window: the Element Call iframe runs its own matrix-js-sdk client
@@ -25,11 +31,26 @@ export function getMeetingUrl() {
   return adapter?.getMeetingUrl?.() || window.location.href;
 }
 
-function sendDelayedTitle(attempt = 0) {
+function sendDelayedTitle(attempt = 0, scheduledUrl = state.currentMeetingUrl, gen = titleRetryGen) {
   // Отправляем title через 2 сек после входа, когда страница уже загрузилась
   setTimeout(() => {
+    // A newer join has superseded this retry chain. The `scheduledUrl` guard
+    // below only distinguishes DIFFERENT meetings; a leave+rejoin of the SAME
+    // url (e.g. after `meeting_join_rejected`) would otherwise let this stale
+    // chain's near-exhausted `attempt` count fall back to `document.title` and
+    // lock the room before the fresh join's room name has synced. The per-join
+    // generation token invalidates the old chain regardless of url.
+    if (gen !== titleRetryGen) return;
+
     const url = state.currentMeetingUrl;
     if (!url || titleSentForUrl === url) return;
+
+    // Abandon this retry chain if the meeting changed since it was scheduled.
+    // Retries read `state.currentMeetingUrl` fresh, so a stale chain from
+    // meeting A (carrying A's near-exhausted `attempt` count) could otherwise
+    // fire during meeting B, skip B's own retries, and prematurely lock B to
+    // the generic `document.title` before B's room name has synced.
+    if (scheduledUrl !== url) return;
 
     // Prefer the adapter's authoritative title (matrix → room name) over the
     // page title: inside the EC iframe `document.title` is Element Call's own
@@ -41,7 +62,7 @@ function sendDelayedTitle(attempt = 0) {
     // Adapter has a title hook but the room name has not resolved yet — retry
     // instead of locking in the generic `document.title` for the whole meeting.
     if (hasTitleHook && !adapterTitle && attempt < TITLE_MAX_RETRIES) {
-      sendDelayedTitle(attempt + 1);
+      sendDelayedTitle(attempt + 1, scheduledUrl, gen);
       return;
     }
 
@@ -70,6 +91,9 @@ export function sendMeetingJoin() {
       title: ''  // Title отправим позже когда страница загрузится
     });
     console.log(`[${platform} Transcript] Sent meeting_join:`, url);
+    // Supersede any pending title-retry chain from a prior join before starting
+    // a fresh one (see `titleRetryGen`).
+    titleRetryGen++;
     sendDelayedTitle();
   }
 }

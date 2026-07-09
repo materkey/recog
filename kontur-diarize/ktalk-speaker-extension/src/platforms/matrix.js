@@ -336,13 +336,26 @@ export class ElementCallAdapter {
   }
 
   _mutedUserIds() {
-    const set = new Set();
+    // Aggregate per userId with the same "EVERY device muted" rule as
+    // isMicMuted(): a user counts as muted only when all of their livekit
+    // devices have their mic disabled. If any device is on (e.g. a second
+    // device is the active speaker while the local one is muted) the user is
+    // producing audio and must read as unmuted here too — otherwise
+    // getParticipants() emits micMuted:true, the bridge's are_all_mics_muted()
+    // wrongly becomes true, and the mixed-path transcript is marked
+    // uncertain_reason="mics_off" for someone who is actually speaking.
     const memberships = this._memberships();
+    const allMutedByUser = new Map(); // userId → every device so far muted?
     for (const p of this._livekitParticipants()) {
-      if (p?.isMicrophoneEnabled === false) {
-        const parsed = parseRtcIdentity(p.identity, memberships);
-        if (parsed) set.add(parsed.userId);
-      }
+      const parsed = parseRtcIdentity(p.identity, memberships);
+      if (!parsed) continue;
+      const muted = p.isMicrophoneEnabled === false;
+      const prev = allMutedByUser.get(parsed.userId);
+      allMutedByUser.set(parsed.userId, prev === undefined ? muted : prev && muted);
+    }
+    const set = new Set();
+    for (const [userId, allMuted] of allMutedByUser) {
+      if (allMuted) set.add(userId);
     }
     return set;
   }
@@ -390,10 +403,19 @@ export class ElementCallAdapter {
     if (!parsed) return null;
 
     const matrixclient = this._matrixClient();
+    const localUserId = matrixclient?.getUserId?.() || null;
+    const localDeviceId = matrixclient?.getDeviceId?.() || null;
+    // Device-aware local check (mirrors membershipToParticipant): the same
+    // matrix user joined from another device must NOT be flagged isLocal, or
+    // their remote speech would be misattributed to the local mic path.
+    const isLocal =
+      !!parsed.userId &&
+      parsed.userId === localUserId &&
+      (localDeviceId == null || parsed.deviceId == null || parsed.deviceId === localDeviceId);
     return {
       id: parsed.userId,
       name: resolveDisplayName(matrixclient, this._roomId(), parsed.userId),
-      isLocal: parsed.userId === matrixclient?.getUserId?.(),
+      isLocal,
     };
   }
 
@@ -435,13 +457,18 @@ export class ElementCallAdapter {
 
   isMicMuted(participantId) {
     const memberships = this._memberships();
-    const p = this._livekitParticipants().find((lp) => {
+    const matches = this._livekitParticipants().filter((lp) => {
       const parsed = parseRtcIdentity(lp.identity, memberships);
       return parsed && parsed.userId === participantId;
     });
-    if (!p) return false; // unknown → assume on; mixed audio is captured regardless
-    if (typeof p.isMicrophoneEnabled === 'boolean') return !p.isMicrophoneEnabled;
-    return false;
+    if (matches.length === 0) return false; // unknown → assume on; mixed audio is captured regardless
+    // A user may be joined from multiple devices. Treat them as muted only when
+    // EVERY device has its mic disabled: if any device's mic is on (e.g. a
+    // second device is the active speaker while the local one is muted), the
+    // user is producing audio and sendFilteredSpeakerUpdate must not suppress
+    // it. A plain `.find()` returns localParticipant first and would report the
+    // muted local device, dropping the remote same-user device's speech.
+    return matches.every((lp) => lp.isMicrophoneEnabled === false);
   }
 
   anyMicOn() {
