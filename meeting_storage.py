@@ -16,6 +16,7 @@ from dataclasses import dataclass, asdict, field
 from typing import Optional
 from urllib.parse import urlparse
 import json
+import re
 import uuid
 import shutil
 import hashlib
@@ -358,6 +359,16 @@ class MeetingStorage:
         # Извлекаем ID: /abcd1234wxyz или /history/ExampleHistoryId0001
         path_parts = parsed.path.strip("/").split("/")
         live_id = path_parts[-1] if path_parts else None
+
+        # Fallback для платформ, где id комнаты живёт во фрагменте URL, а не в
+        # пути (Element Call: https://element.vkkovalev.work/#/room/<roomId>).
+        # Там путь пустой, поэтому вытаскиваем id из полной строки url.
+        # Используем именно full `url`, а не parsed.fragment: urlparse срезает
+        # ведущий '#', ломая alias-форму #/room/#recog-spike:...
+        if not live_id:
+            match = re.search(r"#/room/([^/?]+)", url)
+            if match:
+                live_id = match.group(1)
 
         # Проверяем, нужно ли создать/переоткрыть встречу
         need_new_or_reopen = False

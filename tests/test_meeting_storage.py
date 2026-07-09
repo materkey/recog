@@ -332,3 +332,74 @@ def test_delete_relinks_prev_and_next_neighbors(tmp_path):
     c_meta = json.loads((tmp_path / c / "meta.json").read_text(encoding="utf-8"))
     assert a_meta["next_meeting_id"] == c
     assert c_meta["prev_meeting_id"] == a
+
+
+def test_on_meeting_join_element_url_uses_fragment_room_id(tmp_path):
+    """
+    given: an Element Call meeting URL carrying the room id in the fragment
+           (empty path) — https://element.vkkovalev.work/#/room/!abc
+    when: on_meeting_join is called with platform="matrix"
+    then: conference.live_id is the bang room id "!abc", not the empty path id
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    storage.start_session(ktalk=True)
+
+    storage.on_meeting_join(
+        "https://element.vkkovalev.work/#/room/!abc", platform="matrix"
+    )
+
+    meta = _read_meta(storage)
+    assert meta["conference"]["live_id"] == "!abc"
+
+
+def test_on_meeting_join_element_alias_form_keeps_leading_hash(tmp_path):
+    """
+    given: the alias room form #/room/#recog-spike:... where the room id itself
+           starts with '#' (parsed.fragment would drop that leading '#')
+    when: on_meeting_join is called with platform="matrix"
+    then: live_id is "#recog-spike:matrix.vkkovalev.work" — the regex runs on
+          the full URL string, preserving the leading '#'
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    storage.start_session(ktalk=True)
+
+    storage.on_meeting_join(
+        "https://element.vkkovalev.work/#/room/#recog-spike:matrix.vkkovalev.work",
+        platform="matrix",
+    )
+
+    meta = _read_meta(storage)
+    assert meta["conference"]["live_id"] == "#recog-spike:matrix.vkkovalev.work"
+
+
+def test_on_meeting_join_ktalk_path_id_unchanged(tmp_path):
+    """
+    given: a KTalk meeting URL with the id in the path
+    when: on_meeting_join is called with platform="ktalk"
+    then: live_id is still the path-derived id (fragment fallback must not fire
+          when the path already yields an id)
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    storage.start_session(ktalk=True)
+
+    storage.on_meeting_join(
+        "https://example.ktalk.ru/abcd1234wxyz", platform="ktalk"
+    )
+
+    meta = _read_meta(storage)
+    assert meta["conference"]["live_id"] == "abcd1234wxyz"
+
+
+def test_on_meeting_join_no_path_or_fragment_id_leaves_live_id_empty(tmp_path):
+    """
+    given: a URL with neither a path id nor a #/room/ fragment
+    when: on_meeting_join is called
+    then: live_id is falsy (empty string / None) — no spurious fallback match
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    storage.start_session(ktalk=True)
+
+    storage.on_meeting_join("https://element.vkkovalev.work/", platform="matrix")
+
+    meta = _read_meta(storage)
+    assert not meta["conference"]["live_id"]
