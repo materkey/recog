@@ -1,6 +1,27 @@
 # KTalk Speaker Detector (extension)
 
-This folder contains the Chrome extension that injects the KTalk transcript UI and sends speaker data to `ktalk_bridge.py`.
+This folder contains the Chrome extension that injects the transcript UI and sends speaker data to `ktalk_bridge.py`.
+
+## Supported platforms
+
+`detectPlatform()` (`src/platforms/index.js`) selects a per-platform adapter (`src/platforms/*.js`) from the tab URL:
+
+- **KTalk** (`ktalk.js`) — injects into the KTalk tab; per-speaker PCM transport (ADR-0018) supported.
+- **Jitsi** (`vas3k.js`) — `meet.vkkovalev.work` / vas3k Jitsi deploys; floating panel (transcript + copilot chat).
+- **Matrix / Element Call** (`matrix.js`) — see below; floating panel, mixed-audio path.
+
+### Element Call (matrix)
+
+Element Call is bundled inside Element Web as a **same-origin iframe** at `https://element.vkkovalev.work/widgets/element-call/index.html` (the standalone `call.element.*` host is not used for room calls). The manifest scopes the Element content-script match to `/widgets/element-call/*` with `"all_frames": true`, so the extension injects **only into the EC iframe, never the Element top frame** — a top-frame injection would open a stray second WS to the bridge and break last-extension-gone meeting-end detection.
+
+`ElementCallAdapter` sources data from Element Call internals:
+
+- Lifecycle / participants / display names from page globals `window.rtcSession` (MatrixRTCSession) and `window.matrixclient` (matrix-js-sdk). Names resolve via `matrixclient.getRoom(roomId).getMember(userId).name` (`participant.name` is empty in Element Call).
+- Active-speaker events from a React fiber-walk (`__reactFiber$*` on an `<audio>` element, walk `.return` up to the livekit `Room`); participants/names still work from the globals alone if the Room isn't found yet.
+- Participant identity is the legacy plain format `${userId}:${deviceId}` (e.g. `@test2:matrix.vkkovalev.work:IZFUKTQLPX`); `parseRtcIdentity()` splits it, with a sha256-hash fallback for future MatrixRTC deploys.
+- The meeting URL is a **synthesized** `https://element.vkkovalev.work/#/room/<roomId>` (optional `getMeetingUrl()` adapter hook) so the backend derives a stable `live_id` from the room id instead of `index.html`.
+
+Per-participant PCM + refine (Tier 2) is out of scope; the mixed-audio path + `speaker_update` signals provide attribution, same as the Jitsi platforms. After any element-web server upgrade, re-run the console probe in the plan's Post-Completion section to confirm globals + fiber props survived. See `docs/plans/completed/20260709-element-call-matrix-platform.md`.
 
 ## Build (required after edits)
 
@@ -20,8 +41,9 @@ This compiles `src/` into the injected bundle `injected.js` used by the extensio
 ## Source layout
 
 - `src/` — editable sources (modules)
+- `src/platforms/` — per-platform adapters (`ktalk.js`, `vas3k.js`, `matrix.js`) + `index.js` (`detectPlatform`)
 - `injected.js` — built bundle loaded by the content script
-- `content.js` — injects `injected.js` into the KTalk page
+- `content.js` — injects `injected.js` into the conference page (KTalk top frame or the scoped Element Call iframe)
 
 ## Notes
 
