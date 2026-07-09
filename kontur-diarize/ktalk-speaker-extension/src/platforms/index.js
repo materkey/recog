@@ -11,6 +11,7 @@
 
 import { KTalkAdapter } from './ktalk.js';
 import { Vas3kAdapter } from './vas3k.js';
+import { ElementCallAdapter } from './matrix.js';
 
 let currentPlatform = null;
 let currentAdapter = null;
@@ -75,6 +76,9 @@ export function getPlatformAdapter() {
       case 'vas3k':
       case 'vkkovalev':
         currentAdapter = new Vas3kAdapter();
+        break;
+      case 'matrix':
+        currentAdapter = new ElementCallAdapter();
         break;
       default:
         console.warn('[Platform] Unknown platform:', platform);
