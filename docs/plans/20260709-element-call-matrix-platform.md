@@ -80,9 +80,9 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 - Modify: `meeting_storage.py` (`on_meeting_join`, ~line 357)
 - Modify: `tests/test_meeting_storage.py`
 
-- [ ] write failing tests: Element URL `https://element.vkkovalev.work/#/room/!abc` → `conference.live_id == "!abc"`; alias form `#/room/#recog-spike:...` → `"#recog-spike:..."` (locks that the regex runs on the full URL, not `parsed.fragment` which drops the leading `#`); KTalk URL behavior unchanged; URL with neither path id nor fragment → live_id None/""
-- [ ] implement fragment fallback in `on_meeting_join` (only when path-derived live_id is empty): apply `re.search(r"#/room/([^/?]+)", url)` to the **full `url` string**
-- [ ] run tests — must pass before task 2
+- [x] write failing tests: Element URL `https://element.vkkovalev.work/#/room/!abc` → `conference.live_id == "!abc"`; alias form `#/room/#recog-spike:...` → `"#recog-spike:..."` (locks that the regex runs on the full URL, not `parsed.fragment` which drops the leading `#`); KTalk URL behavior unchanged; URL with neither path id nor fragment → live_id None/""
+- [x] implement fragment fallback in `on_meeting_join` (only when path-derived live_id is empty): apply `re.search(r"#/room/([^/?]+)", url)` to the **full `url` string**
+- [x] run tests — must pass before task 2
 
 ### Task 2: conference-source predicate + widen ktalk gates (TDD)
 
