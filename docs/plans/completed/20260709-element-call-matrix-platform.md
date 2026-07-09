@@ -181,9 +181,9 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 
 ### Task 10: [Final] Update documentation
 
-- [ ] CLAUDE.md: extension section — add matrix/Element Call platform, `all_frames` note, spike facts (bundled EC path, legacy identity format) worth persisting
-- [ ] extension README: platform list + Element notes
-- [ ] move this plan to `docs/plans/completed/`
+- [x] CLAUDE.md: extension section — add matrix/Element Call platform, `all_frames` note, spike facts (bundled EC path, legacy identity format) worth persisting
+- [x] extension README: platform list + Element notes
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
