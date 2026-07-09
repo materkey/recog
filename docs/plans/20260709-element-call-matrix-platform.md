@@ -154,9 +154,9 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 - Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.js` (platform dispatch: `initPlatformUI`, `addTranscriptLinePlatform`, copilot reply/status routing)
 - Modify/Create: jest tests alongside
 
-- [ ] write failing jest tests: `copilot_reply`/`copilot_status` reach the floating-panel copilot view when `supportsTabInjection() === false`, and still reach the KTalk tab path otherwise
-- [ ] wire `ws.js` (`copilot_reply`/`copilot_status` handlers) + `ui.js` platform dispatch so copilot frames route to the panel on floating-panel platforms
-- [ ] run tests — must pass before task 8
+- [x] write failing jest tests: `copilot_reply`/`copilot_status` reach the floating-panel copilot view when `supportsTabInjection() === false`, and still reach the KTalk tab path otherwise — `src/copilot-routing.test.js` (6 tests, one jsdom file that flips `isJitsiPlatform` per describe-block, asserting the mount surface differs by platform: floating-panel `.jitsi-copilot-host` vs KTalk `.slide-menu-wrapper .content .ktalk-ai-panel`, and that the *other* surface is never created). The tests are discriminating — a routing regression fails one direction: the floating-panel branch would return null without `.slide-menu-wrapper`, the KTalk branch would create a stray `.jitsi-transcript-panel`
+- [x] wire `ws.js` (`copilot_reply`/`copilot_status` handlers) + `ui.js` platform dispatch so copilot frames route to the panel on floating-panel platforms — the actual wiring was completed in Task 6: `ws.js` already dispatches `copilot_reply`/`copilot_status` to the shared `handleCopilotReply`/`handleCopilotStatus`, and Task 6 made `ui.js`'s `createCopilotContent()` platform-aware (mounts into the floating-panel copilot host on `isJitsiPlatform()`, the KTalk slide-menu tab otherwise) so the dispatch centralizes there. Added a clarifying comment at the `ws.js` copilot dispatch documenting the centralized platform routing (no behavior change)
+- [x] run tests — must pass before task 8 (188 passed, 12 suites)
 
 ### Task 8: verify iframe init / no double-inject (build + regression)
 
