@@ -20,7 +20,11 @@ export function getMeetingUrl() {
 function sendDelayedTitle() {
   // Отправляем title через 2 сек после входа, когда страница уже загрузилась
   setTimeout(() => {
-    const title = document.title;
+    // Prefer the adapter's authoritative title (matrix → room name) over the
+    // page title: inside the EC iframe `document.title` is Element Call's own
+    // page title, not the room. Same optional-chaining pattern as getMeetingUrl.
+    const adapter = getPlatformAdapter();
+    const title = adapter?.getMeetingTitle?.() || document.title;
     const url = state.currentMeetingUrl;
     if (title && url && titleSentForUrl !== url) {
       titleSentForUrl = url;

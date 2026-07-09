@@ -106,3 +106,36 @@ describe('no-flap invariant', () => {
     expect(state.currentMeetingUrl).toBe(getMeetingUrl());
   });
 });
+
+describe('sendDelayedTitle prefers the adapter title', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  test('sends the matrix room name from getMeetingTitle, not document.title', () => {
+    document.title = 'Element Call'; // the non-authoritative EC iframe page title
+    mockAdapter = {
+      getMeetingUrl: () => MATRIX_URL,
+      getMeetingTitle: () => 'Recog Spike',
+      isConferenceAvailable: () => true,
+    };
+    mockPlatform = 'matrix';
+
+    sendMeetingJoin();
+    jest.advanceTimersByTime(2000);
+
+    const titleMsg = mockSendWsMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'meeting_title_update');
+    expect(titleMsg).toMatchObject({ type: 'meeting_title_update', title: 'Recog Spike' });
+  });
+
+  test('falls back to document.title when the adapter has no getMeetingTitle (ktalk)', () => {
+    document.title = 'KTalk Room';
+    mockAdapter = ktalkAdapter;
+    mockPlatform = 'ktalk';
+
+    sendMeetingJoin();
+    jest.advanceTimersByTime(2000);
+
+    const titleMsg = mockSendWsMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'meeting_title_update');
+    expect(titleMsg).toMatchObject({ type: 'meeting_title_update', title: 'KTalk Room' });
+  });
+});
