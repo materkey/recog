@@ -3,7 +3,7 @@ import { formatBioReadText, normalizeBioReadSettings, BIOREAD_LIMITS, BIOREAD_SE
 import { getUncertainSuffix, renderMarkdown, escapeHtml } from './utils.js';
 import { sendWsMessage, sendCopilotChatMessage } from './ws_api.js';
 import { getPlatform, isJitsiPlatform } from './platforms/index.js';
-import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine, clearVas3kTranscript } from './ui-vas3k.js';
+import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine, clearVas3kTranscript, ensureVas3kCopilotHost, setVas3kCopilotActivateHandler } from './ui-vas3k.js';
 
 let selectedModel = localStorage.getItem('ktalk-ai-model') || 'codex';
 let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'codex';
@@ -1347,13 +1347,21 @@ export function createCopilotContent() {
     return state.copilotContentElement;
   }
 
-  const contentArea = document.querySelector('.slide-menu-wrapper .content');
-  if (!contentArea) {
-    console.log('[KTalk Transcript] Content area not found for copilot');
-    return null;
+  let panelBody;
+  if (isJitsiPlatform()) {
+    // Floating-panel platforms (vas3k / matrix): mount the copilot chat inside
+    // the panel's copilot host instead of the KTalk slide-menu tab. The shared
+    // copilot message/chip styles live in ui.js injectStyles().
+    injectStyles();
+    panelBody = ensureVas3kCopilotHost();
+  } else {
+    const contentArea = document.querySelector('.slide-menu-wrapper .content');
+    if (!contentArea) {
+      console.log('[KTalk Transcript] Content area not found for copilot');
+      return null;
+    }
+    panelBody = ensureAiPanelBody(contentArea);
   }
-
-  const panelBody = ensureAiPanelBody(contentArea);
   if (!panelBody) return null;
 
   state.copilotContentElement = document.createElement('div');
@@ -2054,6 +2062,23 @@ function activateCopilotTab() {
 
 function deactivateCustomTabs() {
   setActiveView(null);
+}
+
+// Handler registered with ui-vas3k so a floating-panel view switch drives the
+// copilot subsystem (lazy content build, active class, unread reset, focus).
+// Panel-level DOM (tab highlight, content visibility) stays in ui-vas3k.
+function activateVas3kView(view) {
+  const isCopilot = view === 'copilot';
+  if (isCopilot) ensureCopilotContent();
+  if (state.copilotContentElement) {
+    state.copilotContentElement.classList.toggle('active', isCopilot);
+  }
+  state.isCopilotActive = isCopilot;
+  if (isCopilot) {
+    setCopilotUnread(false);
+    const input = getCopilotInputEl();
+    if (input) input.focus();
+  }
 }
 
 export function watchTabChanges() {
@@ -3205,6 +3230,8 @@ export function handleSummaryResponse(data) {
  */
 export function initPlatformUI() {
   if (isJitsiPlatform()) {
+    // Let the floating panel drive the copilot subsystem on view switches.
+    setVas3kCopilotActivateHandler(activateVas3kView);
     return initVas3kUI();
   }
 
