@@ -102,9 +102,9 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 - Modify: `frontend/static/index.html` (source filter options, ~line 50)
 - Modify: `frontend/static/style.css` (`--source-matrix` var, `.source-matrix` class)
 
-- [ ] add `<option value="matrix">` to the source filter
-- [ ] add badge color var + `.source-matrix` rule (pick a distinct color, e.g. Element green)
-- [ ] no unit tests (static markup) — visual check deferred to Task 8
+- [x] add `<option value="matrix">` to the source filter
+- [x] add badge color var + `.source-matrix` rule (pick a distinct color, e.g. Element green)
+- [x] no unit tests (static markup) — visual check deferred to Task 8
 
 ### Task 4: extension platform detection + manifest (TDD)
 
