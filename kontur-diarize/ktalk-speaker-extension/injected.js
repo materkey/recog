@@ -981,6 +981,7 @@ function init() {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   getMeetingUrl: () => (/* binding */ getMeetingUrl),
 /* harmony export */   handleMeetingJoinRejected: () => (/* binding */ handleMeetingJoinRejected),
 /* harmony export */   sendMeetingJoin: () => (/* binding */ sendMeetingJoin),
 /* harmony export */   sendMeetingLeave: () => (/* binding */ sendMeetingLeave),
@@ -994,6 +995,19 @@ __webpack_require__.r(__webpack_exports__);
 
 
 let titleSentForUrl = null;
+
+/**
+ * Canonical meeting URL: the adapter's synthesized URL when it provides one
+ * (matrix → `#/room/<roomId>`), otherwise the raw page URL. BOTH the sent
+ * `meeting_join.url` / stored `state.currentMeetingUrl` AND
+ * `startMeetingCheck()`'s change-detection must read this same source, or the
+ * inside-iframe location (`…/index.html#…`) and the stored synthesized URL
+ * would never match and the check would flap leave/join every 2 s tick.
+ */
+function getMeetingUrl() {
+  const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_2__.getPlatformAdapter)();
+  return adapter?.getMeetingUrl?.() || window.location.href;
+}
 
 function sendDelayedTitle() {
   // Отправляем title через 2 сек после входа, когда страница уже загрузилась
@@ -1012,7 +1026,7 @@ function sendDelayedTitle() {
 }
 
 function sendMeetingJoin() {
-  const url = window.location.href;
+  const url = getMeetingUrl();
   const platform = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_2__.getPlatform)();
   // Send meeting_join for both KTalk and vas3k platforms
   if (url && platform) {
@@ -1072,7 +1086,7 @@ function startMeetingCheck() {
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.meetingCheckInterval = setInterval(() => {
     const inMeeting = isInMeeting();
-    const url = window.location.href;
+    const url = getMeetingUrl();
 
     if (inMeeting && url !== _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl) {
       if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl) {
@@ -1968,6 +1982,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _ktalk_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./ktalk.js */ "./src/platforms/ktalk.js");
 /* harmony import */ var _vas3k_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./vas3k.js */ "./src/platforms/vas3k.js");
+/* harmony import */ var _matrix_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./matrix.js */ "./src/platforms/matrix.js");
 /**
  * Platform detection and adapter factory
  *
@@ -1975,7 +1990,10 @@ __webpack_require__.r(__webpack_exports__);
  * - KTalk (ktalk.ru) - uses custom $conf wrapper with RxJS observables
  * - vas3k.cloud - uses standard Jitsi Meet APP object
  * - vkkovalev.work - uses standard Jitsi Meet APP object
+ * - Element Call / Matrix (element.vkkovalev.work) - bundled EC iframe at
+ *   /widgets/element-call/*; sources data from matrix-js-sdk + livekit
  */
+
 
 
 
@@ -1984,16 +2002,32 @@ let currentPlatform = null;
 let currentAdapter = null;
 
 /**
- * Detect which platform we're on based on hostname
+ * Detect which platform we're on based on hostname (and pathname for matrix).
+ *
+ * `loc` defaults to `window.location` but is injectable so tests can exercise
+ * multiple URLs in one file (jsdom forbids mutating `location` after setup).
  */
-function detectPlatform() {
-  const hostname = window.location.hostname;
+function detectPlatform(loc = window.location) {
+  const hostname = loc.hostname;
+  const pathname = loc.pathname || '';
 
   if (hostname.includes('ktalk.ru')) {
     return 'ktalk';
   }
   if (hostname.includes('vas3k.cloud')) {
     return 'vas3k';
+  }
+  // Element Call is bundled inside Element Web as a same-origin iframe served
+  // from /widgets/element-call/*. This check MUST come before the generic
+  // vkkovalev.work host check below, which would otherwise misroute
+  // element.* to the Jitsi (vkkovalev) adapter. Only the EC iframe path gets
+  // an adapter — the Element top frame (path '/') returns null so the
+  // extension does not open a second stray WS there.
+  if (hostname.includes('element.vkkovalev.work')) {
+    if (pathname.startsWith('/widgets/element-call/')) {
+      return 'matrix';
+    }
+    return null;
   }
   if (hostname.includes('vkkovalev.work')) {
     return 'vkkovalev';
@@ -2028,6 +2062,9 @@ function getPlatformAdapter() {
       case 'vkkovalev':
         currentAdapter = new _vas3k_js__WEBPACK_IMPORTED_MODULE_1__.Vas3kAdapter();
         break;
+      case 'matrix':
+        currentAdapter = new _matrix_js__WEBPACK_IMPORTED_MODULE_2__.ElementCallAdapter();
+        break;
       default:
         console.warn('[Platform] Unknown platform:', platform);
         return null;
@@ -2059,17 +2096,25 @@ function getPlatformDisplayName() {
       return 'Вастрик Мит';
     case 'vkkovalev':
       return 'VK Meet';
+    case 'matrix':
+      return 'Element Call';
     default:
       return 'Unknown';
   }
 }
 
 /**
- * Check if platform uses standard Jitsi Meet (not KTalk)
+ * Check if platform uses the floating-panel UI + conference retry-forever loop
+ * (everything except KTalk).
+ *
+ * Despite the historical name, this predicate is NOT just a Jitsi check: it
+ * also gates the conference retry loop (`init.js`) and 8+ `ui.js` sites, so
+ * matrix (Element Call, whose livekit conference mounts late) MUST be included
+ * or the retry gives up before the conference appears.
  */
 function isJitsiPlatform() {
   const platform = getPlatform();
-  return platform === 'vas3k' || platform === 'vkkovalev';
+  return platform === 'vas3k' || platform === 'vkkovalev' || platform === 'matrix';
 }
 
 
@@ -2615,6 +2660,513 @@ class KTalkAdapter {
     }
 
     return fallback || 'Unknown';
+  }
+}
+
+
+/***/ },
+
+/***/ "./src/platforms/matrix.js"
+/*!*********************************!*\
+  !*** ./src/platforms/matrix.js ***!
+  \*********************************/
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   ELEMENT_BASE_URL: () => (/* binding */ ELEMENT_BASE_URL),
+/* harmony export */   ElementCallAdapter: () => (/* binding */ ElementCallAdapter),
+/* harmony export */   buildMeetingTitle: () => (/* binding */ buildMeetingTitle),
+/* harmony export */   buildMeetingUrl: () => (/* binding */ buildMeetingUrl),
+/* harmony export */   findLivekitRoom: () => (/* binding */ findLivekitRoom),
+/* harmony export */   findTrackRefs: () => (/* binding */ findTrackRefs),
+/* harmony export */   getFiberFromNode: () => (/* binding */ getFiberFromNode),
+/* harmony export */   membershipToParticipant: () => (/* binding */ membershipToParticipant),
+/* harmony export */   parseRtcIdentity: () => (/* binding */ parseRtcIdentity),
+/* harmony export */   resolveDisplayName: () => (/* binding */ resolveDisplayName),
+/* harmony export */   walkFiberForProps: () => (/* binding */ walkFiberForProps)
+/* harmony export */ });
+/**
+ * Element Call (Matrix) Platform Adapter
+ *
+ * Element Call is bundled inside Element Web as a same-origin iframe served from
+ * /widgets/element-call/*. This adapter runs ONLY inside that iframe (manifest
+ * scope) and sources data from Element Call internals:
+ *
+ * - `window.matrixclient` (matrix-js-sdk client) — display names, local userId.
+ * - `window.rtcSession` (MatrixRTCSession; mounts on call join, removed on
+ *   leave) — room id + `memberships[]` (plain `userId` + `deviceId`).
+ * - a React fiber-walk from any decoded `<audio>` element up to the livekit
+ *   `Room` (`memoizedProps.livekitRoom`) for active-speaker events. The Room
+ *   mounts late (first unmute), so it is discovered lazily and cached.
+ *
+ * Identity note: on this deploy `participant.identity` is the LEGACY plain
+ * format `${userId}:${deviceId}` (e.g. `@test2:matrix.vkkovalev.work:IZFUKTQLPX`),
+ * not the sha256 hash. `parseRtcIdentity` parses it directly and keeps a
+ * memberships (`rtcBackendIdentity`) fallback for the future sticky-event
+ * MatrixRTC hash format.
+ *
+ * Assumption: a single LiveKit focus per call (personal single-server deploy) —
+ * the first `livekitRoom` found in the fiber tree is used.
+ */
+
+const ELEMENT_BASE_URL = 'https://element.vkkovalev.work';
+
+const FIBER_KEY_PREFIX = '__reactFiber$';
+const MAX_FIBER_HOPS = 50;
+const ROOM_RETRY_INTERVAL_MS = 2000;
+
+// ---------------------------------------------------------------------------
+// Pure helpers (unit-tested in matrix.test.js)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a livekit participant identity into `{ userId, deviceId }`.
+ *
+ * Legacy plain format: `${userId}:${deviceId}` where `userId` is itself
+ * `@localpart:homeserver` (so a valid legacy identity has ≥2 colons; the
+ * deviceId is the segment after the LAST colon). Falls back to matching the
+ * identity against `membership.rtcBackendIdentity` (future sha256-hash form).
+ * Returns null for malformed / non-matching input.
+ */
+function parseRtcIdentity(identity, memberships = []) {
+  if (typeof identity !== 'string' || !identity) return null;
+
+  if (identity.startsWith('@')) {
+    const firstColon = identity.indexOf(':');
+    const lastColon = identity.lastIndexOf(':');
+    // firstColon separates localpart:homeserver; lastColon separates :deviceId.
+    if (firstColon > 0 && lastColon > firstColon) {
+      return {
+        userId: identity.slice(0, lastColon),
+        deviceId: identity.slice(lastColon + 1),
+      };
+    }
+  }
+
+  for (const m of memberships || []) {
+    if (m && m.rtcBackendIdentity === identity) {
+      return { userId: m.userId, deviceId: m.deviceId };
+    }
+  }
+
+  return null;
+}
+
+/** Resolve a matrix userId to its room display name (fallback: the userId). */
+function resolveDisplayName(matrixclient, roomId, userId) {
+  if (!userId) return 'Unknown';
+  try {
+    const member = matrixclient?.getRoom?.(roomId)?.getMember?.(userId);
+    return member?.name || userId;
+  } catch (e) {
+    return userId;
+  }
+}
+
+/**
+ * Map an rtcSession membership to the participant shape the UI/speaker code
+ * expects (`{ id, name, isLocal, isSpeaking, micMuted }`).
+ */
+function membershipToParticipant(membership, ctx = {}) {
+  const {
+    matrixclient,
+    roomId,
+    localUserId,
+    localDeviceId = null,
+    speakingUserIds = new Set(),
+    mutedUserIds = new Set(),
+  } = ctx;
+  const userId = membership?.userId;
+  const deviceId = membership?.deviceId ?? null;
+  const name = resolveDisplayName(matrixclient, roomId, userId);
+  const isLocal =
+    !!userId &&
+    userId === localUserId &&
+    (localDeviceId == null || deviceId == null || deviceId === localDeviceId);
+  return {
+    id: userId,
+    name,
+    isLocal,
+    isSpeaking: speakingUserIds.has(userId),
+    micMuted: mutedUserIds.has(userId),
+  };
+}
+
+/** Synthesize the canonical Element deep-link `#/room/<roomId>`. */
+function buildMeetingUrl(roomId) {
+  if (!roomId) return null;
+  return `${ELEMENT_BASE_URL}/#/room/${roomId}`;
+}
+
+/** Resolve the room name from matrixclient (fallback: empty string). */
+function buildMeetingTitle(matrixclient, roomId) {
+  if (!roomId) return '';
+  try {
+    return matrixclient?.getRoom?.(roomId)?.name || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fiber walk
+// ---------------------------------------------------------------------------
+
+/** Read the React fiber attached to a DOM node (`__reactFiber$*` property). */
+function getFiberFromNode(node) {
+  if (!node) return null;
+  const key = Object.keys(node).find((k) => k.startsWith(FIBER_KEY_PREFIX));
+  return key ? node[key] : null;
+}
+
+/**
+ * Walk a fiber chain upward via `.return`, collecting `memoizedProps.trackRef`
+ * and `memoizedProps.livekitRoom`. Stops once both are found or the hop cap is
+ * reached.
+ */
+function walkFiberForProps(fiber, maxHops = MAX_FIBER_HOPS) {
+  let current = fiber;
+  let hops = 0;
+  let trackRef = null;
+  let livekitRoom = null;
+  while (current && hops < maxHops) {
+    const props = current.memoizedProps;
+    if (props) {
+      if (!trackRef && props.trackRef) trackRef = props.trackRef;
+      if (!livekitRoom && props.livekitRoom) livekitRoom = props.livekitRoom;
+    }
+    if (trackRef && livekitRoom) break;
+    current = current.return;
+    hops++;
+  }
+  return { trackRef, livekitRoom };
+}
+
+function decodedAudioElements(doc) {
+  return [...doc.querySelectorAll('audio')].filter((a) => a.srcObject);
+}
+
+/** Find the livekit `Room` by walking the fiber of any decoded `<audio>`. */
+function findLivekitRoom(doc = document) {
+  for (const audio of decodedAudioElements(doc)) {
+    const fiber = getFiberFromNode(audio);
+    if (!fiber) continue;
+    const { livekitRoom } = walkFiberForProps(fiber);
+    if (livekitRoom) return livekitRoom;
+  }
+  return null;
+}
+
+/** Collect every `trackRef` reachable from decoded `<audio>` fibers. */
+function findTrackRefs(doc = document) {
+  const refs = [];
+  for (const audio of decodedAudioElements(doc)) {
+    const fiber = getFiberFromNode(audio);
+    if (!fiber) continue;
+    const { trackRef } = walkFiberForProps(fiber);
+    if (trackRef) refs.push(trackRef);
+  }
+  return refs;
+}
+
+// ---------------------------------------------------------------------------
+// Adapter
+// ---------------------------------------------------------------------------
+
+const ROOM_SPEAKER_EVENTS = [
+  'activeSpeakersChanged',
+  'participantConnected',
+  'participantDisconnected',
+  'trackMuted',
+  'trackUnmuted',
+];
+
+class ElementCallAdapter {
+  constructor(win = window, doc = document) {
+    this.name = 'matrix';
+    this._win = win;
+    this._doc = doc;
+    this._room = null; // cached livekit Room (found via fiber-walk)
+    this._roomRetryTimer = null;
+    this._roomEventsAttached = false;
+    this._speakerHandlers = [];
+    this._speakerCallback = null;
+    this._joinCallback = null;
+  }
+
+  _rtcSession() {
+    return this._win.rtcSession || null;
+  }
+
+  _matrixClient() {
+    return this._win.matrixclient || null;
+  }
+
+  _roomId() {
+    return this._rtcSession()?.room?.roomId || null;
+  }
+
+  _memberships() {
+    return this._rtcSession()?.memberships || [];
+  }
+
+  // -- Conference lifecycle --------------------------------------------------
+
+  isInPrejoin() {
+    // Element Call renders its own lobby; nothing to surface to the panel yet.
+    return false;
+  }
+
+  isConferenceAvailable() {
+    return !!(this._rtcSession() && this._matrixClient());
+  }
+
+  waitForConference(maxAttempts = 200) {
+    return new Promise((resolve, reject) => {
+      let attempts = 0;
+      const check = () => {
+        attempts++;
+        if (this.isConferenceAvailable()) {
+          console.log('[Matrix Adapter] Conference found (rtcSession + matrixclient)');
+          resolve(this.getConference());
+          return;
+        }
+        if (attempts < maxAttempts) {
+          setTimeout(check, 500);
+        } else {
+          reject(new Error('Conference not found'));
+        }
+      };
+      check();
+    });
+  }
+
+  /** rtcSession drives participants + lifecycle. */
+  getConference() {
+    return this._rtcSession();
+  }
+
+  /**
+   * Returns the livekit `Room` — `null` until the fiber-walk finds it, then the
+   * cached `Room`. init.js reattaches active-speaker subscriptions only when
+   * this object identity changes; the Room mounts late (first unmute) so the
+   * single `null → Room` flip is what drives that reattach.
+   */
+  getJitsiConference() {
+    return this._ensureRoom();
+  }
+
+  _ensureRoom() {
+    if (this._room) return this._room;
+    const room = findLivekitRoom(this._doc);
+    if (room) {
+      this._room = room;
+      this._stopRoomRetry();
+      // Attach speaker events now that the Room exists (if a subscriber waits).
+      if (this._speakerCallback) this._attachRoomSpeakerEvents();
+    } else {
+      this._startRoomRetry();
+    }
+    return this._room;
+  }
+
+  _startRoomRetry() {
+    if (this._roomRetryTimer) return;
+    this._roomRetryTimer = setInterval(() => {
+      this._ensureRoom();
+    }, ROOM_RETRY_INTERVAL_MS);
+  }
+
+  _stopRoomRetry() {
+    if (this._roomRetryTimer) {
+      clearInterval(this._roomRetryTimer);
+      this._roomRetryTimer = null;
+    }
+  }
+
+  isConferenceReady() {
+    // Ready once the livekit Room is found (tracks decoded) or memberships
+    // exist — the mixed-audio path works regardless; active-speaker degrades
+    // gracefully until the Room is found.
+    if (this._ensureRoom()) return true;
+    return this._memberships().length > 0;
+  }
+
+  // -- Participants ----------------------------------------------------------
+
+  _livekitParticipants() {
+    const room = this._room;
+    const out = [];
+    if (!room) return out;
+    if (room.localParticipant) out.push(room.localParticipant);
+    room.remoteParticipants?.forEach?.((p) => out.push(p));
+    return out;
+  }
+
+  _speakingUserIds() {
+    const set = new Set();
+    const memberships = this._memberships();
+    for (const p of this._livekitParticipants()) {
+      if (p?.isSpeaking) {
+        const parsed = parseRtcIdentity(p.identity, memberships);
+        if (parsed) set.add(parsed.userId);
+      }
+    }
+    return set;
+  }
+
+  _mutedUserIds() {
+    const set = new Set();
+    const memberships = this._memberships();
+    for (const p of this._livekitParticipants()) {
+      if (p?.isMicrophoneEnabled === false) {
+        const parsed = parseRtcIdentity(p.identity, memberships);
+        if (parsed) set.add(parsed.userId);
+      }
+    }
+    return set;
+  }
+
+  getParticipants() {
+    const matrixclient = this._matrixClient();
+    const roomId = this._roomId();
+    this._ensureRoom(); // populate livekit state for speaking/muted flags
+    const ctx = {
+      matrixclient,
+      roomId,
+      localUserId: matrixclient?.getUserId?.() || null,
+      localDeviceId: matrixclient?.getDeviceId?.() || null,
+      speakingUserIds: this._speakingUserIds(),
+      mutedUserIds: this._mutedUserIds(),
+    };
+    return this._memberships().map((m) => membershipToParticipant(m, ctx));
+  }
+
+  getParticipantName(participantId) {
+    if (!participantId) return 'Unknown';
+    return resolveDisplayName(this._matrixClient(), this._roomId(), participantId);
+  }
+
+  // -- Active speaker --------------------------------------------------------
+
+  getActiveSpeaker() {
+    const room = this._ensureRoom();
+    if (!room) return null;
+
+    let speaking = null;
+    const active = room.activeSpeakers || [];
+    speaking = active.find((p) => p && p.isSpeaking) || active[0] || null;
+    if (!speaking) {
+      for (const p of this._livekitParticipants()) {
+        if (p?.isSpeaking) {
+          speaking = p;
+          break;
+        }
+      }
+    }
+    if (!speaking) return null;
+
+    const parsed = parseRtcIdentity(speaking.identity, this._memberships());
+    if (!parsed) return null;
+
+    const matrixclient = this._matrixClient();
+    return {
+      id: parsed.userId,
+      name: resolveDisplayName(matrixclient, this._roomId(), parsed.userId),
+      isLocal: parsed.userId === matrixclient?.getUserId?.(),
+    };
+  }
+
+  _attachRoomSpeakerEvents() {
+    const room = this._room;
+    if (!room || typeof room.on !== 'function' || this._roomEventsAttached) return;
+    const handler = () => this._speakerCallback?.();
+    for (const event of ROOM_SPEAKER_EVENTS) {
+      room.on(event, handler);
+      this._speakerHandlers.push({ event, handler });
+    }
+    if (this._joinCallback) {
+      const joinHandler = (p) => setTimeout(() => this._joinCallback(p?.identity), 500);
+      room.on('participantConnected', joinHandler);
+      this._speakerHandlers.push({ event: 'participantConnected', handler: joinHandler });
+    }
+    this._roomEventsAttached = true;
+  }
+
+  subscribeToSpeakerChanges(callback) {
+    this._speakerCallback = callback;
+    // Attach now if the Room already exists; otherwise _ensureRoom's retry
+    // attaches once the Room mounts (first unmute).
+    this._ensureRoom();
+    this._attachRoomSpeakerEvents();
+  }
+
+  onParticipantJoined(callback) {
+    this._joinCallback = callback;
+    // If events are already attached, wire the join listener immediately.
+    if (this._room && this._roomEventsAttached && typeof this._room.on === 'function') {
+      const joinHandler = (p) => setTimeout(() => callback(p?.identity), 500);
+      this._room.on('participantConnected', joinHandler);
+      this._speakerHandlers.push({ event: 'participantConnected', handler: joinHandler });
+    }
+  }
+
+  // -- Mic state -------------------------------------------------------------
+
+  isMicMuted(participantId) {
+    const memberships = this._memberships();
+    const p = this._livekitParticipants().find((lp) => {
+      const parsed = parseRtcIdentity(lp.identity, memberships);
+      return parsed && parsed.userId === participantId;
+    });
+    if (!p) return false; // unknown → assume on; mixed audio is captured regardless
+    if (typeof p.isMicrophoneEnabled === 'boolean') return !p.isMicrophoneEnabled;
+    return false;
+  }
+
+  anyMicOn() {
+    return this._livekitParticipants().some((p) => p.isMicrophoneEnabled === true);
+  }
+
+  // -- Meeting url -----------------------------------------------------------
+
+  /**
+   * Canonical synthesized meeting url. Inside the EC iframe `location.href` is
+   * `…/widgets/element-call/index.html#…` (path-derived live_id would be
+   * "index.html"), so both meeting_join and the change-detection tick must use
+   * this synthesized `#/room/<roomId>` url instead.
+   */
+  getMeetingUrl() {
+    return buildMeetingUrl(this._roomId());
+  }
+
+  // -- UI hooks --------------------------------------------------------------
+
+  getTabContainerSelector() {
+    return null; // floating-panel platform, no native tabs
+  }
+
+  getContentAreaSelector() {
+    return null;
+  }
+
+  supportsTabInjection() {
+    return false; // use the floating panel
+  }
+
+  // -- Cleanup ---------------------------------------------------------------
+
+  dispose() {
+    const room = this._room;
+    if (room && typeof room.off === 'function') {
+      this._speakerHandlers.forEach(({ event, handler }) => room.off(event, handler));
+    }
+    this._speakerHandlers = [];
+    this._roomEventsAttached = false;
+    this._stopRoomRetry();
+    // Note: the cached Room is intentionally kept across reattach — its object
+    // identity must stay stable so init.js does not thrash subscriptions.
   }
 }
 
@@ -3564,7 +4116,11 @@ const state = {
   copilotContentElement: null,
   isCopilotActive: false,
   copilotUnread: false,
-  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript'
+  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript',
+
+  // Active view of the floating panel (Jitsi / matrix platforms): the panel
+  // hosts both the transcript and the ported Copilot chat view.
+  vas3kActiveView: 'transcript'
 };
 
 
@@ -3583,10 +4139,13 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   copyVas3kTranscript: () => (/* binding */ copyVas3kTranscript),
 /* harmony export */   createFloatingPanel: () => (/* binding */ createFloatingPanel),
 /* harmony export */   createVas3kSummaryModal: () => (/* binding */ createVas3kSummaryModal),
+/* harmony export */   ensureVas3kCopilotHost: () => (/* binding */ ensureVas3kCopilotHost),
 /* harmony export */   handleVas3kSummaryResponse: () => (/* binding */ handleVas3kSummaryResponse),
 /* harmony export */   highlightVas3kLine: () => (/* binding */ highlightVas3kLine),
 /* harmony export */   initVas3kUI: () => (/* binding */ initVas3kUI),
 /* harmony export */   injectVas3kStyles: () => (/* binding */ injectVas3kStyles),
+/* harmony export */   setVas3kCopilotActivateHandler: () => (/* binding */ setVas3kCopilotActivateHandler),
+/* harmony export */   setVas3kView: () => (/* binding */ setVas3kView),
 /* harmony export */   showVas3kPrejoinState: () => (/* binding */ showVas3kPrejoinState),
 /* harmony export */   showVas3kWaitingState: () => (/* binding */ showVas3kWaitingState),
 /* harmony export */   toggleVas3kFollow: () => (/* binding */ toggleVas3kFollow),
@@ -3610,6 +4169,17 @@ __webpack_require__.r(__webpack_exports__);
 let panelVisible = true;
 let isDragging = false;
 let dragOffset = { x: 0, y: 0 };
+
+// Optional hook invoked when the user clicks the Copilot sub-tab. Registered
+// by ui.js (which owns the copilot subsystem) so a tab click can lazily build
+// the copilot content and focus its input. ui-vas3k must not import ui.js
+// (ui.js already imports ui-vas3k — the reverse would be a cycle), so the
+// dependency is inverted through this setter.
+let copilotActivateHandler = null;
+
+function setVas3kCopilotActivateHandler(fn) {
+  copilotActivateHandler = fn;
+}
 
 /**
  * Inject styles for the floating panel
@@ -3702,6 +4272,71 @@ function injectVas3kStyles() {
     .jitsi-transcript-header button.active {
       background: rgba(100, 181, 246, 0.3);
       color: #64B5F6;
+    }
+
+    /* Sub-tab bar: Transcript | Copilot */
+    .jitsi-panel-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 6px 10px;
+      background: rgba(45, 45, 45, 0.9);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .jitsi-panel-tab {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .jitsi-panel-tab:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .jitsi-panel-tab.active {
+      background: rgba(100, 181, 246, 0.25);
+      color: #64B5F6;
+    }
+
+    /* Unread marker on the Copilot sub-tab. Self-contained so it renders in
+       the tab bar even before the copilot content (and ui.js styles) mount. */
+    .jitsi-panel-tab .ktalk-ai-unread {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #4ade80;
+      display: inline-block;
+    }
+
+    .jitsi-panel-tab .ktalk-ai-unread[hidden] {
+      display: none;
+    }
+
+    /* Copilot chat host inside the floating panel. The reused
+       .ktalk-copilot-content element mounts here; its own styles come from
+       ui.js injectStyles() (called by createCopilotContent on this platform). */
+    .jitsi-copilot-host {
+      flex: 1;
+      min-height: 0;
+      max-height: 340px;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .jitsi-copilot-host .ktalk-copilot-content.active {
+      flex: 1;
+      min-height: 0;
     }
 
     /* Highlighted transcript line */
@@ -4019,6 +4654,10 @@ function createFloatingPanel() {
         <button class="jitsi-close-btn" title="Скрыть">×</button>
       </div>
     </div>
+    <div class="jitsi-panel-tabs">
+      <button type="button" class="jitsi-panel-tab active" data-view="transcript">Транскрипт</button>
+      <button type="button" class="jitsi-panel-tab" data-view="copilot">Copilot<span class="ktalk-ai-unread" hidden></span></button>
+    </div>
     <div class="jitsi-speaker-status">
       <span class="jitsi-speaker-dot"></span>
       <span class="jitsi-speaker-name">Ожидание подключения...</span>
@@ -4028,6 +4667,7 @@ function createFloatingPanel() {
         Транскрипт появится здесь, когда начнётся речь
       </div>
     </div>
+    <div class="jitsi-copilot-host"></div>
   `;
 
   document.body.appendChild(panel);
@@ -4100,10 +4740,59 @@ function createFloatingPanel() {
     panelVisible = true;
   });
 
+  // Sub-tab bar: Transcript | Copilot. Clicking a tab switches the panel's
+  // active view; the Copilot content is built lazily on first activation via
+  // the handler ui.js registers (it owns the copilot subsystem).
+  panel.querySelectorAll('.jitsi-panel-tab').forEach((tab) => {
+    tab.addEventListener('click', () => setVas3kView(tab.dataset.view));
+  });
+
   // Store reference
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement = panel.querySelector('.jitsi-transcript-content');
 
   return true;
+}
+
+/**
+ * Ensure the floating panel exists and return its copilot host container.
+ * ui.js's createCopilotContent() mounts the shared `.ktalk-copilot-content`
+ * DOM into this host on floating-panel platforms (vas3k / matrix).
+ */
+function ensureVas3kCopilotHost() {
+  let host = document.querySelector('.jitsi-transcript-panel .jitsi-copilot-host');
+  if (!host) {
+    createFloatingPanel();
+    host = document.querySelector('.jitsi-transcript-panel .jitsi-copilot-host');
+  }
+  return host;
+}
+
+/**
+ * Switch the floating panel between the Transcript and Copilot views.
+ * Panel-level DOM (tab highlight, content visibility) is handled here;
+ * copilot-subsystem state (lazy content build, active class, unread reset,
+ * input focus) is delegated to the handler ui.js registers, so ui-vas3k
+ * stays free of a ui.js import (which would form a cycle).
+ */
+function setVas3kView(view) {
+  const panel = document.querySelector('.jitsi-transcript-panel');
+  if (!panel) return;
+
+  const isCopilot = view === 'copilot';
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.vas3kActiveView = view;
+
+  panel.querySelectorAll('.jitsi-panel-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === view);
+  });
+
+  const transcript = panel.querySelector('.jitsi-transcript-content');
+  const host = panel.querySelector('.jitsi-copilot-host');
+  const speakerStatus = panel.querySelector('.jitsi-speaker-status');
+  if (transcript) transcript.style.display = isCopilot ? 'none' : '';
+  if (host) host.style.display = isCopilot ? 'flex' : 'none';
+  if (speakerStatus) speakerStatus.style.display = isCopilot ? 'none' : '';
+
+  if (copilotActivateHandler) copilotActivateHandler(view);
 }
 
 /**
@@ -5967,13 +6656,21 @@ function createCopilotContent() {
     return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement;
   }
 
-  const contentArea = document.querySelector('.slide-menu-wrapper .content');
-  if (!contentArea) {
-    console.log('[KTalk Transcript] Content area not found for copilot');
-    return null;
+  let panelBody;
+  if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
+    // Floating-panel platforms (vas3k / matrix): mount the copilot chat inside
+    // the panel's copilot host instead of the KTalk slide-menu tab. The shared
+    // copilot message/chip styles live in ui.js injectStyles().
+    injectStyles();
+    panelBody = (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.ensureVas3kCopilotHost)();
+  } else {
+    const contentArea = document.querySelector('.slide-menu-wrapper .content');
+    if (!contentArea) {
+      console.log('[KTalk Transcript] Content area not found for copilot');
+      return null;
+    }
+    panelBody = ensureAiPanelBody(contentArea);
   }
-
-  const panelBody = ensureAiPanelBody(contentArea);
   if (!panelBody) return null;
 
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement = document.createElement('div');
@@ -6674,6 +7371,23 @@ function activateCopilotTab() {
 
 function deactivateCustomTabs() {
   setActiveView(null);
+}
+
+// Handler registered with ui-vas3k so a floating-panel view switch drives the
+// copilot subsystem (lazy content build, active class, unread reset, focus).
+// Panel-level DOM (tab highlight, content visibility) stays in ui-vas3k.
+function activateVas3kView(view) {
+  const isCopilot = view === 'copilot';
+  if (isCopilot) ensureCopilotContent();
+  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement) {
+    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.classList.toggle('active', isCopilot);
+  }
+  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive = isCopilot;
+  if (isCopilot) {
+    setCopilotUnread(false);
+    const input = getCopilotInputEl();
+    if (input) input.focus();
+  }
 }
 
 function watchTabChanges() {
@@ -7825,6 +8539,8 @@ function handleSummaryResponse(data) {
  */
 function initPlatformUI() {
   if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
+    // Let the floating panel drive the copilot subsystem on view switches.
+    (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.setVas3kCopilotActivateHandler)(activateVas3kView);
     return (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.initVas3kUI)();
   }
 
@@ -8072,6 +8788,10 @@ function connectWebSocket() {
         } else if (data.type === 'anchor_response') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
         } else if (data.type === 'copilot_reply') {
+          // Platform dispatch is centralized in the handler: ensureCopilotContent
+          // → createCopilotContent() mounts the copilot chat into the floating
+          // panel on floating-panel platforms (matrix / vas3k) and the KTalk tab
+          // otherwise, so copilot frames reach the right surface on every platform.
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleCopilotReply)(data);
         } else if (data.type === 'copilot_status') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleCopilotStatus)(data);
