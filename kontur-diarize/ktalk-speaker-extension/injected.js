@@ -3118,7 +3118,7 @@ class ElementCallAdapter {
       this._speakerHandlers.push({ event, handler });
     }
     if (this._joinCallback) {
-      const joinHandler = (p) => setTimeout(() => this._joinCallback(p?.identity), 500);
+      const joinHandler = (p) => setTimeout(() => this._joinCallback?.(p?.identity), 500);
       room.on('participantConnected', joinHandler);
       this._speakerHandlers.push({ event: 'participantConnected', handler: joinHandler });
     }
