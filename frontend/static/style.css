@@ -24,6 +24,7 @@
     --source-local: #4ade80;
     --source-orphan: #fbbf24;
     --source-diarized: #a78bfa;
+    --source-matrix: #0dbd8b;
 
     --border: #2d2d4a;
     --shadow: rgba(0, 0, 0, 0.3);
@@ -388,6 +389,11 @@ a:hover {
 .source-diarized {
     background: rgba(167, 139, 250, 0.2);
     color: var(--source-diarized);
+}
+
+.source-matrix {
+    background: rgba(13, 189, 139, 0.2);
+    color: var(--source-matrix);
 }
 
 .source-unknown {
