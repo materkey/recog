@@ -995,6 +995,12 @@ __webpack_require__.r(__webpack_exports__);
 
 
 let titleSentForUrl = null;
+// Per-join generation token: bumped on every `sendMeetingJoin()` so a pending
+// title-retry chain from a previous join (same OR different url) invalidates
+// itself instead of leaking its near-exhausted `attempt` count into the fresh
+// join. The `scheduledUrl` guard alone cannot catch a leave+rejoin of the same
+// room (e.g. after `meeting_join_rejected`).
+let titleRetryGen = 0;
 
 // The adapter's authoritative title (matrix → room name) can resolve after the
 // initial 2 s window: the Element Call iframe runs its own matrix-js-sdk client
@@ -1017,11 +1023,26 @@ function getMeetingUrl() {
   return adapter?.getMeetingUrl?.() || window.location.href;
 }
 
-function sendDelayedTitle(attempt = 0) {
+function sendDelayedTitle(attempt = 0, scheduledUrl = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl, gen = titleRetryGen) {
   // Отправляем title через 2 сек после входа, когда страница уже загрузилась
   setTimeout(() => {
+    // A newer join has superseded this retry chain. The `scheduledUrl` guard
+    // below only distinguishes DIFFERENT meetings; a leave+rejoin of the SAME
+    // url (e.g. after `meeting_join_rejected`) would otherwise let this stale
+    // chain's near-exhausted `attempt` count fall back to `document.title` and
+    // lock the room before the fresh join's room name has synced. The per-join
+    // generation token invalidates the old chain regardless of url.
+    if (gen !== titleRetryGen) return;
+
     const url = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl;
     if (!url || titleSentForUrl === url) return;
+
+    // Abandon this retry chain if the meeting changed since it was scheduled.
+    // Retries read `state.currentMeetingUrl` fresh, so a stale chain from
+    // meeting A (carrying A's near-exhausted `attempt` count) could otherwise
+    // fire during meeting B, skip B's own retries, and prematurely lock B to
+    // the generic `document.title` before B's room name has synced.
+    if (scheduledUrl !== url) return;
 
     // Prefer the adapter's authoritative title (matrix → room name) over the
     // page title: inside the EC iframe `document.title` is Element Call's own
@@ -1033,7 +1054,7 @@ function sendDelayedTitle(attempt = 0) {
     // Adapter has a title hook but the room name has not resolved yet — retry
     // instead of locking in the generic `document.title` for the whole meeting.
     if (hasTitleHook && !adapterTitle && attempt < TITLE_MAX_RETRIES) {
-      sendDelayedTitle(attempt + 1);
+      sendDelayedTitle(attempt + 1, scheduledUrl, gen);
       return;
     }
 
@@ -1062,6 +1083,9 @@ function sendMeetingJoin() {
       title: ''  // Title отправим позже когда страница загрузится
     });
     console.log(`[${platform} Transcript] Sent meeting_join:`, url);
+    // Supersede any pending title-retry chain from a prior join before starting
+    // a fresh one (see `titleRetryGen`).
+    titleRetryGen++;
     sendDelayedTitle();
   }
 }
@@ -3048,13 +3072,26 @@ class ElementCallAdapter {
   }
 
   _mutedUserIds() {
-    const set = new Set();
+    // Aggregate per userId with the same "EVERY device muted" rule as
+    // isMicMuted(): a user counts as muted only when all of their livekit
+    // devices have their mic disabled. If any device is on (e.g. a second
+    // device is the active speaker while the local one is muted) the user is
+    // producing audio and must read as unmuted here too — otherwise
+    // getParticipants() emits micMuted:true, the bridge's are_all_mics_muted()
+    // wrongly becomes true, and the mixed-path transcript is marked
+    // uncertain_reason="mics_off" for someone who is actually speaking.
     const memberships = this._memberships();
+    const allMutedByUser = new Map(); // userId → every device so far muted?
     for (const p of this._livekitParticipants()) {
-      if (p?.isMicrophoneEnabled === false) {
-        const parsed = parseRtcIdentity(p.identity, memberships);
-        if (parsed) set.add(parsed.userId);
-      }
+      const parsed = parseRtcIdentity(p.identity, memberships);
+      if (!parsed) continue;
+      const muted = p.isMicrophoneEnabled === false;
+      const prev = allMutedByUser.get(parsed.userId);
+      allMutedByUser.set(parsed.userId, prev === undefined ? muted : prev && muted);
+    }
+    const set = new Set();
+    for (const [userId, allMuted] of allMutedByUser) {
+      if (allMuted) set.add(userId);
     }
     return set;
   }
@@ -3102,10 +3139,19 @@ class ElementCallAdapter {
     if (!parsed) return null;
 
     const matrixclient = this._matrixClient();
+    const localUserId = matrixclient?.getUserId?.() || null;
+    const localDeviceId = matrixclient?.getDeviceId?.() || null;
+    // Device-aware local check (mirrors membershipToParticipant): the same
+    // matrix user joined from another device must NOT be flagged isLocal, or
+    // their remote speech would be misattributed to the local mic path.
+    const isLocal =
+      !!parsed.userId &&
+      parsed.userId === localUserId &&
+      (localDeviceId == null || parsed.deviceId == null || parsed.deviceId === localDeviceId);
     return {
       id: parsed.userId,
       name: resolveDisplayName(matrixclient, this._roomId(), parsed.userId),
-      isLocal: parsed.userId === matrixclient?.getUserId?.(),
+      isLocal,
     };
   }
 
@@ -3147,13 +3193,18 @@ class ElementCallAdapter {
 
   isMicMuted(participantId) {
     const memberships = this._memberships();
-    const p = this._livekitParticipants().find((lp) => {
+    const matches = this._livekitParticipants().filter((lp) => {
       const parsed = parseRtcIdentity(lp.identity, memberships);
       return parsed && parsed.userId === participantId;
     });
-    if (!p) return false; // unknown → assume on; mixed audio is captured regardless
-    if (typeof p.isMicrophoneEnabled === 'boolean') return !p.isMicrophoneEnabled;
-    return false;
+    if (matches.length === 0) return false; // unknown → assume on; mixed audio is captured regardless
+    // A user may be joined from multiple devices. Treat them as muted only when
+    // EVERY device has its mic disabled: if any device's mic is on (e.g. a
+    // second device is the active speaker while the local one is muted), the
+    // user is producing audio and sendFilteredSpeakerUpdate must not suppress
+    // it. A plain `.find()` returns localParticipant first and would report the
+    // muted local device, dropping the remote same-user device's speech.
+    return matches.every((lp) => lp.isMicrophoneEnabled === false);
   }
 
   anyMicOn() {
@@ -8763,7 +8814,12 @@ function connectWebSocket() {
       // Send participants for both KTalk and vas3k
       const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_6__.getPlatformAdapter)();
       if (adapter) {
-        const conf = adapter.getConference();
+        // Gate on isConferenceAvailable(), not a merely-truthy getConference():
+        // for matrix getConference() returns rtcSession even before roomId
+        // resolves, so sendMeetingJoin() would fall back to the EC iframe's
+        // index.html URL and store live_id="index.html" — the exact collapse
+        // isConferenceAvailable() guards against. Mirrors isInMeeting().
+        const conf = adapter.isConferenceAvailable() ? adapter.getConference() : null;
         if (conf) {
           (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendParticipantsUpdate)(conf);
           const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.getActiveSpeaker)(conf);

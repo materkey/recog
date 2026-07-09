@@ -31,7 +31,12 @@ export function connectWebSocket() {
       // Send participants for both KTalk and vas3k
       const adapter = getPlatformAdapter();
       if (adapter) {
-        const conf = adapter.getConference();
+        // Gate on isConferenceAvailable(), not a merely-truthy getConference():
+        // for matrix getConference() returns rtcSession even before roomId
+        // resolves, so sendMeetingJoin() would fall back to the EC iframe's
+        // index.html URL and store live_id="index.html" — the exact collapse
+        // isConferenceAvailable() guards against. Mirrors isInMeeting().
+        const conf = adapter.isConferenceAvailable() ? adapter.getConference() : null;
         if (conf) {
           sendParticipantsUpdate(conf);
           const activeSpeaker = getActiveSpeaker(conf);

@@ -25,7 +25,7 @@ jest.unstable_mockModule('./ws_api.js', () => ({
   sendWsMessage: mockSendWsMessage,
 }));
 
-const { getMeetingUrl, sendMeetingJoin, sendMeetingLeave, startMeetingCheck } = await import('./meeting.js');
+const { getMeetingUrl, sendMeetingJoin, sendMeetingLeave, handleMeetingJoinRejected, startMeetingCheck } = await import('./meeting.js');
 const { state } = await import('./state.js');
 
 const MATRIX_URL = 'https://element.vkkovalev.work/#/room/!spike:matrix.vkkovalev.work';
@@ -160,6 +160,86 @@ describe('sendDelayedTitle prefers the adapter title', () => {
 
     const titleMsg = mockSendWsMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'meeting_title_update');
     expect(titleMsg).toMatchObject({ type: 'meeting_title_update', title: 'Recog Spike' });
+  });
+
+  test('a stale title retry from meeting A does not lock meeting B to document.title', () => {
+    document.title = 'Element Call';
+    const urlA = 'https://element.vkkovalev.work/#/room/!A:matrix.vkkovalev.work';
+    const urlB = 'https://element.vkkovalev.work/#/room/!B:matrix.vkkovalev.work';
+    let currentUrl = urlA;
+    const titleByUrl = { [urlA]: '', [urlB]: '' }; // neither room name synced yet
+    mockAdapter = {
+      getMeetingUrl: () => currentUrl,
+      getMeetingTitle: () => titleByUrl[currentUrl] || '',
+      isConferenceAvailable: () => true,
+    };
+    mockPlatform = 'matrix';
+
+    // Join A; run its retries almost to exhaustion while A's name stays unresolved.
+    // After 5 ticks attempts 0..4 have run and the final (attempt 5) retry is
+    // still PENDING — the stale chain that must not leak into meeting B.
+    sendMeetingJoin();
+    jest.advanceTimersByTime(2000 * 5);
+
+    // Switch to B before A's chain exhausts.
+    sendMeetingLeave('changed_meeting');
+    currentUrl = urlB;
+    sendMeetingJoin();
+
+    // Next tick: A's pending attempt-5 fires (URL now B). Without URL scoping it
+    // would give up and lock B to document.title. B's name resolves before B's
+    // OWN chain exhausts, so a correctly-scoped B chain still emits the room name.
+    jest.advanceTimersByTime(2000);
+    titleByUrl[urlB] = 'Room B';
+    jest.advanceTimersByTime(2000 * 2);
+
+    const titles = mockSendWsMessage.mock.calls
+      .map((c) => c[0])
+      .filter((m) => m.type === 'meeting_title_update')
+      .map((m) => m.title);
+    expect(titles).not.toContain('Element Call');
+    expect(titles).toContain('Room B');
+  });
+
+  test('a stale title retry after a same-room rejoin does not lock the room to document.title', () => {
+    document.title = 'Element Call';
+    // Distinct room url so a prior test's module-level `titleSentForUrl` lock
+    // does not short-circuit this one.
+    const url = 'https://element.vkkovalev.work/#/room/!rejoin:matrix.vkkovalev.work';
+    let roomName = ''; // room name not synced yet
+    mockAdapter = {
+      getMeetingUrl: () => url,
+      getMeetingTitle: () => roomName,
+      isConferenceAvailable: () => true,
+    };
+    mockPlatform = 'matrix';
+
+    // Join; run its retries almost to exhaustion while the room name stays empty.
+    // After 5 ticks attempts 0..4 have run and the final (attempt 5) retry is
+    // still PENDING.
+    sendMeetingJoin();
+    jest.advanceTimersByTime(2000 * 5);
+
+    // Bridge rejects (another tab owns the meeting); we clear and re-join the
+    // SAME url on the next poll. URL scoping alone cannot tell the stale chain
+    // from the fresh one — both carry this url.
+    handleMeetingJoinRejected({ active_meeting_id: 'other-tab' });
+    sendMeetingJoin();
+
+    // The stale attempt-5 fires now. Without a per-join generation token it would
+    // give up (attempt 5 == TITLE_MAX_RETRIES), lock document.title, and block the
+    // fresh chain. With the token it is invalidated; the fresh chain survives and
+    // emits the room name once it resolves.
+    jest.advanceTimersByTime(2000);
+    roomName = 'Real Room';
+    jest.advanceTimersByTime(2000 * 2);
+
+    const titles = mockSendWsMessage.mock.calls
+      .map((c) => c[0])
+      .filter((m) => m.type === 'meeting_title_update')
+      .map((m) => m.title);
+    expect(titles).not.toContain('Element Call');
+    expect(titles).toContain('Real Room');
   });
 
   test('falls back to document.title after exhausting matrix title retries', () => {

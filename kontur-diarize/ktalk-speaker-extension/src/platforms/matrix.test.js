@@ -378,6 +378,47 @@ describe('ElementCallAdapter', () => {
     expect(adapter.getActiveSpeaker()).toBeNull();
   });
 
+  test('getActiveSpeaker does not flag the local user speaking from another device as local', () => {
+    // Same matrix userId as the local client, but a different deviceId — this is
+    // a second device of "me", whose speech is captured on the remote/mixed
+    // path, so it must NOT be reported isLocal.
+    const speaking = { identity: '@me:matrix.vkkovalev.work:OTHERDEVICE', isSpeaking: true };
+    const livekitRoom = {
+      remoteParticipants: new Map(),
+      localParticipant: null,
+      activeSpeakers: [speaking],
+      on() {},
+      off() {},
+    };
+    const leaf = chain(null, { livekitRoom });
+    const audio = document.createElement('audio');
+    Object.defineProperty(audio, 'srcObject', { value: {}, configurable: true });
+    audio['__reactFiber$xyz'] = leaf;
+    document.body.appendChild(audio);
+
+    const speaker = adapter.getActiveSpeaker();
+    expect(speaker.id).toBe('@me:matrix.vkkovalev.work');
+    expect(speaker.isLocal).toBe(false);
+  });
+
+  test('getActiveSpeaker flags the local user speaking from the local device as local', () => {
+    const speaking = { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isSpeaking: true };
+    const livekitRoom = {
+      remoteParticipants: new Map(),
+      localParticipant: null,
+      activeSpeakers: [speaking],
+      on() {},
+      off() {},
+    };
+    const leaf = chain(null, { livekitRoom });
+    const audio = document.createElement('audio');
+    Object.defineProperty(audio, 'srcObject', { value: {}, configurable: true });
+    audio['__reactFiber$xyz'] = leaf;
+    document.body.appendChild(audio);
+
+    expect(adapter.getActiveSpeaker().isLocal).toBe(true);
+  });
+
   test('supportsTabInjection is false (floating panel platform)', () => {
     expect(adapter.supportsTabInjection()).toBe(false);
   });
@@ -410,6 +451,65 @@ describe('ElementCallAdapter', () => {
     expect(me).toMatchObject({ isSpeaking: false, micMuted: true });
     expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(true);
     expect(adapter.anyMicOn()).toBe(true);
+  });
+
+  test('getParticipants reports micMuted false when a same-user second device has its mic on', () => {
+    // Same multi-device case as isMicMuted below, but exercised through
+    // getParticipants(): the bridge aggregates these into are_all_mics_muted(),
+    // so an "any device muted" answer here would flag a speaking user's
+    // transcript as mics_off. Both devices must therefore agree with
+    // isMicMuted()'s "every device muted" rule.
+    mountRoom({
+      localParticipant: { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isMicrophoneEnabled: false },
+      remoteParticipants: new Map([
+        ['b', { identity: '@me:matrix.vkkovalev.work:OTHERDEVICE', isSpeaking: true, isMicrophoneEnabled: true }],
+      ]),
+      activeSpeakers: [],
+      on() {},
+      off() {},
+    });
+    adapter.isConferenceReady(); // discover the livekit Room (caches _room)
+
+    const parts = adapter.getParticipants();
+    const me = parts.filter((p) => p.id === '@me:matrix.vkkovalev.work');
+    expect(me.length).toBeGreaterThan(0);
+    expect(me.every((p) => p.micMuted === false)).toBe(true);
+    expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(false);
+  });
+
+  test('isMicMuted is false when a same-user second device has its mic on', () => {
+    // The local device (localParticipant, listed first) is muted, but the same
+    // matrix user is also joined from a second device whose mic is on and which
+    // is the active speaker. A userId-keyed `.find()` would match the muted
+    // local device first and suppress the remote device's speech, so mute must
+    // be reported only when EVERY device of the user is muted.
+    mountRoom({
+      localParticipant: { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isMicrophoneEnabled: false },
+      remoteParticipants: new Map([
+        ['b', { identity: '@me:matrix.vkkovalev.work:OTHERDEVICE', isSpeaking: true, isMicrophoneEnabled: true }],
+      ]),
+      activeSpeakers: [],
+      on() {},
+      off() {},
+    });
+    adapter.isConferenceReady(); // discover the livekit Room (caches _room)
+
+    expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(false);
+  });
+
+  test('isMicMuted is true when every device of the user is muted', () => {
+    mountRoom({
+      localParticipant: { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isMicrophoneEnabled: false },
+      remoteParticipants: new Map([
+        ['b', { identity: '@me:matrix.vkkovalev.work:OTHERDEVICE', isMicrophoneEnabled: false }],
+      ]),
+      activeSpeakers: [],
+      on() {},
+      off() {},
+    });
+    adapter.isConferenceReady(); // discover the livekit Room (caches _room)
+
+    expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(true);
   });
 
   test('reattach after dispose wires exactly one participantConnected join handler', () => {
