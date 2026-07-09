@@ -540,4 +540,46 @@ describe('ElementCallAdapter', () => {
     adapter.onParticipantJoined(() => {});
     expect(registered.participantConnected.size).toBe(2);
   });
+
+  test('getJitsiConference re-discovers the Room after a leave→rejoin in the same iframe', () => {
+    // Call #1: cache Room1 under the current rtcSession.
+    const room1 = mountRoom({
+      remoteParticipants: new Map(),
+      localParticipant: null,
+      activeSpeakers: [],
+      on() {},
+      off() {},
+    });
+    expect(adapter.getJitsiConference()).toBe(room1);
+
+    // Leave then rejoin: EC swaps window.rtcSession for a fresh session and
+    // livekit builds a new Room. The cached Room1 is now disconnected and must
+    // not be returned for the new call, or active-speaker events attach to the
+    // dead Room and attribution silently stops.
+    document.body.innerHTML = '';
+    window.rtcSession = makeRtcSession(); // new session identity
+    const room2 = mountRoom({
+      remoteParticipants: new Map(),
+      localParticipant: null,
+      activeSpeakers: [],
+      on() {},
+      off() {},
+    });
+    const found = adapter.getJitsiConference();
+    expect(found).toBe(room2);
+    expect(found).not.toBe(room1);
+  });
+
+  test('getJitsiConference stops the room-discovery retry once the call is left', () => {
+    // No Room mounted yet → discovery arms the 2 s retry interval.
+    expect(adapter.getJitsiConference()).toBeNull();
+    expect(adapter._roomRetryTimer).not.toBeNull();
+
+    // Leave: rtcSession disappears within the same iframe. init.js's leave path
+    // never calls dispose(), so _ensureRoom itself must cancel the retry or it
+    // runs forever after the meeting ends.
+    delete window.rtcSession;
+    expect(adapter.getJitsiConference()).toBeNull();
+    expect(adapter._roomRetryTimer).toBeNull();
+  });
 });
