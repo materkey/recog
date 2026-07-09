@@ -143,9 +143,9 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 - Modify/Create: `kontur-diarize/ktalk-speaker-extension/src/ui-vas3k.js` (or new `src/ui-copilot-panel.js`)
 - Create: copilot-view jest tests alongside
 
-- [ ] write failing jest tests: Transcript | Copilot view toggle; `copilot_chat_message` sent via `sendCopilotChatMessage` with meeting context; `copilot_reply` renders/updates a message; `copilot_status` chip states (online/working/blocked/offline); pending/unread bookkeeping
-- [ ] port the copilot chat view (input, message list, agent status chip, `state.copilotPending`/unread bookkeeping) from the KTalk tab UI into the floating panel — reference `handleCopilotReply`/`handleCopilotStatus` (`src/ui.js:1756,1805`), `ensureCopilotContent`/`appendCopilotMessage`/`updateCopilotMessage`, `.ktalk-copilot-*`; reuse `sendCopilotChatMessage` (`src/ws_api.js:70`). This is a full view, not the overlay's plain text swap
-- [ ] run tests — must pass before task 7
+- [x] write failing jest tests: Transcript | Copilot view toggle; `copilot_chat_message` sent via `sendCopilotChatMessage` with meeting context; `copilot_reply` renders/updates a message; `copilot_status` chip states (online/working/blocked/offline); pending/unread bookkeeping — `src/ui-copilot-panel.test.js` (8 tests, jsdom scoped to the EC iframe URL)
+- [x] port the copilot chat view (input, message list, agent status chip, `state.copilotPending`/unread bookkeeping) from the KTalk tab UI into the floating panel — reused the shared ui.js copilot subsystem by making `createCopilotContent()` platform-aware: on `isJitsiPlatform()` it injects the shared styles and mounts `.ktalk-copilot-content` into the panel's new `.jitsi-copilot-host` (via `ensureVas3kCopilotHost()`) instead of the KTalk slide-menu. Added `setVas3kView()` + Transcript|Copilot sub-tab wiring in `ui-vas3k.js`; ui.js registers `activateVas3kView` as the copilot-activation handler (lazy build, active class, unread reset, focus) through the existing `setVas3kCopilotActivateHandler` inversion (no ui.js↔ui-vas3k cycle). `handleCopilotReply`/`handleCopilotStatus`/`sendCopilotChatMessage` are reused unchanged — full view, not a plain text swap
+- [x] run tests — must pass before task 7 (182 passed, 11 suites)
 
 ### Task 7: route copilot frames to the floating panel
 

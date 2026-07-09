@@ -79,5 +79,9 @@ export const state = {
   copilotContentElement: null,
   isCopilotActive: false,
   copilotUnread: false,
-  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript'
+  lastAiView: localStorage.getItem(constants.AI_LAST_VIEW_KEY) || 'transcript',
+
+  // Active view of the floating panel (Jitsi / matrix platforms): the panel
+  // hosts both the transcript and the ported Copilot chat view.
+  vas3kActiveView: 'transcript'
 };

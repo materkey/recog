@@ -13,6 +13,17 @@ let panelVisible = true;
 let isDragging = false;
 let dragOffset = { x: 0, y: 0 };
 
+// Optional hook invoked when the user clicks the Copilot sub-tab. Registered
+// by ui.js (which owns the copilot subsystem) so a tab click can lazily build
+// the copilot content and focus its input. ui-vas3k must not import ui.js
+// (ui.js already imports ui-vas3k — the reverse would be a cycle), so the
+// dependency is inverted through this setter.
+let copilotActivateHandler = null;
+
+export function setVas3kCopilotActivateHandler(fn) {
+  copilotActivateHandler = fn;
+}
+
 /**
  * Inject styles for the floating panel
  */
@@ -104,6 +115,71 @@ export function injectVas3kStyles() {
     .jitsi-transcript-header button.active {
       background: rgba(100, 181, 246, 0.3);
       color: #64B5F6;
+    }
+
+    /* Sub-tab bar: Transcript | Copilot */
+    .jitsi-panel-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 6px 10px;
+      background: rgba(45, 45, 45, 0.9);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .jitsi-panel-tab {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .jitsi-panel-tab:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .jitsi-panel-tab.active {
+      background: rgba(100, 181, 246, 0.25);
+      color: #64B5F6;
+    }
+
+    /* Unread marker on the Copilot sub-tab. Self-contained so it renders in
+       the tab bar even before the copilot content (and ui.js styles) mount. */
+    .jitsi-panel-tab .ktalk-ai-unread {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #4ade80;
+      display: inline-block;
+    }
+
+    .jitsi-panel-tab .ktalk-ai-unread[hidden] {
+      display: none;
+    }
+
+    /* Copilot chat host inside the floating panel. The reused
+       .ktalk-copilot-content element mounts here; its own styles come from
+       ui.js injectStyles() (called by createCopilotContent on this platform). */
+    .jitsi-copilot-host {
+      flex: 1;
+      min-height: 0;
+      max-height: 340px;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .jitsi-copilot-host .ktalk-copilot-content.active {
+      flex: 1;
+      min-height: 0;
     }
 
     /* Highlighted transcript line */
@@ -421,6 +497,10 @@ export function createFloatingPanel() {
         <button class="jitsi-close-btn" title="Скрыть">×</button>
       </div>
     </div>
+    <div class="jitsi-panel-tabs">
+      <button type="button" class="jitsi-panel-tab active" data-view="transcript">Транскрипт</button>
+      <button type="button" class="jitsi-panel-tab" data-view="copilot">Copilot<span class="ktalk-ai-unread" hidden></span></button>
+    </div>
     <div class="jitsi-speaker-status">
       <span class="jitsi-speaker-dot"></span>
       <span class="jitsi-speaker-name">Ожидание подключения...</span>
@@ -430,6 +510,7 @@ export function createFloatingPanel() {
         Транскрипт появится здесь, когда начнётся речь
       </div>
     </div>
+    <div class="jitsi-copilot-host"></div>
   `;
 
   document.body.appendChild(panel);
@@ -502,10 +583,59 @@ export function createFloatingPanel() {
     panelVisible = true;
   });
 
+  // Sub-tab bar: Transcript | Copilot. Clicking a tab switches the panel's
+  // active view; the Copilot content is built lazily on first activation via
+  // the handler ui.js registers (it owns the copilot subsystem).
+  panel.querySelectorAll('.jitsi-panel-tab').forEach((tab) => {
+    tab.addEventListener('click', () => setVas3kView(tab.dataset.view));
+  });
+
   // Store reference
   state.transcriptContentElement = panel.querySelector('.jitsi-transcript-content');
 
   return true;
+}
+
+/**
+ * Ensure the floating panel exists and return its copilot host container.
+ * ui.js's createCopilotContent() mounts the shared `.ktalk-copilot-content`
+ * DOM into this host on floating-panel platforms (vas3k / matrix).
+ */
+export function ensureVas3kCopilotHost() {
+  let host = document.querySelector('.jitsi-transcript-panel .jitsi-copilot-host');
+  if (!host) {
+    createFloatingPanel();
+    host = document.querySelector('.jitsi-transcript-panel .jitsi-copilot-host');
+  }
+  return host;
+}
+
+/**
+ * Switch the floating panel between the Transcript and Copilot views.
+ * Panel-level DOM (tab highlight, content visibility) is handled here;
+ * copilot-subsystem state (lazy content build, active class, unread reset,
+ * input focus) is delegated to the handler ui.js registers, so ui-vas3k
+ * stays free of a ui.js import (which would form a cycle).
+ */
+export function setVas3kView(view) {
+  const panel = document.querySelector('.jitsi-transcript-panel');
+  if (!panel) return;
+
+  const isCopilot = view === 'copilot';
+  state.vas3kActiveView = view;
+
+  panel.querySelectorAll('.jitsi-panel-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === view);
+  });
+
+  const transcript = panel.querySelector('.jitsi-transcript-content');
+  const host = panel.querySelector('.jitsi-copilot-host');
+  const speakerStatus = panel.querySelector('.jitsi-speaker-status');
+  if (transcript) transcript.style.display = isCopilot ? 'none' : '';
+  if (host) host.style.display = isCopilot ? 'flex' : 'none';
+  if (speakerStatus) speakerStatus.style.display = isCopilot ? 'none' : '';
+
+  if (copilotActivateHandler) copilotActivateHandler(view);
 }
 
 /**
