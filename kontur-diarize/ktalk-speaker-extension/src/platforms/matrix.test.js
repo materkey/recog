@@ -270,6 +270,15 @@ describe('ElementCallAdapter', () => {
     };
   }
 
+  /** Mount an <audio> whose fiber exposes `room` so `_ensureRoom` finds it. */
+  function mountRoom(room) {
+    const audio = document.createElement('audio');
+    Object.defineProperty(audio, 'srcObject', { value: {}, configurable: true });
+    audio['__reactFiber$xyz'] = chain(null, { livekitRoom: room });
+    document.body.appendChild(audio);
+    return room;
+  }
+
   beforeEach(() => {
     document.body.innerHTML = '';
     window.matrixclient = makeMatrixClient();
@@ -361,5 +370,64 @@ describe('ElementCallAdapter', () => {
 
   test('supportsTabInjection is false (floating panel platform)', () => {
     expect(adapter.supportsTabInjection()).toBe(false);
+  });
+
+  test('getMeetingTitle returns the Matrix room name', () => {
+    expect(adapter.getMeetingTitle()).toBe('Recog Spike');
+  });
+
+  test('getMeetingTitle returns empty string when the room name is unresolved', () => {
+    window.matrixclient.getRoom = () => null;
+    expect(adapter.getMeetingTitle()).toBe('');
+  });
+
+  test('getParticipants reflects livekit speaking/muted state keyed by userId', () => {
+    mountRoom({
+      localParticipant: null,
+      remoteParticipants: new Map([
+        ['a', { identity: '@test2:matrix.vkkovalev.work:IZFUKTQLPX', isSpeaking: true, isMicrophoneEnabled: true }],
+        ['b', { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isSpeaking: false, isMicrophoneEnabled: false }],
+      ]),
+      activeSpeakers: [],
+      on() {},
+      off() {},
+    });
+
+    const parts = adapter.getParticipants();
+    const other = parts.find((p) => p.id === '@test2:matrix.vkkovalev.work');
+    const me = parts.find((p) => p.id === '@me:matrix.vkkovalev.work');
+    expect(other).toMatchObject({ isSpeaking: true, micMuted: false });
+    expect(me).toMatchObject({ isSpeaking: false, micMuted: true });
+    expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(true);
+    expect(adapter.anyMicOn()).toBe(true);
+  });
+
+  test('reattach after dispose wires exactly one participantConnected join handler', () => {
+    // Count live on()/off() registrations per event so a join-handler double
+    // (dispose failing to clear _joinCallback) is observable.
+    const registered = {};
+    mountRoom({
+      localParticipant: null,
+      remoteParticipants: new Map(),
+      activeSpeakers: [],
+      on(event, handler) {
+        (registered[event] = registered[event] || new Set()).add(handler);
+      },
+      off(event, handler) {
+        registered[event]?.delete(handler);
+      },
+    });
+
+    // Cycle 1: fresh subscribe + join wiring on the (now cached) Room.
+    adapter.subscribeToSpeakerChanges(() => {});
+    adapter.onParticipantJoined(() => {});
+    // participantConnected carries one speaker handler + one join handler.
+    expect(registered.participantConnected.size).toBe(2);
+
+    // Reattach: init.js disposes then re-subscribes against the same Room.
+    adapter.dispose();
+    adapter.subscribeToSpeakerChanges(() => {});
+    adapter.onParticipantJoined(() => {});
+    expect(registered.participantConnected.size).toBe(2);
   });
 });

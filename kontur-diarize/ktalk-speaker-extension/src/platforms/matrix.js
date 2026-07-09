@@ -453,6 +453,16 @@ export class ElementCallAdapter {
     return buildMeetingUrl(this._roomId());
   }
 
+  /**
+   * Authoritative meeting title = the Matrix room name. Inside the EC iframe
+   * `document.title` is Element Call's own page title, not the room, so
+   * meeting.js prefers this hook over `document.title` (mirrors getMeetingUrl).
+   * Returns '' when the room name is not yet resolved → caller falls back.
+   */
+  getMeetingTitle() {
+    return buildMeetingTitle(this._matrixClient(), this._roomId());
+  }
+
   // -- UI hooks --------------------------------------------------------------
 
   getTabContainerSelector() {
@@ -477,6 +487,12 @@ export class ElementCallAdapter {
     this._speakerHandlers = [];
     this._roomEventsAttached = false;
     this._stopRoomRetry();
+    // Clear the join callback so a reattach re-wires it from exactly one site.
+    // If it survived, `_attachRoomSpeakerEvents` (which runs first, via
+    // subscribeToSpeakerChanges) would attach a join listener because
+    // `_joinCallback` is still truthy, and `onParticipantJoined` would then
+    // attach a second one — double-firing `sendParticipantsUpdate` per join.
+    this._joinCallback = null;
     // Note: the cached Room is intentionally kept across reattach — its object
     // identity must stay stable so init.js does not thrash subscriptions.
   }
