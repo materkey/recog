@@ -231,7 +231,14 @@ export class ElementCallAdapter {
   }
 
   isConferenceAvailable() {
-    return !!(this._rtcSession() && this._matrixClient());
+    // Require a resolved roomId too: getMeetingUrl() synthesizes `#/room/<roomId>`
+    // from it. If we reported "in meeting" while roomId was momentarily unset,
+    // meeting.js's getMeetingUrl() would fall back to the iframe's
+    // `…/index.html#…` location, so the backend would derive live_id="index.html"
+    // and collapse every matrix room onto that shared id — the exact same-day
+    // merge this feature avoids. roomId is normally set the moment rtcSession
+    // exists, so this only gates the degenerate transient window.
+    return !!(this._rtcSession() && this._matrixClient() && this._roomId());
   }
 
   waitForConference(maxAttempts = 200) {

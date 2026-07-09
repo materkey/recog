@@ -298,6 +298,16 @@ describe('ElementCallAdapter', () => {
     expect(adapter.isConferenceAvailable()).toBe(false);
   });
 
+  test('isConferenceAvailable is false until roomId resolves (no index.html live_id)', () => {
+    // rtcSession + matrixclient present but roomId not yet set — reporting
+    // "in meeting" here would let meeting.js fall back to the iframe's
+    // index.html URL and collapse every matrix room onto one live_id.
+    window.rtcSession = { room: {}, memberships: [] };
+    expect(adapter.isConferenceAvailable()).toBe(false);
+    window.rtcSession = makeRtcSession();
+    expect(adapter.isConferenceAvailable()).toBe(true);
+  });
+
   test('getConference returns the rtcSession, getMeetingUrl the synthesized url', () => {
     expect(adapter.getConference()).toBe(window.rtcSession);
     expect(adapter.getMeetingUrl()).toBe(
