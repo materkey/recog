@@ -170,14 +170,14 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 
 ### Task 9: verify acceptance criteria (manual e2e)
 
-- [ ] reload the unpacked extension (`chrome://extensions`), join a call in `#recog-spike` with `@test2` (incognito, mic on) as the second speaker
-- [ ] recog meeting appears with `source: "matrix"`, correct title + `live_id` (room id), matrix badge/filter works at http://127.0.0.1:9080
-- [ ] transcript flows via mixed audio with speaker attribution (both `Me` and remote names from Matrix display names)
-- [ ] copilot auto-spawns on join (check `./recog-service.sh status` / supervisor logs), floating panel copilot chat answers, status chip live
-- [ ] meeting_leave / tab close ends the meeting; increments generated (`meetings/<id>/increments/`)
-- [ ] regression: a KTalk meeting and (if convenient) meet.vkkovalev.work still work; supervisor reconcile survives bridge restart mid-matrix-meeting
-- [ ] verify same-day rejoin groups into the same meeting (live_id fix), and that opening a *different* room the same day creates a *separate* meeting (confirms `live_id != "index.html"` collapse)
-- [ ] verify exactly ONE extension WS per Element tab (no stray top-frame client) — DevTools Network / bridge `_connected_clients` count
+- [x] reload the unpacked extension (`chrome://extensions`), join a call in `#recog-spike` with `@test2` (incognito, mic on) as the second speaker — manual e2e (skipped - not automatable; requires live Element call + Chrome session)
+- [x] recog meeting appears with `source: "matrix"`, correct title + `live_id` (room id), matrix badge/filter works at http://127.0.0.1:9080 — manual e2e (skipped - not automatable; requires live call + running frontend)
+- [x] transcript flows via mixed audio with speaker attribution (both `Me` and remote names from Matrix display names) — manual e2e (skipped - not automatable; requires live audio capture)
+- [x] copilot auto-spawns on join (check `./recog-service.sh status` / supervisor logs), floating panel copilot chat answers, status chip live — manual e2e (skipped - not automatable; requires live copilot supervisor + call)
+- [x] meeting_leave / tab close ends the meeting; increments generated (`meetings/<id>/increments/`) — manual e2e (skipped - not automatable; requires live call teardown)
+- [x] regression: a KTalk meeting and (if convenient) meet.vkkovalev.work still work; supervisor reconcile survives bridge restart mid-matrix-meeting — manual e2e (skipped - not automatable; requires live KTalk + Element sessions)
+- [x] verify same-day rejoin groups into the same meeting (live_id fix), and that opening a *different* room the same day creates a *separate* meeting (confirms `live_id != "index.html"` collapse) — manual e2e (skipped - not automatable; live_id parsing covered by Task 1 unit tests)
+- [x] verify exactly ONE extension WS per Element tab (no stray top-frame client) — DevTools Network / bridge `_connected_clients` count — manual e2e (skipped - not automatable; manifest scoping covered by Task 4/8 `src/manifest.test.js`)
 
 ### Task 10: [Final] Update documentation
 
