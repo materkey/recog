@@ -4,6 +4,19 @@ import { getPlatformAdapter, getPlatform } from './platforms/index.js';
 
 let titleSentForUrl = null;
 
+/**
+ * Canonical meeting URL: the adapter's synthesized URL when it provides one
+ * (matrix → `#/room/<roomId>`), otherwise the raw page URL. BOTH the sent
+ * `meeting_join.url` / stored `state.currentMeetingUrl` AND
+ * `startMeetingCheck()`'s change-detection must read this same source, or the
+ * inside-iframe location (`…/index.html#…`) and the stored synthesized URL
+ * would never match and the check would flap leave/join every 2 s tick.
+ */
+export function getMeetingUrl() {
+  const adapter = getPlatformAdapter();
+  return adapter?.getMeetingUrl?.() || window.location.href;
+}
+
 function sendDelayedTitle() {
   // Отправляем title через 2 сек после входа, когда страница уже загрузилась
   setTimeout(() => {
@@ -21,7 +34,7 @@ function sendDelayedTitle() {
 }
 
 export function sendMeetingJoin() {
-  const url = window.location.href;
+  const url = getMeetingUrl();
   const platform = getPlatform();
   // Send meeting_join for both KTalk and vas3k platforms
   if (url && platform) {
@@ -81,7 +94,7 @@ export function startMeetingCheck() {
 
   state.meetingCheckInterval = setInterval(() => {
     const inMeeting = isInMeeting();
-    const url = window.location.href;
+    const url = getMeetingUrl();
 
     if (inMeeting && url !== state.currentMeetingUrl) {
       if (state.currentMeetingUrl) {
