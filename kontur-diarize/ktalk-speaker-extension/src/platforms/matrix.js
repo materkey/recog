@@ -200,6 +200,7 @@ export class ElementCallAdapter {
     this._win = win;
     this._doc = doc;
     this._room = null; // cached livekit Room (found via fiber-walk)
+    this._roomSession = null; // rtcSession the cached Room was discovered under
     this._roomRetryTimer = null;
     this._roomEventsAttached = false;
     this._speakerHandlers = [];
@@ -277,10 +278,33 @@ export class ElementCallAdapter {
   }
 
   _ensureRoom() {
+    const session = this._rtcSession();
+    if (!session) {
+      // Left the call (rtcSession gone within the same iframe): the cached Room
+      // belongs to the ended call and is disconnected. Drop it and stop the
+      // retry — init.js's leave path never calls dispose(), so without this the
+      // stale Room survives and the 2 s room-discovery interval runs forever.
+      if (this._room) {
+        this._room = null;
+        this._roomSession = null;
+        this._roomEventsAttached = false;
+      }
+      this._stopRoomRetry();
+      return null;
+    }
+    if (this._room && session !== this._roomSession) {
+      // Rejoined a new call in the same iframe: livekit builds a fresh Room per
+      // call, so the cached one is from the previous (now disconnected) call.
+      // Re-discover the current call's Room instead of returning the dead one.
+      this._room = null;
+      this._roomEventsAttached = false;
+      this._stopRoomRetry();
+    }
     if (this._room) return this._room;
     const room = findLivekitRoom(this._doc);
     if (room) {
       this._room = room;
+      this._roomSession = session;
       this._stopRoomRetry();
       // Attach speaker events now that the Room exists (if a subscriber waits).
       if (this._speakerCallback) this._attachRoomSpeakerEvents();
