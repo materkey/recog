@@ -138,4 +138,47 @@ describe('sendDelayedTitle prefers the adapter title', () => {
     const titleMsg = mockSendWsMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'meeting_title_update');
     expect(titleMsg).toMatchObject({ type: 'meeting_title_update', title: 'KTalk Room' });
   });
+
+  test('retries the empty matrix room name instead of locking in document.title', () => {
+    document.title = 'Element Call'; // the non-authoritative EC iframe page title
+    let roomName = ''; // room not yet synced when we first look
+    mockAdapter = {
+      getMeetingUrl: () => MATRIX_URL,
+      getMeetingTitle: () => roomName,
+      isConferenceAvailable: () => true,
+    };
+    mockPlatform = 'matrix';
+
+    sendMeetingJoin();
+    // First look at +2s: room name still empty → nothing sent yet, no lock.
+    jest.advanceTimersByTime(2000);
+    expect(mockSendWsMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'meeting_title_update')).toBeUndefined();
+
+    // Room name resolves; the next retry tick picks it up.
+    roomName = 'Recog Spike';
+    jest.advanceTimersByTime(2000);
+
+    const titleMsg = mockSendWsMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'meeting_title_update');
+    expect(titleMsg).toMatchObject({ type: 'meeting_title_update', title: 'Recog Spike' });
+  });
+
+  test('falls back to document.title after exhausting matrix title retries', () => {
+    document.title = 'Element Call';
+    // Distinct room url so the module-level titleSentForUrl lock from the prior
+    // test does not short-circuit this one.
+    const otherUrl = 'https://element.vkkovalev.work/#/room/!other:matrix.vkkovalev.work';
+    mockAdapter = {
+      getMeetingUrl: () => otherUrl,
+      getMeetingTitle: () => '', // never resolves
+      isConferenceAvailable: () => true,
+    };
+    mockPlatform = 'matrix';
+
+    sendMeetingJoin();
+    // Initial attempt + 5 retries, 2 s apart → advance well past the budget.
+    jest.advanceTimersByTime(2000 * 8);
+
+    const titleMsg = mockSendWsMessage.mock.calls.map((c) => c[0]).find((m) => m.type === 'meeting_title_update');
+    expect(titleMsg).toMatchObject({ type: 'meeting_title_update', title: 'Element Call' });
+  });
 });

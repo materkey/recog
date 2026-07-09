@@ -996,6 +996,14 @@ __webpack_require__.r(__webpack_exports__);
 
 let titleSentForUrl = null;
 
+// The adapter's authoritative title (matrix → room name) can resolve after the
+// initial 2 s window: the Element Call iframe runs its own matrix-js-sdk client
+// that may still be syncing `getRoom(roomId).name` when we first look. Retry a
+// bounded number of times (2 s apart) before locking in the generic
+// `document.title` ("Element Call"), so a cold client does not permanently
+// mislabel the meeting.
+const TITLE_MAX_RETRIES = 5;
+
 /**
  * Canonical meeting URL: the adapter's synthesized URL when it provides one
  * (matrix → `#/room/<roomId>`), otherwise the raw page URL. BOTH the sent
@@ -1009,16 +1017,28 @@ function getMeetingUrl() {
   return adapter?.getMeetingUrl?.() || window.location.href;
 }
 
-function sendDelayedTitle() {
+function sendDelayedTitle(attempt = 0) {
   // Отправляем title через 2 сек после входа, когда страница уже загрузилась
   setTimeout(() => {
+    const url = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl;
+    if (!url || titleSentForUrl === url) return;
+
     // Prefer the adapter's authoritative title (matrix → room name) over the
     // page title: inside the EC iframe `document.title` is Element Call's own
     // page title, not the room. Same optional-chaining pattern as getMeetingUrl.
     const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_2__.getPlatformAdapter)();
-    const title = adapter?.getMeetingTitle?.() || document.title;
-    const url = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingUrl;
-    if (title && url && titleSentForUrl !== url) {
+    const hasTitleHook = typeof adapter?.getMeetingTitle === 'function';
+    const adapterTitle = hasTitleHook ? adapter.getMeetingTitle() : '';
+
+    // Adapter has a title hook but the room name has not resolved yet — retry
+    // instead of locking in the generic `document.title` for the whole meeting.
+    if (hasTitleHook && !adapterTitle && attempt < TITLE_MAX_RETRIES) {
+      sendDelayedTitle(attempt + 1);
+      return;
+    }
+
+    const title = adapterTitle || document.title;
+    if (title) {
       titleSentForUrl = url;
       (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_1__.sendWsMessage)({
         type: 'meeting_title_update',
