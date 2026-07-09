@@ -103,6 +103,10 @@ export function connectWebSocket() {
         } else if (data.type === 'anchor_response') {
           handleAnchorResponse(data);
         } else if (data.type === 'copilot_reply') {
+          // Platform dispatch is centralized in the handler: ensureCopilotContent
+          // → createCopilotContent() mounts the copilot chat into the floating
+          // panel on floating-panel platforms (matrix / vas3k) and the KTalk tab
+          // otherwise, so copilot frames reach the right surface on every platform.
           handleCopilotReply(data);
         } else if (data.type === 'copilot_status') {
           handleCopilotStatus(data);
