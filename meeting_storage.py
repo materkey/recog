@@ -29,6 +29,23 @@ import time
 UTC = timezone.utc
 EXTERNAL_INDEX_CACHE_DIR = Path.home() / ".cache" / "recog" / "external_indexes"
 
+# Sources that represent an extension-driven conference meeting. All four share
+# the same lifecycle — copilot auto-spawn, end-on-last-extension-gone, and
+# increment generation — so the bridge gates them through a single predicate
+# instead of a hardcoded `source == "ktalk"`. "orphan"/"local" are plain
+# recordings, not conferences.
+CONFERENCE_SOURCES = frozenset({"ktalk", "vas3k", "vkkovalev", "matrix"})
+
+
+def is_conference_source(source: Optional[str]) -> bool:
+    """True when `source` is an extension-driven conference platform.
+
+    Groups ktalk + the Jitsi platforms (vas3k/vkkovalev) + matrix so copilot
+    lifecycle, end-on-last-extension-gone, and increment generation treat them
+    identically. orphan/local meetings are not conferences.
+    """
+    return source in CONFERENCE_SOURCES
+
 
 def get_external_paths() -> list[tuple[Path, Optional[str]]]:
     """Get external meeting paths from environment variable.
@@ -491,8 +508,8 @@ class MeetingStorage:
 
         meta = self._load_meta()
 
-        # Для KTalk встреч добавляем маркер паузы (может быть переоткрыта)
-        if meta.get("source") == "ktalk" and end_reason != "session_end":
+        # Для conference-встреч добавляем маркер паузы (может быть переоткрыта)
+        if is_conference_source(meta.get("source")) and end_reason != "session_end":
             self._append_system_event("session_pause", "Сессия приостановлена")
 
         now = datetime.now(UTC)
