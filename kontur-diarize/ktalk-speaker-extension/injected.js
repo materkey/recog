@@ -4291,6 +4291,12 @@ __webpack_require__.r(__webpack_exports__);
 let panelVisible = true;
 let isDragging = false;
 let dragOffset = { x: 0, y: 0 };
+const DEFAULT_CODEX_UI_MODEL = 'codex:gpt-5.6-sol';
+
+function getSelectedModel() {
+  const model = localStorage.getItem('ktalk-ai-model');
+  return !model || model === 'codex' ? DEFAULT_CODEX_UI_MODEL : model;
+}
 
 // Optional hook invoked when the user clicks the Copilot sub-tab. Registered
 // by ui.js (which owns the copilot subsystem) so a tab click can lazily build
@@ -5083,7 +5089,9 @@ function createVas3kSummaryModal() {
     </div>
     <div class="jitsi-summary-footer">
       <select class="jitsi-model-selector">
-        <option value="codex">Codex (GPT-5.5)</option>
+        <option value="codex:gpt-5.6-sol">Codex (GPT-5.6 Sol)</option>
+        <option value="codex:gpt-5.6-terra">Codex (GPT-5.6 Terra)</option>
+        <option value="codex:gpt-5.6-luna">Codex (GPT-5.6 Luna)</option>
         <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
         <option value="codex:gpt-5.3-codex-spark">Codex Spark</option>
         <option value="claude:opus">Claude Opus</option>
@@ -5147,7 +5155,7 @@ function createVas3kSummaryModal() {
 
   // Model selector handler
   const modelSelector = modal.querySelector('.jitsi-model-selector');
-  const currentModel = localStorage.getItem('ktalk-ai-model') || 'codex';
+  const currentModel = getSelectedModel();
   modelSelector.value = currentModel;
   modelSelector.addEventListener('change', () => {
     localStorage.setItem('ktalk-ai-model', modelSelector.value);
@@ -5247,7 +5255,7 @@ function requestVas3kSummary(type) {
     summary_type: type,
     transcript: transcriptText,
     lines_count: linesToSend.length,
-    model: localStorage.getItem('ktalk-ai-model') || 'codex',
+    model: getSelectedModel(),
     meeting_title: document.title || ''
   });
 }
@@ -5276,7 +5284,7 @@ function askVas3kFollowUp() {
     transcript: transcriptText,
     question: question,
     previous_summary: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText || '',
-    model: localStorage.getItem('ktalk-ai-model') || 'codex',
+    model: getSelectedModel(),
     meeting_title: document.title || ''
   });
 
@@ -5436,8 +5444,15 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
-let selectedModel = localStorage.getItem('ktalk-ai-model') || 'codex';
-let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'codex';
+const DEFAULT_CODEX_UI_MODEL = 'codex:gpt-5.6-sol';
+
+function getStoredModel(key) {
+  const model = localStorage.getItem(key);
+  return !model || model === 'codex' ? DEFAULT_CODEX_UI_MODEL : model;
+}
+
+let selectedModel = getStoredModel('ktalk-ai-model');
+let anchorModel = getStoredModel('ktalk-anchor-model');
 let meetingTitle = document.title || '';
 let bioReadHotkeyBound = false;
 let bioReadPanelListenerBound = false;
@@ -6734,7 +6749,7 @@ function createContextContent() {
   const modelSelect = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.querySelector('.ktalk-context-model-select');
   modelSelect.value = anchorModel;
   if (modelSelect.value !== anchorModel) {
-    anchorModel = 'codex';
+    anchorModel = DEFAULT_CODEX_UI_MODEL;
     modelSelect.value = anchorModel;
     localStorage.setItem('ktalk-anchor-model', anchorModel);
   }
@@ -8071,7 +8086,9 @@ function setupSummaryMenu(container) {
 
 function getAnchorModelOptions() {
   return [
-    { value: 'codex', label: 'Codex (GPT-5.5)' },
+    { value: 'codex:gpt-5.6-sol', label: 'Codex (GPT-5.6 Sol)' },
+    { value: 'codex:gpt-5.6-terra', label: 'Codex (GPT-5.6 Terra)' },
+    { value: 'codex:gpt-5.6-luna', label: 'Codex (GPT-5.6 Luna)' },
     { value: 'codex:gpt-4.1', label: 'Codex (GPT-4.1)' },
     { value: 'codex:gpt-5.3-codex-spark', label: 'Codex Spark' },
     { value: 'claude:opus', label: 'Claude Opus' },

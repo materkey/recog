@@ -33,7 +33,12 @@ from typing import Optional, Dict, List, Callable, TYPE_CHECKING
 import sys
 from pathlib import Path
 from recog.node_env import get_node_env
-from recog.ai_provider import build_codex_exec_command, mark_ccs_automation, resolve_cli
+from recog.ai_provider import (
+    DEFAULT_CODEX_MODEL,
+    build_codex_exec_command,
+    mark_ccs_automation,
+    resolve_cli,
+)
 from recog.config import load_dotenv, MIC_SPEAKER_NAME
 from meeting_storage import is_conference_source
 
@@ -1266,7 +1271,7 @@ class KTalkBridge:
     async def _call_codex_cli(
         self,
         prompt: str,
-        model: str = "gpt-5.5",
+        model: str = DEFAULT_CODEX_MODEL,
         task: str = "analysis",
     ) -> str:
         """Call Codex CLI (uses ChatGPT Pro subscription)."""
@@ -1431,7 +1436,7 @@ class KTalkBridge:
 
             if model.startswith("codex"):
                 # Codex CLI (uses ChatGPT Pro subscription)
-                codex_model = model.split(":")[1] if ":" in model else "gpt-5.5"
+                codex_model = model.split(":")[1] if ":" in model else DEFAULT_CODEX_MODEL
                 print(f"[KTalk Bridge] Using Codex CLI with model: {codex_model}", file=sys.stderr)
                 summary = await self._call_codex_cli(prompt, codex_model, task="summarize")
 
@@ -1587,7 +1592,7 @@ class KTalkBridge:
 
             if model.startswith("codex"):
                 # Codex CLI (uses ChatGPT Pro subscription)
-                codex_model = model.split(":")[1] if ":" in model else "gpt-5.5"
+                codex_model = model.split(":")[1] if ":" in model else DEFAULT_CODEX_MODEL
                 print(f"[KTalk Bridge] Anchor using Codex CLI with model: {codex_model}", file=sys.stderr)
                 raw_text = await self._call_codex_cli(prompt, codex_model, task="anchor")
 

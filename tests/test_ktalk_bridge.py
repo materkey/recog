@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ktalk_bridge import KTalkBridge, Participant, PcmChunk
+from recog.ai_provider import DEFAULT_CODEX_MODEL
 
 
 @pytest.mark.asyncio
@@ -36,9 +37,10 @@ async def test_call_codex_cli_marks_prompt_and_uses_ephemeral():
 
     with patch("ktalk_bridge.resolve_cli", return_value="/mock/codex"), \
          patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=fake_create_subprocess_exec)):
-        answer = await bridge._call_codex_cli("hello", model="gpt-5.4", task="summarize")
+        answer = await bridge._call_codex_cli("hello", task="summarize")
 
     assert answer == "answer"
+    assert created["cmd"][3] == DEFAULT_CODEX_MODEL
     assert "--ephemeral" in created["cmd"]
     assert created["input"].decode().startswith(
         "<!-- ccs-automation:recog task=summarize -->\nhello"

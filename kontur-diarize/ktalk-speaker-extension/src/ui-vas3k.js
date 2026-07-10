@@ -12,6 +12,12 @@ import { sendWsMessage } from './ws_api.js';
 let panelVisible = true;
 let isDragging = false;
 let dragOffset = { x: 0, y: 0 };
+const DEFAULT_CODEX_UI_MODEL = 'codex:gpt-5.6-sol';
+
+function getSelectedModel() {
+  const model = localStorage.getItem('ktalk-ai-model');
+  return !model || model === 'codex' ? DEFAULT_CODEX_UI_MODEL : model;
+}
 
 // Optional hook invoked when the user clicks the Copilot sub-tab. Registered
 // by ui.js (which owns the copilot subsystem) so a tab click can lazily build
@@ -804,7 +810,9 @@ export function createVas3kSummaryModal() {
     </div>
     <div class="jitsi-summary-footer">
       <select class="jitsi-model-selector">
-        <option value="codex">Codex (GPT-5.5)</option>
+        <option value="codex:gpt-5.6-sol">Codex (GPT-5.6 Sol)</option>
+        <option value="codex:gpt-5.6-terra">Codex (GPT-5.6 Terra)</option>
+        <option value="codex:gpt-5.6-luna">Codex (GPT-5.6 Luna)</option>
         <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
         <option value="codex:gpt-5.3-codex-spark">Codex Spark</option>
         <option value="claude:opus">Claude Opus</option>
@@ -868,7 +876,7 @@ export function createVas3kSummaryModal() {
 
   // Model selector handler
   const modelSelector = modal.querySelector('.jitsi-model-selector');
-  const currentModel = localStorage.getItem('ktalk-ai-model') || 'codex';
+  const currentModel = getSelectedModel();
   modelSelector.value = currentModel;
   modelSelector.addEventListener('change', () => {
     localStorage.setItem('ktalk-ai-model', modelSelector.value);
@@ -968,7 +976,7 @@ function requestVas3kSummary(type) {
     summary_type: type,
     transcript: transcriptText,
     lines_count: linesToSend.length,
-    model: localStorage.getItem('ktalk-ai-model') || 'codex',
+    model: getSelectedModel(),
     meeting_title: document.title || ''
   });
 }
@@ -997,7 +1005,7 @@ function askVas3kFollowUp() {
     transcript: transcriptText,
     question: question,
     previous_summary: state.currentSummaryText || '',
-    model: localStorage.getItem('ktalk-ai-model') || 'codex',
+    model: getSelectedModel(),
     meeting_title: document.title || ''
   });
 

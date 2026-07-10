@@ -16,6 +16,7 @@ from pathlib import Path
 from recog.node_env import get_node_env, version_key
 
 CCS_AUTOMATION_MARKER_PREFIX = "<!-- ccs-automation:recog"
+DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
 
 
 def _sanitize_ccs_task(task: str) -> str:
@@ -114,7 +115,7 @@ class CodexCliProvider(AIProvider):
     """Codex CLI - uses ChatGPT Pro subscription."""
 
     def __init__(self, task: str = "analysis"):
-        self.model = os.getenv("CODEX_MODEL", "gpt-5.5")
+        self.model = os.getenv("CODEX_MODEL", DEFAULT_CODEX_MODEL)
         self.reasoning_effort = os.getenv("CODEX_REASONING_EFFORT", "xhigh")
         self.task = task
         self._cli = resolve_cli("codex")

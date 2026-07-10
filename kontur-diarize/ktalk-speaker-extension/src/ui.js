@@ -5,8 +5,15 @@ import { sendWsMessage, sendCopilotChatMessage } from './ws_api.js';
 import { getPlatform, isJitsiPlatform } from './platforms/index.js';
 import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine, clearVas3kTranscript, ensureVas3kCopilotHost, setVas3kCopilotActivateHandler } from './ui-vas3k.js';
 
-let selectedModel = localStorage.getItem('ktalk-ai-model') || 'codex';
-let anchorModel = localStorage.getItem('ktalk-anchor-model') || 'codex';
+const DEFAULT_CODEX_UI_MODEL = 'codex:gpt-5.6-sol';
+
+function getStoredModel(key) {
+  const model = localStorage.getItem(key);
+  return !model || model === 'codex' ? DEFAULT_CODEX_UI_MODEL : model;
+}
+
+let selectedModel = getStoredModel('ktalk-ai-model');
+let anchorModel = getStoredModel('ktalk-anchor-model');
 let meetingTitle = document.title || '';
 let bioReadHotkeyBound = false;
 let bioReadPanelListenerBound = false;
@@ -1303,7 +1310,7 @@ export function createContextContent() {
   const modelSelect = state.contextContentElement.querySelector('.ktalk-context-model-select');
   modelSelect.value = anchorModel;
   if (modelSelect.value !== anchorModel) {
-    anchorModel = 'codex';
+    anchorModel = DEFAULT_CODEX_UI_MODEL;
     modelSelect.value = anchorModel;
     localStorage.setItem('ktalk-anchor-model', anchorModel);
   }
@@ -2640,7 +2647,9 @@ function setupSummaryMenu(container) {
 
 function getAnchorModelOptions() {
   return [
-    { value: 'codex', label: 'Codex (GPT-5.5)' },
+    { value: 'codex:gpt-5.6-sol', label: 'Codex (GPT-5.6 Sol)' },
+    { value: 'codex:gpt-5.6-terra', label: 'Codex (GPT-5.6 Terra)' },
+    { value: 'codex:gpt-5.6-luna', label: 'Codex (GPT-5.6 Luna)' },
     { value: 'codex:gpt-4.1', label: 'Codex (GPT-4.1)' },
     { value: 'codex:gpt-5.3-codex-spark', label: 'Codex Spark' },
     { value: 'claude:opus', label: 'Claude Opus' },

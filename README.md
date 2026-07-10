@@ -124,6 +124,9 @@ python add_speaker_live.py "Speaker Name" 10
 Copy `.env.example` → `.env` and edit:
 
 - `MIC_SPEAKER_NAME` — speaker label for microphone input (default `Me`).
+- `CODEX_MODEL` — Codex model for transcript analysis, auto-increments,
+  anchors, and titles. Supported GPT-5.6 models: `gpt-5.6-sol` (default),
+  `gpt-5.6-terra`, and `gpt-5.6-luna`; requires Codex CLI 0.144.0 or newer.
 - `RECOG_BRIDGE_WS_URL` — override the bridge WebSocket URL the frontend
   subscribes to (default `ws://localhost:8766`).
 - `RECOG_COPILOT_AUTOSPAWN` — master switch for the auto-spawn Copilot

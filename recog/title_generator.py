@@ -9,7 +9,12 @@ import json
 import os
 from typing import Optional
 
-from recog.ai_provider import build_codex_exec_command, mark_ccs_automation, resolve_cli
+from recog.ai_provider import (
+    DEFAULT_CODEX_MODEL,
+    build_codex_exec_command,
+    mark_ccs_automation,
+    resolve_cli,
+)
 from recog.node_env import get_node_env
 
 
@@ -64,7 +69,7 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
 
     Args:
         transcript: Meeting transcript text
-        model: Codex model to use (default from CODEX_MODEL env or gpt-5.5)
+        model: Codex model to use (default from CODEX_MODEL env or gpt-5.6-sol)
 
     Returns:
         Generated title or None if generation failed
@@ -77,7 +82,7 @@ async def generate_title_async(transcript: str, model: str = None) -> Optional[s
     # produced titles about the opening topic, not the meeting.
     transcript = _sample_transcript(transcript)
 
-    model = model or os.getenv("CODEX_MODEL", "gpt-5.5")
+    model = model or os.getenv("CODEX_MODEL", DEFAULT_CODEX_MODEL)
     prompt = mark_ccs_automation(TITLE_PROMPT.format(transcript=transcript), "title")
     cmd = build_codex_exec_command(resolve_cli("codex"), model)
 
