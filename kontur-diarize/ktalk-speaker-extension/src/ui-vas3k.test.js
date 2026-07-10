@@ -428,7 +428,9 @@ describe('Model Selector Feature', () => {
       expect(options.length).toBeGreaterThanOrEqual(3);
 
       const values = Array.from(options).map(o => o.value);
-      expect(values).toContain('codex');
+      expect(values).toContain('codex:gpt-5.6-sol');
+      expect(values).toContain('codex:gpt-5.6-terra');
+      expect(values).toContain('codex:gpt-5.6-luna');
       expect(values).toContain('codex:gpt-5.3-codex-spark');
       expect(values).toContain('claude:opus');
     });
@@ -441,6 +443,16 @@ describe('Model Selector Feature', () => {
 
       const selector = document.querySelector('.jitsi-model-selector');
       expect(selector.value).toBe('claude:opus');
+    });
+
+    test('legacy codex selection defaults to GPT-5.6 Sol', () => {
+      localStorage.setItem('ktalk-ai-model', 'codex');
+
+      createFloatingPanel();
+      createVas3kSummaryModal();
+
+      const selector = document.querySelector('.jitsi-model-selector');
+      expect(selector.value).toBe('codex:gpt-5.6-sol');
     });
 
     test('changing selector updates localStorage', () => {

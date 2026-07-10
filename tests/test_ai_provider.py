@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recog.ai_provider import (
     CCS_AUTOMATION_MARKER_PREFIX,
+    DEFAULT_CODEX_MODEL,
     AIProvider,
     CodexCliProvider,
     build_codex_exec_command,
@@ -110,6 +111,13 @@ class TestCodexCliProvider:
         with patch("recog.ai_provider.resolve_cli", return_value="/usr/bin/codex"):
             provider = CodexCliProvider()
         assert provider.key == "codex"
+
+    def test_defaults_to_gpt_5_6_sol(self):
+        """given: no CODEX_MODEL - when: provider is created - then: Sol is used"""
+        with patch("recog.ai_provider.resolve_cli", return_value="/usr/bin/codex"), \
+             patch.dict(os.environ, {}, clear=True):
+            provider = CodexCliProvider()
+        assert provider.model == DEFAULT_CODEX_MODEL
 
     def test_name_includes_model(self):
         """given: CodexCliProvider - when: .name - then: includes model name"""
