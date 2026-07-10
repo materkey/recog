@@ -86,13 +86,18 @@ describe('manifest Element Call scoping', () => {
     }
   });
 
-  test('host_permissions + web_accessible_resources are scoped to the EC iframe path too', () => {
+  test('host_permissions are scoped to the EC iframe path', () => {
     expect(manifest.host_permissions).toContain(EC_PATTERN);
+  });
+
+  test('web_accessible_resources use the origin-wide Element pattern', () => {
+    // Chrome rejects path-scoped match patterns in web_accessible_resources[].matches
+    // ("Invalid match pattern" — only "<origin>/*" is allowed there), so WAR cannot
+    // mirror the /widgets/element-call/* scoping. That is fine: WAR only controls which
+    // origins may fetch injected.js; top-frame injection is prevented by content_scripts
+    // (asserted above), not by WAR.
     const war = manifest.web_accessible_resources[0];
-    expect(war.matches).toContain(EC_PATTERN);
-    // and never the top frame
-    for (const pattern of war.matches) {
-      expect(matchPatternMatches(pattern, ELEMENT_TOP_FRAME_URL)).toBe(false);
-    }
+    expect(war.matches).toContain('https://element.vkkovalev.work/*');
+    expect(war.matches).not.toContain(EC_PATTERN);
   });
 });

@@ -42,7 +42,7 @@
   "web_accessible_resources": [
     {
       "resources": ["injected.js", "src/audio-worklet/downsampler.js"],
-      "matches": ["https://*.ktalk.ru/*", "https://meet.vas3k.cloud/*", "https://meet.vkkovalev.work/*", "https://element.vkkovalev.work/widgets/element-call/*"]
+      "matches": ["https://*.ktalk.ru/*", "https://meet.vas3k.cloud/*", "https://meet.vkkovalev.work/*", "https://element.vkkovalev.work/*"]
     }
   ]
 }
