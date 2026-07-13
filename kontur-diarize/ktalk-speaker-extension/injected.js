@@ -936,11 +936,19 @@ function init() {
 
   setTimeout(_ws_js__WEBPACK_IMPORTED_MODULE_2__.connectWebSocket, 1000);
 
+  // Panel presence alone can't gate setupUI(): an early bridge frame
+  // (copilot_status primer ~1 s after WS connect) side-creates the floating
+  // panel via ensureCopilotContent → createFloatingPanel before this 2 s
+  // interval ever fires, which used to skip setupUI()/initPlatformUI()
+  // forever (unregistered Copilot activate handler, no debug panel).
+  let floatingUiInitialized = false;
+
   setInterval(() => {
     if (adapter && !adapter.supportsTabInjection()) {
       // For vas3k.cloud: check floating panel exists
-      if (!document.querySelector('.jitsi-transcript-panel')) {
+      if (!floatingUiInitialized || !document.querySelector('.jitsi-transcript-panel')) {
         setupUI();
+        floatingUiInitialized = true;
       }
     } else {
       // For KTalk: check tab exists
@@ -6799,6 +6807,13 @@ function createCopilotContent() {
     // the panel's copilot host instead of the KTalk slide-menu tab. The shared
     // copilot message/chip styles live in ui.js injectStyles().
     injectStyles();
+    // The panel may be created right here (ensureVas3kCopilotHost →
+    // createFloatingPanel) by an early bridge frame — the copilot_status
+    // primers arrive ~1 s after WS connect, before init.js's 2 s interval
+    // ever runs setupUI()/initPlatformUI(). Register the activate handler
+    // now so a Copilot tab click can always build/activate this content;
+    // otherwise the tab switches views but the content stays display:none.
+    (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.setVas3kCopilotActivateHandler)(activateVas3kView);
     panelBody = (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_5__.ensureVas3kCopilotHost)();
   } else {
     const contentArea = document.querySelector('.slide-menu-wrapper .content');
