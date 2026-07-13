@@ -323,11 +323,19 @@ export function init() {
 
   setTimeout(connectWebSocket, 1000);
 
+  // Panel presence alone can't gate setupUI(): an early bridge frame
+  // (copilot_status primer ~1 s after WS connect) side-creates the floating
+  // panel via ensureCopilotContent → createFloatingPanel before this 2 s
+  // interval ever fires, which used to skip setupUI()/initPlatformUI()
+  // forever (unregistered Copilot activate handler, no debug panel).
+  let floatingUiInitialized = false;
+
   setInterval(() => {
     if (adapter && !adapter.supportsTabInjection()) {
       // For vas3k.cloud: check floating panel exists
-      if (!document.querySelector('.jitsi-transcript-panel')) {
+      if (!floatingUiInitialized || !document.querySelector('.jitsi-transcript-panel')) {
         setupUI();
+        floatingUiInitialized = true;
       }
     } else {
       // For KTalk: check tab exists

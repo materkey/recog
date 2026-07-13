@@ -1360,6 +1360,13 @@ export function createCopilotContent() {
     // the panel's copilot host instead of the KTalk slide-menu tab. The shared
     // copilot message/chip styles live in ui.js injectStyles().
     injectStyles();
+    // The panel may be created right here (ensureVas3kCopilotHost →
+    // createFloatingPanel) by an early bridge frame — the copilot_status
+    // primers arrive ~1 s after WS connect, before init.js's 2 s interval
+    // ever runs setupUI()/initPlatformUI(). Register the activate handler
+    // now so a Copilot tab click can always build/activate this content;
+    // otherwise the tab switches views but the content stays display:none.
+    setVas3kCopilotActivateHandler(activateVas3kView);
     panelBody = ensureVas3kCopilotHost();
   } else {
     const contentArea = document.querySelector('.slide-menu-wrapper .content');
