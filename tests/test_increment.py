@@ -126,11 +126,85 @@ async def test_generate_v1_creates_increment_files(tmp_path):
     assert v1_meta["provider"] == "codex"
     assert v1_meta["prompt_id"] == "my-increment"
     assert v1_meta["prompt_name"] == "My increment"
+    assert v1_meta["participant_id"] is None
+    assert v1_meta["participant_name"] == "Вася"
 
     # Verify prompt contained all segments
     call_args = mock_provider.complete.call_args[0][0]
     assert "Привет" in call_args
     assert "Начинаем" in call_args
+
+
+@pytest.mark.asyncio
+async def test_other_participant_when_generated_then_uses_their_name_and_metadata(tmp_path):
+    """
+    given: meeting with a local and a remote participant
+    when: increment generation targets the remote participant
+    then: the prompt and stored metadata identify that participant
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = _make_meeting(tmp_path, meeting_id)
+    gen = IncrementGenerator(tmp_path)
+
+    mock_provider = MagicMock()
+    mock_provider.key = "codex"
+    mock_provider.model = "gpt-5.6-sol"
+    mock_provider.reasoning_effort = "xhigh"
+    mock_provider.complete = AsyncMock(return_value="## Задачи\n- Сделать ревью\n")
+
+    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+        version = await gen.generate(
+            meeting_id,
+            meeting_path,
+            DEFAULT_PROMPT,
+            participant_id="speaker_2",
+        )
+
+    assert version == 1
+    rendered_prompt = mock_provider.complete.call_args[0][0]
+    assert "Участник: Петя" in rendered_prompt
+
+    meta = json.loads(
+        (meeting_path / "increments" / "my-increment" / "v1_meta.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert meta["participant_id"] == "speaker_2"
+    assert meta["participant_name"] == "Петя"
+    assert meta["model"] == "gpt-5.6-sol"
+
+
+@pytest.mark.asyncio
+async def test_local_increment_exists_when_other_participant_generated_then_full_transcript_is_used(tmp_path):
+    """
+    given: a local participant increment already covers the whole transcript
+    when: the first increment is generated for another participant
+    then: participant delta tracking starts independently from the full transcript
+    """
+    meeting_id = "2026-03-21_test"
+    meeting_path = _make_meeting(tmp_path, meeting_id)
+    inc_dir = meeting_path / "increments" / "my-increment"
+    _make_v1_meta(inc_dir, [1, 3])
+    gen = IncrementGenerator(tmp_path)
+
+    mock_provider = MagicMock()
+    mock_provider.key = "codex"
+    mock_provider.model = "gpt-5.6-sol"
+    mock_provider.reasoning_effort = "xhigh"
+    mock_provider.complete = AsyncMock(return_value="## Задачи\n- Сделать ревью\n")
+
+    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+        version = await gen.generate(
+            meeting_id,
+            meeting_path,
+            DEFAULT_PROMPT,
+            participant_id="speaker_2",
+        )
+
+    assert version == 2
+    rendered_prompt = mock_provider.complete.call_args[0][0]
+    assert "Привет" in rendered_prompt
+    assert "Начинаем" in rendered_prompt
 
 
 @pytest.mark.asyncio

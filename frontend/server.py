@@ -699,7 +699,12 @@ async def get_increment(meeting_id: str, prompt_id: str, version: int):
 
 
 @app.post("/api/meetings/{meeting_id}/increments/{prompt_id}/generate")
-async def generate_prompt_increment(meeting_id: str, prompt_id: str, force: bool = False):
+async def generate_prompt_increment(
+    meeting_id: str,
+    prompt_id: str,
+    force: bool = False,
+    participant_id: Optional[str] = None,
+):
     """Trigger generation for a specific prompt in a meeting.
 
     force=true regenerates over the full transcript (manual Regenerate),
@@ -717,6 +722,11 @@ async def generate_prompt_increment(meeting_id: str, prompt_id: str, force: bool
         meeting = storage.get_meeting(meeting_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
+        if (
+            participant_id is not None
+            and participant_id not in meeting.get("meta", {}).get("participants", {})
+        ):
+            raise HTTPException(status_code=400, detail="Participant not found")
 
         meeting_path = MEETINGS_DIR / meeting_id
         if not meeting_path.exists():
@@ -730,11 +740,20 @@ async def generate_prompt_increment(meeting_id: str, prompt_id: str, force: bool
 
         gen = IncrementGenerator(MEETINGS_DIR, prompts_dir=prompts_dir)
         gen.migrate_flat_increments(meeting_path)
-        version = await gen.generate(meeting_id, meeting_path, prompt, force=force)
+        version = await gen.generate(
+            meeting_id,
+            meeting_path,
+            prompt,
+            force=force,
+            participant_id=participant_id,
+        )
 
         if version is None:
             # Check if a failed meta was written (generate returns None for both skip and failure)
-            latest_metas = gen.list_increments(meeting_id, prompt_id)
+            latest_metas = [
+                meta for meta in gen.list_increments(meeting_id, prompt_id)
+                if meta.get("participant_id") == participant_id
+            ]
             if latest_metas and latest_metas[-1].get("status") == "failed":
                 error_msg = latest_metas[-1].get("error", "Generation failed")
                 raise HTTPException(status_code=500, detail=error_msg)
