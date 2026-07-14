@@ -78,7 +78,8 @@ class IncrementGenerator:
         return cls._locks[key]
 
     def _claim_version(
-        self, meeting_id: str, prompt_id: str, all_segments: list[dict], force: bool = False
+        self, meeting_id: str, prompt_id: str, all_segments: list[dict],
+        participant_id: Optional[str], participant_name: str, force: bool = False
     ) -> Optional[tuple[int, list[dict], int, int]]:
         """Atomically claim the next version number with segment_range in placeholder.
 
@@ -97,7 +98,9 @@ class IncrementGenerator:
         inc_dir.mkdir(parents=True, exist_ok=True)
 
         for _ in range(5):
-            version, last_segment_id = self._next_version(meeting_id, prompt_id)
+            version, last_segment_id = self._next_version(
+                meeting_id, prompt_id, participant_id
+            )
 
             # Compute delta for this version's base (full transcript when forced)
             if last_segment_id is not None and not force:
@@ -116,6 +119,8 @@ class IncrementGenerator:
             placeholder = json.dumps({
                 "version": version,
                 "prompt_id": prompt_id,
+                "participant_id": participant_id,
+                "participant_name": participant_name,
                 "status": "generating",
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "segment_range": [seg_start, seg_end],
@@ -186,11 +191,16 @@ class IncrementGenerator:
     def _increments_dir(self, meeting_id: str, prompt_id: str) -> Path:
         return self._meetings_base / meeting_id / "increments" / prompt_id
 
-    def _next_version(self, meeting_id: str, prompt_id: str) -> tuple[int, Optional[int]]:
+    def _next_version(
+        self, meeting_id: str, prompt_id: str,
+        participant_id: Optional[str] = None
+    ) -> tuple[int, Optional[int]]:
         """Scan increments/<prompt_id>/v*_meta.json, return (next_version, last_segment_id).
 
         last_segment_id is the upper bound of segment_range from the latest
-        *completed* or *in-progress* version, or None if no such versions exist.
+        *completed* or *in-progress* version for the selected participant, or
+        None if no such versions exist. Old metadata without participant_id is
+        treated as the default local participant.
         Version counter increments past failed versions to avoid reuse.
         Stale 'generating' placeholders (older than STALE_GENERATING_TIMEOUT_SECONDS)
         are automatically marked as failed so their segments can be retried.
@@ -230,7 +240,10 @@ class IncrementGenerator:
                 # completed results are final; in-progress ranges prevent
                 # cross-process duplicate content.  Failed versions lose
                 # their segment_range, so those segments are retried.
-                if status in ("completed", "generating"):
+                if (
+                    meta.get("participant_id") == participant_id
+                    and status in ("completed", "generating")
+                ):
                     sr = meta.get("segment_range")
                     if sr and len(sr) == 2 and (last_segment_id is None or sr[1] > last_segment_id):
                         last_segment_id = sr[1]
@@ -246,7 +259,10 @@ class IncrementGenerator:
                     if v > max_version:
                         max_version = v
                     status = meta.get("status")
-                    if status in ("completed", "generating"):
+                    if (
+                        meta.get("participant_id") == participant_id
+                        and status in ("completed", "generating")
+                    ):
                         sr = meta.get("segment_range")
                         if sr and len(sr) == 2 and (last_segment_id is None or sr[1] > last_segment_id):
                             last_segment_id = sr[1]
@@ -284,7 +300,10 @@ class IncrementGenerator:
             "---\n\n"
         )
 
-    async def generate(self, meeting_id: str, meeting_path: Path, prompt: PromptConfig, force: bool = False) -> Optional[int]:
+    async def generate(
+        self, meeting_id: str, meeting_path: Path, prompt: PromptConfig,
+        force: bool = False, participant_id: Optional[str] = None
+    ) -> Optional[int]:
         """Generate next increment version for a meeting using the given prompt.
 
         Returns version number on success, None if skipped (zero delta
@@ -331,10 +350,27 @@ class IncrementGenerator:
         # Serialize concurrent generate() calls for the same (meeting_id, prompt_id)
         # to prevent two coroutines from selecting the same version number.
         async with self._get_lock(meeting_id, prompt_id):
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if participant_id is None:
+                local_names = _local_participant_names(meta)
+                user_name = ", ".join(local_names) if local_names else "User"
+            else:
+                participant = meta.get("participants", {}).get(participant_id)
+                if participant is None:
+                    raise ValueError(f"Participant '{participant_id}' not found")
+                user_name = participant.get("name") or participant_id
+
             # Atomically claim version on the filesystem with segment_range
             # in the placeholder from the start, preventing cross-process
             # duplicate delta windows.
-            claim = self._claim_version(meeting_id, prompt_id, segments, force=force)
+            claim = self._claim_version(
+                meeting_id,
+                prompt_id,
+                segments,
+                participant_id,
+                user_name,
+                force=force,
+            )
             if claim is None:
                 print(f"[increment] {prompt_id} skipped: 0 delta segments", file=sys.stderr)
                 return None
@@ -344,19 +380,12 @@ class IncrementGenerator:
 
             t0 = time.monotonic()
             try:
-                # Load meta
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-
                 # Build transcript text (filters out event_type segments and empty text)
                 transcript_text = _segments_to_transcript(delta_segments)
                 if not transcript_text.strip():
                     print(f"[increment] {prompt_id} v{version} skipped: no text in delta segments", file=sys.stderr)
                     self._remove_generating_meta(inc_dir, version)
                     return None
-
-                # Determine user name
-                local_names = _local_participant_names(meta)
-                user_name = ", ".join(local_names) if local_names else "User"
 
                 # All participant names
                 participants = [
@@ -385,6 +414,8 @@ class IncrementGenerator:
                     "version": version,
                     "prompt_id": prompt_id,
                     "prompt_name": prompt.name,
+                    "participant_id": participant_id,
+                    "participant_name": user_name,
                     "provider": provider.key,
                     "model": provider.model,
                     "reasoning_effort": provider.reasoning_effort,
@@ -445,6 +476,8 @@ class IncrementGenerator:
                     "version": version,
                     "prompt_id": prompt_id,
                     "prompt_name": prompt.name,
+                    "participant_id": participant_id,
+                    "participant_name": user_name,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "status": "failed",
                     "duration_seconds": round(duration, 1),
@@ -463,6 +496,8 @@ class IncrementGenerator:
                     "version": version,
                     "prompt_id": prompt_id,
                     "prompt_name": prompt.name,
+                    "participant_id": participant_id,
+                    "participant_name": user_name,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "status": "failed",
                     "duration_seconds": round(duration, 1),

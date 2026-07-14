@@ -1353,7 +1353,7 @@ let aiProviderNames = {};  // Store provider display names
 let activeAiTab = 'claude';
 let aiEventSource = null;
 let incrementPollTimer = null;
-let _incrementState = null;  // {meetingId, incrementsByPrompt, promptNames, currentPromptId, currentVersion}
+let _incrementState = null;  // Stored increment modal state, including participant selection
 
 async function analyzeIncrement() {
     const meeting = views.meeting;
@@ -1458,6 +1458,24 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
     const promptIds = Object.keys(incrementsByPrompt);
     if (promptIds.length === 0) return;
 
+    const meetingParticipants = Object.entries(views.meeting.meta?.participants || {});
+    const localNames = meetingParticipants
+        .filter(function(entry) { return entry[1].is_local; })
+        .map(function(entry) { return entry[1].name || entry[0]; });
+    const seenParticipantNames = new Set(localNames);
+    const otherParticipants = [];
+    meetingParticipants.forEach(function(entry) {
+        if (entry[1].is_local) return;
+        const name = entry[1].name || entry[0];
+        if (seenParticipantNames.has(name)) return;
+        seenParticipantNames.add(name);
+        otherParticipants.push({ id: entry[0], name: name });
+    });
+    const incrementParticipants = [{
+        id: null,
+        name: localNames.length > 0 ? localNames.join(', ') : 'Me'
+    }].concat(otherParticipants);
+
     const modal = document.getElementById('ai-modal');
     modal.style.display = 'flex';
 
@@ -1475,6 +1493,10 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
 
     // Body: version sub-tabs + content area
     modal.querySelector('.modal-body').innerHTML =
+        '<div class="increment-participant-toolbar" id="increment-participant-toolbar">' +
+            '<label for="increment-participant-select">Participant</label>' +
+            '<select id="increment-participant-select" onchange="switchIncrementParticipant(this.value)"></select>' +
+        '</div>' +
         '<div class="increment-version-tabs" id="version-tabs"></div>' +
         '<div id="increment-content" class="ai-tab-content active"><div class="loading">Loading...</div></div>';
 
@@ -1489,8 +1511,19 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
         incrementsByPrompt: incrementsByPrompt,
         promptNames: promptNames,
         currentPromptId: promptIds[0],
-        currentVersion: null
+        currentVersion: null,
+        currentParticipantId: null,
+        participants: incrementParticipants,
+        pendingGenerations: new Set()
     };
+
+    const participantSelect = document.getElementById('increment-participant-select');
+    incrementParticipants.forEach(function(participant) {
+        const option = document.createElement('option');
+        option.value = participant.id || '';
+        option.textContent = participant.name;
+        participantSelect.appendChild(option);
+    });
 
     // Load first prompt
     switchPromptTab(meetingId, promptIds[0]);
@@ -1507,12 +1540,26 @@ function switchPromptTab(meetingId, promptId) {
     }
 
     var metas = (_incrementState && _incrementState.incrementsByPrompt[promptId]) || [];
+    var isParticipantIncrement = promptId === 'my-increment';
+    var participantToolbar = document.getElementById('increment-participant-toolbar');
+    if (participantToolbar) {
+        participantToolbar.style.display = isParticipantIncrement ? '' : 'none';
+    }
+    if (isParticipantIncrement && _incrementState) {
+        metas = metas.filter(function(meta) {
+            return (meta.participant_id || null) === _incrementState.currentParticipantId;
+        });
+    }
     var versionTabsContainer = document.getElementById('version-tabs');
 
     if (metas.length === 0) {
         if (versionTabsContainer) versionTabsContainer.innerHTML = '';
-        document.getElementById('increment-content').innerHTML =
-            '<div class="empty">No versions generated yet</div>';
+        if (isParticipantIncrement) {
+            generateParticipantIncrement();
+        } else {
+            document.getElementById('increment-content').innerHTML =
+                '<div class="empty">No versions generated yet</div>';
+        }
         return;
     }
 
@@ -1536,6 +1583,61 @@ function switchPromptTab(meetingId, promptId) {
     }
 
     loadIncrementContent(meetingId, promptId, latestVersion);
+}
+
+function switchIncrementParticipant(participantId) {
+    if (!_incrementState) return;
+
+    _incrementState.currentParticipantId = participantId || null;
+    switchPromptTab(_incrementState.meetingId, _incrementState.currentPromptId);
+}
+
+async function generateParticipantIncrement() {
+    if (!_incrementState || _incrementState.currentPromptId !== 'my-increment') return;
+
+    const state = _incrementState;
+    const meetingId = state.meetingId;
+    const participantId = state.currentParticipantId;
+    const pendingKey = participantId || '__local__';
+    const container = document.getElementById('increment-content');
+
+    if (state.pendingGenerations.has(pendingKey)) {
+        if (container) container.innerHTML = '<div class="loading">Generating increment...</div>';
+        return;
+    }
+
+    state.pendingGenerations.add(pendingKey);
+    if (container) container.innerHTML = '<div class="loading">Generating increment...</div>';
+
+    try {
+        const params = new URLSearchParams();
+        if (participantId) params.set('participant_id', participantId);
+        const query = params.toString();
+        const res = await fetch('/api/meetings/' + encodeURIComponent(meetingId) +
+            '/increments/my-increment/generate' + (query ? '?' + query : ''), { method: 'POST' });
+        if (!res.ok) {
+            const err = await res.json().catch(function() { return {}; });
+            throw new Error(err.detail || 'Generation failed');
+        }
+        const generation = await res.json();
+        if (generation.status === 'skipped') {
+            throw new Error(generation.message || 'No new segments to process');
+        }
+
+        const increments = await api.getIncrements(meetingId);
+        if (_incrementState !== state) return;
+        state.incrementsByPrompt = increments;
+
+        if (state.currentPromptId === 'my-increment' && state.currentParticipantId === participantId) {
+            switchPromptTab(meetingId, 'my-increment');
+        }
+    } catch (e) {
+        if (_incrementState === state && state.currentParticipantId === participantId && container) {
+            container.innerHTML = '<div class="error">Generation failed: ' + escapeHtml(e.message) + '</div>';
+        }
+    } finally {
+        state.pendingGenerations.delete(pendingKey);
+    }
 }
 
 function switchIncrementVersion(meetingId, promptId, version) {
@@ -1571,6 +1673,8 @@ async function loadIncrementContent(meetingId, promptId, version) {
     const container = document.getElementById('increment-content');
     if (!container) return;
 
+    const requestedParticipantId = _incrementState ? _incrementState.currentParticipantId : null;
+
     container.innerHTML = '<div class="loading">Loading...</div>';
 
     try {
@@ -1581,6 +1685,14 @@ async function loadIncrementContent(meetingId, promptId, version) {
         }
 
         const { meta, content } = result;
+        if (_incrementState && (
+            _incrementState.meetingId !== meetingId ||
+            _incrementState.currentPromptId !== promptId ||
+            _incrementState.currentVersion !== version ||
+            _incrementState.currentParticipantId !== requestedParticipantId
+        )) {
+            return;
+        }
 
         if (meta.status === 'failed') {
             const errorMsg = meta.error || 'Generation failed';
@@ -1609,12 +1721,20 @@ async function loadIncrementContent(meetingId, promptId, version) {
         const rendered = renderMarkdown(strippedContent);
         const durationStr = meta.duration_seconds != null ? meta.duration_seconds.toFixed(1) + 's' : '';
         const promptName = (_incrementState && _incrementState.promptNames[promptId]) || promptId;
-        const infoStr = promptName + ' · v' + meta.version + ' · ' + meta.segment_count + ' segments' +
+        const participantStr = meta.participant_name ? ' · ' + meta.participant_name : '';
+        const infoStr = promptName + participantStr + ' · v' + meta.version + ' · ' + meta.segment_count + ' segments' +
             (durationStr ? ' · ' + durationStr : '');
+        const providerName = meta.provider === 'codex' ? 'Codex' : (meta.provider || '');
+        const modelStr = meta.model
+            ? [providerName, meta.model, meta.reasoning_effort].filter(Boolean).join(' · ')
+            : 'Model unavailable';
 
         container.innerHTML =
-            '<div class="ai-answer">' + rendered + '</div>' +
-            '<div class="ai-provider">' + escapeHtml(infoStr) + '</div>';
+            '<div class="increment-result-meta">' +
+                '<span class="increment-model-badge">Model: ' + escapeHtml(modelStr) + '</span>' +
+                '<span class="increment-result-details">' + escapeHtml(infoStr) + '</span>' +
+            '</div>' +
+            '<div class="ai-answer">' + rendered + '</div>';
 
         aiResponses['increment'] = strippedContent;
         activeAiTab = 'increment';
@@ -1630,6 +1750,9 @@ async function regeneratePrompt() {
     }
     var meetingId = _incrementState ? _incrementState.meetingId : (views.meeting && views.meeting.id);
     var promptId = _incrementState ? _incrementState.currentPromptId : null;
+    var participantId = _incrementState && promptId === 'my-increment'
+        ? _incrementState.currentParticipantId
+        : null;
 
     if (!meetingId || !promptId) {
         // Fall back to SSE if no prompt context
@@ -1645,8 +1768,10 @@ async function regeneratePrompt() {
         // force=true: regenerate over the full transcript. Without it a finished
         // meeting (last version already covers every segment) skips with
         // "No new segments to process".
+        var params = new URLSearchParams({ force: 'true' });
+        if (participantId) params.set('participant_id', participantId);
         var res = await fetch('/api/meetings/' + encodeURIComponent(meetingId) +
-            '/increments/' + encodeURIComponent(promptId) + '/generate?force=true', { method: 'POST' });
+            '/increments/' + encodeURIComponent(promptId) + '/generate?' + params.toString(), { method: 'POST' });
         if (!res.ok) {
             var err = await res.json().catch(function() { return {}; });
             throw new Error(err.detail || 'Generation failed');
@@ -1663,6 +1788,11 @@ async function regeneratePrompt() {
         ]);
         showStoredIncrements(meetingId, increments, prompts);
         // Switch to the prompt that was regenerated
+        if (_incrementState && participantId) {
+            _incrementState.currentParticipantId = participantId;
+            var participantSelect = document.getElementById('increment-participant-select');
+            if (participantSelect) participantSelect.value = participantId;
+        }
         switchPromptTab(meetingId, promptId);
     } catch (e) {
         if (container) container.innerHTML = '<div class="error">Regeneration failed: ' + escapeHtml(e.message) + '</div>';

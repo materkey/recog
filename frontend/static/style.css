@@ -1031,6 +1031,36 @@ a:hover {
     display: block;
 }
 
+.increment-participant-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 0 12px;
+}
+
+.increment-participant-toolbar label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.increment-participant-toolbar select {
+    min-width: 180px;
+    max-width: 70%;
+    padding: 7px 28px 7px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.increment-participant-toolbar select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
 .increment-version-tabs {
     display: flex;
     gap: 4px;
@@ -1062,6 +1092,34 @@ a:hover {
     color: var(--accent);
     border-color: var(--accent);
     background: var(--bg-secondary);
+}
+
+.increment-result-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.increment-model-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-tertiary));
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.increment-result-details {
+    color: var(--text-muted);
+    font-size: 11px;
 }
 
 .modal-close {
