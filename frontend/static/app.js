@@ -1354,6 +1354,7 @@ let activeAiTab = 'claude';
 let aiEventSource = null;
 let incrementPollTimer = null;
 let _incrementState = null;  // Stored increment modal state, including participant selection
+const SYSTEM_PARTICIPANT_ID = '__system__';
 
 async function analyzeIncrement() {
     const meeting = views.meeting;
@@ -1460,12 +1461,14 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
 
     const meetingParticipants = Object.entries(views.meeting.meta?.participants || {});
     const localNames = meetingParticipants
-        .filter(function(entry) { return entry[1].is_local; })
+        .filter(function(entry) {
+            return entry[0] !== SYSTEM_PARTICIPANT_ID && entry[1].is_local;
+        })
         .map(function(entry) { return entry[1].name || entry[0]; });
     const seenParticipantNames = new Set(localNames);
     const otherParticipants = [];
     meetingParticipants.forEach(function(entry) {
-        if (entry[1].is_local) return;
+        if (entry[0] === SYSTEM_PARTICIPANT_ID || entry[1].is_local) return;
         const name = entry[1].name || entry[0];
         if (seenParticipantNames.has(name)) return;
         seenParticipantNames.add(name);
