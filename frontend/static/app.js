@@ -626,31 +626,38 @@ const views = {
             transcriptEl.innerHTML = '';
 
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            this.ws = new WebSocket(`${protocol}//${window.location.host}/api/live/stream`);
+            const ws = new WebSocket(`${protocol}//${window.location.host}/api/live/stream`);
+            this.ws = ws;
 
-            this.ws.onopen = () => {
+            ws.onopen = () => {
+                if (this.ws !== ws) return;
                 this.updateStatus('connected');
             };
 
-            this.ws.onclose = () => {
+            ws.onclose = () => {
+                if (this.ws !== ws) return;
+                this.ws = null;
                 this.updateStatus('disconnected');
+                copilotHandleWsClosed();
             };
 
-            this.ws.onerror = () => {
+            ws.onerror = () => {
+                if (this.ws !== ws) return;
                 this.updateStatus('error');
             };
 
-            this.ws.onmessage = (event) => {
+            ws.onmessage = (event) => {
+                if (this.ws !== ws) return;
                 const msg = JSON.parse(event.data);
                 this.handleMessage(msg);
             };
         },
 
         disconnect() {
-            if (this.ws) {
-                this.ws.close();
-                this.ws = null;
-            }
+            const ws = this.ws;
+            this.ws = null;
+            if (ws) ws.close();
+            copilotHandleWsClosed();
             this.segments = [];
             this.currentMeeting = null;
             this.pendingRefines.clear();
@@ -697,6 +704,7 @@ const views = {
                     lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
                     this.renderTranscript(transcriptEl);
+                    updateCopilotControls();
                     break;
 
                 case 'meeting_change':
@@ -707,6 +715,7 @@ const views = {
                     lastAnchorPayload = null;
                     this.renderMeetingInfo(msg.meeting, infoEl);
                     this.renderTranscript(transcriptEl);
+                    updateCopilotControls();
                     break;
 
                 case 'segments':
@@ -721,11 +730,23 @@ const views = {
                     if (!msg.meeting_id || !this.currentMeeting
                             || msg.meeting_id === this.currentMeeting.id) {
                         this.refineEnabled = msg.refine_enabled === true;
+                        if (this.currentMeeting && this.refineEnabled) {
+                            this.currentMeeting.source = 'ktalk';
+                            updateCopilotControls();
+                        }
                     }
                     break;
 
                 case 'transcript_refine':
                     this.handleTranscriptRefine(msg, transcriptEl);
+                    break;
+
+                case 'copilot_reply':
+                    handleCopilotReply(msg);
+                    break;
+
+                case 'copilot_status':
+                    handleCopilotStatus(msg);
                     break;
 
                 case 'error':
@@ -920,6 +941,621 @@ const views = {
 
 function toggleFollowMode() {
     views.live.toggleFollow();
+}
+
+
+// --- Copilot Panel ---
+// Module-level state so chat history, chip state, and pending requests
+// survive view switches (views.live.disconnect() must not clear this).
+// F5 loses history by design; the session itself survives tab close (D2).
+
+const COPILOT_TRANSCRIPT_WINDOW_SIZE = 15;
+
+const COPILOT_AGENT_CHIP = {
+    online: { icon: '🟢', label: 'online', cls: 'online' },
+    working: { icon: '🟡', label: 'working', cls: 'working' },
+    spawning: { icon: '🟡', label: 'spawning', cls: 'working' },
+    blocked: { icon: '🔴', label: 'blocked', cls: 'blocked' },
+    offline: { icon: '⚫', label: 'offline', cls: 'offline' }
+};
+
+const COPILOT_CONFERENCE_SOURCES = new Set(['ktalk', 'vas3k', 'vkkovalev', 'matrix']);
+
+const copilotState = {
+    messages: [],           // {id, kind, text, request_id, status, time}
+    pending: new Map(),     // request_id -> {userId, assistantId, createdAt}
+    agentState: 'offline',
+    panelOpen: false,
+    unread: false,
+    spawnPendingId: null,   // request_id of the in-flight spawn click
+    stopPendingId: null     // request_id of the in-flight stop click
+};
+
+function copilotNowDisplay() {
+    return new Date().toLocaleTimeString('ru-RU', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+}
+
+function generateCopilotRequestId() {
+    return 'copilot_' + crypto.randomUUID();
+}
+
+function nextCopilotMsgId() {
+    return 'copilot-msg-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+// Single OPEN-guarded send helper: every copilot frame goes through here.
+function sendCopilotFrame(frame) {
+    const ws = views.live.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(frame));
+    return true;
+}
+
+function copilotRoleLabel(kind) {
+    if (kind === 'user') return 'Вы';
+    if (kind === 'assistant') return 'Claude';
+    if (kind === 'proactive') return 'Claude · proactive';
+    if (kind === 'status') return 'Status';
+    if (kind === 'error') return 'Error';
+    return kind;
+}
+
+function getCopilotMessagesEl() {
+    return document.getElementById('copilot-messages');
+}
+
+function scrollCopilotToBottom() {
+    const messagesEl = getCopilotMessagesEl();
+    if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// Text content of a bubble: assistant/proactive kinds render through the
+// escape-first renderMarkdown (safe for innerHTML) with .ai-answer
+// typography; user/error/status and pending placeholders stay plain text.
+function setCopilotMsgText(textEl, msg) {
+    const isPending = msg.kind === 'assistant'
+        && typeof msg.status === 'string'
+        && msg.status !== 'done'
+        && msg.status !== 'error';
+    const isMarkdownKind = msg.kind === 'assistant' || msg.kind === 'proactive';
+    textEl.className = 'copilot-msg-text'
+        + (isPending ? ' pending' : '')
+        + (isMarkdownKind && !isPending ? ' ai-answer' : '');
+    if (isMarkdownKind && !isPending) {
+        textEl.innerHTML = renderMarkdown(msg.text || '');
+    } else {
+        textEl.textContent = msg.text || (isPending ? '…' : '');
+    }
+}
+
+function renderCopilotMessage(msg) {
+    const messagesEl = getCopilotMessagesEl();
+    if (!messagesEl) return null;
+    const empty = messagesEl.querySelector('.copilot-empty');
+    if (empty) empty.remove();
+
+    const wrapper = document.createElement('div');
+    wrapper.className = `copilot-msg copilot-msg-${msg.kind}`;
+    wrapper.dataset.copilotId = msg.id;
+    if (msg.request_id) wrapper.dataset.copilotRequestId = msg.request_id;
+
+    const header = document.createElement('div');
+    header.className = 'copilot-msg-header';
+    const roleEl = document.createElement('span');
+    roleEl.className = 'copilot-msg-role';
+    roleEl.textContent = copilotRoleLabel(msg.kind);
+    const timeEl = document.createElement('span');
+    timeEl.className = 'copilot-msg-time';
+    timeEl.textContent = msg.time || copilotNowDisplay();
+    header.appendChild(roleEl);
+    header.appendChild(timeEl);
+
+    const textEl = document.createElement('div');
+    setCopilotMsgText(textEl, msg);
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(textEl);
+    messagesEl.appendChild(wrapper);
+    scrollCopilotToBottom();
+    return wrapper;
+}
+
+// Append-only insertion with scroll-to-bottom; returns the message id.
+function appendCopilotMessage(msg) {
+    if (!msg.id) msg.id = nextCopilotMsgId();
+    if (!msg.time) msg.time = copilotNowDisplay();
+    copilotState.messages.push(msg);
+    renderCopilotMessage(msg);
+    noteCopilotUnread(msg.kind);
+    return msg.id;
+}
+
+// In-place mutation of an existing bubble (no reorder).
+function updateCopilotMessage(id, updates) {
+    const msg = copilotState.messages.find((m) => m.id === id);
+    if (!msg) return;
+    Object.assign(msg, updates);
+
+    const messagesEl = getCopilotMessagesEl();
+    const el = messagesEl ? messagesEl.querySelector(`[data-copilot-id="${id}"]`) : null;
+    if (!el) return;
+    if (updates.kind) {
+        el.classList.remove(
+            'copilot-msg-user',
+            'copilot-msg-assistant',
+            'copilot-msg-proactive',
+            'copilot-msg-status',
+            'copilot-msg-error'
+        );
+        el.classList.add(`copilot-msg-${msg.kind}`);
+        const roleEl = el.querySelector('.copilot-msg-role');
+        if (roleEl) roleEl.textContent = copilotRoleLabel(msg.kind);
+    }
+    if (updates.time != null) {
+        const timeEl = el.querySelector('.copilot-msg-time');
+        if (timeEl) timeEl.textContent = msg.time;
+    }
+    const textEl = el.querySelector('.copilot-msg-text');
+    if (textEl) setCopilotMsgText(textEl, msg);
+}
+
+function noteCopilotUnread(kind) {
+    if (kind !== 'assistant' && kind !== 'proactive') return;
+    if (copilotState.panelOpen) return;
+    copilotState.unread = true;
+    updateCopilotUnreadDot();
+}
+
+function updateCopilotUnreadDot() {
+    const dot = document.getElementById('copilot-unread-dot');
+    if (dot) dot.hidden = !copilotState.unread;
+}
+
+function updateCopilotChips() {
+    const meta = COPILOT_AGENT_CHIP[copilotState.agentState] || COPILOT_AGENT_CHIP.offline;
+    for (const id of ['copilot-chip', 'copilot-panel-chip']) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.classList.remove('online', 'working', 'blocked', 'offline');
+        el.classList.add(meta.cls);
+        el.textContent = `${meta.icon} ${meta.label}`;
+        el.title = `Copilot session: ${meta.label}`;
+    }
+}
+
+function updateCopilotControls() {
+    const input = document.getElementById('copilot-input');
+    const sendBtn = document.getElementById('copilot-send-btn');
+    const stopBtn = document.getElementById('copilot-stop-btn');
+    const spawning = copilotState.spawnPendingId !== null
+        || copilotState.agentState === 'spawning';
+    if (input) {
+        input.disabled = spawning;
+        input.placeholder = spawning ? 'запускается…' : 'Спросить Claude...';
+    }
+    if (sendBtn) sendBtn.disabled = spawning;
+    if (stopBtn) {
+        const stopping = copilotState.stopPendingId !== null;
+        const meetingSource = views.live.currentMeeting && views.live.currentMeeting.source;
+        const conferenceOwned = COPILOT_CONFERENCE_SOURCES.has(meetingSource);
+        // The 90 s GRACE means "останавливается…" legitimately shows for
+        // minutes — the session is stopped only when the chip goes ⚫.
+        // Disabled while a stop is already in flight (no duplicate frames)
+        // and while there is no manual session to stop.
+        stopBtn.textContent = stopping ? 'останавливается…' : 'Stop';
+        stopBtn.disabled = stopping
+            || copilotState.agentState === 'offline'
+            || conferenceOwned;
+        stopBtn.title = conferenceOwned
+            ? 'Conference Copilot sessions are managed automatically'
+            : '';
+    }
+}
+
+function openCopilotPanel() {
+    copilotState.panelOpen = true;
+    const panel = document.getElementById('copilot-panel');
+    if (panel) panel.style.display = 'flex';
+    copilotState.unread = false;
+    updateCopilotUnreadDot();
+    updateCopilotControls();
+    scrollCopilotToBottom();
+}
+
+function closeCopilotPanel() {
+    copilotState.panelOpen = false;
+    const panel = document.getElementById('copilot-panel');
+    if (panel) panel.style.display = 'none';
+}
+
+function toggleCopilotPanel() {
+    if (copilotState.panelOpen) {
+        closeCopilotPanel();
+    } else {
+        openCopilotPanel();
+    }
+}
+
+function copilotButtonClick() {
+    // Chip ⚫ and no spawn in flight: open the panel and send exactly one
+    // spawn request. Otherwise the button just toggles the panel.
+    if (copilotState.agentState === 'offline' && !copilotState.spawnPendingId) {
+        openCopilotPanel();
+        const requestId = generateCopilotRequestId();
+        if (!sendCopilotFrame({ type: 'copilot_spawn_request', request_id: requestId })) {
+            appendCopilotMessage({
+                kind: 'error',
+                text: 'Bridge offline: сообщение не отправлено.'
+            });
+            return;
+        }
+        copilotState.spawnPendingId = requestId;
+        updateCopilotControls();
+        return;
+    }
+    toggleCopilotPanel();
+}
+
+function copilotStopClick() {
+    if (copilotState.stopPendingId) return;
+    const requestId = generateCopilotRequestId();
+    if (!sendCopilotFrame({ type: 'copilot_stop_request', request_id: requestId })) {
+        appendCopilotMessage({
+            kind: 'error',
+            text: 'Bridge offline: сообщение не отправлено.'
+        });
+        return;
+    }
+    copilotState.stopPendingId = requestId;
+    updateCopilotControls();
+}
+
+// Last ≤15 non-event rows of the live transcript, in the ws_api.js wire
+// shape ({speaker, text, timestamp, segment_id}).
+function buildCopilotTranscriptWindow() {
+    const segments = Array.isArray(views.live.segments) ? views.live.segments : [];
+    return segments
+        .filter((s) => s && !s.event_type)
+        .slice(-COPILOT_TRANSCRIPT_WINDOW_SIZE)
+        .map((s) => ({
+            speaker: s.speaker || '',
+            text: s.text || '',
+            timestamp: s.ts_display || '',
+            segment_id: s.id || 0
+        }));
+}
+
+function submitCopilotChat() {
+    const input = document.getElementById('copilot-input');
+    if (!input || input.disabled) return;
+    const text = (input.value || '').trim();
+    if (!text) return;
+
+    const meeting = views.live.currentMeeting;
+    const requestId = generateCopilotRequestId();
+    const sent = sendCopilotFrame({
+        type: 'copilot_chat_message',
+        request_id: requestId,
+        text: text,
+        meeting_id: (meeting && meeting.id) || null,
+        meeting_title: (meeting && meeting.title) || null,
+        transcript_window: buildCopilotTranscriptWindow(),
+        created_at: Date.now()
+    });
+    if (!sent) {
+        // WS not OPEN: error bubble, input untouched, no pending entry.
+        appendCopilotMessage({
+            kind: 'error',
+            text: 'Bridge offline: сообщение не отправлено.'
+        });
+        return;
+    }
+
+    const userId = appendCopilotMessage({
+        kind: 'user',
+        text: text,
+        request_id: requestId
+    });
+    const assistantId = appendCopilotMessage({
+        kind: 'assistant',
+        text: 'Жду ответа Claude…',
+        request_id: requestId,
+        status: 'working'
+    });
+    copilotState.pending.set(requestId, { userId, assistantId, createdAt: Date.now() });
+    input.value = '';
+}
+
+function handleCopilotReply(data) {
+    const requestId = data && data.request_id;
+    const replyText = (data && (data.text || data.message)) || '';
+    const kind = data && data.kind === 'proactive' ? 'proactive' : 'assistant';
+
+    if (kind === 'proactive') {
+        appendCopilotMessage({
+            kind: 'proactive',
+            text: replyText,
+            request_id: requestId || null
+        });
+        return;
+    }
+
+    const pending = requestId ? copilotState.pending.get(requestId) : null;
+    if (pending) {
+        // Resolve the placeholder in place — no reorder.
+        updateCopilotMessage(pending.assistantId, {
+            kind: 'assistant',
+            text: replyText,
+            status: 'done',
+            time: copilotNowDisplay()
+        });
+        copilotState.pending.delete(requestId);
+        noteCopilotUnread('assistant');
+        return;
+    }
+    // Unknown request_id (e.g. extension-authored): append, never drop.
+    appendCopilotMessage({
+        kind: 'assistant',
+        text: replyText,
+        request_id: requestId || null
+    });
+}
+
+// Drives the agent chip only — never touches per-request placeholders.
+// Unknown values leave the chip unchanged.
+function handleCopilotAgentState(next) {
+    if (!COPILOT_AGENT_CHIP[next]) return;
+    copilotState.agentState = next;
+    // Spawn has no ack: pending clears once the chip leaves offline.
+    if (copilotState.spawnPendingId && next !== 'offline') {
+        copilotState.spawnPendingId = null;
+    }
+    // Stop is done only when the chip reaches offline.
+    if (copilotState.stopPendingId && next === 'offline') {
+        copilotState.stopPendingId = null;
+    }
+    updateCopilotChips();
+    updateCopilotControls();
+}
+
+function handleCopilotStatus(data) {
+    const status = (data && data.status) || 'unknown';
+    const requestId = data && data.request_id;
+
+    if (status === 'agent_state') {
+        handleCopilotAgentState(data && data.agent_state);
+        return;
+    }
+
+    if (status === 'channel_connected') {
+        // Channel-level recovery signal — no dedicated indicator in the
+        // webapp panel; must not fall through to placeholder handling.
+        return;
+    }
+
+    if (status === 'conference_active') {
+        // Spawn rejected: the bridge refuses manual spawn while a
+        // conference meeting is active.
+        if (requestId) {
+            if (requestId !== copilotState.spawnPendingId) return;
+            copilotState.spawnPendingId = null;
+            updateCopilotControls();
+        }
+        appendCopilotMessage({ kind: 'status', text: 'занято конференцией' });
+        return;
+    }
+
+    if (status === 'manual_preempted') {
+        appendCopilotMessage({ kind: 'status', text: 'сессия переключена на конференцию' });
+        return;
+    }
+
+    if (status === 'bridge_disconnected' || status === 'supervisor_disconnected') {
+        const label = status === 'bridge_disconnected' ? 'Bridge offline' : 'Supervisor offline';
+        if (requestId && requestId === copilotState.spawnPendingId) {
+            // Spawn failed — button becomes clickable again (retry).
+            copilotState.spawnPendingId = null;
+            updateCopilotControls();
+            appendCopilotMessage({ kind: 'error', text: `${label}: запрос не доставлен.` });
+            return;
+        }
+        if (requestId && requestId === copilotState.stopPendingId) {
+            // Stop failed — Stop stays enabled (retry affordance).
+            copilotState.stopPendingId = null;
+            updateCopilotControls();
+            appendCopilotMessage({ kind: 'error', text: `${label}: запрос не доставлен.` });
+            return;
+        }
+        const pending = requestId ? copilotState.pending.get(requestId) : null;
+        if (pending) {
+            updateCopilotMessage(pending.assistantId, {
+                kind: 'error',
+                text: `${label}: сообщение не доставлено.`,
+                status: 'error',
+                time: copilotNowDisplay()
+            });
+            copilotState.pending.delete(requestId);
+            return;
+        }
+        if (requestId) {
+            // Another tab's request-scoped failure.
+            return;
+        }
+        appendCopilotMessage({ kind: 'error', text: `${label}: запрос не доставлен.` });
+        return;
+    }
+
+    if (status === 'channel_disconnected') {
+        // Defensive: a per-request frame carrying a spawn/stop id must not
+        // leave the input bricked at 'запускается…'/'останавливается…'.
+        if (requestId && requestId === copilotState.spawnPendingId) {
+            copilotState.spawnPendingId = null;
+            updateCopilotControls();
+            appendCopilotMessage({
+                kind: 'error',
+                text: 'Channel offline: Claude не подключён.'
+            });
+            return;
+        }
+        if (requestId && requestId === copilotState.stopPendingId) {
+            copilotState.stopPendingId = null;
+            updateCopilotControls();
+            appendCopilotMessage({
+                kind: 'error',
+                text: 'Channel offline: Claude не подключён.'
+            });
+            return;
+        }
+        const pending = requestId ? copilotState.pending.get(requestId) : null;
+        if (pending) {
+            updateCopilotMessage(pending.assistantId, {
+                kind: 'error',
+                text: 'Channel offline: Claude не подключён.',
+                status: 'error',
+                time: copilotNowDisplay()
+            });
+            copilotState.pending.delete(requestId);
+            return;
+        }
+        if (requestId) {
+            // Another tab's per-request echo fanned out through the shared
+            // subscriber socket — nothing of ours to resolve, drop it.
+            return;
+        }
+        if (copilotState.pending.size > 0) {
+            // Channel died mid-flight with no specific request_id: flip
+            // every stranded placeholder instead of one vague bubble.
+            copilotState.pending.forEach((p) => {
+                if (p && p.assistantId) {
+                    updateCopilotMessage(p.assistantId, {
+                        kind: 'error',
+                        text: 'Channel offline: Claude не подключён.',
+                        status: 'error',
+                        time: copilotNowDisplay()
+                    });
+                }
+            });
+            copilotState.pending.clear();
+            return;
+        }
+        appendCopilotMessage({
+            kind: 'error',
+            text: 'Channel offline: Claude не подключён.'
+        });
+        return;
+    }
+
+    if (status === 'error') {
+        const message = (data && data.message) || 'Claude не смог ответить.';
+        // Defensive: same spawn/stop unbricking as bridge/supervisor errors.
+        if (requestId && requestId === copilotState.spawnPendingId) {
+            copilotState.spawnPendingId = null;
+            updateCopilotControls();
+            appendCopilotMessage({ kind: 'error', text: message });
+            return;
+        }
+        if (requestId && requestId === copilotState.stopPendingId) {
+            copilotState.stopPendingId = null;
+            updateCopilotControls();
+            appendCopilotMessage({ kind: 'error', text: message });
+            return;
+        }
+        const pending = requestId ? copilotState.pending.get(requestId) : null;
+        if (pending) {
+            updateCopilotMessage(pending.assistantId, {
+                kind: 'error',
+                text: message,
+                status: 'error',
+                time: copilotNowDisplay()
+            });
+            copilotState.pending.delete(requestId);
+        } else {
+            appendCopilotMessage({ kind: 'error', text: message });
+        }
+        return;
+    }
+
+    if (status === 'done') {
+        // No-op if the reply already landed (pending gone by then).
+        const pending = requestId ? copilotState.pending.get(requestId) : null;
+        if (pending) {
+            updateCopilotMessage(pending.assistantId, {
+                kind: 'status',
+                text: (data && data.message) || 'Запрос завершён без ответа.',
+                status: 'done',
+                time: copilotNowDisplay()
+            });
+            copilotState.pending.delete(requestId);
+        }
+        return;
+    }
+
+    // queued / working / unknown per-request status: mutate the matching
+    // placeholder only; no bubble is created without a pending match.
+    const pending = requestId ? copilotState.pending.get(requestId) : null;
+    if (pending) {
+        updateCopilotMessage(pending.assistantId, {
+            status: status,
+            text: status === 'working' ? 'Claude думает…' : `Status: ${status}`,
+            time: copilotNowDisplay()
+        });
+    }
+}
+
+// WS closed (view switch or connection drop): a reply broadcast while this
+// tab's socket is closed is permanently lost (no replay), so flip every
+// in-flight placeholder to an error and reset spawn/stop pending state.
+// Idempotent — views.live.disconnect() closing the ws also fires onclose,
+// and the second run finds nothing pending.
+function copilotHandleWsClosed() {
+    if (copilotState.pending.size === 0
+            && !copilotState.spawnPendingId
+            && !copilotState.stopPendingId) {
+        return;
+    }
+    copilotState.pending.forEach((p) => {
+        if (p && p.assistantId) {
+            updateCopilotMessage(p.assistantId, {
+                kind: 'error',
+                text: 'Bridge offline: соединение прервано.',
+                status: 'error',
+                time: copilotNowDisplay()
+            });
+        }
+    });
+    copilotState.pending.clear();
+    if (copilotState.spawnPendingId) {
+        appendCopilotMessage({
+            kind: 'error',
+            text: 'Bridge offline: результат запуска неизвестен.'
+        });
+    }
+    if (copilotState.stopPendingId) {
+        appendCopilotMessage({
+            kind: 'error',
+            text: 'Bridge offline: результат остановки неизвестен.'
+        });
+    }
+    copilotState.spawnPendingId = null;
+    copilotState.stopPendingId = null;
+    updateCopilotControls();
+}
+
+function initCopilotPanel() {
+    const input = document.getElementById('copilot-input');
+    if (input) {
+        input.addEventListener('keydown', (e) => {
+            if (e.isComposing) return;
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submitCopilotChat();
+            }
+        });
+    }
 }
 
 
@@ -1334,7 +1970,7 @@ function showNotification(message, type = 'success') {
         background: ${type === 'error' ? '#ef4444' : '#22c55e'};
         color: white;
         font-weight: 500;
-        z-index: 1000;
+        z-index: 1200;
         animation: slideIn 0.3s ease;
     `;
     document.body.appendChild(notification);
@@ -2215,4 +2851,5 @@ function formatTime(seconds) {
 document.addEventListener('DOMContentLoaded', () => {
     router.init();
     initAnchorOverlay();
+    initCopilotPanel();
 });
