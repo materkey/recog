@@ -68,6 +68,12 @@ AGENT_SILENCE_THRESHOLD_S = 10.0
 # daemon's first `claude_sessions` poll (5 s) cannot flap the chip to offline.
 AGENT_SESSIONS_ZERO_DEBOUNCE_S = 10.0
 
+# Synthetic lifecycle id for a manually spawned copilot session (webapp
+# "Recog Copilot" button). A constant — not a per-click uuid — so a flap or a
+# supervisor reconnect maps to the SAME id and the supervisor's GRACE revival
+# / adopt paths recognise the session instead of killing and respawning it.
+MANUAL_MEETING_ID = "manual"
+
 def _truncate_text(text: str, max_len: int) -> str:
     clean = " ".join(text.split())
     if len(clean) <= max_len:
@@ -335,6 +341,27 @@ class KTalkBridge:
         # client sends `supervisor_hello`. Meeting `meeting_started` /
         # `meeting_ended` frames fan out to it via `_emit_lifecycle`.
         self._supervisor_clients: set = set()
+
+        # Manual copilot session mirror (D5). True while a manual (non-
+        # conference) session should be alive: armed when a
+        # `copilot_spawn_request` is actually relayed to a supervisor, cleared
+        # on `copilot_stop_request` and on conference preemption, re-armed from
+        # `supervisor_hello.current_meeting_id == MANUAL_MEETING_ID`.
+        #
+        # Single-owner semantics: the SUPERVISOR owns manual-session truth (it
+        # physically holds the tmux session); this flag is only the bridge's
+        # mirror, so `_compute_meeting_state` can answer "adopt" instead of
+        # "kill" on a reconnect. Deliberately NOT persisted — recovery after a
+        # bridge restart is `supervisor_hello`-driven only, so the bridge can
+        # never claim a session that no longer exists.
+        #
+        # Unlike the client sets around it, reads need no threading lock:
+        # every access is confined to the asyncio loop thread. Manual
+        # spawn/stop operations still need an asyncio lock because handlers
+        # for different subscriber sockets can interleave while awaiting a
+        # supervisor send.
+        self._manual_copilot_active: bool = False
+        self._manual_copilot_request_lock = asyncio.Lock()
 
         # Agent-state merge (D4). Last status reported by the supervisor
         # (screen classification) and by the copilot channel daemon (live MCP
@@ -1169,6 +1196,119 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
 
+    async def _relay_to_supervisors(self, frame: dict) -> bool:
+        """Forward a frame verbatim to every registered supervisor client.
+
+        Returns True only when the frame actually reached at least one
+        supervisor — registration alone is not delivery. A socket already in
+        its closing handshake stays in `_supervisor_clients` until
+        `_handle_client`'s finally-block reaps it, so "non-empty set" would
+        report success for a frame nobody received; the spawn caller would then
+        arm the manual mirror with no session behind it and tell the user
+        nothing. False makes the caller reply `supervisor_disconnected`
+        instead. Per-client send errors are swallowed with a log exactly as in
+        `_emit_lifecycle`: a dead supervisor socket must not crash the message
+        handler, nor abort delivery to the sockets queued behind it.
+        """
+        with self._lock:
+            supervisors = list(self._supervisor_clients)
+        if not supervisors:
+            return False
+        message = json.dumps(frame, ensure_ascii=False)
+        delivered = False
+        for client in supervisors:
+            if (
+                frame.get("type") == "copilot_spawn_request"
+                and self._is_meeting_active()
+            ):
+                break
+            try:
+                await client.send(message)
+                delivered = True
+            except Exception as e:
+                print(
+                    f"[KTalk Bridge] Failed to send {frame.get('type')} to supervisor: {e}",
+                    file=sys.stderr,
+                )
+        return delivered
+
+    async def _reply_copilot_status(
+        self, websocket, request_id: str, status: str, message: str = ""
+    ) -> None:
+        """Answer the ORIGINATOR socket with a per-request `copilot_status`.
+
+        Deliberately not a broadcast: the frame binds an error to one click via
+        `request_id`, so fanning it out would make every open webapp render a
+        failure for a button it never pressed.
+        """
+        if websocket is None:
+            print(
+                f"[KTalk Bridge] {status} status for request_id={request_id} "
+                f"dropped — no originator socket",
+                file=sys.stderr,
+            )
+            return
+        frame = json.dumps(
+            {
+                "type": "copilot_status",
+                "request_id": request_id,
+                "status": status,
+                "message": message,
+            },
+            ensure_ascii=False,
+        )
+        try:
+            await websocket.send(frame)
+        except Exception as e:
+            print(
+                f"[KTalk Bridge] Failed to send {status} status: {e}",
+                file=sys.stderr,
+            )
+
+    def _set_manual_copilot_active(self, active: bool) -> None:
+        """Update the manual mirror and restart sessions-zero debounce."""
+        if self._manual_copilot_active == active:
+            return
+        self._manual_copilot_active = active
+        self._sessions_zero_since = None
+
+    async def _preempt_manual_copilot(self) -> None:
+        """Clear the manual mirror when a conference takes over the copilot.
+
+        Called from the conference `meeting_started` emit path: the supervisor
+        kills the `"manual"` session and respawns bound to the meeting id, so
+        the bridge's mirror must follow or a later reconnect would resurrect a
+        session that no longer exists.
+
+        The notice goes to `_subscriber_clients` ONLY — it is a webapp-facing
+        status the extension has no renderer for, and the extension's frame
+        stream must stay byte-identical.
+        """
+        if not self._manual_copilot_active:
+            return
+        self._set_manual_copilot_active(False)
+        with self._lock:
+            subscribers = list(self._subscriber_clients)
+        if not subscribers:
+            return
+        message = json.dumps(
+            {
+                "type": "copilot_status",
+                "request_id": "",
+                "status": "manual_preempted",
+                "message": "Manual copilot session preempted by a conference meeting",
+            },
+            ensure_ascii=False,
+        )
+        for client in subscribers:
+            try:
+                await client.send(message)
+            except Exception as e:
+                print(
+                    f"[KTalk Bridge] Failed to send manual_preempted to subscriber: {e}",
+                    file=sys.stderr,
+                )
+
     def _is_meeting_active(self) -> bool:
         """True when a conference meeting is genuinely in progress.
 
@@ -1195,12 +1335,23 @@ class KTalkBridge:
         with self._lock:
             return bool(self._connected_clients)
 
+    def _copilot_should_be_alive(self) -> bool:
+        """A copilot session should exist: conference meeting OR manual session."""
+        return self._is_meeting_active() or self._manual_copilot_active
+
     def _compute_meeting_state(self) -> dict:
         """Build the `meeting_state` reconciliation reply for `supervisor_hello`.
 
-        `active` follows `_is_meeting_active`; meeting_id / meeting_title are
-        only populated when active so a stale orphan meeting never looks live
-        to the supervisor.
+        `active` is True when a copilot session should exist at all — a
+        conference meeting (`_is_meeting_active`) OR an armed manual mirror —
+        with the conference taking precedence for meeting_id / meeting_title.
+        Neither is populated while inactive, so a stale orphan meeting never
+        looks live to the supervisor.
+
+        A manual session (no conference, `_manual_copilot_active` armed) is
+        reported as the synthetic `MANUAL_MEETING_ID` so the supervisor's
+        reconcile adopts its live tmux session instead of GRACE-killing it.
+        Conference first: `"manual"` must never mask a real meeting id.
         """
         active = self._is_meeting_active()
         meeting_id = None
@@ -1212,6 +1363,9 @@ class KTalkBridge:
                 meeting_title = storage._load_meta().get("title")
             except Exception:
                 meeting_title = None
+        elif self._manual_copilot_active:
+            active = True
+            meeting_id = MANUAL_MEETING_ID
         return {
             "type": "meeting_state",
             "active": active,
@@ -1234,8 +1388,11 @@ class KTalkBridge:
         """Track when the sessions-zero *offline* condition began holding.
 
         The offline verdict fires only when the daemon reports a confident 0
-        live sessions AND the supervisor is past `spawning` AND a meeting is
-        active. Anchoring `_sessions_zero_since` to when that combined
+        live sessions AND the supervisor is past `spawning` AND a copilot
+        session should be alive (conference meeting OR manual session —
+        `_copilot_should_be_alive`, so a manual copilot whose Claude session
+        never registered cannot keep a false green chip). Anchoring
+        `_sessions_zero_since` to when that combined
         condition *begins* (rather than to the raw count) means the debounce
         window starts when the copilot comes online with no MCP session yet —
         giving the daemon's 5 s poll time to report the fresh session before
@@ -1248,7 +1405,7 @@ class KTalkBridge:
             self._claude_sessions_count == 0
             and status is not None
             and status not in ("offline", "spawning")
-            and self._is_meeting_active()
+            and self._copilot_should_be_alive()
         )
         if not eligible:
             self._sessions_zero_since = None
@@ -1266,17 +1423,18 @@ class KTalkBridge:
             or (now - self._supervisor_status_ts) > AGENT_SILENCE_THRESHOLD_S
         ):
             return "offline"
-        # Daemon reports a confident zero live MCP sessions during an active
-        # meeting while the supervisor is past `spawning`: the TUI is up but
-        # the copilot never connected. Debounced so leaving `spawning` before
-        # the daemon's first poll does not flap the chip. `None` count is
-        # unknown (not a confident 0) and never forces offline here.
+        # Daemon reports a confident zero live MCP sessions while a copilot
+        # session should be alive (conference meeting OR manual session) and
+        # the supervisor is past `spawning`: the TUI is up but the copilot
+        # never connected. Debounced so leaving `spawning` before the daemon's
+        # first poll does not flap the chip. `None` count is unknown (not a
+        # confident 0) and never forces offline here.
         if (
             self._claude_sessions_count == 0
             and status != "spawning"
             and self._sessions_zero_since is not None
             and (now - self._sessions_zero_since) >= AGENT_SESSIONS_ZERO_DEBOUNCE_S
-            and self._is_meeting_active()
+            and self._copilot_should_be_alive()
         ):
             return "offline"
         return status
@@ -1799,9 +1957,9 @@ class KTalkBridge:
                         # Subscriber announces itself — move the connection
                         # from the extension set to the subscribers set so
                         # it does not block meeting lifecycle or receive
-                        # clock_sync resets. No further messages are
-                        # expected from a subscriber; the loop remains open
-                        # to relay server→client broadcasts until close.
+                        # clock_sync resets. Subscribers may later send manual
+                        # copilot control frames; the same loop handles those
+                        # while continuing to relay server→client broadcasts.
                         with self._lock:
                             self._connected_clients.discard(websocket)
                             self._subscriber_clients.add(websocket)
@@ -2292,6 +2450,12 @@ class KTalkBridge:
                         "created_at": time.time() * 1000,
                     }
                     await self._emit_lifecycle(meeting_started_frame)
+                    # Conference preemption (D2): the supervisor kills a live
+                    # `"manual"` session and respawns bound to this meeting id,
+                    # so the bridge's manual mirror must be cleared here. Runs
+                    # AFTER the lifecycle emit so the conference frame's shape
+                    # and order are untouched; the notice is subscriber-only.
+                    await self._preempt_manual_copilot()
                     # Reset proactive transcript-tick state for the new
                     # meeting. `send_transcript` consults this on every
                     # broadcast; seeding `last_emit_ts` to the join time
@@ -2682,11 +2846,18 @@ class KTalkBridge:
                 )
                 return
 
-            meeting_id = (
-                self._meeting_storage.get_current_meeting_id()
-                if self._meeting_storage is not None
-                else None
-            )
+            # Stamp the meeting only for conference requests, whose replies
+            # legitimately go stale when that meeting ends. A manual/mic-only
+            # request has no conference to belong to, and `current_meeting_id`
+            # would hand it the orphan meeting — which `_check_silence_split`
+            # rotates on its own schedule, dropping the reply as "stale" for a
+            # meeting the request never belonged to. `None` here makes the
+            # pending entry `""` (the existing no-meeting escape hatch) and
+            # leaves the reply-side cross-check nothing to mismatch against.
+            # Extension chat is unaffected: it only happens inside a conference.
+            meeting_id = None
+            if self._meeting_storage is not None and self._is_meeting_active():
+                meeting_id = self._meeting_storage.get_current_meeting_id()
             meeting_title = data.get("meeting_title")
             transcript_window = data.get("transcript_window")
             created_at = data.get("created_at")
@@ -2945,6 +3116,94 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
 
+        elif msg_type == "copilot_spawn_request":
+            # Webapp asks for a manual copilot session (webapp → frontend →
+            # bridge → supervisor). The bridge is a pure relay: it never
+            # interprets supervisor state, it only mirrors the outcome in
+            # `_manual_copilot_active`.
+            request_id = data.get("request_id")
+            if not isinstance(request_id, str) or not request_id:
+                print(
+                    "[KTalk Bridge] copilot_spawn_request missing/invalid request_id — ignored",
+                    file=sys.stderr,
+                )
+                return
+            async with self._manual_copilot_request_lock:
+                if self._is_meeting_active():
+                    # Defence in depth (D5): the supervisor reads this frame as
+                    # `meeting_started("manual")`, which would kill the session
+                    # bound to the live conference. Never forward it.
+                    await self._reply_copilot_status(
+                        websocket,
+                        request_id,
+                        "conference_active",
+                        "A conference meeting owns the copilot session",
+                    )
+                    return
+                delivered = await self._relay_to_supervisors(data)
+                # Re-check the guard: the relay above awaited `client.send`, and a
+                # concurrent `meeting_join` can complete a whole conference start
+                # in that window. Its `_preempt_manual_copilot()` saw the mirror
+                # still False and no-opped, so arming it now would leave the bridge
+                # claiming a manual session for the entire conference and past its
+                # end. The supervisor is unaffected — it rebinds to the conference
+                # id on the `meeting_started` it just received.
+                if self._is_meeting_active():
+                    print(
+                        "[KTalk Bridge] Conference started while relaying "
+                        f"copilot_spawn_request request_id={request_id} — manual mirror not armed",
+                        file=sys.stderr,
+                    )
+                    await self._reply_copilot_status(
+                        websocket,
+                        request_id,
+                        "conference_active",
+                        "A conference meeting owns the copilot session",
+                    )
+                    return
+                if not delivered:
+                    # No supervisor reached → no tmux session. Arming the mirror
+                    # here would make a later `supervisor_hello` reconcile as
+                    # "no session + active meeting → spawn" and silently start a
+                    # session the user was already told had failed.
+                    await self._reply_copilot_status(
+                        websocket,
+                        request_id,
+                        "supervisor_disconnected",
+                        "Copilot supervisor is not connected",
+                    )
+                    return
+                self._set_manual_copilot_active(True)
+
+        elif msg_type == "copilot_stop_request":
+            # Webapp stops the manual session. No conference guard: a stray
+            # stop is already inert at the supervisor (`meeting_ended` no-ops
+            # on a mismatched lifecycle id).
+            request_id = data.get("request_id")
+            if not isinstance(request_id, str) or not request_id:
+                print(
+                    "[KTalk Bridge] copilot_stop_request missing/invalid request_id — ignored",
+                    file=sys.stderr,
+                )
+                return
+            async with self._manual_copilot_request_lock:
+                # Mirror of the spawn rule: the flag clears even when the relay
+                # fails, because there is no session left to keep alive for.
+                self._set_manual_copilot_active(False)
+                try:
+                    if not await self._relay_to_supervisors(data):
+                        await self._reply_copilot_status(
+                            websocket,
+                            request_id,
+                            "supervisor_disconnected",
+                            "Copilot supervisor is not connected",
+                        )
+                finally:
+                    # A reconnecting supervisor can report its still-live
+                    # manual session while the stop relay awaits I/O. The
+                    # completed stop is the newer user intent and must win.
+                    self._set_manual_copilot_active(False)
+
         elif msg_type == "supervisor_hello":
             # Copilot supervisor (recog/copilot_supervisor.py) announces
             # itself. Move the connection out of `_connected_clients` into
@@ -2978,6 +3237,18 @@ class KTalkBridge:
             # reply reflects the reconciled (possibly ended) meeting.
             if no_extension_clients:
                 await self._end_meeting_on_last_extension_gone()
+            # Re-arm the manual mirror from the supervisor's own live session
+            # id (D5) — the supervisor is the single runtime owner, so a bridge
+            # restart mid-manual-session recovers here with no persistence.
+            # Must run BEFORE `_compute_meeting_state` so the reconcile reply
+            # already reads `{active: true, meeting_id: "manual"}` and the
+            # supervisor adopts instead of GRACE-killing. Conference wins: a
+            # stale manual claim must never displace a live meeting.
+            if (
+                data.get("current_meeting_id") == MANUAL_MEETING_ID
+                and not self._is_meeting_active()
+            ):
+                self._set_manual_copilot_active(True)
             state_frame = self._compute_meeting_state()
             try:
                 await websocket.send(json.dumps(state_frame, ensure_ascii=False))
@@ -3073,6 +3344,7 @@ class KTalkBridge:
         """Главная функция фонового потока."""
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        self._manual_copilot_request_lock = asyncio.Lock()
 
         try:
             self._loop.run_until_complete(self._run_server())
