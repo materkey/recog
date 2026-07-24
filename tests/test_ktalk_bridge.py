@@ -1454,7 +1454,9 @@ async def test_copilot_channel_reply_does_not_loopback_to_channel_clients():
     when:  the channel server sends `copilot_channel_reply`
     then:  only the extension client receives the relayed `copilot_reply`
            — the channel client (the originator) does not see the frame
-           because `_broadcast_message` only iterates `_connected_clients`
+           because `_broadcast_copilot_frame` iterates `_connected_clients`
+           + `_subscriber_clients`, and `copilot_channel_hello` moved the
+           channel client out of both into `_copilot_channel_clients`
     """
     bridge = KTalkBridge()
 
@@ -3538,3 +3540,267 @@ async def test_agent_state_primer_sent_to_reconnecting_client():
         "status": "agent_state",
         "agent_state": "online",
     }]
+
+
+# --- copilot frame fan-out: extension + subscriber clients (CAP-1) ---
+#
+# Every copilot broadcast must reach `_subscriber_clients` (the frontend
+# `BridgeSubscriber`) in addition to `_connected_clients` (the extension),
+# so the webapp `#/live` view can render copilot replies and status.
+# `_broadcast_message` itself stays extension-only.
+
+
+def _copilot_frames(client, frame_type: str, status: str | None = None):
+    """Extract decoded frames of `frame_type` (optionally filtered by status)."""
+    out = []
+    for m in client.sent:
+        f = json.loads(m)
+        if f.get("type") != frame_type:
+            continue
+        if status is not None and f.get("status") != status:
+            continue
+        out.append(f)
+    return out
+
+
+def _bridge_with_extension_and_subscriber():
+    """Bridge with one extension client and one subscriber client (recorders)."""
+    bridge = KTalkBridge()
+    ext = RecordingClient()
+    sub = RecordingClient()
+    bridge._connected_clients.add(ext)
+    bridge._subscriber_clients.add(sub)
+    return bridge, ext, sub
+
+
+@pytest.mark.asyncio
+async def test_copilot_reply_fans_out_to_extension_and_subscriber():
+    """
+    given: a bridge with one extension client and one subscriber client
+    when:  the channel server sends `copilot_channel_reply`
+    then:  both clients receive the identical `copilot_reply` frame — the
+           webapp relay (`BridgeSubscriber`) cannot render replies otherwise
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+
+    await bridge._process_message(
+        {
+            "type": "copilot_channel_reply",
+            "request_id": "req-42",
+            "kind": "manual",
+            "text": "Алиса спросила про метрики.",
+            "meeting_id": "2026-04-26_test_meeting",
+            "created_at": 1700000123456.0,
+        }
+    )
+
+    assert len(ext.sent) == 1
+    assert ext.sent == sub.sent
+    payload = json.loads(sub.sent[0])
+    assert payload["type"] == "copilot_reply"
+    assert payload["request_id"] == "req-42"
+    assert payload["kind"] == "manual"
+    assert payload["text"] == "Алиса спросила про метрики."
+    assert payload["meeting_id"] == "2026-04-26_test_meeting"
+    assert payload["created_at"] == 1700000123456.0
+
+
+@pytest.mark.asyncio
+async def test_copilot_per_request_status_fans_out_to_extension_and_subscriber():
+    """
+    given: a bridge with one extension client and one subscriber client
+    when:  the channel server sends `copilot_channel_status`
+    then:  both clients receive the identical per-request `copilot_status`
+           frame so the webapp can drive its pending indicator
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+
+    await bridge._process_message(
+        {
+            "type": "copilot_channel_status",
+            "request_id": "req-42",
+            "status": "working",
+            "message": "Claude is thinking",
+        }
+    )
+
+    assert len(ext.sent) == 1
+    assert ext.sent == sub.sent
+    payload = json.loads(sub.sent[0])
+    assert payload["type"] == "copilot_status"
+    assert payload["request_id"] == "req-42"
+    assert payload["status"] == "working"
+    assert payload["message"] == "Claude is thinking"
+
+
+@pytest.mark.asyncio
+async def test_agent_state_chip_fans_out_to_extension_and_subscriber():
+    """
+    given: a bridge with an active ktalk meeting, one extension client and
+           one subscriber client
+    when:  the effective agent state flips (supervisor reports `working`)
+    then:  both clients receive the `copilot_status status='agent_state'`
+           chip frame — the webapp chip mirrors the extension chip
+    """
+    bridge, ext = _bridge_with_active_ktalk()
+    sub = RecordingClient()
+    bridge._subscriber_clients.add(sub)
+
+    bridge._supervisor_agent_status = "working"
+    bridge._supervisor_status_ts = 50.0
+    bridge._set_claude_sessions(1)
+
+    await bridge._recompute_agent_state(now=50.0)
+
+    assert _agent_states(ext) == ["working"]
+    assert _agent_states(sub) == ["working"]
+    assert ext.sent == sub.sent
+
+
+@pytest.mark.asyncio
+async def test_channel_connected_fans_out_to_extension_and_subscriber():
+    """
+    given: a bridge with one extension client and one subscriber client and
+           no channel clients yet
+    when:  the first channel client sends `copilot_channel_hello` (0→1)
+    then:  both clients receive `copilot_status status='channel_connected'`
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+
+    channel_ws = ControllableFakeWebSocket()
+    channel_ws.add_message(json.dumps({"type": "copilot_channel_hello"}))
+
+    handler_task = asyncio.create_task(bridge._handle_client(channel_ws))
+    for _ in range(50):
+        if channel_ws in bridge._copilot_channel_clients:
+            break
+        await asyncio.sleep(0.01)
+
+    try:
+        assert channel_ws in bridge._copilot_channel_clients
+        assert _copilot_frames(ext, "copilot_status", "channel_connected")
+        assert ext.sent == sub.sent
+    finally:
+        channel_ws.signal_close()
+        await handler_task
+
+
+@pytest.mark.asyncio
+async def test_channel_disconnected_fans_out_to_extension_and_subscriber():
+    """
+    given: a registered channel client, one extension client and one
+           subscriber client
+    when:  the last channel client's socket closes (1→0)
+    then:  both clients receive `copilot_status status='channel_disconnected'`
+           — without this the webapp stays blind to channel-daemon death
+           mid-session
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+
+    channel_ws = ControllableFakeWebSocket()
+    channel_ws.add_message(json.dumps({"type": "copilot_channel_hello"}))
+
+    handler_task = asyncio.create_task(bridge._handle_client(channel_ws))
+    try:
+        for _ in range(50):
+            if channel_ws in bridge._copilot_channel_clients:
+                break
+            await asyncio.sleep(0.01)
+        assert channel_ws in bridge._copilot_channel_clients
+
+        # Drop the `channel_connected` frames emitted on hello.
+        ext.sent.clear()
+        sub.sent.clear()
+
+        channel_ws.signal_close()
+        await handler_task
+
+        assert len(_copilot_frames(ext, "copilot_status", "channel_disconnected")) == 1
+        assert ext.sent == sub.sent
+    finally:
+        channel_ws.signal_close()
+        if not handler_task.done():
+            await handler_task
+
+
+@pytest.mark.asyncio
+async def test_copilot_frame_reaches_subscriber_without_extension_clients():
+    """
+    given: a bridge with a subscriber client and NO extension clients
+           (webapp open, no conference tab — the primary CAP-1 scenario)
+    when:  a copilot frame is broadcast
+    then:  the subscriber still receives it — the fan-out must not inherit
+           `_broadcast_message`'s empty-`_connected_clients` early return
+    """
+    bridge = KTalkBridge()
+    sub = RecordingClient()
+    bridge._subscriber_clients.add(sub)
+    assert not bridge._connected_clients
+
+    await bridge._process_message(
+        {
+            "type": "copilot_channel_reply",
+            "request_id": "req-9",
+            "kind": "manual",
+            "text": "ответ без расширения",
+        }
+    )
+
+    assert len(sub.sent) == 1
+    payload = json.loads(sub.sent[0])
+    assert payload["type"] == "copilot_reply"
+    assert payload["text"] == "ответ без расширения"
+
+
+@pytest.mark.asyncio
+async def test_dead_client_does_not_abort_copilot_fan_out():
+    """
+    given: a dead client whose `send` raises, sitting in `_connected_clients`,
+           plus a live extension recorder and a live subscriber recorder —
+           the fan-out iterates extensions before subscribers, so the
+           subscriber is guaranteed to be reached AFTER the dead socket
+    when:  a copilot frame is broadcast
+    then:  no exception escapes the broadcast and BOTH live clients still
+           receive the frame — a dead socket must not abort delivery to the
+           recipients queued behind it
+    """
+    class ExplodingClient:
+        async def send(self, message: str):
+            raise RuntimeError("socket is gone")
+
+    bridge = KTalkBridge()
+    ext = RecordingClient()
+    sub = RecordingClient()
+    bridge._connected_clients.add(ExplodingClient())
+    bridge._connected_clients.add(ext)
+    bridge._subscriber_clients.add(sub)
+
+    await bridge._process_message(
+        {
+            "type": "copilot_channel_status",
+            "request_id": "req-5",
+            "status": "done",
+        }
+    )
+
+    assert len(_copilot_frames(ext, "copilot_status", "done")) == 1
+    assert len(_copilot_frames(sub, "copilot_status", "done")) == 1
+
+
+@pytest.mark.asyncio
+async def test_non_copilot_frame_is_not_fanned_out_to_subscriber():
+    """
+    given: a bridge with one extension client and one subscriber client
+    when:  a non-copilot frame (`transcript_history`) is broadcast
+    then:  only the extension receives it — subscribers must not start
+           seeing transcript/lifecycle/meeting frames
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+
+    await bridge._broadcast_message(
+        {"type": "transcript_history", "meeting_id": "m-1", "segments": []}
+    )
+
+    assert len(ext.sent) == 1
+    assert json.loads(ext.sent[0])["type"] == "transcript_history"
+    assert sub.sent == []
