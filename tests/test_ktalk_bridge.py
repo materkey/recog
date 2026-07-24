@@ -1299,12 +1299,17 @@ async def test_copilot_chat_message_forwarded_to_channel_client():
 
     mock_storage = Mock()
     mock_storage.get_current_meeting_id = Mock(return_value="2026-04-26_test_meeting")
+    # The extension only ever chats from inside a conference meeting, and only
+    # conference requests carry a meeting stamp — spell that out so the fixture
+    # matches the scenario the docstring describes.
+    mock_storage._load_meta = Mock(return_value={"source": "ktalk"})
     bridge.set_meeting_storage(mock_storage)
 
     channel_client = RecordingClient()
     bridge._copilot_channel_clients.add(channel_client)
 
     extension_ws = RecordingClient()
+    bridge._connected_clients.add(extension_ws)
 
     transcript_window = [
         {"speaker": "Alice", "text": "пробуем", "ts": 1700000000.0},
@@ -1858,6 +1863,9 @@ async def test_meeting_join_transition_marks_pending_requests_stale():
     storage.on_meeting_join = Mock(side_effect=_on_join)
     storage.get_current_transcript = Mock(return_value=[])
     storage.get_current_meeting_id = Mock(side_effect=lambda: storage.current_meeting_id)
+    # Both meetings are real ktalk conferences — only conference chat requests
+    # carry a meeting stamp and can therefore go stale.
+    storage._load_meta = Mock(return_value={"source": "ktalk"})
 
     bridge = KTalkBridge()
     bridge.set_meeting_storage(storage)
@@ -3804,3 +3812,821 @@ async def test_non_copilot_frame_is_not_fanned_out_to_subscriber():
     assert len(ext.sent) == 1
     assert json.loads(ext.sent[0])["type"] == "transcript_history"
     assert sub.sent == []
+
+
+# --- manual copilot session: spawn/stop relay + manual state (CAP-2/3/4) ---
+#
+# The bridge relays `copilot_spawn_request` / `copilot_stop_request`
+# (webapp -> frontend -> bridge -> supervisor) and mirrors the supervisor's
+# manual-session truth in `_manual_copilot_active`, so a supervisor reconnect
+# adopts a live manual session instead of GRACE-killing it. Conference
+# meetings take precedence over manual state everywhere the two can conflict.
+
+
+def _bridge_with_supervisor():
+    """Bridge with a registered supervisor client and a subscriber (recorders)."""
+    bridge = KTalkBridge()
+    sup = RecordingClient()
+    sub = RecordingClient()
+    bridge._supervisor_clients.add(sup)
+    bridge._subscriber_clients.add(sub)
+    return bridge, sup, sub
+
+
+@pytest.mark.asyncio
+async def test_real_subscriber_socket_relays_spawn_and_stop_to_supervisor():
+    """
+    given: a real bridge server with hello-registered subscriber and supervisor
+    when:  the subscriber sends manual spawn and stop frames with opaque fields
+    then:  the supervisor receives each complete JSON object in order and the
+           bridge mirror follows the last delivered operation
+    """
+    bridge = KTalkBridge()
+    server, url = await _serve_bridge(bridge)
+    supervisor = subscriber = None
+    try:
+        supervisor = await websockets.connect(url)
+        await supervisor.send(json.dumps({"type": "supervisor_hello"}))
+        await _recv_type(supervisor, "meeting_state")
+
+        subscriber = await websockets.connect(url)
+        await subscriber.send(json.dumps({"type": "subscriber_hello"}))
+        spawn = {
+            "type": "copilot_spawn_request",
+            "request_id": "req-real-spawn",
+            "opaque": {"future_protocol_field": True},
+        }
+        await subscriber.send(json.dumps(spawn))
+
+        assert await _recv_type(supervisor, "copilot_spawn_request") == spawn
+        assert bridge._manual_copilot_active is True
+
+        stop = {
+            "type": "copilot_stop_request",
+            "request_id": "req-real-stop",
+            "opaque": "preserved",
+        }
+        await subscriber.send(json.dumps(stop))
+
+        assert await _recv_type(supervisor, "copilot_stop_request") == stop
+        assert bridge._manual_copilot_active is False
+    finally:
+        if subscriber is not None:
+            await subscriber.close()
+        if supervisor is not None:
+            await supervisor.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_real_subscriber_socket_gets_spawn_rejection_for_its_request():
+    """
+    given: a real bridge server with a subscriber but no supervisor
+    when:  that subscriber sends a manual spawn request
+    then:  the same socket receives `supervisor_disconnected` with its request id
+    """
+    bridge = KTalkBridge()
+    server, url = await _serve_bridge(bridge)
+    subscriber = None
+    try:
+        subscriber = await websockets.connect(url)
+        await subscriber.send(json.dumps({"type": "subscriber_hello"}))
+        await subscriber.send(json.dumps({
+            "type": "copilot_spawn_request",
+            "request_id": "req-real-reject",
+        }))
+
+        rejected = await _recv_type(subscriber, "copilot_status")
+        while rejected.get("status") != "supervisor_disconnected":
+            rejected = await _recv_type(subscriber, "copilot_status")
+        assert rejected["request_id"] == "req-real-reject"
+    finally:
+        if subscriber is not None:
+            await subscriber.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_spawn_request_relays_to_supervisor_and_arms_manual_flag():
+    """
+    given: a registered supervisor client and no conference meeting
+    when:  a subscriber socket sends `copilot_spawn_request`
+    then:  the frame is forwarded verbatim to the supervisor and
+           `_manual_copilot_active` is armed, so a later `supervisor_hello`
+           reconciles as "adopt" instead of killing the session
+    """
+    bridge, sup, sub = _bridge_with_supervisor()
+    origin = RecordingClient()
+
+    request = {
+        "type": "copilot_spawn_request",
+        "request_id": "req-spawn",
+        "opaque": {"future_protocol_field": True},
+    }
+    await bridge._process_message(request, websocket=origin)
+
+    assert _copilot_frames(sup, "copilot_spawn_request") == [request]
+    assert bridge._manual_copilot_active is True
+    # No error reply on the happy path; the supervisor answers with status.
+    assert origin.sent == []
+
+
+@pytest.mark.asyncio
+async def test_spawn_request_during_conference_is_rejected():
+    """
+    given: an active conference meeting and a registered supervisor
+    when:  a `copilot_spawn_request` arrives
+    then:  nothing at all reaches the supervisor (it would read the frame as
+           `meeting_started("manual")` and kill the conference-bound session),
+           the manual flag stays False, and the originator alone gets
+           `copilot_status {status: "conference_active"}` echoing request_id
+    """
+    bridge, sup, sub = _bridge_with_supervisor()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1", title="Standup"))
+    bridge._connected_clients.add(RecordingClient())
+    origin = RecordingClient()
+
+    await bridge._process_message(
+        {"type": "copilot_spawn_request", "request_id": "req-conf"},
+        websocket=origin,
+    )
+
+    assert sup.sent == []
+    assert bridge._manual_copilot_active is False
+    rejected = _copilot_frames(origin, "copilot_status", "conference_active")
+    assert len(rejected) == 1
+    assert rejected[0]["request_id"] == "req-conf"
+    # The error binds to the originating click — never fanned out.
+    assert sub.sent == []
+
+
+@pytest.mark.asyncio
+async def test_spawn_request_without_supervisor_replies_disconnected():
+    """
+    given: no supervisor client is registered
+    when:  a `copilot_spawn_request` arrives
+    then:  the originator gets `supervisor_disconnected` echoing request_id and
+           the manual flag stays False — arming it with no relay (and thus no
+           tmux session) would make a later hello silently spawn a session the
+           user was already told had failed
+    """
+    bridge = KTalkBridge()
+    sub = RecordingClient()
+    bridge._subscriber_clients.add(sub)
+    origin = RecordingClient()
+
+    await bridge._process_message(
+        {"type": "copilot_spawn_request", "request_id": "req-nosup"},
+        websocket=origin,
+    )
+
+    frames = _copilot_frames(origin, "copilot_status", "supervisor_disconnected")
+    assert len(frames) == 1
+    assert frames[0]["request_id"] == "req-nosup"
+    assert bridge._manual_copilot_active is False
+    assert sub.sent == []
+
+
+@pytest.mark.asyncio
+async def test_stop_request_relays_to_supervisor_and_clears_flag():
+    """
+    given: a live manual session (flag armed) and a registered supervisor
+    when:  a `copilot_stop_request` arrives
+    then:  the frame is forwarded verbatim and the manual flag is cleared
+    """
+    bridge, sup, sub = _bridge_with_supervisor()
+    bridge._manual_copilot_active = True
+    bridge._sessions_zero_since = 1.0
+    origin = RecordingClient()
+
+    request = {
+        "type": "copilot_stop_request",
+        "request_id": "req-stop",
+        "opaque": {"future_protocol_field": True},
+    }
+    await bridge._process_message(request, websocket=origin)
+
+    assert _copilot_frames(sup, "copilot_stop_request") == [request]
+    assert bridge._manual_copilot_active is False
+    assert bridge._sessions_zero_since is None
+    assert origin.sent == []
+
+
+@pytest.mark.asyncio
+async def test_stop_request_during_conference_is_still_relayed():
+    """
+    given: an active conference meeting and a registered supervisor
+    when:  a `copilot_stop_request` arrives
+    then:  the exact frame still reaches the supervisor and no
+           `conference_active` rejection is returned
+    """
+    bridge, sup, sub = _bridge_with_supervisor()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1", title="Standup"))
+    bridge._connected_clients.add(RecordingClient())
+    origin = RecordingClient()
+    request = {
+        "type": "copilot_stop_request",
+        "request_id": "req-stop-conf",
+        "opaque": "preserved",
+    }
+
+    await bridge._process_message(request, websocket=origin)
+
+    assert _copilot_frames(sup, "copilot_stop_request") == [request]
+    assert _copilot_frames(origin, "copilot_status", "conference_active") == []
+
+
+@pytest.mark.asyncio
+async def test_stop_request_without_supervisor_still_clears_flag():
+    """
+    given: a live manual session (flag armed) and no supervisor registered
+    when:  a `copilot_stop_request` arrives
+    then:  the originator gets `supervisor_disconnected` echoing request_id and
+           the flag is cleared anyway — there is no session to keep alive for
+    """
+    bridge = KTalkBridge()
+    bridge._manual_copilot_active = True
+    origin = RecordingClient()
+
+    await bridge._process_message(
+        {"type": "copilot_stop_request", "request_id": "req-stop-nosup"},
+        websocket=origin,
+    )
+
+    frames = _copilot_frames(origin, "copilot_status", "supervisor_disconnected")
+    assert len(frames) == 1
+    assert frames[0]["request_id"] == "req-stop-nosup"
+    assert bridge._manual_copilot_active is False
+
+
+@pytest.mark.asyncio
+async def test_malformed_spawn_and_stop_requests_are_ignored(capsys):
+    """
+    given: a registered supervisor and an armed manual flag
+    when:  spawn/stop frames arrive with a missing, empty or non-string
+           request_id
+    then:  each is dropped with a log — no relay, no reply, no flag change
+           (an un-echoable error could never be bound to a click anyway)
+    """
+    bridge, sup, sub = _bridge_with_supervisor()
+    bridge._manual_copilot_active = True
+    origin = RecordingClient()
+
+    malformed = [
+        {"type": "copilot_spawn_request"},
+        {"type": "copilot_spawn_request", "request_id": ""},
+        {"type": "copilot_spawn_request", "request_id": 42},
+        {"type": "copilot_stop_request"},
+        {"type": "copilot_stop_request", "request_id": ""},
+        {"type": "copilot_stop_request", "request_id": None},
+    ]
+    for frame in malformed:
+        await bridge._process_message(frame, websocket=origin)
+
+    assert sup.sent == []
+    assert origin.sent == []
+    assert sub.sent == []
+    assert bridge._manual_copilot_active is True
+    err = capsys.readouterr().err
+    assert err.count("missing/invalid request_id") == len(malformed)
+
+
+def test_meeting_state_reports_manual_session():
+    """
+    given: an armed manual flag and no conference meeting
+    when:  the bridge builds a `meeting_state` reply
+    then:  it reports the synthetic manual meeting so the supervisor's
+           reconcile adopts the live session instead of GRACE-killing it
+    """
+    bridge = KTalkBridge()
+    bridge._manual_copilot_active = True
+
+    frame = bridge._compute_meeting_state()
+
+    assert frame == {
+        "type": "meeting_state",
+        "active": True,
+        "meeting_id": "manual",
+        "meeting_title": None,
+    }
+
+
+def test_meeting_state_conference_takes_precedence_over_manual():
+    """
+    given: an armed manual flag AND an active conference meeting
+    when:  the bridge builds a `meeting_state` reply
+    then:  the conference meeting is reported — "manual" must never mask a
+           real meeting id the supervisor binds its session to
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1", title="Standup"))
+    bridge._connected_clients.add(RecordingClient())
+    bridge._manual_copilot_active = True
+
+    frame = bridge._compute_meeting_state()
+
+    assert frame["active"] is True
+    assert frame["meeting_id"] == "m-1"
+    assert frame["meeting_title"] == "Standup"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_hello_rearms_manual_flag_before_reply():
+    """
+    given: a bridge that lost its manual flag (restart) and no conference
+    when:  the supervisor reconnects with `current_meeting_id == "manual"`
+    then:  the flag is re-armed BEFORE the reply is computed, so the
+           `meeting_state` answer is already `{active: True, "manual"}` and
+           the supervisor adopts its live tmux session (D5)
+    """
+    bridge = KTalkBridge()
+    sup = RecordingClient()
+
+    await bridge._process_message(
+        {"type": "supervisor_hello", "current_meeting_id": "manual"},
+        websocket=sup,
+    )
+
+    assert bridge._manual_copilot_active is True
+    states = _copilot_frames(sup, "meeting_state")
+    assert len(states) == 1
+    assert states[0]["active"] is True
+    assert states[0]["meeting_id"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_hello_manual_id_does_not_rearm_during_conference():
+    """
+    given: an active conference meeting
+    when:  a supervisor hello arrives with `current_meeting_id == "manual"`
+    then:  the manual flag stays False and the reply carries the conference
+           meeting — conference precedence outranks the stale manual claim
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_ktalk_storage(meeting_id="m-1", title="Standup"))
+    bridge._connected_clients.add(RecordingClient())
+    sup = RecordingClient()
+
+    await bridge._process_message(
+        {"type": "supervisor_hello", "current_meeting_id": "manual"},
+        websocket=sup,
+    )
+
+    assert bridge._manual_copilot_active is False
+    states = _copilot_frames(sup, "meeting_state")
+    assert len(states) == 1
+    assert states[0]["active"] is True
+    assert states[0]["meeting_id"] == "m-1"
+
+
+@pytest.mark.asyncio
+async def test_conference_meeting_started_preempts_manual_session():
+    """
+    given: a live manual session and an extension about to join a conference
+    when:  `meeting_join` drives the conference `meeting_started` emit path
+    then:  the manual flag is cleared (the supervisor rebinds its session to
+           the meeting id) and subscribers ALONE get the informational
+           `manual_preempted` notice — the extension stream stays untouched
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_meeting_storage_mock(meeting_id="m-conf"))
+    ext = RecordingClient()
+    sub = RecordingClient()
+    bridge._connected_clients.add(ext)
+    bridge._subscriber_clients.add(sub)
+    bridge._manual_copilot_active = True
+
+    await bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/room",
+        "title": "Standup",
+        "platform": "ktalk",
+    })
+
+    assert bridge._manual_copilot_active is False
+    notices = _copilot_frames(sub, "copilot_status", "manual_preempted")
+    assert len(notices) == 1
+    assert notices[0]["request_id"] == ""
+    assert _copilot_frames(ext, "copilot_status", "manual_preempted") == []
+
+
+@pytest.mark.asyncio
+async def test_conference_start_without_manual_session_emits_no_preemption():
+    """
+    given: no manual copilot session and a subscriber watching bridge status
+    when:  an extension starts an ordinary conference meeting
+    then:  no `manual_preempted` notice is emitted
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_meeting_storage_mock(meeting_id="m-conf"))
+    ext = RecordingClient()
+    sub = RecordingClient()
+    bridge._connected_clients.add(ext)
+    bridge._subscriber_clients.add(sub)
+
+    await bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/room",
+        "title": "Standup",
+        "platform": "ktalk",
+    })
+
+    assert _copilot_frames(sub, "copilot_status", "manual_preempted") == []
+
+
+@pytest.mark.asyncio
+async def test_manual_preemption_delivers_past_a_dead_subscriber():
+    """
+    given: an active manual mirror, one dead subscriber and one healthy one
+    when:  conference preemption broadcasts `manual_preempted`
+    then:  the dead socket is logged and the healthy subscriber still receives
+           the notice without an exception escaping
+    """
+    class ExplodingSubscriber:
+        async def send(self, message: str):
+            raise RuntimeError("socket is gone")
+
+    bridge = KTalkBridge()
+    healthy = RecordingClient()
+    bridge._subscriber_clients.add(ExplodingSubscriber())
+    bridge._subscriber_clients.add(healthy)
+    bridge._manual_copilot_active = True
+
+    await bridge._preempt_manual_copilot()
+
+    assert len(_copilot_frames(healthy, "copilot_status", "manual_preempted")) == 1
+    assert bridge._manual_copilot_active is False
+
+
+@pytest.mark.asyncio
+async def test_manual_session_with_zero_claude_sessions_goes_offline():
+    """
+    given: a manual session (no conference), supervisor reporting `online`,
+           and the daemon reporting a confident zero live MCP sessions
+    when:  the zero-session condition holds past the debounce window
+    then:  the effective chip flips to offline — a manual copilot whose Claude
+           session never registered must not keep showing a false green chip
+    """
+    bridge = KTalkBridge()
+    sub = RecordingClient()
+    bridge._subscriber_clients.add(sub)
+    bridge._manual_copilot_active = True
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = 100.0
+    bridge._set_claude_sessions(0)
+
+    await bridge._recompute_agent_state(now=100.0)   # zero just started → online
+    bridge._supervisor_status_ts = 111.0             # heartbeat keeps it fresh
+    await bridge._recompute_agent_state(now=111.0)   # 11s ≥ debounce → offline
+
+    assert _agent_states(sub) == ["online", "offline"]
+
+
+@pytest.mark.asyncio
+async def test_manual_chat_message_carries_no_meeting_id():
+    """
+    given: no conference meeting is active — storage still reports an orphan
+           meeting id, as it always does after a leave
+    when:  a `copilot_chat_message` is forwarded to the channel client
+    then:  the outbound `copilot_user_message` carries meeting_id None and the
+           pending entry records "" — a manual request must not inherit
+           conference staleness semantics
+    """
+    bridge = KTalkBridge()
+    storage = _ktalk_storage(meeting_id="orphan-1", source="orphan")
+    storage.get_current_meeting_id = Mock(return_value="orphan-1")
+    bridge.set_meeting_storage(storage)
+    channel = RecordingClient()
+    bridge._copilot_channel_clients.add(channel)
+
+    await bridge._process_message({
+        "type": "copilot_chat_message",
+        "request_id": "req-manual",
+        "text": "что было сказано?",
+    }, websocket=RecordingClient())
+
+    forwarded = _copilot_frames(channel, "copilot_user_message")
+    assert len(forwarded) == 1
+    assert forwarded[0]["meeting_id"] is None
+    assert bridge._copilot_pending_requests["req-manual"] == ""
+
+
+@pytest.mark.asyncio
+async def test_manual_chat_reply_survives_meeting_rotation():
+    """
+    given: a manual chat request forwarded with no conference active, whose
+           meeting stamp the channel server echoes back verbatim
+    when:  `_check_silence_split` rotates the orphan meeting mid-flight and the
+           reply only then arrives
+    then:  the reply is still broadcast — the reply-side staleness cross-check
+           has no meeting id to mismatch against
+    """
+    bridge = KTalkBridge()
+    storage = _ktalk_storage(meeting_id="orphan-1", source="orphan")
+    storage.get_current_meeting_id = Mock(side_effect=lambda: storage.current_meeting_id)
+    bridge.set_meeting_storage(storage)
+    channel = RecordingClient()
+    bridge._copilot_channel_clients.add(channel)
+    sub = RecordingClient()
+    bridge._subscriber_clients.add(sub)
+
+    await bridge._process_message({
+        "type": "copilot_chat_message",
+        "request_id": "req-rot",
+        "text": "вопрос",
+    }, websocket=RecordingClient())
+    echoed_meeting_id = _copilot_frames(channel, "copilot_user_message")[0]["meeting_id"]
+
+    # Orphan silence-split rotates the current meeting while Claude thinks.
+    storage.current_meeting_id = "orphan-2"
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-rot",
+        "kind": "manual",
+        "text": "ответ",
+        "meeting_id": echoed_meeting_id,
+    })
+
+    replies = _copilot_frames(sub, "copilot_reply")
+    assert len(replies) == 1
+    assert replies[0]["text"] == "ответ"
+
+
+@pytest.mark.asyncio
+async def test_spawn_request_with_only_a_dead_supervisor_is_not_armed():
+    """
+    given: the sole registered supervisor is a socket in its closing handshake
+           whose `send` raises — `_handle_client`'s finally-block has not
+           reaped it from `_supervisor_clients` yet
+    when:  a `copilot_spawn_request` arrives
+    then:  registration is not delivery: the originator gets
+           `supervisor_disconnected` and the manual mirror stays False, so no
+           later `supervisor_hello` can reconcile an armed mirror into a
+           session the user was already told had failed
+    """
+    class ExplodingClient:
+        async def send(self, message: str):
+            raise RuntimeError("socket is gone")
+
+    bridge = KTalkBridge()
+    bridge._supervisor_clients.add(ExplodingClient())
+    origin = RecordingClient()
+
+    await bridge._process_message(
+        {"type": "copilot_spawn_request", "request_id": "req-dead"},
+        websocket=origin,
+    )
+
+    frames = _copilot_frames(origin, "copilot_status", "supervisor_disconnected")
+    assert len(frames) == 1
+    assert frames[0]["request_id"] == "req-dead"
+    assert bridge._manual_copilot_active is False
+
+
+@pytest.mark.asyncio
+async def test_spawn_request_delivers_past_a_dead_supervisor():
+    """
+    given: a dead supervisor socket registered alongside a live one
+    when:  a `copilot_spawn_request` arrives
+    then:  no exception escapes, the live supervisor still receives the frame,
+           and the mirror is armed — one broken socket must not deny a spawn
+           the machine can actually serve
+    """
+    class ExplodingClient:
+        async def send(self, message: str):
+            raise RuntimeError("socket is gone")
+
+    bridge = KTalkBridge()
+    live = RecordingClient()
+    bridge._supervisor_clients.add(ExplodingClient())
+    bridge._supervisor_clients.add(live)
+    origin = RecordingClient()
+
+    await bridge._process_message(
+        {"type": "copilot_spawn_request", "request_id": "req-mixed"},
+        websocket=origin,
+    )
+
+    assert _copilot_frames(live, "copilot_spawn_request") == [
+        {"type": "copilot_spawn_request", "request_id": "req-mixed"}
+    ]
+    assert bridge._manual_copilot_active is True
+    assert origin.sent == []
+
+
+@pytest.mark.asyncio
+async def test_spawn_request_is_not_armed_when_conference_starts_mid_relay():
+    """
+    given: no conference at guard time, but a `meeting_join` on another socket
+           completes while the relay awaits `client.send` — its
+           `_preempt_manual_copilot()` sees the mirror still False and no-ops
+    when:  the spawn handler resumes after the relay
+    then:  it re-checks and does NOT arm the mirror — otherwise the bridge
+           would claim a manual session for the whole conference and past its
+           end, with no preemption left to clear it
+    """
+    bridge = KTalkBridge()
+    # Starts as an orphan (no conference — the spawn guard must pass), flips
+    # to a real ktalk meeting when `meeting_join` lands mid-relay.
+    storage = Mock()
+    storage.current_meeting_path = Path("/tmp/orphan-1.jsonl")
+    storage.current_meeting_id = "orphan-1"
+    storage._load_meta = Mock(return_value={"source": "orphan"})
+
+    def _on_join(url, *args, **kwargs):
+        storage.current_meeting_path = Path("/tmp/m-conf.jsonl")
+        storage.current_meeting_id = "m-conf"
+        storage._load_meta = Mock(return_value={"source": "ktalk", "title": "Standup"})
+        return "m-conf"
+
+    storage.on_meeting_join = Mock(side_effect=_on_join)
+    storage.get_current_transcript = Mock(return_value=[])
+    storage.get_current_meeting_id = Mock(side_effect=lambda: storage.current_meeting_id)
+    bridge.set_meeting_storage(storage)
+    ext = RecordingClient()
+    bridge._connected_clients.add(ext)
+
+    class ConferenceRacingSupervisor(RecordingClient):
+        """Supervisor whose send yields to a concurrent conference start."""
+
+        async def send(self, message: str):
+            await super().send(message)
+            await bridge._process_message({
+                "type": "meeting_join",
+                "url": "https://ktalk.test/room",
+                "title": "Standup",
+                "platform": "ktalk",
+            })
+
+    sup = ConferenceRacingSupervisor()
+    bridge._supervisor_clients.add(sup)
+    origin = RecordingClient()
+
+    assert not bridge._is_meeting_active()   # guard passes at entry
+    await bridge._process_message(
+        {"type": "copilot_spawn_request", "request_id": "req-race"},
+        websocket=origin,
+    )
+
+    # The frame did reach the supervisor — it rebinds to the conference id on
+    # the `meeting_started` it received in the same window.
+    assert _copilot_frames(sup, "copilot_spawn_request")
+    assert bridge._is_meeting_active()
+    assert bridge._manual_copilot_active is False
+    rejected = _copilot_frames(origin, "copilot_status", "conference_active")
+    assert len(rejected) == 1
+    assert rejected[0]["request_id"] == "req-race"
+
+
+@pytest.mark.asyncio
+async def test_no_conference_given_spawn_fanout_when_conference_starts_then_late_send_stops():
+    """
+    given: two supervisors and no conference when a manual spawn relay starts
+    when:  a conference becomes active after the first supervisor receives it
+    then:  no later supervisor receives a spawn that could displace the conference
+    """
+    bridge = KTalkBridge()
+    conference_active = False
+    bridge._is_meeting_active = Mock(side_effect=lambda: conference_active)
+
+    class ConferenceStartingSupervisor(RecordingClient):
+        async def send(self, message: str):
+            nonlocal conference_active
+            await super().send(message)
+            conference_active = True
+
+    first = ConferenceStartingSupervisor()
+    late = RecordingClient()
+    bridge._supervisor_clients = [first, late]
+    origin = RecordingClient()
+    request = {
+        "type": "copilot_spawn_request",
+        "request_id": "req-fanout-race",
+    }
+
+    await bridge._process_message(request, websocket=origin)
+
+    assert _copilot_frames(first, "copilot_spawn_request") == [request]
+    assert _copilot_frames(late, "copilot_spawn_request") == []
+    rejected = _copilot_frames(origin, "copilot_status", "conference_active")
+    assert len(rejected) == 1
+    assert rejected[0]["request_id"] == "req-fanout-race"
+    assert bridge._manual_copilot_active is False
+
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_in_flight_spawn_before_updating_manual_state():
+    """
+    given: a spawn relay is suspended in `send` and another subscriber sends stop
+    when:  the spawn delivery resumes
+    then:  the supervisor observes spawn then stop and the bridge finishes
+           inactive, matching the last operation the supervisor processed
+    """
+    class BlockingSpawnSupervisor(RecordingClient):
+        def __init__(self):
+            super().__init__()
+            self.spawn_started = asyncio.Event()
+            self.release_spawn = asyncio.Event()
+
+        async def send(self, message: str):
+            self.sent.append(message)
+            if json.loads(message).get("type") == "copilot_spawn_request":
+                self.spawn_started.set()
+                await self.release_spawn.wait()
+
+    bridge = KTalkBridge()
+    sup = BlockingSpawnSupervisor()
+    bridge._supervisor_clients.add(sup)
+
+    spawn_task = asyncio.create_task(bridge._process_message(
+        {"type": "copilot_spawn_request", "request_id": "req-spawn-race"},
+        websocket=RecordingClient(),
+    ))
+    await asyncio.wait_for(sup.spawn_started.wait(), timeout=1.0)
+    stop_task = asyncio.create_task(bridge._process_message(
+        {"type": "copilot_stop_request", "request_id": "req-stop-race"},
+        websocket=RecordingClient(),
+    ))
+    await asyncio.sleep(0)
+
+    assert [json.loads(message)["type"] for message in sup.sent] == [
+        "copilot_spawn_request"
+    ]
+
+    sup.release_spawn.set()
+    await asyncio.gather(spawn_task, stop_task)
+
+    assert [json.loads(message)["type"] for message in sup.sent] == [
+        "copilot_spawn_request",
+        "copilot_stop_request",
+    ]
+    assert bridge._manual_copilot_active is False
+
+
+@pytest.mark.asyncio
+async def test_manual_active_given_stop_in_flight_when_hello_rearms_then_stop_wins():
+    """
+    given: a stop relay is suspended after clearing the manual mirror
+    when:  a reconnecting supervisor hello re-arms it before delivery finishes
+    then:  the completed stop clears the mirror again and reconciliation is inactive
+    """
+    class BlockingStopSupervisor(RecordingClient):
+        def __init__(self):
+            super().__init__()
+            self.stop_started = asyncio.Event()
+            self.release_stop = asyncio.Event()
+
+        async def send(self, message: str):
+            self.sent.append(message)
+            if json.loads(message).get("type") == "copilot_stop_request":
+                self.stop_started.set()
+                await self.release_stop.wait()
+
+    bridge = KTalkBridge()
+    bridge._manual_copilot_active = True
+    sup = BlockingStopSupervisor()
+    bridge._supervisor_clients.add(sup)
+
+    stop_task = asyncio.create_task(bridge._process_message(
+        {"type": "copilot_stop_request", "request_id": "req-stop-hello-race"},
+        websocket=RecordingClient(),
+    ))
+    await asyncio.wait_for(sup.stop_started.wait(), timeout=1.0)
+
+    reconnecting_sup = RecordingClient()
+    await bridge._process_message(
+        {"type": "supervisor_hello", "current_meeting_id": "manual"},
+        websocket=reconnecting_sup,
+    )
+    assert bridge._manual_copilot_active is True
+
+    sup.release_stop.set()
+    await stop_task
+
+    assert bridge._manual_copilot_active is False
+    assert bridge._compute_meeting_state()["active"] is False
+
+
+def test_contended_manual_lock_given_bridge_restart_when_reused_then_new_loop_works():
+    """
+    given: the manual request lock was contended on the bridge thread's event loop
+    when:  the same bridge object restarts and creates a new event loop
+    then:  concurrent manual requests can contend without an old-loop binding error
+    """
+    bridge = KTalkBridge()
+
+    async def contend_manual_lock():
+        await bridge._manual_copilot_request_lock.acquire()
+        waiter = asyncio.create_task(bridge._manual_copilot_request_lock.acquire())
+        await asyncio.sleep(0)
+        bridge._manual_copilot_request_lock.release()
+        await waiter
+        bridge._manual_copilot_request_lock.release()
+
+    bridge._run_server = contend_manual_lock
+
+    bridge._thread_main()
+    bridge._thread_main()
