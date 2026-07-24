@@ -14,7 +14,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -455,6 +455,110 @@ async def _forward_bridge_message(raw: str) -> None:
     await live_watcher._broadcast(raw)
 
 
+# --- Copilot proxy (CAP-5) ---
+# The server is a pure relay (D5): no manual-session state, no spawn/stop
+# bookkeeping. The only thing kept is the last agent-state chip frame from
+# the bridge, replayed to each new live-stream client right after `init` so
+# a browser opening #/live mid-session does not show a stale chip.
+
+INBOUND_COPILOT_TYPES = frozenset({
+    "copilot_chat_message",
+    "copilot_spawn_request",
+    "copilot_stop_request",
+})
+
+# Last `copilot_status {status: "agent_state"}` frame seen from the bridge.
+_agent_state_primer: Optional[str] = None
+
+
+def _cache_agent_state_frame(raw: str) -> None:
+    """Remember the raw frame iff it is the agent-state chip frame."""
+    global _agent_state_primer
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(data, dict):
+        return
+    if data.get("type") == "copilot_status" and data.get("status") == "agent_state":
+        _agent_state_primer = raw
+
+
+async def _on_bridge_frame(raw: str) -> None:
+    """Bridge-frame wrapper: cache the agent-state primer, then delegate."""
+    _cache_agent_state_frame(raw)
+    await _forward_bridge_message(raw)
+
+
+async def _send_agent_state_primer(websocket: WebSocket) -> None:
+    """Deliver the cached agent-state frame to a freshly connected client.
+
+    A send failure (client already gone) is swallowed with a log — it must
+    not crash the endpoint loop.
+    """
+    if _agent_state_primer is None:
+        return
+    try:
+        await websocket.send_text(_agent_state_primer)
+    except Exception as exc:
+        print(
+            f"[live-stream] agent_state primer send failed: {exc!r}",
+            file=sys.stderr,
+        )
+
+
+async def handle_client_frame(
+    raw: str,
+    subscriber: Optional[BridgeSubscriber],
+    reply_cb: Callable[[str], Awaitable[None]],
+) -> None:
+    """Route one webapp-originated frame from /api/live/stream.
+
+    Whitelisted copilot frames are relayed verbatim (the original raw
+    string) via `subscriber.send(raw)`; validation beyond the type
+    whitelist is bridge-side. On failure (`send` returned False, or no
+    subscriber at all) the originating client gets
+    `copilot_status {status: "bridge_disconnected", request_id}` —
+    best-effort, no queueing, no retry.
+    """
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, RecursionError):
+        print("[live-stream] dropped malformed client frame", file=sys.stderr)
+        return
+    if not isinstance(data, dict):
+        print("[live-stream] dropped non-object client frame", file=sys.stderr)
+        return
+    msg_type = data.get("type")
+    # isinstance guard keeps this total: an unhashable `type` (e.g. a list)
+    # would raise TypeError on frozenset membership.
+    if not isinstance(msg_type, str) or msg_type not in INBOUND_COPILOT_TYPES:
+        print(
+            f"[live-stream] dropped non-copilot client frame type={msg_type!r}",
+            file=sys.stderr,
+        )
+        return
+
+    sent = False
+    if subscriber is not None:
+        sent = await subscriber.send(raw)
+    if sent:
+        return
+
+    reply = json.dumps({
+        "type": "copilot_status",
+        "status": "bridge_disconnected",
+        "request_id": data.get("request_id"),
+    })
+    try:
+        await reply_cb(reply)
+    except Exception as exc:
+        print(
+            f"[live-stream] bridge_disconnected reply failed: {exc!r}",
+            file=sys.stderr,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
@@ -471,12 +575,12 @@ async def lifespan(app: FastAPI):
     observer.schedule(live_watcher, str(MEETINGS_DIR), recursive=True)
     observer.start()
 
-    # Subscribe to KTalk bridge to forward `transcript_refine` events
-    # to webapp live-stream clients (D10: JSONL tail-reader cannot see
-    # post-rewrite refines, so the bridge channel carries them).
+    # Subscribe to KTalk bridge for downstream live-stream frames and
+    # upstream Copilot requests. D10 refine frames use this channel because
+    # the JSONL tail-reader cannot see post-rewrite refines.
     bridge_subscriber = BridgeSubscriber(
         bridge_url=BRIDGE_WS_URL,
-        forward_callback=_forward_bridge_message,
+        forward_callback=_on_bridge_frame,
     )
     await bridge_subscriber.start()
 
@@ -1403,6 +1507,7 @@ async def live_stream(websocket: WebSocket):
                 # every segment stuck in the preliminary (tier-1) state.
                 "refine_enabled": current.get("source") == "ktalk",
             }))
+            await _send_agent_state_primer(websocket)
         else:
             await websocket.send_text(json.dumps({
                 "type": "init",
@@ -1411,6 +1516,7 @@ async def live_stream(websocket: WebSocket):
                 "active_meetings": [],
                 "refine_enabled": False,
             }))
+            await _send_agent_state_primer(websocket)
     except Exception as e:
         await websocket.send_text(json.dumps({
             "type": "error",
@@ -1419,7 +1525,8 @@ async def live_stream(websocket: WebSocket):
 
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            await handle_client_frame(raw, bridge_subscriber, websocket.send_text)
     except WebSocketDisconnect:
         pass
     finally:
