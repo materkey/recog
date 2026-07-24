@@ -49,3 +49,6 @@ _bmad/
 
 # Override global ignore (~/.config/git/ignore lists openspec/)
 !openspec/
+.bmad-loop/runs/
+.bmad-loop/cache/
+.bmad-loop/policy.toml
