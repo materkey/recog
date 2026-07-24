@@ -1073,12 +1073,47 @@ class KTalkBridge:
         await self._broadcast_message(frame)
 
     async def _broadcast_message(self, data: dict):
-        """Отправляет сообщение всем подключённым клиентам."""
+        """Отправляет сообщение всем подключённым extension-клиентам.
+
+        Extension-only by design: subscribers (frontend `BridgeSubscriber`)
+        must not receive ordinary transcript/lifecycle/meeting frames.
+        `transcript_refine` uses its dedicated `send_refine` path; copilot
+        frames use `_broadcast_copilot_frame` instead.
+        """
         if not self._connected_clients:
             return
 
         message = json.dumps(data, ensure_ascii=False)
         for client in list(self._connected_clients):
+            try:
+                await client.send(message)
+            except Exception:
+                pass  # Клиент может отключиться
+
+    async def _broadcast_copilot_frame(self, data: dict):
+        """Fan a copilot frame out to extension AND subscriber clients.
+
+        `_broadcast_message` targets only `_connected_clients` (the Chrome
+        extension), so subscribers — the frontend `BridgeSubscriber`, which
+        relays onto the webapp `#/live` view — would never see copilot
+        replies or status. Every copilot broadcast site routes through here
+        instead; `_broadcast_message` stays extension-only so transcript,
+        lifecycle and meeting frames do not gain the wider fan-out.
+
+        Unlike `_broadcast_message` this must NOT early-return on an empty
+        `_connected_clients`: the primary scenario is a webapp open with no
+        conference tab at all, where there are zero extension clients.
+
+        Snapshot under the lock: `_handle_client` mutates both sets on the
+        asyncio thread (same reason as `send_refine`).
+        """
+        with self._lock:
+            recipients = list(self._connected_clients) + list(self._subscriber_clients)
+        if not recipients:
+            return
+
+        message = json.dumps(data, ensure_ascii=False)
+        for client in recipients:
             try:
                 await client.send(message)
             except Exception:
@@ -1261,7 +1296,7 @@ class KTalkBridge:
         if effective == self._last_effective_agent_state:
             return
         self._last_effective_agent_state = effective
-        await self._broadcast_message({
+        await self._broadcast_copilot_frame({
             "type": "copilot_status",
             "request_id": "",
             "status": "agent_state",
@@ -1844,7 +1879,7 @@ class KTalkBridge:
                         f"{stranded} in-flight request(s); dropped bookkeeping",
                         file=sys.stderr,
                     )
-                await self._broadcast_message({
+                await self._broadcast_copilot_frame({
                     "type": "copilot_status",
                     "request_id": "",
                     "status": "channel_disconnected",
@@ -2616,7 +2651,7 @@ class KTalkBridge:
             # path. Skip when other channel clients were already present
             # to avoid noisy duplicate signals.
             if was_first_channel_client:
-                await self._broadcast_message({
+                await self._broadcast_copilot_frame({
                     "type": "copilot_status",
                     "request_id": "",
                     "status": "channel_connected",
@@ -2716,10 +2751,10 @@ class KTalkBridge:
         elif msg_type == "copilot_channel_reply":
             # Channel server (recog/copilot_channel.py) emits a reply for a
             # previous user request — or a proactive ("live"/"tick") frame.
-            # Re-emit as a `copilot_reply` so extension clients can render
-            # it in the Copilot tab. The channel client itself was moved
+            # Re-emit as a `copilot_reply` so extension and subscriber
+            # clients can render it. The channel client itself was moved
             # out of `_connected_clients` by `copilot_channel_hello`, so
-            # `_broadcast_message` cannot loop the frame back to its
+            # `_broadcast_copilot_frame` cannot loop the frame back to its
             # author.
             request_id = data.get("request_id")
             if not isinstance(request_id, str) or not request_id:
@@ -2777,7 +2812,7 @@ class KTalkBridge:
             created_at = data.get("created_at")
             if not isinstance(created_at, (int, float)):
                 created_at = time.time() * 1000
-            await self._broadcast_message({
+            await self._broadcast_copilot_frame({
                 "type": "copilot_reply",
                 "request_id": request_id,
                 "kind": kind,
@@ -2796,8 +2831,8 @@ class KTalkBridge:
 
         elif msg_type == "copilot_channel_status":
             # Channel server reports per-request status (queued/working/
-            # error/done). Re-emit as `copilot_status` to extension
-            # clients so the UI can update the request indicator.
+            # error/done). Re-emit as `copilot_status` to extension and
+            # subscriber clients so the UI can update the request indicator.
             request_id = data.get("request_id")
             if not isinstance(request_id, str) or not request_id:
                 print(
@@ -2822,7 +2857,7 @@ class KTalkBridge:
             message_text = data.get("message")
             if not isinstance(message_text, str):
                 message_text = ""
-            await self._broadcast_message({
+            await self._broadcast_copilot_frame({
                 "type": "copilot_status",
                 "request_id": request_id,
                 "status": status,
