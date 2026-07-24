@@ -87,6 +87,11 @@
                     <button class="btn" id="copy-live-btn" onclick="copyLiveToClipboard()" title="Copy transcript as Markdown">Copy MD</button>
                     <button class="btn" id="download-live-btn" onclick="downloadLiveMarkdown()" title="Download transcript as Markdown file">↓ MD</button>
                     <button class="btn btn-privacy" id="live-privacy-btn" onclick="togglePrivacy()" title="Replace names with speaker_N in Copy/Download">Privacy</button>
+                    <button class="btn btn-copilot" id="copilot-btn" onclick="copilotButtonClick()" title="Recog Copilot session">
+                        Recog Copilot
+                        <span class="copilot-agent-chip offline" id="copilot-chip">&#9899; offline</span>
+                        <span class="copilot-unread-dot" id="copilot-unread-dot" hidden></span>
+                    </button>
                     <div class="live-status" id="live-status">
                         <span class="status-dot"></span>
                         <span class="status-text">Connecting...</span>
@@ -142,6 +147,25 @@
             <div class="anchor-footer">
                 <div id="anchor-mention" class="anchor-mention"></div>
                 <div id="anchor-note" class="anchor-note"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Copilot Chat Panel -->
+    <div id="copilot-panel" class="copilot-panel" style="display: none;">
+        <div class="copilot-panel-header">
+            <span class="copilot-panel-title">Recog Copilot</span>
+            <span class="copilot-agent-chip offline" id="copilot-panel-chip">&#9899; offline</span>
+            <button class="btn btn-danger btn-small" id="copilot-stop-btn" onclick="copilotStopClick()" disabled>Stop</button>
+            <button class="copilot-panel-close" onclick="closeCopilotPanel()">&times;</button>
+        </div>
+        <div id="copilot-messages" class="copilot-messages">
+            <div class="copilot-empty">Сообщений пока нет.</div>
+        </div>
+        <div class="copilot-input-area">
+            <textarea id="copilot-input" class="copilot-input" rows="2" placeholder="Спросить Claude..."></textarea>
+            <div class="copilot-input-row">
+                <button class="btn" id="copilot-send-btn" onclick="submitCopilotChat()">Send</button>
             </div>
         </div>
     </div>
