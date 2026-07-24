@@ -1,10 +1,16 @@
 """Supervisor daemon that auto-spawns the Copilot Claude session per KTalk meeting.
 
-Connects to ktalk_bridge as a WS client (`supervisor_hello`), listens for
-`meeting_started` / `meeting_ended` lifecycle frames and drives a detached
-tmux session with the Claude Code copilot (spawn on meeting start, kill after
-a grace period on meeting end). See
-`docs/plans/2026-07-02-auto-copilot-session.md`.
+Connects to ktalk_bridge as a WS client (`supervisor_hello`, carrying the id of
+the session it currently intends to keep alive), listens for `meeting_started` /
+`meeting_ended` lifecycle frames and drives a detached tmux session with the
+Claude Code copilot (spawn on meeting start, kill after a grace period on
+meeting end). See `docs/plans/2026-07-02-auto-copilot-session.md`.
+
+The webapp can also drive the same machine by hand: `copilot_spawn_request` /
+`copilot_stop_request` (relayed by the bridge) map onto the synthetic meeting id
+`MANUAL_MEETING_ID`, so a repeated spawn is the existing same-id flap and a real
+conference preempts the manual session as any back-to-back meeting would. See
+`docs/plans/20260724-webapp-copilot-live.md`.
 
 State machine (SessionLifecycle, pure — no I/O):
 
@@ -41,6 +47,12 @@ DEFAULT_MCP_URL = "http://127.0.0.1:8767/mcp"
 TMUX_SOCKET = "recog-copilot"
 TMUX_SESSION = "copilot"
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# Synthetic lifecycle id for a webapp-driven (manual) copilot session. Twin of
+# `ktalk_bridge.MANUAL_MEETING_ID` — the value must not drift, the bridge keys
+# its manual mirror and `meeting_state` reply off the very same string. Not
+# imported from there on purpose: ktalk_bridge is a heavy top-level module and
+# importing it here would invert the layering.
+MANUAL_MEETING_ID = "manual"
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -479,12 +491,21 @@ class Supervisor:
     # --- lifecycle event plumbing ---
 
     async def handle_frame(self, data: dict) -> None:
+        """Drive the lifecycle from one bridge frame.
+
+        `autospawn` (RECOG_COPILOT_AUTOSPAWN) gates only the three
+        meeting-driven branches (D3). The manual frames are an explicit user
+        click relayed by the bridge, so they run regardless of the flag; the
+        bridge already rejected a spawn during a live conference, and
+        `request_id` is its business — the supervisor answers only through
+        `copilot_agent_status`.
+        """
         if not isinstance(data, dict):
-            return
-        if not self.autospawn:
             return
         ftype = data.get("type")
         if ftype == "meeting_state":
+            if not self.autospawn:
+                return
             session_alive = await self._probe_session_alive()
             await self._apply(
                 self._reconcile(
@@ -492,11 +513,27 @@ class Supervisor:
                 )
             )
         elif ftype == "meeting_started":
+            if not self.autospawn:
+                return
             meeting_id = data.get("meeting_id")
             if meeting_id:
                 await self._apply(self.lifecycle.meeting_started(str(meeting_id)))
         elif ftype == "meeting_ended":
+            if not self.autospawn:
+                return
             await self._apply(self.lifecycle.meeting_ended(data.get("meeting_id")))
+        elif ftype == "copilot_spawn_request":
+            # An explicit click is fresh user intent, not a flap: reset the
+            # respawn budget here. A session that burned all its attempts parks
+            # in SPAWNING("manual"), where the same-id flap emits no `Spawn` —
+            # so `_apply` would never reset it and Start would stay inert
+            # forever. Preserve an already-pending retry, though: cancelling it
+            # would make a repeated click postpone recovery.
+            if self._respawn_task is None or self._respawn_task.done():
+                self._reset_respawn_backoff()
+            await self._apply(self.lifecycle.meeting_started(MANUAL_MEETING_ID))
+        elif ftype == "copilot_stop_request":
+            await self._apply(self.lifecycle.meeting_ended(MANUAL_MEETING_ID))
 
     async def _probe_session_alive(self) -> bool:
         try:
@@ -574,6 +611,17 @@ class Supervisor:
             if spawning:
                 self._spawn_in_flight = False
 
+    def _live_meeting_id(self) -> Optional[str]:
+        """`supervisor_hello.current_meeting_id` (D5): the id of a session the
+        machine intends to keep alive. GRACE/IDLE report None — a session
+        already scheduled to die must not be re-armed by the bridge's
+        reconcile reply (that would let a reconnect inside the grace window
+        defeat the user's Stop).
+        """
+        if self.lifecycle.state in (State.SPAWNING, State.RUNNING):
+            return self.lifecycle.meeting_id
+        return None
+
     async def _send_agent_status(self, status: AgentState) -> None:
         """Report `copilot_agent_status` to the bridge (watchdog callback).
 
@@ -601,9 +649,12 @@ class Supervisor:
         Respawns with per-meeting backoff (`RESPAWN_BACKOFF_S`, ≤3 attempts).
         A pending respawn absorbs repeated reports; the budget resets on
         every fresh meeting-driven spawn (see `_apply`).
+
+        Not gated on `autospawn` (D3): this path only fires for a session the
+        machine already decided should be alive — including a manual one
+        started with the flag off. The IDLE machine, not the flag, is what
+        keeps a dead session dead (`session_died` yields no `Spawn` there).
         """
-        if not self.autospawn:
-            return
         if self._respawn_task is not None and not self._respawn_task.done():
             return
         commands = self.lifecycle.session_died()
@@ -709,8 +760,19 @@ class Supervisor:
                         # for reconciliation. A bridge that predates the
                         # protocol simply never replies — lifecycle frames
                         # still arrive once Task 4 lands.
+                        # `current_meeting_id` lets a restarted bridge re-arm
+                        # its manual mirror from the only runtime owner of that
+                        # truth — us (D5) — so its reconcile reply adopts a live
+                        # manual session instead of GRACE-killing it.
                         self._ws = ws
-                        await ws.send(json.dumps({"type": "supervisor_hello"}))
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "type": "supervisor_hello",
+                                    "current_meeting_id": self._live_meeting_id(),
+                                }
+                            )
+                        )
                         self._on_connected()
                         delay = self.INITIAL_BACKOFF_S
                         async for raw in ws:
@@ -795,7 +857,8 @@ def main(argv: Optional[list] = None) -> None:
     if not supervisor.autospawn:
         print(
             "[copilot-supervisor] RECOG_COPILOT_AUTOSPAWN is off — "
-            "connected but not spawning sessions",
+            "meeting-driven auto-spawn disabled; manual webapp spawn/stop "
+            "and crash-respawn still work",
             file=sys.stderr,
         )
     try:
