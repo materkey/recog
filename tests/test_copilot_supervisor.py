@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recog.copilot_supervisor import (
     DEFAULT_MCP_URL,
+    MANUAL_MEETING_ID,
     AgentState,
     Kill,
     SessionLifecycle,
@@ -216,9 +217,9 @@ async def test_meeting_change_from_grace_kills_and_respawns():
     await sup.stop()
 
 
-async def test_autospawn_off_is_noop():
+async def test_autospawn_off_meeting_frames_are_inert():
     """given: RECOG_COPILOT_AUTOSPAWN=0 (autospawn=False)
-    when: lifecycle and meeting_state frames arrive
+    when: conference lifecycle and meeting_state frames arrive
     then: no commands are issued and the machine stays IDLE
     """
     runner = FakeRunner()
@@ -230,6 +231,27 @@ async def test_autospawn_off_is_noop():
 
     assert runner.spawned == []
     assert runner.kills == 0
+    assert sup.lifecycle.state is State.IDLE
+
+
+async def test_autospawn_off_manual_frames_still_work():
+    """given: RECOG_COPILOT_AUTOSPAWN=0 — the gate covers only meeting frames (D3)
+    when: a manual spawn is followed by a manual stop and grace expiry
+    then: the session spawns and is killed on expiry — the flag never blocks
+          an explicit user request
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=0.05, autospawn=False)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    assert runner.spawned == [MANUAL_MEETING_ID]
+    await sup.handle_frame({"type": "copilot_stop_request", "request_id": "r2"})
+    assert sup.lifecycle.state is State.GRACE
+    assert runner.kills == 0
+
+    await asyncio.sleep(0.15)
+    assert runner.spawned == [MANUAL_MEETING_ID]
+    assert runner.kills == 1
     assert sup.lifecycle.state is State.IDLE
 
 
@@ -346,6 +368,284 @@ async def test_reconcile_idle_no_session_no_meeting_noop():
 
 
 # ---------------------------------------------------------------------------
+# Manual copilot lifecycle (webapp spawn/stop under the synthetic "manual" id)
+# ---------------------------------------------------------------------------
+
+
+def test_manual_meeting_id_matches_bridge_constant():
+    """given: the bridge relays manual frames under its own MANUAL_MEETING_ID
+    when: the supervisor's duplicated constant is compared with the bridge one
+    then: the values match — a drift would break flap/adopt id matching
+    """
+    from ktalk_bridge import MANUAL_MEETING_ID as BRIDGE_MANUAL_MEETING_ID
+
+    assert MANUAL_MEETING_ID == "manual"
+    assert MANUAL_MEETING_ID == BRIDGE_MANUAL_MEETING_ID
+
+
+@pytest.mark.parametrize("autospawn", [True, False])
+async def test_manual_spawn_request_spawns_session(autospawn):
+    """given: an idle supervisor, autospawn on or off
+    when: copilot_spawn_request arrives
+    then: a session is spawned under the synthetic "manual" lifecycle id
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=autospawn)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+
+    assert runner.spawned == [MANUAL_MEETING_ID]
+    assert runner.kills == 0
+    assert sup.lifecycle.state is State.SPAWNING
+    assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
+    await sup.stop()
+
+
+async def test_manual_spawn_request_twice_is_idempotent():
+    """given: a live manual session
+    when: a second copilot_spawn_request arrives (double click)
+    then: no second spawn and no kill — the same-id flap is a no-op
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    sup.lifecycle.session_ready()
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r2"})
+
+    assert runner.spawned == [MANUAL_MEETING_ID]
+    assert runner.kills == 0
+    assert sup.lifecycle.state is State.RUNNING
+    await sup.stop()
+
+
+async def test_manual_spawn_request_within_grace_revives_session():
+    """given: a manual session put into GRACE by a stop request
+    when: the user presses the button again before the timer expires
+    then: GRACE→RUNNING with no kill and no second spawn, timer cancelled
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    sup.lifecycle.session_ready()
+    await sup.handle_frame({"type": "copilot_stop_request", "request_id": "r2"})
+    assert sup.lifecycle.state is State.GRACE
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r3"})
+
+    assert sup.lifecycle.state is State.RUNNING
+    assert runner.spawned == [MANUAL_MEETING_ID]
+    assert runner.kills == 0
+    assert sup._grace_task is None  # timer cancelled on leaving GRACE
+    await sup.stop()
+
+
+async def test_manual_stop_request_graces_then_kills():
+    """given: a live manual session with autospawn off
+    when: copilot_stop_request arrives and the grace timer expires
+    then: the kill is deferred to the timer — exactly one spawn, one kill
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=0.05, autospawn=False)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    sup.lifecycle.session_ready()
+    await sup.handle_frame({"type": "copilot_stop_request", "request_id": "r2"})
+    assert sup.lifecycle.state is State.GRACE
+    assert sup._grace_task is not None  # grace timer armed via _apply
+    assert runner.kills == 0
+
+    await asyncio.sleep(0.15)
+    assert runner.spawned == [MANUAL_MEETING_ID]
+    assert runner.kills == 1
+    assert sup.lifecycle.state is State.IDLE
+
+
+async def test_conference_meeting_preempts_manual_session():
+    """given: a live manual session and autospawn on
+    when: a conference meeting starts
+    then: the manual session is killed and a session for the meeting spawned
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    sup.lifecycle.session_ready()
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "B"})
+
+    assert runner.kills == 1
+    assert runner.spawned == [MANUAL_MEETING_ID, "B"]
+    assert sup.lifecycle.state is State.SPAWNING
+    assert sup.lifecycle.meeting_id == "B"
+    await sup.stop()
+
+
+async def test_reconcile_adopts_live_manual_session():
+    """given: machine IDLE but a manual tmux session is alive (supervisor
+           restarted while the user's manual session ran)
+    when: the bridge replies meeting_state {active: true, meeting_id: "manual"}
+    then: adopt — no spawn, no kill; the machine tracks the manual session
+    """
+    runner = FakeRunner()
+    sup = Supervisor(
+        runner=runner,
+        grace_s=10.0,
+        autospawn=True,
+        session_alive_probe=lambda: True,
+    )
+
+    await sup.handle_frame(
+        {"type": "meeting_state", "active": True, "meeting_id": MANUAL_MEETING_ID}
+    )
+
+    assert runner.spawned == []
+    assert runner.kills == 0
+    assert sup.lifecycle.state is State.RUNNING
+    assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
+
+
+async def test_manual_session_respawns_after_crash_with_autospawn_off():
+    """given: autospawn off and a live manual session
+    when: the watchdog keeps reporting session_died
+    then: the session respawns on the same ≤3 backoff budget as a conference
+          one — the removed gate never blocked crash recovery (D3)
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
+    sup.RESPAWN_BACKOFF_S = (0.01, 0.01, 0.01)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    sup.lifecycle.session_ready()
+
+    for _ in range(6):
+        await sup.on_session_died()
+        await asyncio.sleep(0.05)
+
+    assert runner.spawned == [MANUAL_MEETING_ID] * 4  # initial + 3 respawns
+    assert sup.lifecycle.state is State.SPAWNING
+    await sup.stop()
+
+
+async def test_manual_spawn_request_resets_exhausted_respawn_budget():
+    """given: a manual session that burned its whole respawn budget and parked
+           in SPAWNING("manual")
+    when: the user presses Start again — a same-id flap that emits no commands
+    then: the budget is fresh, so the next session_died revives the session;
+          without the reset the button would stay inert until Stop + grace
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
+    sup.RESPAWN_BACKOFF_S = (0.01, 0.01, 0.01)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    for _ in range(6):
+        await sup.on_session_died()
+        await asyncio.sleep(0.05)
+    assert runner.spawned == [MANUAL_MEETING_ID] * 4  # budget spent
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r2"})
+    assert runner.spawned == [MANUAL_MEETING_ID] * 4  # the flap itself spawns nothing
+    assert sup._respawn_attempts == 0
+
+    await sup.on_session_died()
+    await asyncio.sleep(0.05)
+
+    assert runner.spawned == [MANUAL_MEETING_ID] * 5
+    await sup.stop()
+
+
+async def test_manual_spawn_request_preserves_pending_respawn():
+    """given: a manual session with a respawn already waiting on backoff
+    when: the user presses Start again before that retry runs
+    then: the pending retry and its spent budget are preserved — the click
+          neither cancels nor postpones recovery
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
+    sup.RESPAWN_BACKOFF_S = (0.1, 0.1, 0.1)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    sup.lifecycle.session_ready()
+    await sup.on_session_died()
+    pending_respawn = sup._respawn_task
+    assert pending_respawn is not None
+    assert sup._respawn_attempts == 1
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r2"})
+
+    assert sup._respawn_task is pending_respawn
+    assert sup._respawn_attempts == 1
+    await asyncio.sleep(0.15)
+    assert runner.spawned == [MANUAL_MEETING_ID] * 2
+    await sup.stop()
+
+
+async def test_manual_stop_during_conference_is_inert():
+    """given: a session bound to conference meeting "B" (the bridge relays a
+           stray webapp copilot_stop_request with no conference guard and
+           documents it as inert here — ktalk_bridge.py:3178-3181)
+    when: copilot_stop_request arrives while RUNNING("B")
+    then: the id mismatch makes meeting_ended a no-op — the conference session
+          stays RUNNING, no grace timer is armed and nothing is killed
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=0.05, autospawn=True)
+
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "B"})
+    sup.lifecycle.session_ready()
+    await sup.handle_frame({"type": "copilot_stop_request", "request_id": "r1"})
+
+    assert sup.lifecycle.state is State.RUNNING
+    assert sup.lifecycle.meeting_id == "B"
+    assert runner.kills == 0
+    assert sup._grace_task is None
+    await sup.stop()
+
+
+async def test_manual_frames_malformed_are_ignored():
+    """given: an idle supervisor
+    when: a non-dict frame, an unknown type and an empty frame arrive
+    then: nothing is spawned — handle_frame's existing guards drop them
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
+
+    await sup.handle_frame(["copilot_spawn_request"])
+    await sup.handle_frame({"type": "copilot_unknown_request", "request_id": "r1"})
+    await sup.handle_frame({})
+
+    assert runner.spawned == []
+    assert runner.kills == 0
+    assert sup.lifecycle.state is State.IDLE
+
+
+@pytest.mark.parametrize(
+    "state,meeting_id,expected",
+    [
+        (State.IDLE, None, None),
+        (State.SPAWNING, MANUAL_MEETING_ID, MANUAL_MEETING_ID),
+        (State.RUNNING, MANUAL_MEETING_ID, MANUAL_MEETING_ID),
+        (State.RUNNING, "mtg-1", "mtg-1"),
+        # adopted session of unknown provenance: never claim it is manual
+        (State.RUNNING, None, None),
+        (State.GRACE, MANUAL_MEETING_ID, None),
+    ],
+)
+def test_live_meeting_id_reports_only_sessions_meant_to_live(state, meeting_id, expected):
+    """given: the lifecycle parked in each state
+    when: supervisor_hello's current_meeting_id is computed
+    then: only SPAWNING/RUNNING report an id — a GRACE session the user
+          already stopped must not be re-armed and revived by the bridge reply
+    """
+    sup = Supervisor(runner=FakeRunner())
+    sup.lifecycle.state = state
+    sup.lifecycle.meeting_id = meeting_id
+
+    assert sup._live_meeting_id() == expected
+
+
+# ---------------------------------------------------------------------------
 # Bridge connection: supervisor_hello + reconnect behaviour
 # ---------------------------------------------------------------------------
 
@@ -356,10 +656,19 @@ async def _start_mock_bridge(handler):
     return server, port
 
 
+async def _collect_hello(handler_received):
+    for _ in range(20):
+        if handler_received:
+            break
+        await asyncio.sleep(0.05)
+    assert handler_received, "supervisor did not send any frame"
+    return json.loads(handler_received[0])
+
+
 async def test_supervisor_sends_hello_on_connect():
-    """given: a mock bridge accepting connections
+    """given: a mock bridge accepting connections and an idle supervisor
     when: the supervisor connects
-    then: the first frame it sends is `{"type": "supervisor_hello"}`
+    then: the first frame is supervisor_hello with a null current_meeting_id
     """
     received = []
 
@@ -375,12 +684,42 @@ async def test_supervisor_sends_hello_on_connect():
     sup = Supervisor(f"ws://127.0.0.1:{port}", runner=FakeRunner())
     await sup.start()
     try:
-        for _ in range(20):
-            if received:
-                break
-            await asyncio.sleep(0.05)
-        assert received, "supervisor did not send any frame"
-        assert json.loads(received[0]) == {"type": "supervisor_hello"}
+        assert await _collect_hello(received) == {
+            "type": "supervisor_hello",
+            "current_meeting_id": None,
+        }
+    finally:
+        await sup.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_supervisor_hello_reports_live_manual_session():
+    """given: a live manual session and a bridge that (re)appears afterwards
+    when: the supervisor connects
+    then: supervisor_hello carries current_meeting_id="manual" so the bridge
+          re-arms its manual mirror and answers with an adoptable meeting_state
+    """
+    received = []
+
+    async def handler(websocket):
+        try:
+            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            received.append(first)
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
+
+    server, port = await _start_mock_bridge(handler)
+    sup = Supervisor(f"ws://127.0.0.1:{port}", runner=FakeRunner(), autospawn=False)
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    sup.lifecycle.session_ready()
+    await sup.start()
+    try:
+        assert await _collect_hello(received) == {
+            "type": "supervisor_hello",
+            "current_meeting_id": MANUAL_MEETING_ID,
+        }
     finally:
         await sup.stop()
         server.close()
@@ -656,7 +995,13 @@ async def test_respawn_aborted_when_meeting_ends_during_backoff():
     await sup.stop()
 
 
-async def test_session_died_with_autospawn_off_is_noop():
+async def test_session_died_while_idle_does_not_spawn():
+    """given: an IDLE machine — no session should exist
+    when: session_died is reported
+    then: nothing is spawned. D3 removed the autospawn gate from this path, so
+          the state machine is what holds the line: `session_died()` in IDLE
+          yields no Spawn command regardless of the flag
+    """
     runner = FakeRunner()
     sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
 
@@ -664,6 +1009,7 @@ async def test_session_died_with_autospawn_off_is_noop():
     await asyncio.sleep(0.02)
 
     assert runner.spawned == []
+    assert sup._respawn_task is None
     assert sup.lifecycle.state is State.IDLE
 
 
