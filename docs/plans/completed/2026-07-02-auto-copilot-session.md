@@ -398,7 +398,7 @@ Key design decisions:
 - Проверка флапа: перезагрузить вкладку KTalk посреди встречи — сессия копайлота должна пережить;
   то же для `./recog-service.sh restart` (рестарт bridge) посреди встречи — reconcile должен
   увести сессию в GRACE, а не убить её
-- Проверка respawn: `tmux -L recog-copilot kill-session` посреди встречи — супервизор
+- Проверка respawn: `tmux -L recog-copilot kill-session -t =copilot` посреди встречи — супервизор
   должен переподнять сессию, чип пройти через ⚫→🟢
 - Первый запуск под настоящим launchd закрывает остаточный риск spike'а (scrubbed env ≈ launchd,
   keychain проверен, но полный boot под launchd — нет)
@@ -412,7 +412,8 @@ Key design decisions:
 - стоимость: один initialPrompt-turn (opus, lean context) на каждую встречу
 - незнакомый стартовый экран claude после апдейта → `blocked` в чипе: сразу, если матчится
   футер диалога (правило 2), иначе через spawn-deadline (60 с в `spawning`); respawn не
-  поможет — лечится вручную (`tmux -L recog-copilot attach`)
+  поможет — лечится вручную (`tmux -L recog-copilot attach -t =copilot` для
+  meeting-driven сессии, `-t =copilot-manual` для manual)
 - позитивные маркеры классификации (`esc to interrupt`, prompt `❯`) заморожены на claude
   2.1.197: их дрейф после апдейта деградирует статус в правдоподобно-неверный
   (working→online) и не ловится фикстурными тестами — принято для v1; после апдейта claude

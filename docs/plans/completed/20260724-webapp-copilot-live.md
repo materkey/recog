@@ -70,9 +70,15 @@ conference tab; no manual session start at all.
   meeting is active, it re-arms `_manual_copilot_active` BEFORE computing
   `meeting_state`, so the reconcile reply is `{active: true, meeting_id: "manual"}`
   and `_reconcile` adopts instead of killing. This covers both restart
-  permutations (bridge-only, and bridge+frontend via `./recog-service.sh restart`)
-  without persistence and without any frontend-side flag — the frontend keeps
-  NO manual state. Defense-in-depth guard: the bridge REJECTS
+  permutations without persistence and without any frontend-side flag — the
+  frontend keeps NO manual state: a bridge-only restart recovers via the hello
+  re-arm above, and a full `./recog-service.sh restart` (supervisor included)
+  recovers because the manual session carries its kind in its tmux session
+  name (`copilot-manual` vs the meeting-driven `copilot`, DW-9) — the fresh
+  supervisor probes the manual name at startup, re-adopts a live one as
+  RUNNING("manual"), and its hello again reports `"manual"` (both names alive
+  → conference wins, the stale manual session is killed).
+  Defense-in-depth guard: the bridge REJECTS
   `copilot_spawn_request` while a conference meeting is active
   (`_is_meeting_active()` true) — not forwarded, flag untouched, reply
   `copilot_status {status: "conference_active", request_id}` to the originator —
@@ -396,15 +402,24 @@ extension chip.
 - `./recog-service.sh restart` + `./recog-service.sh restart-supervisor`
 - open `http://127.0.0.1:9080/#/live`, press "Recog Copilot", wait for 🟢
   (~6–10 s cold start), send a question, receive an answer; press Stop, verify
-  the tmux session (`tmux -L recog-copilot ls`) is gone after grace
+  the manual session (`copilot-manual` in `tmux -L recog-copilot ls`; meeting-
+  driven sessions are named `copilot`) is gone after grace
 - with a real conference: start a KTalk/Jitsi meeting during a manual session,
   verify preemption (session respawns bound to the meeting), verify the webapp
   shows "сессия переключена на конференцию", and that the extension panel still
   works unchanged
-- restart resilience (known gap): `./recog-service.sh restart` also restarts the
-  supervisor, so its fresh lifecycle cannot report the surviving manual binding
-  and the tmux session enters GRACE. Re-run this acceptance case after the
-  deferred lifecycle-id recovery is implemented.
+- restart resilience: `./recog-service.sh restart` also restarts the
+  supervisor; its fresh lifecycle re-adopts the surviving manual session by
+  probing the `copilot-manual` tmux name at startup (DW-9), so hello reports
+  `"manual"` and the session survives the full restart. Smoke: restart during
+  a live manual session, verify the chip returns 🟢 without a respawn and
+  `tmux -L recog-copilot ls` still lists `copilot-manual`, then send a chat
+  question and require a `copilot_reply` — the restart also restarts the
+  copilot-channel MCP daemon, so the round-trip proves the re-adopted session
+  is functional, not merely present.
+- stop reaps both session kinds: start a manual session, run
+  `./recog-service.sh stop`, verify `tmux -L recog-copilot ls` lists no
+  session (both `copilot` and `copilot-manual` gone).
 
 **Known v1 limitations** (documented, not tasks):
 - no proactive ticks in manual sessions (D4)
@@ -415,3 +430,6 @@ extension chip.
   `_manual_copilot_active` on conference `meeting_started`, but a supervisor
   with autospawn off ignores meeting frames — the `"manual"` tmux session
   lingers untracked by the bridge and is only killable via explicit Stop
+- a supervisor restart inside the 90 s grace window resurrects a manual
+  session the user explicitly stopped — the session still exists during
+  grace, and its existence is the marker (DW-9)
