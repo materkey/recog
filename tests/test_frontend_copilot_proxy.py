@@ -461,6 +461,34 @@ def test_endpoint_relays_to_live_subscriber(monkeypatch):
         assert subscriber.sent == [first, second]
 
 
+def test_given_manual_spawn_when_live_stream_disconnects_then_bridge_gets_no_stop(
+    monkeypatch,
+):
+    """given: a live-stream client wired to a recording bridge subscriber
+    when: the client sends a manual spawn frame (positive control proving
+          the recorder is wired) and then disconnects (F5 / tab close)
+    then: subscriber.sent holds only that frame — the server-side disconnect
+          path emitted nothing to the bridge (the browser half — app.js
+          having no unload-time stop sender — is not covered by this
+          test) (DW-14)
+    """
+    monkeypatch.setattr(server, "get_storage", lambda: FakeStorage())
+    subscriber = FakeSubscriber(send_result=True)
+    monkeypatch.setattr(server, "bridge_subscriber", subscriber)
+
+    frame = json.dumps({"type": "copilot_spawn_request", "request_id": "pre-f5"})
+
+    client = TestClient(server.app)
+    with client.websocket_connect("/api/live/stream") as ws:
+        assert json.loads(ws.receive_text())["type"] == "init"
+        ws.send_text(frame)
+
+    # Starlette's websocket_connect context exit joins the handler task, so
+    # the completed disconnect path is fully observable here — the assertion
+    # is deterministic, not racy.
+    assert subscriber.sent == [frame]
+
+
 def test_primer_delivered_after_active_meeting_init(monkeypatch):
     """given: an active meeting and a cached agent_state frame
     when: a new WS client connects to the live stream
