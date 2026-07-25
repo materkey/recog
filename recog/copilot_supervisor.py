@@ -180,6 +180,9 @@ class TmuxRunner:
     `run(args) -> (returncode, output)`.
     """
 
+    KILL_RETRIES = 3
+    KILL_RETRY_DELAY_S = 0.5
+
     def __init__(
         self,
         *,
@@ -246,8 +249,28 @@ class TmuxRunner:
         return True
 
     async def kill(self) -> None:
-        # Missing session is fine — kill is idempotent (D5: no graceful stop).
-        await self._run(self._tmux("kill-session", "-t", self.session_name))
+        """Kill the copilot session; a non-zero rc is verified against
+        `has-session` before retrying or raising (DW-12). A zero rc is
+        trusted as-is.
+
+        A non-zero rc with the session already gone stays a success — kill is
+        idempotent (D5: no graceful stop). A non-zero rc while `has-session`
+        still succeeds is retried up to KILL_RETRIES times and finally raised
+        as RuntimeError, so a failed kill surfaces in `_execute`'s per-command
+        error log instead of silently orphaning a live Copilot session.
+        """
+        rc, out = 0, ""
+        for attempt in range(self.KILL_RETRIES):
+            if attempt:
+                await asyncio.sleep(self.KILL_RETRY_DELAY_S)
+            rc, out = await self._run(
+                self._tmux("kill-session", "-t", self.session_name)
+            )
+            if rc == 0:
+                return
+            if not await self.alive():
+                return
+        raise RuntimeError(f"tmux kill-session failed (rc={rc}): {out.strip()}")
 
     async def alive(self) -> bool:
         rc, _ = await self._run(self._tmux("has-session", "-t", self.session_name))
@@ -367,13 +390,12 @@ class Watchdog:
             return
 
         observed = await self._observe()
-        if observed is AgentState.OFFLINE and self._spawn_in_flight():
-            # A spawn command is mid-flight: the tmux session has not been
-            # created yet (or is being replaced), so an OFFLINE observation is
-            # the expected pre-spawn gap, not a death. Treat it as SPAWNING so
-            # the chip does not flicker offline and no respawn budget is burned
-            # by a spurious session_died. A genuine post-spawn crash is caught
-            # once the flag clears (the session then really is gone).
+        if self._spawn_in_flight():
+            # A spawn command is queued or executing: any visible pane still
+            # belongs to the previous session (or to an incompletely-created
+            # replacement), so it cannot mark the replacement ready yet.
+            # Treat every observation as SPAWNING until the command settles;
+            # a genuine post-spawn state is observed once the flag clears.
             observed = AgentState.SPAWNING
         if observed in (AgentState.ONLINE, AgentState.WORKING):
             self.lifecycle.session_ready()
@@ -475,6 +497,12 @@ class Supervisor:
         # during that window the tmux session is transiently absent, so the
         # watchdog must not read OFFLINE as a death (see Watchdog.tick).
         self._spawn_in_flight = False
+        self._spawn_in_flight_count = 0
+        # Serialises command execution. `_grace_expire` holds it across its
+        # stale-Kill re-check + kill, so whichever of {grace-expiry Kill,
+        # frame-driven Spawn} acquires first fully settles before the other
+        # observes the world (DW-10). Loop-agnostic on Python 3.12.
+        self._execute_lock = asyncio.Lock()
         if runner is not None and all(
             hasattr(runner, name) for name in ("alive", "capture", "send_keys")
         ):
@@ -587,29 +615,40 @@ class Supervisor:
         await self._execute(commands)
 
     async def _execute(self, commands: tuple) -> None:
-        # Mark the whole spawn (plus any preceding kill on a back-to-back
-        # meeting switch) in-flight so a concurrent watchdog tick treats the
-        # transient session-absent gap as SPAWNING, not a death.
+        if not commands:
+            return
+        # Mark queued spawns before waiting for the lock: the lifecycle has
+        # already entered SPAWNING, so a watchdog tick must treat an OFFLINE
+        # session as the expected replacement gap even while another command
+        # still owns the execution lock. A counter keeps overlapping callers
+        # from clearing the shared flag out from under each other.
         spawning = any(isinstance(command, Spawn) for command in commands)
         if spawning:
+            self._spawn_in_flight_count += 1
             self._spawn_in_flight = True
         try:
-            for command in commands:
-                try:
-                    if isinstance(command, Kill):
-                        if self.runner is not None:
-                            await self.runner.kill()
-                    elif isinstance(command, Spawn):
-                        if self.runner is not None:
-                            await self.runner.spawn(command.meeting_id)
-                except Exception as exc:
-                    print(
-                        f"{self._log_prefix} command {command!r} failed: {exc!r}",
-                        file=sys.stderr,
-                    )
+            async with self._execute_lock:
+                await self._execute_locked(commands)
         finally:
             if spawning:
-                self._spawn_in_flight = False
+                self._spawn_in_flight_count -= 1
+                self._spawn_in_flight = self._spawn_in_flight_count > 0
+
+    async def _execute_locked(self, commands: tuple) -> None:
+        # Callers must hold `_execute_lock`.
+        for command in commands:
+            try:
+                if isinstance(command, Kill):
+                    if self.runner is not None:
+                        await self.runner.kill()
+                elif isinstance(command, Spawn):
+                    if self.runner is not None:
+                        await self.runner.spawn(command.meeting_id)
+            except Exception as exc:
+                print(
+                    f"{self._log_prefix} command {command!r} failed: {exc!r}",
+                    file=sys.stderr,
+                )
 
     def _live_meeting_id(self) -> Optional[str]:
         """`supervisor_hello.current_meeting_id` (D5): the id of a session the
@@ -710,7 +749,15 @@ class Supervisor:
         await asyncio.sleep(self.grace_s)
         self._grace_task = None
         commands = self.lifecycle.timer_expired()
-        await self._execute(commands)
+        if not commands:
+            return
+        async with self._execute_lock:
+            # A frame-driven spawn/adopt may have claimed the still-live
+            # session while this task waited for the lock (state left IDLE);
+            # executing the queued Kill then would destroy it (DW-10).
+            if self.lifecycle.state is not State.IDLE:
+                return
+            await self._execute_locked(commands)
 
     # --- bridge connection (reconnect loop modelled on BridgeSubscriber) ---
 

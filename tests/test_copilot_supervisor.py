@@ -217,6 +217,216 @@ async def test_meeting_change_from_grace_kills_and_respawns():
     await sup.stop()
 
 
+async def test_stale_grace_kill_skipped_when_spawn_wins_race():
+    """given: a GRACE machine whose expired timer queued a Kill that is parked
+           on the execute lock (state already flipped to IDLE)
+    when: a meeting_started frame claims the still-live session before the
+          stale Kill acquires the lock
+    then: the Kill is skipped — the runner records zero kill() calls and the
+          session survives under the new meeting id (DW-10)
+    """
+    fake_tmux = FakeTmux(has_session=True)
+    sup = Supervisor(
+        runner=TmuxRunner(run=fake_tmux), grace_s=0.05, autospawn=True
+    )
+
+    sup.lifecycle.adopt("A")
+    await sup.handle_frame({"type": "meeting_ended", "meeting_id": "A"})
+    assert sup.lifecycle.state is State.GRACE
+    grace_task = sup._grace_task
+
+    async with sup._execute_lock:
+        # Grace expires while the lock is held elsewhere: timer_expired flips
+        # the machine to IDLE and the queued Kill parks on the lock.
+        for _ in range(100):
+            if sup.lifecycle.state is State.IDLE:
+                break
+            await asyncio.sleep(0.01)
+        assert sup.lifecycle.state is State.IDLE
+        # The frame takes the IDLE branch synchronously; its Spawn queues on
+        # the lock behind the parked stale Kill.
+        frame_task = asyncio.create_task(
+            sup.handle_frame({"type": "meeting_started", "meeting_id": "B"})
+        )
+        for _ in range(100):
+            if sup.lifecycle.state is State.SPAWNING:
+                break
+            await asyncio.sleep(0.01)
+        assert sup.lifecycle.state is State.SPAWNING
+
+    await asyncio.wait_for(frame_task, timeout=1.0)
+    await asyncio.wait_for(grace_task, timeout=1.0)
+
+    assert fake_tmux.subcommands() == ["has-session"]
+    assert fake_tmux.has_session is True  # B adopted the surviving session
+    assert sup.lifecycle.state is State.SPAWNING
+    assert sup.lifecycle.meeting_id == "B"
+    await sup.stop()
+
+
+async def test_stale_grace_kill_skipped_when_claim_reaches_running():
+    """given: the stale grace Kill is parked on the execute lock and a
+           meeting_started frame claimed the still-live session (IDLE branch)
+    when: the watchdog confirms the session up (SPAWNING → RUNNING) before
+          the parked Kill acquires the lock
+    then: the re-check still skips the Kill — the guard covers every
+          non-IDLE claim, not just SPAWNING (DW-10)
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=0.05, autospawn=True)
+
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "A"})
+    sup.lifecycle.session_ready()
+    await sup.handle_frame({"type": "meeting_ended", "meeting_id": "A"})
+    assert sup.lifecycle.state is State.GRACE
+    grace_task = sup._grace_task
+
+    async with sup._execute_lock:
+        for _ in range(100):
+            if sup.lifecycle.state is State.IDLE:
+                break
+            await asyncio.sleep(0.01)
+        assert sup.lifecycle.state is State.IDLE
+        frame_task = asyncio.create_task(
+            sup.handle_frame({"type": "meeting_started", "meeting_id": "B"})
+        )
+        for _ in range(100):
+            if sup.lifecycle.state is State.SPAWNING:
+                break
+            await asyncio.sleep(0.01)
+        assert sup.lifecycle.state is State.SPAWNING
+        # The watchdog confirms the claimed session before the Kill runs.
+        sup.lifecycle.session_ready()
+        assert sup.lifecycle.state is State.RUNNING
+
+    await asyncio.wait_for(frame_task, timeout=1.0)
+    await asyncio.wait_for(grace_task, timeout=1.0)
+
+    assert runner.kills == 0
+    assert runner.spawned == ["A", "B"]
+    assert sup.lifecycle.state is State.RUNNING
+    assert sup.lifecycle.meeting_id == "B"
+    await sup.stop()
+
+
+async def test_stale_grace_kill_skipped_when_claim_returns_to_grace():
+    """given: an expired grace Kill is parked on the execute lock and meeting
+           B claims the session, then ends before its queued Spawn runs
+    when: the old grace Kill acquires the lock with lifecycle back in GRACE
+    then: it is still skipped — only IDLE permits the queued Kill (DW-10)
+    """
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, grace_s=0.05, autospawn=True)
+
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "A"})
+    sup.lifecycle.session_ready()
+    await sup.handle_frame({"type": "meeting_ended", "meeting_id": "A"})
+    old_grace_task = sup._grace_task
+
+    async with sup._execute_lock:
+        for _ in range(100):
+            if sup.lifecycle.state is State.IDLE:
+                break
+            await asyncio.sleep(0.01)
+        assert sup.lifecycle.state is State.IDLE
+
+        frame_task = asyncio.create_task(
+            sup.handle_frame({"type": "meeting_started", "meeting_id": "B"})
+        )
+        for _ in range(100):
+            if sup.lifecycle.state is State.SPAWNING:
+                break
+            await asyncio.sleep(0.01)
+        assert sup.lifecycle.state is State.SPAWNING
+
+        end_task = asyncio.create_task(
+            sup.handle_frame({"type": "meeting_ended", "meeting_id": "B"})
+        )
+        for _ in range(100):
+            if sup.lifecycle.state is State.GRACE:
+                break
+            await asyncio.sleep(0.01)
+        assert sup.lifecycle.state is State.GRACE
+        new_grace_task = sup._grace_task
+        new_grace_task.cancel()
+        sup._grace_task = None
+
+    await asyncio.wait_for(frame_task, timeout=1.0)
+    await asyncio.wait_for(end_task, timeout=1.0)
+    await asyncio.wait_for(old_grace_task, timeout=1.0)
+    with pytest.raises(asyncio.CancelledError):
+        await new_grace_task
+
+    assert runner.kills == 0
+    assert runner.spawned == ["A", "B"]
+    assert sup.lifecycle.state is State.GRACE
+    assert sup.lifecycle.meeting_id == "B"
+    await sup.stop()
+
+
+async def test_spawn_waits_out_in_flight_grace_kill_then_fresh_session():
+    """given: the grace-expiry Kill holds the execute lock mid-kill
+    when: a meeting_started frame arrives while the kill is in flight
+    then: its spawn runs only after the kill completes and creates a fresh
+          session — never adopt-then-destroy (DW-10)
+    """
+    class BlockingSessionTmux(FakeTmux):
+        def __init__(self):
+            super().__init__(has_session=True)
+            self.kill_started = asyncio.Event()
+            self.release_kill = asyncio.Event()
+
+        async def __call__(self, args):
+            if args[3] == "kill-session":
+                self.calls.append(list(args))
+                self.has_session = False
+                self.kill_started.set()
+                await self.release_kill.wait()
+                return (0, "")
+            if args[3] == "new-session":
+                self.calls.append(list(args))
+                self.has_session = True
+                return (0, "")
+            return await super().__call__(args)
+
+    fake_tmux = BlockingSessionTmux()
+    sup = Supervisor(
+        runner=TmuxRunner(run=fake_tmux), grace_s=0.05, autospawn=True
+    )
+
+    sup.lifecycle.adopt("A")
+    await sup.handle_frame({"type": "meeting_ended", "meeting_id": "A"})
+    grace_task = sup._grace_task
+
+    await asyncio.wait_for(fake_tmux.kill_started.wait(), timeout=1.0)
+    frame_task = asyncio.create_task(
+        sup.handle_frame({"type": "meeting_started", "meeting_id": "B"})
+    )
+    for _ in range(100):
+        if sup.lifecycle.state is State.SPAWNING and sup._spawn_in_flight:
+            break
+        await asyncio.sleep(0.01)
+    assert sup.lifecycle.state is State.SPAWNING
+    assert sup._spawn_in_flight is True
+
+    await sup.watchdog.tick()
+    assert sup._respawn_attempts == 0
+    assert sup._respawn_task is None
+    assert "new-session" not in fake_tmux.subcommands()
+
+    fake_tmux.release_kill.set()
+    await asyncio.wait_for(frame_task, timeout=1.0)
+    await asyncio.wait_for(grace_task, timeout=1.0)
+
+    assert fake_tmux.subcommands().count("kill-session") == 1
+    assert fake_tmux.subcommands().count("new-session") == 1
+    assert fake_tmux.has_session is True
+    assert sup.lifecycle.state is State.SPAWNING
+    assert sup.lifecycle.meeting_id == "B"
+    assert sup._spawn_in_flight is False
+    await sup.stop()
+
+
 async def test_autospawn_off_meeting_frames_are_inert():
     """given: RECOG_COPILOT_AUTOSPAWN=0 (autospawn=False)
     when: conference lifecycle and meeting_state frames arrive
@@ -876,12 +1086,185 @@ async def test_spawn_raises_on_tmux_failure():
 
 
 async def test_kill_targets_named_session_and_ignores_missing():
+    """given: kill-session fails but has-session confirms the session is gone
+    when: kill() runs
+    then: it returns without raising and without retrying — kill stays
+          idempotent (rc != 0 with the session gone is a success)
+    """
     fake = FakeTmux()
     fake.responses["kill-session"] = (1, "no server running")
 
     await TmuxRunner(run=fake).kill()  # must not raise
 
-    assert fake.calls == [["tmux", "-L", "recog-copilot", "kill-session", "-t", "copilot"]]
+    assert fake.calls[0] == ["tmux", "-L", "recog-copilot", "kill-session", "-t", "copilot"]
+    assert fake.subcommands() == ["kill-session", "has-session"]  # probe, no retry
+
+
+class SequencedKillTmux(FakeTmux):
+    """FakeTmux whose kill-session responses are consumed in sequence."""
+
+    def __init__(self, kill_results, *, has_session=True, has_session_results=None):
+        super().__init__(has_session=has_session)
+        self.kill_results = list(kill_results)
+        self.has_session_results = (
+            list(has_session_results) if has_session_results is not None else None
+        )
+
+    async def __call__(self, args):
+        if args[3] == "kill-session" and self.kill_results:
+            self.calls.append(list(args))
+            return self.kill_results.pop(0)
+        if (
+            args[3] == "has-session"
+            and self.has_session_results is not None
+            and self.has_session_results
+        ):
+            self.calls.append(list(args))
+            has_session = self.has_session_results.pop(0)
+            return (0, "") if has_session else (1, "can't find session: copilot")
+        return await super().__call__(args)
+
+
+def test_kill_retry_policy_defaults_are_pinned():
+    """given: the production tmux kill retry policy
+    when: its class-level defaults are inspected
+    then: it remains three total attempts paced by half a second
+    """
+    assert TmuxRunner.KILL_RETRIES == 3
+    assert TmuxRunner.KILL_RETRY_DELAY_S == 0.5
+
+
+async def test_kill_retries_transient_failure_then_succeeds():
+    """given: the first kill-session fails while the session is still alive
+    when: kill() retries after the (zeroed) delay
+    then: the second attempt succeeds and nothing is raised
+    """
+    fake = SequencedKillTmux([(1, "server busy"), (0, "")])
+    runner = TmuxRunner(run=fake)
+    runner.KILL_RETRY_DELAY_S = 0.0
+
+    await runner.kill()  # must not raise
+
+    assert fake.subcommands() == ["kill-session", "has-session", "kill-session"]
+
+
+async def test_kill_stops_retrying_when_session_disappears_after_later_attempt():
+    """given: two failed kill attempts, with the session alive after the first
+           failure but gone after the second
+    when: kill() probes liveness after each failed attempt
+    then: it returns after the second probe without a third kill or an error
+    """
+    fake = SequencedKillTmux(
+        [(1, "busy"), (1, "already gone"), (1, "must not run")],
+        has_session_results=[True, False],
+    )
+    runner = TmuxRunner(run=fake)
+    runner.KILL_RETRY_DELAY_S = 0.0
+
+    await runner.kill()
+
+    assert fake.subcommands() == [
+        "kill-session",
+        "has-session",
+        "kill-session",
+        "has-session",
+    ]
+
+
+async def test_kill_persistent_failure_raises_after_bounded_retries():
+    """given: kill-session keeps failing while has-session still succeeds
+    when: kill() exhausts its bounded retry budget
+    then: RuntimeError surfaces with the rc and trimmed tmux output (DW-12 —
+          a live session must not be silently orphaned)
+    """
+    fake = SequencedKillTmux([(1, "cannot kill\n")] * 5)
+    runner = TmuxRunner(run=fake)
+    runner.KILL_RETRY_DELAY_S = 0.0
+
+    with pytest.raises(RuntimeError, match=r"kill-session failed \(rc=1\): cannot kill"):
+        await runner.kill()
+
+    assert fake.subcommands().count("kill-session") == TmuxRunner.KILL_RETRIES
+
+
+async def test_kill_retry_pacing_sleeps_only_between_attempts(monkeypatch):
+    """given: kill() paths with and without retries, with asyncio.sleep
+           replaced by a recorder (real KILL_RETRY_DELAY_S kept)
+    when: each path runs
+    then: no sleep on single-attempt success or the idempotent session-gone
+          path; exactly attempts-1 sleeps of KILL_RETRY_DELAY_S between
+          attempts on the retry and exhaustion paths
+    """
+    import recog.copilot_supervisor as sup_mod
+
+    sleeps = []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(sup_mod.asyncio, "sleep", record_sleep)
+
+    await TmuxRunner(run=SequencedKillTmux([(0, "")])).kill()
+    assert sleeps == []  # first-attempt success: no pacing
+
+    await TmuxRunner(
+        run=SequencedKillTmux([(1, "gone")], has_session=False)
+    ).kill()
+    assert sleeps == []  # idempotent session-gone: no retry, no sleep
+
+    await TmuxRunner(run=SequencedKillTmux([(1, "busy"), (1, "busy"), (0, "")])).kill()
+    assert sleeps == [TmuxRunner.KILL_RETRY_DELAY_S] * 2  # between attempts only
+
+    sleeps.clear()
+    with pytest.raises(RuntimeError):
+        await TmuxRunner(run=SequencedKillTmux([(1, "stuck")] * 5)).kill()
+    assert sleeps == [TmuxRunner.KILL_RETRY_DELAY_S] * (TmuxRunner.KILL_RETRIES - 1)
+
+
+async def test_execute_logs_persistent_kill_failure_without_crashing(capsys):
+    """given: a runner whose kill() raises after exhausted retries
+    when: a Kill command is routed through _execute
+    then: the per-command error path prints the failure and the supervisor
+          does not crash
+    """
+    class FailingKillRunner(FakeRunner):
+        async def kill(self):
+            raise RuntimeError("tmux kill-session failed (rc=1): boom")
+
+    sup = Supervisor(runner=FailingKillRunner())
+
+    await sup._execute((Kill(),))  # must not raise
+
+    error = capsys.readouterr().err
+    assert "command Kill() failed" in error
+    assert "rc=1" in error
+    assert "boom" in error
+
+
+async def test_grace_expiry_surfaces_exhausted_tmux_kill_and_stays_idle(capsys):
+    """given: a GRACE session whose real TmuxRunner exhausts all kill retries
+           while has-session keeps confirming the session is alive
+    when: the grace timer expires
+    then: the composite supervisor path logs the tmux diagnostic, performs
+          the bounded attempts, and leaves lifecycle IDLE without crashing
+    """
+    fake = SequencedKillTmux([(1, "still alive")] * 5, has_session=True)
+    runner = TmuxRunner(run=fake)
+    runner.KILL_RETRY_DELAY_S = 0.0
+    sup = Supervisor(runner=runner, grace_s=0.0, autospawn=True)
+    sup.lifecycle.adopt("A")
+
+    await sup.handle_frame({"type": "meeting_ended", "meeting_id": "A"})
+    grace_task = sup._grace_task
+    await asyncio.wait_for(grace_task, timeout=1.0)
+
+    error = capsys.readouterr().err
+    assert "command Kill() failed" in error
+    assert "rc=1" in error
+    assert "still alive" in error
+    assert fake.subcommands().count("kill-session") == TmuxRunner.KILL_RETRIES
+    assert sup.lifecycle.state is State.IDLE
+    await sup.stop()
 
 
 async def test_alive_reflects_has_session():
@@ -1255,6 +1638,32 @@ async def test_watchdog_offline_during_spawn_is_not_death():
     assert lifecycle.state is State.SPAWNING
 
 
+async def test_watchdog_live_pane_during_spawn_does_not_mark_replacement_ready():
+    """given: a replacement Spawn is queued while the old pane is still online
+    when: the watchdog ticks before and after the Spawn command settles
+    then: it stays SPAWNING until settlement and only then marks the session ready
+    """
+    spawn_in_flight = True
+    runner = WatchdogRunner(alive=True, screen=REPL_PROMPT_SCREEN)
+    watchdog, lifecycle, statuses, died = _make_watchdog(
+        runner,
+        state=State.SPAWNING,
+        spawn_in_flight=lambda: spawn_in_flight,
+    )
+
+    await watchdog.tick()
+
+    assert statuses == [AgentState.SPAWNING]
+    assert lifecycle.state is State.SPAWNING
+    assert died == []
+
+    spawn_in_flight = False
+    await watchdog.tick()
+
+    assert statuses[-1] is AgentState.ONLINE
+    assert lifecycle.state is State.RUNNING
+
+
 async def test_watchdog_offline_after_spawn_completes_is_death():
     """given: no spawn is in-flight (the session should be up) but the pane is gone
     when: the watchdog ticks
@@ -1339,6 +1748,54 @@ async def test_execute_marks_spawn_in_flight_during_spawn():
     finally:
         release.set()
         await task
+    assert sup._spawn_in_flight is False
+
+
+async def test_execute_empty_commands_does_not_wait_for_lock():
+    """given: another command owns the execution lock
+    when: a no-op lifecycle event emits an empty command tuple
+    then: _execute returns without waiting for unrelated tmux I/O
+    """
+    sup = Supervisor(runner=FakeRunner())
+
+    async with sup._execute_lock:
+        await asyncio.wait_for(sup._execute(()), timeout=0.1)
+
+
+async def test_execute_keeps_spawn_in_flight_set_across_queued_spawns():
+    """given: one Spawn is executing and a second Spawn is queued on the lock
+    when: the first finishes and the second begins
+    then: the shared watchdog flag stays true until both callers finish
+    """
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+
+    class TwoSpawnRunner(FakeRunner):
+        async def spawn(self, meeting_id):
+            await super().spawn(meeting_id)
+            if meeting_id == "A":
+                first_started.set()
+                await release_first.wait()
+            else:
+                second_started.set()
+                await release_second.wait()
+
+    sup = Supervisor(runner=TwoSpawnRunner())
+    first_task = asyncio.create_task(sup._execute((Spawn("A"),)))
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+    second_task = asyncio.create_task(sup._execute((Spawn("B"),)))
+    await asyncio.sleep(0)
+    assert sup._spawn_in_flight is True
+
+    release_first.set()
+    await asyncio.wait_for(second_started.wait(), timeout=1.0)
+    await asyncio.wait_for(first_task, timeout=1.0)
+    assert sup._spawn_in_flight is True
+
+    release_second.set()
+    await asyncio.wait_for(second_task, timeout=1.0)
     assert sup._spawn_in_flight is False
 
 
