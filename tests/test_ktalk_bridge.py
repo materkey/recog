@@ -1522,6 +1522,46 @@ async def test_copilot_chat_message_without_channel_returns_disconnected_status(
 
 
 @pytest.mark.asyncio
+async def test_given_no_channel_when_chat_sent_then_disconnected_echo_is_originator_only():
+    """
+    given: no channel clients; an extension client, a subscriber client and
+           a supervisor client are all registered
+    when:  a separate originator socket sends `copilot_chat_message`
+    then:  the originator alone receives the `channel_disconnected`
+           `copilot_status` echo (positive control); every other registered
+           client has `sent == []` — the echo must never widen to a
+           broadcast (DW-16)
+    """
+    bridge = KTalkBridge()
+    assert not bridge._copilot_channel_clients
+
+    ext = RecordingClient()
+    sub = RecordingClient()
+    sup = RecordingClient()
+    bridge._connected_clients.add(ext)
+    bridge._subscriber_clients.add(sub)
+    bridge._supervisor_clients.add(sup)
+
+    origin = RecordingClient()
+    await bridge._process_message(
+        {
+            "type": "copilot_chat_message",
+            "request_id": "req-orig-only",
+            "text": "сводка",
+        },
+        websocket=origin,
+    )
+
+    echoes = _copilot_frames(origin, "copilot_status", "channel_disconnected")
+    assert len(echoes) == 1
+    assert echoes[0]["request_id"] == "req-orig-only"
+    assert len(origin.sent) == 1
+    assert ext.sent == []
+    assert sub.sent == []
+    assert sup.sent == []
+
+
+@pytest.mark.asyncio
 async def test_copilot_chat_message_with_invalid_fields_is_ignored():
     """
     given: a registered Copilot channel client
@@ -2637,6 +2677,83 @@ async def test_meeting_join_resets_tick_state_and_meeting_leave_clears_it():
         "reason": "user_left",
     })
     assert bridge._copilot_tick_state is None
+
+
+@pytest.mark.asyncio
+async def test_given_manual_spawn_when_transcripts_arrive_then_tick_state_stays_unseeded():
+    """
+    given: a bridge with a registered supervisor, a channel client and no
+           active conference meeting
+    when:  a `copilot_spawn_request` arms the manual mirror (positive
+           control) and six `send_transcript` calls land — past the count
+           trigger
+    then:  `_copilot_tick_state` stays None and no `transcript_tick`
+           reaches the channel client — manual sessions get manual chat
+           only, never proactive ticks (DW-17, webapp plan D4)
+    """
+    bridge, sup, sub = _bridge_with_supervisor()
+    bridge._loop = asyncio.get_event_loop()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    origin = RecordingClient()
+    await bridge._process_message(
+        {"type": "copilot_spawn_request", "request_id": "req-manual-tick"},
+        websocket=origin,
+    )
+    # Positive control: the manual path actually ran and armed the mirror.
+    assert bridge._manual_copilot_active is True
+    assert bridge._copilot_tick_state is None
+
+    for sid in range(1, 7):
+        bridge.send_transcript("Alice", f"t{sid}", "10:00:00", segment_id=sid)
+    await asyncio.sleep(0.05)
+
+    # Positive control: the flood actually recorded — the negative below
+    # cannot pass vacuously if transcript recording ever breaks.
+    assert len(bridge._copilot_transcript_buffer) == 6
+    assert bridge._copilot_tick_state is None
+    assert _copilot_frames(channel_client, "transcript_tick") == []
+
+
+@pytest.mark.asyncio
+async def test_given_manual_hello_rearm_when_transcripts_arrive_then_tick_state_stays_unseeded():
+    """
+    given: a bridge with a channel client and no active conference meeting
+    when:  `supervisor_hello {current_meeting_id: "manual"}` re-arms the
+           manual mirror (positive control) and six `send_transcript`
+           calls land — past the count trigger
+    then:  `_copilot_tick_state` stays None and no `transcript_tick`
+           reaches the channel client — the hello re-arm path must not
+           seed proactive ticks either (DW-17, webapp plan D4)
+    """
+    bridge = KTalkBridge()
+    bridge._loop = asyncio.get_event_loop()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-1"))
+
+    channel_client = RecordingClient()
+    bridge._copilot_channel_clients.add(channel_client)
+
+    sup = RecordingClient()
+    await bridge._process_message(
+        {"type": "supervisor_hello", "current_meeting_id": "manual"},
+        websocket=sup,
+    )
+    # Positive control: the re-arm path actually ran and armed the mirror.
+    assert bridge._manual_copilot_active is True
+    assert bridge._copilot_tick_state is None
+
+    for sid in range(1, 7):
+        bridge.send_transcript("Alice", f"t{sid}", "10:00:00", segment_id=sid)
+    await asyncio.sleep(0.05)
+
+    # Positive control: the flood actually recorded — the negative below
+    # cannot pass vacuously if transcript recording ever breaks.
+    assert len(bridge._copilot_transcript_buffer) == 6
+    assert bridge._copilot_tick_state is None
+    assert _copilot_frames(channel_client, "transcript_tick") == []
 
 
 @pytest.mark.asyncio

@@ -941,6 +941,64 @@ async def test_supervisor_hello_reports_live_manual_session():
         await server.wait_closed()
 
 
+async def test_given_live_manual_session_when_hello_crosses_wire_then_bridge_rearms():
+    """given: a live manual session whose supervisor sends its hello over a
+           real websocket to a mock bridge that captures the raw frame
+    when: that captured frame (not a hand-built dict) is fed into a real
+          KTalkBridge._process_message
+    then: the bridge re-arms its manual mirror and replies with
+          meeting_state {active: true, meeting_id: "manual"} — a one-sided
+          rename of `current_meeting_id` in either module fails here because
+          the asserted bytes travelled from Supervisor.run() into the
+          bridge's real handler (DW-11)
+    """
+    from ktalk_bridge import KTalkBridge
+
+    received = []
+
+    async def handler(websocket):
+        try:
+            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            received.append(first)
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
+
+    server, port = await _start_mock_bridge(handler)
+    sup = Supervisor(f"ws://127.0.0.1:{port}", runner=FakeRunner(), autospawn=False)
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    sup.lifecycle.session_ready()
+    await sup.start()
+    try:
+        hello = await _collect_hello(received)
+    finally:
+        await sup.stop()
+        server.close()
+        await server.wait_closed()
+
+    class RecordingWebSocket:
+        """Minimal recording stub for the bridge side of the wire."""
+
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, message):
+            self.sent.append(message)
+
+    bridge = KTalkBridge()
+    stub = RecordingWebSocket()
+    await bridge._process_message(hello, websocket=stub)
+
+    assert bridge._manual_copilot_active is True
+    states = [
+        f for f in (json.loads(m) for m in stub.sent)
+        if f.get("type") == "meeting_state"
+    ]
+    assert len(states) == 1
+    assert states[0]["active"] is True
+    assert states[0]["meeting_id"] == MANUAL_MEETING_ID
+
+
 async def test_supervisor_hello_then_meeting_state_spawns():
     """given: a mock bridge that answers supervisor_hello with meeting_state
     when: the supervisor connects with no session and an active meeting exists
