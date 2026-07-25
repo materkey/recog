@@ -1,6 +1,9 @@
 """Tests for MeetingStorage JSONL schema + update_segments semantics (Task 10)."""
 import json
+import os
+import stat
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -403,3 +406,353 @@ def test_on_meeting_join_no_path_or_fragment_id_leaves_live_id_empty(tmp_path):
 
     meta = _read_meta(storage)
     assert not meta["conference"]["live_id"]
+
+
+# --- DW-7: _save_json atomicity (temp file + os.replace) ---
+
+
+def test_save_json_overwrites_existing_file_without_tmp_leftovers(tmp_path):
+    """
+    given: a target file that already contains old JSON
+    when: _save_json writes new data to the same path
+    then: the file contains exactly the new JSON and no *.tmp files remain
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    target.write_text(json.dumps({"old": True}), encoding="utf-8")
+
+    storage._save_json(target, {"new": "данные"})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"new": "данные"}
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_json_first_write_creates_target(tmp_path):
+    """
+    given: the target file does not exist yet
+    when: _save_json is called
+    then: the target is created with the new JSON and no *.tmp files remain
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+
+    storage._save_json(target, {"id": 1})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"id": 1}
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_json_preserves_format(tmp_path):
+    """
+    given: data with non-ASCII content
+    when: _save_json writes it
+    then: output matches json.dumps(..., ensure_ascii=False, indent=2) exactly
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    data = {"title": "Встреча", "nested": {"a": 1}}
+
+    storage._save_json(target, data)
+
+    expected = json.dumps(data, ensure_ascii=False, indent=2)
+    assert target.read_text(encoding="utf-8") == expected
+
+
+def test_save_json_concurrent_writers_use_unique_same_directory_temps(
+    tmp_path, monkeypatch
+):
+    """
+    given: two writers targeting the same existing JSON file
+    when: both reach os.replace concurrently
+    then: each uses a different temporary file in the target directory
+    """
+    import threading
+
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    target.write_text("{}", encoding="utf-8")
+    real_replace = os.replace
+    replace_barrier = threading.Barrier(2)
+    source_paths: list[Path] = []
+    source_lock = threading.Lock()
+    errors: list[BaseException] = []
+
+    def synchronized_replace(src, dst):
+        with source_lock:
+            source_paths.append(Path(src))
+        replace_barrier.wait(timeout=10)
+        real_replace(src, dst)
+
+    def writer(payload):
+        try:
+            storage._save_json(target, payload)
+        except BaseException as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+
+    monkeypatch.setattr("meeting_storage.os.replace", synchronized_replace)
+    threads = [
+        threading.Thread(target=writer, args=({"writer": 1},), daemon=True),
+        threading.Thread(target=writer, args=({"writer": 2},), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert all(not thread.is_alive() for thread in threads), "writer thread hung"
+    assert not errors
+    assert len(source_paths) == 2
+    assert len(set(source_paths)) == 2
+    assert all(source.parent == target.parent for source in source_paths)
+    assert json.loads(target.read_text(encoding="utf-8")) in (
+        {"writer": 1},
+        {"writer": 2},
+    )
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_json_failure_leaves_original_intact_and_no_tmp(tmp_path, monkeypatch):
+    """
+    given: a target file with valid old JSON and os.replace that raises
+    when: _save_json fails partway
+    then: the original content is untouched, no temp file remains,
+          and the exception propagates to the caller
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    old = {"still": "here"}
+    target.write_text(json.dumps(old, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def boom(src, dst):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("meeting_storage.os.replace", boom)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        storage._save_json(target, {"new": "data"})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == old
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_json_first_write_replace_failure_leaves_target_absent(
+    tmp_path, monkeypatch
+):
+    """
+    given: no target file and os.replace that raises
+    when: _save_json attempts the first write
+    then: the target stays absent, the temp is removed, and the error propagates
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+
+    def boom(src, dst):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("meeting_storage.os.replace", boom)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        storage._save_json(target, {"new": "data"})
+
+    assert not target.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_json_write_failure_leaves_original_intact_and_no_tmp(
+    tmp_path, monkeypatch
+):
+    """
+    given: an existing target and a temporary file whose write raises
+    when: _save_json fails before os.replace
+    then: the original survives, the temp is removed, and the error propagates
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    old = {"still": "here"}
+    target.write_text(json.dumps(old), encoding="utf-8")
+    real_fdopen = os.fdopen
+
+    class FailingWriter:
+        def __init__(self, file_obj):
+            self.file_obj = file_obj
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.file_obj.close()
+
+        def write(self, text):
+            raise OSError("simulated write failure")
+
+    def failing_fdopen(fd, *args, **kwargs):
+        return FailingWriter(real_fdopen(fd, *args, **kwargs))
+
+    monkeypatch.setattr("meeting_storage.os.fdopen", failing_fdopen)
+
+    with pytest.raises(OSError, match="simulated write failure"):
+        storage._save_json(target, {"new": "data"})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == old
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_json_concurrent_writer_reader_never_torn(tmp_path):
+    """
+    given: one thread looping _save_json on a path while another loops
+           json.loads(path.read_text())
+    when: they run for many iterations
+    then: every read parses valid JSON equal to one of the written payloads —
+          never empty/partial (mirrors _is_meeting_active never seeing a torn
+          meta.json) — and the reader demonstrably performed reads
+    """
+    import threading
+
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    payload_a = {"state": "a", "pad": "x" * 2048}
+    payload_b = {"state": "b", "pad": "y" * 2048}
+    storage._save_json(target, payload_a)
+
+    iterations = 300
+    errors: list[BaseException] = []
+    done = threading.Event()
+    start = threading.Barrier(2)
+    writer_active = threading.Event()
+    observed_overlap = threading.Event()
+    reads = 0
+
+    def writer():
+        try:
+            writer_active.set()
+            start.wait(timeout=10)
+            for i in range(iterations):
+                storage._save_json(
+                    target, payload_a if i % 2 == 0 else payload_b
+                )
+                time.sleep(0)  # yield so the reader interleaves
+        except BaseException as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+        finally:
+            writer_active.clear()
+            done.set()
+
+    def reader():
+        nonlocal reads
+        try:
+            start.wait(timeout=10)
+            while True:
+                data = json.loads(target.read_text(encoding="utf-8"))
+                assert data in (payload_a, payload_b)
+                reads += 1
+                if writer_active.is_set():
+                    observed_overlap.set()
+                if done.is_set():
+                    break
+        except BaseException as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=writer, daemon=True),
+        threading.Thread(target=reader, daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert all(not t.is_alive() for t in threads), "thread did not finish in time"
+    assert not errors, f"torn read or write failure: {errors!r}"
+    assert reads > 0, "reader performed no reads — test would be vacuous"
+    assert observed_overlap.is_set(), "reader never overlapped the active writer"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_json_preserves_existing_file_mode(tmp_path):
+    """
+    given: an existing target file chmod'ed to a non-default mode with sticky bit
+    when: _save_json overwrites it
+    then: the file keeps mode 0o1640 (old truncate-in-place preserved the
+          inode's permissions; the atomic rewrite must match)
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    target.write_text("{}", encoding="utf-8")
+    os.chmod(target, 0o1640)
+
+    storage._save_json(target, {"v": 2})
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o1640
+    assert json.loads(target.read_text(encoding="utf-8")) == {"v": 2}
+
+
+def test_save_json_restrictive_mode_protects_temp_before_write(
+    tmp_path, monkeypatch
+):
+    """
+    given: an existing target restricted to its owner
+    when: _save_json opens its temporary file for writing
+    then: the temporary file is already restricted before JSON is written
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    target.write_text("{}", encoding="utf-8")
+    os.chmod(target, 0o600)
+    real_fdopen = os.fdopen
+    observed_modes = []
+
+    def recording_fdopen(fd, *args, **kwargs):
+        observed_modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        return real_fdopen(fd, *args, **kwargs)
+
+    monkeypatch.setattr("meeting_storage.os.fdopen", recording_fdopen)
+
+    storage._save_json(target, {"private": True})
+
+    assert observed_modes == [0o600]
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_save_json_first_write_mode_matches_umask_default(tmp_path):
+    """
+    given: no existing target file
+    when: _save_json creates it under a controlled 0o027 umask
+    then: mode is 0o666 & ~umask — what the old path.write_text (open "w")
+          produced
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+
+    previous_umask = os.umask(0o027)
+    try:
+        storage._save_json(target, {"fresh": True})
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+
+def test_save_json_existing_target_stat_error_propagates(tmp_path, monkeypatch):
+    """
+    given: an existing target whose stat fails for a reason other than absence
+    when: _save_json tries to preserve its mode
+    then: the error propagates, the original survives, and the temp is removed
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    target = tmp_path / "meta.json"
+    old = {"still": "here"}
+    target.write_text(json.dumps(old), encoding="utf-8")
+    real_stat = os.stat
+
+    def failing_target_stat(path, *args, **kwargs):
+        if Path(path) == target:
+            raise PermissionError("simulated stat failure")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr("meeting_storage.os.stat", failing_target_stat)
+
+    with pytest.raises(PermissionError, match="simulated stat failure"):
+        storage._save_json(target, {"new": "data"})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == old
+    assert list(tmp_path.glob("*.tmp")) == []
