@@ -125,9 +125,9 @@ conference tab; no manual session start at all.
 
 - **unit tests**: pytest per task in the existing test files (see tasks)
 - **UI (app.js)**: the frontend SPA has no JS test infrastructure (no npm setup in
-  `frontend/`) — UI behavior is verified by the acceptance smoke in Task 7 and by
-  keeping all protocol logic server-side (already covered by pytest). Do not
-  introduce a JS test harness in this plan.
+  `frontend/`) — syntax is checked with `node --check`, and protocol logic stays
+  server-side under pytest. Browser behavior remains a post-completion manual
+  smoke; do not introduce a JS test harness in this plan.
 - **e2e**: `tests/e2e` exists but covers diarization, not the webapp — out of scope
 
 ## Progress Tracking
@@ -187,21 +187,21 @@ extension chip.
 - Modify: `ktalk_bridge.py`
 - Modify: `tests/test_ktalk_bridge.py`
 
-- [ ] write failing tests: a registered subscriber client receives `copilot_reply`
-      (from `copilot_channel_reply`) and every `copilot_status` variant —
-      per-request, `agent_state` chip, `channel_connected`,
-      `channel_disconnected`; extension clients still receive them too
-- [ ] add a `_broadcast_copilot_frame` helper (fan-out to `_connected_clients` +
+- [x] write failing tests: a registered subscriber client receives `copilot_reply`
+      (from `copilot_channel_reply`) and broadcast `copilot_status` variants
+      (`agent_state`, `channel_connected`, and the last-channel
+      `channel_disconnected`); extension clients still receive shared-audience
+      frames, while per-request rejection echoes stay originator-only
+- [x] add a `_broadcast_copilot_frame` helper (fan-out to `_connected_clients` +
       `_subscriber_clients`, snapshot under `self._lock` as `send_refine` does,
-      `ktalk_bridge.py:1009`) and route ALL copilot broadcast sites through it —
-      type-based, not per-site: `copilot_reply` ~`ktalk_bridge.py:2780`,
-      per-request `copilot_status` ~`:2825`, agent-state chip ~`:1264`,
-      `channel_connected` ~`:2619`, `channel_disconnected` on last channel-client
-      departure ~`:1847` (a hand-patched subset would leave the webapp blind to
-      channel-daemon death mid-session)
-- [ ] verify no other `_broadcast_message` call sites leak unrelated frames to
+      `ktalk_bridge.py:1009`) and route shared-audience Copilot broadcast sites
+      through it: `copilot_reply` ~`ktalk_bridge.py:2780`, agent-state chip
+      ~`:1264`, `channel_connected` ~`:2619`, `channel_disconnected` on last
+      channel-client departure ~`:1847` (a hand-patched subset would leave the
+      webapp blind to channel-daemon death mid-session)
+- [x] verify no other `_broadcast_message` call sites leak unrelated frames to
       subscribers (only copilot frames get the wider fan-out)
-- [ ] run tests - must pass before task 2
+- [x] run tests - must pass before task 2
 
 ### Task 2: Bridge relays manual spawn/stop and tracks manual session state
 
@@ -209,7 +209,7 @@ extension chip.
 - Modify: `ktalk_bridge.py`
 - Modify: `tests/test_ktalk_bridge.py`
 
-- [ ] write failing tests: `copilot_spawn_request` from a subscriber socket is
+- [x] write failing tests: `copilot_spawn_request` from a subscriber socket is
       forwarded to supervisor clients and sets the manual flag;
       `copilot_spawn_request` while a conference meeting is active
       (`_is_meeting_active()` true) is NOT forwarded, does NOT set the flag,
@@ -226,18 +226,20 @@ extension chip.
       the flag before `meeting_state` is computed (reply `active=True` — D5);
       spawn_request with no supervisor connected → `copilot_status
       {status: "supervisor_disconnected", request_id}` to the originator socket
-- [ ] add `_manual_copilot_active` state + handlers for the two new frame types in
+- [x] add `_manual_copilot_active` state + handlers for the two new frame types in
       `_process_message` (forward to `_supervisor_clients` like `_emit_lifecycle`
       does, `ktalk_bridge.py:1122`); reject spawn with `conference_active` while
-      `_is_meeting_active()` is true — never forward it to the supervisor
-- [ ] extend `_compute_meeting_state` (`ktalk_bridge.py:1163`) with the manual
+      `_is_meeting_active()` is true — never forward it when the conference is
+      already active; if it starts mid-relay, do not arm the manual flag and
+      return `conference_active` to the originator
+- [x] extend `_compute_meeting_state` (`ktalk_bridge.py:1163`) with the manual
       branch (conference meeting takes precedence over manual); re-arm the flag
       from `supervisor_hello.current_meeting_id` in the `supervisor_hello`
       handler BEFORE `_compute_meeting_state` runs (D5)
-- [ ] clear the manual flag inside the conference `meeting_started` emit path
+- [x] clear the manual flag inside the conference `meeting_started` emit path
       (preemption) and on `copilot_stop_request`; on preemption broadcast
       `copilot_status {status: "manual_preempted"}` to subscriber clients
-- [ ] extend the sessions-zero → offline merge eligibility to manual sessions:
+- [x] extend the sessions-zero → offline merge eligibility to manual sessions:
       add helper `_copilot_should_be_alive() -> bool` returning
       `_is_meeting_active() or _manual_copilot_active`, use it in
       `_update_sessions_zero_anchor` (`ktalk_bridge.py:1216`) and
@@ -247,7 +249,7 @@ extension chip.
       past the debounce → effective state `offline` (chip must not show 🟢 for
       a manual copilot whose Claude session never registered with
       copilot_channel)
-- [ ] manual chat must not inherit conference staleness semantics: in
+- [x] manual chat must not inherit conference staleness semantics: in
       `copilot_chat_message` (`ktalk_bridge.py:2650`), capture `meeting_id` as
       None when `_is_meeting_active()` is False (mic-only/orphan context) — the
       pending entry then records `""` (existing no-meeting escape hatch,
@@ -256,7 +258,7 @@ extension chip.
       rotates the orphan meeting mid-flight. Conference requests unaffected.
       Test: chat sent with no conference active, current meeting rotated before
       the reply arrives → reply is still broadcast (not dropped as stale)
-- [ ] run tests - must pass before task 3
+- [x] run tests - must pass before task 3
 
 ### Task 3: Supervisor handles manual spawn/stop; autospawn gate narrowed
 
@@ -264,7 +266,7 @@ extension chip.
 - Modify: `recog/copilot_supervisor.py`
 - Modify: `tests/test_copilot_supervisor.py`
 
-- [ ] write failing tests: `copilot_spawn_request` → `lifecycle.meeting_started("manual")`
+- [x] write failing tests: `copilot_spawn_request` → `lifecycle.meeting_started("manual")`
       → Spawn; repeated `copilot_spawn_request` with a live manual session is a
       no-op flap (idempotent same-id spawn — double-click safe);
       `copilot_stop_request` → `meeting_ended` →
@@ -273,22 +275,22 @@ extension chip.
       on reconnect adopts the live session (no kill); with `autospawn=False`
       manual frames still spawn but `meeting_started`/`meeting_state` remain
       inert; `session_died` respawns a manual session even with `autospawn=False`
-- [ ] update the existing `test_autospawn_off_is_noop`
+- [x] update the existing `test_autospawn_off_is_noop`
       (`tests/test_copilot_supervisor.py:219`) — it asserts ALL frames are no-ops
       under `autospawn=False`, which D3 changes; split it into
       meeting-frames-are-inert vs manual-frames-still-work
-- [ ] handle the two new frame types in `handle_frame` (`copilot_supervisor.py:480`)
-- [ ] move the `if not self.autospawn: return` gate from the top of `handle_frame`
+- [x] handle the two new frame types in `handle_frame` (`copilot_supervisor.py:480`)
+- [x] move the `if not self.autospawn: return` gate from the top of `handle_frame`
       into the `meeting_started` / `meeting_state` / `meeting_ended` branches (D3);
       manual stop must also work when autospawn is off
-- [ ] remove the `autospawn` early-return from `on_session_died`
+- [x] remove the `autospawn` early-return from `on_session_died`
       (`copilot_supervisor.py:605`) so a crashed manual session respawns (D3)
-- [ ] include `current_meeting_id` (the lifecycle's live session id or null) in
-      `supervisor_hello` (D5); test: supervisor reconnect during a live manual
-      session → bridge re-arms its flag → `meeting_state {active: true,
-      meeting_id: "manual"}` → adopt, no kill (covers `./recog-service.sh
-      restart` wiping the bridge mid-manual-session)
-- [ ] run tests - must pass before task 4
+- [x] include `current_meeting_id` (the id of a session the supervisor intends
+      to keep alive, or null in GRACE/IDLE) in `supervisor_hello` (D5); test:
+      supervisor reconnect during a live manual session → bridge re-arms its
+      flag → `meeting_state {active: true, meeting_id: "manual"}` → adopt, no
+      kill (covers a bridge-only restart wiping the bridge mid-manual-session)
+- [x] run tests - must pass before task 4
 
 ### Task 4: BridgeSubscriber becomes bidirectional
 
@@ -296,16 +298,16 @@ extension chip.
 - Modify: `frontend/bridge_subscriber.py`
 - Modify: `tests/test_bridge_subscriber.py`
 
-- [ ] write failing tests: forwards `copilot_reply` and `copilot_status` (in
+- [x] write failing tests: forwards `copilot_reply` and `copilot_status` (in
       addition to `transcript_refine`), still drops other types; `send(raw)`
       delivers to the connected bridge socket; `send` while disconnected returns
       False (or raises a typed error) without crashing the run loop
-- [ ] replace the single-type filter (`bridge_subscriber.py:167`) with a
+- [x] replace the single-type filter (`bridge_subscriber.py:167`) with a
       `FORWARD_TYPES` frozenset `{transcript_refine, copilot_reply, copilot_status}`
-- [ ] hold the current ws in an attribute; add `async def send(self, raw: str) -> bool`
+- [x] hold the current ws in an attribute; add `async def send(self, raw: str) -> bool`
       (best-effort: no queueing of stale chat messages across reconnects — a chat
       message typed while the bridge is down fails fast)
-- [ ] run tests - must pass before task 5
+- [x] run tests - must pass before task 5
 
 ### Task 5: Frontend server — inbound copilot frames over `/api/live/stream`
 
@@ -313,7 +315,7 @@ extension chip.
 - Modify: `frontend/server.py`
 - Create: `tests/test_frontend_copilot_proxy.py`
 
-- [ ] write failing tests (pure helpers + fake subscriber): inbound whitelist
+- [x] write failing tests (pure helpers + fake subscriber): inbound whitelist
       accepts the three copilot types and rejects others; accepted frames are
       passed to `bridge_subscriber.send`; send failure (bridge link down)
       produces a `copilot_status {status: "bridge_disconnected", request_id}`
@@ -321,17 +323,17 @@ extension chip.
       for spawn/stop); last `agent_state` is cached and delivered to a newly
       connected live-stream client. The server holds NO manual-session state —
       it is a pure relay (D5: recovery is supervisor_hello-driven, bridge-side)
-- [ ] extract inbound handling into a testable helper
+- [x] extract inbound handling into a testable helper
       `handle_client_frame(raw, subscriber, reply_cb)` and call it from the
       `/api/live/stream` receive loop (`frontend/server.py:1420`)
-- [ ] note: NO `_forward_bridge_message` change needed — it already broadcasts
+- [x] note: NO `_forward_bridge_message` change needed — it already broadcasts
       every forwarded frame unconditionally (`frontend/server.py:453`); widening
       `FORWARD_TYPES` in Task 4 is sufficient for bridge→webapp fan-out
-- [ ] agent-state primer: cache the last `copilot_status {status: "agent_state"}`
+- [x] agent-state primer: cache the last `copilot_status {status: "agent_state"}`
       seen from the bridge and send it right after `init` on each new
       `/api/live/stream` connection (a browser opening `#/live` mid-session must
       not show ⚫ until the next state change)
-- [ ] run tests + `python -m compileall recog frontend` - must pass before task 6
+- [x] run tests + `python -m compileall recog frontend` - must pass before task 6
 
 ### Task 6: Webapp UI — Copilot button, status chip, chat panel
 
@@ -340,52 +342,53 @@ extension chip.
 - Modify: `frontend/static/index.html`
 - Modify: `frontend/static/style.css` (or the stylesheet used by the live view)
 
-- [ ] add a "Recog Copilot" button with status chip to the live view; chip driven
+- [x] add a "Recog Copilot" button with status chip to the live view; chip driven
       by `copilot_status {status: "agent_state"}` frames (⚫ offline default)
-- [ ] click on ⚫/idle → send `copilot_spawn_request {request_id}` and open the
+- [x] click on ⚫/idle → send `copilot_spawn_request {request_id}` and open the
       chat panel; Stop control sends `copilot_stop_request {request_id}` and
       shows "останавливается…" — the session dies only after the supervisor's
       90 s GRACE, so the UI must not claim "stopped" until the chip goes ⚫; a
       failed stop (`bridge_disconnected`/`supervisor_disconnected` echo) shows
       the error with a retry affordance; while `spawning` show "запускается…"
       and disable the input
-- [ ] chat panel: message list, input, per-`request_id` pending state, statuses
+- [x] chat panel: message list, input, per-`request_id` pending state, statuses
       (`queued/working/error/done/channel_disconnected/bridge_disconnected/
       supervisor_disconnected/conference_active/manual_preempted` — the last
       two render as info lines: "занято конференцией" / "сессия переключена на
       конференцию"), assistant replies rendered via existing
       `renderMarkdown` (`app.js:1869`) — behavior mirrors the extension panel
       (`ui-copilot-panel.test.js` is the behavioral spec)
-- [ ] build `transcript_window` from the last ≤15 segments in `views.live` state,
+- [x] build `transcript_window` from the last ≤15 segments in `views.live` state,
       shape as `ws_api.js:73`; include `meeting_title` when a meeting is active
-- [ ] new `case` branches in `handleMessage` (`app.js:675`) for `copilot_reply` /
+- [x] new `case` branches in `handleMessage` (`app.js:675`) for `copilot_reply` /
       `copilot_status`; unknown `request_id` replies (e.g. authored from the
       extension) are appended, not dropped
-- [ ] verify: `python -m compileall recog frontend` passes; full pytest suite
-      passes (UI has no JS test infra — covered by Task 7 smoke)
+- [x] verify: `python -m compileall recog frontend` and
+      `node --check frontend/static/app.js` pass; full pytest suite passes
 
 ### Task 7: Verify acceptance criteria
 
-- [ ] all Overview requirements implemented (manual spawn, chat, Stop, chip)
-- [ ] edge cases handled: no supervisor / no channel client / bridge down;
+- [x] all Overview requirements implemented (manual spawn, chat, Stop, chip)
+- [x] automated edge cases handled: no supervisor / no channel client / bridge down;
       conference preemption of a manual session; `copilot_spawn_request` during
       an active conference is rejected (`conference_active`) and can never kill
       the conference-bound session; supervisor reconnect adopts a manual
-      session; `./recog-service.sh restart` (bridge+frontend) mid-manual-session
-      → session survives via `supervisor_hello.current_meeting_id` re-arm; F5
-      of the tab does not kill the session; manual chat reply survives an
-      orphan-meeting silence-split rotation mid-flight
-- [ ] run full test suite: `python -m pytest tests/ -v`
-- [ ] `python -m compileall recog frontend`
-- [ ] smoke (see Post-Completion) executed and passing
+      session; a bridge-only restart while the supervisor stays alive re-arms via
+      `supervisor_hello.current_meeting_id`; F5 of the tab does not kill the
+      session; manual chat reply survives an orphan-meeting silence-split
+      rotation mid-flight
+- [x] run full test suite: `python -m pytest tests/ -v`
+- [x] `python -m compileall recog frontend`
+- [x] `node --check frontend/static/app.js`
+- ⚠️ smoke (see Post-Completion) — post-completion manual step, NOT attempted here: launchd restart, real-meeting preemption check, and restart-resilience check remain for a human
 
 ### Task 8: [Final] Update documentation
 
-- [ ] update `CLAUDE.md`: extend the copilot supervisor section with manual
+- [x] update `CLAUDE.md`: extend the copilot supervisor section with manual
       spawn frames + webapp chat, note D3/D4 semantics
-- [ ] update `openspec/specs/ktalk-copilot-chat/spec.md` if the team keeps specs
+- [x] update `openspec/specs/ktalk-copilot-chat/spec.md` if the team keeps specs
       in sync (new frames + subscriber fan-out)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
@@ -398,9 +401,10 @@ extension chip.
   verify preemption (session respawns bound to the meeting), verify the webapp
   shows "сессия переключена на конференцию", and that the extension panel still
   works unchanged
-- restart resilience: `./recog-service.sh restart` during a live manual session
-  → the tmux session survives (supervisor re-arms the bridge via
-  `supervisor_hello.current_meeting_id`), chat works again after reconnect
+- restart resilience (known gap): `./recog-service.sh restart` also restarts the
+  supervisor, so its fresh lifecycle cannot report the surviving manual binding
+  and the tmux session enters GRACE. Re-run this acceptance case after the
+  deferred lifecycle-id recovery is implemented.
 
 **Known v1 limitations** (documented, not tasks):
 - no proactive ticks in manual sessions (D4)

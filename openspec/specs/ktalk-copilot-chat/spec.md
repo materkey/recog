@@ -149,3 +149,88 @@ The system SHALL isolate Copilot failures from the existing transcription, refin
 - **WHEN** the Copilot feature flag is disabled or the channel server is not running
 - **THEN** existing KTalk transcription functionality behaves as before this change
 
+### Requirement: Copilot broadcast fan-out to subscriber clients
+The bridge SHALL send every broadcast Copilot frame (`copilot_reply` and the broadcast `copilot_status` variants — the `agent_state` chip, `channel_connected`, and the `channel_disconnected` broadcast on last channel-client departure) to registered subscriber clients in addition to extension clients, without widening the fan-out of any non-Copilot frame. Per-request rejection echoes (`conference_active`, `supervisor_disconnected`, and the no-channel `channel_disconnected` chat echo) stay targeted at the originating socket; `manual_preempted` goes to subscriber clients only.
+
+#### Scenario: Subscriber receives Copilot frames
+- **WHEN** the bridge broadcasts a `copilot_reply` or a broadcast `copilot_status` frame
+- **THEN** registered subscriber clients receive the frame
+- **AND** connected extension clients still receive shared-audience frames unchanged; subscriber-only `manual_preempted` is not widened
+
+#### Scenario: Non-Copilot frames keep their original audience
+- **WHEN** the bridge broadcasts a non-Copilot frame intended for extension clients
+- **THEN** subscriber clients do not receive it through the Copilot fan-out
+
+### Requirement: Manual Copilot session lifecycle
+The system SHALL let a user spawn and stop a Copilot session manually via `copilot_spawn_request` / `copilot_stop_request` frames carrying a client-generated `request_id`, relayed by the bridge to supervisor clients; the supervisor maps them onto the constant synthetic lifecycle id `manual`.
+
+#### Scenario: Manual spawn request
+- **WHEN** the bridge receives `copilot_spawn_request` from a subscriber client while no conference meeting is active and a supervisor client is connected
+- **THEN** the bridge forwards the frame to supervisor clients, and arms its manual-session flag only after successful delivery with no conference having started mid-relay
+- **AND** the supervisor drives `meeting_started("manual")` → spawn, treating a repeated spawn with a live manual session as an idempotent same-id flap (an explicit spawn also resets the respawn backoff budget when no retry is pending, reviving a session parked after exhausted respawn attempts)
+
+#### Scenario: Manual stop request
+- **WHEN** the bridge receives `copilot_stop_request` while a manual session is live
+- **THEN** the bridge clears its manual-session flag and forwards the frame to supervisor clients
+- **AND** the supervisor treats it as `meeting_ended("manual")`, killing the session after the grace period
+
+#### Scenario: Stop during a conference session is inert
+- **WHEN** `copilot_stop_request` arrives while the live session is bound to a conference meeting
+- **THEN** the bridge still clears its manual-session flag and relays the frame
+- **AND** the supervisor's `meeting_ended("manual")` no-ops on the mismatched lifecycle id — a webapp Stop can never kill a conference-bound session
+
+#### Scenario: Supervisor unavailable
+- **WHEN** a `copilot_spawn_request` or `copilot_stop_request` arrives with no supervisor client connected
+- **THEN** the bridge replies `copilot_status {status: "supervisor_disconnected", request_id}` to the originating socket
+- **AND** a stop request still clears the manual-session flag
+
+#### Scenario: Autospawn flag does not gate manual frames
+- **WHEN** `RECOG_COPILOT_AUTOSPAWN=0` is set
+- **THEN** meeting-driven frames remain inert for the supervisor
+- **AND** manual spawn/stop and crash-respawn of a manual session still work
+
+### Requirement: Conference precedence over manual sessions
+Conference meetings SHALL take routing precedence over manual Copilot sessions: a manual spawn during an active conference is rejected, and, while meeting-driven autospawn is enabled, a conference start preempts a live manual session with a user-visible notice.
+
+#### Scenario: Spawn rejected during an active conference
+- **WHEN** `copilot_spawn_request` arrives while a conference meeting is already active
+- **THEN** the bridge does not forward the frame to the supervisor and leaves the manual-session flag untouched
+- **AND** replies `copilot_status {status: "conference_active", request_id}` to the originating socket
+- **AND** if a conference starts mid-relay instead, the frame may already have been delivered, but the manual-session flag is not armed and the originator still receives `conference_active`
+
+#### Scenario: Conference start preempts a manual session
+- **WHEN** a conference `meeting_started` is emitted while the manual-session flag is armed and meeting-driven autospawn is enabled
+- **THEN** the bridge clears the manual-session flag
+- **AND** broadcasts `copilot_status {status: "manual_preempted"}` to subscriber clients
+
+#### Scenario: Conference starts while autospawn is disabled
+- **WHEN** a conference `meeting_started` is emitted while the manual-session flag is armed and `RECOG_COPILOT_AUTOSPAWN=0`
+- **THEN** the bridge clears the manual-session flag and broadcasts `copilot_status {status: "manual_preempted"}` to subscriber clients
+- **AND** the supervisor ignores the meeting frame, so the existing `manual` tmux session may linger until an explicit Stop
+
+### Requirement: Manual session recovery via supervisor hello
+`supervisor_hello` SHALL carry a `current_meeting_id` field — the id of a session the supervisor intends to keep alive (SPAWNING/RUNNING); GRACE and IDLE report null — so a restarted bridge can re-learn a live manual session without a reconnect inside the grace window defeating Stop.
+
+#### Scenario: Bridge restart re-arms the manual flag
+- **WHEN** the bridge receives `supervisor_hello` with `current_meeting_id == "manual"` and no conference meeting is active
+- **THEN** the bridge re-arms its manual-session flag before computing `meeting_state`
+- **AND** replies `meeting_state {active: true, meeting_id: "manual"}` so the supervisor reconcile adopts the live session instead of killing it
+
+### Requirement: Webapp Copilot proxy over the live stream
+The frontend server SHALL relay Copilot traffic both ways over `/api/live/stream`: inbound frames restricted to a whitelist of `copilot_chat_message`, `copilot_spawn_request`, and `copilot_stop_request` sent to the bridge via the subscriber's best-effort send, and bridge Copilot frames (`copilot_reply` / `copilot_status`, alongside `transcript_refine`) fanned out to all connected live-stream clients.
+
+#### Scenario: Whitelisted inbound frame is relayed
+- **WHEN** a browser sends one of the three whitelisted Copilot frame types over `/api/live/stream`
+- **THEN** the server relays the frame to the bridge through the subscriber
+
+#### Scenario: Non-whitelisted inbound frame is dropped
+- **WHEN** a client sends a non-whitelisted frame type over `/api/live/stream`
+- **THEN** the server drops the frame with a log
+
+#### Scenario: Bridge link is down
+- **WHEN** a whitelisted inbound frame arrives while the bridge subscriber is disconnected or the send fails
+- **THEN** the server replies `copilot_status {status: "bridge_disconnected", request_id}` to the originating client only
+
+#### Scenario: Agent-state primer on connect
+- **WHEN** a new client connects to `/api/live/stream` and a last `agent_state` Copilot status has been cached
+- **THEN** the server delivers the cached `copilot_status {status: "agent_state", agent_state: "spawning"|"online"|"working"|"blocked"|"offline"}` frame right after `init`
