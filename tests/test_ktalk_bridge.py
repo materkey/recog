@@ -12,6 +12,7 @@ from unittest.mock import Mock, AsyncMock, patch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import ktalk_bridge
 from ktalk_bridge import KTalkBridge, Participant, PcmChunk
 from recog.ai_provider import DEFAULT_CODEX_MODEL
 
@@ -3885,6 +3886,620 @@ async def test_non_copilot_frame_is_not_fanned_out_to_subscriber():
     assert len(ext.sent) == 1
     assert json.loads(ext.sent[0])["type"] == "transcript_history"
     assert sub.sent == []
+
+
+# --- bounded fan-out sends (DW-6) ---
+
+
+class StalledClient:
+    """Fake WS client whose `send` never returns; records scheduled closes."""
+
+    def __init__(self):
+        self.close_calls = 0
+        self.send_started = asyncio.Event()
+
+    async def send(self, message: str):
+        self.send_started.set()
+        await asyncio.sleep(3600)
+
+    async def close(self):
+        self.close_calls += 1
+
+
+class StalledClientWithoutClose:
+    """Stalled fake without a `close` attribute (helper must tolerate it)."""
+
+    async def send(self, message: str):
+        await asyncio.sleep(3600)
+
+
+class HandlerStalledClient(ControllableFakeWebSocket):
+    """Handler-owned socket whose outbound sends and close can be stalled."""
+
+    def __init__(self):
+        super().__init__()
+        self.sent: list[str] = []
+        self.stall_sends = False
+        self.close_calls = 0
+        self.close_started = asyncio.Event()
+        self.allow_close = asyncio.Event()
+
+    async def send(self, message: str):
+        if self.stall_sends:
+            await asyncio.sleep(3600)
+        self.sent.append(message)
+
+    async def close(self):
+        self.close_calls += 1
+        self.close_started.set()
+        await self.allow_close.wait()
+        self.signal_close()
+
+
+class StalledClientWithFailingClose(StalledClient):
+    """Stalled socket whose asynchronous close fails."""
+
+    async def close(self):
+        self.close_calls += 1
+        raise RuntimeError("close failed")
+
+
+class SendBarrier:
+    """Coordinate several sends so a test can prove concurrent entry."""
+
+    def __init__(self, expected: int):
+        self.expected = expected
+        self.started = 0
+        self.all_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+
+class BarrierStalledClient:
+    """Send blocks at a shared barrier until every peer entered concurrently."""
+
+    def __init__(self, barrier: SendBarrier):
+        self.barrier = barrier
+
+    async def send(self, message: str):
+        self.barrier.started += 1
+        if self.barrier.started == self.barrier.expected:
+            self.barrier.all_started.set()
+        await self.barrier.release.wait()
+
+    async def close(self):
+        pass
+
+
+async def _await_timeout_scenario(awaitable):
+    """Fail a bounded-send regression promptly instead of hanging for an hour."""
+    return await asyncio.wait_for(awaitable, timeout=2.0)
+
+
+def test_given_default_configuration_when_bridge_sends_then_timeout_is_five_seconds():
+    assert ktalk_bridge.BROADCAST_SEND_TIMEOUT_S == 5.0
+
+
+@pytest.mark.asyncio
+async def test_stalled_socket_does_not_block_copilot_fan_out(monkeypatch):
+    """
+    given: one stalled client (send never returns) in `_connected_clients`
+           and one healthy subscriber, with a 0.1 s send timeout
+    when:  a copilot frame is broadcast
+    then:  the healthy subscriber still receives the frame and the broadcast
+           returns in roughly one timeout instead of hanging
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    stalled = StalledClient()
+    healthy = RecordingClient()
+    bridge._connected_clients.add(stalled)
+    bridge._subscriber_clients.add(healthy)
+
+    start = time.monotonic()
+    await _await_timeout_scenario(
+        bridge._broadcast_copilot_frame({"type": "copilot_reply", "text": "hi"})
+    )
+    elapsed = time.monotonic() - start
+
+    assert len(healthy.sent) == 1
+    assert json.loads(healthy.sent[0])["type"] == "copilot_reply"
+    # Loose bound: proves "not hung" (any value << 3600), tolerant of
+    # scheduler jitter on a loaded machine.
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_timed_out_client_gets_close_scheduled(monkeypatch):
+    """
+    given: a stalled client in `_connected_clients` with a 0.1 s send timeout
+    when:  a broadcast times out on that client
+    then:  a `close()` call has been scheduled on the stalled socket
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    stalled = StalledClient()
+    bridge._connected_clients.add(stalled)
+
+    await _await_timeout_scenario(
+        bridge._broadcast_message({"type": "transcript", "text": "x"})
+    )
+    # `close()` is scheduled via create_task, never awaited inline — poll
+    # with a deadline instead of one fixed sleep (load-tolerant).
+    deadline = time.monotonic() + 2.0
+    while stalled.close_calls == 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+
+    assert stalled.close_calls == 1
+    # Role membership stays intact until `_handle_client` reaps a real
+    # socket, but later broadcasts fail fast instead of re-paying the timeout.
+    assert stalled in bridge._connected_clients
+    assert stalled in bridge._timed_out_clients
+    start = time.monotonic()
+    await _await_timeout_scenario(
+        bridge._broadcast_message({"type": "transcript", "text": "again"})
+    )
+    assert time.monotonic() - start < 0.05
+    assert stalled.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_given_overlapping_timeouts_when_client_stalls_then_close_is_scheduled_once(
+    monkeypatch, capsys
+):
+    """
+    given: two broadcasts snapshot the same stalled socket before either times out
+    when:  both bounded sends hit the timeout concurrently
+    then:  the socket is logged and closed only once
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    stalled = StalledClient()
+    bridge._connected_clients.add(stalled)
+
+    await _await_timeout_scenario(
+        asyncio.gather(
+            bridge._broadcast_message({"type": "transcript", "text": "one"}),
+            bridge._broadcast_message({"type": "transcript", "text": "two"}),
+        )
+    )
+    deadline = time.monotonic() + 2.0
+    while stalled.close_calls == 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+
+    assert stalled.close_calls == 1
+    assert capsys.readouterr().err.count("Send timed out") == 1
+
+
+@pytest.mark.asyncio
+async def test_given_close_task_failure_when_timeout_fires_then_failure_is_retrieved(
+    monkeypatch, capsys
+):
+    """
+    given: a stalled socket whose asynchronous close raises
+    when:  a bounded send times out and schedules the close
+    then:  the task failure is retrieved and logged instead of leaking an
+           unhandled-task warning
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    stalled = StalledClientWithFailingClose()
+    bridge._connected_clients.add(stalled)
+
+    await _await_timeout_scenario(
+        bridge._broadcast_message({"type": "transcript", "text": "x"})
+    )
+    deadline = time.monotonic() + 2.0
+    while bridge._bg_close_tasks and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+
+    assert stalled.close_calls == 1
+    assert "Failed to close stalled client: close failed" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_given_handler_reaped_client_when_send_times_out_then_marker_is_not_readded(
+    monkeypatch
+):
+    """
+    given: a registered client whose handler removes it while its send is stalled
+    when:  the already-orphaned send reaches the timeout
+    then:  timeout bookkeeping does not retain or close the reaped socket again
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    stalled = StalledClient()
+    bridge._connected_clients.add(stalled)
+    send_task = asyncio.create_task(bridge._send_bounded(stalled, "frame"))
+    await asyncio.wait_for(stalled.send_started.wait(), timeout=1.0)
+
+    with bridge._lock:
+        bridge._connected_clients.discard(stalled)
+
+    assert await _await_timeout_scenario(send_task) is False
+    await asyncio.sleep(0)
+    assert stalled not in bridge._timed_out_clients
+    assert stalled.close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_given_timed_out_channel_when_handler_reaps_it_then_pending_requests_are_closed(
+    monkeypatch
+):
+    """
+    given: a handler-owned channel socket with an in-flight chat request
+    when:  its outbound send times out and the scheduled close completes
+    then:  handler role cleanup drops the request and broadcasts
+           `channel_disconnected`
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    extension = RecordingClient()
+    bridge._connected_clients.add(extension)
+    channel = HandlerStalledClient()
+    channel.add_message(json.dumps({"type": "copilot_channel_hello"}))
+    handler_task = asyncio.create_task(bridge._handle_client(channel))
+    for _ in range(50):
+        if channel in bridge._copilot_channel_clients:
+            break
+        await asyncio.sleep(0.01)
+    assert channel in bridge._copilot_channel_clients
+    extension.sent.clear()
+    bridge._copilot_pending_requests["req-timeout"] = "meeting-A"
+    channel.stall_sends = True
+
+    await _await_timeout_scenario(
+        bridge._broadcast_to_channel_clients(
+            {"type": "meeting_started", "meeting_id": "meeting-A"}
+        )
+    )
+    await asyncio.wait_for(channel.close_started.wait(), timeout=1.0)
+    assert channel in bridge._copilot_channel_clients
+    assert len(bridge._bg_close_tasks) == 1
+    close_task = next(iter(bridge._bg_close_tasks))
+    assert not close_task.done()
+    channel.allow_close.set()
+    await asyncio.wait_for(handler_task, timeout=1.0)
+    await asyncio.wait_for(asyncio.shield(close_task), timeout=1.0)
+    await asyncio.sleep(0)
+
+    assert "req-timeout" not in bridge._copilot_pending_requests
+    assert channel not in bridge._copilot_channel_clients
+    assert channel not in bridge._timed_out_clients
+    assert bridge._bg_close_tasks == set()
+    statuses = _copilot_frames(extension, "copilot_status", "channel_disconnected")
+    assert len(statuses) == 1
+
+
+@pytest.mark.asyncio
+async def test_given_timed_out_supervisor_when_handler_reaps_it_then_agent_goes_offline(
+    monkeypatch
+):
+    """
+    given: a handler-owned supervisor reporting `online`
+    when:  a lifecycle send times out and the scheduled close completes
+    then:  handler role cleanup clears its status and broadcasts `offline`
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    extension = RecordingClient()
+    bridge._connected_clients.add(extension)
+    supervisor = HandlerStalledClient()
+    supervisor.add_message(json.dumps({"type": "supervisor_hello"}))
+    handler_task = asyncio.create_task(bridge._handle_client(supervisor))
+    for _ in range(50):
+        if supervisor in bridge._supervisor_clients:
+            break
+        await asyncio.sleep(0.01)
+    assert supervisor in bridge._supervisor_clients
+    bridge._supervisor_agent_status = "online"
+    bridge._supervisor_status_ts = time.monotonic()
+    bridge._last_effective_agent_state = "online"
+    extension.sent.clear()
+    supervisor.stall_sends = True
+
+    await _await_timeout_scenario(
+        bridge._emit_lifecycle(
+            {"type": "meeting_started", "meeting_id": "meeting-A"}
+        )
+    )
+    await asyncio.wait_for(supervisor.close_started.wait(), timeout=1.0)
+    assert supervisor in bridge._supervisor_clients
+    supervisor.allow_close.set()
+    await asyncio.wait_for(handler_task, timeout=1.0)
+
+    assert bridge._supervisor_agent_status is None
+    assert supervisor not in bridge._supervisor_clients
+    assert supervisor not in bridge._timed_out_clients
+    assert _agent_states(extension) == ["offline"]
+
+
+@pytest.mark.asyncio
+async def test_given_timed_out_extension_when_close_is_pending_then_meeting_stays_active(
+    monkeypatch
+):
+    """
+    given: the only extension socket in an active conference meeting
+    when:  its outbound send times out but the fire-and-forget close is pending
+    then:  the meeting stays active until handler cleanup ends it
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="meeting-A")
+    bridge.set_meeting_storage(storage)
+    extension = HandlerStalledClient()
+    handler_task = asyncio.create_task(bridge._handle_client(extension))
+    for _ in range(50):
+        if extension in bridge._connected_clients:
+            break
+        await asyncio.sleep(0.01)
+    assert extension in bridge._connected_clients
+    extension.stall_sends = True
+
+    await _await_timeout_scenario(
+        bridge._broadcast_message(
+            {"type": "meeting_started", "meeting_id": "meeting-A"}
+        )
+    )
+    await asyncio.wait_for(extension.close_started.wait(), timeout=1.0)
+    assert bridge._is_meeting_active() is True
+    assert storage.on_ktalk_leave.call_count == 0
+    extension.allow_close.set()
+    await asyncio.wait_for(handler_task, timeout=1.0)
+
+    storage.on_ktalk_leave.assert_called_once_with("disconnected")
+
+
+@pytest.mark.asyncio
+async def test_stalled_sole_supervisor_relay_returns_false(monkeypatch):
+    """
+    given: a sole supervisor whose `send` hangs, with a 0.1 s send timeout
+    when:  a frame is relayed to supervisors
+    then:  `_relay_to_supervisors` returns False within roughly one timeout
+           (a timeout counts as not delivered)
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    bridge._supervisor_clients.add(StalledClient())
+
+    start = time.monotonic()
+    delivered = await _await_timeout_scenario(
+        bridge._relay_to_supervisors(
+            {"type": "copilot_stop_request", "request_id": "req-stalled"}
+        )
+    )
+    elapsed = time.monotonic() - start
+
+    assert delivered is False
+    # Loose bound: proves "not hung", tolerant of scheduler jitter.
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_given_stalled_supervisor_when_stop_is_requested_then_originator_is_rejected(
+    monkeypatch
+):
+    """
+    given: a sole supervisor whose send stalls and an originator websocket
+    when:  the originator requests a manual Copilot stop
+    then:  the outer protocol replies `supervisor_disconnected` with the same
+           request id instead of leaving the UI waiting
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    bridge._supervisor_clients.add(StalledClient())
+    bridge._manual_copilot_active = True
+    origin = RecordingClient()
+
+    await _await_timeout_scenario(
+        bridge._process_message(
+            {"type": "copilot_stop_request", "request_id": "req-stalled-stop"},
+            websocket=origin,
+        )
+    )
+
+    frames = _copilot_frames(origin, "copilot_status", "supervisor_disconnected")
+    assert len(frames) == 1
+    assert frames[0]["request_id"] == "req-stalled-stop"
+    assert bridge._manual_copilot_active is False
+
+
+@pytest.mark.asyncio
+async def test_stalled_plus_healthy_supervisor_relay_returns_true(monkeypatch):
+    """
+    given: one stalled and one healthy supervisor, with a 0.1 s send timeout
+    when:  a frame is relayed to supervisors
+    then:  `_relay_to_supervisors` returns True and the healthy supervisor
+           received the frame
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    healthy = RecordingClient()
+    bridge._supervisor_clients.add(StalledClient())
+    bridge._supervisor_clients.add(healthy)
+
+    delivered = await _await_timeout_scenario(
+        bridge._relay_to_supervisors(
+            {"type": "copilot_stop_request", "request_id": "req-mixed"}
+        )
+    )
+
+    assert delivered is True
+    assert len(healthy.sent) == 1
+    assert json.loads(healthy.sent[0])["request_id"] == "req-mixed"
+
+
+@pytest.mark.asyncio
+async def test_timed_out_client_without_close_does_not_raise(monkeypatch):
+    """
+    given: a stalled test fake without a `close` attribute plus a healthy
+           client, with a 0.1 s send timeout
+    when:  a broadcast times out on the fake
+    then:  no AttributeError escapes — the healthy client still receives
+           the frame
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    stalled = StalledClientWithoutClose()
+    healthy = RecordingClient()
+    bridge._connected_clients.add(stalled)
+    bridge._connected_clients.add(healthy)
+
+    await _await_timeout_scenario(
+        bridge._broadcast_message({"type": "transcript", "text": "x"})
+    )
+
+    assert len(healthy.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_stalled_channel_client_does_not_block_channel_broadcast(monkeypatch):
+    """
+    given: one stalled and one healthy Copilot channel client, with a 0.1 s
+           send timeout
+    when:  a frame is broadcast to channel clients
+    then:  the healthy channel client still receives it and the call
+           returns bounded instead of hanging
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    healthy = RecordingClient()
+    bridge._copilot_channel_clients.add(StalledClient())
+    bridge._copilot_channel_clients.add(healthy)
+
+    start = time.monotonic()
+    await _await_timeout_scenario(
+        bridge._broadcast_to_channel_clients(
+            {"type": "meeting_started", "meeting_id": "m-ch"}
+        )
+    )
+    elapsed = time.monotonic() - start
+
+    assert len(healthy.sent) == 1
+    assert json.loads(healthy.sent[0])["type"] == "meeting_started"
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_stalled_supervisor_does_not_block_lifecycle_emit(monkeypatch):
+    """
+    given: stalled and healthy supervisor clients plus a healthy extension,
+           with a 0.1 s send timeout
+    when:  a lifecycle frame is emitted via `_emit_lifecycle`
+    then:  both healthy recipients receive the frame and the supervisor
+           fan-out completes bounded instead of hanging on its stalled peer
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    ext = RecordingClient()
+    healthy_supervisor = RecordingClient()
+    bridge._connected_clients.add(ext)
+    bridge._supervisor_clients.add(StalledClient())
+    bridge._supervisor_clients.add(healthy_supervisor)
+
+    start = time.monotonic()
+    await _await_timeout_scenario(
+        bridge._emit_lifecycle({"type": "meeting_started", "meeting_id": "m-lc"})
+    )
+    elapsed = time.monotonic() - start
+
+    assert len(ext.sent) == 1
+    assert json.loads(ext.sent[0])["type"] == "meeting_started"
+    assert len(healthy_supervisor.sent) == 1
+    assert json.loads(healthy_supervisor.sent[0])["type"] == "meeting_started"
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_stalled_subscriber_does_not_block_manual_preempted_notice(monkeypatch):
+    """
+    given: one stalled and one healthy subscriber, an armed manual copilot
+           mirror, and a 0.1 s send timeout
+    when:  the manual session is preempted by a conference
+    then:  the healthy subscriber still receives the `manual_preempted`
+           status and the call returns bounded
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    healthy = RecordingClient()
+    bridge._subscriber_clients.add(StalledClient())
+    bridge._subscriber_clients.add(healthy)
+    bridge._manual_copilot_active = True
+
+    start = time.monotonic()
+    preempted = await _await_timeout_scenario(bridge._preempt_manual_copilot())
+    elapsed = time.monotonic() - start
+
+    assert preempted is True
+    assert len(healthy.sent) == 1
+    payload = json.loads(healthy.sent[0])
+    assert payload["type"] == "copilot_status"
+    assert payload["status"] == "manual_preempted"
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_stalled_channel_client_does_not_block_chat_forward(monkeypatch):
+    """
+    given: one stalled and one healthy Copilot channel client, with a 0.1 s
+           send timeout
+    when:  a `copilot_chat_message` frame is processed
+    then:  the healthy channel client still receives the forwarded
+           `copilot_user_message` and the handler returns bounded
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 0.1)
+    bridge = KTalkBridge()
+    healthy = RecordingClient()
+    bridge._copilot_channel_clients.add(StalledClient())
+    bridge._copilot_channel_clients.add(healthy)
+
+    start = time.monotonic()
+    await _await_timeout_scenario(
+        bridge._process_message(
+            {
+                "type": "copilot_chat_message",
+                "request_id": "req-chat-stall",
+                "text": "привет",
+            }
+        )
+    )
+    elapsed = time.monotonic() - start
+
+    assert len(healthy.sent) == 1
+    payload = json.loads(healthy.sent[0])
+    assert payload["type"] == "copilot_user_message"
+    assert payload["request_id"] == "req-chat-stall"
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_multiple_stalled_clients_time_out_concurrently(monkeypatch):
+    """
+    given: three stalled clients and one healthy client in
+           `_connected_clients`, coordinated behind one send barrier
+    when:  a frame is broadcast
+    then:  all three stalled sends enter before any is released and the
+           healthy client receives the frame (pins gather concurrency without
+           a scheduler-sensitive elapsed-time threshold)
+    """
+    monkeypatch.setattr(ktalk_bridge, "BROADCAST_SEND_TIMEOUT_S", 10.0)
+    bridge = KTalkBridge()
+    healthy = RecordingClient()
+    barrier = SendBarrier(expected=3)
+    for _ in range(3):
+        bridge._connected_clients.add(BarrierStalledClient(barrier))
+    bridge._connected_clients.add(healthy)
+
+    broadcast_task = asyncio.create_task(
+        bridge._broadcast_message({"type": "transcript", "text": "x"})
+    )
+    try:
+        await asyncio.wait_for(barrier.all_started.wait(), timeout=1.0)
+    finally:
+        barrier.release.set()
+        await _await_timeout_scenario(broadcast_task)
+
+    assert barrier.started == 3
+    assert len(healthy.sent) == 1
 
 
 # --- manual copilot session: spawn/stop relay + manual state (CAP-2/3/4) ---
