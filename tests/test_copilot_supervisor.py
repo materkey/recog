@@ -1,7 +1,9 @@
 """Tests for recog/copilot_supervisor.py — lifecycle state machine + bridge glue."""
 import asyncio
 import json
+import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from recog.copilot_supervisor import (
     DEFAULT_MCP_URL,
     MANUAL_MEETING_ID,
+    TMUX_SESSION,
+    TMUX_SESSION_MANUAL,
     AgentState,
     Kill,
     SessionLifecycle,
@@ -225,7 +229,7 @@ async def test_stale_grace_kill_skipped_when_spawn_wins_race():
     then: the Kill is skipped — the runner records zero kill() calls and the
           session survives under the new meeting id (DW-10)
     """
-    fake_tmux = FakeTmux(has_session=True)
+    fake_tmux = NameAwareTmux({TMUX_SESSION})
     sup = Supervisor(
         runner=TmuxRunner(run=fake_tmux), grace_s=0.05, autospawn=True
     )
@@ -257,8 +261,9 @@ async def test_stale_grace_kill_skipped_when_spawn_wins_race():
     await asyncio.wait_for(frame_task, timeout=1.0)
     await asyncio.wait_for(grace_task, timeout=1.0)
 
-    assert fake_tmux.subcommands() == ["has-session"]
-    assert fake_tmux.has_session is True  # B adopted the surviving session
+    assert fake_tmux.kill_targets() == []
+    assert "new-session" not in fake_tmux.subcommands()
+    assert TMUX_SESSION in fake_tmux.sessions  # B adopted the surviving session
     assert sup.lifecycle.state is State.SPAWNING
     assert sup.lifecycle.meeting_id == "B"
     await sup.stop()
@@ -1016,6 +1021,420 @@ async def test_supervisor_drops_malformed_frames():
 
 
 # ---------------------------------------------------------------------------
+# Startup manual-session re-adoption (DW-9): the tmux session name carries the
+# session kind (`copilot-manual` vs the meeting-driven `copilot`)
+# ---------------------------------------------------------------------------
+
+
+class NameAwareTmux(FakeTmux):
+    """FakeTmux tracking per-name session existence.
+
+    `has-session`/`kill-session` read the target after `-t`, `new-session`
+    after `-s` — so tests can distinguish the manual and default names.
+    """
+
+    def __init__(self, sessions=()):
+        super().__init__()
+        self.sessions = set(sessions)
+
+    @staticmethod
+    def _target(args, flag):
+        target = args[args.index(flag) + 1]
+        return target[1:] if target.startswith("=") else target
+
+    async def __call__(self, args):
+        self.calls.append(list(args))
+        sub = args[3]
+        if sub in self.responses:
+            return self.responses[sub]
+        if sub == "has-session":
+            name = self._target(args, "-t")
+            return (0, "") if name in self.sessions else (
+                1,
+                f"can't find session: {name}",
+            )
+        if sub == "new-session":
+            self.sessions.add(self._target(args, "-s"))
+            return (0, "")
+        if sub == "kill-session":
+            self.sessions.discard(self._target(args, "-t"))
+            return (0, "")
+        return (0, "")
+
+    def kill_targets(self):
+        return [
+            self._target(call, "-t") for call in self.calls
+            if call[3] == "kill-session"
+        ]
+
+    def new_session_names(self):
+        return [
+            self._target(call, "-s") for call in self.calls
+            if call[3] == "new-session"
+        ]
+
+
+async def test_startup_readopts_manual_named_session_and_hello_reports_manual():
+    """given: a live `copilot-manual` tmux session, no `copilot` session and
+           no conference meeting (full restart during a manual session)
+    when: the supervisor starts fresh and the bridge replies
+          meeting_state {active: true, meeting_id: "manual"}
+    then: hello carries current_meeting_id="manual", the runner is bound to
+          the manual name and zero kills / zero spawns are issued
+    """
+    received = []
+
+    async def handler(websocket):
+        try:
+            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            received.append(first)
+            await websocket.send(json.dumps({
+                "type": "meeting_state",
+                "active": True,
+                "meeting_id": MANUAL_MEETING_ID,
+            }))
+        except Exception:
+            pass
+        await asyncio.sleep(0.3)
+
+    fake = NameAwareTmux({TMUX_SESSION_MANUAL})
+    server, port = await _start_mock_bridge(handler)
+    sup = Supervisor(
+        f"ws://127.0.0.1:{port}",
+        runner=TmuxRunner(run=fake),
+        grace_s=10.0,
+        autospawn=True,
+    )
+    await sup.start()
+    try:
+        assert await _collect_hello(received) == {
+            "type": "supervisor_hello",
+            "current_meeting_id": MANUAL_MEETING_ID,
+        }
+        await asyncio.sleep(0.2)  # let the meeting_state reply be reconciled
+        assert sup.lifecycle.state is State.RUNNING
+        assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
+        assert sup.runner.session_name == TMUX_SESSION_MANUAL
+        assert fake.kill_targets() == []
+        assert fake.new_session_names() == []
+    finally:
+        await sup.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_startup_conference_named_session_survives_meeting_rejoin():
+    """given: a live `copilot` (conference-named) tmux session and no manual
+           one (full restart mid-conference)
+    when: the fresh supervisor connects, the bridge replies
+          meeting_state {active: false} and the extension later re-sends
+          meeting_started("A")
+    then: no startup adoption (hello None) and the session survives via the
+          adopt(None) wildcard branch — zero kills, zero spawns
+    """
+    received = []
+
+    async def handler(websocket):
+        try:
+            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            received.append(first)
+            await websocket.send(json.dumps(
+                {"type": "meeting_state", "active": False, "meeting_id": None}
+            ))
+            await asyncio.sleep(0.15)
+            await websocket.send(json.dumps(
+                {"type": "meeting_started", "meeting_id": "A"}
+            ))
+        except Exception:
+            pass
+        await asyncio.sleep(0.3)
+
+    fake = NameAwareTmux({TMUX_SESSION})
+    server, port = await _start_mock_bridge(handler)
+    sup = Supervisor(
+        f"ws://127.0.0.1:{port}",
+        runner=TmuxRunner(run=fake),
+        grace_s=10.0,
+        autospawn=True,
+    )
+    await sup.start()
+    try:
+        hello = await _collect_hello(received)
+        assert hello["current_meeting_id"] is None
+        for _ in range(40):
+            if sup.lifecycle.state is State.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+        assert sup.lifecycle.state is State.RUNNING
+        assert sup.lifecycle.meeting_id == "A"
+        assert sup.runner.session_name == TMUX_SESSION
+        assert fake.kill_targets() == []
+        assert fake.new_session_names() == []
+        assert TMUX_SESSION in fake.sessions
+    finally:
+        await sup.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_startup_both_sessions_alive_conference_wins_kills_manual():
+    """given: both `copilot` and `copilot-manual` tmux sessions alive at
+           supervisor startup
+    when: the supervisor starts and connects
+    then: no manual adoption (hello None), the stale manual session is killed
+          exactly once and the runner stays on the default name
+    """
+    received = []
+
+    async def handler(websocket):
+        try:
+            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            received.append(first)
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
+
+    fake = NameAwareTmux({TMUX_SESSION, TMUX_SESSION_MANUAL})
+    server, port = await _start_mock_bridge(handler)
+    sup = Supervisor(f"ws://127.0.0.1:{port}", runner=TmuxRunner(run=fake))
+    await sup.start()
+    try:
+        hello = await _collect_hello(received)
+        assert hello["current_meeting_id"] is None
+        assert sup.lifecycle.state is State.IDLE
+        assert fake.kill_targets() == [TMUX_SESSION_MANUAL]
+        assert fake.sessions == {TMUX_SESSION}
+        assert sup.runner.session_name == TMUX_SESSION
+        assert fake.new_session_names() == []
+    finally:
+        await sup.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_startup_no_sessions_probes_manual_name_only_and_stays_idle():
+    """given: no live tmux session under either name
+    when: the supervisor starts and connects
+    then: behavior is identical to today — hello None, the machine stays
+          IDLE, and the only tmux call is the manual-name probe
+    """
+    received = []
+
+    async def handler(websocket):
+        try:
+            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            received.append(first)
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
+
+    fake = NameAwareTmux(set())
+    server, port = await _start_mock_bridge(handler)
+    sup = Supervisor(f"ws://127.0.0.1:{port}", runner=TmuxRunner(run=fake))
+    await sup.start()
+    try:
+        hello = await _collect_hello(received)
+        assert hello["current_meeting_id"] is None
+        assert sup.lifecycle.state is State.IDLE
+        assert fake.subcommands() == ["has-session"]
+        assert fake.calls[0][4:] == ["-t", f"={TMUX_SESSION_MANUAL}"]
+    finally:
+        await sup.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_startup_readoption_with_autospawn_off_still_adopts():
+    """given: RECOG_COPILOT_AUTOSPAWN=0 and a live `copilot-manual` session
+    when: the supervisor starts fresh
+    then: adoption still happens (manual machinery is not autospawn-gated,
+          D3) and hello carries "manual"
+    """
+    received = []
+
+    async def handler(websocket):
+        try:
+            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+            received.append(first)
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
+
+    fake = NameAwareTmux({TMUX_SESSION_MANUAL})
+    server, port = await _start_mock_bridge(handler)
+    sup = Supervisor(
+        f"ws://127.0.0.1:{port}", runner=TmuxRunner(run=fake), autospawn=False
+    )
+    await sup.start()
+    try:
+        assert await _collect_hello(received) == {
+            "type": "supervisor_hello",
+            "current_meeting_id": MANUAL_MEETING_ID,
+        }
+        assert sup.lifecycle.state is State.RUNNING
+        assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
+        assert sup.runner.session_name == TMUX_SESSION_MANUAL
+        assert fake.kill_targets() == []
+        assert fake.new_session_names() == []
+    finally:
+        await sup.stop()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_conference_preemption_kills_manual_name_spawns_default_name():
+    """given: an established manual session running under `copilot-manual`
+    when: a conference meeting_started("B") arrives
+    then: the manual-named session is killed and a default-named session is
+          spawned — precedence is unaffected by per-kind naming
+    """
+    fake = NameAwareTmux(set())
+    runner = TmuxRunner(run=fake)
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
+
+    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
+    assert runner.session_name == TMUX_SESSION_MANUAL
+    assert fake.sessions == {TMUX_SESSION_MANUAL}
+    sup.lifecycle.session_ready()
+
+    await sup.handle_frame({"type": "meeting_started", "meeting_id": "B"})
+
+    assert fake.kill_targets() == [TMUX_SESSION_MANUAL]
+    assert fake.new_session_names() == [TMUX_SESSION_MANUAL, TMUX_SESSION]
+    assert runner.session_name == TMUX_SESSION
+    assert fake.sessions == {TMUX_SESSION}
+    assert sup.lifecycle.state is State.SPAWNING
+    assert sup.lifecycle.meeting_id == "B"
+    await sup.stop()
+
+
+async def test_startup_readoption_probe_failure_logs_and_skips(capsys):
+    """given: the tmux aliveness probe raises at startup
+    when: the startup manual re-adoption runs
+    then: the failure is logged and no adoption happens — the machine stays
+          IDLE (existing "probe fails → no adoption" behavior)
+    """
+    class BoomRunner(FakeRunner):
+        async def alive(self, session_name=None):
+            raise RuntimeError("tmux unavailable")
+
+    sup = Supervisor(runner=BoomRunner())
+
+    await sup._startup_manual_readoption()
+
+    assert sup.lifecycle.state is State.IDLE
+    assert "startup probe failed" in capsys.readouterr().err
+
+
+async def test_startup_both_alive_manual_kill_failure_logged_startup_continues(capsys):
+    """given: both names alive at startup and kill-session persistently
+           failing while has-session keeps confirming the sessions
+    when: the startup manual re-adoption runs
+    then: the kill failure is logged, no adoption happens and startup
+          continues with the machine IDLE on the default name
+    """
+    fake = NameAwareTmux({TMUX_SESSION, TMUX_SESSION_MANUAL})
+    fake.responses["kill-session"] = (1, "boom")
+    runner = TmuxRunner(run=fake)
+    runner.KILL_RETRY_DELAY_S = 0.0
+    sup = Supervisor(runner=runner)
+
+    await sup._startup_manual_readoption()
+
+    assert sup.lifecycle.state is State.IDLE
+    assert sup.runner.session_name == TMUX_SESSION
+    assert "stale manual session kill failed" in capsys.readouterr().err
+
+
+async def test_spawn_derives_session_name_from_meeting_id():
+    """given: a fresh TmuxRunner
+    when: spawn(MANUAL_MEETING_ID) then spawn("A") run
+    then: the manual spawn creates and binds `copilot-manual`, the meeting
+          spawn rebinds back to the default `copilot` name
+    """
+    fake = NameAwareTmux(set())
+    runner = TmuxRunner(run=fake)
+
+    await runner.spawn(MANUAL_MEETING_ID)
+    assert runner.session_name == TMUX_SESSION_MANUAL
+
+    await runner.spawn("A")
+    assert runner.session_name == TMUX_SESSION
+
+    assert fake.new_session_names() == [TMUX_SESSION_MANUAL, TMUX_SESSION]
+
+
+async def test_spawn_reaps_stale_sibling_session_before_creating():
+    """given: a stale `copilot-manual` session still alive (e.g. its
+           preemption Kill exhausted the DW-12 retries)
+    when: a conference spawn("B") runs
+    then: the stale manual-named session is killed and the default-named
+          session is created — no second live copilot lingers
+    """
+    fake = NameAwareTmux({TMUX_SESSION_MANUAL})
+    runner = TmuxRunner(run=fake)
+
+    created = await runner.spawn("B")
+
+    assert created is True
+    assert fake.kill_targets() == [TMUX_SESSION_MANUAL]
+    assert fake.new_session_names() == [TMUX_SESSION]
+    assert fake.sessions == {TMUX_SESSION}
+    assert runner.session_name == TMUX_SESSION
+
+
+async def test_spawn_manual_reaps_stale_default_sibling_before_creating():
+    """given: a stale `copilot` session still alive
+    when: a manual spawn runs
+    then: the stale default-named session is killed and `copilot-manual`
+          becomes the only live session
+    """
+    fake = NameAwareTmux({TMUX_SESSION})
+    runner = TmuxRunner(run=fake)
+
+    created = await runner.spawn(MANUAL_MEETING_ID)
+
+    assert created is True
+    assert fake.kill_targets() == [TMUX_SESSION]
+    assert fake.new_session_names() == [TMUX_SESSION_MANUAL]
+    assert fake.sessions == {TMUX_SESSION_MANUAL}
+    assert runner.session_name == TMUX_SESSION_MANUAL
+
+
+async def test_spawn_sibling_kill_failure_aborts_before_creating_target():
+    """given: a stale sibling session whose kill-session persistently fails
+           while has-session keeps confirming it
+    when: a conference spawn("B") runs
+    then: the spawn fails before creating the default-named session, so two
+          live copilots cannot coexist
+    """
+    fake = NameAwareTmux({TMUX_SESSION_MANUAL})
+    fake.responses["kill-session"] = (1, "boom")
+    runner = TmuxRunner(run=fake)
+    runner.KILL_RETRY_DELAY_S = 0.0
+
+    with pytest.raises(RuntimeError, match="stale sibling session"):
+        await runner.spawn("B")
+
+    assert fake.new_session_names() == []
+    assert fake.sessions == {TMUX_SESSION_MANUAL}
+
+
+async def test_alive_probes_specific_session_name():
+    """given: only the manual-named session exists
+    when: alive() is asked about each name explicitly and about the current one
+    then: it answers per target name — the default probe reads the runner's
+          current (default) name
+    """
+    fake = NameAwareTmux({TMUX_SESSION_MANUAL})
+    runner = TmuxRunner(run=fake)
+
+    assert await runner.alive(TMUX_SESSION_MANUAL) is True
+    assert await runner.alive(TMUX_SESSION) is False
+    assert await runner.alive() is False  # current name is the default one
+
+
+# ---------------------------------------------------------------------------
 # TmuxRunner: command building + tmux invocations via injected runner
 # ---------------------------------------------------------------------------
 
@@ -1056,8 +1475,9 @@ async def test_spawn_runs_new_session_with_socket_and_cwd(tmp_path):
     created = await runner.spawn("A")
 
     assert created is True
-    assert fake.subcommands() == ["has-session", "new-session"]
-    new_session = fake.calls[1]
+    # sibling stale-session probe + aliveness gate, then the actual creation
+    assert fake.subcommands() == ["has-session", "has-session", "new-session"]
+    new_session = fake.calls[2]
     assert new_session[:3] == ["tmux", "-L", "recog-copilot"]
     assert new_session[3:9] == ["new-session", "-d", "-s", "copilot", "-c", str(tmp_path)]
     assert new_session[9] == runner.build_claude_command()
@@ -1069,12 +1489,14 @@ async def test_spawn_adopts_live_session_without_new_session():
     then: no new-session is issued (duplicate name would error and waste
           a respawn-backoff attempt) — the live session is adopted
     """
-    fake = FakeTmux(has_session=True)
+    fake = NameAwareTmux({TMUX_SESSION})
 
     created = await TmuxRunner(run=fake).spawn("A")
 
     assert created is False
-    assert fake.subcommands() == ["has-session"]
+    # sibling stale-session probe (dead) + aliveness gate (alive) — no kill
+    assert fake.subcommands() == ["has-session", "has-session"]
+    assert fake.kill_targets() == []
 
 
 async def test_spawn_raises_on_tmux_failure():
@@ -1096,7 +1518,9 @@ async def test_kill_targets_named_session_and_ignores_missing():
 
     await TmuxRunner(run=fake).kill()  # must not raise
 
-    assert fake.calls[0] == ["tmux", "-L", "recog-copilot", "kill-session", "-t", "copilot"]
+    assert fake.calls[0] == [
+        "tmux", "-L", "recog-copilot", "kill-session", "-t", "=copilot"
+    ]
     assert fake.subcommands() == ["kill-session", "has-session"]  # probe, no retry
 
 
@@ -1280,9 +1704,139 @@ async def test_send_keys_and_capture():
     await runner.send_keys("1")
     text = await runner.capture()
 
-    assert fake.calls[0] == ["tmux", "-L", "recog-copilot", "send-keys", "-t", "copilot", "1"]
-    assert fake.calls[1] == ["tmux", "-L", "recog-copilot", "capture-pane", "-p", "-t", "copilot"]
+    assert fake.calls[0] == [
+        "tmux", "-L", "recog-copilot", "send-keys", "-t", "=copilot", "1"
+    ]
+    assert fake.calls[1] == [
+        "tmux", "-L", "recog-copilot", "capture-pane", "-p", "-t", "=copilot"
+    ]
     assert text == "❯ prompt line"
+
+
+async def test_manual_binding_targets_send_keys_and_capture_exactly():
+    """given: a TmuxRunner bound to the manual session name
+    when: watchdog-facing send_keys() and capture() run
+    then: both commands target exactly `copilot-manual`
+    """
+    fake = FakeTmux()
+    fake.responses["capture-pane"] = (0, "❯ prompt line")
+    runner = TmuxRunner(run=fake)
+    runner.session_name = TMUX_SESSION_MANUAL
+
+    await runner.send_keys("1")
+    text = await runner.capture()
+
+    assert fake.calls[0] == [
+        "tmux",
+        "-L",
+        "recog-copilot",
+        "send-keys",
+        "-t",
+        f"={TMUX_SESSION_MANUAL}",
+        "1",
+    ]
+    assert fake.calls[1] == [
+        "tmux",
+        "-L",
+        "recog-copilot",
+        "capture-pane",
+        "-p",
+        "-t",
+        f"={TMUX_SESSION_MANUAL}",
+    ]
+    assert text == "❯ prompt line"
+
+
+@pytest.mark.parametrize("command", ["stop", "uninstall"])
+def test_terminal_service_command_reaps_both_copilot_session_names(tmp_path, command):
+    """given: shell shims for launchctl and tmux
+    when: a terminal service command runs
+    then: both copilot session names are targeted exactly once
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    launchctl = bin_dir / "launchctl"
+    launchctl.write_text("#!/bin/sh\nexit 0\n")
+    launchctl.chmod(0o755)
+    tmux_log = tmp_path / "tmux.log"
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        '#!/bin/sh\n'
+        'printf "%s\\n" "$*" >> "$TMUX_LOG"\n'
+        'if [ "$3" = "has-session" ]; then\n'
+        '    [ "${TMUX_STAYS_ALIVE:-0}" = "1" ] && exit 0\n'
+        '    exit 1\n'
+        'fi\n'
+        'exit 0\n'
+    )
+    tmux.chmod(0o755)
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path / "home"),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "TMUX_LOG": str(tmux_log),
+    }
+
+    subprocess.run(
+        ["bash", str(Path(__file__).resolve().parent.parent / "recog-service.sh"), command],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert tmux_log.read_text().splitlines() == [
+        "-L recog-copilot kill-session -t =copilot",
+        "-L recog-copilot has-session -t =copilot",
+        "-L recog-copilot kill-session -t =copilot-manual",
+        "-L recog-copilot has-session -t =copilot-manual",
+    ]
+
+
+def test_terminal_service_command_surfaces_persistent_tmux_cleanup_failure(tmp_path):
+    """given: tmux keeps reporting both copilot sessions alive
+    when: the terminal stop command exhausts cleanup attempts
+    then: the command fails visibly instead of claiming the services stopped
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    launchctl = bin_dir / "launchctl"
+    launchctl.write_text("#!/bin/sh\nexit 0\n")
+    launchctl.chmod(0o755)
+    tmux_log = tmp_path / "tmux.log"
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        '#!/bin/sh\n'
+        'printf "%s\\n" "$*" >> "$TMUX_LOG"\n'
+        'exit 0\n'
+    )
+    tmux.chmod(0o755)
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path / "home"),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "TMUX_LOG": str(tmux_log),
+        "TMUX_STAYS_ALIVE": "1",
+    }
+
+    result = subprocess.run(
+        ["bash", str(Path(__file__).resolve().parent.parent / "recog-service.sh"), "stop"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    tmux_calls = tmux_log.read_text().splitlines()
+    for session_name in (TMUX_SESSION, TMUX_SESSION_MANUAL):
+        assert f"Failed to stop tmux session: {session_name}" in result.stdout
+        assert tmux_calls.count(
+            f"-L recog-copilot kill-session -t ={session_name}"
+        ) == 3
+        assert tmux_calls.count(
+            f"-L recog-copilot has-session -t ={session_name}"
+        ) == 3
 
 
 async def test_capture_returns_empty_when_session_gone():

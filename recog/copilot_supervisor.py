@@ -46,6 +46,12 @@ DEFAULT_GRACE_S = 90.0
 DEFAULT_MCP_URL = "http://127.0.0.1:8767/mcp"
 TMUX_SOCKET = "recog-copilot"
 TMUX_SESSION = "copilot"
+# The tmux session name IS the session-kind marker (DW-9): manual (webapp)
+# spawns live under this sibling name, every meeting-driven spawn keeps
+# TMUX_SESSION. A fresh supervisor reads the kind back at startup instead of
+# guessing — a session left behind by a pre-upgrade supervisor is named
+# `copilot` and therefore reads as a conference session (the safe default).
+TMUX_SESSION_MANUAL = "copilot-manual"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # Synthetic lifecycle id for a webapp-driven (manual) copilot session. Twin of
 # `ktalk_bridge.MANUAL_MEETING_ID` — the value must not drift, the bridge keys
@@ -176,6 +182,12 @@ class TmuxRunner:
     """Drives the copilot Claude session in detached tmux on a dedicated
     socket (`tmux -L recog-copilot`), isolated from the user's personal tmux.
 
+    `session_name` is the *current* session's name — per-session state, not a
+    fixed value: `spawn()` derives it from its `meeting_id` (MANUAL_MEETING_ID
+    → TMUX_SESSION_MANUAL, anything else → the default name), and every tmux
+    verb (`kill`, `alive`, `send_keys`, `capture`) targets it, so a
+    preemption kills the manual name and creates the default one (DW-9).
+
     The subprocess runner is injectable for tests: an async callable
     `run(args) -> (returncode, output)`.
     """
@@ -197,9 +209,15 @@ class TmuxRunner:
         self._run = run or _run_subprocess
         self.socket_name = socket_name
         self.session_name = session_name
+        self._default_session_name = session_name
 
     def _tmux(self, *args: str) -> list:
         return ["tmux", "-L", self.socket_name, *args]
+
+    @staticmethod
+    def _exact_target(session_name: str) -> str:
+        """Build an exact tmux target; bare names are prefix-matched."""
+        return f"={session_name}"
 
     def build_claude_command(self) -> str:
         """Claude invocation for `tmux new-session` (single shell string).
@@ -231,6 +249,30 @@ class TmuxRunner:
         respawn-backoff attempt for nothing — spawn is gated on `alive()`.
         Returns True if a new session was created, False if adopted.
         """
+        # Rebind the runner to the name matching the session kind BEFORE the
+        # aliveness gate, so both the probe and new-session target it (DW-9).
+        self.session_name = (
+            TMUX_SESSION_MANUAL
+            if meeting_id == MANUAL_MEETING_ID
+            else self._default_session_name
+        )
+        # Cross-kind stale-session guard: any sibling-named session alive at
+        # spawn time is stale by design (one copilot per machine) — e.g. a
+        # preemption whose Kill exhausted its DW-12 retries. Reap it before
+        # creating the target session; if cleanup still fails after kill()
+        # retries, abort this spawn so two live copilots cannot coexist.
+        sibling = (
+            self._default_session_name
+            if self.session_name == TMUX_SESSION_MANUAL
+            else TMUX_SESSION_MANUAL
+        )
+        if await self.alive(sibling):
+            try:
+                await self.kill(sibling)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"stale sibling session {sibling!r} could not be killed"
+                ) from exc
         if await self.alive():
             return False
         rc, out = await self._run(
@@ -248,10 +290,13 @@ class TmuxRunner:
             raise RuntimeError(f"tmux new-session failed (rc={rc}): {out.strip()}")
         return True
 
-    async def kill(self) -> None:
+    async def kill(self, session_name: Optional[str] = None) -> None:
         """Kill the copilot session; a non-zero rc is verified against
         `has-session` before retrying or raising (DW-12). A zero rc is
         trusted as-is.
+
+        Targets the current session's name unless `session_name` overrides it
+        (used only by the startup both-alive cleanup, DW-9).
 
         A non-zero rc with the session already gone stays a success — kill is
         idempotent (D5: no graceful stop). A non-zero rc while `has-session`
@@ -259,29 +304,44 @@ class TmuxRunner:
         as RuntimeError, so a failed kill surfaces in `_execute`'s per-command
         error log instead of silently orphaning a live Copilot session.
         """
+        target = session_name or self.session_name
         rc, out = 0, ""
         for attempt in range(self.KILL_RETRIES):
             if attempt:
                 await asyncio.sleep(self.KILL_RETRY_DELAY_S)
             rc, out = await self._run(
-                self._tmux("kill-session", "-t", self.session_name)
+                self._tmux("kill-session", "-t", self._exact_target(target))
             )
             if rc == 0:
                 return
-            if not await self.alive():
+            if not await self.alive(target):
                 return
         raise RuntimeError(f"tmux kill-session failed (rc={rc}): {out.strip()}")
 
-    async def alive(self) -> bool:
-        rc, _ = await self._run(self._tmux("has-session", "-t", self.session_name))
+    async def alive(self, session_name: Optional[str] = None) -> bool:
+        """Probe a session's existence — the current one by default, or a
+        specific name (the startup kind-probe, DW-9)."""
+        target = session_name or self.session_name
+        rc, _ = await self._run(
+            self._tmux("has-session", "-t", self._exact_target(target))
+        )
         return rc == 0
 
     async def send_keys(self, *keys: str) -> None:
-        await self._run(self._tmux("send-keys", "-t", self.session_name, *keys))
+        await self._run(
+            self._tmux(
+                "send-keys", "-t", self._exact_target(self.session_name), *keys
+            )
+        )
 
     async def capture(self) -> str:
         rc, out = await self._run(
-            self._tmux("capture-pane", "-p", "-t", self.session_name)
+            self._tmux(
+                "capture-pane",
+                "-p",
+                "-t",
+                self._exact_target(self.session_name),
+            )
         )
         return out if rc == 0 else ""
 
@@ -441,10 +501,12 @@ class Supervisor:
     """WS glue around SessionLifecycle: bridge connection, grace timer, runner.
 
     `runner` (spawn/kill target, TmuxRunner in production) must expose
-    `async spawn(meeting_id)` and `async kill()`. `session_alive_probe`
-    reports whether a copilot tmux session already exists — used only for
-    reconciliation after a supervisor restart; defaults to `runner.alive`
-    when the runner provides one.
+    `async spawn(meeting_id)` and `async kill(session_name=None)`; the
+    startup kind-probe (DW-9) additionally uses
+    `async alive(session_name=None)` when the runner provides it.
+    `session_alive_probe` reports whether a copilot tmux session already
+    exists — used only for reconciliation after a supervisor restart;
+    defaults to `runner.alive` when the runner provides one.
     """
 
     INITIAL_BACKOFF_S = 1.0
@@ -572,6 +634,65 @@ class Supervisor:
         except Exception as exc:
             print(f"{self._log_prefix} session probe failed: {exc!r}", file=sys.stderr)
             return False
+
+    async def _startup_manual_readoption(self) -> None:
+        """Re-adopt a surviving manual copilot session at supervisor startup (DW-9).
+
+        The tmux session name carries the session kind (`copilot-manual` vs
+        the meeting-driven `copilot`), so a fresh supervisor *reads* the type
+        instead of guessing. The probe targets the manual name (once, while
+        IDLE); the default name is consulted only when the manual one is
+        alive, to arbitrate the both-alive case:
+
+        - manual alive, default dead → `lifecycle.adopt("manual")` + rebind
+          the runner, so `supervisor_hello` carries `"manual"` and the bridge
+          re-arms its manual mirror.
+        - both alive → conference wins (one copilot per machine): no
+          adoption, the stale manual session is killed.
+        - a surviving *conference* session is never adopted here — the
+          existing `meeting_state` reconciliation preserves it as today.
+
+        Not gated on `autospawn` — manual-session machinery works regardless
+        of the flag (D3). A probe failure logs and skips adoption.
+        """
+        if self.lifecycle.state is not State.IDLE:
+            return
+        runner = self.runner
+        if runner is None or not hasattr(runner, "alive"):
+            return
+        try:
+            manual_alive = bool(await runner.alive(TMUX_SESSION_MANUAL))
+            default_alive = manual_alive and bool(await runner.alive(TMUX_SESSION))
+        except Exception as exc:
+            print(
+                f"{self._log_prefix} manual-session startup probe failed: {exc!r}",
+                file=sys.stderr,
+            )
+            return
+        if not manual_alive:
+            return
+        if default_alive:
+            print(
+                f"{self._log_prefix} both {TMUX_SESSION!r} and "
+                f"{TMUX_SESSION_MANUAL!r} tmux sessions alive at startup — "
+                "conference wins, killing the stale manual session",
+                file=sys.stderr,
+            )
+            try:
+                await runner.kill(TMUX_SESSION_MANUAL)
+            except Exception as exc:
+                print(
+                    f"{self._log_prefix} stale manual session kill failed: {exc!r}",
+                    file=sys.stderr,
+                )
+            return
+        self.lifecycle.adopt(MANUAL_MEETING_ID)
+        runner.session_name = TMUX_SESSION_MANUAL
+        print(
+            f"{self._log_prefix} re-adopted live manual copilot session "
+            f"({TMUX_SESSION_MANUAL})",
+            file=sys.stderr,
+        )
 
     def _reconcile(
         self, active: bool, meeting_id: Optional[str], session_alive: bool
@@ -793,6 +914,10 @@ class Supervisor:
         delay = self.INITIAL_BACKOFF_S
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
+        # Startup kind-probe (DW-9): re-adopt a surviving manual-named session
+        # before the watchdog starts and before the first connect, so the
+        # hello below already reports it via `_live_meeting_id()`.
+        await self._startup_manual_readoption()
         # The watchdog polls tmux for the supervisor's whole lifetime; it
         # sends status only while `self._ws` is connected and drops silently
         # otherwise (bridge merge reads silence as offline).

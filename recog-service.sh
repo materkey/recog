@@ -149,7 +149,24 @@ stop_all_services() {
 # supervisor re-adopts on reconnect via meeting_state reconciliation.
 kill_copilot_tmux() {
     if command -v tmux > /dev/null 2>&1; then
-        tmux -L recog-copilot kill-session -t copilot 2>/dev/null || true
+        # Both session kinds: `copilot` (meeting-driven) and `copilot-manual`
+        # (webapp manual session, DW-9) — leave nothing behind.
+        local session_name attempt session_alive failed=0
+        for session_name in copilot copilot-manual; do
+            session_alive=1
+            for attempt in 1 2 3; do
+                tmux -L recog-copilot kill-session -t "=$session_name" 2>/dev/null || true
+                if ! tmux -L recog-copilot has-session -t "=$session_name" 2>/dev/null; then
+                    session_alive=0
+                    break
+                fi
+            done
+            if [ "$session_alive" -eq 1 ]; then
+                warn "Failed to stop tmux session: $session_name"
+                failed=1
+            fi
+        done
+        return "$failed"
     fi
 }
 
