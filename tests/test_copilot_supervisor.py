@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1762,11 +1763,13 @@ async def test_send_keys_and_capture():
     await runner.send_keys("1")
     text = await runner.capture()
 
+    # pane verbs need the trailing colon — tmux rejects a bare `=name` as a
+    # pane target ("can't find pane")
     assert fake.calls[0] == [
-        "tmux", "-L", "recog-copilot", "send-keys", "-t", "=copilot", "1"
+        "tmux", "-L", "recog-copilot", "send-keys", "-t", "=copilot:", "1"
     ]
     assert fake.calls[1] == [
-        "tmux", "-L", "recog-copilot", "capture-pane", "-p", "-t", "=copilot"
+        "tmux", "-L", "recog-copilot", "capture-pane", "-p", "-t", "=copilot:"
     ]
     assert text == "❯ prompt line"
 
@@ -1774,7 +1777,8 @@ async def test_send_keys_and_capture():
 async def test_manual_binding_targets_send_keys_and_capture_exactly():
     """given: a TmuxRunner bound to the manual session name
     when: watchdog-facing send_keys() and capture() run
-    then: both commands target exactly `copilot-manual`
+    then: both commands target exactly `copilot-manual`, in the pane form
+          (trailing colon) tmux accepts for these verbs
     """
     fake = FakeTmux()
     fake.responses["capture-pane"] = (0, "❯ prompt line")
@@ -1790,7 +1794,7 @@ async def test_manual_binding_targets_send_keys_and_capture_exactly():
         "recog-copilot",
         "send-keys",
         "-t",
-        f"={TMUX_SESSION_MANUAL}",
+        f"={TMUX_SESSION_MANUAL}:",
         "1",
     ]
     assert fake.calls[1] == [
@@ -1800,7 +1804,7 @@ async def test_manual_binding_targets_send_keys_and_capture_exactly():
         "capture-pane",
         "-p",
         "-t",
-        f"={TMUX_SESSION_MANUAL}",
+        f"={TMUX_SESSION_MANUAL}:",
     ]
     assert text == "❯ prompt line"
 
@@ -2486,3 +2490,119 @@ async def test_run_tracks_ws_and_starts_watchdog():
     finally:
         await sup.stop()
     assert sup._watchdog_task is None
+
+
+# --- tmux target syntax: pane verbs vs session verbs ---
+#
+# `-t =name` is an exact *session* target and is what `has-session` /
+# `kill-session` need. `capture-pane` / `send-keys` take a *pane* target, where
+# tmux rejects `=name` outright ("can't find pane") — the exact form there needs
+# a trailing colon (`=name:`). Getting this wrong is invisible to a mocked
+# runner, so one test below drives a real tmux server.
+
+
+def _tmux_targets(recorded, verb):
+    """The `-t` argument of every recorded invocation of `verb`."""
+    out = []
+    for args in recorded:
+        if verb in args and "-t" in args:
+            out.append(args[args.index("-t") + 1])
+    return out
+
+
+async def test_pane_verbs_target_exact_session_with_trailing_colon():
+    """given: a runner bound to the manual session name
+    when:  capture() and send_keys() build their tmux invocations
+    then:  the pane target is the exact-session form WITH a trailing colon,
+           while session-level verbs keep it without — tmux rejects `=name`
+           as a pane target
+    """
+    recorded = []
+
+    async def fake(args):
+        recorded.append(list(args))
+        return 0, ""
+
+    runner = TmuxRunner(run=fake, session_name=TMUX_SESSION_MANUAL)
+
+    await runner.capture()
+    await runner.send_keys("1")
+    await runner.alive()
+
+    assert _tmux_targets(recorded, "capture-pane") == [f"={TMUX_SESSION_MANUAL}:"]
+    assert _tmux_targets(recorded, "send-keys") == [f"={TMUX_SESSION_MANUAL}:"]
+    assert _tmux_targets(recorded, "has-session") == [f"={TMUX_SESSION_MANUAL}"]
+
+
+async def test_capture_failure_is_logged_not_silently_empty(capsys):
+    """given: tmux refuses the capture (non-zero rc)
+    when:  capture() runs
+    then:  it still returns "" but the refusal is logged — a silent "" reads as
+           an empty startup screen and pins the chip to spawning forever
+    """
+    from recog.log_utils import _reset_for_tests
+
+    _reset_for_tests()
+
+    async def fake(args):
+        return 1, "can't find pane: =copilot-manual"
+
+    runner = TmuxRunner(run=fake, session_name=TMUX_SESSION_MANUAL)
+
+    assert await runner.capture() == ""
+    assert "capture" in capsys.readouterr().err.lower()
+
+
+async def test_send_keys_failure_is_logged(capsys):
+    """given: tmux refuses the keystroke (non-zero rc)
+    when:  send_keys() runs
+    then:  the refusal is logged — a lost keystroke leaves the copilot waiting
+           on its startup dialog with nothing reporting the problem
+    """
+    from recog.log_utils import _reset_for_tests
+
+    _reset_for_tests()
+
+    async def fake(args):
+        return 1, "can't find pane: =copilot-manual"
+
+    runner = TmuxRunner(run=fake, session_name=TMUX_SESSION_MANUAL)
+
+    await runner.send_keys("1")
+
+    assert "send-keys" in capsys.readouterr().err.lower()
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not installed")
+async def test_capture_and_send_keys_drive_a_real_tmux_session():
+    """given: a live session on a throwaway tmux socket, named so that the
+             default session name is a strict prefix of it
+    when:  TmuxRunner.capture() and send_keys() target that session
+    then:  capture returns the pane's real contents and the keystroke lands —
+           the mocked runner cannot catch a wrong target syntax, and a bare
+           (non-exact) name would prefix-match the wrong session
+    """
+    socket = f"recog-test-{os.getpid()}"
+    session = TMUX_SESSION_MANUAL
+    subprocess.run(
+        ["tmux", "-L", socket, "new-session", "-d", "-s", session, "cat"],
+        check=True,
+        capture_output=True,
+    )
+    try:
+        runner = TmuxRunner(socket_name=socket, session_name=session)
+
+        assert await runner.alive() is True
+
+        await runner.send_keys("RECOG_MARKER")
+        await asyncio.sleep(0.4)
+        screen = await runner.capture()
+
+        assert "RECOG_MARKER" in screen
+
+        # the default name must NOT resolve to this session — exactness matters
+        assert await TmuxRunner(socket_name=socket, session_name=TMUX_SESSION).alive() is False
+    finally:
+        subprocess.run(
+            ["tmux", "-L", socket, "kill-server"], capture_output=True
+        )
