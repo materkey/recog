@@ -40,7 +40,10 @@ from typing import Callable, Optional
 
 import websockets
 
+from recog.log_utils import log_rate_limited
 
+
+LOG_PREFIX = "[copilot-supervisor]"
 DEFAULT_BRIDGE_URL = "ws://127.0.0.1:8766"
 DEFAULT_GRACE_S = 90.0
 DEFAULT_MCP_URL = "http://127.0.0.1:8767/mcp"
@@ -216,8 +219,26 @@ class TmuxRunner:
 
     @staticmethod
     def _exact_target(session_name: str) -> str:
-        """Build an exact tmux target; bare names are prefix-matched."""
+        """Exact tmux *session* target (`has-session`, `kill-session`).
+
+        A bare name is prefix-matched, so `copilot` would resolve to
+        `copilot-manual` when only the latter exists — the `=` prefix pins it.
+        """
         return f"={session_name}"
+
+    @staticmethod
+    def _exact_pane_target(session_name: str) -> str:
+        """Exact tmux *pane* target (`capture-pane`, `send-keys`).
+
+        These verbs resolve `-t` as a pane, where tmux rejects the bare
+        `=name` session form outright ("can't find pane") — the exact pane
+        spec needs the trailing colon, which selects the session's current
+        window and its active pane. Without it `capture` returned "" (read as
+        an empty startup screen → chip pinned to `spawning`) and `send_keys`
+        silently dropped the dev-channels dismissal, leaving the copilot
+        waiting on its startup dialog forever.
+        """
+        return f"={session_name}:"
 
     def build_claude_command(self) -> str:
         """Claude invocation for `tmux new-session` (single shell string).
@@ -328,11 +349,23 @@ class TmuxRunner:
         return rc == 0
 
     async def send_keys(self, *keys: str) -> None:
-        await self._run(
+        rc, out = await self._run(
             self._tmux(
-                "send-keys", "-t", self._exact_target(self.session_name), *keys
+                "send-keys",
+                "-t",
+                self._exact_pane_target(self.session_name),
+                *keys,
             )
         )
+        if rc != 0:
+            # A dropped keystroke is how the dev-channels dialog stays up: the
+            # watchdog dismisses it once per appearance, so a silent failure
+            # wedges the session. Rate-limited — the watchdog retries on every
+            # tick while the dialog is visible.
+            log_rate_limited(
+                "copilot-supervisor.send-keys",
+                f"{LOG_PREFIX} tmux send-keys failed (rc={rc}): {out.strip()}",
+            )
 
     async def capture(self) -> str:
         rc, out = await self._run(
@@ -340,10 +373,19 @@ class TmuxRunner:
                 "capture-pane",
                 "-p",
                 "-t",
-                self._exact_target(self.session_name),
+                self._exact_pane_target(self.session_name),
             )
         )
-        return out if rc == 0 else ""
+        if rc != 0:
+            # "" is indistinguishable from a genuine empty startup screen, so a
+            # silent failure classifies as `spawning` forever. Rate-limited —
+            # this runs on every ~2 s watchdog tick.
+            log_rate_limited(
+                "copilot-supervisor.capture-pane",
+                f"{LOG_PREFIX} tmux capture-pane failed (rc={rc}): {out.strip()}",
+            )
+            return ""
+        return out
 
 
 # --- screen classification (watchdog) ---
@@ -522,7 +564,7 @@ class Supervisor:
         grace_s: Optional[float] = None,
         autospawn: Optional[bool] = None,
         session_alive_probe: Optional[Callable[[], bool]] = None,
-        log_prefix: str = "[copilot-supervisor]",
+        log_prefix: str = LOG_PREFIX,
     ) -> None:
         self.bridge_url = bridge_url
         self.runner = runner
