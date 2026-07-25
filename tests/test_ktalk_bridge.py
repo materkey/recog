@@ -6,7 +6,9 @@ import json
 import time
 import pytest
 import websockets
+from websockets.datastructures import MultipleValuesError
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock, patch
 
 import sys
@@ -177,6 +179,153 @@ async def test_meeting_not_ended_if_other_clients_connected():
 
     # Cleanup
     bridge._connected_clients.discard(other_client)
+
+
+# --- Origin allowlist tests ---
+
+
+class FakeOriginWebSocket(FakeWebSocket):
+    """FakeWebSocket whose handshake request carries an Origin header."""
+
+    def __init__(self, origin: str):
+        super().__init__()
+        self.request = SimpleNamespace(headers={"Origin": origin})
+        self.close_calls: list[int] = []
+
+    async def close(self, code: int = 1000, reason: str = ""):
+        self.close_calls.append(code)
+        self._closed = True
+
+
+@pytest.mark.asyncio
+async def test_given_disallowed_origin_when_bridge_handles_client_then_closed_before_registration():
+    """
+    given: KTalkBridge and a WS whose handshake Origin is not allowlisted
+    when: _handle_client handles the connection
+    then: socket is closed with 1008 before any frame is read and it is
+          never added to _connected_clients / _subscriber_clients
+    """
+    bridge = KTalkBridge()
+    fake_ws = FakeOriginWebSocket("https://evil.example")
+    fake_ws.add_message(json.dumps({"type": "subscriber_hello"}))
+
+    with patch("ktalk_bridge.log_rate_limited") as log_rejection:
+        await bridge._handle_client(fake_ws)
+
+    assert fake_ws.close_calls == [1008]
+    assert fake_ws not in bridge._connected_clients
+    assert fake_ws not in bridge._subscriber_clients
+    assert log_rejection.call_args.args[0] == "bridge-ws-origin-reject"
+    # The subscriber_hello frame was never consumed from the socket.
+    assert fake_ws._messages == [json.dumps({"type": "subscriber_hello"})]
+
+
+@pytest.mark.asyncio
+async def test_given_allowed_origin_when_bridge_handles_client_then_frame_dispatched():
+    """
+    given: KTalkBridge and a WS whose handshake Origin is on the allowlist
+    when: _handle_client handles the connection
+    then: the connection is not closed by the guard and its frames are
+          dispatched to _process_message
+    """
+    bridge = KTalkBridge()
+    fake_ws = FakeOriginWebSocket("https://example.ktalk.ru")
+    fake_ws.add_message(json.dumps({"type": "ping"}))
+
+    with patch.object(bridge, "_process_message", new=AsyncMock()) as process:
+        await bridge._handle_client(fake_ws)
+
+    assert fake_ws.close_calls == []
+    process.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_given_duplicate_origins_when_bridge_handles_client_then_closed_with_1008():
+    """
+    given: a WS whose handshake carries duplicate Origin headers, so
+           Headers.get raises MultipleValuesError (a LookupError)
+    when: _handle_client handles the connection
+    then: the guard rejects cleanly with close 1008 (no traceback / 1011)
+          and never registers the socket
+    """
+    class DuplicateOriginHeaders:
+        def get(self, key, default=None):
+            raise MultipleValuesError(key)
+
+    bridge = KTalkBridge()
+    fake_ws = FakeOriginWebSocket("unused")
+    fake_ws.request = SimpleNamespace(headers=DuplicateOriginHeaders())
+
+    await bridge._handle_client(fake_ws)
+
+    assert fake_ws.close_calls == [1008]
+    assert fake_ws not in bridge._connected_clients
+    assert fake_ws not in bridge._subscriber_clients
+
+
+@pytest.mark.asyncio
+async def test_given_legacy_request_headers_when_bridge_handles_client_then_guard_applied():
+    """
+    given: a legacy-protocol WS (websockets < 14) exposing the handshake
+           headers via `request_headers` instead of `request`
+    when: _handle_client handles a disallowed origin
+    then: the guard still sees the Origin and closes with 1008
+    """
+    bridge = KTalkBridge()
+    fake_ws = FakeOriginWebSocket("unused")
+    del fake_ws.request
+    fake_ws.request_headers = {"Origin": "https://evil.example"}
+
+    await bridge._handle_client(fake_ws)
+
+    assert fake_ws.close_calls == [1008]
+    assert fake_ws not in bridge._connected_clients
+
+
+@pytest.mark.asyncio
+async def test_given_real_bridge_and_disallowed_origin_when_connected_then_closed_with_1008():
+    """
+    given: a REAL bridge WS server (websockets.serve)
+    when: a real client connects with a disallowed Origin header
+    then: the connection is closed with code 1008 — exercises the real
+          ServerConnection.request extraction path, not a fake
+    """
+    bridge = KTalkBridge()
+    server, url = await _serve_bridge(bridge)
+    ws = None
+    try:
+        ws = await websockets.connect(url, origin="https://evil.example")
+        with pytest.raises(websockets.exceptions.ConnectionClosed):
+            await asyncio.wait_for(ws.recv(), timeout=5)
+        assert ws.close_code == 1008
+        assert ws not in bridge._connected_clients
+    finally:
+        if ws is not None:
+            await ws.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_given_real_bridge_and_allowed_origin_when_connected_then_connection_stays_open():
+    """
+    given: a REAL bridge WS server
+    when: a real client connects with an allowlisted conference Origin
+    then: the connection survives the guard and receives the agent-state
+          primer frame
+    """
+    bridge = KTalkBridge()
+    server, url = await _serve_bridge(bridge)
+    ws = None
+    try:
+        ws = await websockets.connect(url, origin="https://example.ktalk.ru")
+        frame = await _recv_type(ws, "copilot_status")
+        assert frame["status"] == "agent_state"
+    finally:
+        if ws is not None:
+            await ws.close()
+        server.close()
+        await server.wait_closed()
 
 
 # --- get_sole_unmuted_remote_participant tests ---
