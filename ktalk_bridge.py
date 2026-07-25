@@ -74,6 +74,12 @@ AGENT_SESSIONS_ZERO_DEBOUNCE_S = 10.0
 # / adopt paths recognise the session instead of killing and respawning it.
 MANUAL_MEETING_ID = "manual"
 
+# Upper bound for a single fan-out `send()` (DW-6). WebSocket flow-control
+# backpressure blocks `send` without raising, so one stalled recipient would
+# otherwise freeze every broadcast loop for the recipients queued behind it.
+# Read at call time so tests can monkeypatch it.
+BROADCAST_SEND_TIMEOUT_S = 5.0
+
 def _truncate_text(text: str, max_len: int) -> str:
     clean = " ".join(text.split())
     if len(clean) <= max_len:
@@ -318,6 +324,15 @@ class KTalkBridge:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._loop = None
+        # Strong references to fire-and-forget `close()` tasks scheduled by
+        # `_send_bounded`: the event loop holds tasks only weakly, so a
+        # pending close could be garbage-collected before it runs.
+        self._bg_close_tasks: set = set()
+        # Clients whose bounded send already timed out. Keep their role-set
+        # membership until `_handle_client` reaps the closed socket so its
+        # role-specific disconnect cleanup still runs, while later broadcasts
+        # fail fast instead of paying the timeout again.
+        self._timed_out_clients: set = set()
         self._connected_clients = set()
         # Subscriber clients (e.g. frontend `BridgeSubscriber`) connect as
         # read-only listeners. They do NOT participate in the KTalk meeting
@@ -1099,6 +1114,70 @@ class KTalkBridge:
             return
         await self._broadcast_message(frame)
 
+    async def _send_bounded(self, client, message: str) -> bool:
+        """Send `message` to one client, bounded by `BROADCAST_SEND_TIMEOUT_S`.
+
+        WebSocket flow-control backpressure makes `send()` block without
+        raising, so an unbounded send lets one stalled socket freeze the
+        whole fan-out loop. On timeout: log one stderr line, mark the client
+        so later broadcasts fail fast, schedule the client's `close()` via
+        `create_task` (never awaited inline — `close()` on a stalled socket
+        blocks until its own close_timeout), and return False. Role-set
+        membership is preserved until `_handle_client` reaps the closed
+        socket so its channel/supervisor/meeting cleanup still runs. Clients
+        without a `close` attribute (test fakes) are tolerated. Non-timeout
+        exceptions propagate so each fan-out loop keeps its existing
+        per-client error visibility.
+        """
+        with self._lock:
+            if client in self._timed_out_clients:
+                return False
+        try:
+            await asyncio.wait_for(
+                client.send(message), timeout=BROADCAST_SEND_TIMEOUT_S
+            )
+            return True
+        except asyncio.TimeoutError:
+            with self._lock:
+                still_registered = (
+                    client in self._connected_clients
+                    or client in self._subscriber_clients
+                    or client in self._copilot_channel_clients
+                    or client in self._supervisor_clients
+                )
+                first_timeout = (
+                    still_registered and client not in self._timed_out_clients
+                )
+                if first_timeout:
+                    self._timed_out_clients.add(client)
+            if not first_timeout:
+                return False
+            print(
+                f"[KTalk Bridge] Send timed out after {BROADCAST_SEND_TIMEOUT_S}s — "
+                f"closing stalled client",
+                file=sys.stderr,
+            )
+            close = getattr(client, "close", None)
+            if close is not None:
+                try:
+                    result = close()
+                    if asyncio.iscoroutine(result):
+                        async def close_safely():
+                            try:
+                                await result
+                            except Exception as e:
+                                print(
+                                    f"[KTalk Bridge] Failed to close stalled client: {e}",
+                                    file=sys.stderr,
+                                )
+
+                        task = asyncio.get_running_loop().create_task(close_safely())
+                        self._bg_close_tasks.add(task)
+                        task.add_done_callback(self._bg_close_tasks.discard)
+                except Exception:
+                    pass
+            return False
+
     async def _broadcast_message(self, data: dict):
         """Отправляет сообщение всем подключённым extension-клиентам.
 
@@ -1111,11 +1190,17 @@ class KTalkBridge:
             return
 
         message = json.dumps(data, ensure_ascii=False)
-        for client in list(self._connected_clients):
+
+        async def dispatch(client):
             try:
-                await client.send(message)
+                await self._send_bounded(client, message)
             except Exception:
                 pass  # Клиент может отключиться
+
+        await asyncio.gather(
+            *(dispatch(client) for client in list(self._connected_clients)),
+            return_exceptions=True,
+        )
 
     async def _broadcast_copilot_frame(self, data: dict):
         """Fan a copilot frame out to extension AND subscriber clients.
@@ -1140,11 +1225,16 @@ class KTalkBridge:
             return
 
         message = json.dumps(data, ensure_ascii=False)
-        for client in recipients:
+
+        async def dispatch(client):
             try:
-                await client.send(message)
+                await self._send_bounded(client, message)
             except Exception:
                 pass  # Клиент может отключиться
+
+        await asyncio.gather(
+            *(dispatch(client) for client in recipients), return_exceptions=True
+        )
 
     async def _broadcast_to_channel_clients(self, data: dict):
         """Send a frame to every registered Copilot channel client.
@@ -1159,14 +1249,19 @@ class KTalkBridge:
         if not channel_clients:
             return
         message = json.dumps(data, ensure_ascii=False)
-        for client in channel_clients:
+
+        async def dispatch(client):
             try:
-                await client.send(message)
+                await self._send_bounded(client, message)
             except Exception as e:
                 print(
                     f"[KTalk Bridge] Failed to send {data.get('type')} to channel client: {e}",
                     file=sys.stderr,
                 )
+
+        await asyncio.gather(
+            *(dispatch(client) for client in channel_clients), return_exceptions=True
+        )
 
     async def _emit_lifecycle(self, frame: dict):
         """Fan a meeting-lifecycle frame out to every consumer.
@@ -1187,14 +1282,19 @@ class KTalkBridge:
         if not supervisors:
             return
         message = json.dumps(frame, ensure_ascii=False)
-        for client in supervisors:
+
+        async def dispatch(client):
             try:
-                await client.send(message)
+                await self._send_bounded(client, message)
             except Exception as e:
                 print(
                     f"[KTalk Bridge] Failed to send {frame.get('type')} to supervisor: {e}",
                     file=sys.stderr,
                 )
+
+        await asyncio.gather(
+            *(dispatch(client) for client in supervisors), return_exceptions=True
+        )
 
     async def _relay_to_supervisors(self, frame: dict) -> bool:
         """Forward a frame verbatim to every registered supervisor client.
@@ -1209,6 +1309,13 @@ class KTalkBridge:
         instead. Per-client send errors are swallowed with a log exactly as in
         `_emit_lifecycle`: a dead supervisor socket must not crash the message
         handler, nor abort delivery to the sockets queued behind it.
+
+        Timed-out sends are delivery-unknown: cancelling `send()` after the
+        frame reached the transport buffer means the peer may still receive
+        it, so a timeout is counted as not delivered (at-most-once from the
+        caller's perspective) — the originator may see
+        `supervisor_disconnected` while the supervisor still acts on the
+        frame.
         """
         with self._lock:
             supervisors = list(self._supervisor_clients)
@@ -1223,8 +1330,8 @@ class KTalkBridge:
             ):
                 break
             try:
-                await client.send(message)
-                delivered = True
+                if await self._send_bounded(client, message):
+                    delivered = True
             except Exception as e:
                 print(
                     f"[KTalk Bridge] Failed to send {frame.get('type')} to supervisor: {e}",
@@ -1326,14 +1433,18 @@ class KTalkBridge:
             },
             ensure_ascii=False,
         )
-        for client in subscribers:
+        async def dispatch(client):
             try:
-                await client.send(message)
+                await self._send_bounded(client, message)
             except Exception as e:
                 print(
                     f"[KTalk Bridge] Failed to send manual_preempted to subscriber: {e}",
                     file=sys.stderr,
                 )
+
+        await asyncio.gather(
+            *(dispatch(client) for client in subscribers), return_exceptions=True
+        )
 
     def _is_meeting_active(self) -> bool:
         """True when a conference meeting is genuinely in progress.
@@ -2019,6 +2130,7 @@ class KTalkBridge:
                 self._subscriber_clients.discard(websocket)
                 self._copilot_channel_clients.discard(websocket)
                 self._supervisor_clients.discard(websocket)
+                self._timed_out_clients.discard(websocket)
                 # Release meeting ownership if the owner WS just dropped —
                 # otherwise the rejection gate would permanently block every
                 # subsequent meeting_join from a fresh tab (the dead WS
@@ -2941,14 +3053,20 @@ class KTalkBridge:
             # then be relayed normally — there is no meeting to become stale
             # against).
             self._copilot_pending_requests[request_id] = meeting_id or ""
-            for client in channel_clients:
+
+            async def forward(client):
                 try:
-                    await client.send(outbound)
+                    await self._send_bounded(client, outbound)
                 except Exception as e:
                     print(
                         f"[KTalk Bridge] Failed to forward copilot_chat_message to channel client: {e}",
                         file=sys.stderr,
                     )
+
+            await asyncio.gather(
+                *(forward(client) for client in channel_clients),
+                return_exceptions=True,
+            )
 
         elif msg_type == "copilot_channel_reply":
             # Channel server (recog/copilot_channel.py) emits a reply for a
