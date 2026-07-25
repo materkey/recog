@@ -21,6 +21,7 @@ import uuid
 import shutil
 import hashlib
 import os
+import stat
 import sys
 import threading
 import time
@@ -1118,11 +1119,55 @@ class MeetingStorage:
         self._save_json(self.current_meeting_path / "meta.json", meta)
 
     def _save_json(self, path: Path, data: dict):
-        """Сохранить JSON файл."""
-        path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
+        """Сохранить JSON файл атомарно (уникальный temp file + os.replace).
+
+        Конкурентные читатели (например _is_meeting_active в ktalk_bridge)
+        всегда видят либо полный старый, либо полный новый файл — никогда
+        обрезанный/частичный.
+        """
+        # Read the target mode before creating the temp so a restrictive
+        # existing mode also protects the temp while its contents are written.
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            mode = None
+
+        while True:
+            tmp_path = path.parent / f"{path.name}.{uuid.uuid4().hex}.tmp"
+            try:
+                fd = os.open(
+                    tmp_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    mode if mode is not None else 0o666,
+                )
+                break
+            except FileExistsError:
+                continue
+
+        raw_fd = fd
+        try:
+            file_obj = os.fdopen(fd, "w", encoding="utf-8")
+            raw_fd = -1  # file_obj owns the descriptor from this point
+            with file_obj as f:
+                f.write(json.dumps(data, ensure_ascii=False, indent=2))
+
+            # Atomic replacement changes the inode, so explicitly carry over
+            # the existing target's permissions. A first write already has
+            # the old open(..., "w") mode because os.open applied the umask.
+            if mode is not None:
+                os.chmod(tmp_path, mode)
+            os.replace(tmp_path, path)
+        except BaseException:
+            if raw_fd != -1:
+                try:
+                    os.close(raw_fd)
+                except OSError:
+                    pass
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _update_index(self, meta: dict):
         """Обновить index.json после завершения встречи."""
