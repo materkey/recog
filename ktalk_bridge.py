@@ -1272,7 +1272,7 @@ class KTalkBridge:
         self._manual_copilot_active = active
         self._sessions_zero_since = None
 
-    async def _preempt_manual_copilot(self) -> None:
+    async def _preempt_manual_copilot(self, *, notify: bool = True) -> bool:
         """Clear the manual mirror when a conference takes over the copilot.
 
         Called from the conference `meeting_started` emit path: the supervisor
@@ -1280,13 +1280,39 @@ class KTalkBridge:
         the bridge's mirror must follow or a later reconnect would resurrect a
         session that no longer exists.
 
-        The notice goes to `_subscriber_clients` ONLY — it is a webapp-facing
-        status the extension has no renderer for, and the extension's frame
-        stream must stay byte-identical.
+        With `notify=False`, only the synchronous state mutation runs. This
+        lets `meeting_join` invalidate late manual replies before its first
+        lifecycle-send await without putting subscriber I/O on the lifecycle
+        critical path.
         """
         if not self._manual_copilot_active:
-            return
+            return False
         self._set_manual_copilot_active(False)
+        # Invalidate pending manual-chat requests (recorded with meeting id
+        # "") — the supervisor kills the manual session, so a late reply for
+        # one of these must not be broadcast into the new conference chat.
+        # The `stale:` marker follows the existing convention; the reply
+        # handler's stale-prefix branch drops (and terminally echoes) it.
+        stale_count = 0
+        for req_id, mid in list(self._copilot_pending_requests.items()):
+            if mid == "":
+                self._copilot_pending_requests[req_id] = f"stale:{mid}"
+                stale_count += 1
+        if stale_count:
+            print(
+                f"[KTalk Bridge] Marked {stale_count} manual copilot request(s) stale on preemption",
+                file=sys.stderr,
+            )
+        if notify:
+            await self._notify_manual_copilot_preempted()
+        return True
+
+    async def _notify_manual_copilot_preempted(self) -> None:
+        """Notify webapp subscribers after conference lifecycle delivery.
+
+        The extension has no renderer for this status, so its frame stream
+        stays byte-identical.
+        """
         with self._lock:
             subscribers = list(self._subscriber_clients)
         if not subscribers:
@@ -2449,13 +2475,17 @@ class KTalkBridge:
                         "meeting_title": title,
                         "created_at": time.time() * 1000,
                     }
+                    # Invalidate the manual mirror and its pending requests
+                    # synchronously before lifecycle fan-out can re-enter the
+                    # bridge with a late reply. Subscriber notification stays
+                    # after lifecycle delivery so slow webapp clients cannot
+                    # delay the supervisor's manual-to-conference replacement.
+                    manual_preempted = await self._preempt_manual_copilot(
+                        notify=False
+                    )
                     await self._emit_lifecycle(meeting_started_frame)
-                    # Conference preemption (D2): the supervisor kills a live
-                    # `"manual"` session and respawns bound to this meeting id,
-                    # so the bridge's manual mirror must be cleared here. Runs
-                    # AFTER the lifecycle emit so the conference frame's shape
-                    # and order are untouched; the notice is subscriber-only.
-                    await self._preempt_manual_copilot()
+                    if manual_preempted:
+                        await self._notify_manual_copilot_preempted()
                     # Reset proactive transcript-tick state for the new
                     # meeting. `send_transcript` consults this on every
                     # broadcast; seeding `last_emit_ts` to the join time
@@ -2904,6 +2934,13 @@ class KTalkBridge:
                 },
                 ensure_ascii=False,
             )
+            # Publish request scope before the first channel-send await. A
+            # re-entrant meeting_join must see and stale-mark this entry; the
+            # resumed relay must not overwrite that marker afterwards.
+            # Empty string is used when no meeting is active (the reply will
+            # then be relayed normally — there is no meeting to become stale
+            # against).
+            self._copilot_pending_requests[request_id] = meeting_id or ""
             for client in channel_clients:
                 try:
                     await client.send(outbound)
@@ -2912,12 +2949,6 @@ class KTalkBridge:
                         f"[KTalk Bridge] Failed to forward copilot_chat_message to channel client: {e}",
                         file=sys.stderr,
                     )
-            # Record request_id -> meeting_id so a late reply that
-            # arrives after `meeting_leave` can be filtered out.
-            # Empty string is used when no meeting is active (the reply
-            # will then be relayed normally — there is no meeting to
-            # become stale against).
-            self._copilot_pending_requests[request_id] = meeting_id or ""
 
         elif msg_type == "copilot_channel_reply":
             # Channel server (recog/copilot_channel.py) emits a reply for a
@@ -2948,6 +2979,18 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
                 return
+            meeting_id = data.get("meeting_id")
+            # `None` (and absent) stays valid — replies generated before any
+            # meeting lifecycle must still relay. But a non-string value
+            # would silently bypass the cross-meeting guard below, so reject
+            # it like the sibling validations. The pending entry is left
+            # untouched: the frame never entered the reply flow.
+            if meeting_id is not None and not isinstance(meeting_id, str):
+                print(
+                    "[KTalk Bridge] copilot_channel_reply invalid meeting_id type — ignored",
+                    file=sys.stderr,
+                )
+                return
             tracked = self._copilot_pending_requests.get(request_id)
             if isinstance(tracked, str) and tracked.startswith("stale:"):
                 print(
@@ -2955,8 +2998,28 @@ class KTalkBridge:
                     file=sys.stderr,
                 )
                 self._copilot_pending_requests.pop(request_id, None)
+                # Terminal echo: without it the asking UI waits forever on
+                # "Жду ответа Claude…". Both UIs treat per-request `error`
+                # as terminal (resolve the placeholder, re-enable input).
+                # The message states the actual cause, keyed off the entry's
+                # original scope: an empty id means a manual/no-meeting
+                # request (e.g. invalidated by `_preempt_manual_copilot`) —
+                # never tell a manual-chat user a meeting ended when no
+                # meeting ever existed for their question.
+                original_scope = tracked[len("stale:"):]
+                await self._broadcast_copilot_frame({
+                    "type": "copilot_status",
+                    "request_id": request_id,
+                    "status": "error",
+                    "message": (
+                        "Ответ не доставлен: встреча, в которой был задан "
+                        "вопрос, уже завершилась."
+                        if original_scope
+                        else "Ответ не доставлен: ручная сессия copilot "
+                        "была прервана."
+                    ),
+                })
                 return
-            meeting_id = data.get("meeting_id")
             # Proactive replies use a synthetic `proactive_<uuid>` request_id
             # that was never tracked in `_copilot_pending_requests`, so the
             # stale-prefix check above cannot drop them. Cross-check the
@@ -2978,7 +3041,28 @@ class KTalkBridge:
                         f"{current_meeting_id} (kind={kind}) — dropped",
                         file=sys.stderr,
                     )
-                    self._copilot_pending_requests.pop(request_id, None)
+                    tracked_value = self._copilot_pending_requests.pop(request_id, None)
+                    # Terminal echo only for tracked requests: proactive
+                    # `proactive_<uuid>` replies were never recorded, and an
+                    # unmatched per-request `error` frame would render a
+                    # spurious error bubble in both UIs. No `stale:` strip
+                    # needed here: stale-prefixed entries already returned
+                    # at the stale-prefix branch above, and nothing awaits
+                    # between the two dict reads on the single event loop.
+                    if tracked_value is not None:
+                        scope = tracked_value
+                        await self._broadcast_copilot_frame({
+                            "type": "copilot_status",
+                            "request_id": request_id,
+                            "status": "error",
+                            "message": (
+                                "Ответ не доставлен: встреча сменилась до "
+                                "получения ответа."
+                                if scope
+                                else "Ответ не доставлен: ручная сессия "
+                                "copilot была прервана."
+                            ),
+                        })
                     return
             created_at = data.get("created_at")
             if not isinstance(created_at, (int, float)):

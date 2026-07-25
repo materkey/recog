@@ -1550,6 +1550,79 @@ async def test_copilot_channel_reply_with_invalid_fields_is_ignored():
 
 
 @pytest.mark.asyncio
+async def test_copilot_channel_reply_with_non_string_meeting_id_is_ignored(capsys):
+    """
+    given: an extension client and a tracked pending request
+    when:  copilot_channel_reply frames arrive with a non-string, non-None
+           meeting_id (int / list / dict)
+    then:  nothing is broadcast and the pending entry is NOT popped — the
+           frame never entered the reply flow (sibling log-and-return)
+    """
+    bridge = KTalkBridge()
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+    bridge._copilot_pending_requests["req-1"] = "m-current"
+
+    for bad_meeting_id in (123, ["m-1"], {"id": "m-1"}):
+        await bridge._process_message(
+            {
+                "type": "copilot_channel_reply",
+                "request_id": "req-1",
+                "kind": "manual",
+                "text": "x",
+                "meeting_id": bad_meeting_id,
+            }
+        )
+
+    assert extension_client.sent == []
+    assert bridge._copilot_pending_requests.get("req-1") == "m-current"
+    assert capsys.readouterr().err.count(
+        "copilot_channel_reply invalid meeting_id type — ignored"
+    ) == 3
+
+
+@pytest.mark.asyncio
+async def test_copilot_channel_reply_with_null_or_absent_meeting_id_is_relayed():
+    """
+    given: an extension client and a tracked pending request
+    when:  copilot_channel_reply frames arrive with explicit
+           `meeting_id: null` and with the key absent
+    then:  both replies ARE relayed — None/absent stay valid (replies
+           generated before any meeting lifecycle must reach the extension)
+    """
+    bridge = KTalkBridge()
+    extension_client = RecordingClient()
+    bridge._connected_clients.add(extension_client)
+    payloads = [
+        {
+            "type": "copilot_channel_reply",
+            "request_id": "req-null",
+            "kind": "manual",
+            "text": "ответ",
+            "meeting_id": None,
+        },
+        {
+            "type": "copilot_channel_reply",
+            "request_id": "req-absent",
+            "kind": "manual",
+            "text": "ещё ответ",
+        },
+    ]
+    for payload in payloads:
+        bridge._copilot_pending_requests[payload["request_id"]] = ""
+        await bridge._process_message(payload)
+
+    relayed = [
+        json.loads(m) for m in extension_client.sent
+        if json.loads(m)["type"] == "copilot_reply"
+    ]
+    assert [frame["request_id"] for frame in relayed] == [
+        "req-null",
+        "req-absent",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_copilot_channel_status_with_invalid_fields_is_ignored():
     """
     given: an extension client registered in `_connected_clients`
@@ -4630,3 +4703,410 @@ def test_contended_manual_lock_given_bridge_restart_when_reused_then_new_loop_wo
 
     bridge._thread_main()
     bridge._thread_main()
+
+
+# --- copilot reply drop guards: terminal echo + manual-preempt invalidation ---
+# A tracked reply dropped by either drop branch (stale-prefix / cross-meeting
+# mismatch) must terminally resolve the asking UI via a broadcast
+# `copilot_status {status: "error"}`; untracked (proactive) drops stay fully
+# silent. `_preempt_manual_copilot` stale-marks pending manual entries
+# (meeting id "") so a late manual reply cannot leak into the conference chat.
+
+_MSG_MEETING_ENDED = (
+    "Ответ не доставлен: встреча, в которой был задан вопрос, уже завершилась."
+)
+_MSG_MEETING_CHANGED = "Ответ не доставлен: встреча сменилась до получения ответа."
+_MSG_MANUAL_PREEMPTED = "Ответ не доставлен: ручная сессия copilot была прервана."
+
+
+@pytest.mark.asyncio
+async def test_stale_drop_emits_one_terminal_error_to_both_audiences(capsys):
+    """
+    given: a tracked pending entry stale-marked with a meeting scope
+           ("stale:m-prev"), one extension and one subscriber client
+    when:  the copilot_channel_reply for that request_id arrives
+    then:  no copilot_reply is broadcast; extension AND subscriber each
+           receive exactly ONE copilot_status {status: "error"} with the
+           request_id and the meeting-ended message; the entry is popped
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+    bridge._copilot_pending_requests["req-late"] = "stale:m-prev"
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-late",
+        "kind": "manual",
+        "text": "поздняя сводка",
+    })
+
+    for client in (ext, sub):
+        assert _copilot_frames(client, "copilot_reply") == []
+        errors = _copilot_frames(client, "copilot_status", "error")
+        assert len(errors) == 1
+        assert errors[0]["request_id"] == "req-late"
+        assert errors[0]["message"] == _MSG_MEETING_ENDED
+    assert "req-late" not in bridge._copilot_pending_requests
+    assert (
+        "copilot_channel_reply for stale request_id=req-late "
+        "(kind=manual) — dropped"
+    ) in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_cross_meeting_drop_for_tracked_request_emits_terminal_error(capsys):
+    """
+    given: a tracked non-stale entry ("m-prev"), current meeting "m-new",
+           one extension and one subscriber client
+    when:  a copilot_channel_reply arrives carrying meeting_id "m-prev"
+    then:  no copilot_reply; ONE terminal copilot_status error per client
+           with the meeting-changed message; the entry is popped
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-new"))
+    bridge._copilot_pending_requests["req-x"] = "m-prev"
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-x",
+        "kind": "manual",
+        "text": "ответ из прошлой встречи",
+        "meeting_id": "m-prev",
+    })
+
+    for client in (ext, sub):
+        assert _copilot_frames(client, "copilot_reply") == []
+        errors = _copilot_frames(client, "copilot_status", "error")
+        assert len(errors) == 1
+        assert errors[0]["request_id"] == "req-x"
+        assert errors[0]["message"] == _MSG_MEETING_CHANGED
+    assert "req-x" not in bridge._copilot_pending_requests
+    assert (
+        "copilot_channel_reply for meeting_id=m-prev but current is "
+        "m-new (kind=manual) — dropped"
+    ) in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_cross_meeting_drop_for_untracked_reply_emits_no_status(capsys):
+    """
+    given: no pending entry (proactive `proactive_<uuid>` reply), current
+           meeting "m-now"
+    when:  a copilot_channel_reply arrives carrying mismatching meeting_id
+    then:  nothing is broadcast at all — an unmatched per-request error
+           frame would render a spurious error bubble in both UIs
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+    bridge.set_meeting_storage(_make_storage_for_meeting("m-now"))
+
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "proactive_abc123",
+        "kind": "proactive",
+        "text": "заметка из прошлой встречи",
+        "meeting_id": "m-old",
+    })
+
+    assert ext.sent == []
+    assert sub.sent == []
+    assert (
+        "copilot_channel_reply for meeting_id=m-old but current is "
+        "m-now (kind=proactive) — dropped"
+    ) in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_preempt_manual_copilot_stale_marks_only_manual_entries(capsys):
+    """
+    given: an armed manual mirror and pending entries of every scope:
+           manual (""), conference ("m-cur"), already-stale ("stale:m-old")
+    when:  `_preempt_manual_copilot` runs
+    then:  only the ""-valued entry becomes "stale:"; the conference and
+           already-stale entries are untouched
+    """
+    bridge = KTalkBridge()
+    bridge._manual_copilot_active = True
+    bridge._copilot_pending_requests["req-m"] = ""
+    bridge._copilot_pending_requests["req-c"] = "m-cur"
+    bridge._copilot_pending_requests["req-s"] = "stale:m-old"
+
+    await bridge._preempt_manual_copilot()
+
+    assert bridge._copilot_pending_requests["req-m"] == "stale:"
+    assert bridge._copilot_pending_requests["req-c"] == "m-cur"
+    assert bridge._copilot_pending_requests["req-s"] == "stale:m-old"
+    assert (
+        "Marked 1 manual copilot request(s) stale on preemption"
+    ) in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_preempt_manual_copilot_noop_leaves_pending_untouched():
+    """
+    given: `_manual_copilot_active` is False and a pending ""-valued entry
+    when:  `_preempt_manual_copilot` runs
+    then:  the early return fires — the entry is NOT stale-marked
+    """
+    bridge = KTalkBridge()
+    bridge._copilot_pending_requests["req-m"] = ""
+
+    await bridge._preempt_manual_copilot()
+
+    assert bridge._copilot_pending_requests["req-m"] == ""
+
+
+@pytest.mark.asyncio
+async def test_late_manual_reply_after_preemption_gets_terminal_echo():
+    """
+    given: an armed manual mirror with a pending ""-valued request, one
+           extension and one subscriber client
+    when:  a conference `meeting_join` triggers `_preempt_manual_copilot`
+           and the manual reply arrives afterwards
+    then:  the entry was stale-marked ("stale:"); the reply is NOT rendered
+           as copilot_reply; both audiences receive ONE terminal
+           copilot_status error carrying the MANUAL-session message
+           ("прервана") — never the meeting-ended one, because no meeting
+           ever existed for the question (end-to-end DW-15 + DW-8)
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_meeting_storage_mock(meeting_id="m-conf"))
+    ext = RecordingClient()
+    sub = RecordingClient()
+    bridge._connected_clients.add(ext)
+    bridge._subscriber_clients.add(sub)
+    bridge._manual_copilot_active = True
+    bridge._copilot_pending_requests["req-manual"] = ""
+
+    await bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/room",
+        "title": "Standup",
+        "platform": "ktalk",
+    })
+
+    assert bridge._copilot_pending_requests["req-manual"] == "stale:"
+
+    ext.sent.clear()
+    sub.sent.clear()
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-manual",
+        "kind": "manual",
+        "text": "поздний ответ ручной сессии",
+        "meeting_id": None,
+    })
+
+    for client in (ext, sub):
+        assert _copilot_frames(client, "copilot_reply") == []
+        errors = _copilot_frames(client, "copilot_status", "error")
+        assert len(errors) == 1
+        assert errors[0]["request_id"] == "req-manual"
+        assert errors[0]["message"] == _MSG_MANUAL_PREEMPTED
+        assert errors[0]["message"] != _MSG_MEETING_ENDED
+    assert "req-manual" not in bridge._copilot_pending_requests
+
+
+@pytest.mark.asyncio
+async def test_given_lifecycle_send_reenters_when_manual_reply_arrives_then_reply_is_stale():
+    """
+    given: an armed manual mirror with a pending request and a channel
+           lifecycle recipient that re-enters the bridge
+    when:  that recipient handles the late manual reply from inside its
+           `meeting_started` send
+    then:  preemption has already stale-marked the request, so no
+           copilot_reply leaks into the conference chat and the terminal
+           manual-session error reaches both UI audiences
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+    bridge.set_meeting_storage(_meeting_storage_mock(meeting_id="m-conf"))
+    bridge._manual_copilot_active = True
+    bridge._copilot_pending_requests["req-reentrant"] = ""
+
+    class ReplyingLifecycleClient(RecordingClient):
+        def __init__(self):
+            super().__init__()
+            self.replied = False
+
+        async def send(self, message: str):
+            await super().send(message)
+            frame = json.loads(message)
+            if frame.get("type") == "meeting_started" and not self.replied:
+                self.replied = True
+                await bridge._process_message({
+                    "type": "copilot_channel_reply",
+                    "request_id": "req-reentrant",
+                    "kind": "manual",
+                    "text": "слишком поздний ответ",
+                    "meeting_id": None,
+                })
+
+    channel = ReplyingLifecycleClient()
+    bridge._copilot_channel_clients.add(channel)
+
+    await bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/room",
+        "title": "Standup",
+        "platform": "ktalk",
+    })
+
+    assert channel.replied is True
+    assert len(_copilot_frames(channel, "meeting_started")) == 1
+    for client in (ext, sub):
+        assert _copilot_frames(client, "copilot_reply") == []
+        errors = _copilot_frames(client, "copilot_status", "error")
+        assert len(errors) == 1
+        assert errors[0]["request_id"] == "req-reentrant"
+        assert errors[0]["message"] == _MSG_MANUAL_PREEMPTED
+    assert "req-reentrant" not in bridge._copilot_pending_requests
+
+
+@pytest.mark.asyncio
+async def test_given_channel_send_reenters_when_conference_joins_then_pending_stays_stale():
+    """
+    given: a manual chat relay with no active conference and a channel client
+           that starts a conference while receiving `copilot_user_message`
+    when:  the chat relay resumes and its late reply later arrives
+    then:  pending bookkeeping was visible before the send await, becomes
+           "stale:" during preemption, is not overwritten on resume, and only
+           the terminal manual-session error reaches both UI audiences
+    """
+    bridge, ext, sub = _bridge_with_extension_and_subscriber()
+    storage = Mock()
+    storage.current_meeting_path = Path("/tmp/orphan.jsonl")
+    storage.current_meeting_id = "orphan"
+    source = {"value": "orphan"}
+    storage._load_meta = Mock(
+        side_effect=lambda: {"source": source["value"], "title": "Standup"}
+    )
+
+    def _on_join(url, *args, **kwargs):
+        source["value"] = "ktalk"
+        storage.current_meeting_path = Path("/tmp/m-conf.jsonl")
+        storage.current_meeting_id = "m-conf"
+        return "m-conf"
+
+    storage.on_meeting_join = Mock(side_effect=_on_join)
+    storage.get_current_transcript = Mock(return_value=[])
+    storage.get_current_meeting_id = Mock(
+        side_effect=lambda: storage.current_meeting_id
+    )
+    bridge.set_meeting_storage(storage)
+    bridge._manual_copilot_active = True
+
+    class JoiningChannelClient(RecordingClient):
+        def __init__(self):
+            super().__init__()
+            self.pending_before_join = None
+            self.pending_after_join = None
+            self.joined = False
+
+        async def send(self, message: str):
+            await super().send(message)
+            frame = json.loads(message)
+            if frame.get("type") == "copilot_user_message" and not self.joined:
+                self.joined = True
+                self.pending_before_join = bridge._copilot_pending_requests.get(
+                    "req-race"
+                )
+                await bridge._process_message({
+                    "type": "meeting_join",
+                    "url": "https://ktalk.test/room",
+                    "title": "Standup",
+                    "platform": "ktalk",
+                })
+                self.pending_after_join = bridge._copilot_pending_requests.get(
+                    "req-race"
+                )
+
+    channel = JoiningChannelClient()
+    bridge._copilot_channel_clients.add(channel)
+
+    await bridge._process_message(
+        {
+            "type": "copilot_chat_message",
+            "request_id": "req-race",
+            "text": "ручной вопрос",
+        },
+        websocket=sub,
+    )
+
+    assert channel.pending_before_join == ""
+    assert channel.pending_after_join == "stale:"
+    assert bridge._copilot_pending_requests["req-race"] == "stale:"
+    forwarded = _copilot_frames(channel, "copilot_user_message")
+    assert len(forwarded) == 1
+    assert forwarded[0]["meeting_id"] is None
+
+    ext.sent.clear()
+    sub.sent.clear()
+    await bridge._process_message({
+        "type": "copilot_channel_reply",
+        "request_id": "req-race",
+        "kind": "manual",
+        "text": "поздний ответ",
+        "meeting_id": None,
+    })
+
+    for client in (ext, sub):
+        assert _copilot_frames(client, "copilot_reply") == []
+        errors = _copilot_frames(client, "copilot_status", "error")
+        assert len(errors) == 1
+        assert errors[0]["request_id"] == "req-race"
+        assert errors[0]["message"] == _MSG_MANUAL_PREEMPTED
+    assert "req-race" not in bridge._copilot_pending_requests
+
+
+@pytest.mark.asyncio
+async def test_given_blocking_preemption_notice_when_join_runs_then_lifecycle_arrives_first():
+    """
+    given: an armed manual mirror and a subscriber that blocks while receiving
+           the `manual_preempted` notice
+    when:  a conference meeting joins and reaches that blocked send
+    then:  channel, extension, and supervisor recipients already received
+           `meeting_started`; subscriber I/O is not on the lifecycle path
+    """
+    bridge = KTalkBridge()
+    bridge.set_meeting_storage(_meeting_storage_mock(meeting_id="m-conf"))
+    channel = RecordingClient()
+    extension = RecordingClient()
+    supervisor = RecordingClient()
+    bridge._copilot_channel_clients.add(channel)
+    bridge._connected_clients.add(extension)
+    bridge._supervisor_clients.add(supervisor)
+    bridge._manual_copilot_active = True
+    bridge._copilot_pending_requests["req-manual"] = ""
+
+    class BlockingSubscriber(RecordingClient):
+        def __init__(self):
+            super().__init__()
+            self.notice_started = asyncio.Event()
+            self.release_notice = asyncio.Event()
+
+        async def send(self, message: str):
+            await super().send(message)
+            frame = json.loads(message)
+            if frame.get("status") == "manual_preempted":
+                self.notice_started.set()
+                await self.release_notice.wait()
+
+    subscriber = BlockingSubscriber()
+    bridge._subscriber_clients.add(subscriber)
+
+    join_task = asyncio.create_task(bridge._process_message({
+        "type": "meeting_join",
+        "url": "https://ktalk.test/room",
+        "title": "Standup",
+        "platform": "ktalk",
+    }))
+    await asyncio.wait_for(subscriber.notice_started.wait(), timeout=1.0)
+    try:
+        for recipient in (channel, extension, supervisor):
+            started = _copilot_frames(recipient, "meeting_started")
+            assert len(started) == 1
+            assert started[0]["meeting_id"] == "m-conf"
+        assert bridge._manual_copilot_active is False
+        assert bridge._copilot_pending_requests["req-manual"] == "stale:"
+        assert join_task.done() is False
+    finally:
+        subscriber.release_notice.set()
+        await asyncio.wait_for(join_task, timeout=1.0)
