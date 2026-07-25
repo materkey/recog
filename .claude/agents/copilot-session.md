@@ -5,6 +5,7 @@ model: opus
 skills:
   - copilot-mode
 initialPrompt: |
+  <!-- ccs-automation:recog task=copilot -->
   Я в copilot-режиме для живой KTalk встречи. Скилл copilot-mode уже подгружен —
   держи его как standing context.
 
