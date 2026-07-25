@@ -40,6 +40,8 @@ from recog.ai_provider import (
     resolve_cli,
 )
 from recog.config import load_dotenv, MIC_SPEAKER_NAME
+from recog.log_utils import log_rate_limited
+from recog.ws_origin import origin_allowed
 from meeting_storage import is_conference_source
 
 if TYPE_CHECKING:
@@ -2029,6 +2031,44 @@ class KTalkBridge:
 
     async def _handle_client(self, websocket):
         """Обрабатывает подключение клиента (Chrome extension или subscriber)."""
+        # Origin allowlist (recog/ws_origin.py): WebSockets bypass CORS, so
+        # reject browser pages that are not the extension's conference hosts
+        # or the webapp BEFORE the socket is registered anywhere and before
+        # any inbound frame is read. Python clients (supervisor, channel
+        # daemon, BridgeSubscriber) send no Origin header and pass; test
+        # fakes without a `request` attribute are treated the same way.
+        request = getattr(websocket, "request", None)
+        if request is not None:
+            # websockets >= 14 asyncio implementation: handshake request
+            # object with a Headers mapping.
+            headers = request.headers
+        else:
+            # websockets 12/13 legacy protocol exposes the handshake headers
+            # as `request_headers` instead. Test fakes with neither
+            # attribute fall through as no-Origin (allowed).
+            headers = getattr(websocket, "request_headers", None)
+        origin = None
+        rejected_reason = None
+        if headers is not None:
+            try:
+                origin = headers.get("Origin")
+            except LookupError:
+                # websockets' Headers.get raises MultipleValuesError (a
+                # LookupError) when the handshake carries duplicate Origin
+                # headers — never a legitimate client; reject cleanly.
+                rejected_reason = "duplicate Origin headers"
+        if rejected_reason is None and not origin_allowed(origin):
+            rejected_reason = f"disallowed origin {origin!r}"
+        if rejected_reason is not None:
+            # Rate-limited: this path is attacker-reachable (a hostile page
+            # can loop connection attempts) — do not let it flood stderr.
+            log_rate_limited(
+                "bridge-ws-origin-reject",
+                f"[KTalk Bridge] Rejected WS connection: {rejected_reason} "
+                f"({websocket.remote_address})",
+            )
+            await websocket.close(code=1008, reason="origin not allowed")
+            return
         # Guard set mutation with `self._lock` — `send_transcript` /
         # `send_refine` snapshot these sets from non-asyncio threads and
         # an unlocked mutation races their iteration.

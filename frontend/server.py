@@ -34,6 +34,8 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from meeting_storage import MeetingStorage, get_external_paths
+from recog.log_utils import log_rate_limited
+from recog.ws_origin import origin_allowed
 from bridge_subscriber import BridgeSubscriber
 from live_watcher import LiveWatcher
 from transcript_watcher import TranscriptWatcher
@@ -1475,6 +1477,25 @@ async def watch_meeting(websocket: WebSocket, meeting_id: str):
 @app.websocket("/api/live/stream")
 async def live_stream(websocket: WebSocket):
     """WebSocket for live transcription stream."""
+    # Origin allowlist (recog/ws_origin.py): WebSockets bypass CORS, so a
+    # malicious page could otherwise relay copilot frames through this
+    # endpoint. Deny the handshake before accept() — live_watcher must
+    # never see a rejected socket. No-Origin clients (tests, tools) pass.
+    origins = websocket.headers.getlist("origin")
+    origin = origins[0] if len(origins) == 1 else None
+    rejected_reason = "duplicate Origin headers" if len(origins) > 1 else None
+    if rejected_reason is None and not origin_allowed(origin):
+        rejected_reason = f"disallowed origin {origin!r}"
+    if rejected_reason is not None:
+        # Rate-limited: this path is attacker-reachable (a hostile page can
+        # loop connection attempts) — do not let it flood stderr.
+        log_rate_limited(
+            "frontend-ws-origin-reject",
+            f"[Frontend] Rejected /api/live/stream connection from "
+            f"{rejected_reason}",
+        )
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     live_watcher.register(websocket)
 

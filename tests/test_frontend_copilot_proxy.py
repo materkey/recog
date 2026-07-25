@@ -12,9 +12,12 @@ state it keeps is a primer cache of the last
 import json
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from starlette.datastructures import Headers
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "frontend"))
@@ -474,6 +477,87 @@ def test_primer_delivered_after_active_meeting_init(monkeypatch):
         assert init["type"] == "init"
         assert init["meeting"]["id"] == "m-active"
         assert json.loads(ws.receive_text()) == json.loads(primer)
+
+
+def test_given_disallowed_origin_when_live_stream_connects_then_denied_before_registration(
+    monkeypatch,
+):
+    """given: a WS client whose handshake carries a disallowed Origin
+    when: it connects to /api/live/stream
+    then: the handshake is denied before accept() and live_watcher never
+          registers the socket
+    """
+    monkeypatch.setattr(server, "get_storage", lambda: FakeStorage())
+    register = Mock(wraps=server.live_watcher.register)
+    log_rejection = Mock()
+    monkeypatch.setattr(server.live_watcher, "register", register)
+    monkeypatch.setattr(server, "log_rate_limited", log_rejection)
+
+    client = TestClient(server.app)
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            "/api/live/stream", headers={"Origin": "https://evil.example"}
+        ):
+            pass
+
+    register.assert_not_called()
+    assert log_rejection.call_args.args[0] == "frontend-ws-origin-reject"
+
+
+@pytest.mark.asyncio
+async def test_given_duplicate_origins_when_live_stream_handles_socket_then_rejected(
+    monkeypatch,
+):
+    """given: a WS handshake carrying duplicate Origin headers
+    when: live_stream handles the socket
+    then: it closes with 1008 without registering the socket
+    """
+    class FakeWebSocket:
+        headers = Headers(raw=[
+            (b"origin", b"http://127.0.0.1:9080"),
+            (b"origin", b"https://evil.example"),
+        ])
+
+        def __init__(self):
+            self.close_calls = []
+
+        async def close(self, code=1000):
+            self.close_calls.append(code)
+
+    register = Mock()
+    monkeypatch.setattr(server.live_watcher, "register", register)
+    websocket = FakeWebSocket()
+
+    await server.live_stream(websocket)
+
+    assert websocket.close_calls == [1008]
+    register.assert_not_called()
+
+
+def test_given_no_origin_when_live_stream_connects_then_init_received(monkeypatch):
+    """given: a WS client that sends no Origin header (non-browser client)
+    when: it connects to /api/live/stream
+    then: behavior is unchanged — the init frame arrives
+    """
+    monkeypatch.setattr(server, "get_storage", lambda: FakeStorage())
+
+    client = TestClient(server.app)
+    with client.websocket_connect("/api/live/stream") as ws:
+        assert json.loads(ws.receive_text())["type"] == "init"
+
+
+def test_given_webapp_origin_when_live_stream_connects_then_init_received(monkeypatch):
+    """given: a WS client whose handshake carries the webapp origin
+    when: it connects to /api/live/stream
+    then: the handshake is accepted and the init frame arrives
+    """
+    monkeypatch.setattr(server, "get_storage", lambda: FakeStorage())
+
+    client = TestClient(server.app)
+    with client.websocket_connect(
+        "/api/live/stream", headers={"Origin": "http://127.0.0.1:9080"}
+    ) as ws:
+        assert json.loads(ws.receive_text())["type"] == "init"
 
 
 async def test_lifespan_wires_bridge_frames_bidirectionally(monkeypatch, tmp_path):
