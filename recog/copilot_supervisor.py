@@ -9,7 +9,9 @@ meeting end). See `docs/plans/2026-07-02-auto-copilot-session.md`.
 The webapp can also drive the same machine by hand: `copilot_spawn_request` /
 `copilot_stop_request` (relayed by the bridge) map onto the synthetic meeting id
 `MANUAL_MEETING_ID`, so a repeated spawn is the existing same-id flap and a real
-conference preempts the manual session as any back-to-back meeting would. See
+conference preempts the manual session as any back-to-back meeting would. An
+explicit stop is `stop_now` — an immediate kill with no grace window (the grace
+period only shields conference rejoin flaps). See
 `docs/plans/20260724-webapp-copilot-live.md`.
 
 State machine (SessionLifecycle, pure — no I/O):
@@ -21,6 +23,7 @@ State machine (SessionLifecycle, pure — no I/O):
     GRACE(A) ──timer expired──► kill + IDLE
     RUNNING(A) ──meeting_started(B)──► kill + SPAWNING(B)
     RUNNING(A) ──session_died──► SPAWNING(A)          (respawn; backoff in runner glue)
+    RUNNING/SPAWNING/GRACE(A) ──stop_now(A)──► kill + IDLE   (explicit Stop: no grace)
 """
 
 from __future__ import annotations
@@ -155,6 +158,20 @@ class SessionLifecycle:
         if self.state is State.SPAWNING:
             self.state = State.RUNNING
         return ()
+
+    def stop_now(self, meeting_id: Optional[str]) -> tuple:
+        """Explicit user Stop: kill immediately, no grace window.
+
+        The grace period exists to survive conference rejoin flaps; a user
+        clicking Stop is fresh intent, and 90 s of "останавливается…" reads
+        as a hang. Same id-matching rule as `meeting_ended`, so a stray stop
+        for a session bound to another meeting stays inert.
+        """
+        if self.state is State.IDLE or not self._same_meeting(meeting_id):
+            return ()
+        self.state = State.IDLE
+        self.meeting_id = None
+        return (Kill(),)
 
     def adopt(self, meeting_id: Optional[str]) -> tuple:
         """Attach to an already-live tmux session without spawning.
@@ -665,7 +682,17 @@ class Supervisor:
                 self._reset_respawn_backoff()
             await self._apply(self.lifecycle.meeting_started(MANUAL_MEETING_ID))
         elif ftype == "copilot_stop_request":
-            await self._apply(self.lifecycle.meeting_ended(MANUAL_MEETING_ID))
+            # Immediate kill (no grace): the stop path logs its one lifecycle
+            # event here — the 2026-08-06 stuck-"останавливается…" incident
+            # was undiagnosable because every hop of this path was silent.
+            commands = self.lifecycle.stop_now(MANUAL_MEETING_ID)
+            if commands:
+                print(
+                    f"{self._log_prefix} manual stop request "
+                    f"{data.get('request_id')!r} — killing session now",
+                    file=sys.stderr,
+                )
+            await self._apply(commands)
 
     async def _probe_session_alive(self) -> bool:
         try:

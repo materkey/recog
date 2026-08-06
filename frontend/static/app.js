@@ -951,6 +951,12 @@ function toggleFollowMode() {
 
 const COPILOT_TRANSCRIPT_WINDOW_SIZE = 15;
 
+// Manual Stop is an immediate kill at the supervisor (~2-5 s to ⚫ offline).
+// If no offline arrives within this window the stop frame was lost somewhere
+// on the webapp → bridge → supervisor path — surface it instead of showing
+// "останавливается…" forever (2026-08-06 incident).
+const COPILOT_STOP_CONFIRM_TIMEOUT_MS = 15000;
+
 const COPILOT_AGENT_CHIP = {
     online: { icon: '🟢', label: 'online', cls: 'online' },
     working: { icon: '🟡', label: 'working', cls: 'working' },
@@ -1142,10 +1148,10 @@ function updateCopilotControls() {
         const stopping = copilotState.stopPendingId !== null;
         const meetingSource = views.live.currentMeeting && views.live.currentMeeting.source;
         const conferenceOwned = COPILOT_CONFERENCE_SOURCES.has(meetingSource);
-        // The 90 s GRACE means "останавливается…" legitimately shows for
-        // minutes — the session is stopped only when the chip goes ⚫.
-        // Disabled while a stop is already in flight (no duplicate frames)
-        // and while there is no manual session to stop.
+        // Manual Stop kills immediately — "останавливается…" resolves to ⚫
+        // within seconds, or the timeout in copilotStopClick reports the
+        // stop as lost. Disabled while a stop is already in flight (no
+        // duplicate frames) and while there is no manual session to stop.
         stopBtn.textContent = stopping ? 'останавливается…' : 'Stop';
         stopBtn.disabled = stopping
             || copilotState.agentState === 'offline'
@@ -1212,6 +1218,15 @@ function copilotStopClick() {
     }
     copilotState.stopPendingId = requestId;
     updateCopilotControls();
+    setTimeout(() => {
+        if (copilotState.stopPendingId !== requestId) return;
+        copilotState.stopPendingId = null;
+        updateCopilotControls();
+        appendCopilotMessage({
+            kind: 'error',
+            text: 'Stop не подтверждён за 15 с — запрос, похоже, потерялся. Попробуйте ещё раз.'
+        });
+    }, COPILOT_STOP_CONFIRM_TIMEOUT_MS);
 }
 
 // Last ≤15 non-event rows of the live transcript, in the ws_api.js wire

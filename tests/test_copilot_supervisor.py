@@ -114,6 +114,18 @@ class FakeTmux:
         (State.SPAWNING, "A", "session_ready", (), State.RUNNING, "A", ()),
         # session_ready outside SPAWNING: no-op
         (State.RUNNING, "A", "session_ready", (), State.RUNNING, "A", ()),
+        # explicit user stop: immediate kill, no grace window
+        (State.RUNNING, "A", "stop_now", ("A",), State.IDLE, None, (Kill(),)),
+        # stop while still spawning: kill the half-started session too
+        (State.SPAWNING, "A", "stop_now", ("A",), State.IDLE, None, (Kill(),)),
+        # stop during grace: kill right away instead of waiting out the timer
+        (State.GRACE, "A", "stop_now", ("A",), State.IDLE, None, (Kill(),)),
+        # adopted session (unknown id) matches any stop — same as meeting_ended
+        (State.RUNNING, None, "stop_now", ("A",), State.IDLE, None, (Kill(),)),
+        # stop for a different id is stale — ignored
+        (State.RUNNING, "A", "stop_now", ("B",), State.RUNNING, "A", ()),
+        # stop in IDLE: no-op
+        (State.IDLE, None, "stop_now", ("A",), State.IDLE, None, ()),
     ],
 )
 def test_lifecycle_transitions(start_state, start_mid, event, args, end_state, end_mid, commands):
@@ -452,8 +464,8 @@ async def test_autospawn_off_meeting_frames_are_inert():
 
 async def test_autospawn_off_manual_frames_still_work():
     """given: RECOG_COPILOT_AUTOSPAWN=0 — the gate covers only meeting frames (D3)
-    when: a manual spawn is followed by a manual stop and grace expiry
-    then: the session spawns and is killed on expiry — the flag never blocks
+    when: a manual spawn is followed by a manual stop
+    then: the session spawns and is killed immediately — the flag never blocks
           an explicit user request
     """
     runner = FakeRunner()
@@ -462,10 +474,7 @@ async def test_autospawn_off_manual_frames_still_work():
     await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
     assert runner.spawned == [MANUAL_MEETING_ID]
     await sup.handle_frame({"type": "copilot_stop_request", "request_id": "r2"})
-    assert sup.lifecycle.state is State.GRACE
-    assert runner.kills == 0
 
-    await asyncio.sleep(0.15)
     assert runner.spawned == [MANUAL_MEETING_ID]
     assert runner.kills == 1
     assert sup.lifecycle.state is State.IDLE
@@ -635,10 +644,10 @@ async def test_manual_spawn_request_twice_is_idempotent():
     await sup.stop()
 
 
-async def test_manual_spawn_request_within_grace_revives_session():
-    """given: a manual session put into GRACE by a stop request
-    when: the user presses the button again before the timer expires
-    then: GRACE→RUNNING with no kill and no second spawn, timer cancelled
+async def test_manual_stop_then_spawn_starts_fresh_session():
+    """given: a manual session killed by an explicit stop request
+    when: the user presses the button again
+    then: a fresh session is spawned — stop leaves nothing to revive
     """
     runner = FakeRunner()
     sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
@@ -646,36 +655,32 @@ async def test_manual_spawn_request_within_grace_revives_session():
     await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
     sup.lifecycle.session_ready()
     await sup.handle_frame({"type": "copilot_stop_request", "request_id": "r2"})
-    assert sup.lifecycle.state is State.GRACE
+    assert sup.lifecycle.state is State.IDLE
+    assert runner.kills == 1
 
     await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r3"})
 
-    assert sup.lifecycle.state is State.RUNNING
-    assert runner.spawned == [MANUAL_MEETING_ID]
-    assert runner.kills == 0
-    assert sup._grace_task is None  # timer cancelled on leaving GRACE
+    assert sup.lifecycle.state is State.SPAWNING
+    assert runner.spawned == [MANUAL_MEETING_ID] * 2
     await sup.stop()
 
 
-async def test_manual_stop_request_graces_then_kills():
+async def test_manual_stop_request_kills_immediately():
     """given: a live manual session with autospawn off
-    when: copilot_stop_request arrives and the grace timer expires
-    then: the kill is deferred to the timer — exactly one spawn, one kill
+    when: copilot_stop_request arrives
+    then: the session is killed at once — no grace window, no timer armed
     """
     runner = FakeRunner()
-    sup = Supervisor(runner=runner, grace_s=0.05, autospawn=False)
+    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=False)
 
     await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
     sup.lifecycle.session_ready()
     await sup.handle_frame({"type": "copilot_stop_request", "request_id": "r2"})
-    assert sup.lifecycle.state is State.GRACE
-    assert sup._grace_task is not None  # grace timer armed via _apply
-    assert runner.kills == 0
 
-    await asyncio.sleep(0.15)
+    assert sup.lifecycle.state is State.IDLE
+    assert sup._grace_task is None
     assert runner.spawned == [MANUAL_MEETING_ID]
     assert runner.kills == 1
-    assert sup.lifecycle.state is State.IDLE
 
 
 async def test_conference_meeting_preempts_manual_session():
@@ -802,7 +807,7 @@ async def test_manual_stop_during_conference_is_inert():
            stray webapp copilot_stop_request with no conference guard and
            documents it as inert here — ktalk_bridge.py:3178-3181)
     when: copilot_stop_request arrives while RUNNING("B")
-    then: the id mismatch makes meeting_ended a no-op — the conference session
+    then: the id mismatch makes stop_now a no-op — the conference session
           stays RUNNING, no grace timer is armed and nothing is killed
     """
     runner = FakeRunner()
