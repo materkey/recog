@@ -3418,9 +3418,10 @@ class KTalkBridge:
                 self._set_manual_copilot_active(True)
 
         elif msg_type == "copilot_stop_request":
-            # Webapp stops the manual session. No conference guard: a stray
-            # stop is already inert at the supervisor (`meeting_ended` no-ops
-            # on a mismatched lifecycle id).
+            # Webapp stops the manual session (immediate kill at the
+            # supervisor — `stop_now`, no grace). No conference guard: a stray
+            # stop is already inert at the supervisor (`stop_now` no-ops on a
+            # mismatched lifecycle id).
             request_id = data.get("request_id")
             if not isinstance(request_id, str) or not request_id:
                 print(
