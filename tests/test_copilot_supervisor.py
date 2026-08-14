@@ -2076,12 +2076,33 @@ SPINNER_SCREEN = (
     "╰──────────────────────────────────────────────╯\n"
 )
 STARTUP_SCREEN = "\n\n  Starting up…\n"
+# Workspace-trust dialog captured live on claude 2.1.197+ (2026-08-14): shown
+# on fresh spawns when the project carries pre-approved permissions in
+# .claude/settings.local.json.
+TRUST_DIALOG_SCREEN = (
+    " Accessing workspace:\n"
+    "\n"
+    " /Users/vkkovalev/projects/recog\n"
+    "\n"
+    " Quick safety check: Is this a project you created or one you trust?\n"
+    "\n"
+    " Claude Code'll be able to read, edit, and execute files here.\n"
+    "\n"
+    " ⚠ This folder pre-approves 1 tool permission in .claude/settings.local.json:\n"
+    "   mcp__plugin_mem0_mem0__search_memories\n"
+    "\n"
+    " ❯ 1. Yes, I trust this folder\n"
+    "   2. No, exit\n"
+    "\n"
+    " Enter to confirm · Esc to cancel\n"
+)
 
 
 @pytest.mark.parametrize(
     "screen,expected",
     [
         (DEV_CHANNELS_SCREEN, AgentState.BLOCKED),   # known dev-channels dialog
+        (TRUST_DIALOG_SCREEN, AgentState.BLOCKED),   # known workspace-trust dialog
         (MODEL_DIALOG_SCREEN, AgentState.BLOCKED),   # unknown selection dialog
         (SPINNER_SCREEN, AgentState.WORKING),        # spinner beats the prompt line
         (REPL_PROMPT_SCREEN, AgentState.ONLINE),     # idle prompt
@@ -2182,6 +2203,41 @@ async def test_watchdog_redismisses_when_dialog_reappears():
     await watchdog.tick()                 # dialog again → send "1" again
 
     assert runner.sent_keys == [("1",), ("1",)]
+
+
+async def test_watchdog_auto_dismisses_trust_dialog_once():
+    """given: the copilot pane shows the workspace-trust dialog
+    when: the watchdog ticks twice on the same dialog
+    then: it sends "1" exactly once and reports spawning (never blocked)
+    """
+    clock = FakeClock()
+    runner = WatchdogRunner(screen=TRUST_DIALOG_SCREEN)
+    watchdog, _lifecycle, statuses, _died = _make_watchdog(runner, clock=clock)
+
+    await watchdog.tick()
+    await watchdog.tick()
+
+    assert runner.sent_keys == [("1",)]
+    assert AgentState.BLOCKED not in statuses
+    assert statuses == [AgentState.SPAWNING]
+
+
+async def test_watchdog_dismisses_trust_then_dev_channels_dialogs():
+    """given: the trust dialog is dismissed and the dev-channels dialog
+           immediately replaces it (back-to-back startup dialogs)
+    when: the watchdog ticks across the transition
+    then: each dialog gets its own keypress (per-dialog latch, not a global one)
+    """
+    clock = FakeClock()
+    runner = WatchdogRunner(screen=TRUST_DIALOG_SCREEN)
+    watchdog, _lifecycle, statuses, _died = _make_watchdog(runner, clock=clock)
+
+    await watchdog.tick()                 # trust dialog → send "1"
+    runner.screen = DEV_CHANNELS_SCREEN
+    await watchdog.tick()                 # dev-channels dialog → send "1" again
+
+    assert runner.sent_keys == [("1",), ("1",)]
+    assert AgentState.BLOCKED not in statuses
 
 
 async def test_watchdog_unknown_dialog_reports_blocked_without_dismiss():

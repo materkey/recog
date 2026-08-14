@@ -422,6 +422,14 @@ BLOCKED_MARKERS = ("enter to confirm", "esc to cancel", "❯ 1.")
 WORKING_MARKER = "esc to interrupt"
 PROMPT_CHAR = "❯"
 DEV_CHANNELS_MARKER = "local development"
+# Workspace-trust dialog (shown on fresh spawns when the project carries
+# pre-approved permissions in .claude/settings.local.json); both current and
+# older claude phrasings.
+TRUST_DIALOG_MARKERS = ("trust this folder", "trust the files in this folder")
+# Dialogs safe to auto-answer with option 1: dev-channels ("Yes, load them")
+# and workspace trust ("Yes, I trust this folder" — the same repo the
+# supervisor itself spawned the session into).
+AUTO_DISMISS_MARKERS = (DEV_CHANNELS_MARKER,) + TRUST_DIALOG_MARKERS
 PROMPT_TAIL_LINES = 15
 
 
@@ -450,8 +458,9 @@ class Watchdog:
     """Polls the copilot tmux screen while a session is expected to live.
 
     Each tick: classify the pane (`offline` when the session is gone),
-    auto-dismiss the known dev-channels dialog (`send-keys 1`, once per
-    dialog occurrence, reported as `spawning` — not `blocked`), report
+    auto-dismiss the known startup dialogs — dev-channels and workspace
+    trust — (`send-keys 1`, once per dialog occurrence, reported as
+    `spawning` — not `blocked`), report
     `copilot_agent_status` to the bridge on every state change plus an
     idempotent heartbeat every ~HEARTBEAT_S (the bridge merge measures
     freshness by it), and feed `session_ready` / `session_died` back into
@@ -481,7 +490,7 @@ class Watchdog:
         self._spawn_in_flight = spawn_in_flight
         self._last_reported: Optional[AgentState] = None
         self._last_report_ts: float = 0.0
-        self._dialog_dismissed = False
+        self._dismissed_dialog: Optional[str] = None
         self._spawning_since: Optional[float] = None
 
     async def run(self) -> None:
@@ -502,7 +511,7 @@ class Watchdog:
         if self.lifecycle.state is State.IDLE:
             # No session should exist: no probing, no heartbeats (the bridge
             # merge treats silence as offline) — just close out the chip once.
-            self._dialog_dismissed = False
+            self._dismissed_dialog = None
             self._spawning_since = None
             if self._last_reported not in (None, AgentState.OFFLINE):
                 await self._report(AgentState.OFFLINE, now)
@@ -538,16 +547,22 @@ class Watchdog:
 
     async def _observe(self) -> AgentState:
         if not await self.runner.alive():
-            self._dialog_dismissed = False
+            self._dismissed_dialog = None
             return AgentState.OFFLINE
         text = await self.runner.capture()
         state = classify_screen(text)
-        if state is AgentState.BLOCKED and DEV_CHANNELS_MARKER in text.lower():
-            if not self._dialog_dismissed:
-                self._dialog_dismissed = True
-                await self.runner.send_keys("1")
-            return AgentState.SPAWNING
-        self._dialog_dismissed = False
+        if state is AgentState.BLOCKED:
+            lowered = text.lower()
+            marker = next((m for m in AUTO_DISMISS_MARKERS if m in lowered), None)
+            if marker is not None:
+                # Latch per dialog kind, not globally: startup dialogs can
+                # appear back-to-back (trust → dev-channels), each needs its
+                # own keypress — but the same dialog is answered only once.
+                if self._dismissed_dialog != marker:
+                    self._dismissed_dialog = marker
+                    await self.runner.send_keys("1")
+                return AgentState.SPAWNING
+        self._dismissed_dialog = None
         return state
 
     async def _report(self, state: AgentState, now: float) -> None:
