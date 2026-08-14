@@ -933,6 +933,7 @@ export function injectStyles() {
         display: flex;
         flex-direction: column;
         gap: 10px;
+        user-select: text;
       }
       .ktalk-copilot-empty {
         color: rgba(255, 255, 255, 0.4);
@@ -991,6 +992,7 @@ export function injectStyles() {
         color: rgba(255, 255, 255, 0.9);
         white-space: pre-wrap;
         word-break: break-word;
+        user-select: text;
       }
       .copilot-msg-text.pending {
         color: rgba(255, 255, 255, 0.5);
