@@ -6322,19 +6322,26 @@ function injectStyles() {
       .ktalk-copilot-status.disconnected {
         color: #f87171;
       }
-      /* Agent lifecycle chip — reflects the auto-spawned copilot session
-         health (supervisor screen state merged with daemon MCP-session
-         count in the bridge). Independent from .ktalk-copilot-status, which
-         describes channel / per-request health. */
-      .ktalk-copilot-agent-chip {
+      /* Shared pill geometry for the header controls. The fixed height only
+         works with a single-line label — a wrapped one spills outside the
+         box — so nowrap belongs here, next to the height that requires it. */
+      .ktalk-copilot-agent-chip,
+      .ktalk-copilot-mute-btn {
         font-size: 11px;
         padding: 0 8px;
         height: 22px;
         line-height: 22px;
         border-radius: 4px;
+        white-space: nowrap;
+        flex: 0 0 auto;
+      }
+      /* Agent lifecycle chip — reflects the auto-spawned copilot session
+         health (supervisor screen state merged with daemon MCP-session
+         count in the bridge). Independent from .ktalk-copilot-status, which
+         describes channel / per-request health. */
+      .ktalk-copilot-agent-chip {
         background: rgba(255, 255, 255, 0.06);
         color: rgba(255, 255, 255, 0.75);
-        white-space: nowrap;
       }
       .ktalk-copilot-agent-chip.online {
         color: #4ade80;
@@ -6355,19 +6362,10 @@ function injectStyles() {
         gap: 8px;
       }
       .ktalk-copilot-mute-btn {
-        padding: 0 8px;
         background: rgba(255, 255, 255, 0.1);
         border: 1px solid rgba(255, 255, 255, 0.2);
-        border-radius: 4px;
         color: rgba(255, 255, 255, 0.85);
-        font-size: 11px;
         cursor: pointer;
-        height: 22px;
-        line-height: 22px;
-        /* Fixed height + wrapping label = the second line spills outside the
-           button box. Keep the label on one line like .ktalk-copilot-agent-chip. */
-        white-space: nowrap;
-        flex: 0 0 auto;
       }
       .ktalk-copilot-mute-btn:hover {
         background: rgba(255, 255, 255, 0.2);
@@ -6839,7 +6837,7 @@ function createCopilotContent() {
         <span class="ktalk-copilot-status">…</span>
         <div class="ktalk-copilot-actions">
           <span class="ktalk-copilot-agent-chip offline" title="Copilot session: offline">⚫ offline</span>
-          <button type="button" class="ktalk-copilot-mute-btn" title="Mute proactive messages for 10 minutes">Mute 10m</button>
+          <button type="button" class="ktalk-copilot-mute-btn" title="Mute proactive messages for 10 minutes"></button>
         </div>
       </div>
       <div class="ktalk-copilot-messages">
@@ -8852,6 +8850,20 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+/**
+ * `meeting_ended` is broadcast to every extension client, and the bridge now
+ * ends a meeting as soon as its owner tab drops — so a tab merely loaded on a
+ * conference host (the content script connects to the bridge with or without a
+ * call) receives it too. Only the tab actually in that meeting should narrate
+ * it, so this match is strict: an idle tab has `currentMeetingId === null` and
+ * stays quiet. The transcript guards in `ui.js` deliberately do the opposite
+ * and pass unknown ids through — dropping a transcript row costs data,
+ * dropping a system line costs nothing.
+ */
+function isOurMeeting(data) {
+  return Boolean(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId) && data.meeting_id === _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId;
+}
+
 function connectWebSocket() {
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection && _state_js__WEBPACK_IMPORTED_MODULE_0__.state.wsConnection.readyState === WebSocket.OPEN) {
     return;
@@ -8961,15 +8973,13 @@ function connectWebSocket() {
         } else if (data.type === 'copilot_status') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleCopilotStatus)(data);
         } else if (data.type === 'meeting_started') {
+          // No isOurMeeting() guard here: the bridge emits this BEFORE the
+          // joiner's `transcript_history` (ktalk_bridge.py:2651 vs :2698), so
+          // `state.currentMeetingId` is still the previous meeting's id.
           const title = (data && data.meeting_title) ? ` — ${data.meeting_title}` : '';
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)(`Встреча началась${title}`);
         } else if (data.type === 'meeting_ended') {
-          // The bridge now ends a meeting as soon as its owner tab drops,
-          // so this frame reaches sibling tabs (an idle conference host
-          // holds a WS too). Only the tab that was in the meeting should
-          // report it; an unrelated tab has a different currentMeetingId.
-          if (!data.meeting_id || !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId
-              || data.meeting_id === _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId) {
+          if (isOurMeeting(data)) {
             (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)('Встреча закончилась');
           }
         } else if (data.type === 'meeting_join_rejected') {
