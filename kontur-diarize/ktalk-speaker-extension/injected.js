@@ -6364,6 +6364,10 @@ function injectStyles() {
         cursor: pointer;
         height: 22px;
         line-height: 22px;
+        /* Fixed height + wrapping label = the second line spills outside the
+           button box. Keep the label on one line like .ktalk-copilot-agent-chip. */
+        white-space: nowrap;
+        flex: 0 0 auto;
       }
       .ktalk-copilot-mute-btn:hover {
         background: rgba(255, 255, 255, 0.2);
@@ -6835,7 +6839,7 @@ function createCopilotContent() {
         <span class="ktalk-copilot-status">…</span>
         <div class="ktalk-copilot-actions">
           <span class="ktalk-copilot-agent-chip offline" title="Copilot session: offline">⚫ offline</span>
-          <button type="button" class="ktalk-copilot-mute-btn" title="Mute proactive messages for 10 minutes">Mute proactive 10m</button>
+          <button type="button" class="ktalk-copilot-mute-btn" title="Mute proactive messages for 10 minutes">Mute 10m</button>
         </div>
       </div>
       <div class="ktalk-copilot-messages">
@@ -6894,7 +6898,7 @@ function refreshCopilotMuteButton() {
   if (!btn) return;
   const muted = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotProactiveMutedUntil > Date.now();
   btn.classList.toggle('active', muted);
-  btn.textContent = muted ? 'Unmute proactive' : 'Mute proactive 10m';
+  btn.textContent = muted ? 'Unmute' : 'Mute 10m';
 }
 
 function toggleCopilotProactiveMute() {
