@@ -7,6 +7,20 @@ import { sendWsMessage } from './ws_api.js';
 import { sendMeetingJoin, startMeetingCheck } from './meeting.js';
 import { getPlatformAdapter } from './platforms/index.js';
 
+/**
+ * `meeting_ended` is broadcast to every extension client, and the bridge now
+ * ends a meeting as soon as its owner tab drops — so a tab merely loaded on a
+ * conference host (the content script connects to the bridge with or without a
+ * call) receives it too. Only the tab actually in that meeting should narrate
+ * it, so this match is strict: an idle tab has `currentMeetingId === null` and
+ * stays quiet. The transcript guards in `ui.js` deliberately do the opposite
+ * and pass unknown ids through — dropping a transcript row costs data,
+ * dropping a system line costs nothing.
+ */
+function isOurMeeting(data) {
+  return Boolean(state.currentMeetingId) && data.meeting_id === state.currentMeetingId;
+}
+
 export function connectWebSocket() {
   if (state.wsConnection && state.wsConnection.readyState === WebSocket.OPEN) {
     return;
@@ -116,15 +130,13 @@ export function connectWebSocket() {
         } else if (data.type === 'copilot_status') {
           handleCopilotStatus(data);
         } else if (data.type === 'meeting_started') {
+          // No isOurMeeting() guard here: the bridge emits this BEFORE the
+          // joiner's `transcript_history` (ktalk_bridge.py:2651 vs :2698), so
+          // `state.currentMeetingId` is still the previous meeting's id.
           const title = (data && data.meeting_title) ? ` — ${data.meeting_title}` : '';
           appendCopilotSystemMessage(`Встреча началась${title}`);
         } else if (data.type === 'meeting_ended') {
-          // The bridge now ends a meeting as soon as its owner tab drops,
-          // so this frame reaches sibling tabs (an idle conference host
-          // holds a WS too). Only the tab that was in the meeting should
-          // report it; an unrelated tab has a different currentMeetingId.
-          if (!data.meeting_id || !state.currentMeetingId
-              || data.meeting_id === state.currentMeetingId) {
+          if (isOurMeeting(data)) {
             appendCopilotSystemMessage('Встреча закончилась');
           }
         } else if (data.type === 'meeting_join_rejected') {

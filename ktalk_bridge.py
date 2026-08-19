@@ -2230,32 +2230,28 @@ class KTalkBridge:
                 await self._recompute_agent_state()
             # Only extension clients count for lifecycle — subscribers are
             # passive listeners and must not block "last extension gone".
-            # The owner check is the second trigger: a content script runs on
-            # every conference host (an idle example.ktalk.ru tab holds a WS
-            # without being in any call), so `no_extension_clients` can stay
-            # False forever while the tab that actually owned the meeting is
-            # long gone — the meeting then hangs LIVE with no way to end it.
             if no_extension_clients or was_meeting_owner:
                 await self._end_meeting_on_extension_gone()
 
     async def _end_meeting_on_extension_gone(self) -> None:
         """Run the end-of-meeting cleanup when the meeting lost its extension.
 
+        Two conditions end a meeting here, whichever comes first:
+
+        - **The owner is gone.** `_meeting_owner_ws` — the socket that sent
+          `meeting_join` — closed. Other extension tabs may still be
+          connected, and usually are: the content script runs on every
+          conference host in the manifest, so an idle `example.ktalk.ru` tab
+          holds a WS without being in any call. Waiting for those would pin
+          the meeting LIVE indefinitely.
+        - **Nobody is left.** `_connected_clients` is empty. Covers a meeting
+          whose owner the bridge never recorded (bridge restarted mid-call),
+          and is re-checked by the `*_hello` handlers, which recover from the
+          race where a Python client was still transiently counted as an
+          extension when the real one disconnected.
+
         Idempotent: safe to call when no meeting is active (the inner
-        checks skip the cleanup). Called from three sites:
-        1. `_handle_client.finally` when an extension closes and leaves
-           `_connected_clients` empty.
-        2. `_handle_client.finally` when the closing socket was
-           `_meeting_owner_ws` — the tab that sent `meeting_join`. Other
-           extension tabs (idle conference hosts, a second room) may still
-           be connected; none of them owns this meeting, so waiting for
-           them to close would keep it LIVE indefinitely.
-        3. the `subscriber_hello` / `copilot_channel_hello` /
-           `supervisor_hello` handlers, to recover from the race where
-           an extension disconnected while this subscriber was still
-           transiently counted in `_connected_clients` (between WS-open
-           and hello-processing), causing the extension's finally-block
-           to skip the cleanup.
+        checks skip the cleanup).
 
         Mirrors the explicit `meeting_leave` Copilot cleanup so a hard
         extension disconnect (page reload, crash, network drop) cannot

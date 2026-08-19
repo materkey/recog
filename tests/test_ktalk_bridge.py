@@ -3300,62 +3300,21 @@ async def test_real_bridge_delivers_meeting_ended_on_leave_to_supervisor():
 
 
 @pytest.mark.asyncio
-async def test_real_bridge_delivers_meeting_ended_on_last_extension_gone_to_supervisor():
+@pytest.mark.parametrize("idle_tab", [False, True], ids=["alone", "idle-sibling"])
+async def test_owner_disconnect_ends_meeting(idle_tab):
     """
-    given: a REAL bridge, a registered supervisor, and an active meeting
-    when:  the only extension client abruptly disconnects (no meeting_leave)
-    then:  the supervisor receives `meeting_ended` via the
-           last-extension-gone path — the third emit path, and proof that
-           `supervisor_hello` isolates the supervisor from the extension
-           count (else `no_extension_clients` would be False and no end fires)
+    given: a REAL bridge, a registered supervisor, and an extension that
+           joined a meeting — alone, or alongside an idle conference-host
+           tab that never joined anything (the content script connects to
+           the bridge whether or not there is a call)
+    when:  the joining tab disconnects abruptly (tab closed, no meeting_leave)
+    then:  the supervisor receives `meeting_ended` in both cases. Without
+           the idle tab this also proves `supervisor_hello` isolates the
+           supervisor from the extension count; with it, that waiting for
+           `_connected_clients` to empty would pin the meeting LIVE.
     """
     bridge = KTalkBridge()
     storage = _meeting_storage_mock(meeting_id="m-live")
-    storage.current_meeting_path = None
-    bridge.set_meeting_storage(storage)
-
-    server, url = await _serve_bridge(bridge)
-    supervisor = extension = None
-    try:
-        supervisor = await websockets.connect(url)
-        await supervisor.send(json.dumps({"type": "supervisor_hello"}))
-        await _recv_type(supervisor, "meeting_state")
-
-        extension = await websockets.connect(url)
-        await extension.send(json.dumps({
-            "type": "meeting_join",
-            "url": "https://ktalk.test/abc",
-            "title": "Standup",
-            "platform": "ktalk",
-        }))
-        await _recv_type(supervisor, "meeting_started")
-
-        await extension.close()  # abrupt disconnect — page crash / network drop
-        extension = None
-        ended = await _recv_type(supervisor, "meeting_ended")
-        assert ended["meeting_id"] == "m-live"
-    finally:
-        if extension is not None:
-            await extension.close()
-        if supervisor is not None:
-            await supervisor.close()
-        server.close()
-        await server.wait_closed()
-
-
-@pytest.mark.asyncio
-async def test_meeting_ends_when_owner_tab_drops_while_idle_tab_stays():
-    """
-    given: a REAL bridge, a registered supervisor, an extension that joined
-           a meeting (the owner tab), and a SECOND extension client that
-           never joined anything — an idle conference-host tab, which the
-           content script connects to the bridge regardless of any call
-    when:  the owner tab disconnects abruptly (tab closed, no meeting_leave)
-    then:  the meeting ends anyway — waiting for `_connected_clients` to
-           empty would keep it LIVE for as long as the idle tab is open
-    """
-    bridge = KTalkBridge()
-    storage = _meeting_storage_mock(meeting_id="m-owner")
     storage.current_meeting_path = None
     bridge.set_meeting_storage(storage)
 
@@ -3366,21 +3325,22 @@ async def test_meeting_ends_when_owner_tab_drops_while_idle_tab_stays():
         await supervisor.send(json.dumps({"type": "supervisor_hello"}))
         await _recv_type(supervisor, "meeting_state")
 
-        idle = await websockets.connect(url)  # idle example.ktalk.ru tab
+        if idle_tab:
+            idle = await websockets.connect(url)
 
         owner = await websockets.connect(url)
         await owner.send(json.dumps({
             "type": "meeting_join",
-            "url": "https://element.test/#/room/!abc",
-            "title": "Recording test",
-            "platform": "matrix",
+            "url": "https://ktalk.test/abc",
+            "title": "Standup",
+            "platform": "ktalk",
         }))
         await _recv_type(supervisor, "meeting_started")
 
-        await owner.close()
+        await owner.close()  # abrupt disconnect — tab closed / page crash
         owner = None
         ended = await _recv_type(supervisor, "meeting_ended")
-        assert ended["meeting_id"] == "m-owner"
+        assert ended["meeting_id"] == "m-live"
         assert storage.on_ktalk_leave.called
     finally:
         for ws in (owner, idle, supervisor):

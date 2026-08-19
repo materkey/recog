@@ -875,19 +875,26 @@ export function injectStyles() {
       .ktalk-copilot-status.disconnected {
         color: #f87171;
       }
-      /* Agent lifecycle chip — reflects the auto-spawned copilot session
-         health (supervisor screen state merged with daemon MCP-session
-         count in the bridge). Independent from .ktalk-copilot-status, which
-         describes channel / per-request health. */
-      .ktalk-copilot-agent-chip {
+      /* Shared pill geometry for the header controls. The fixed height only
+         works with a single-line label — a wrapped one spills outside the
+         box — so nowrap belongs here, next to the height that requires it. */
+      .ktalk-copilot-agent-chip,
+      .ktalk-copilot-mute-btn {
         font-size: 11px;
         padding: 0 8px;
         height: 22px;
         line-height: 22px;
         border-radius: 4px;
+        white-space: nowrap;
+        flex: 0 0 auto;
+      }
+      /* Agent lifecycle chip — reflects the auto-spawned copilot session
+         health (supervisor screen state merged with daemon MCP-session
+         count in the bridge). Independent from .ktalk-copilot-status, which
+         describes channel / per-request health. */
+      .ktalk-copilot-agent-chip {
         background: rgba(255, 255, 255, 0.06);
         color: rgba(255, 255, 255, 0.75);
-        white-space: nowrap;
       }
       .ktalk-copilot-agent-chip.online {
         color: #4ade80;
@@ -908,19 +915,10 @@ export function injectStyles() {
         gap: 8px;
       }
       .ktalk-copilot-mute-btn {
-        padding: 0 8px;
         background: rgba(255, 255, 255, 0.1);
         border: 1px solid rgba(255, 255, 255, 0.2);
-        border-radius: 4px;
         color: rgba(255, 255, 255, 0.85);
-        font-size: 11px;
         cursor: pointer;
-        height: 22px;
-        line-height: 22px;
-        /* Fixed height + wrapping label = the second line spills outside the
-           button box. Keep the label on one line like .ktalk-copilot-agent-chip. */
-        white-space: nowrap;
-        flex: 0 0 auto;
       }
       .ktalk-copilot-mute-btn:hover {
         background: rgba(255, 255, 255, 0.2);
@@ -1392,7 +1390,7 @@ export function createCopilotContent() {
         <span class="ktalk-copilot-status">…</span>
         <div class="ktalk-copilot-actions">
           <span class="ktalk-copilot-agent-chip offline" title="Copilot session: offline">⚫ offline</span>
-          <button type="button" class="ktalk-copilot-mute-btn" title="Mute proactive messages for 10 minutes">Mute 10m</button>
+          <button type="button" class="ktalk-copilot-mute-btn" title="Mute proactive messages for 10 minutes"></button>
         </div>
       </div>
       <div class="ktalk-copilot-messages">
