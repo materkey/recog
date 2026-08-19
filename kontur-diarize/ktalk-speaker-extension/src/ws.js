@@ -119,7 +119,14 @@ export function connectWebSocket() {
           const title = (data && data.meeting_title) ? ` — ${data.meeting_title}` : '';
           appendCopilotSystemMessage(`Встреча началась${title}`);
         } else if (data.type === 'meeting_ended') {
-          appendCopilotSystemMessage('Встреча закончилась');
+          // The bridge now ends a meeting as soon as its owner tab drops,
+          // so this frame reaches sibling tabs (an idle conference host
+          // holds a WS too). Only the tab that was in the meeting should
+          // report it; an unrelated tab has a different currentMeetingId.
+          if (!data.meeting_id || !state.currentMeetingId
+              || data.meeting_id === state.currentMeetingId) {
+            appendCopilotSystemMessage('Встреча закончилась');
+          }
         } else if (data.type === 'meeting_join_rejected') {
           handleMeetingJoinRejected(data);
         }

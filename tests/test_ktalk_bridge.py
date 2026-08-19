@@ -1135,7 +1135,7 @@ async def test_subscriber_hello_without_active_meeting_is_noop():
     """
     given: no active meeting, no extensions, a subscriber connects
     when:  its subscriber_hello is processed
-    then:  _end_meeting_on_last_extension_gone is safe to call — no
+    then:  _end_meeting_on_extension_gone is safe to call — no
            on_ktalk_leave invocation because no meeting is active.
     """
     bridge = KTalkBridge()
@@ -2925,7 +2925,7 @@ def test_send_refine_with_meeting_id_skips_cross_meeting_entries():
     assert entry["refined"] is False
 
 
-# --- _end_meeting_on_last_extension_gone: copilot cleanup parity with meeting_leave ---
+# --- _end_meeting_on_extension_gone: copilot cleanup parity with meeting_leave ---
 
 
 @pytest.mark.asyncio
@@ -3096,7 +3096,7 @@ async def test_reply_without_meeting_id_falls_through_filter():
     assert relayed[0]["request_id"] == "req-known"
 
 
-# --- _end_meeting_on_last_extension_gone: defensive _load_meta error path ---
+# --- _end_meeting_on_extension_gone: defensive _load_meta error path ---
 
 
 @pytest.mark.asyncio
@@ -3339,6 +3339,53 @@ async def test_real_bridge_delivers_meeting_ended_on_last_extension_gone_to_supe
             await extension.close()
         if supervisor is not None:
             await supervisor.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_meeting_ends_when_owner_tab_drops_while_idle_tab_stays():
+    """
+    given: a REAL bridge, a registered supervisor, an extension that joined
+           a meeting (the owner tab), and a SECOND extension client that
+           never joined anything — an idle conference-host tab, which the
+           content script connects to the bridge regardless of any call
+    when:  the owner tab disconnects abruptly (tab closed, no meeting_leave)
+    then:  the meeting ends anyway — waiting for `_connected_clients` to
+           empty would keep it LIVE for as long as the idle tab is open
+    """
+    bridge = KTalkBridge()
+    storage = _meeting_storage_mock(meeting_id="m-owner")
+    storage.current_meeting_path = None
+    bridge.set_meeting_storage(storage)
+
+    server, url = await _serve_bridge(bridge)
+    supervisor = owner = idle = None
+    try:
+        supervisor = await websockets.connect(url)
+        await supervisor.send(json.dumps({"type": "supervisor_hello"}))
+        await _recv_type(supervisor, "meeting_state")
+
+        idle = await websockets.connect(url)  # idle example.ktalk.ru tab
+
+        owner = await websockets.connect(url)
+        await owner.send(json.dumps({
+            "type": "meeting_join",
+            "url": "https://element.test/#/room/!abc",
+            "title": "Recording test",
+            "platform": "matrix",
+        }))
+        await _recv_type(supervisor, "meeting_started")
+
+        await owner.close()
+        owner = None
+        ended = await _recv_type(supervisor, "meeting_ended")
+        assert ended["meeting_id"] == "m-owner"
+        assert storage.on_ktalk_leave.called
+    finally:
+        for ws in (owner, idle, supervisor):
+            if ws is not None:
+                await ws.close()
         server.close()
         await server.wait_closed()
 

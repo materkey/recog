@@ -2152,7 +2152,7 @@ class KTalkBridge:
                         # and skipped the meeting-end lifecycle. Re-run the
                         # check now that the subscriber has been unmasked.
                         if no_extension_clients:
-                            await self._end_meeting_on_last_extension_gone()
+                            await self._end_meeting_on_extension_gone()
                         continue
                     await self._process_message(data, websocket=websocket)
                 except json.JSONDecodeError:
@@ -2176,7 +2176,8 @@ class KTalkBridge:
                 # subsequent meeting_join from a fresh tab (the dead WS
                 # reference would still match nothing in _connected_clients
                 # but the comparison check happens before that read).
-                if websocket is self._meeting_owner_ws:
+                was_meeting_owner = websocket is self._meeting_owner_ws
+                if was_meeting_owner:
                     self._meeting_owner_ws = None
                 no_extension_clients = not self._connected_clients
                 no_channel_clients_left = not self._copilot_channel_clients
@@ -2229,17 +2230,28 @@ class KTalkBridge:
                 await self._recompute_agent_state()
             # Only extension clients count for lifecycle — subscribers are
             # passive listeners and must not block "last extension gone".
-            if no_extension_clients:
-                await self._end_meeting_on_last_extension_gone()
+            # The owner check is the second trigger: a content script runs on
+            # every conference host (an idle example.ktalk.ru tab holds a WS
+            # without being in any call), so `no_extension_clients` can stay
+            # False forever while the tab that actually owned the meeting is
+            # long gone — the meeting then hangs LIVE with no way to end it.
+            if no_extension_clients or was_meeting_owner:
+                await self._end_meeting_on_extension_gone()
 
-    async def _end_meeting_on_last_extension_gone(self) -> None:
-        """Run the end-of-meeting cleanup when no extension clients remain.
+    async def _end_meeting_on_extension_gone(self) -> None:
+        """Run the end-of-meeting cleanup when the meeting lost its extension.
 
         Idempotent: safe to call when no meeting is active (the inner
-        checks skip the cleanup). Called from two sites:
+        checks skip the cleanup). Called from three sites:
         1. `_handle_client.finally` when an extension closes and leaves
            `_connected_clients` empty.
-        2. the `subscriber_hello` handler, to recover from the race where
+        2. `_handle_client.finally` when the closing socket was
+           `_meeting_owner_ws` — the tab that sent `meeting_join`. Other
+           extension tabs (idle conference hosts, a second room) may still
+           be connected; none of them owns this meeting, so waiting for
+           them to close would keep it LIVE indefinitely.
+        3. the `subscriber_hello` / `copilot_channel_hello` /
+           `supervisor_hello` handlers, to recover from the race where
            an extension disconnected while this subscriber was still
            transiently counted in `_connected_clients` (between WS-open
            and hello-processing), causing the extension's finally-block
@@ -2304,10 +2316,11 @@ class KTalkBridge:
             self._copilot_transcript_buffer.clear()
             self._copilot_transcript_order.clear()
         if prev_meeting_id:
-            # Extensions are already gone here (this path fires on the last
-            # extension disconnect), but `_emit_lifecycle` still reaches
-            # channel clients and the supervisor; the empty extension
-            # broadcast is a harmless no-op.
+            # The extension that owned this meeting is gone; any extension
+            # still connected sits on another tab and filters the frame by
+            # its own `state.currentMeetingId`. `_emit_lifecycle` also
+            # reaches channel clients and the supervisor, which is the point
+            # of the broadcast here.
             await self._emit_lifecycle({
                 "type": "meeting_ended",
                 "meeting_id": prev_meeting_id,
@@ -2987,7 +3000,7 @@ class KTalkBridge:
             # that the channel client has been unmasked. Same pattern as
             # `subscriber_hello` above.
             if no_extension_clients:
-                await self._end_meeting_on_last_extension_gone()
+                await self._end_meeting_on_extension_gone()
             # Mirror of the channel-client disconnect path: when the channel
             # transitions from 0 to 1+ clients, broadcast a channel-level
             # `channel_connected` so extensions can clear any prior
@@ -3479,7 +3492,7 @@ class KTalkBridge:
             # hellos — and it must run BEFORE `_compute_meeting_state` so the
             # reply reflects the reconciled (possibly ended) meeting.
             if no_extension_clients:
-                await self._end_meeting_on_last_extension_gone()
+                await self._end_meeting_on_extension_gone()
             # Re-arm the manual mirror from the supervisor's own live session
             # id (D5) — the supervisor is the single runtime owner, so a bridge
             # restart mid-manual-session recovers here with no persistence.
