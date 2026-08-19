@@ -8964,7 +8964,14 @@ function connectWebSocket() {
           const title = (data && data.meeting_title) ? ` — ${data.meeting_title}` : '';
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)(`Встреча началась${title}`);
         } else if (data.type === 'meeting_ended') {
-          (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)('Встреча закончилась');
+          // The bridge now ends a meeting as soon as its owner tab drops,
+          // so this frame reaches sibling tabs (an idle conference host
+          // holds a WS too). Only the tab that was in the meeting should
+          // report it; an unrelated tab has a different currentMeetingId.
+          if (!data.meeting_id || !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId
+              || data.meeting_id === _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentMeetingId) {
+            (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.appendCopilotSystemMessage)('Встреча закончилась');
+          }
         } else if (data.type === 'meeting_join_rejected') {
           (0,_meeting_js__WEBPACK_IMPORTED_MODULE_2__.handleMeetingJoinRejected)(data);
         }
