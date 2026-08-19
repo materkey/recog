@@ -41,6 +41,8 @@ direct `copilot_user_message`s. Defaults are conservative:
   addressed to the local user (`MIC_SPEAKER_NAME`); a missing owner or
   deadline on a stated action item; a technical risk that the participants
   have not flagged; a contradiction with earlier transcript context.
+- **Proactive length.** One sentence, ≤ 140 characters, no preamble. The
+  user reads proactive notes mid-meeting; anything longer is skipped.
 - **Never speak up for.** Filler, agreement, off-topic chat, or anything
   that would be obvious to the participants. Do not summarise the meeting
   unless asked.
@@ -430,6 +432,11 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
             "a missing owner or deadline on a stated action item, a "
             "technical risk participants have not flagged, a contradiction "
             "with earlier transcript context.\n"
+            "- Hard length limit for kind='proactive': one sentence, at "
+            "most 140 characters, no preamble and no lists. The user reads "
+            "it mid-meeting out of the corner of an eye. If the point does "
+            "not fit in one sentence it is not proactive material — stay "
+            "silent and let the user ask.\n"
             "- Never speak up for filler, agreement, off-topic chat, or "
             "anything obvious to participants. Do not summarise the "
             "meeting unless asked."

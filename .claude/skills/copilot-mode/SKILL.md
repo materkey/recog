@@ -35,6 +35,8 @@ A batch of new segments arrived (5+ since last tick or 15s elapsed). The meta ha
 
 **Default to silence.** Most ticks should produce zero `send_copilot_message` calls. The bridge already throttles ticks; the extension UI applies a 60s proactive cooldown plus mute toggle, so verbose output is wasted tokens.
 
+**Hard length limit for `kind="proactive"`: одно предложение, ≤ 140 символов.** Пользователь читает это краем глаза посреди встречи — длинное сообщение он просто пропустит. Никаких преамбул («Обрати внимание», «Похоже, что»), никаких перечислений, никаких пояснений «почему я это пишу». Только сам факт или вопрос. Если мысль не влезает в одно предложение — значит, она не для проактивного сообщения: промолчи и дождись, когда пользователь спросит сам.
+
 Speak up only on:
 
 - **Direct question to the local user.** Look for `<local_user_name>,` or `@<local_user_name>` patterns, or rhetorical "Слава, как у нас с CI?" style. Answer briefly with `kind="proactive"`.
@@ -100,7 +102,7 @@ get_recent_transcript(window_seconds=300)
 # verify the question is current and CI capacity has been mentioned
 send_copilot_message(
   kind="proactive",
-  text="CI на 8 шардах сейчас, peak ~70%. Если +50% нагрузки — закладывай 12 шардов.",
+  text="CI: 8 шардов, peak ~70% — при +50% нагрузки нужно 12.",
   meeting_id="2026-04-27_..."
 )
 ```
@@ -142,7 +144,7 @@ Action:
 ```
 send_copilot_message(
   kind="proactive",
-  text="Action item «разобраться с метриками тестов» — нет owner и нет срока. Зафиксировать?",
+  text="«Метрики тестов» — нет owner и срока, зафиксировать?",
   meeting_id="..."
 )
 ```
