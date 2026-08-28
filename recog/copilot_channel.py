@@ -67,6 +67,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
+try:
+    from mcp.server.streamable_http import GET_STREAM_KEY
+except ImportError:  # SDK moved/renamed the constant — keep the wire value
+    GET_STREAM_KEY = "_GET_stream"
+
 
 DEFAULT_BRIDGE_URL = "ws://127.0.0.1:8766"
 DEFAULT_MCP_HOST = "127.0.0.1"
@@ -94,6 +99,34 @@ LOG_PREFIX = "[copilot-channel]"
 # steady `claude_sessions == 0` flip the chip to offline (see the
 # `claude_sessions` merge comment in ktalk_bridge.py).
 SESSION_COUNT_POLL_INTERVAL_S = 5.0
+
+# Zombie-transport reaper cadence and strike threshold. A Claude session
+# killed via `tmux kill-session` (SIGKILL — the supervisor's normal teardown)
+# never sends the HTTP DELETE that terminates its MCP session, and FastMCP
+# does not pass `session_idle_timeout` to the session manager, so the dead
+# transport stays in `_server_instances` forever. 3 strikes × 60 s means a
+# transport must lack a standing GET stream for ~3 minutes straight before
+# being reaped — long enough for a freshly-initialized client to open its
+# SSE stream or for a live one to reconnect it.
+ZOMBIE_REAP_INTERVAL_S = 60.0
+ZOMBIE_REAP_STRIKES = 3
+
+
+def _transport_channel_reachable(transport: Any) -> bool:
+    """True when the transport can actually receive a channel push.
+
+    A live Claude Code session keeps a standing GET SSE stream open
+    (registered under `GET_STREAM_KEY` in `_request_streams`) — that stream
+    is the only route `notifications/claude/channel` can travel. Without it
+    the SDK's message router silently discards server-initiated
+    notifications, so the transport is a zombie left behind by a killed
+    client. A transport without a `_request_streams` attribute (SDK rename)
+    is conservatively treated as reachable.
+    """
+    streams = getattr(transport, "_request_streams", None)
+    if streams is None:
+        return True
+    return GET_STREAM_KEY in streams
 
 
 class BridgeLink:
@@ -224,7 +257,14 @@ class SessionCountReporter:
                 )
                 self._warned_missing_attr = True
             return None
-        return len(instances or {})
+        # Count only channel-reachable transports: zombies left behind by
+        # SIGKILLed Claude sessions would otherwise inflate the count and
+        # keep the bridge's sessions==0 offline detection from ever firing.
+        return sum(
+            1
+            for transport in (instances or {}).values()
+            if _transport_channel_reachable(transport)
+        )
 
     async def poll_once(self) -> Optional[dict]:
         """One poll iteration.
@@ -247,6 +287,98 @@ class SessionCountReporter:
         self._last_count = count
         self._reported_epoch = epoch
         return result
+
+
+class ZombieSessionReaper:
+    """Reap MCP transports whose client died without terminating the session.
+
+    The supervisor tears copilot sessions down with `tmux kill-session`
+    (SIGKILL), so the Claude client never sends the DELETE that would remove
+    its transport from the session manager, and FastMCP configures no
+    `session_idle_timeout` — dead transports accumulate forever (observed:
+    24 "sessions" with one live client). A transport is considered dead when
+    it has no standing GET SSE stream (`_transport_channel_reachable`) for
+    `strikes_to_reap` consecutive sweeps; reaping mirrors the SDK's own
+    idle-timeout path: pop from `_server_instances`, then
+    `transport.terminate()` (which unblocks the session's `app.run` task).
+    """
+
+    def __init__(self, mcp: FastMCP, strikes_to_reap: int = ZOMBIE_REAP_STRIKES) -> None:
+        self._mcp = mcp
+        self._threshold = strikes_to_reap
+        self._strikes: dict[str, int] = {}
+
+    async def sweep_once(self) -> list[str]:
+        """One scan over the session registry. Returns reaped session ids."""
+        try:
+            manager = self._mcp.session_manager
+        except (RuntimeError, AttributeError):
+            return []
+        if manager is None:
+            return []
+        instances = getattr(manager, "_server_instances", None)
+        if instances is None:
+            return []
+
+        reaped: list[str] = []
+        for session_id, transport in list(instances.items()):
+            if _transport_channel_reachable(transport):
+                self._strikes.pop(session_id, None)
+                continue
+            strikes = self._strikes.get(session_id, 0) + 1
+            self._strikes[session_id] = strikes
+            if strikes < self._threshold:
+                continue
+            instances.pop(session_id, None)
+            self._strikes.pop(session_id, None)
+            terminate = getattr(transport, "terminate", None)
+            if callable(terminate):
+                try:
+                    await terminate()
+                except Exception as exc:
+                    print(
+                        f"{LOG_PREFIX} zombie session {session_id} terminate "
+                        f"failed: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
+            reaped.append(session_id)
+        if reaped:
+            print(
+                f"{LOG_PREFIX} reaped {len(reaped)} zombie MCP session(s): "
+                f"{', '.join(reaped)}",
+                file=sys.stderr,
+            )
+        # Forget strikes for sessions that disappeared on their own.
+        for session_id in list(self._strikes):
+            if session_id not in instances:
+                self._strikes.pop(session_id, None)
+        return reaped
+
+
+async def _zombie_reaper_loop(
+    reaper: ZombieSessionReaper, stop_event: asyncio.Event
+) -> None:
+    """Sweep for zombie transports every `ZOMBIE_REAP_INTERVAL_S`.
+
+    Exceptions are logged and swallowed — a failed sweep must not tear down
+    the channel server.
+    """
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=ZOMBIE_REAP_INTERVAL_S
+            )
+            return
+        except asyncio.TimeoutError:
+            pass
+        try:
+            await reaper.sweep_once()
+        except Exception as exc:
+            print(
+                f"{LOG_PREFIX} zombie sweep failed: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
 
 
 def _attach_channel_capability(mcp: FastMCP) -> None:
@@ -305,6 +437,11 @@ async def _broadcast_channel_notification(
 
     sent = 0
     for transport in list(transports.values()):
+        # Skip zombies: the SDK's message router drops notifications routed
+        # to a transport whose standing GET stream is gone, so writing there
+        # would only inflate the reported delivery count.
+        if not _transport_channel_reachable(transport):
+            continue
         write_stream = getattr(transport, "_write_stream", None)
         if write_stream is None:
             continue
@@ -794,11 +931,14 @@ async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
         file=sys.stderr,
     )
 
+    reaper = ZombieSessionReaper(mcp)
+
     ws_task = asyncio.create_task(_ws_loop(bridge_url, link, stop_event, mcp))
     mcp_task = asyncio.create_task(mcp.run_streamable_http_async())
     poll_task = asyncio.create_task(
         _session_count_poll_loop(reporter, stop_event)
     )
+    reaper_task = asyncio.create_task(_zombie_reaper_loop(reaper, stop_event))
     try:
         done, _pending = await asyncio.wait(
             {ws_task, mcp_task}, return_when=asyncio.FIRST_COMPLETED
@@ -809,10 +949,10 @@ async def _serve(bridge_url: str, mcp_host: str, mcp_port: int) -> None:
                 print(f"{LOG_PREFIX} task crashed: {exc!r}", file=sys.stderr)
     finally:
         stop_event.set()
-        for task in (ws_task, mcp_task, poll_task):
+        for task in (ws_task, mcp_task, poll_task, reaper_task):
             if not task.done():
                 task.cancel()
-        for task in (ws_task, mcp_task, poll_task):
+        for task in (ws_task, mcp_task, poll_task, reaper_task):
             try:
                 await task
             except asyncio.CancelledError:

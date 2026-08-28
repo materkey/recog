@@ -522,6 +522,168 @@ async def test_broadcast_channel_notification_writes_to_active_transports():
         assert params["meta"] == {"event_type": "transcript_tick"}
 
 
+async def test_broadcast_skips_transports_without_standing_get_stream():
+    """
+    given: three fake transports — one live (standing GET SSE stream
+           registered under GET_STREAM_KEY), one zombie (its Claude client
+           was SIGKILLed, so the GET stream was cleaned up and
+           `_request_streams` is empty), and one with an unknown shape
+           (no `_request_streams` attribute at all — SDK rename / old fake)
+    when:  `_broadcast_channel_notification` is invoked
+    then:  the live and unknown-shape transports receive the notification,
+           the zombie is skipped, and the returned count is 2 — the SDK's
+           message router would silently discard the zombie's push anyway
+           (streamable_http.py drops messages routed to a missing
+           GET stream), so counting it as "delivered" was a lie.
+    """
+    from recog.copilot_channel import (
+        GET_STREAM_KEY,
+        _broadcast_channel_notification,
+    )
+
+    class RecordingStream:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, msg):
+            self.sent.append(msg)
+
+    class LiveTransport:
+        def __init__(self):
+            self._write_stream = RecordingStream()
+            self._request_streams = {GET_STREAM_KEY: object()}
+
+    class ZombieTransport:
+        def __init__(self):
+            self._write_stream = RecordingStream()
+            self._request_streams = {}
+
+    class UnknownShapeTransport:
+        def __init__(self):
+            self._write_stream = RecordingStream()
+
+    live, zombie, unknown = LiveTransport(), ZombieTransport(), UnknownShapeTransport()
+
+    class FakeSessionManager:
+        _server_instances = {"live": live, "zombie": zombie, "unknown": unknown}
+
+    link = BridgeLink()
+    mcp = _build_mcp(link, "127.0.0.1", 0)
+    mcp._session_manager = FakeSessionManager()  # type: ignore[attr-defined]
+
+    sent_count = await _broadcast_channel_notification(mcp, "content", {})
+    assert sent_count == 2
+    assert len(live._write_stream.sent) == 1
+    assert len(unknown._write_stream.sent) == 1
+    assert zombie._write_stream.sent == []
+
+
+async def test_session_count_reporter_counts_only_channel_reachable_sessions():
+    """
+    given: a session manager holding one live transport (standing GET
+           stream) and one zombie transport (empty `_request_streams`)
+    when:  the reporter polls
+    then:  it reports count=1 — zombie transports left behind by
+           SIGKILLed Claude sessions must not inflate `claude_sessions`,
+           otherwise the bridge's sessions==0 offline detection can
+           never fire.
+    """
+    from recog.copilot_channel import GET_STREAM_KEY
+
+    class LiveTransport:
+        _request_streams = {GET_STREAM_KEY: object()}
+
+    class ZombieTransport:
+        _request_streams: dict = {}
+
+    link = BridgeLink()
+    ws = _RecordingWS()
+    link.set_socket(ws)
+    mcp = _build_mcp(link, "127.0.0.1", 0)
+    mcp._session_manager = _FakeSessionManager(
+        {"live": LiveTransport(), "zombie": ZombieTransport()}
+    )
+    reporter = SessionCountReporter(mcp, link)
+
+    await reporter.poll_once()
+    assert ws.sent[-1] == {"type": "claude_sessions", "count": 1}
+
+
+async def test_zombie_reaper_terminates_after_consecutive_strikes():
+    """
+    given: a session manager with one live and one zombie transport, and a
+           ZombieSessionReaper with a 3-strike threshold
+    when:  sweep_once runs three times
+    then:  the zombie is removed from `_server_instances` and terminated on
+           the third sweep (not earlier — a freshly-initialized client may
+           not have opened its GET stream yet), and the live transport is
+           untouched.
+    """
+    from recog.copilot_channel import GET_STREAM_KEY, ZombieSessionReaper
+
+    class LiveTransport:
+        _request_streams = {GET_STREAM_KEY: object()}
+
+        async def terminate(self):
+            raise AssertionError("live transport must not be terminated")
+
+    class ZombieTransport:
+        def __init__(self):
+            self._request_streams: dict = {}
+            self.terminated = False
+
+        async def terminate(self):
+            self.terminated = True
+
+    zombie = ZombieTransport()
+    manager = _FakeSessionManager({"live": LiveTransport(), "zombie": zombie})
+    mcp = _build_mcp(BridgeLink(), "127.0.0.1", 0)
+    mcp._session_manager = manager
+    reaper = ZombieSessionReaper(mcp, strikes_to_reap=3)
+
+    assert await reaper.sweep_once() == []
+    assert await reaper.sweep_once() == []
+    assert "zombie" in manager._server_instances
+    assert await reaper.sweep_once() == ["zombie"]
+    assert zombie.terminated is True
+    assert "zombie" not in manager._server_instances
+    assert "live" in manager._server_instances
+
+
+async def test_zombie_reaper_strikes_reset_when_get_stream_returns():
+    """
+    given: a transport whose GET stream disappears for two sweeps and then
+           comes back (an SSE reconnect, not a dead client)
+    when:  sweep_once runs past the strike threshold afterwards
+    then:  the transport is never reaped — recovery resets the strike count.
+    """
+    from recog.copilot_channel import GET_STREAM_KEY, ZombieSessionReaper
+
+    class Transport:
+        def __init__(self):
+            self._request_streams: dict = {}
+            self.terminated = False
+
+        async def terminate(self):
+            self.terminated = True
+
+    transport = Transport()
+    manager = _FakeSessionManager({"s": transport})
+    mcp = _build_mcp(BridgeLink(), "127.0.0.1", 0)
+    mcp._session_manager = manager
+    reaper = ZombieSessionReaper(mcp, strikes_to_reap=3)
+
+    await reaper.sweep_once()
+    await reaper.sweep_once()
+    transport._request_streams[GET_STREAM_KEY] = object()  # SSE reconnected
+    await reaper.sweep_once()
+    del transport._request_streams[GET_STREAM_KEY]
+    await reaper.sweep_once()
+    await reaper.sweep_once()
+    assert transport.terminated is False
+    assert "s" in manager._server_instances
+
+
 async def test_broadcast_channel_no_op_without_active_sessions():
     """
     given: a FastMCP whose session_manager has zero active transports
