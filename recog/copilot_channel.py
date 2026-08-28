@@ -805,6 +805,33 @@ async def _ws_loop(
         delay = min(delay * 2, MAX_BACKOFF_S)
 
 
+def _evict_one_event(queue: "asyncio.Queue[dict]") -> Optional[dict]:
+    """Make room in a full queue: drop the oldest `transcript_tick` first.
+
+    Ticks are periodic and superseded by the next one; a
+    `copilot_user_message` or a lifecycle marker is not — a typed question
+    must never be sacrificed to make room for a tick. Falls back to the
+    overall-oldest event when no tick is queued. Runs synchronously (no
+    awaits) so the drain-and-putback is atomic within the event loop.
+    """
+    items: list[dict] = []
+    try:
+        while True:
+            items.append(queue.get_nowait())
+    except asyncio.QueueEmpty:
+        pass
+    dropped: Optional[dict] = None
+    for index, event in enumerate(items):
+        if event.get("type") == "transcript_tick":
+            dropped = items.pop(index)
+            break
+    if dropped is None and items:
+        dropped = items.pop(0)
+    for event in items:
+        queue.put_nowait(event)
+    return dropped
+
+
 async def _handle_inbound(
     raw: Any, link: BridgeLink, mcp: Optional[FastMCP] = None
 ) -> None:
@@ -852,15 +879,13 @@ async def _handle_inbound(
     }:
         queue = link.event_queue
         if queue.full():
-            try:
-                dropped = queue.get_nowait()
+            dropped = _evict_one_event(queue)
+            if dropped is not None:
                 print(
                     f"{LOG_PREFIX} event_queue full — dropped oldest "
                     f"{dropped.get('type')!r}",
                     file=sys.stderr,
                 )
-            except asyncio.QueueEmpty:
-                pass
         try:
             queue.put_nowait(data)
         except asyncio.QueueFull:

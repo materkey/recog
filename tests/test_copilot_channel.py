@@ -684,6 +684,35 @@ async def test_zombie_reaper_strikes_reset_when_get_stream_returns():
     assert "s" in manager._server_instances
 
 
+async def test_event_queue_overflow_prefers_dropping_transcript_tick():
+    """
+    given: a full queue holding a copilot_user_message and a transcript_tick
+    when:  another event arrives via `_handle_inbound`
+    then:  the transcript_tick is evicted (ticks are periodic and superseded
+           by the next one) and the user message survives — a typed question
+           must never be sacrificed to make room for a tick.
+    """
+    from recog.copilot_channel import _handle_inbound
+
+    link = BridgeLink()
+    link.event_queue = asyncio.Queue(maxsize=2)
+    link.event_queue.put_nowait({"type": "copilot_user_message", "text": "\u0432\u043e\u043f\u0440\u043e\u0441"})
+    link.event_queue.put_nowait({"type": "transcript_tick", "n": 1})
+
+    await _handle_inbound(
+        json.dumps({"type": "copilot_user_message", "text": "\u0435\u0449\u0451 \u0432\u043e\u043f\u0440\u043e\u0441"}), link
+    )
+
+    drained = []
+    while not link.event_queue.empty():
+        drained.append(link.event_queue.get_nowait())
+    assert [e["type"] for e in drained] == [
+        "copilot_user_message",
+        "copilot_user_message",
+    ]
+    assert [e.get("text") for e in drained] == ["\u0432\u043e\u043f\u0440\u043e\u0441", "\u0435\u0449\u0451 \u0432\u043e\u043f\u0440\u043e\u0441"]
+
+
 async def test_broadcast_channel_no_op_without_active_sessions():
     """
     given: a FastMCP whose session_manager has zero active transports
