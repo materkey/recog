@@ -10,6 +10,7 @@ import { jest } from '@jest/globals';
 
 let state;
 let renderCopilotMessage;
+let createCopilotContent;
 let handleCopilotReply;
 let handleCopilotStatus;
 let appendCopilotSystemMessage;
@@ -29,6 +30,7 @@ beforeAll(async () => {
   state = (await import('./state.js')).state;
   ({
     renderCopilotMessage,
+    createCopilotContent,
     handleCopilotReply,
     handleCopilotStatus,
     appendCopilotSystemMessage,
@@ -88,6 +90,27 @@ describe('Copilot DOM panel', () => {
     expect(el.classList.contains('copilot-msg-user')).toBe(true);
     expect(el.querySelector('.copilot-msg-copy-btn')).toBeNull();
     expect(el.querySelector('.copilot-msg-dismiss-btn')).toBeNull();
+  });
+
+  test('recreating the panel after the host SPA re-renders the sidebar replays message history', () => {
+    // Mirror the production append flow: render first, push after (appendCopilotMessage).
+    for (const msg of [
+      { id: 'u1', kind: 'user', text: 'вопрос', time: '10:00:00' },
+      { id: 'a1', kind: 'assistant', text: 'ответ', time: '10:00:01' },
+    ]) {
+      renderCopilotMessage(msg);
+      state.copilotMessages.push(msg);
+    }
+    expect(document.querySelectorAll('.copilot-msg')).toHaveLength(2);
+
+    // KTalk SPA re-render drops the injected panel subtree entirely.
+    buildHostDom();
+    expect(document.querySelector('.ktalk-copilot-content')).toBeNull();
+
+    const el = createCopilotContent();
+    const texts = [...el.querySelectorAll('.copilot-msg-text')].map((n) => n.textContent);
+    expect(texts).toEqual(['вопрос', 'ответ']);
+    expect(el.querySelector('.ktalk-copilot-empty')).toBeNull();
   });
 
   test('handleCopilotReply replaces the pending assistant placeholder', () => {
