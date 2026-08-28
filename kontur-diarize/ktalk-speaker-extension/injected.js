@@ -6867,6 +6867,13 @@ function createCopilotContent() {
   sendBtn.addEventListener('click', () => submitCopilotInput());
 
   panelBody.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement);
+  // Replay accumulated history: the host SPA (KTalk sidebar re-render on
+  // channel switch, panel close/reopen) drops the injected DOM, but
+  // state.copilotMessages survives — without a replay the rebuilt panel
+  // shows the empty placeholder and past messages are never seen again.
+  for (const msg of _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotMessages) {
+    renderCopilotMessage(msg);
+  }
   updateCopilotStatusIndicator();
   updateCopilotAgentChip();
   console.log('[KTalk Transcript] Copilot element created');
