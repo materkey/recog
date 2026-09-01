@@ -5086,6 +5086,17 @@ function injectStyles() {
         color: rgba(255, 255, 255, 0.85);
         background: rgba(255, 255, 255, 0.05);
       }
+      /* While the Recog tab is active, KTalk still marks its own tab (chat/private)
+         as _active — the panel merely covers its content. Suppress that highlight
+         so only one tab looks selected; it comes back as soon as Recog deactivates. */
+      .tl-tabset__content:has(.ktalk-ai-tab._active) .tl-tab:not(.ktalk-ai-tab-wrapper) .link._active {
+        background: transparent;
+        color: rgba(255, 255, 255, 0.6);
+      }
+      .tl-tabset__content:has(.ktalk-ai-tab._active) .tl-tab:not(.ktalk-ai-tab-wrapper) .link._active:hover {
+        background: rgba(255, 255, 255, 0.03);
+        color: rgba(255, 255, 255, 0.85);
+      }
       .ktalk-ai-tab .tab-content {
         display: flex;
         align-items: center;
