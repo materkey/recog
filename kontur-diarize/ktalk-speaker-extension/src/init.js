@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { injectStyles, addAiTab, createTranscriptContent, createContextContent, createCopilotContent, watchTabChanges, initPlatformUI } from './ui.js';
+import { injectStyles, addAiTab, createTranscriptContent, createCopilotContent, watchTabChanges, initPlatformUI } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
@@ -10,7 +10,6 @@ import { showVas3kPrejoinState, showVas3kWaitingState } from './ui-vas3k.js';
 
 const AI_CONTENT_RECOVERY = [
   { selector: '.ktalk-transcript-content', stateKey: 'transcriptContentElement', create: createTranscriptContent },
-  { selector: '.ktalk-context-content', stateKey: 'contextContentElement', create: createContextContent },
   { selector: '.ktalk-copilot-content', stateKey: 'copilotContentElement', create: createCopilotContent }
 ];
 
@@ -152,7 +151,6 @@ function setupUI() {
   const aiTabAdded = addAiTab();
   if (aiTabAdded) {
     createTranscriptContent();
-    createContextContent();
     createCopilotContent();
     watchTabChanges();
   }

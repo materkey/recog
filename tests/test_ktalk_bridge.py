@@ -16,64 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import ktalk_bridge
 from ktalk_bridge import KTalkBridge, Participant, PcmChunk
-from recog.ai_provider import DEFAULT_CODEX_MODEL
-
-
-@pytest.mark.asyncio
-async def test_call_codex_cli_marks_prompt_and_uses_ephemeral():
-    bridge = KTalkBridge()
-    created = {}
-
-    class FakeProcess:
-        returncode = 0
-
-        async def communicate(self, input=None):
-            created["input"] = input
-            return (
-                b'{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}\n',
-                b"",
-            )
-
-    async def fake_create_subprocess_exec(*cmd, **kwargs):
-        created["cmd"] = cmd
-        return FakeProcess()
-
-    with patch("ktalk_bridge.resolve_cli", return_value="/mock/codex"), \
-         patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=fake_create_subprocess_exec)):
-        answer = await bridge._call_codex_cli("hello", task="summarize")
-
-    assert answer == "answer"
-    assert created["cmd"][3] == DEFAULT_CODEX_MODEL
-    assert "--ephemeral" in created["cmd"]
-    assert created["input"].decode().startswith(
-        "<!-- ccs-automation:recog task=summarize -->\nhello"
-    )
-
-
-@pytest.mark.asyncio
-async def test_call_claude_cli_marks_prompt():
-    bridge = KTalkBridge()
-    created = {}
-
-    class FakeProcess:
-        returncode = 0
-
-        async def communicate(self):
-            return b"answer\n", b""
-
-    async def fake_create_subprocess_exec(*cmd, **kwargs):
-        created["cmd"] = cmd
-        return FakeProcess()
-
-    with patch("ktalk_bridge.resolve_cli", return_value="/mock/claude"), \
-         patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=fake_create_subprocess_exec)):
-        answer = await bridge._call_claude_cli("hello", model="opus", task="anchor")
-
-    assert answer == "answer"
-    assert created["cmd"][:2] == ("/mock/claude", "-p")
-    assert created["cmd"][2].startswith(
-        "<!-- ccs-automation:recog task=anchor -->\nhello"
-    )
 
 
 class FakeWebSocket:

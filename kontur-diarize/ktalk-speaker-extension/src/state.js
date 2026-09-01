@@ -34,15 +34,6 @@ export const state = {
   currentMeetingId: null,
   meetingCheckInterval: null,
 
-  summaryModalElement: null,
-  currentSummaryText: '',
-  summaryRequestPending: false,
-  currentSummaryType: 'catchup',
-  contextContentElement: null,
-  anchorRequestPending: false,
-  currentAnchorData: null,
-  anchorLastUpdated: 0,
-
   debugPanelElement: null,
   debugVisible: false,
   lastParticipants: [],

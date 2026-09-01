@@ -13,7 +13,6 @@ let handleTranscriptRefine;
 let handleNewMeeting;
 let handleTranscriptHistory;
 let buildSpeakerAliasMap;
-let createContextContent;
 
 // `isJitsiPlatform` lives in `platforms/index.js` and is derived from
 // `window.location.hostname`. jsdom forbids mutating `location` after setup,
@@ -32,26 +31,7 @@ beforeAll(async () => {
   }));
 
   state = (await import('./state.js')).state;
-  ({ handleTranscript, handleTranscriptRefine, handleNewMeeting, handleTranscriptHistory, buildSpeakerAliasMap, createContextContent } = await import('./ui.js'));
-});
-
-describe('GPT-5.6 model selector', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '<div class="slide-menu-wrapper"><div class="content"></div></div>';
-    state.contextContentElement = null;
-  });
-
-  test('given context UI - when created - then all GPT-5.6 models are available', () => {
-    createContextContent();
-
-    const selector = document.querySelector('.ktalk-context-model-select');
-    const values = Array.from(selector.options).map(option => option.value);
-    expect(values).toEqual(expect.arrayContaining([
-      'codex:gpt-5.6-sol',
-      'codex:gpt-5.6-terra',
-      'codex:gpt-5.6-luna',
-    ]));
-  });
+  ({ handleTranscript, handleTranscriptRefine, handleNewMeeting, handleTranscriptHistory, buildSpeakerAliasMap } = await import('./ui.js'));
 });
 
 describe('handleTranscriptRefine', () => {
