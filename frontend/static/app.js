@@ -264,24 +264,25 @@ const views = {
             const container = document.getElementById('meetings-list');
             let filtered = this.meetings;
 
-            // Filter by date
-            filtered = DatePicker.filterMeetings(filtered, DatePicker.getDate());
-
-            // Filter by source
-            if (this.filterSource) {
-                if (this.filterSource === 'active') {
-                    filtered = filtered.filter(m => m.is_active);
-                } else {
-                    filtered = filtered.filter(m => m.source === this.filterSource);
-                }
-            }
-
-            // Filter by title
             if (this.filterTitle) {
+                // Search spans the whole base: date/source narrow browsing, not search
+                // (matches the by-content mode, which never applied them)
                 const term = this.filterTitle.toLowerCase();
                 filtered = filtered.filter(m =>
                     (m.title || '').toLowerCase().includes(term)
                 );
+            } else {
+                // Filter by date
+                filtered = DatePicker.filterMeetings(filtered, DatePicker.getDate());
+
+                // Filter by source
+                if (this.filterSource) {
+                    if (this.filterSource === 'active') {
+                        filtered = filtered.filter(m => m.is_active);
+                    } else {
+                        filtered = filtered.filter(m => m.source === this.filterSource);
+                    }
+                }
             }
 
             if (filtered.length === 0) {
