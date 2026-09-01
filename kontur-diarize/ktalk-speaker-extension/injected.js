@@ -5500,20 +5500,23 @@ function injectStyles() {
         border-radius: 6px;
         background: transparent;
         vertical-align: middle;
-        transition: color 0.15s;
+        transition: color 0.2s ease-in-out, background-color 0.15s ease-in-out;
       }
       .ktalk-ai-tab.link:hover {
         color: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.03);
       }
       .ktalk-ai-tab.link._active {
         color: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.05);
       }
       .ktalk-ai-tab .tab-content {
         display: flex;
         align-items: center;
         height: 32px;
         line-height: 16px;
-        gap: 4px;
+        padding: 8px 6px;
+        gap: 5px;
       }
       .ktalk-ai-unread {
         width: 6px;
