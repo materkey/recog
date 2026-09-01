@@ -86,7 +86,7 @@ export function injectStyles() {
         display: none;
         flex-direction: column;
         height: 100%;
-        background: rgb(52, 52, 52);
+        background: rgb(45, 45, 45);
       }
       .ktalk-ai-panel.active {
         display: flex;
@@ -95,7 +95,7 @@ export function injectStyles() {
         display: flex;
         gap: 4px;
         padding: 8px 12px;
-        background: rgb(60, 60, 60);
+        background: rgb(52, 52, 52);
         border-bottom: 1px solid rgba(255,255,255,0.1);
         flex: 0 0 auto;
       }
@@ -135,7 +135,7 @@ export function injectStyles() {
         display: none;
         flex-direction: column;
         height: 100%;
-        background: rgb(52, 52, 52);
+        background: rgb(45, 45, 45);
         color: rgba(255, 255, 255, 0.8);
         user-select: text;
         --bioread-tail-opacity: 0.6;
@@ -147,7 +147,7 @@ export function injectStyles() {
         display: flex;
         align-items: center;
         padding: 10px 16px;
-        background: rgb(60, 60, 60);
+        background: rgb(52, 52, 52);
         border-bottom: 1px solid rgba(255,255,255,0.1);
         gap: 8px;
       }
@@ -176,7 +176,7 @@ export function injectStyles() {
         align-items: center;
         justify-content: flex-start;
         padding: 8px 12px;
-        background: rgb(56, 56, 56);
+        background: rgb(52, 52, 52);
         border-bottom: 1px solid rgba(255,255,255,0.1);
         flex-wrap: wrap;
         gap: 6px;
@@ -312,7 +312,7 @@ export function injectStyles() {
         display: none;
         flex-direction: column;
         gap: 8px;
-        background: rgb(44, 44, 44);
+        background: rgb(64, 63, 63);
         border: 1px solid rgba(255,255,255,0.1);
         border-radius: 8px;
         box-shadow: 0 12px 24px rgba(0,0,0,0.35);
@@ -445,7 +445,7 @@ export function injectStyles() {
         display: none;
         flex-direction: column;
         height: 100%;
-        background: rgb(52, 52, 52);
+        background: rgb(45, 45, 45);
         color: rgba(255, 255, 255, 0.85);
       }
       .ktalk-copilot-content.active {
@@ -456,7 +456,7 @@ export function injectStyles() {
         align-items: center;
         gap: 8px;
         padding: 10px 16px;
-        background: rgb(60, 60, 60);
+        background: rgb(52, 52, 52);
         border-bottom: 1px solid rgba(255, 255, 255, 0.1);
       }
       .ktalk-copilot-title {
@@ -630,7 +630,7 @@ export function injectStyles() {
         flex-direction: column;
         gap: 6px;
         padding: 10px 12px;
-        background: rgb(56, 56, 56);
+        background: rgb(52, 52, 52);
         border-top: 1px solid rgba(255, 255, 255, 0.1);
       }
       .ktalk-copilot-input {
@@ -824,7 +824,7 @@ export function createTranscriptContent() {
             Start recog with:
           </div>
           <div class="ktalk-transcript-empty-cmd">
-            python mp4_notes.py live --screencapture --ktalk
+            ./recog-service.sh start
           </div>
         </div>
       </div>
@@ -2013,7 +2013,7 @@ function updateTranscriptUI() {
             Start recog with:
           </div>
           <div class="ktalk-transcript-empty-cmd">
-            python mp4_notes.py live --screencapture --ktalk
+            ./recog-service.sh start
           </div>
         </div>
       `;
