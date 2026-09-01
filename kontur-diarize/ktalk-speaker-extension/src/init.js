@@ -134,6 +134,26 @@ function tryAttachConference() {
   }
 }
 
+function ktalkUiMissing() {
+  // No tabset means the chat panel is closed - there is nowhere to inject yet.
+  if (!document.querySelector('.tl-tabset__content')) return false;
+  return !document.querySelector('.ktalk-ai-tab')
+    || AI_CONTENT_RECOVERY.some(({ selector }) => !document.querySelector(selector));
+}
+
+function recoverKtalkUi() {
+  if (!document.querySelector('.ktalk-ai-tab')) {
+    setupUI();
+  }
+  for (const { selector, stateKey, create } of AI_CONTENT_RECOVERY) {
+    if (!document.querySelector(selector)) {
+      state[stateKey] = null;
+      state.originalChatContent = null;
+      create();
+    }
+  }
+}
+
 function setupUI() {
   const adapter = getPlatformAdapter();
 
@@ -337,20 +357,27 @@ export function init() {
       }
     } else {
       // For KTalk: check tab exists
-      if (!document.querySelector('.ktalk-ai-tab')) {
-        setupUI();
-      }
-      for (const { selector, stateKey, create } of AI_CONTENT_RECOVERY) {
-        if (!document.querySelector(selector)) {
-          state[stateKey] = null;
-          state.originalChatContent = null;
-          create();
-        }
-      }
+      recoverKtalkUi();
     }
     tryAttachConference();
     updateDebugPanel();
   }, 2000);
+
+  // KTalk renders the tabset only while the chat panel is open, so the 2 s
+  // interval alone shows the Recog tab with a visible lag after the panel
+  // opens (and after every KTalk re-render). React to DOM changes instead;
+  // the interval stays as a fallback.
+  if (!adapter || adapter.supportsTabInjection()) {
+    // Synchronous on purpose: rAF never fires and setTimeout is clamped to
+    // ~1 s in hidden/unfocused tabs, while observer callbacks are microtasks
+    // and run everywhere. ktalkUiMissing() keeps the common case to a single
+    // querySelector, and our own insertions can't loop the observer - the
+    // re-entered callback sees the UI present and returns.
+    const uiObserver = new MutationObserver(() => {
+      if (ktalkUiMissing()) recoverKtalkUi();
+    });
+    uiObserver.observe(document.body, { childList: true, subtree: true });
+  }
 
   waitForConference(subscribeToDominantSpeaker);
 
