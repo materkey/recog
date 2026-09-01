@@ -5,21 +5,9 @@ import { sendWsMessage, sendCopilotChatMessage } from './ws_api.js';
 import { getPlatform, isJitsiPlatform } from './platforms/index.js';
 import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine, clearVas3kTranscript, ensureVas3kCopilotHost, setVas3kCopilotActivateHandler } from './ui-vas3k.js';
 
-const DEFAULT_CODEX_UI_MODEL = 'codex:gpt-5.6-sol';
-
-function getStoredModel(key) {
-  const model = localStorage.getItem(key);
-  return !model || model === 'codex' ? DEFAULT_CODEX_UI_MODEL : model;
-}
-
-let selectedModel = getStoredModel('ktalk-ai-model');
-let anchorModel = getStoredModel('ktalk-anchor-model');
 let meetingTitle = document.title || '';
 let bioReadHotkeyBound = false;
 let bioReadPanelListenerBound = false;
-let summaryMenuOpen = false;
-let summaryMenuListenerBound = false;
-let anchorHotkeyBound = false;
 
 export function injectStyles() {
   if (document.querySelector('#ktalk-transcript-styles')) return;
@@ -82,7 +70,7 @@ export function injectStyles() {
         display: none;
       }
 
-      /* AI panel: sub-navigation + active view (Transcript | Context | Copilot) */
+      /* AI panel: sub-navigation + active view (Transcript | Copilot) */
       .ktalk-ai-panel {
         display: none;
         flex-direction: column;
@@ -143,74 +131,6 @@ export function injectStyles() {
       }
       .ktalk-transcript-content.active {
         display: flex;
-      }
-      .ktalk-context-content {
-        display: none;
-        flex-direction: column;
-        height: 100%;
-        background: rgb(52, 52, 52);
-        color: rgba(255, 255, 255, 0.85);
-      }
-      .ktalk-context-content.active {
-        display: flex;
-      }
-      .ktalk-context-header {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 16px;
-        background: rgb(60, 60, 60);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-      }
-      .ktalk-context-title {
-        font-size: 13px;
-        font-weight: 600;
-      }
-      .ktalk-context-actions {
-        margin-left: auto;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .ktalk-context-refresh-btn {
-        padding: 0 10px;
-        background: rgba(255,255,255,0.12);
-        border: 1px solid rgba(0, 138, 255, 0.6);
-        border-radius: 4px;
-        color: rgba(255,255,255,0.9);
-        font-size: 11px;
-        cursor: pointer;
-        height: 22px;
-        line-height: 22px;
-      }
-      .ktalk-context-refresh-btn:hover {
-        background: rgba(0, 138, 255, 0.2);
-        border-color: rgba(0, 138, 255, 0.9);
-      }
-      .ktalk-context-refresh-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .ktalk-context-model-select {
-        background: rgba(255,255,255,0.1);
-        border: 1px solid rgba(255,255,255,0.2);
-        color: rgba(255,255,255,0.9);
-        font-size: 12px;
-        border-radius: 4px;
-        padding: 2px 6px;
-      }
-      .ktalk-context-body {
-        padding: 16px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        flex: 1;
-      }
-      .ktalk-context-body.loading {
-        align-items: center;
-        justify-content: center;
-        color: rgba(255,255,255,0.7);
       }
       .ktalk-transcript-speaker-bar {
         display: flex;
@@ -344,87 +264,6 @@ export function injectStyles() {
         background: #0ea5e9;
         color: #fff;
       }
-      .ktalk-transcript-summary-btn {
-        padding: 0 8px;
-        background: rgba(255,255,255,0.1);
-        border: none;
-        border-radius: 4px;
-        color: rgba(255,255,255,0.8);
-        font-size: 11px;
-        cursor: pointer;
-        transition: background 0.15s;
-        height: 22px;
-        line-height: 22px;
-        white-space: nowrap;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 4px;
-      }
-      .ktalk-transcript-summary-btn:hover {
-        background: rgba(255,255,255,0.2);
-      }
-      .ktalk-transcript-summary-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .ktalk-transcript-summary-btn.loading {
-        animation: ktalk-loading 1s infinite;
-      }
-      @keyframes ktalk-loading {
-        0% { opacity: 0.5; }
-        50% { opacity: 1; }
-        100% { opacity: 0.5; }
-      }
-      .ktalk-summary-menu {
-        position: relative;
-        display: inline-flex;
-      }
-      .ktalk-summary-menu-toggle {
-        padding: 0 8px;
-        background: rgba(255,255,255,0.1);
-        border: none;
-        border-radius: 4px;
-        color: rgba(255,255,255,0.8);
-        font-size: 11px;
-        cursor: pointer;
-        transition: background 0.15s;
-        height: 22px;
-        line-height: 22px;
-        white-space: nowrap;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-      }
-      .ktalk-summary-menu-toggle:hover {
-        background: rgba(255,255,255,0.2);
-      }
-      .ktalk-summary-menu-toggle.active {
-        background: rgba(255,255,255,0.25);
-      }
-      .ktalk-summary-menu-panel {
-        position: absolute;
-        top: calc(100% + 6px);
-        left: 0;
-        min-width: 160px;
-        padding: 6px;
-        background: rgb(44, 44, 44);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 8px;
-        box-shadow: 0 12px 24px rgba(0,0,0,0.35);
-        display: none;
-        flex-direction: column;
-        gap: 4px;
-        z-index: 5;
-      }
-      .ktalk-summary-menu-panel.active {
-        display: flex;
-      }
-      .ktalk-summary-menu-panel .ktalk-transcript-summary-btn {
-        width: 100%;
-        justify-content: flex-start;
-        gap: 8px;
-      }
       .ktalk-bioread-toggle,
       .ktalk-bioread-settings-btn {
         padding: 0 8px;
@@ -492,259 +331,6 @@ export function injectStyles() {
         text-align: right;
         font-variant-numeric: tabular-nums;
         color: rgba(255,255,255,0.9);
-      }
-
-      /* Summary Floating Window */
-      .ktalk-summary-modal {
-        position: fixed;
-        top: 50px;
-        right: 50px;
-        width: 480px;
-        background: rgb(40, 40, 40);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 12px;
-        box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-        z-index: 9999;
-        display: none;
-        font-family: "Lab Grotesque", Arial, sans-serif;
-      }
-      .ktalk-summary-modal.active {
-        display: block;
-      }
-      .ktalk-summary-modal-content {
-        display: flex;
-        flex-direction: column;
-        max-height: 80vh;
-      }
-      .ktalk-summary-modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 16px 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        cursor: move;
-      }
-      .ktalk-summary-modal-title {
-        font-size: 16px;
-        font-weight: 600;
-        color: #fff;
-      }
-      .ktalk-summary-modal-close {
-        background: none;
-        border: none;
-        color: rgba(255,255,255,0.6);
-        font-size: 20px;
-        cursor: pointer;
-        padding: 0;
-      }
-      .ktalk-summary-modal-close:hover {
-        color: #fff;
-      }
-      .ktalk-summary-modal-body {
-        padding: 20px;
-        overflow-y: auto;
-        color: rgba(255,255,255,0.9);
-        font-size: 14px;
-        line-height: 1.6;
-      }
-      .ktalk-summary-modal-body.loading {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        min-height: 200px;
-        gap: 12px;
-      }
-      .ktalk-summary-spinner {
-        width: 32px;
-        height: 32px;
-        border: 3px solid rgba(255,255,255,0.2);
-        border-top: 3px solid #60a5fa;
-        border-radius: 50%;
-        animation: ktalk-spin 0.8s linear infinite;
-      }
-      @keyframes ktalk-spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-      .ktalk-summary-modal-footer {
-        display: flex;
-        justify-content: flex-end;
-        padding: 12px 20px;
-        border-top: 1px solid rgba(255,255,255,0.1);
-      }
-      .ktalk-summary-copy-btn {
-        padding: 6px 12px;
-        background: rgba(255,255,255,0.1);
-        border: none;
-        border-radius: 6px;
-        color: rgba(255,255,255,0.8);
-        font-size: 12px;
-        cursor: pointer;
-      }
-      .ktalk-summary-copy-btn:hover {
-        background: rgba(255,255,255,0.2);
-      }
-      .ktalk-summary-copy-btn.copied {
-        background: #22c55e;
-      }
-      .ktalk-summary-error {
-        color: #f87171;
-        font-weight: 500;
-      }
-      .ktalk-summary-question-input {
-        display: flex;
-        gap: 8px;
-        padding: 0 20px 12px 20px;
-      }
-      .ktalk-question-field {
-        flex: 1;
-        padding: 8px 12px;
-        background: rgba(255,255,255,0.08);
-        border: 1px solid rgba(255,255,255,0.15);
-        border-radius: 6px;
-        color: #fff;
-        font-size: 13px;
-      }
-      .ktalk-question-field:focus {
-        outline: none;
-        border-color: #60a5fa;
-      }
-      .ktalk-question-field::placeholder {
-        color: rgba(255,255,255,0.4);
-      }
-      .ktalk-question-submit {
-        padding: 8px 12px;
-        background: #60a5fa;
-        border: none;
-        border-radius: 6px;
-        color: #fff;
-        font-size: 13px;
-        cursor: pointer;
-      }
-      .ktalk-question-submit:hover {
-        background: #3b82f6;
-      }
-      .ktalk-question-submit:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .ktalk-summary-text h3, .ktalk-summary-text h4 {
-        color: #fff;
-        margin: 12px 0 8px 0;
-      }
-      .ktalk-summary-text h3:first-child {
-        margin-top: 0;
-      }
-      .ktalk-summary-text ul {
-        margin: 8px 0;
-        padding-left: 20px;
-      }
-      .ktalk-summary-text li {
-        margin: 4px 0;
-      }
-      .ktalk-summary-text strong {
-        color: #fff;
-      }
-      .ktalk-summary-text em {
-        color: rgba(255,255,255,0.8);
-      }
-      .ktalk-anchor-section-title {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: rgba(255,255,255,0.5);
-        margin-bottom: 4px;
-      }
-      .ktalk-anchor-topic {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        padding: 8px 10px;
-        background: rgba(255,255,255,0.06);
-        border-radius: 6px;
-      }
-      .ktalk-anchor-topic-text {
-        font-size: 14px;
-        font-weight: 600;
-        color: rgba(255,255,255,0.92);
-      }
-      .ktalk-anchor-tone {
-        font-size: 10px;
-        padding: 2px 6px;
-        border-radius: 999px;
-        border: 1px solid transparent;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-      .ktalk-anchor-tone.neutral {
-        color: rgba(255,255,255,0.65);
-        border-color: rgba(255,255,255,0.2);
-      }
-      .ktalk-anchor-tone.calm {
-        color: #4ade80;
-        border-color: rgba(74, 222, 128, 0.5);
-      }
-      .ktalk-anchor-tone.heated {
-        color: #f87171;
-        border-color: rgba(248, 113, 113, 0.6);
-      }
-      .ktalk-anchor-bullets {
-        list-style: none;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        padding: 0;
-        margin: 0;
-      }
-      .ktalk-anchor-bullet {
-        display: flex;
-        gap: 8px;
-        align-items: flex-start;
-      }
-      .ktalk-anchor-ts-btn {
-        background: rgba(255,255,255,0.08);
-        border: 1px solid rgba(255,255,255,0.2);
-        color: rgba(255,255,255,0.7);
-        font-size: 11px;
-        border-radius: 999px;
-        padding: 2px 8px;
-        cursor: pointer;
-        font-family: monospace;
-      }
-      .ktalk-anchor-ts-btn:hover {
-        border-color: rgba(0, 138, 255, 0.8);
-        color: rgba(255,255,255,0.9);
-      }
-      .ktalk-anchor-ts-btn.empty {
-        cursor: default;
-        opacity: 0.5;
-      }
-      .ktalk-anchor-bullet-text {
-        font-size: 13px;
-        color: rgba(255,255,255,0.85);
-        line-height: 1.4;
-      }
-      .ktalk-anchor-mention {
-        font-size: 13px;
-        padding: 8px 10px;
-        border-radius: 6px;
-        background: rgba(255,255,255,0.05);
-      }
-      .ktalk-anchor-mention.ok {
-        color: #4ade80;
-      }
-      .ktalk-anchor-mention.alert {
-        color: #fca5a5;
-      }
-      .ktalk-anchor-note {
-        font-size: 11px;
-        color: rgba(255,255,255,0.5);
-        margin-top: 2px;
-      }
-      .ktalk-msg.anchor-highlight {
-        box-shadow: 0 0 0 2px rgba(0, 138, 255, 0.6);
-        border-radius: 6px;
       }
 
       /* Transcript messages */
@@ -1127,9 +713,7 @@ function captureOriginalChatContent(contentArea) {
 }
 
 function activateSubView(view) {
-  if (view === 'context') {
-    activateContextTab();
-  } else if (view === 'copilot') {
+  if (view === 'copilot') {
     activateCopilotTab();
   } else {
     setActiveView('transcript');
@@ -1148,7 +732,6 @@ function ensureAiPanelBody(contentArea) {
     panel.innerHTML = `
         <div class="ktalk-ai-subnav">
           <button type="button" class="ktalk-ai-subtab" data-view="transcript">Transcript</button>
-          <button type="button" class="ktalk-ai-subtab" data-view="context">Context</button>
           <button type="button" class="ktalk-ai-subtab" data-view="copilot">Copilot<span class="ktalk-ai-unread" hidden></span></button>
         </div>
         <div class="ktalk-ai-panel-body"></div>
@@ -1189,16 +772,6 @@ export function createTranscriptContent() {
         </div>
       </div>
       <div class="ktalk-transcript-toolbar">
-        <div class="ktalk-summary-menu">
-          <button class="ktalk-summary-menu-toggle" title="Summary actions">
-            Summary <span class="ktalk-summary-caret">▾</span>
-          </button>
-          <div class="ktalk-summary-menu-panel">
-            <button class="ktalk-transcript-summary-btn" data-type="catchup" title="Catch up - включиться в дискуссию">🎯 Catch up</button>
-            <button class="ktalk-transcript-summary-btn" data-type="brief" title="Краткое за 2 мин">📋 Brief</button>
-            <button class="ktalk-transcript-summary-btn" data-type="full" title="Вся встреча + вопрос">💬 Full</button>
-          </div>
-        </div>
         <button class="ktalk-transcript-follow-btn" title="Auto-follow latest">Follow</button>
         <button class="ktalk-transcript-copy-btn" title="Copy all transcript">Copy</button>
         <button class="ktalk-transcript-privacy-btn" title="Replace names with speaker_N when copying">Privacy</button>
@@ -1256,12 +829,6 @@ export function createTranscriptContent() {
   });
   state.transcriptContentElement.querySelector('.ktalk-transcript-follow-btn').addEventListener('click', toggleAutoFollow);
   updateFollowButton();
-  state.transcriptContentElement.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      requestSummary(btn.dataset.type);
-      closeSummaryMenu();
-    });
-  });
   state.transcriptContentElement.querySelector('.ktalk-scroll-top').addEventListener('click', () => {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) container.scrollTop = 0;
@@ -1271,69 +838,12 @@ export function createTranscriptContent() {
     if (container) container.scrollTop = container.scrollHeight;
   });
 
-  setupSummaryMenu(state.transcriptContentElement);
-  setupAnchorControls();
   setupBioReadControls(state.transcriptContentElement);
-  createSummaryModal();
 
   panelBody.appendChild(state.transcriptContentElement);
 
   console.log('[KTalk Transcript] Content element created');
   return state.transcriptContentElement;
-}
-
-export function createContextContent() {
-  if (document.querySelector('.ktalk-context-content')) {
-    return document.querySelector('.ktalk-context-content');
-  }
-
-  const contentArea = document.querySelector('.slide-menu-wrapper .content');
-  if (!contentArea) {
-    console.log('[KTalk Transcript] Content area not found for context');
-    return null;
-  }
-
-  const panelBody = ensureAiPanelBody(contentArea);
-  if (!panelBody) return null;
-
-  state.contextContentElement = document.createElement('div');
-  state.contextContentElement.className = 'ktalk-context-content';
-  state.contextContentElement.innerHTML = `
-      <div class="ktalk-context-header">
-        <span class="ktalk-context-title">Context</span>
-        <div class="ktalk-context-actions">
-          <select class="ktalk-context-model-select">
-            ${getAnchorModelOptions()}
-          </select>
-          <button class="ktalk-context-refresh-btn" title="Refresh (Alt+J)">Refresh</button>
-        </div>
-      </div>
-      <div class="ktalk-context-body loading">
-        <div class="ktalk-summary-spinner"></div>
-        <span>Собираю контекст...</span>
-      </div>
-    `;
-
-  const modelSelect = state.contextContentElement.querySelector('.ktalk-context-model-select');
-  modelSelect.value = anchorModel;
-  if (modelSelect.value !== anchorModel) {
-    anchorModel = DEFAULT_CODEX_UI_MODEL;
-    modelSelect.value = anchorModel;
-    localStorage.setItem('ktalk-anchor-model', anchorModel);
-  }
-  modelSelect.addEventListener('change', (e) => {
-    anchorModel = e.target.value;
-    localStorage.setItem('ktalk-anchor-model', anchorModel);
-  });
-
-  const refreshBtn = state.contextContentElement.querySelector('.ktalk-context-refresh-btn');
-  refreshBtn.addEventListener('click', () => {
-    requestAnchor();
-  });
-
-  panelBody.appendChild(state.contextContentElement);
-  console.log('[KTalk Transcript] Context element created');
-  return state.contextContentElement;
 }
 
 const COPILOT_PROACTIVE_MUTE_MS = 10 * 60 * 1000;
@@ -2015,9 +1525,8 @@ function setActiveView(view) {
   const aiTab = aiTabBtn?.closest('.tl-tab');
 
   const isTranscript = view === 'transcript';
-  const isContext = view === 'context';
   const isCopilot = view === 'copilot';
-  const isAnyActive = isTranscript || isContext || isCopilot;
+  const isAnyActive = isTranscript || isCopilot;
 
   if (aiTab) aiTab.classList.toggle('_active', isAnyActive);
   if (aiTabBtn) aiTabBtn.classList.toggle('_active', isAnyActive);
@@ -2035,9 +1544,6 @@ function setActiveView(view) {
   }
   if (state.transcriptContentElement) {
     state.transcriptContentElement.classList.toggle('active', isTranscript);
-  }
-  if (state.contextContentElement) {
-    state.contextContentElement.classList.toggle('active', isContext);
   }
   if (state.copilotContentElement) {
     state.copilotContentElement.classList.toggle('active', isCopilot);
@@ -2067,17 +1573,6 @@ function setCopilotUnread(unread) {
 function noteCopilotUnread(kind) {
   if (!state.isCopilotActive && (kind === 'proactive' || kind === 'assistant')) {
     setCopilotUnread(true);
-  }
-}
-
-function activateContextTab() {
-  ensureContextContent();
-  setActiveView('context');
-  const now = Date.now();
-  const staleMs = 90000;
-  const isStale = !state.currentAnchorData || (now - state.anchorLastUpdated) > staleMs;
-  if (isStale && !state.anchorRequestPending) {
-    requestAnchor();
   }
 }
 
@@ -2619,251 +2114,6 @@ function updateFollowButton() {
   btn.textContent = state.autoScrollEnabled ? 'Follow' : 'Paused';
 }
 
-function updateSummaryMenu() {
-  if (!state.transcriptContentElement) return;
-  const toggle = state.transcriptContentElement.querySelector('.ktalk-summary-menu-toggle');
-  const panel = state.transcriptContentElement.querySelector('.ktalk-summary-menu-panel');
-  if (toggle) toggle.classList.toggle('active', summaryMenuOpen);
-  if (panel) panel.classList.toggle('active', summaryMenuOpen);
-}
-
-function closeSummaryMenu() {
-  if (!summaryMenuOpen) return;
-  summaryMenuOpen = false;
-  updateSummaryMenu();
-}
-
-function setupSummaryMenu(container) {
-  const toggle = container.querySelector('.ktalk-summary-menu-toggle');
-  const panel = container.querySelector('.ktalk-summary-menu-panel');
-
-  summaryMenuOpen = false;
-
-  if (toggle) {
-    toggle.addEventListener('click', (event) => {
-      event.stopPropagation();
-      summaryMenuOpen = !summaryMenuOpen;
-      updateSummaryMenu();
-    });
-  }
-
-  if (panel) {
-    panel.addEventListener('click', (event) => event.stopPropagation());
-  }
-
-  if (!summaryMenuListenerBound) {
-    summaryMenuListenerBound = true;
-    document.addEventListener('click', (event) => {
-      if (!summaryMenuOpen) return;
-      const activePanel = state.transcriptContentElement?.querySelector('.ktalk-summary-menu-panel');
-      const activeToggle = state.transcriptContentElement?.querySelector('.ktalk-summary-menu-toggle');
-      if (activePanel && activePanel.contains(event.target)) return;
-      if (activeToggle && activeToggle.contains(event.target)) return;
-      closeSummaryMenu();
-    });
-  }
-
-  updateSummaryMenu();
-}
-
-function getAnchorModelOptions() {
-  return [
-    { value: 'codex:gpt-5.6-sol', label: 'Codex (GPT-5.6 Sol)' },
-    { value: 'codex:gpt-5.6-terra', label: 'Codex (GPT-5.6 Terra)' },
-    { value: 'codex:gpt-5.6-luna', label: 'Codex (GPT-5.6 Luna)' },
-    { value: 'codex:gpt-4.1', label: 'Codex (GPT-4.1)' },
-    { value: 'codex:gpt-5.3-codex-spark', label: 'Codex Spark' },
-    { value: 'claude:opus', label: 'Claude Opus' },
-    { value: 'claude:sonnet', label: 'Claude Sonnet' },
-    { value: 'gemini-3-pro-preview', label: 'Gemini 3.0 Pro' },
-    { value: 'gemini-3-flash-preview', label: 'Gemini 3.0 Flash' },
-    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }
-  ].map(option => `<option value="${option.value}">${option.label}</option>`).join('');
-}
-
-function ensureContextContent() {
-  if (!state.contextContentElement) {
-    createContextContent();
-  }
-}
-
-function setContextLoading() {
-  ensureContextContent();
-  const body = state.contextContentElement?.querySelector('.ktalk-context-body');
-  if (!body) return;
-  body.className = 'ktalk-context-body loading';
-  body.innerHTML = `
-      <div class="ktalk-summary-spinner"></div>
-      <span>Собираю контекст...</span>
-    `;
-  const refreshBtn = state.contextContentElement?.querySelector('.ktalk-context-refresh-btn');
-  if (refreshBtn) refreshBtn.disabled = true;
-}
-
-function updateAnchorContent(payload, approximate = false) {
-  ensureContextContent();
-
-  state.currentAnchorData = payload;
-  state.anchorLastUpdated = Date.now();
-  const data = payload?.data || payload || {};
-  const tone = ['neutral', 'calm', 'heated'].includes(data.topic_tone) ? data.topic_tone : 'neutral';
-
-  const topic = escapeHtml(data.current_topic || 'No recent context.');
-  const bullets = Array.isArray(data.summary_bullets) ? data.summary_bullets : [];
-  const mention = data.user_mentioned === true;
-  const mentionText = mention
-    ? escapeHtml(data.mention_context || 'Упоминание без деталей.')
-    : 'Ваше имя не упоминалось.';
-  const mentionTs = data.mention_ts_display ? escapeHtml(data.mention_ts_display) : '';
-
-  const bulletsHtml = bullets.length > 0
-    ? bullets.map((bullet) => {
-      const text = escapeHtml(bullet.text || '');
-      const ts = escapeHtml(bullet.ts_display || '');
-      const tsButton = ts
-        ? `<button class="ktalk-anchor-ts-btn" data-ts="${ts}">${ts}</button>`
-        : '<span class="ktalk-anchor-ts-btn empty">--:--:--</span>';
-      return `<li class="ktalk-anchor-bullet">${tsButton}<span class="ktalk-anchor-bullet-text">${text}</span></li>`;
-    }).join('')
-    : '<li class="ktalk-anchor-bullet"><span class="ktalk-anchor-bullet-text">Нет свежих пунктов.</span></li>';
-
-  const mentionHtml = mention
-    ? `<div class="ktalk-anchor-mention alert">Упомянули вас ${mentionTs ? `<button class="ktalk-anchor-ts-btn" data-ts="${mentionTs}">${mentionTs}</button>` : ''}<span>${mentionText}</span></div>`
-    : `<div class="ktalk-anchor-mention ok">${mentionText}</div>`;
-
-  const noteHtml = approximate ? '<div class="ktalk-anchor-note">Ответ может быть приблизительным.</div>' : '';
-
-  const body = state.contextContentElement?.querySelector('.ktalk-context-body');
-  if (!body) return;
-  body.className = 'ktalk-context-body';
-  body.innerHTML = `
-      <div class="ktalk-anchor-section">
-        <div class="ktalk-anchor-section-title">Right now</div>
-        <div class="ktalk-anchor-topic">
-          <span class="ktalk-anchor-tone ${tone}">${tone}</span>
-          <span class="ktalk-anchor-topic-text">${topic}</span>
-        </div>
-      </div>
-      <div class="ktalk-anchor-section">
-        <div class="ktalk-anchor-section-title">Last minutes</div>
-        <ul class="ktalk-anchor-bullets">${bulletsHtml}</ul>
-      </div>
-      <div class="ktalk-anchor-section">
-        <div class="ktalk-anchor-section-title">Mentions</div>
-        ${mentionHtml}
-        ${noteHtml}
-      </div>
-    `;
-
-  body.querySelectorAll('.ktalk-anchor-ts-btn').forEach((btn) => {
-    if (btn.classList.contains('empty')) return;
-    btn.addEventListener('click', () => {
-      const ts = btn.getAttribute('data-ts');
-      if (ts) scrollToAnchorTimestamp(ts);
-    });
-  });
-}
-
-function updateAnchorError(message) {
-  ensureContextContent();
-  const body = state.contextContentElement?.querySelector('.ktalk-context-body');
-  if (!body) return;
-  body.className = 'ktalk-context-body';
-  body.innerHTML = `<div class="ktalk-summary-error">${escapeHtml(message || 'Не удалось получить контекст.')}</div>`;
-}
-
-function getLocalUserName() {
-  const participants = state.lastParticipants || [];
-  const local = participants.find(p => p.isLocal && p.name);
-  if (local?.name) return local.name;
-
-  for (let idx = state.transcriptLines.length - 1; idx >= 0; idx -= 1) {
-    const line = state.transcriptLines[idx];
-    if (line && line.is_local && line.speaker) return line.speaker;
-  }
-
-  return '';
-}
-
-function requestAnchor() {
-  if (state.anchorRequestPending) return;
-  if (state.transcriptLines.length === 0) {
-    updateAnchorError('Нет транскрипта для анализа');
-    return;
-  }
-
-  meetingTitle = document.title || meetingTitle;
-
-  const windowMs = 4 * 60 * 1000;
-  const cutoff = Date.now() - windowMs;
-  const recentLines = state.transcriptLines.filter(line => line.createdAt && line.createdAt >= cutoff);
-  const linesToSend = recentLines.length > 0 ? recentLines : state.transcriptLines.slice(-25);
-
-  if (linesToSend.length === 0) {
-    updateAnchorError('Нет данных для анализа');
-    return;
-  }
-
-  const transcriptText = linesToSend.map(line => {
-    const speaker = line.speaker + getUncertainSuffix(line);
-    return `[${line.time}] ${speaker}: ${line.text}`;
-  }).join('\n');
-
-  setContextLoading();
-  state.anchorRequestPending = true;
-
-  sendWsMessage({
-    type: 'anchor_request',
-    transcript: transcriptText,
-    lines_count: linesToSend.length,
-    window_seconds: Math.round(windowMs / 1000),
-    model: anchorModel,
-    user_name: getLocalUserName() || 'User',
-    meeting_title: meetingTitle
-  });
-}
-
-function scrollToAnchorTimestamp(ts) {
-  const container = document.querySelector('.ktalk-transcript-messages');
-  if (!container) return;
-
-  const escaped = window.CSS && CSS.escape ? CSS.escape(ts) : ts.replace(/"/g, '\\"');
-  const target = container.querySelector(`.ktalk-msg[data-ts="${escaped}"]`);
-  if (!target) return;
-
-  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  target.classList.add('anchor-highlight');
-  setTimeout(() => target.classList.remove('anchor-highlight'), 1600);
-}
-
-function setupAnchorControls() {
-  if (anchorHotkeyBound) return;
-  anchorHotkeyBound = true;
-
-  document.addEventListener('keydown', (event) => {
-    if (!event.altKey || event.code !== 'KeyJ') return;
-    if (isEditableTarget(event.target)) return;
-    event.preventDefault();
-    activateContextTab();
-    requestAnchor();
-  });
-}
-
-export function handleAnchorResponse(data) {
-  state.anchorRequestPending = false;
-
-  const refreshBtn = state.contextContentElement?.querySelector('.ktalk-context-refresh-btn');
-  if (refreshBtn) refreshBtn.disabled = false;
-
-  if (data.error) {
-    updateAnchorError(data.error);
-    return;
-  }
-
-  updateAnchorContent(data.data || data, data.approximate);
-}
-
 function loadBioReadSettings() {
   const fallback = normalizeBioReadSettings(state.bioRead);
   const saved = localStorage.getItem(BIOREAD_SETTINGS_KEY);
@@ -3014,250 +2264,6 @@ function formatTranscriptText(text) {
 }
 
 
-function createSummaryModal() {
-  if (document.querySelector('.ktalk-summary-modal')) return;
-
-  state.summaryModalElement = document.createElement('div');
-  state.summaryModalElement.className = 'ktalk-summary-modal';
-  state.summaryModalElement.innerHTML = `
-      <div class="ktalk-summary-modal-content">
-        <div class="ktalk-summary-modal-header">
-          <span class="ktalk-summary-modal-title">✨ Catch Up</span>
-          <select class="ktalk-model-select">
-            ${getAnchorModelOptions()}
-          </select>
-          <button class="ktalk-summary-modal-close">×</button>
-        </div>
-        <div class="ktalk-summary-modal-body loading">
-          <div class="ktalk-summary-spinner"></div>
-          <span>Анализирую транскрипт...</span>
-        </div>
-        <div class="ktalk-summary-question-input" style="display: none;">
-          <input type="text" class="ktalk-question-field" placeholder="Задай уточняющий вопрос..." />
-          <button class="ktalk-question-submit">→</button>
-        </div>
-        <div class="ktalk-summary-modal-footer">
-          <button class="ktalk-summary-copy-btn">📋 Копировать</button>
-        </div>
-      </div>
-    `;
-
-  state.summaryModalElement.querySelector('.ktalk-summary-modal-close').addEventListener('click', closeSummaryModal);
-  state.summaryModalElement.querySelector('.ktalk-summary-copy-btn').addEventListener('click', copySummary);
-
-  state.summaryModalElement.querySelector('.ktalk-question-submit').addEventListener('click', askFollowUpQuestion);
-  state.summaryModalElement.querySelector('.ktalk-question-field').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') askFollowUpQuestion();
-  });
-
-  const modelSelect = state.summaryModalElement.querySelector('.ktalk-model-select');
-  modelSelect.value = selectedModel;
-  modelSelect.addEventListener('change', (e) => {
-    selectedModel = e.target.value;
-    localStorage.setItem('ktalk-ai-model', selectedModel);
-  });
-
-  const header = state.summaryModalElement.querySelector('.ktalk-summary-modal-header');
-  let isDragging = false;
-  let dragOffsetX = 0;
-  let dragOffsetY = 0;
-
-  header.addEventListener('mousedown', (e) => {
-    if (e.target.classList.contains('ktalk-summary-modal-close')) return;
-    isDragging = true;
-    const rect = state.summaryModalElement.getBoundingClientRect();
-    dragOffsetX = e.clientX - rect.left;
-    dragOffsetY = e.clientY - rect.top;
-    header.style.cursor = 'grabbing';
-  });
-
-  document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    e.preventDefault();
-    const x = e.clientX - dragOffsetX;
-    const y = e.clientY - dragOffsetY;
-    state.summaryModalElement.style.left = x + 'px';
-    state.summaryModalElement.style.top = y + 'px';
-    state.summaryModalElement.style.right = 'auto';
-    state.summaryModalElement.style.bottom = 'auto';
-  });
-
-  document.addEventListener('mouseup', () => {
-    if (isDragging) {
-      isDragging = false;
-      header.style.cursor = 'move';
-    }
-  });
-
-  document.body.appendChild(state.summaryModalElement);
-}
-
-function showSummaryModal(summaryType = 'catchup') {
-  if (!state.summaryModalElement) {
-    createSummaryModal();
-  }
-
-  const titles = {
-    catchup: '🎯 Catch Up',
-    brief: '📋 Краткое (2 мин)',
-    full: '💬 Вся встреча'
-  };
-  state.summaryModalElement.querySelector('.ktalk-summary-modal-title').textContent = titles[summaryType] || titles.catchup;
-
-  const questionInput = state.summaryModalElement.querySelector('.ktalk-summary-question-input');
-  questionInput.style.display = summaryType === 'full' ? 'flex' : 'none';
-
-  state.summaryModalElement.classList.add('active');
-  const body = state.summaryModalElement.querySelector('.ktalk-summary-modal-body');
-  body.className = 'ktalk-summary-modal-body loading';
-  body.innerHTML = `
-      <div class="ktalk-summary-spinner"></div>
-      <span>Анализирую транскрипт...</span>
-    `;
-}
-
-function closeSummaryModal() {
-  if (state.summaryModalElement) {
-    state.summaryModalElement.classList.remove('active');
-  }
-}
-
-function updateSummaryContent(text, isError = false) {
-  if (!state.summaryModalElement) return;
-
-  state.currentSummaryText = text;
-  const body = state.summaryModalElement.querySelector('.ktalk-summary-modal-body');
-  body.className = 'ktalk-summary-modal-body';
-
-  if (isError) {
-    body.innerHTML = `<div class="ktalk-summary-error">${text}</div>`;
-  } else {
-    body.innerHTML = `<div class="ktalk-summary-text">${renderMarkdown(text)}</div>`;
-  }
-}
-
-function copySummary() {
-  if (!state.currentSummaryText) return;
-
-  navigator.clipboard.writeText(state.currentSummaryText).then(() => {
-    const btn = state.summaryModalElement.querySelector('.ktalk-summary-copy-btn');
-    if (btn) {
-      btn.classList.add('copied');
-      btn.textContent = '✓ Скопировано';
-      setTimeout(() => {
-        btn.classList.remove('copied');
-        btn.textContent = '📋 Копировать';
-      }, 2000);
-    }
-  });
-}
-
-function requestSummary(summaryType = 'catchup') {
-  if (state.summaryRequestPending) return;
-  if (state.transcriptLines.length === 0) {
-    alert('Нет транскрипта для анализа');
-    return;
-  }
-
-  state.currentSummaryType = summaryType;
-  let linesToSend;
-
-  if (summaryType === 'catchup') {
-    const oneMinuteAgo = Date.now() - 60000;
-    const recentLines = state.transcriptLines.filter(line => line.createdAt && line.createdAt >= oneMinuteAgo);
-    linesToSend = recentLines.length > 0 ? recentLines : state.transcriptLines.slice(-10);
-  } else if (summaryType === 'brief') {
-    const twoMinutesAgo = Date.now() - 120000;
-    const recentLines = state.transcriptLines.filter(line => line.createdAt && line.createdAt >= twoMinutesAgo);
-    linesToSend = recentLines.length > 0 ? recentLines : state.transcriptLines.slice(-20);
-  } else {
-    linesToSend = state.transcriptLines;
-  }
-
-  if (linesToSend.length === 0) {
-    alert('Нет данных для анализа');
-    return;
-  }
-
-  const transcriptText = linesToSend.map(line => {
-    const speaker = line.speaker + getUncertainSuffix(line);
-    return `[${line.time}] ${speaker}: ${line.text}`;
-  }).join('\n');
-
-  showSummaryModal(summaryType);
-  state.summaryRequestPending = true;
-
-  document.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
-    btn.classList.add('loading');
-    btn.disabled = true;
-  });
-
-  sendWsMessage({
-    type: 'summarize_request',
-    summary_type: summaryType,
-    transcript: transcriptText,
-    lines_count: linesToSend.length,
-    model: selectedModel,
-    meeting_title: meetingTitle
-  });
-}
-
-function askFollowUpQuestion() {
-  const input = state.summaryModalElement.querySelector('.ktalk-question-field');
-  const question = input.value.trim();
-  if (!question) return;
-
-  const transcriptText = state.transcriptLines.map(line => {
-    const speaker = line.speaker + getUncertainSuffix(line);
-    return `[${line.time}] ${speaker}: ${line.text}`;
-  }).join('\n');
-
-  const body = state.summaryModalElement.querySelector('.ktalk-summary-modal-body');
-  body.innerHTML = `
-      <div class="ktalk-summary-spinner"></div>
-      <span>Отвечаю на вопрос...</span>
-    `;
-  body.classList.add('loading');
-
-  const submitBtn = state.summaryModalElement.querySelector('.ktalk-question-submit');
-  submitBtn.disabled = true;
-
-  sendWsMessage({
-    type: 'summarize_request',
-    summary_type: 'question',
-    transcript: transcriptText,
-    question: question,
-    previous_summary: state.currentSummaryText,
-    model: selectedModel,
-    meeting_title: meetingTitle
-  });
-
-  input.value = '';
-}
-
-export function handleSummaryResponse(data) {
-  state.summaryRequestPending = false;
-
-  document.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
-    btn.classList.remove('loading');
-    btn.disabled = false;
-  });
-
-  const submitBtn = state.summaryModalElement?.querySelector('.ktalk-question-submit');
-  if (submitBtn) submitBtn.disabled = false;
-
-  if (data.error) {
-    updateSummaryContent('Ошибка: ' + data.error, true);
-  } else if (data.summary) {
-    updateSummaryContent(data.summary);
-  }
-}
-
-/**
- * Initialize platform-specific UI
- * For vas3k.cloud: creates floating panel
- * For KTalk: uses existing tab injection (handled separately)
- */
 export function initPlatformUI() {
   if (isJitsiPlatform()) {
     // Let the floating panel drive the copilot subsystem on view switches.

@@ -4,12 +4,12 @@
 TBD - created by archiving change ktalk-claude-copilot-chat. Update Purpose after archive.
 ## Requirements
 ### Requirement: Copilot tab in KTalk DOM
-The system SHALL provide a `Copilot` tab inside the existing KTalk extension UI, alongside the existing transcript/context surfaces, without removing or regressing those surfaces.
+The system SHALL provide a `Copilot` tab inside the existing KTalk extension UI, alongside the existing transcript surface, without removing or regressing that surface.
 
 #### Scenario: Copilot tab is available during a meeting
 - **WHEN** the extension successfully injects its meeting UI into a supported KTalk/Jitsi page
 - **THEN** the UI includes a `Copilot` tab that can be opened by the user
-- **AND** the existing transcript and context tabs remain available
+- **AND** the existing transcript tab remains available
 
 #### Scenario: Copilot tab shows connection state
 - **WHEN** the bridge WebSocket or Claude channel is unavailable

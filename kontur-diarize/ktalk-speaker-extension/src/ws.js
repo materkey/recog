@@ -1,7 +1,6 @@
 import { state, constants } from './state.js';
-import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleTranscriptRefine, handleNewMeeting, handleSummaryResponse, handleAnchorResponse, handleCopilotReply, handleCopilotStatus, appendCopilotSystemMessage, handleCopilotBridgeDisconnect } from './ui.js';
+import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, handleTranscriptRefine, handleNewMeeting, handleCopilotReply, handleCopilotStatus, appendCopilotSystemMessage, handleCopilotBridgeDisconnect } from './ui.js';
 import { handleMeetingJoinRejected } from './meeting.js';
-import { handleVas3kSummaryResponse } from './ui-vas3k.js';
 import { getActiveSpeaker, sendParticipantsUpdate, sendFilteredSpeakerUpdate } from './speaker.js';
 import { sendWsMessage } from './ws_api.js';
 import { sendMeetingJoin, startMeetingCheck } from './meeting.js';
@@ -116,11 +115,6 @@ export function connectWebSocket() {
           handleTranscriptRefine(data);
         } else if (data.type === 'new_meeting') {
           handleNewMeeting(data);
-        } else if (data.type === 'summarize_response') {
-          handleSummaryResponse(data);
-          handleVas3kSummaryResponse(data);
-        } else if (data.type === 'anchor_response') {
-          handleAnchorResponse(data);
         } else if (data.type === 'copilot_reply') {
           // Platform dispatch is centralized in the handler: ensureCopilotContent
           // → createCopilotContent() mounts the copilot chat into the floating

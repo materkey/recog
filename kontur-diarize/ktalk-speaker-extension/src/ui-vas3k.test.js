@@ -224,118 +224,6 @@ describe('Scroll Buttons Feature', () => {
   });
 });
 
-describe('AI Summary Feature', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    state.transcriptLines = [];
-  });
-
-  describe('AI button in UI', () => {
-    let createFloatingPanel;
-
-    beforeAll(async () => {
-      const module = await import('./ui-vas3k.js');
-      createFloatingPanel = module.createFloatingPanel;
-    });
-
-    test('panel has AI button', () => {
-      createFloatingPanel();
-
-      const aiBtn = document.querySelector('.jitsi-ai-btn');
-      expect(aiBtn).not.toBeNull();
-    });
-
-    test('AI button opens summary modal', () => {
-      createFloatingPanel();
-
-      const aiBtn = document.querySelector('.jitsi-ai-btn');
-      aiBtn.click();
-
-      const modal = document.querySelector('.jitsi-summary-modal');
-      expect(modal).not.toBeNull();
-    });
-  });
-
-  describe('Summary Modal', () => {
-    let createVas3kSummaryModal, createFloatingPanel;
-
-    beforeAll(async () => {
-      const module = await import('./ui-vas3k.js');
-      createVas3kSummaryModal = module.createVas3kSummaryModal;
-      createFloatingPanel = module.createFloatingPanel;
-    });
-
-    test('modal has summary type buttons', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const catchupBtn = document.querySelector('.jitsi-summary-btn[data-type="catchup"]');
-      const briefBtn = document.querySelector('.jitsi-summary-btn[data-type="brief"]');
-      const fullBtn = document.querySelector('.jitsi-summary-btn[data-type="full"]');
-
-      expect(catchupBtn).not.toBeNull();
-      expect(briefBtn).not.toBeNull();
-      expect(fullBtn).not.toBeNull();
-    });
-
-    test('modal has close button', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const closeBtn = document.querySelector('.jitsi-summary-close');
-      expect(closeBtn).not.toBeNull();
-    });
-
-    test('modal has content area', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const content = document.querySelector('.jitsi-summary-content');
-      expect(content).not.toBeNull();
-    });
-
-    test('modal has copy button', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const copyBtn = document.querySelector('.jitsi-summary-copy-btn');
-      expect(copyBtn).not.toBeNull();
-    });
-
-    test('close button removes modal', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const closeBtn = document.querySelector('.jitsi-summary-close');
-      closeBtn.click();
-
-      const modal = document.querySelector('.jitsi-summary-modal');
-      expect(modal).toBeNull();
-    });
-  });
-
-  describe('Full summary mode', () => {
-    let createVas3kSummaryModal, createFloatingPanel;
-
-    beforeAll(async () => {
-      const module = await import('./ui-vas3k.js');
-      createVas3kSummaryModal = module.createVas3kSummaryModal;
-      createFloatingPanel = module.createFloatingPanel;
-    });
-
-    test('full mode shows question input', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const fullBtn = document.querySelector('.jitsi-summary-btn[data-type="full"]');
-      fullBtn.click();
-
-      const questionInput = document.querySelector('.jitsi-summary-question-input');
-      expect(questionInput).not.toBeNull();
-    });
-  });
-});
-
 describe('Highlight Feature', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
@@ -393,81 +281,6 @@ describe('Highlight Feature', () => {
   });
 });
 
-describe('Model Selector Feature', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    localStorage.clear();
-  });
-
-  describe('Model selector in Summary Modal', () => {
-    let createVas3kSummaryModal, createFloatingPanel;
-
-    beforeAll(async () => {
-      const module = await import('./ui-vas3k.js');
-      createVas3kSummaryModal = module.createVas3kSummaryModal;
-      createFloatingPanel = module.createFloatingPanel;
-    });
-
-    test('modal has model selector dropdown', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const selector = document.querySelector('.jitsi-model-selector');
-      expect(selector).not.toBeNull();
-      expect(selector.tagName).toBe('SELECT');
-    });
-
-    test('selector has model options', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const selector = document.querySelector('.jitsi-model-selector');
-      const options = selector.querySelectorAll('option');
-
-      // Should have Codex, Claude, Gemini options
-      expect(options.length).toBeGreaterThanOrEqual(3);
-
-      const values = Array.from(options).map(o => o.value);
-      expect(values).toContain('codex:gpt-5.6-sol');
-      expect(values).toContain('codex:gpt-5.6-terra');
-      expect(values).toContain('codex:gpt-5.6-luna');
-      expect(values).toContain('codex:gpt-5.3-codex-spark');
-      expect(values).toContain('claude:opus');
-    });
-
-    test('selector shows current model from localStorage', () => {
-      localStorage.setItem('ktalk-ai-model', 'claude:opus');
-
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const selector = document.querySelector('.jitsi-model-selector');
-      expect(selector.value).toBe('claude:opus');
-    });
-
-    test('legacy codex selection defaults to GPT-5.6 Sol', () => {
-      localStorage.setItem('ktalk-ai-model', 'codex');
-
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const selector = document.querySelector('.jitsi-model-selector');
-      expect(selector.value).toBe('codex:gpt-5.6-sol');
-    });
-
-    test('changing selector updates localStorage', () => {
-      createFloatingPanel();
-      createVas3kSummaryModal();
-
-      const selector = document.querySelector('.jitsi-model-selector');
-      selector.value = 'gemini-2.5-flash';
-      selector.dispatchEvent(new Event('change'));
-
-      expect(localStorage.getItem('ktalk-ai-model')).toBe('gemini-2.5-flash');
-    });
-  });
-});
-
 describe('Transcript Panel Layout', () => {
   let createFloatingPanel;
 
@@ -495,8 +308,8 @@ describe('Transcript Panel Layout', () => {
     const controls = document.querySelector('.jitsi-transcript-header-controls');
     const buttons = controls.querySelectorAll('button');
 
-    // Should have: Copy, AI, Follow, ↑, ↓, −, ×
-    expect(buttons.length).toBe(7);
+    // Should have: Copy, Follow, ↑, ↓, −, ×
+    expect(buttons.length).toBe(6);
   });
 
   test('header buttons have compact styling', () => {

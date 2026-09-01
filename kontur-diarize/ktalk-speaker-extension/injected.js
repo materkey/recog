@@ -623,7 +623,6 @@ __webpack_require__.r(__webpack_exports__);
 
 const AI_CONTENT_RECOVERY = [
   { selector: '.ktalk-transcript-content', stateKey: 'transcriptContentElement', create: _ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent },
-  { selector: '.ktalk-context-content', stateKey: 'contextContentElement', create: _ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent },
   { selector: '.ktalk-copilot-content', stateKey: 'copilotContentElement', create: _ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent }
 ];
 
@@ -765,7 +764,6 @@ function setupUI() {
   const aiTabAdded = (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.addAiTab)();
   if (aiTabAdded) {
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createTranscriptContent)();
-    (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createContextContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.createCopilotContent)();
     (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.watchTabChanges)();
   }
@@ -4201,15 +4199,6 @@ const state = {
   currentMeetingId: null,
   meetingCheckInterval: null,
 
-  summaryModalElement: null,
-  currentSummaryText: '',
-  summaryRequestPending: false,
-  currentSummaryType: 'catchup',
-  contextContentElement: null,
-  anchorRequestPending: false,
-  currentAnchorData: null,
-  anchorLastUpdated: 0,
-
   debugPanelElement: null,
   debugVisible: false,
   lastParticipants: [],
@@ -4268,9 +4257,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   clearVas3kTranscript: () => (/* binding */ clearVas3kTranscript),
 /* harmony export */   copyVas3kTranscript: () => (/* binding */ copyVas3kTranscript),
 /* harmony export */   createFloatingPanel: () => (/* binding */ createFloatingPanel),
-/* harmony export */   createVas3kSummaryModal: () => (/* binding */ createVas3kSummaryModal),
 /* harmony export */   ensureVas3kCopilotHost: () => (/* binding */ ensureVas3kCopilotHost),
-/* harmony export */   handleVas3kSummaryResponse: () => (/* binding */ handleVas3kSummaryResponse),
 /* harmony export */   highlightVas3kLine: () => (/* binding */ highlightVas3kLine),
 /* harmony export */   initVas3kUI: () => (/* binding */ initVas3kUI),
 /* harmony export */   injectVas3kStyles: () => (/* binding */ injectVas3kStyles),
@@ -4299,12 +4286,6 @@ __webpack_require__.r(__webpack_exports__);
 let panelVisible = true;
 let isDragging = false;
 let dragOffset = { x: 0, y: 0 };
-const DEFAULT_CODEX_UI_MODEL = 'codex:gpt-5.6-sol';
-
-function getSelectedModel() {
-  const model = localStorage.getItem('ktalk-ai-model');
-  return !model || model === 'codex' ? DEFAULT_CODEX_UI_MODEL : model;
-}
 
 // Optional hook invoked when the user clicks the Copilot sub-tab. Registered
 // by ui.js (which owns the copilot subsystem) so a tab click can lazily build
@@ -4481,144 +4462,6 @@ function injectVas3kStyles() {
       border-left: 3px solid #FFEB3B;
     }
 
-    /* Summary Modal */
-    .jitsi-summary-modal {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 450px;
-      max-height: 500px;
-      background: rgba(30, 30, 30, 0.98);
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-      z-index: 10001;
-      display: flex;
-      flex-direction: column;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: rgba(255, 255, 255, 0.9);
-      overflow: hidden;
-    }
-
-    .jitsi-summary-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 16px;
-      background: rgba(50, 50, 50, 0.9);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      cursor: move;
-    }
-
-    .jitsi-summary-header h3 {
-      margin: 0;
-      font-size: 14px;
-      font-weight: 600;
-    }
-
-    .jitsi-summary-close {
-      background: transparent;
-      border: none;
-      color: rgba(255, 255, 255, 0.7);
-      cursor: pointer;
-      font-size: 18px;
-      padding: 4px 8px;
-    }
-
-    .jitsi-summary-types {
-      display: flex;
-      gap: 8px;
-      padding: 12px 16px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    }
-
-    .jitsi-summary-btn {
-      flex: 1;
-      padding: 8px 12px;
-      background: rgba(255, 255, 255, 0.1);
-      border: none;
-      border-radius: 6px;
-      color: rgba(255, 255, 255, 0.8);
-      cursor: pointer;
-      font-size: 12px;
-      transition: background 0.15s;
-    }
-
-    .jitsi-summary-btn:hover {
-      background: rgba(255, 255, 255, 0.2);
-    }
-
-    .jitsi-summary-btn.active {
-      background: rgba(100, 181, 246, 0.3);
-      color: #64B5F6;
-    }
-
-    .jitsi-summary-content {
-      flex: 1;
-      padding: 16px;
-      overflow-y: auto;
-      max-height: 300px;
-      font-size: 13px;
-      line-height: 1.5;
-    }
-
-    .jitsi-summary-footer {
-      display: flex;
-      gap: 8px;
-      padding: 12px 16px;
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
-    }
-
-    .jitsi-summary-copy-btn {
-      padding: 8px 16px;
-      background: rgba(76, 175, 80, 0.2);
-      border: none;
-      border-radius: 6px;
-      color: #4CAF50;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .jitsi-model-selector {
-      flex: 1;
-      padding: 8px 12px;
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 6px;
-      color: rgba(255, 255, 255, 0.9);
-      font-size: 12px;
-      cursor: pointer;
-    }
-
-    .jitsi-model-selector option {
-      background: #1a1a2e;
-      color: rgba(255, 255, 255, 0.9);
-    }
-
-    .jitsi-summary-question-wrapper {
-      display: none;
-      padding: 12px 16px;
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
-    }
-
-    .jitsi-summary-question-wrapper.visible {
-      display: block;
-    }
-
-    .jitsi-summary-question-input {
-      width: 100%;
-      padding: 8px 12px;
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 6px;
-      color: rgba(255, 255, 255, 0.9);
-      font-size: 13px;
-    }
-
-    .jitsi-summary-question-input::placeholder {
-      color: rgba(255, 255, 255, 0.4);
-    }
-
     /* Connection indicator */
     .jitsi-ws-indicator {
       width: 8px;
@@ -4782,7 +4625,6 @@ function createFloatingPanel() {
       </h3>
       <div class="jitsi-transcript-header-controls">
         <button class="jitsi-copy-btn" title="Копировать">Copy</button>
-        <button class="jitsi-ai-btn" title="AI Summary">AI</button>
         <button class="jitsi-follow-btn" title="Автоскролл">Follow</button>
         <button class="jitsi-scroll-up-btn" title="В начало">⬆</button>
         <button class="jitsi-scroll-down-btn" title="В конец">⬇</button>
@@ -4835,11 +4677,6 @@ function createFloatingPanel() {
   const copyBtn = panel.querySelector('.jitsi-copy-btn');
   copyBtn.addEventListener('click', () => {
     copyVas3kTranscript();
-  });
-
-  const aiBtn = panel.querySelector('.jitsi-ai-btn');
-  aiBtn.addEventListener('click', () => {
-    createVas3kSummaryModal();
   });
 
   const followBtn = panel.querySelector('.jitsi-follow-btn');
@@ -5070,252 +4907,6 @@ function addVas3kTranscriptLine(line) {
 }
 
 /**
- * Create AI Summary modal
- */
-function createVas3kSummaryModal() {
-  // Remove existing modal if any
-  const existing = document.querySelector('.jitsi-summary-modal');
-  if (existing) existing.remove();
-
-  const modal = document.createElement('div');
-  modal.className = 'jitsi-summary-modal';
-  modal.innerHTML = `
-    <div class="jitsi-summary-header">
-      <h3>AI Summary</h3>
-      <button class="jitsi-summary-close">×</button>
-    </div>
-    <div class="jitsi-summary-types">
-      <button class="jitsi-summary-btn" data-type="catchup">Catch-up (1 мин)</button>
-      <button class="jitsi-summary-btn" data-type="brief">Кратко (2 мин)</button>
-      <button class="jitsi-summary-btn" data-type="full">Полный</button>
-    </div>
-    <div class="jitsi-summary-content">
-      <p style="color: rgba(255,255,255,0.5)">Выберите тип summary выше</p>
-    </div>
-    <div class="jitsi-summary-question-wrapper">
-      <input type="text" class="jitsi-summary-question-input" placeholder="Задайте вопрос по транскрипту...">
-    </div>
-    <div class="jitsi-summary-footer">
-      <select class="jitsi-model-selector">
-        <option value="codex:gpt-5.6-sol">Codex (GPT-5.6 Sol)</option>
-        <option value="codex:gpt-5.6-terra">Codex (GPT-5.6 Terra)</option>
-        <option value="codex:gpt-5.6-luna">Codex (GPT-5.6 Luna)</option>
-        <option value="codex:gpt-4.1">Codex (GPT-4.1)</option>
-        <option value="codex:gpt-5.3-codex-spark">Codex Spark</option>
-        <option value="claude:opus">Claude Opus</option>
-        <option value="claude:sonnet">Claude Sonnet</option>
-        <option value="gemini-2.5-flash">Gemini Flash</option>
-        <option value="gemini-2.5-pro">Gemini Pro</option>
-      </select>
-      <button class="jitsi-summary-copy-btn">Copy</button>
-    </div>
-  `;
-
-  document.body.appendChild(modal);
-
-  // Close button handler
-  const closeBtn = modal.querySelector('.jitsi-summary-close');
-  closeBtn.addEventListener('click', () => {
-    modal.remove();
-  });
-
-  // Summary type buttons
-  const typeButtons = modal.querySelectorAll('.jitsi-summary-btn');
-  typeButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      // Remove active from all
-      typeButtons.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      const type = btn.dataset.type;
-      const questionWrapper = modal.querySelector('.jitsi-summary-question-wrapper');
-
-      // Show question input only for "full" type
-      if (type === 'full') {
-        questionWrapper.classList.add('visible');
-      } else {
-        questionWrapper.classList.remove('visible');
-      }
-
-      // TODO: Request summary via WebSocket
-      requestVas3kSummary(type);
-    });
-  });
-
-  // Copy button handler
-  const copyBtn = modal.querySelector('.jitsi-summary-copy-btn');
-  copyBtn.addEventListener('click', () => {
-    const content = modal.querySelector('.jitsi-summary-content');
-    navigator.clipboard.writeText(content.textContent || '');
-    copyBtn.textContent = '✓';
-    setTimeout(() => {
-      copyBtn.textContent = 'Copy';
-    }, 2000);
-  });
-
-  // Question input Enter handler
-  const questionInput = modal.querySelector('.jitsi-summary-question-input');
-  questionInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      askVas3kFollowUp();
-    }
-  });
-
-  // Model selector handler
-  const modelSelector = modal.querySelector('.jitsi-model-selector');
-  const currentModel = getSelectedModel();
-  modelSelector.value = currentModel;
-  modelSelector.addEventListener('change', () => {
-    localStorage.setItem('ktalk-ai-model', modelSelector.value);
-  });
-
-  // Setup drag for modal
-  setupModalDrag(modal);
-
-  return modal;
-}
-
-/**
- * Setup drag functionality for modal
- */
-function setupModalDrag(modal) {
-  const header = modal.querySelector('.jitsi-summary-header');
-  let modalDragging = false;
-  let modalDragOffset = { x: 0, y: 0 };
-
-  header.addEventListener('mousedown', (e) => {
-    if (e.target.tagName === 'BUTTON') return;
-
-    modalDragging = true;
-    const rect = modal.getBoundingClientRect();
-    modalDragOffset.x = e.clientX - rect.left;
-    modalDragOffset.y = e.clientY - rect.top;
-
-    // Remove transform to use absolute positioning
-    modal.style.transform = 'none';
-    modal.style.left = rect.left + 'px';
-    modal.style.top = rect.top + 'px';
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  });
-
-  function onMouseMove(e) {
-    if (!modalDragging) return;
-
-    const x = e.clientX - modalDragOffset.x;
-    const y = e.clientY - modalDragOffset.y;
-
-    // Keep modal within viewport
-    const maxX = window.innerWidth - modal.offsetWidth;
-    const maxY = window.innerHeight - modal.offsetHeight;
-
-    modal.style.left = Math.max(0, Math.min(x, maxX)) + 'px';
-    modal.style.top = Math.max(0, Math.min(y, maxY)) + 'px';
-  }
-
-  function onMouseUp() {
-    modalDragging = false;
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
-  }
-}
-
-/**
- * Request summary from backend
- */
-function requestVas3kSummary(type) {
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) {
-    const content = document.querySelector('.jitsi-summary-content');
-    if (content) {
-      content.innerHTML = '<p style="color: #ff6b6b">Нет транскрипта для анализа</p>';
-    }
-    return;
-  }
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryType = type;
-  let linesToSend;
-
-  if (type === 'catchup') {
-    const oneMinuteAgo = Date.now() - 60000;
-    const recentLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.filter(line => line.createdAt && line.createdAt >= oneMinuteAgo);
-    linesToSend = recentLines.length > 0 ? recentLines : _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-10);
-  } else if (type === 'brief') {
-    const twoMinutesAgo = Date.now() - 120000;
-    const recentLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.filter(line => line.createdAt && line.createdAt >= twoMinutesAgo);
-    linesToSend = recentLines.length > 0 ? recentLines : _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-20);
-  } else {
-    linesToSend = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines;
-  }
-
-  const transcriptText = linesToSend.map(line => {
-    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
-    return `[${line.time}] ${speaker}: ${line.text}`;
-  }).join('\n');
-
-  const content = document.querySelector('.jitsi-summary-content');
-  if (content) {
-    content.innerHTML = '<p style="color: rgba(255,255,255,0.5)">⏳ Генерация summary...</p>';
-  }
-
-  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsMessage)({
-    type: 'summarize_request',
-    summary_type: type,
-    transcript: transcriptText,
-    lines_count: linesToSend.length,
-    model: getSelectedModel(),
-    meeting_title: document.title || ''
-  });
-}
-
-/**
- * Ask follow-up question
- */
-function askVas3kFollowUp() {
-  const input = document.querySelector('.jitsi-summary-question-input');
-  const question = input?.value?.trim();
-  if (!question) return;
-
-  const transcriptText = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map(line => {
-    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.getUncertainSuffix)(line);
-    return `[${line.time}] ${speaker}: ${line.text}`;
-  }).join('\n');
-
-  const content = document.querySelector('.jitsi-summary-content');
-  if (content) {
-    content.innerHTML = '<p style="color: rgba(255,255,255,0.5)">⏳ Отвечаю на вопрос...</p>';
-  }
-
-  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_2__.sendWsMessage)({
-    type: 'summarize_request',
-    summary_type: 'question',
-    transcript: transcriptText,
-    question: question,
-    previous_summary: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText || '',
-    model: getSelectedModel(),
-    meeting_title: document.title || ''
-  });
-
-  input.value = '';
-}
-
-/**
- * Handle summary response from backend
- */
-function handleVas3kSummaryResponse(data) {
-  const content = document.querySelector('.jitsi-summary-content');
-  if (!content) return;
-
-  if (data.error) {
-    content.innerHTML = `<p style="color: #ff6b6b">Ошибка: ${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(data.error)}</p>`;
-    return;
-  }
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText = data.summary || '';
-  content.innerHTML = `<div style="white-space: pre-wrap">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_1__.escapeHtml)(data.summary || 'Нет данных')}</div>`;
-}
-
-/**
  * Update follow button visual state
  */
 function updateFollowButtonState(btn) {
@@ -5420,15 +5011,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   addTranscriptLinePlatform: () => (/* binding */ addTranscriptLinePlatform),
 /* harmony export */   appendCopilotSystemMessage: () => (/* binding */ appendCopilotSystemMessage),
 /* harmony export */   buildSpeakerAliasMap: () => (/* binding */ buildSpeakerAliasMap),
-/* harmony export */   createContextContent: () => (/* binding */ createContextContent),
 /* harmony export */   createCopilotContent: () => (/* binding */ createCopilotContent),
 /* harmony export */   createTranscriptContent: () => (/* binding */ createTranscriptContent),
-/* harmony export */   handleAnchorResponse: () => (/* binding */ handleAnchorResponse),
 /* harmony export */   handleCopilotBridgeDisconnect: () => (/* binding */ handleCopilotBridgeDisconnect),
 /* harmony export */   handleCopilotReply: () => (/* binding */ handleCopilotReply),
 /* harmony export */   handleCopilotStatus: () => (/* binding */ handleCopilotStatus),
 /* harmony export */   handleNewMeeting: () => (/* binding */ handleNewMeeting),
-/* harmony export */   handleSummaryResponse: () => (/* binding */ handleSummaryResponse),
 /* harmony export */   handleTranscript: () => (/* binding */ handleTranscript),
 /* harmony export */   handleTranscriptHistory: () => (/* binding */ handleTranscriptHistory),
 /* harmony export */   handleTranscriptRefine: () => (/* binding */ handleTranscriptRefine),
@@ -5452,21 +5040,9 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
-const DEFAULT_CODEX_UI_MODEL = 'codex:gpt-5.6-sol';
-
-function getStoredModel(key) {
-  const model = localStorage.getItem(key);
-  return !model || model === 'codex' ? DEFAULT_CODEX_UI_MODEL : model;
-}
-
-let selectedModel = getStoredModel('ktalk-ai-model');
-let anchorModel = getStoredModel('ktalk-anchor-model');
 let meetingTitle = document.title || '';
 let bioReadHotkeyBound = false;
 let bioReadPanelListenerBound = false;
-let summaryMenuOpen = false;
-let summaryMenuListenerBound = false;
-let anchorHotkeyBound = false;
 
 function injectStyles() {
   if (document.querySelector('#ktalk-transcript-styles')) return;
@@ -5529,7 +5105,7 @@ function injectStyles() {
         display: none;
       }
 
-      /* AI panel: sub-navigation + active view (Transcript | Context | Copilot) */
+      /* AI panel: sub-navigation + active view (Transcript | Copilot) */
       .ktalk-ai-panel {
         display: none;
         flex-direction: column;
@@ -5590,74 +5166,6 @@ function injectStyles() {
       }
       .ktalk-transcript-content.active {
         display: flex;
-      }
-      .ktalk-context-content {
-        display: none;
-        flex-direction: column;
-        height: 100%;
-        background: rgb(52, 52, 52);
-        color: rgba(255, 255, 255, 0.85);
-      }
-      .ktalk-context-content.active {
-        display: flex;
-      }
-      .ktalk-context-header {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 16px;
-        background: rgb(60, 60, 60);
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-      }
-      .ktalk-context-title {
-        font-size: 13px;
-        font-weight: 600;
-      }
-      .ktalk-context-actions {
-        margin-left: auto;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .ktalk-context-refresh-btn {
-        padding: 0 10px;
-        background: rgba(255,255,255,0.12);
-        border: 1px solid rgba(0, 138, 255, 0.6);
-        border-radius: 4px;
-        color: rgba(255,255,255,0.9);
-        font-size: 11px;
-        cursor: pointer;
-        height: 22px;
-        line-height: 22px;
-      }
-      .ktalk-context-refresh-btn:hover {
-        background: rgba(0, 138, 255, 0.2);
-        border-color: rgba(0, 138, 255, 0.9);
-      }
-      .ktalk-context-refresh-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .ktalk-context-model-select {
-        background: rgba(255,255,255,0.1);
-        border: 1px solid rgba(255,255,255,0.2);
-        color: rgba(255,255,255,0.9);
-        font-size: 12px;
-        border-radius: 4px;
-        padding: 2px 6px;
-      }
-      .ktalk-context-body {
-        padding: 16px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        flex: 1;
-      }
-      .ktalk-context-body.loading {
-        align-items: center;
-        justify-content: center;
-        color: rgba(255,255,255,0.7);
       }
       .ktalk-transcript-speaker-bar {
         display: flex;
@@ -5791,87 +5299,6 @@ function injectStyles() {
         background: #0ea5e9;
         color: #fff;
       }
-      .ktalk-transcript-summary-btn {
-        padding: 0 8px;
-        background: rgba(255,255,255,0.1);
-        border: none;
-        border-radius: 4px;
-        color: rgba(255,255,255,0.8);
-        font-size: 11px;
-        cursor: pointer;
-        transition: background 0.15s;
-        height: 22px;
-        line-height: 22px;
-        white-space: nowrap;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 4px;
-      }
-      .ktalk-transcript-summary-btn:hover {
-        background: rgba(255,255,255,0.2);
-      }
-      .ktalk-transcript-summary-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .ktalk-transcript-summary-btn.loading {
-        animation: ktalk-loading 1s infinite;
-      }
-      @keyframes ktalk-loading {
-        0% { opacity: 0.5; }
-        50% { opacity: 1; }
-        100% { opacity: 0.5; }
-      }
-      .ktalk-summary-menu {
-        position: relative;
-        display: inline-flex;
-      }
-      .ktalk-summary-menu-toggle {
-        padding: 0 8px;
-        background: rgba(255,255,255,0.1);
-        border: none;
-        border-radius: 4px;
-        color: rgba(255,255,255,0.8);
-        font-size: 11px;
-        cursor: pointer;
-        transition: background 0.15s;
-        height: 22px;
-        line-height: 22px;
-        white-space: nowrap;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-      }
-      .ktalk-summary-menu-toggle:hover {
-        background: rgba(255,255,255,0.2);
-      }
-      .ktalk-summary-menu-toggle.active {
-        background: rgba(255,255,255,0.25);
-      }
-      .ktalk-summary-menu-panel {
-        position: absolute;
-        top: calc(100% + 6px);
-        left: 0;
-        min-width: 160px;
-        padding: 6px;
-        background: rgb(44, 44, 44);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 8px;
-        box-shadow: 0 12px 24px rgba(0,0,0,0.35);
-        display: none;
-        flex-direction: column;
-        gap: 4px;
-        z-index: 5;
-      }
-      .ktalk-summary-menu-panel.active {
-        display: flex;
-      }
-      .ktalk-summary-menu-panel .ktalk-transcript-summary-btn {
-        width: 100%;
-        justify-content: flex-start;
-        gap: 8px;
-      }
       .ktalk-bioread-toggle,
       .ktalk-bioread-settings-btn {
         padding: 0 8px;
@@ -5939,259 +5366,6 @@ function injectStyles() {
         text-align: right;
         font-variant-numeric: tabular-nums;
         color: rgba(255,255,255,0.9);
-      }
-
-      /* Summary Floating Window */
-      .ktalk-summary-modal {
-        position: fixed;
-        top: 50px;
-        right: 50px;
-        width: 480px;
-        background: rgb(40, 40, 40);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 12px;
-        box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-        z-index: 9999;
-        display: none;
-        font-family: "Lab Grotesque", Arial, sans-serif;
-      }
-      .ktalk-summary-modal.active {
-        display: block;
-      }
-      .ktalk-summary-modal-content {
-        display: flex;
-        flex-direction: column;
-        max-height: 80vh;
-      }
-      .ktalk-summary-modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 16px 20px;
-        border-bottom: 1px solid rgba(255,255,255,0.1);
-        cursor: move;
-      }
-      .ktalk-summary-modal-title {
-        font-size: 16px;
-        font-weight: 600;
-        color: #fff;
-      }
-      .ktalk-summary-modal-close {
-        background: none;
-        border: none;
-        color: rgba(255,255,255,0.6);
-        font-size: 20px;
-        cursor: pointer;
-        padding: 0;
-      }
-      .ktalk-summary-modal-close:hover {
-        color: #fff;
-      }
-      .ktalk-summary-modal-body {
-        padding: 20px;
-        overflow-y: auto;
-        color: rgba(255,255,255,0.9);
-        font-size: 14px;
-        line-height: 1.6;
-      }
-      .ktalk-summary-modal-body.loading {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        min-height: 200px;
-        gap: 12px;
-      }
-      .ktalk-summary-spinner {
-        width: 32px;
-        height: 32px;
-        border: 3px solid rgba(255,255,255,0.2);
-        border-top: 3px solid #60a5fa;
-        border-radius: 50%;
-        animation: ktalk-spin 0.8s linear infinite;
-      }
-      @keyframes ktalk-spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-      .ktalk-summary-modal-footer {
-        display: flex;
-        justify-content: flex-end;
-        padding: 12px 20px;
-        border-top: 1px solid rgba(255,255,255,0.1);
-      }
-      .ktalk-summary-copy-btn {
-        padding: 6px 12px;
-        background: rgba(255,255,255,0.1);
-        border: none;
-        border-radius: 6px;
-        color: rgba(255,255,255,0.8);
-        font-size: 12px;
-        cursor: pointer;
-      }
-      .ktalk-summary-copy-btn:hover {
-        background: rgba(255,255,255,0.2);
-      }
-      .ktalk-summary-copy-btn.copied {
-        background: #22c55e;
-      }
-      .ktalk-summary-error {
-        color: #f87171;
-        font-weight: 500;
-      }
-      .ktalk-summary-question-input {
-        display: flex;
-        gap: 8px;
-        padding: 0 20px 12px 20px;
-      }
-      .ktalk-question-field {
-        flex: 1;
-        padding: 8px 12px;
-        background: rgba(255,255,255,0.08);
-        border: 1px solid rgba(255,255,255,0.15);
-        border-radius: 6px;
-        color: #fff;
-        font-size: 13px;
-      }
-      .ktalk-question-field:focus {
-        outline: none;
-        border-color: #60a5fa;
-      }
-      .ktalk-question-field::placeholder {
-        color: rgba(255,255,255,0.4);
-      }
-      .ktalk-question-submit {
-        padding: 8px 12px;
-        background: #60a5fa;
-        border: none;
-        border-radius: 6px;
-        color: #fff;
-        font-size: 13px;
-        cursor: pointer;
-      }
-      .ktalk-question-submit:hover {
-        background: #3b82f6;
-      }
-      .ktalk-question-submit:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .ktalk-summary-text h3, .ktalk-summary-text h4 {
-        color: #fff;
-        margin: 12px 0 8px 0;
-      }
-      .ktalk-summary-text h3:first-child {
-        margin-top: 0;
-      }
-      .ktalk-summary-text ul {
-        margin: 8px 0;
-        padding-left: 20px;
-      }
-      .ktalk-summary-text li {
-        margin: 4px 0;
-      }
-      .ktalk-summary-text strong {
-        color: #fff;
-      }
-      .ktalk-summary-text em {
-        color: rgba(255,255,255,0.8);
-      }
-      .ktalk-anchor-section-title {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: rgba(255,255,255,0.5);
-        margin-bottom: 4px;
-      }
-      .ktalk-anchor-topic {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        padding: 8px 10px;
-        background: rgba(255,255,255,0.06);
-        border-radius: 6px;
-      }
-      .ktalk-anchor-topic-text {
-        font-size: 14px;
-        font-weight: 600;
-        color: rgba(255,255,255,0.92);
-      }
-      .ktalk-anchor-tone {
-        font-size: 10px;
-        padding: 2px 6px;
-        border-radius: 999px;
-        border: 1px solid transparent;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-      .ktalk-anchor-tone.neutral {
-        color: rgba(255,255,255,0.65);
-        border-color: rgba(255,255,255,0.2);
-      }
-      .ktalk-anchor-tone.calm {
-        color: #4ade80;
-        border-color: rgba(74, 222, 128, 0.5);
-      }
-      .ktalk-anchor-tone.heated {
-        color: #f87171;
-        border-color: rgba(248, 113, 113, 0.6);
-      }
-      .ktalk-anchor-bullets {
-        list-style: none;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        padding: 0;
-        margin: 0;
-      }
-      .ktalk-anchor-bullet {
-        display: flex;
-        gap: 8px;
-        align-items: flex-start;
-      }
-      .ktalk-anchor-ts-btn {
-        background: rgba(255,255,255,0.08);
-        border: 1px solid rgba(255,255,255,0.2);
-        color: rgba(255,255,255,0.7);
-        font-size: 11px;
-        border-radius: 999px;
-        padding: 2px 8px;
-        cursor: pointer;
-        font-family: monospace;
-      }
-      .ktalk-anchor-ts-btn:hover {
-        border-color: rgba(0, 138, 255, 0.8);
-        color: rgba(255,255,255,0.9);
-      }
-      .ktalk-anchor-ts-btn.empty {
-        cursor: default;
-        opacity: 0.5;
-      }
-      .ktalk-anchor-bullet-text {
-        font-size: 13px;
-        color: rgba(255,255,255,0.85);
-        line-height: 1.4;
-      }
-      .ktalk-anchor-mention {
-        font-size: 13px;
-        padding: 8px 10px;
-        border-radius: 6px;
-        background: rgba(255,255,255,0.05);
-      }
-      .ktalk-anchor-mention.ok {
-        color: #4ade80;
-      }
-      .ktalk-anchor-mention.alert {
-        color: #fca5a5;
-      }
-      .ktalk-anchor-note {
-        font-size: 11px;
-        color: rgba(255,255,255,0.5);
-        margin-top: 2px;
-      }
-      .ktalk-msg.anchor-highlight {
-        box-shadow: 0 0 0 2px rgba(0, 138, 255, 0.6);
-        border-radius: 6px;
       }
 
       /* Transcript messages */
@@ -6574,9 +5748,7 @@ function captureOriginalChatContent(contentArea) {
 }
 
 function activateSubView(view) {
-  if (view === 'context') {
-    activateContextTab();
-  } else if (view === 'copilot') {
+  if (view === 'copilot') {
     activateCopilotTab();
   } else {
     setActiveView('transcript');
@@ -6595,7 +5767,6 @@ function ensureAiPanelBody(contentArea) {
     panel.innerHTML = `
         <div class="ktalk-ai-subnav">
           <button type="button" class="ktalk-ai-subtab" data-view="transcript">Transcript</button>
-          <button type="button" class="ktalk-ai-subtab" data-view="context">Context</button>
           <button type="button" class="ktalk-ai-subtab" data-view="copilot">Copilot<span class="ktalk-ai-unread" hidden></span></button>
         </div>
         <div class="ktalk-ai-panel-body"></div>
@@ -6636,16 +5807,6 @@ function createTranscriptContent() {
         </div>
       </div>
       <div class="ktalk-transcript-toolbar">
-        <div class="ktalk-summary-menu">
-          <button class="ktalk-summary-menu-toggle" title="Summary actions">
-            Summary <span class="ktalk-summary-caret">▾</span>
-          </button>
-          <div class="ktalk-summary-menu-panel">
-            <button class="ktalk-transcript-summary-btn" data-type="catchup" title="Catch up - включиться в дискуссию">🎯 Catch up</button>
-            <button class="ktalk-transcript-summary-btn" data-type="brief" title="Краткое за 2 мин">📋 Brief</button>
-            <button class="ktalk-transcript-summary-btn" data-type="full" title="Вся встреча + вопрос">💬 Full</button>
-          </div>
-        </div>
         <button class="ktalk-transcript-follow-btn" title="Auto-follow latest">Follow</button>
         <button class="ktalk-transcript-copy-btn" title="Copy all transcript">Copy</button>
         <button class="ktalk-transcript-privacy-btn" title="Replace names with speaker_N when copying">Privacy</button>
@@ -6703,12 +5864,6 @@ function createTranscriptContent() {
   });
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-transcript-follow-btn').addEventListener('click', toggleAutoFollow);
   updateFollowButton();
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      requestSummary(btn.dataset.type);
-      closeSummaryMenu();
-    });
-  });
   _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-scroll-top').addEventListener('click', () => {
     const container = document.querySelector('.ktalk-transcript-messages');
     if (container) container.scrollTop = 0;
@@ -6718,69 +5873,12 @@ function createTranscriptContent() {
     if (container) container.scrollTop = container.scrollHeight;
   });
 
-  setupSummaryMenu(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
-  setupAnchorControls();
   setupBioReadControls(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
-  createSummaryModal();
 
   panelBody.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement);
 
   console.log('[KTalk Transcript] Content element created');
   return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement;
-}
-
-function createContextContent() {
-  if (document.querySelector('.ktalk-context-content')) {
-    return document.querySelector('.ktalk-context-content');
-  }
-
-  const contentArea = document.querySelector('.slide-menu-wrapper .content');
-  if (!contentArea) {
-    console.log('[KTalk Transcript] Content area not found for context');
-    return null;
-  }
-
-  const panelBody = ensureAiPanelBody(contentArea);
-  if (!panelBody) return null;
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement = document.createElement('div');
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.className = 'ktalk-context-content';
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.innerHTML = `
-      <div class="ktalk-context-header">
-        <span class="ktalk-context-title">Context</span>
-        <div class="ktalk-context-actions">
-          <select class="ktalk-context-model-select">
-            ${getAnchorModelOptions()}
-          </select>
-          <button class="ktalk-context-refresh-btn" title="Refresh (Alt+J)">Refresh</button>
-        </div>
-      </div>
-      <div class="ktalk-context-body loading">
-        <div class="ktalk-summary-spinner"></div>
-        <span>Собираю контекст...</span>
-      </div>
-    `;
-
-  const modelSelect = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.querySelector('.ktalk-context-model-select');
-  modelSelect.value = anchorModel;
-  if (modelSelect.value !== anchorModel) {
-    anchorModel = DEFAULT_CODEX_UI_MODEL;
-    modelSelect.value = anchorModel;
-    localStorage.setItem('ktalk-anchor-model', anchorModel);
-  }
-  modelSelect.addEventListener('change', (e) => {
-    anchorModel = e.target.value;
-    localStorage.setItem('ktalk-anchor-model', anchorModel);
-  });
-
-  const refreshBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.querySelector('.ktalk-context-refresh-btn');
-  refreshBtn.addEventListener('click', () => {
-    requestAnchor();
-  });
-
-  panelBody.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement);
-  console.log('[KTalk Transcript] Context element created');
-  return _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement;
 }
 
 const COPILOT_PROACTIVE_MUTE_MS = 10 * 60 * 1000;
@@ -7462,9 +6560,8 @@ function setActiveView(view) {
   const aiTab = aiTabBtn?.closest('.tl-tab');
 
   const isTranscript = view === 'transcript';
-  const isContext = view === 'context';
   const isCopilot = view === 'copilot';
-  const isAnyActive = isTranscript || isContext || isCopilot;
+  const isAnyActive = isTranscript || isCopilot;
 
   if (aiTab) aiTab.classList.toggle('_active', isAnyActive);
   if (aiTabBtn) aiTabBtn.classList.toggle('_active', isAnyActive);
@@ -7482,9 +6579,6 @@ function setActiveView(view) {
   }
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.classList.toggle('active', isTranscript);
-  }
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement.classList.toggle('active', isContext);
   }
   if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement) {
     _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotContentElement.classList.toggle('active', isCopilot);
@@ -7514,17 +6608,6 @@ function setCopilotUnread(unread) {
 function noteCopilotUnread(kind) {
   if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.isCopilotActive && (kind === 'proactive' || kind === 'assistant')) {
     setCopilotUnread(true);
-  }
-}
-
-function activateContextTab() {
-  ensureContextContent();
-  setActiveView('context');
-  const now = Date.now();
-  const staleMs = 90000;
-  const isStale = !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentAnchorData || (now - _state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorLastUpdated) > staleMs;
-  if (isStale && !_state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorRequestPending) {
-    requestAnchor();
   }
 }
 
@@ -8066,251 +7149,6 @@ function updateFollowButton() {
   btn.textContent = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.autoScrollEnabled ? 'Follow' : 'Paused';
 }
 
-function updateSummaryMenu() {
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement) return;
-  const toggle = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-summary-menu-toggle');
-  const panel = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement.querySelector('.ktalk-summary-menu-panel');
-  if (toggle) toggle.classList.toggle('active', summaryMenuOpen);
-  if (panel) panel.classList.toggle('active', summaryMenuOpen);
-}
-
-function closeSummaryMenu() {
-  if (!summaryMenuOpen) return;
-  summaryMenuOpen = false;
-  updateSummaryMenu();
-}
-
-function setupSummaryMenu(container) {
-  const toggle = container.querySelector('.ktalk-summary-menu-toggle');
-  const panel = container.querySelector('.ktalk-summary-menu-panel');
-
-  summaryMenuOpen = false;
-
-  if (toggle) {
-    toggle.addEventListener('click', (event) => {
-      event.stopPropagation();
-      summaryMenuOpen = !summaryMenuOpen;
-      updateSummaryMenu();
-    });
-  }
-
-  if (panel) {
-    panel.addEventListener('click', (event) => event.stopPropagation());
-  }
-
-  if (!summaryMenuListenerBound) {
-    summaryMenuListenerBound = true;
-    document.addEventListener('click', (event) => {
-      if (!summaryMenuOpen) return;
-      const activePanel = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement?.querySelector('.ktalk-summary-menu-panel');
-      const activeToggle = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptContentElement?.querySelector('.ktalk-summary-menu-toggle');
-      if (activePanel && activePanel.contains(event.target)) return;
-      if (activeToggle && activeToggle.contains(event.target)) return;
-      closeSummaryMenu();
-    });
-  }
-
-  updateSummaryMenu();
-}
-
-function getAnchorModelOptions() {
-  return [
-    { value: 'codex:gpt-5.6-sol', label: 'Codex (GPT-5.6 Sol)' },
-    { value: 'codex:gpt-5.6-terra', label: 'Codex (GPT-5.6 Terra)' },
-    { value: 'codex:gpt-5.6-luna', label: 'Codex (GPT-5.6 Luna)' },
-    { value: 'codex:gpt-4.1', label: 'Codex (GPT-4.1)' },
-    { value: 'codex:gpt-5.3-codex-spark', label: 'Codex Spark' },
-    { value: 'claude:opus', label: 'Claude Opus' },
-    { value: 'claude:sonnet', label: 'Claude Sonnet' },
-    { value: 'gemini-3-pro-preview', label: 'Gemini 3.0 Pro' },
-    { value: 'gemini-3-flash-preview', label: 'Gemini 3.0 Flash' },
-    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }
-  ].map(option => `<option value="${option.value}">${option.label}</option>`).join('');
-}
-
-function ensureContextContent() {
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement) {
-    createContextContent();
-  }
-}
-
-function setContextLoading() {
-  ensureContextContent();
-  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-body');
-  if (!body) return;
-  body.className = 'ktalk-context-body loading';
-  body.innerHTML = `
-      <div class="ktalk-summary-spinner"></div>
-      <span>Собираю контекст...</span>
-    `;
-  const refreshBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-refresh-btn');
-  if (refreshBtn) refreshBtn.disabled = true;
-}
-
-function updateAnchorContent(payload, approximate = false) {
-  ensureContextContent();
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentAnchorData = payload;
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorLastUpdated = Date.now();
-  const data = payload?.data || payload || {};
-  const tone = ['neutral', 'calm', 'heated'].includes(data.topic_tone) ? data.topic_tone : 'neutral';
-
-  const topic = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(data.current_topic || 'No recent context.');
-  const bullets = Array.isArray(data.summary_bullets) ? data.summary_bullets : [];
-  const mention = data.user_mentioned === true;
-  const mentionText = mention
-    ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(data.mention_context || 'Упоминание без деталей.')
-    : 'Ваше имя не упоминалось.';
-  const mentionTs = data.mention_ts_display ? (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(data.mention_ts_display) : '';
-
-  const bulletsHtml = bullets.length > 0
-    ? bullets.map((bullet) => {
-      const text = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(bullet.text || '');
-      const ts = (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(bullet.ts_display || '');
-      const tsButton = ts
-        ? `<button class="ktalk-anchor-ts-btn" data-ts="${ts}">${ts}</button>`
-        : '<span class="ktalk-anchor-ts-btn empty">--:--:--</span>';
-      return `<li class="ktalk-anchor-bullet">${tsButton}<span class="ktalk-anchor-bullet-text">${text}</span></li>`;
-    }).join('')
-    : '<li class="ktalk-anchor-bullet"><span class="ktalk-anchor-bullet-text">Нет свежих пунктов.</span></li>';
-
-  const mentionHtml = mention
-    ? `<div class="ktalk-anchor-mention alert">Упомянули вас ${mentionTs ? `<button class="ktalk-anchor-ts-btn" data-ts="${mentionTs}">${mentionTs}</button>` : ''}<span>${mentionText}</span></div>`
-    : `<div class="ktalk-anchor-mention ok">${mentionText}</div>`;
-
-  const noteHtml = approximate ? '<div class="ktalk-anchor-note">Ответ может быть приблизительным.</div>' : '';
-
-  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-body');
-  if (!body) return;
-  body.className = 'ktalk-context-body';
-  body.innerHTML = `
-      <div class="ktalk-anchor-section">
-        <div class="ktalk-anchor-section-title">Right now</div>
-        <div class="ktalk-anchor-topic">
-          <span class="ktalk-anchor-tone ${tone}">${tone}</span>
-          <span class="ktalk-anchor-topic-text">${topic}</span>
-        </div>
-      </div>
-      <div class="ktalk-anchor-section">
-        <div class="ktalk-anchor-section-title">Last minutes</div>
-        <ul class="ktalk-anchor-bullets">${bulletsHtml}</ul>
-      </div>
-      <div class="ktalk-anchor-section">
-        <div class="ktalk-anchor-section-title">Mentions</div>
-        ${mentionHtml}
-        ${noteHtml}
-      </div>
-    `;
-
-  body.querySelectorAll('.ktalk-anchor-ts-btn').forEach((btn) => {
-    if (btn.classList.contains('empty')) return;
-    btn.addEventListener('click', () => {
-      const ts = btn.getAttribute('data-ts');
-      if (ts) scrollToAnchorTimestamp(ts);
-    });
-  });
-}
-
-function updateAnchorError(message) {
-  ensureContextContent();
-  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-body');
-  if (!body) return;
-  body.className = 'ktalk-context-body';
-  body.innerHTML = `<div class="ktalk-summary-error">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.escapeHtml)(message || 'Не удалось получить контекст.')}</div>`;
-}
-
-function getLocalUserName() {
-  const participants = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.lastParticipants || [];
-  const local = participants.find(p => p.isLocal && p.name);
-  if (local?.name) return local.name;
-
-  for (let idx = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length - 1; idx >= 0; idx -= 1) {
-    const line = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines[idx];
-    if (line && line.is_local && line.speaker) return line.speaker;
-  }
-
-  return '';
-}
-
-function requestAnchor() {
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorRequestPending) return;
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) {
-    updateAnchorError('Нет транскрипта для анализа');
-    return;
-  }
-
-  meetingTitle = document.title || meetingTitle;
-
-  const windowMs = 4 * 60 * 1000;
-  const cutoff = Date.now() - windowMs;
-  const recentLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.filter(line => line.createdAt && line.createdAt >= cutoff);
-  const linesToSend = recentLines.length > 0 ? recentLines : _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-25);
-
-  if (linesToSend.length === 0) {
-    updateAnchorError('Нет данных для анализа');
-    return;
-  }
-
-  const transcriptText = linesToSend.map(line => {
-    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
-    return `[${line.time}] ${speaker}: ${line.text}`;
-  }).join('\n');
-
-  setContextLoading();
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorRequestPending = true;
-
-  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsMessage)({
-    type: 'anchor_request',
-    transcript: transcriptText,
-    lines_count: linesToSend.length,
-    window_seconds: Math.round(windowMs / 1000),
-    model: anchorModel,
-    user_name: getLocalUserName() || 'User',
-    meeting_title: meetingTitle
-  });
-}
-
-function scrollToAnchorTimestamp(ts) {
-  const container = document.querySelector('.ktalk-transcript-messages');
-  if (!container) return;
-
-  const escaped = window.CSS && CSS.escape ? CSS.escape(ts) : ts.replace(/"/g, '\\"');
-  const target = container.querySelector(`.ktalk-msg[data-ts="${escaped}"]`);
-  if (!target) return;
-
-  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  target.classList.add('anchor-highlight');
-  setTimeout(() => target.classList.remove('anchor-highlight'), 1600);
-}
-
-function setupAnchorControls() {
-  if (anchorHotkeyBound) return;
-  anchorHotkeyBound = true;
-
-  document.addEventListener('keydown', (event) => {
-    if (!event.altKey || event.code !== 'KeyJ') return;
-    if (isEditableTarget(event.target)) return;
-    event.preventDefault();
-    activateContextTab();
-    requestAnchor();
-  });
-}
-
-function handleAnchorResponse(data) {
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.anchorRequestPending = false;
-
-  const refreshBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.contextContentElement?.querySelector('.ktalk-context-refresh-btn');
-  if (refreshBtn) refreshBtn.disabled = false;
-
-  if (data.error) {
-    updateAnchorError(data.error);
-    return;
-  }
-
-  updateAnchorContent(data.data || data, data.approximate);
-}
-
 function loadBioReadSettings() {
   const fallback = (0,_bioread_js__WEBPACK_IMPORTED_MODULE_1__.normalizeBioReadSettings)(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.bioRead);
   const saved = localStorage.getItem(_bioread_js__WEBPACK_IMPORTED_MODULE_1__.BIOREAD_SETTINGS_KEY);
@@ -8461,250 +7299,6 @@ function formatTranscriptText(text) {
 }
 
 
-function createSummaryModal() {
-  if (document.querySelector('.ktalk-summary-modal')) return;
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement = document.createElement('div');
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.className = 'ktalk-summary-modal';
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.innerHTML = `
-      <div class="ktalk-summary-modal-content">
-        <div class="ktalk-summary-modal-header">
-          <span class="ktalk-summary-modal-title">✨ Catch Up</span>
-          <select class="ktalk-model-select">
-            ${getAnchorModelOptions()}
-          </select>
-          <button class="ktalk-summary-modal-close">×</button>
-        </div>
-        <div class="ktalk-summary-modal-body loading">
-          <div class="ktalk-summary-spinner"></div>
-          <span>Анализирую транскрипт...</span>
-        </div>
-        <div class="ktalk-summary-question-input" style="display: none;">
-          <input type="text" class="ktalk-question-field" placeholder="Задай уточняющий вопрос..." />
-          <button class="ktalk-question-submit">→</button>
-        </div>
-        <div class="ktalk-summary-modal-footer">
-          <button class="ktalk-summary-copy-btn">📋 Копировать</button>
-        </div>
-      </div>
-    `;
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-modal-close').addEventListener('click', closeSummaryModal);
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-copy-btn').addEventListener('click', copySummary);
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-question-submit').addEventListener('click', askFollowUpQuestion);
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-question-field').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') askFollowUpQuestion();
-  });
-
-  const modelSelect = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-model-select');
-  modelSelect.value = selectedModel;
-  modelSelect.addEventListener('change', (e) => {
-    selectedModel = e.target.value;
-    localStorage.setItem('ktalk-ai-model', selectedModel);
-  });
-
-  const header = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-modal-header');
-  let isDragging = false;
-  let dragOffsetX = 0;
-  let dragOffsetY = 0;
-
-  header.addEventListener('mousedown', (e) => {
-    if (e.target.classList.contains('ktalk-summary-modal-close')) return;
-    isDragging = true;
-    const rect = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.getBoundingClientRect();
-    dragOffsetX = e.clientX - rect.left;
-    dragOffsetY = e.clientY - rect.top;
-    header.style.cursor = 'grabbing';
-  });
-
-  document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    e.preventDefault();
-    const x = e.clientX - dragOffsetX;
-    const y = e.clientY - dragOffsetY;
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.style.left = x + 'px';
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.style.top = y + 'px';
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.style.right = 'auto';
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.style.bottom = 'auto';
-  });
-
-  document.addEventListener('mouseup', () => {
-    if (isDragging) {
-      isDragging = false;
-      header.style.cursor = 'move';
-    }
-  });
-
-  document.body.appendChild(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement);
-}
-
-function showSummaryModal(summaryType = 'catchup') {
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement) {
-    createSummaryModal();
-  }
-
-  const titles = {
-    catchup: '🎯 Catch Up',
-    brief: '📋 Краткое (2 мин)',
-    full: '💬 Вся встреча'
-  };
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-modal-title').textContent = titles[summaryType] || titles.catchup;
-
-  const questionInput = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-question-input');
-  questionInput.style.display = summaryType === 'full' ? 'flex' : 'none';
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.classList.add('active');
-  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-modal-body');
-  body.className = 'ktalk-summary-modal-body loading';
-  body.innerHTML = `
-      <div class="ktalk-summary-spinner"></div>
-      <span>Анализирую транскрипт...</span>
-    `;
-}
-
-function closeSummaryModal() {
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement) {
-    _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.classList.remove('active');
-  }
-}
-
-function updateSummaryContent(text, isError = false) {
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement) return;
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText = text;
-  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-modal-body');
-  body.className = 'ktalk-summary-modal-body';
-
-  if (isError) {
-    body.innerHTML = `<div class="ktalk-summary-error">${text}</div>`;
-  } else {
-    body.innerHTML = `<div class="ktalk-summary-text">${(0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.renderMarkdown)(text)}</div>`;
-  }
-}
-
-function copySummary() {
-  if (!_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText) return;
-
-  navigator.clipboard.writeText(_state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText).then(() => {
-    const btn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-copy-btn');
-    if (btn) {
-      btn.classList.add('copied');
-      btn.textContent = '✓ Скопировано';
-      setTimeout(() => {
-        btn.classList.remove('copied');
-        btn.textContent = '📋 Копировать';
-      }, 2000);
-    }
-  });
-}
-
-function requestSummary(summaryType = 'catchup') {
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryRequestPending) return;
-  if (_state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.length === 0) {
-    alert('Нет транскрипта для анализа');
-    return;
-  }
-
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryType = summaryType;
-  let linesToSend;
-
-  if (summaryType === 'catchup') {
-    const oneMinuteAgo = Date.now() - 60000;
-    const recentLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.filter(line => line.createdAt && line.createdAt >= oneMinuteAgo);
-    linesToSend = recentLines.length > 0 ? recentLines : _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-10);
-  } else if (summaryType === 'brief') {
-    const twoMinutesAgo = Date.now() - 120000;
-    const recentLines = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.filter(line => line.createdAt && line.createdAt >= twoMinutesAgo);
-    linesToSend = recentLines.length > 0 ? recentLines : _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.slice(-20);
-  } else {
-    linesToSend = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines;
-  }
-
-  if (linesToSend.length === 0) {
-    alert('Нет данных для анализа');
-    return;
-  }
-
-  const transcriptText = linesToSend.map(line => {
-    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
-    return `[${line.time}] ${speaker}: ${line.text}`;
-  }).join('\n');
-
-  showSummaryModal(summaryType);
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryRequestPending = true;
-
-  document.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
-    btn.classList.add('loading');
-    btn.disabled = true;
-  });
-
-  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsMessage)({
-    type: 'summarize_request',
-    summary_type: summaryType,
-    transcript: transcriptText,
-    lines_count: linesToSend.length,
-    model: selectedModel,
-    meeting_title: meetingTitle
-  });
-}
-
-function askFollowUpQuestion() {
-  const input = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-question-field');
-  const question = input.value.trim();
-  if (!question) return;
-
-  const transcriptText = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.transcriptLines.map(line => {
-    const speaker = line.speaker + (0,_utils_js__WEBPACK_IMPORTED_MODULE_2__.getUncertainSuffix)(line);
-    return `[${line.time}] ${speaker}: ${line.text}`;
-  }).join('\n');
-
-  const body = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-summary-modal-body');
-  body.innerHTML = `
-      <div class="ktalk-summary-spinner"></div>
-      <span>Отвечаю на вопрос...</span>
-    `;
-  body.classList.add('loading');
-
-  const submitBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement.querySelector('.ktalk-question-submit');
-  submitBtn.disabled = true;
-
-  (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_3__.sendWsMessage)({
-    type: 'summarize_request',
-    summary_type: 'question',
-    transcript: transcriptText,
-    question: question,
-    previous_summary: _state_js__WEBPACK_IMPORTED_MODULE_0__.state.currentSummaryText,
-    model: selectedModel,
-    meeting_title: meetingTitle
-  });
-
-  input.value = '';
-}
-
-function handleSummaryResponse(data) {
-  _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryRequestPending = false;
-
-  document.querySelectorAll('.ktalk-transcript-summary-btn').forEach(btn => {
-    btn.classList.remove('loading');
-    btn.disabled = false;
-  });
-
-  const submitBtn = _state_js__WEBPACK_IMPORTED_MODULE_0__.state.summaryModalElement?.querySelector('.ktalk-question-submit');
-  if (submitBtn) submitBtn.disabled = false;
-
-  if (data.error) {
-    updateSummaryContent('Ошибка: ' + data.error, true);
-  } else if (data.summary) {
-    updateSummaryContent(data.summary);
-  }
-}
-
-/**
- * Initialize platform-specific UI
- * For vas3k.cloud: creates floating panel
- * For KTalk: uses existing tab injection (handled separately)
- */
 function initPlatformUI() {
   if ((0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_4__.isJitsiPlatform)()) {
     // Let the floating panel drive the copilot subsystem on view switches.
@@ -8847,11 +7441,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _state_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./state.js */ "./src/state.js");
 /* harmony import */ var _ui_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./ui.js */ "./src/ui.js");
 /* harmony import */ var _meeting_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./meeting.js */ "./src/meeting.js");
-/* harmony import */ var _ui_vas3k_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./ui-vas3k.js */ "./src/ui-vas3k.js");
-/* harmony import */ var _speaker_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./speaker.js */ "./src/speaker.js");
-/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
-/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
-
+/* harmony import */ var _speaker_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./speaker.js */ "./src/speaker.js");
+/* harmony import */ var _ws_api_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./ws_api.js */ "./src/ws_api.js");
+/* harmony import */ var _platforms_index_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./platforms/index.js */ "./src/platforms/index.js");
 
 
 
@@ -8896,7 +7488,7 @@ function connectWebSocket() {
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.copilotChannelStatus = 'unknown';
 
       // Send participants for both KTalk and vas3k
-      const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_6__.getPlatformAdapter)();
+      const adapter = (0,_platforms_index_js__WEBPACK_IMPORTED_MODULE_5__.getPlatformAdapter)();
       if (adapter) {
         // Gate on isConferenceAvailable(), not a merely-truthy getConference():
         // for matrix getConference() returns rtcSession even before roomId
@@ -8905,26 +7497,26 @@ function connectWebSocket() {
         // isConferenceAvailable() guards against. Mirrors isInMeeting().
         const conf = adapter.isConferenceAvailable() ? adapter.getConference() : null;
         if (conf) {
-          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendParticipantsUpdate)(conf);
-          const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.getActiveSpeaker)(conf);
-          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendFilteredSpeakerUpdate)(activeSpeaker);
+          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(conf);
+          const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getActiveSpeaker)(conf);
+          (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendFilteredSpeakerUpdate)(activeSpeaker);
           (0,_meeting_js__WEBPACK_IMPORTED_MODULE_2__.sendMeetingJoin)();
         }
       } else if (window.$conf) {
-        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendParticipantsUpdate)(window.$conf);
-        const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.getActiveSpeaker)(window.$conf);
-        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_4__.sendFilteredSpeakerUpdate)(activeSpeaker);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendParticipantsUpdate)(window.$conf);
+        const activeSpeaker = (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.getActiveSpeaker)(window.$conf);
+        (0,_speaker_js__WEBPACK_IMPORTED_MODULE_3__.sendFilteredSpeakerUpdate)(activeSpeaker);
         (0,_meeting_js__WEBPACK_IMPORTED_MODULE_2__.sendMeetingJoin)();
       }
 
       (0,_meeting_js__WEBPACK_IMPORTED_MODULE_2__.startMeetingCheck)();
 
       // Clock sync for accurate timestamp correlation
-      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_5__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
+      (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
 
       // Re-sync clock every 30 seconds
       _state_js__WEBPACK_IMPORTED_MODULE_0__.state.clockSyncTimer = setInterval(() => {
-        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_5__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
+        (0,_ws_api_js__WEBPACK_IMPORTED_MODULE_4__.sendWsMessage)({ type: 'clock_sync', browser_time: Date.now() });
       }, 30000);
     };
 
@@ -8969,11 +7561,6 @@ function connectWebSocket() {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleTranscriptRefine)(data);
         } else if (data.type === 'new_meeting') {
           (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleNewMeeting)(data);
-        } else if (data.type === 'summarize_response') {
-          (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleSummaryResponse)(data);
-          (0,_ui_vas3k_js__WEBPACK_IMPORTED_MODULE_3__.handleVas3kSummaryResponse)(data);
-        } else if (data.type === 'anchor_response') {
-          (0,_ui_js__WEBPACK_IMPORTED_MODULE_1__.handleAnchorResponse)(data);
         } else if (data.type === 'copilot_reply') {
           // Platform dispatch is centralized in the handler: ensureCopilotContent
           // → createCopilotContent() mounts the copilot chat into the floating
