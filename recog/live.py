@@ -22,7 +22,8 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
                      PCM_WAV_ANCHOR_MAX_AGE_MS,
-                     DEDUP_MAX_GAP_S, ASR_PENDING_BUFFER_CAP_S)
+                     DEDUP_MAX_GAP_S, ASR_PENDING_BUFFER_CAP_S,
+                     CAPTURE_RESYNC_MAX_S)
 from .asr import ASRModule, _mps_autoreleasepool
 from .log_utils import log_rate_limited
 from .remote_asr import ASRTemporarilyUnavailable, build_asr
@@ -211,6 +212,7 @@ class SingleDeviceCapture:
         self._buffered_samples = 0
         self._overlap_samples = int(0.5 * sample_rate)
         self._max_buffered_samples = int(ASR_PENDING_BUFFER_CAP_S * sample_rate)
+        self._resync_max_samples = int(CAPTURE_RESYNC_MAX_S * sample_rate)
 
     def _callback(self, indata, frames, time_info, status):
         if status:
@@ -243,6 +245,13 @@ class SingleDeviceCapture:
             if self._buffer_start_ts is not None:
                 self._buffer_start_ts += len(oldest) / self.sample_rate
             dropped += len(oldest)
+        # Realtime (consumer keeps up): re-anchor the buffer start to wall-clock.
+        # Sample counting alone never re-syncs — the 0.5 s overlap keeps the
+        # buffer non-empty, so any device under-delivery accumulates forever
+        # (mic stamps trailed the PCM speakers by ~5 min by 2026-09-03). A
+        # backlog (ASR outage) keeps sample-derived spoken-time stamps.
+        if self._buffered_samples <= self._resync_max_samples:
+            self._buffer_start_ts = captured_at + (len(data) - self._buffered_samples) / self.sample_rate
         return dropped
 
     def _append_locked_for_tests(self, data: np.ndarray, captured_at: float) -> int:
