@@ -804,8 +804,13 @@ class LiveTranscriber:
             print("Warning: meeting_storage module not found, transcripts won't be saved", file=sys.stderr)
             self._meeting_storage = None
         except Exception as e:
-            print(f"Warning: MeetingStorage error: {e}, transcripts won't be saved", file=sys.stderr)
-            self._meeting_storage = None
+            # Fail fast instead of running without persistence: launchd
+            # (KeepAlive) restarts the service until storage is usable again.
+            # Swallowing the error here (e.g. ENOSPC at startup) used to leave
+            # the service transcribing into stdout only, losing every meeting
+            # until someone noticed the empty webapp.
+            print(f"[FATAL ERROR] MeetingStorage init failed: {e}", file=sys.stderr)
+            raise
 
     def _setup_ktalk_bridge(self):
         """Wire up KTalk bridge, IncrementGenerator, and meeting-change callbacks."""
