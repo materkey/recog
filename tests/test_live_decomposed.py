@@ -287,3 +287,30 @@ class TestResolveSpeakerEmbedding:
 
         transcriber._identify_speaker.assert_called_once_with(None)
         assert result == "speaker"
+
+
+# ---------------------------------------------------------------------------
+# _setup_meeting_storage
+# ---------------------------------------------------------------------------
+
+class TestSetupMeetingStorage:
+
+    def _make_transcriber_mock(self):
+        transcriber = Mock(spec=LiveTranscriber)
+        transcriber.mic_capture = None
+        transcriber.system_capture = None
+        transcriber.use_ktalk = True
+        transcriber.use_screencapture = True
+        transcriber.chunk_duration = 3.0
+        transcriber.save_audio = False
+        transcriber._meeting_storage = None
+        return transcriber
+
+    def test_storage_init_failure_aborts_startup(self):
+        """given: MeetingStorage.start_session raises OSError (disk full) - when: _setup_meeting_storage - then: error propagates instead of running without persistence"""
+        transcriber = self._make_transcriber_mock()
+
+        with patch("meeting_storage.MeetingStorage") as storage_cls:
+            storage_cls.return_value.start_session.side_effect = OSError(28, "No space left on device")
+            with pytest.raises(OSError):
+                LiveTranscriber._setup_meeting_storage(transcriber)
