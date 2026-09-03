@@ -22,6 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from recog.config import CAPTURE_RESYNC_MAX_S
 from recog.live import LiveTranscriber, SingleDeviceCapture, SourceState
 from recog.remote_asr import ASRTemporarilyUnavailable
 from screencapture_audio import ScreenCaptureAudio
@@ -38,6 +39,7 @@ def _init_buffer_fields(cap, max_buffer_s: float = 10.0):
     cap._buffered_samples = 0
     cap._overlap_samples = int(0.5 * SR)
     cap._max_buffered_samples = int(max_buffer_s * SR)
+    cap._resync_max_samples = int(CAPTURE_RESYNC_MAX_S * SR)
 
 
 def _make_single_device_capture() -> SingleDeviceCapture:
@@ -302,3 +304,37 @@ class TestDedupWindow:
         capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1033.0)
         LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
         assert t._handle_mic_chunk.call_count == 2  # записан!
+
+
+# =============================================================================
+# Capture-классы: ресинхронизация метки времени с wall-clock в реальном времени
+# =============================================================================
+
+
+class TestCaptureClockResync:
+    def test_device_gap_in_realtime_does_not_shift_timestamps_early(self, capture):
+        """given: consumer успевает (буфер держит только overlap), а устройство
+                 отдало следующий блок с провалом 7.5 с (недобор сэмплов)
+        when: get_chunk следующего чанка
+        then: метка времени считается от wall-clock прихода блока, а не от
+              накопленного числа сэмплов — иначе недобор копится навсегда"""
+        _feed(capture, 3.0, captured_at=1000.0)
+        _, ts1 = capture.get_chunk(3.0)
+        assert ts1 == pytest.approx(1000.0)
+        # 0.5 с overlap остался в буфере; следующий блок 2.5 с захвачен 1010.0–1012.5
+        _feed(capture, 2.5, captured_at=1010.0)
+
+        _, ts2 = capture.get_chunk(3.0)
+
+        assert ts2 == pytest.approx(1012.5 - 3.0, abs=0.01)
+
+    def test_backlog_keeps_sample_derived_timestamps(self, capture):
+        """given: ASR недоступен — в буфере 8 с бэклога (больше CAPTURE_RESYNC_MAX_S)
+        when: приходит новый блок с более поздним captured_at, затем get_chunk
+        then: старейший чанк сохраняет своё время произнесения (без ресинка)"""
+        _feed(capture, 8.0, captured_at=1000.0)
+        _feed(capture, 1.0, captured_at=1100.0)
+
+        _, ts = capture.get_chunk(3.0)
+
+        assert ts == pytest.approx(1000.0)

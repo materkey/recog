@@ -181,3 +181,7 @@ DEDUP_MAX_GAP_S = float(os.environ.get("DEDUP_MAX_GAP_S", "2.0"))
 # Кап аудио-буфера AudioCapture, пока ASR недоступен (секунды). При превышении
 # старейшее аудио отбрасывается с rate-limited логом.
 ASR_PENDING_BUFFER_CAP_S = float(os.environ.get("ASR_PENDING_BUFFER_CAP_S", "600"))
+# Пока в capture-буфере не больше этого (consumer успевает: overlap + чанк),
+# метка времени буфера ресинхронизируется с wall-clock на каждом блоке. Больше —
+# бэклог при недоступном ASR, метки считаются по числу сэмплов (время произнесения).
+CAPTURE_RESYNC_MAX_S = 6.0
