@@ -297,6 +297,17 @@ before/after comparison, not promised by setup.
 ## Testing
 
 ```bash
+./scripts/check.sh                    # everything below, in one go
+```
+
+`scripts/check.sh` is what CI runs on macOS and Linux: `compileall`, `bash -n`
+over the shell scripts, the CLI smoke test, a dry-run render of the service
+units, and the unit suite. It starts no service, captures no audio and loads no
+model weights — those belong to manual acceptance on a real host.
+
+The individual steps:
+
+```bash
 source venv-gigaam/bin/activate
 python -m pytest tests/ -v            # unit tests
 python -m compileall recog frontend   # syntax check

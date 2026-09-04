@@ -18,7 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.ktalk_orchestrator import KTalkOrchestrator, SpeakerWindow
+# The orchestrator imports playwright at module level, and `-m "not e2e"`
+# deselects *after* collection has already imported this file — without the
+# guard a checkout that installed only requirements.txt fails collection
+# (exit code 2) instead of running the unit suite.
+pytest.importorskip("playwright.sync_api")
+
+from tests.e2e.ktalk_orchestrator import KTalkOrchestrator, SpeakerWindow  # noqa: E402
 
 # Reference-transcript word sets used to detect cross-contamination between
 # Alice and Bob during the overlap window. The exact words produced by GigaAM

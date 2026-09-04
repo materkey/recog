@@ -125,11 +125,15 @@
 - ⚠️ `scripts/check.sh` в README не упоминается — он появляется в шаге 11; строку про него добавит тот коммит.
 
 ### Task 11: chore: проверка и CI
-- [ ] Прочитать подраздел «11. chore: проверка и CI» ниже
-- [ ] `tests/e2e`: `pytest.importorskip("playwright.sync_api")` (или `collect_ignore_glob`), чтобы `pytest -q -m "not e2e"` не падал с кодом 2 без playwright
-- [ ] `scripts/check.sh`: `compileall`, `bash -n` всех shell-скриптов, `mp4_notes.py --help`, `recog-service.sh render --dry-run "$(mktemp -d)"`, `pytest -q -m "not e2e"`
-- [ ] `.github/workflows/ci.yml`: matrix ubuntu+macos, python 3.12, torch CPU-индекс, GigaAM с git-пином, requirements (+macOS с `-c constraints/macos.txt`), `scripts/check.sh`
-- [ ] Коммит: `chore: add a check script and CI workflow`
+- [x] Прочитать подраздел «11. chore: проверка и CI» ниже
+- [x] `tests/e2e`: `pytest.importorskip("playwright.sync_api")` (или `collect_ignore_glob`), чтобы `pytest -q -m "not e2e"` не падал с кодом 2 без playwright
+- [x] `scripts/check.sh`: `compileall`, `bash -n` всех shell-скриптов, `mp4_notes.py --help`, `recog-service.sh render --dry-run "$(mktemp -d)"`, `pytest -q -m "not e2e"`
+- [x] `.github/workflows/ci.yml`: matrix ubuntu+macos, python 3.12, torch CPU-индекс, GigaAM с git-пином, requirements (+macOS с `-c constraints/macos.txt`), `scripts/check.sh`
+- [x] Коммит: `chore: add a check script and CI workflow`
+- ➕ `tests/test_check_script.py` — check.sh прогоняется на выброшенной копии репо со стаб-интерпретатором (что запускает, в каком порядке, какой шаг останавливает прогон, какой интерпретатор выбирается); отдельный тест воспроизводит отсутствие playwright и проверяет, что коллекция `tests/e2e` не падает; тесты на `ci.yml` — drift-гарды на совпадение GigaAM-пина и requirements с `setup.sh` и на `-c constraints/macos.txt` во всех pip-стадиях.
+- ➕ `README.md`: раздел Testing начинается с `./scripts/check.sh` (строка, отложенная из шага 10).
+- ➕ `bash -n` перечисляет скрипты через `git ls-files --cached --others --exclude-standard`, а не `find`: в рабочей копии лежат игнорируемые worktree'ы (`.ralphex/`) с собственными `*.sh`, а новый ещё не добавленный скрипт проверить всё равно нужно.
+- ⚠️ Прогон на Linux в этой итерации не выполнялся (нужен реальный runner) — первый настоящий Linux-прогон даёт CI либо ручная приёмка на Z270XX.
 
 ### Task 12: Финальная автоматическая верификация
 - [ ] `./scripts/check.sh` зелёный локально на macOS

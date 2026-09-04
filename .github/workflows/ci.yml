@@ -1,0 +1,70 @@
+# Runs scripts/check.sh on both supported hosts in a clean environment.
+#
+# The dependency set mirrors setup.sh (torch from the CPU index, GigaAM from
+# the pinned git ref, requirements.txt + frontend/requirements.txt, plus
+# requirements-macos.txt on darwin) so a run here fails for the same reasons a
+# fresh install would. On macOS every pip stage carries
+# `-c constraints/macos.txt`: CI must not resolve the ML stack to versions the
+# Mac's MPS/PyObjC contracts were never verified against.
+#
+# No service is installed, no audio is captured and no model weights are
+# downloaded — that part of the verification needs real hardware.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Same pin setup.sh installs; the PyPI release lags the decoder and
+      # word-timestamp API recog/asr.py and recog/refine.py call directly.
+      GIGAAM_URL: https://github.com/salute-developers/GigaAM.git
+      GIGAAM_REF: 6e4b027
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve pip constraints
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "PIP_ARGS=-c constraints/macos.txt" >> "$GITHUB_ENV"
+          else
+            echo "PIP_ARGS=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install torch (CPU wheels)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install $PIP_ARGS --index-url https://download.pytorch.org/whl/cpu \
+            torch torchaudio
+
+      - name: Install GigaAM (pinned git ref)
+        shell: bash
+        run: pip install $PIP_ARGS "gigaam @ git+${GIGAAM_URL}@${GIGAAM_REF}"
+
+      - name: Install requirements
+        shell: bash
+        run: |
+          reqs=(-r requirements.txt -r frontend/requirements.txt)
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            reqs+=(-r requirements-macos.txt)
+          fi
+          pip install $PIP_ARGS "${reqs[@]}"
+
+      - name: Run checks
+        shell: bash
+        run: ./scripts/check.sh
