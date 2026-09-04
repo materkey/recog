@@ -46,6 +46,7 @@ class LiveWatcher(FileSystemEventHandler):
         self._seen_segment_ids: set[int] = set()
         self._file_inode: Optional[int] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._meeting_read_lock = asyncio.Lock()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
@@ -131,6 +132,15 @@ class LiveWatcher(FileSystemEventHandler):
                     self._loop
                 )
 
+    async def read_active_meetings(self, storage):
+        """Read off-loop, serializing selections from WS init and the watcher.
+
+        Callers apply the selection before their next await, so an older scan
+        cannot finish after a newer one and move the shared watcher backwards.
+        """
+        async with self._meeting_read_lock:
+            return await asyncio.to_thread(storage.list_active_meetings)
+
     async def _check_current_meeting(self):
         """Check for new/changed current meeting."""
         try:
@@ -138,7 +148,7 @@ class LiveWatcher(FileSystemEventHandler):
             from server import get_storage  # type: ignore
 
             storage = get_storage()
-            active_meetings = storage.list_active_meetings()
+            active_meetings = await self.read_active_meetings(storage)
             current = active_meetings[0] if active_meetings else None
 
             if current and current["id"] != self.current_meeting_id:
