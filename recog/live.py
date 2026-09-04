@@ -387,8 +387,8 @@ class LiveTranscriber:
 
         if use_screencapture:
             # Используем ScreenCaptureKit для системного звука
-            from recog.system_audio import ScreenCaptureAudio
-            self.system_capture = ScreenCaptureAudio(self.sample_rate)
+            from recog.system_audio import create_system_capture
+            self.system_capture = create_system_capture("screencapture", self.sample_rate)
             if mic_device is not None:
                 self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
         elif self.dual_mode:

@@ -40,13 +40,13 @@
 - [x] Коммит: `refactor: move screencapture audio module into recog package`
 
 ### Task 3: feat: generic subprocess-capture + PulseAudio-бэкенд
-- [ ] Прочитать подраздел «3. feat: generic subprocess-capture + PulseAudio-бэкенд» ниже
-- [ ] `SubprocessPCMCapture(BufferedAudioCapture)` (бывший `ScreenCaptureAudio`) с `argv`/`name`; `find_or_build_sck_utility(repo_root=REPO_ROOT)`
-- [ ] Исправить restart-политику: `_restart_process()` бросает при смерти ребёнка через 0.5 с, поток не выходит на первом сбое, живёт до `max_restarts`
-- [ ] `parec_argv(source)`, `resolve_pulse_monitor_source(env)`, наблюдение за сменой default sink с явным переподключением (без override), фиксированный источник при `RECOG_PULSE_MONITOR_SOURCE`
-- [ ] `resolve_system_audio_backend(spec, platform, which)` и `create_system_capture(backend, sample_rate)`; демо `python -m recog.system_audio`; имя `ScreenCaptureAudio` не сохраняем
-- [ ] `tests/test_system_audio.py` — все кейсы из детального плана (argv, override, переподключение, ошибки `pactl`, остановка наблюдения, выбор бэкенда, restart-цикл)
-- [ ] Коммит: `feat: add PulseAudio system-audio backend on generic subprocess capture`
+- [x] Прочитать подраздел «3. feat: generic subprocess-capture + PulseAudio-бэкенд» ниже
+- [x] `SubprocessPCMCapture(BufferedAudioCapture)` (бывший `ScreenCaptureAudio`) с `argv`/`name`; `find_or_build_sck_utility(repo_root=REPO_ROOT)`
+- [x] Исправить restart-политику: `_restart_process()` бросает при смерти ребёнка через 0.5 с, поток не выходит на первом сбое, живёт до `max_restarts`
+- [x] `parec_argv(source)`, `resolve_pulse_monitor_source(env)`, наблюдение за сменой default sink с явным переподключением (без override), фиксированный источник при `RECOG_PULSE_MONITOR_SOURCE`
+- [x] `resolve_system_audio_backend(spec, platform, which)` и `create_system_capture(backend, sample_rate)`; демо `python -m recog.system_audio`; имя `ScreenCaptureAudio` не сохраняем
+- [x] `tests/test_system_audio.py` — все кейсы из детального плана (argv, override, переподключение, ошибки `pactl`, остановка наблюдения, выбор бэкенда, restart-цикл)
+- [x] Коммит: `feat: add PulseAudio system-audio backend on generic subprocess capture`
 
 ### Task 4: feat: CLI `--system-audio` + кросс-платформенный автовыбор микрофона
 - [ ] Прочитать подраздел «4. feat: CLI `--system-audio` + кросс-платформенный автовыбор микрофона» ниже
