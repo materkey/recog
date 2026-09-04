@@ -125,6 +125,7 @@ class MeetingStorage:
         system_audio: bool = False,
         ktalk: bool = False,
         screencapture: bool = False,
+        system_audio_backend: str = "none",
         chunk_duration_ms: int = 3000
     ) -> str:
         """
@@ -143,7 +144,10 @@ class MeetingStorage:
             "mic": mic,
             "system_audio": system_audio,
             "ktalk": ktalk,
-            "screencapture": screencapture
+            # `screencapture` — именно ScreenCaptureKit; фактический бэкенд
+            # (`pulse`, `device:<id>`, …) живёт в `system_audio_backend`.
+            "screencapture": screencapture,
+            "system_audio_backend": system_audio_backend
         }
         self._chunk_duration_ms = chunk_duration_ms
 

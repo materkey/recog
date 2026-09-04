@@ -49,12 +49,12 @@
 - [x] Коммит: `feat: add PulseAudio system-audio backend on generic subprocess capture`
 
 ### Task 4: feat: CLI `--system-audio` + кросс-платформенный автовыбор микрофона
-- [ ] Прочитать подраздел «4. feat: CLI `--system-audio` + кросс-платформенный автовыбор микрофона» ниже
-- [ ] `mp4_notes.py`: флаг `--system-audio auto|screencapture|pulse|device:<id>|none` (дефолт `none`), скрытые алиасы `--screencapture`/`--system-device`, `--mic-device none`, вынести `build_parser()`
-- [ ] `recog/live.py`: `use_screencapture: bool` → `system_audio: Optional[str]` в `LiveTranscriber`/`live_pipeline` с маппингом старых вызовов; ветка создания захвата → `create_system_capture`; баннер режима и `start_session(screencapture=...)`/meta не ломаются
-- [ ] `find_builtin_mic()` → `find_default_mic()` с Linux-цепочкой (`pulse`/`pipewire`/`default` → `query_devices(kind="input")` → `None`); `--list-devices` на Linux печатает `pactl list short sources`
-- [ ] Тесты парсера и `find_default_mic` с mock `sounddevice.query_devices`; полный `pytest -q -m "not e2e"` зелёный
-- [ ] Коммит: `feat: select system audio backend from the CLI`
+- [x] Прочитать подраздел «4. feat: CLI `--system-audio` + кросс-платформенный автовыбор микрофона» ниже
+- [x] `mp4_notes.py`: флаг `--system-audio auto|screencapture|pulse|device:<id>|none` (дефолт `none`), скрытые алиасы `--screencapture`/`--system-device`, `--mic-device none`, вынести `build_parser()`
+- [x] `recog/live.py`: `use_screencapture: bool` → `system_audio: Optional[str]` в `LiveTranscriber`/`live_pipeline` с маппингом старых вызовов; ветка создания захвата → `create_system_capture`; баннер режима и `start_session(screencapture=...)`/meta не ломаются
+- [x] `find_builtin_mic()` → `find_default_mic()` с Linux-цепочкой (`pulse`/`pipewire`/`default` → `query_devices(kind="input")` → `None`); `--list-devices` на Linux печатает `pactl list short sources`
+- [x] Тесты парсера и `find_default_mic` с mock `sounddevice.query_devices`; полный `pytest -q -m "not e2e"` зелёный
+- [x] Коммит: `feat: select system audio backend from the CLI`
 
 ### Task 5: feat: выбор устройства ASR `RECOG_ASR_DEVICE`
 - [ ] Прочитать подраздел «5. feat: выбор устройства ASR `RECOG_ASR_DEVICE`» ниже
