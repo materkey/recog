@@ -31,6 +31,9 @@ SVC_REPO_DIR="$SCRIPT_DIR"
 SVC_LOG_DIR="$LOG_DIR"
 source "$SCRIPT_DIR/scripts/service/common.sh"
 
+DEPS_REPO_DIR="$SCRIPT_DIR"
+source "$SCRIPT_DIR/scripts/deps.sh"
+
 SERVICE_OS="${RECOG_SERVICE_OS:-$(uname -s)}"
 case "$SERVICE_OS" in
     Darwin) source "$SCRIPT_DIR/scripts/service/launchd.sh" ;;
@@ -51,6 +54,26 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 ensure_logs_dir() {
     mkdir -p "$LOG_DIR"
+}
+
+# Gate for `start` / `restart`: the same probes setup.sh runs (scripts/deps.sh),
+# before anything is stopped or activated. An install that cannot serve the
+# full live pipeline must not replace one that can — a restart that unloads a
+# working service and then fails to bring up a broken one is the worst
+# outcome. RECOG_SKIP_READINESS=1 bypasses it (running a subset deliberately,
+# or tests driving stub service managers).
+require_ready() {
+    [ "${RECOG_SKIP_READINESS:-0}" = "1" ] && return 0
+
+    local problems
+    problems="$(deps_readiness_problems)"
+    [ -n "$problems" ] || return 0
+
+    warn "Install is not complete — services left untouched:"
+    while IFS= read -r line; do
+        [ -n "$line" ] && warn "  - $line"
+    done <<< "$problems"
+    error "Fix the above, then retry (RECOG_SKIP_READINESS=1 bypasses this check)"
 }
 
 # Probe the copilot channel MCP daemon with a real `initialize` call.
@@ -166,6 +189,7 @@ cmd_uninstall() {
 }
 
 cmd_start() {
+    require_ready
     info "Starting services..."
     ensure_logs_dir
 
@@ -199,6 +223,7 @@ cmd_stop() {
 }
 
 cmd_restart() {
+    require_ready
     # NOTE: intentionally does NOT go through cmd_stop — a mid-meeting restart
     # must keep the live copilot session (the supervisor re-adopts it on
     # reconnect). Only cmd_stop/cmd_uninstall reap it via kill_copilot_tmux.

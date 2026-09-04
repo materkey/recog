@@ -12,8 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Setup
 ```bash
-# Full setup (creates venv and .env)
-./setup_venvs.sh
+# Full setup (venv, dependencies, config files, services)
+./setup.sh
 
 # Or manual setup:
 # GigaAM venv (requires ../GigaAM to exist)

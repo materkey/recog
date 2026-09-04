@@ -74,6 +74,11 @@ def stub_env(tmp_path):
         "HOME": str(home),
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "STUB_LOG": str(log),
+        # These tests drive the service verbs, not the host: the readiness gate
+        # start/restart run (scripts/deps.sh) is covered in tests/test_setup.py
+        # against controlled stubs, and would otherwise make the outcome depend
+        # on whether the developer's box has ffmpeg/parec and a filled-in .env.
+        "RECOG_SKIP_READINESS": "1",
     }
     return env, log, home
 
