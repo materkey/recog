@@ -22,9 +22,9 @@ from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SP
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
                      PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
                      PCM_WAV_ANCHOR_MAX_AGE_MS,
-                     DEDUP_MAX_GAP_S, ASR_PENDING_BUFFER_CAP_S,
-                     CAPTURE_RESYNC_MAX_S)
+                     DEDUP_MAX_GAP_S, ASR_PENDING_BUFFER_CAP_S)
 from .asr import ASRModule, _mps_autoreleasepool
+from .audio_capture import BufferedAudioCapture
 from .log_utils import log_rate_limited
 from .remote_asr import ASRTemporarilyUnavailable, build_asr
 from .refine import RefineResult, RefineWorker, make_abortable_decode
@@ -192,36 +192,22 @@ class IncrementalWavWriter:
         self._file.write(struct.pack('<I', data_size))
 
 
-class SingleDeviceCapture:
+class SingleDeviceCapture(BufferedAudioCapture):
     """Захват аудио с одного устройства."""
 
-    def __init__(self, device, sample_rate=16000, name="device"):
+    def __init__(self, device, sample_rate=16000, name="device",
+                 max_buffer_s: float = ASR_PENDING_BUFFER_CAP_S):
         import sounddevice as sd
+        super().__init__(sample_rate=sample_rate, name=name, max_buffer_s=max_buffer_s)
         self.sd = sd
-        self.sample_rate = sample_rate
         self.device = device
-        self.name = name
-        self.buffer = []
-        self.running = False
         self.stream = None
-        self._lock = None
-        # --- capture-время + буферизация при недоступном ASR -----------------
-        # Дизайн: docs/plans/2026-06-02-asr-fallback-buffering-design.md §2.
-        # _buffer_start_ts — epoch-время захвата первого невычитанного сэмпла.
-        self._buffer_start_ts: Optional[float] = None
-        self._buffered_samples = 0
-        self._overlap_samples = int(0.5 * sample_rate)
-        self._max_buffered_samples = int(ASR_PENDING_BUFFER_CAP_S * sample_rate)
-        self._resync_max_samples = int(CAPTURE_RESYNC_MAX_S * sample_rate)
 
     def _callback(self, indata, frames, time_info, status):
         if status:
             print(f"Audio status ({self.name}): {status}", file=sys.stderr)
         captured_at = time.time() - frames / self.sample_rate
-        if self._lock:
-            with self._lock:
-                dropped = self._append_locked(indata.copy(), captured_at)
-        else:
+        with self._lock:
             dropped = self._append_locked(indata.copy(), captured_at)
         if dropped:
             log_rate_limited(
@@ -230,41 +216,7 @@ class SingleDeviceCapture:
                 f"dropped {dropped / self.sample_rate:.1f}s of oldest audio",
             )
 
-    def _append_locked(self, data: np.ndarray, captured_at: float) -> int:
-        """Добавляет data в буфер; возвращает число сэмплов, отброшенных по капу.
-
-        Вызывается с уже взятым _lock (или без лока до start())."""
-        if not self.buffer:
-            self._buffer_start_ts = captured_at
-        self.buffer.append(data)
-        self._buffered_samples += len(data)
-        dropped = 0
-        while self._buffered_samples > self._max_buffered_samples and self.buffer:
-            oldest = self.buffer.pop(0)
-            self._buffered_samples -= len(oldest)
-            if self._buffer_start_ts is not None:
-                self._buffer_start_ts += len(oldest) / self.sample_rate
-            dropped += len(oldest)
-        # Realtime (consumer keeps up): re-anchor the buffer start to wall-clock.
-        # Sample counting alone never re-syncs — the 0.5 s overlap keeps the
-        # buffer non-empty, so any device under-delivery accumulates forever
-        # (mic stamps trailed the PCM speakers by ~5 min by 2026-09-03). A
-        # backlog (ASR outage) keeps sample-derived spoken-time stamps.
-        if self._buffered_samples <= self._resync_max_samples:
-            self._buffer_start_ts = captured_at + (len(data) - self._buffered_samples) / self.sample_rate
-        return dropped
-
-    def _append_locked_for_tests(self, data: np.ndarray, captured_at: float) -> int:
-        """Тестовый шов: _append_locked под собственным локом."""
-        if self._lock:
-            with self._lock:
-                return self._append_locked(data, captured_at)
-        return self._append_locked(data, captured_at)
-
     def start(self):
-        import threading
-        self._lock = threading.Lock()
-
         # Определяем количество каналов устройства
         device_info = self.sd.query_devices(self.device)
         max_channels = device_info.get('max_input_channels', 1)
@@ -285,52 +237,6 @@ class SingleDeviceCapture:
             self.stream.stop()
             self.stream.close()
             self.running = False
-
-    def clear_buffer(self):
-        """Discard all buffered audio (used on meeting boundary)."""
-        if self._lock:
-            with self._lock:
-                self.buffer = []
-                self._buffer_start_ts = None
-                self._buffered_samples = 0
-        else:
-            self.buffer = []
-            self._buffer_start_ts = None
-            self._buffered_samples = 0
-
-    def get_chunk(self, duration: float) -> Optional[Tuple[np.ndarray, float]]:
-        """Возвращает (аудио чанк (моно), epoch-время захвата первого сэмпла)."""
-        samples_needed = int(duration * self.sample_rate)
-
-        if self._lock:
-            self._lock.acquire()
-        try:
-            if not self.buffer:
-                return None
-            audio = np.concatenate(self.buffer, axis=0)
-            if len(audio) < samples_needed:
-                return None
-
-            chunk = audio[:samples_needed]
-            chunk_start_ts = (
-                self._buffer_start_ts
-                if self._buffer_start_ts is not None
-                else time.time() - duration
-            )
-            # 0.5 сек overlap для лучшего распознавания на границах
-            overlap_start = max(0, samples_needed - self._overlap_samples)
-            self.buffer = [audio[overlap_start:]]
-            self._buffered_samples = len(audio) - overlap_start
-            self._buffer_start_ts = chunk_start_ts + overlap_start / self.sample_rate
-        finally:
-            if self._lock:
-                self._lock.release()
-
-        # Конвертируем стерео в моно если нужно
-        if chunk.ndim > 1 and chunk.shape[1] > 1:
-            chunk = np.mean(chunk, axis=1)
-
-        return chunk.flatten(), chunk_start_ts
 
     @staticmethod
     def list_devices():

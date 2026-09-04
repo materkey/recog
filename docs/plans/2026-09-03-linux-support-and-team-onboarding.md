@@ -24,13 +24,13 @@
 ## Implementation Steps
 
 ### Task 1: refactor: общий буфер захвата `recog/audio_capture.py`
-- [ ] Прочитать подраздел «1. refactor: общий буфер захвата `recog/audio_capture.py`» ниже
-- [ ] Создать `recog/audio_capture.py` с `BufferedAudioCapture` (поля буфера/лока/ресинка, `_append_locked`, `_append_locked_for_tests`, `clear_buffer`, `get_chunk`), лок создаётся в `__init__`
-- [ ] `SingleDeviceCapture` (`recog/live.py`) и `ScreenCaptureAudio` (`screencapture_audio.py`) наследуют базовый класс и пробрасывают `max_buffer_s`; ветки `if self._lock` уходят
-- [ ] Общий `get_chunk`: моно-свёртка при `ndim > 1` + финальный `.flatten()` (контракт — 1-D моно float32) плюс ранний `if not self.running: return None`
-- [ ] `tests/test_live_buffering.py::_init_buffer_fields` вызывает базовый `__init__` с явным `max_buffer_s=10.0`; новый `tests/test_audio_capture.py` с кейсом кадров `(n,2)` → 1-D float32 длины `samples_needed`
-- [ ] `python -m pytest tests/test_live_buffering.py tests/test_audio_capture.py -q` зелёный
-- [ ] Коммит: `refactor: extract BufferedAudioCapture shared by mic and system capture`
+- [x] Прочитать подраздел «1. refactor: общий буфер захвата `recog/audio_capture.py`» ниже
+- [x] Создать `recog/audio_capture.py` с `BufferedAudioCapture` (поля буфера/лока/ресинка, `_append_locked`, `_append_locked_for_tests`, `clear_buffer`, `get_chunk`), лок создаётся в `__init__`
+- [x] `SingleDeviceCapture` (`recog/live.py`) и `ScreenCaptureAudio` (`screencapture_audio.py`) наследуют базовый класс и пробрасывают `max_buffer_s`; ветки `if self._lock` уходят
+- [x] Общий `get_chunk`: моно-свёртка при `ndim > 1` + финальный `.flatten()` (контракт — 1-D моно float32) плюс ранний `if not self.running: return None`
+- [x] `tests/test_live_buffering.py::_init_buffer_fields` вызывает базовый `__init__` с явным `max_buffer_s=10.0`; новый `tests/test_audio_capture.py` с кейсом кадров `(n,2)` → 1-D float32 длины `samples_needed`
+- [x] `python -m pytest tests/test_live_buffering.py tests/test_audio_capture.py -q` зелёный
+- [x] Коммит: `refactor: extract BufferedAudioCapture shared by mic and system capture`
 
 ### Task 2: refactor: `screencapture_audio.py` → `recog/system_audio.py` (чистый перенос)
 - [ ] Прочитать подраздел «2. refactor: `screencapture_audio.py` → `recog/system_audio.py`» ниже
