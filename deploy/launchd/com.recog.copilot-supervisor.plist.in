@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.recog.copilot-supervisor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@PYTHON@</string>
+        <string>-m</string>
+        <string>recog.copilot_supervisor</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO_DIR@</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/copilot-supervisor.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/copilot-supervisor.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- @EXTRA_PATH@ carries $HOME/.local/bin, where `claude` lives; the
+             supervisor spawns it via `tmux -L recog-copilot` and the tmux child
+             inherits this PATH. TERM is pinned so Ink does not emit kitty-only
+             DCS queries. -->
+        <key>PATH</key>
+        <string>@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>TERM</key>
+        <string>xterm-256color</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>

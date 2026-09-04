@@ -13,9 +13,11 @@ import websockets
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import recog.copilot_supervisor as copilot_supervisor
 from recog.copilot_supervisor import (
     DEFAULT_MCP_URL,
     MANUAL_MEETING_ID,
+    SYSTEMD_SESSION_UNIT,
     TMUX_SESSION,
     TMUX_SESSION_MANUAL,
     AgentState,
@@ -28,6 +30,22 @@ from recog.copilot_supervisor import (
     Watchdog,
     classify_screen,
 )
+
+
+# Captured before the autouse fixture below stubs the module attribute, so the
+# probe itself can still be tested.
+_REAL_LINUX_SESSION_MANAGER = copilot_supervisor._linux_session_manager
+
+
+@pytest.fixture(autouse=True)
+def plain_tmux_sessions(monkeypatch):
+    """Pin the session manager to plain tmux for every test in this module.
+
+    Otherwise the same tests would assert different tmux argv on Linux (where
+    the session is wrapped in a transient systemd unit) than on macOS. The
+    Linux path has its own explicit `use_systemd_run=True` tests below.
+    """
+    monkeypatch.setattr(copilot_supervisor, "_linux_session_manager", lambda: False)
 
 
 class FakeRunner:
@@ -2667,3 +2685,213 @@ async def test_capture_and_send_keys_drive_a_real_tmux_session():
         subprocess.run(
             ["tmux", "-L", socket, "kill-server"], capture_output=True
         )
+
+
+# ---------------------------------------------------------------------------
+# Linux: the tmux session lives in a transient `systemd --user` unit so it
+# survives a supervisor restart (plan step 8)
+# ---------------------------------------------------------------------------
+
+
+class LinuxFake:
+    """Runner recording systemd-run / systemctl / tmux invocations.
+
+    `sessions` is the set of live tmux session names (name-aware, so the
+    sibling probe in spawn() behaves like the real thing); `loaded` is
+    systemd's view of the transient unit, flipped to False by a stop so
+    `_reset_session_unit` terminates.
+    """
+
+    def __init__(self, *, sessions=(), loaded=False, load_states=None):
+        self.calls = []
+        self.sessions = set(sessions)
+        self.loaded = loaded
+        self.load_states = list(load_states) if load_states is not None else None
+        self.responses = {}  # program name -> (rc, stdout)
+
+    async def __call__(self, args):
+        self.calls.append(list(args))
+        head = args[0]
+        if head == "systemctl":
+            if "show" in args:
+                if self.load_states:
+                    state = self.load_states.pop(0)
+                else:
+                    state = "loaded" if self.loaded else "not-found"
+                return (0, state + "\n")
+            if "stop" in args:
+                self.loaded = False
+                return (0, "")
+            return (0, "")
+        if head in self.responses:
+            return self.responses[head]
+        if head == "tmux" and args[3] == "has-session":
+            name = args[5].lstrip("=")
+            return (0, "") if name in self.sessions else (1, "can't find session")
+        return (0, "")
+
+    def programs(self):
+        return [call[0] for call in self.calls]
+
+    def systemctl_verbs(self):
+        return [call[2] for call in self.calls if call[0] == "systemctl"]
+
+    def index_of(self, predicate):
+        return next(i for i, call in enumerate(self.calls) if predicate(call))
+
+
+def _linux_runner(fake, **kwargs):
+    return TmuxRunner(run=fake, use_systemd_run=True, **kwargs)
+
+
+def test_linux_session_manager_requires_linux_and_systemd_run(monkeypatch):
+    """given: the platform / systemd-run probe
+    when: either the OS is not Linux or systemd-run is missing
+    then: the transient-unit path stays off — a systemd-less container falls
+          back to plain tmux instead of failing every spawn
+    """
+    monkeypatch.setattr(copilot_supervisor.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        copilot_supervisor.shutil, "which", lambda name: "/usr/bin/" + name
+    )
+    assert _REAL_LINUX_SESSION_MANAGER() is True
+
+    monkeypatch.setattr(copilot_supervisor.shutil, "which", lambda name: None)
+    assert _REAL_LINUX_SESSION_MANAGER() is False
+
+    monkeypatch.setattr(copilot_supervisor.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        copilot_supervisor.shutil, "which", lambda name: "/usr/bin/" + name
+    )
+    assert _REAL_LINUX_SESSION_MANAGER() is False
+
+
+async def test_linux_spawn_wraps_tmux_in_a_transient_unit(tmp_path, monkeypatch):
+    """given: a Linux runner with no live session and no leftover unit
+    when: spawn() runs
+    then: tmux is started by `systemd-run --user` under the stable unit name
+          with oneshot/RemainAfterExit/KillMode and no Restart, carrying the
+          spawn environment the user manager would not otherwise pass on,
+          and the tmux argv itself is unchanged
+    """
+    monkeypatch.setenv("PATH", "/custom/bin")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    fake = LinuxFake()
+    runner = _linux_runner(fake, repo_root=tmp_path, mcp_url="http://x/mcp")
+
+    created = await runner.spawn("A")
+
+    assert created is True
+    argv = fake.calls[-1]
+    assert argv[0] == "systemd-run"
+    assert "--user" in argv and "--collect" in argv
+    assert f"--unit={SYSTEMD_SESSION_UNIT}" in argv
+    assert "--property=Type=oneshot" in argv
+    assert "--property=RemainAfterExit=yes" in argv
+    assert "--property=KillMode=control-group" in argv
+    assert f"--working-directory={tmp_path}" in argv
+    assert "--setenv=PATH=/custom/bin" in argv
+    assert "--setenv=TERM=xterm-256color" in argv
+    assert not any(a.startswith("--property=Restart=") for a in argv)
+
+    tmux_argv = argv[argv.index("tmux"):]
+    assert tmux_argv[:4] == ["tmux", "-L", "recog-copilot", "new-session"]
+    assert tmux_argv[4:9] == ["-d", "-s", TMUX_SESSION, "-c", str(tmp_path)]
+    assert tmux_argv[9] == runner.build_claude_command()
+
+
+async def test_linux_spawn_adopts_live_session_without_touching_the_unit():
+    """given: a live tmux session, i.e. a supervisor restarted under it
+    when: spawn() runs
+    then: the transient unit is neither stopped nor recreated — adoption must
+          not take the running Copilot down
+    """
+    fake = LinuxFake(sessions={TMUX_SESSION}, loaded=True)
+
+    created = await _linux_runner(fake).spawn("A")
+
+    assert created is False
+    assert "systemd-run" not in fake.programs()
+    assert fake.systemctl_verbs() == []
+
+
+async def test_linux_spawn_clears_a_leftover_unit_before_creating():
+    """given: a dead session whose RemainAfterExit unit is still loaded
+    when: spawn() runs
+    then: the unit is stopped and its removal confirmed before systemd-run,
+          which would otherwise refuse the already-taken unit name
+    """
+    fake = LinuxFake(loaded=True)
+
+    await _linux_runner(fake).spawn("A")
+
+    stop_index = fake.index_of(lambda c: c[:3] == ["systemctl", "--user", "stop"])
+    run_index = fake.index_of(lambda c: c[0] == "systemd-run")
+    assert stop_index < run_index
+    assert any(
+        call[0] == "systemctl" and "show" in call
+        for call in fake.calls[stop_index:run_index]
+    )
+
+
+async def test_linux_spawn_raises_when_the_unit_never_goes_away(monkeypatch):
+    """given: a leftover unit systemd refuses to drop
+    when: spawn() runs
+    then: it raises instead of firing systemd-run at a taken unit name
+    """
+    monkeypatch.setattr(copilot_supervisor, "SYSTEMD_UNIT_STOP_TIMEOUT_S", 0.0)
+    fake = LinuxFake(load_states=["loaded", "loaded"])
+
+    with pytest.raises(RuntimeError, match="still loaded"):
+        await _linux_runner(fake).spawn("A")
+
+    assert "systemd-run" not in fake.programs()
+
+
+async def test_linux_kill_stops_the_transient_unit():
+    """given: a live Linux session
+    when: kill() runs
+    then: tmux kill-session is followed by a stop of the transient unit —
+          RemainAfterExit keeps it loaded otherwise, blocking the next spawn
+    """
+    fake = LinuxFake(sessions={TMUX_SESSION}, loaded=True)
+
+    await _linux_runner(fake).kill()
+
+    assert fake.calls[0][:4] == ["tmux", "-L", "recog-copilot", "kill-session"]
+    assert "stop" in fake.systemctl_verbs()
+
+
+async def test_linux_kill_skips_the_stop_when_no_unit_is_loaded():
+    fake = LinuxFake(sessions={TMUX_SESSION}, loaded=False)
+
+    await _linux_runner(fake).kill()
+
+    assert fake.systemctl_verbs() == ["show"]
+
+
+async def test_linux_spawn_failure_is_not_reported_as_success():
+    """given: systemd-run itself fails (no user manager, bad property, ...)
+    when: spawn() runs
+    then: the error surfaces instead of a silent "session created"
+    """
+    fake = LinuxFake()
+    fake.responses["systemd-run"] = (1, "Failed to start transient service unit")
+
+    with pytest.raises(RuntimeError, match="new-session failed"):
+        await _linux_runner(fake).spawn("A")
+
+
+async def test_macos_path_never_touches_systemd():
+    """given: the default (non-Linux) runner
+    when: spawn() and kill() run
+    then: only tmux is invoked — the macOS contract is unchanged
+    """
+    fake = LinuxFake(sessions={TMUX_SESSION})
+
+    runner = TmuxRunner(run=fake, use_systemd_run=False)
+    await runner.kill()
+    fake.sessions.clear()
+    await runner.spawn("A")
+
+    assert set(fake.programs()) == {"tmux"}

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.recog.live</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@PYTHON@</string>
+        <string>@REPO_DIR@/mp4_notes.py</string>
+        <string>live</string>
+        <string>--system-audio</string>
+        <string>auto</string>
+        <string>--ktalk</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO_DIR@</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/live.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/live.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>

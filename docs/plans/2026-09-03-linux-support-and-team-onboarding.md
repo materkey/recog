@@ -84,15 +84,18 @@
 - [x] Коммит: `chore: move personal defaults and data files out of the repo`
 
 ### Task 8: feat: сервисный слой — шаблоны launchd + systemd --user
-- [ ] Прочитать подраздел «8. feat: сервисный слой — шаблоны launchd + systemd --user» ниже
-- [ ] `deploy/launchd/*.plist.in` + `deploy/systemd/*.service.in` (4 юнита) с плейсхолдерами `@REPO_DIR@ @HOME@ @PYTHON@ @LOG_DIR@ @NODE_BIN@ @EXTRA_PATH@`, рендер через `sed` с проверкой отсутствия `@TOKEN@`
-- [ ] `scripts/service/{common,launchd,systemd}.sh` с единым контрактом `svc_unit_path/install/uninstall/start/restart/stop/pid/installed_services`; `recog-service.sh` выбирает backend по `uname -s`
-- [ ] `install` ставит все 4 юнита без активации; systemd-юниты `Restart=always`, `RestartSec=5`, `StartLimitIntervalSec=0` в секции `[Unit]`
-- [ ] Linux copilot переживает рестарт supervisor: `TmuxRunner` запускает tmux/Claude через `systemd-run --user --collect` (transient unit, `Type=oneshot`, `RemainAfterExit=yes`, `KillMode=control-group`, без `Restart`)
-- [ ] Live-юнит вызывает `mp4_notes.py live --system-audio auto --ktalk`; добавить `render --dry-run <dir>`; `status` на Linux подсказывает `loginctl enable-linger`
-- [ ] `git rm --cached com.recog.*.plist` ×4 + `.gitignore: /com.recog.*.plist`
-- [ ] `tests/test_service_templates.py` (рендер обоих бэкендов, `plutil -lint`/`systemd-analyze --user verify` best-effort с ассертом вывода) и тесты жизненного цикла (install не активирует; отсутствующая зависимость блокирует активацию; повторный setup рестартит работавшие сервисы); `tests/test_copilot_supervisor.py` — Linux transient unit
-- [ ] Коммит: `feat: render launchd and systemd units from templates`
+- [x] Прочитать подраздел «8. feat: сервисный слой — шаблоны launchd + systemd --user» ниже
+- [x] `deploy/launchd/*.plist.in` + `deploy/systemd/*.service.in` (4 юнита) с плейсхолдерами `@REPO_DIR@ @HOME@ @PYTHON@ @LOG_DIR@ @NODE_BIN@ @EXTRA_PATH@`, рендер через `sed` с проверкой отсутствия `@TOKEN@`
+- [x] `scripts/service/{common,launchd,systemd}.sh` с единым контрактом `svc_unit_path/install/uninstall/start/restart/stop/pid/installed_services`; `recog-service.sh` выбирает backend по `uname -s`
+- [x] `install` ставит все 4 юнита без активации; systemd-юниты `Restart=always`, `RestartSec=5`, `StartLimitIntervalSec=0` в секции `[Unit]`
+- [x] Linux copilot переживает рестарт supervisor: `TmuxRunner` запускает tmux/Claude через `systemd-run --user --collect` (transient unit, `Type=oneshot`, `RemainAfterExit=yes`, `KillMode=control-group`, без `Restart`)
+- [x] Live-юнит вызывает `mp4_notes.py live --system-audio auto --ktalk`; добавить `render --dry-run <dir>`; `status` на Linux подсказывает `loginctl enable-linger`
+- [x] `git rm --cached com.recog.*.plist` ×4 + `.gitignore: /com.recog.*.plist`
+- [x] `tests/test_service_templates.py` (рендер обоих бэкендов, `plutil -lint`/`systemd-analyze --user verify` best-effort с ассертом вывода) и тесты жизненного цикла (install не активирует; отсутствующая зависимость блокирует активацию; повторный setup рестартит работавшие сервисы); `tests/test_copilot_supervisor.py` — Linux transient unit
+- [x] Коммит: `feat: render launchd and systemd units from templates`
+- ⚠️ Перегенерация установленных юнитов на рабочем Mac (`./recog-service.sh install && ./recog-service.sh restart`) не выполнена: рестарт живых сервисов — действие пользователя. `~/Library/LaunchAgents/com.recog.*.plist` пока хранят старую версию (`--screencapture` вместо `--system-audio auto`, nvm-путь в PATH); до install+restart поведение сервисов не менялось.
+- ➕ `tests/test_copilot_supervisor.py`: autouse-фикстура `plain_tmux_sessions` пинит `_linux_session_manager() → False`, иначе на Linux-CI существующие tmux-ассерты видели бы systemd-run-обёртку
+
 
 ### Task 9: feat: `setup.sh` — установка одной командой
 - [ ] Прочитать подраздел «9. feat: `setup.sh` — установка одной командой» ниже (все 12 пунктов + требования к идемпотентности)

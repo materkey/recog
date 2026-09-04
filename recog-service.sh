@@ -3,48 +3,40 @@
 # recog-service.sh - Manage recog live transcription and frontend services
 #
 # Usage:
-#   ./recog-service.sh install   - Install and enable both services
-#   ./recog-service.sh uninstall - Stop and remove both services
-#   ./recog-service.sh start     - Start both services
-#   ./recog-service.sh stop      - Stop both services
-#   ./recog-service.sh restart   - Restart both services
-#   ./recog-service.sh status    - Show status of both services
+#   ./recog-service.sh install   - Render and install all service units
+#   ./recog-service.sh uninstall - Stop and remove all services
+#   ./recog-service.sh start     - Start all installed services
+#   ./recog-service.sh stop      - Stop all services
+#   ./recog-service.sh restart   - Restart all services
+#   ./recog-service.sh status    - Show status of all services
 #   ./recog-service.sh debug     - Show debug info (participants, speaker, mics)
 #   ./recog-service.sh logs      - Tail logs (stderr)
 #   ./recog-service.sh logs-out  - Tail logs (stdout/transcripts)
 #   ./recog-service.sh logs-web  - Tail frontend logs
+#   ./recog-service.sh render --dry-run <dir> - Render units into <dir> only
 #   ./recog-service.sh claude    - Launch Claude Code wired to the Copilot channel
+#
+# The service units are rendered from deploy/{launchd,systemd}/*.in; the
+# service-manager verbs live in scripts/service/{launchd,systemd}.sh behind the
+# svc_* contract. RECOG_SERVICE_OS overrides the `uname -s` backend choice —
+# it only affects which templates and verbs are used, so `render --dry-run`
+# can produce Linux units on macOS and vice versa.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 
-# Live transcription service
-LIVE_PLIST_NAME="com.recog.live"
-LIVE_PLIST_SRC="$SCRIPT_DIR/$LIVE_PLIST_NAME.plist"
-LIVE_PLIST_DST="$HOME/Library/LaunchAgents/$LIVE_PLIST_NAME.plist"
+SVC_REPO_DIR="$SCRIPT_DIR"
+SVC_LOG_DIR="$LOG_DIR"
+source "$SCRIPT_DIR/scripts/service/common.sh"
 
-# Frontend service
-FRONTEND_PLIST_NAME="com.recog.frontend"
-FRONTEND_PLIST_SRC="$SCRIPT_DIR/$FRONTEND_PLIST_NAME.plist"
-FRONTEND_PLIST_DST="$HOME/Library/LaunchAgents/$FRONTEND_PLIST_NAME.plist"
-
-# Copilot channel daemon (recog.copilot_channel: MCP HTTP <-> bridge WS).
-# Without this Claude Code receives no notifications/claude/channel events
-# (transcript_tick / copilot_user_message), so the in-meeting Copilot is dead.
-COPILOT_PLIST_NAME="com.recog.copilot-channel"
-COPILOT_PLIST_SRC="$SCRIPT_DIR/$COPILOT_PLIST_NAME.plist"
-COPILOT_PLIST_DST="$HOME/Library/LaunchAgents/$COPILOT_PLIST_NAME.plist"
-
-# Copilot supervisor daemon (recog.copilot_supervisor: auto-spawns the Claude
-# copilot tmux session per KTalk meeting). Connects to ktalk_bridge as a
-# supervisor client, drives spawn/kill via `tmux -L recog-copilot`, and reports
-# agent status to the Copilot-tab chip. Replaces the manual `./recog-service.sh
-# claude` step; disable auto-spawn without uninstalling via RECOG_COPILOT_AUTOSPAWN=0.
-SUPERVISOR_PLIST_NAME="com.recog.copilot-supervisor"
-SUPERVISOR_PLIST_SRC="$SCRIPT_DIR/$SUPERVISOR_PLIST_NAME.plist"
-SUPERVISOR_PLIST_DST="$HOME/Library/LaunchAgents/$SUPERVISOR_PLIST_NAME.plist"
+SERVICE_OS="${RECOG_SERVICE_OS:-$(uname -s)}"
+case "$SERVICE_OS" in
+    Darwin) source "$SCRIPT_DIR/scripts/service/launchd.sh" ;;
+    Linux)  source "$SCRIPT_DIR/scripts/service/systemd.sh" ;;
+    *)      echo "Unsupported OS: $SERVICE_OS (expected Darwin or Linux)" >&2; exit 1 ;;
+esac
 
 # Colors
 RED='\033[0;31m'
@@ -77,77 +69,17 @@ tail_log() {
     tail -f "$f"
 }
 
-install_service() {
-    local name="$1"
-    local src="$2"
-    local dst="$3"
-
-    if [ ! -f "$src" ]; then
-        warn "Plist file not found: $src"
-        return 1
-    fi
-
-    # Always unload-before-load so an in-memory cached plist (from a
-    # prior `launchctl load`) is replaced by what is on disk now.
-    # `launchctl start/stop` only signal a running daemon — they do
-    # NOT re-read the plist, so PATH / EnvironmentVariables changes
-    # are silently ignored on a plain restart.
-    cp "$src" "$dst"
-    launchctl unload "$dst" 2>/dev/null || true
-    launchctl load "$dst" 2>/dev/null || true
-    info "Installed $name"
-}
-
-uninstall_service() {
-    local name="$1"
-    local dst="$2"
-
-    launchctl unload "$dst" 2>/dev/null || true
-    rm -f "$dst"
-    info "Uninstalled $name"
-}
-
-# Reload an installed plist: copy fresh from repo, unload, load.
-# This is the only way to make launchd pick up plist changes (PATH,
-# EnvironmentVariables, ProgramArguments) — `launchctl start` after
-# `launchctl stop` reuses the cached plist.
-start_service() {
-    local name="$1"
-    local src="$2"
-    local dst="$3"
-
-    if [ -f "$src" ]; then
-        cp "$src" "$dst"
-    fi
-    launchctl unload "$dst" 2>/dev/null || true
-    launchctl load "$dst" 2>/dev/null || true
-}
-
-stop_service() {
-    local name="$1"
-    local dst="$2"
-    launchctl unload "$dst" 2>/dev/null || true
-}
-
-# Stop every launchd service without touching the copilot tmux session.
-# Shared by `stop` (which then reaps the session) and `restart` (which keeps
-# it — see kill_copilot_tmux).
-stop_all_services() {
-    stop_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST"
-    stop_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST"
-    stop_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_DST"
-    stop_service "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_DST"
-}
-
 # Reap the detached Claude copilot session the supervisor spawns in its own
-# tmux socket (`tmux -L recog-copilot`). Unloading the supervisor plist does
-# NOT kill it: launchd sends SIGTERM, which terminates the daemon before its
-# async teardown runs, and nothing else owns the session — so it would linger
+# tmux socket (`tmux -L recog-copilot`). Stopping the supervisor does NOT kill
+# it: launchd sends SIGTERM, which terminates the daemon before its async
+# teardown runs, and on Linux the session deliberately lives in its own
+# transient unit outside the supervisor's cgroup — so it would linger
 # indefinitely with no supervisor left to run the grace kill. Called on
 # `stop`/`uninstall` (terminal intent: leave nothing behind) but deliberately
 # NOT on `restart`: a mid-meeting restart must keep the live copilot, which the
 # supervisor re-adopts on reconnect via meeting_state reconciliation.
 kill_copilot_tmux() {
+    svc_reap_copilot_session
     if command -v tmux > /dev/null 2>&1; then
         # Both session kinds: `copilot` (meeting-driven) and `copilot-manual`
         # (webapp manual session, DW-9) — leave nothing behind.
@@ -170,52 +102,48 @@ kill_copilot_tmux() {
     fi
 }
 
-# Stop, settle, then start one service. The 1 s gap matters: launchctl
-# unload returns before launchd reaps the process, and a back-to-back
-# load can race the still-bound port / log fd.
 restart_one() {
-    local name="$1" src="$2" dst="$3" label="$4" tail="${5-}"
+    local service="$1" tail="${2-}"
+    local label; label="$(svc_label "$service")"
     info "Restarting $label..."
-    stop_service "$name" "$dst"
-    sleep 1
-    start_service "$name" "$src" "$dst"
+    if ! svc_restart "$service"; then
+        error "$label is not installed — run './recog-service.sh install' first"
+    fi
     info "$label restarted.${tail:+ $tail}"
 }
 
 check_service_status() {
-    local name="$1"
-    local dst="$2"
-    local label="$3"
+    local service="$1"
+    local label; label="$(svc_label "$service")"
 
     echo -e "${CYAN}[$label]${NC}"
 
-    if [ -f "$dst" ]; then
-        echo -e "  Installed: ${GREEN}Yes${NC}"
-    else
+    if [ ! -f "$(svc_unit_path "$service")" ]; then
         echo -e "  Installed: ${RED}No${NC}"
         return
     fi
+    echo -e "  Installed: ${GREEN}Yes${NC}"
 
-    if launchctl list | grep -q "$name"; then
-        PID=$(launchctl list | grep "$name" | awk '{print $1}')
-        if [ "$PID" != "-" ] && [ -n "$PID" ]; then
-            echo -e "  Running:   ${GREEN}Yes${NC} (PID: $PID)"
-        else
-            echo -e "  Running:   ${YELLOW}Loaded but not running${NC}"
-        fi
+    local pid; pid="$(svc_pid "$service")"
+    if [ -n "$pid" ]; then
+        echo -e "  Running:   ${GREEN}Yes${NC} (PID: $pid)"
+    elif svc_loaded "$service"; then
+        echo -e "  Running:   ${YELLOW}Loaded but not running${NC}"
     else
         echo -e "  Running:   ${RED}No${NC}"
     fi
 }
 
 cmd_install() {
-    info "Installing services..."
+    info "Installing services ($(svc_backend_name))..."
     ensure_logs_dir
 
-    install_service "live transcription" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
-    install_service "frontend" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
-    install_service "copilot channel" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST"
-    install_service "copilot supervisor" "$SUPERVISOR_PLIST_SRC" "$SUPERVISOR_PLIST_DST"
+    local service
+    for service in $(svc_all_services); do
+        svc_install "$service" || error "Failed to install $(svc_label "$service")"
+        info "Installed $(svc_label "$service") → $(svc_unit_path "$service")"
+    done
+    svc_post_install
 
     info "Services installed. Use './recog-service.sh start' to start them."
     info "Logs will be written to: $LOG_DIR/"
@@ -224,10 +152,14 @@ cmd_install() {
 cmd_uninstall() {
     info "Uninstalling services..."
 
-    uninstall_service "live transcription" "$LIVE_PLIST_DST"
-    uninstall_service "frontend" "$FRONTEND_PLIST_DST"
-    uninstall_service "copilot channel" "$COPILOT_PLIST_DST"
-    uninstall_service "copilot supervisor" "$SUPERVISOR_PLIST_DST"
+    local service
+    for service in $(svc_all_services); do
+        svc_uninstall "$service"
+        info "Uninstalled $(svc_label "$service")"
+    done
+    svc_post_install
+    # No `|| true`: a copilot session that survived cleanup must fail the
+    # command loudly instead of being reported as uninstalled (set -e).
     kill_copilot_tmux
 
     info "Services uninstalled."
@@ -237,10 +169,15 @@ cmd_start() {
     info "Starting services..."
     ensure_logs_dir
 
-    start_service "$LIVE_PLIST_NAME" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST"
-    start_service "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST"
-    start_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST"
-    start_service "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_SRC" "$SUPERVISOR_PLIST_DST"
+    local installed; installed="$(svc_installed_services)"
+    if [ -z "$installed" ]; then
+        error "No services installed — run './recog-service.sh install' first"
+    fi
+
+    local service
+    for service in $installed; do
+        svc_start "$service" || warn "Failed to start $(svc_label "$service")"
+    done
 
     sleep 1
     cmd_status
@@ -252,7 +189,10 @@ cmd_start() {
 cmd_stop() {
     info "Stopping services..."
 
-    stop_all_services
+    local service
+    for service in $(svc_installed_services); do
+        svc_stop "$service"
+    done
     kill_copilot_tmux
 
     info "Services stopped."
@@ -260,45 +200,51 @@ cmd_stop() {
 
 cmd_restart() {
     # NOTE: intentionally does NOT go through cmd_stop — a mid-meeting restart
-    # must keep the live copilot tmux session (the supervisor re-adopts it on
+    # must keep the live copilot session (the supervisor re-adopts it on
     # reconnect). Only cmd_stop/cmd_uninstall reap it via kill_copilot_tmux.
-    info "Stopping services..."
-    stop_all_services
+    local installed; installed="$(svc_installed_services)"
+    if [ -z "$installed" ]; then
+        error "No services installed — run './recog-service.sh install' first"
+    fi
+
+    local service
+    for service in $installed; do
+        info "Restarting $(svc_label "$service")..."
+        svc_restart "$service" || warn "Failed to restart $(svc_label "$service")"
+    done
+
     sleep 1
-    cmd_start
+    cmd_status
+
+    echo ""
+    info "Frontend available at: http://127.0.0.1:9080"
 }
 
-cmd_restart_web() {
-    restart_one "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_SRC" "$FRONTEND_PLIST_DST" \
-        "frontend service" "Available at: http://127.0.0.1:9080"
-}
+cmd_restart_web()        { restart_one frontend "Available at: http://127.0.0.1:9080"; }
+cmd_restart_live()       { restart_one live; }
+cmd_restart_copilot()    { restart_one copilot-channel "(http://127.0.0.1:8767/mcp)"; }
+cmd_restart_supervisor() { restart_one copilot-supervisor; }
 
-cmd_restart_live() {
-    restart_one "$LIVE_PLIST_NAME" "$LIVE_PLIST_SRC" "$LIVE_PLIST_DST" \
-        "live transcription"
-}
-
-cmd_restart_copilot() {
-    restart_one "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST" \
-        "copilot channel daemon" "(http://127.0.0.1:8767/mcp)"
-}
-
-cmd_restart_supervisor() {
-    restart_one "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_SRC" "$SUPERVISOR_PLIST_DST" \
-        "copilot supervisor daemon"
+# Render every unit into a scratch directory without touching the service
+# manager. Used by tests/CI to validate the templates on either OS.
+cmd_render() {
+    local flag="${1:-}" dir="${2:-}"
+    if [ "$flag" != "--dry-run" ] || [ -z "$dir" ]; then
+        error "Usage: $0 render --dry-run <dir>"
+    fi
+    svc_render_all "$dir" || error "Failed to render $(svc_backend_name) units"
 }
 
 cmd_status() {
-    echo "=== Service Status ==="
+    echo "=== Service Status ($(svc_backend_name)) ==="
     echo ""
 
-    check_service_status "$LIVE_PLIST_NAME" "$LIVE_PLIST_DST" "Live Transcription"
-    echo ""
-    check_service_status "$FRONTEND_PLIST_NAME" "$FRONTEND_PLIST_DST" "Frontend"
-    echo ""
-    check_service_status "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_DST" "Copilot Channel"
-    echo ""
-    check_service_status "$SUPERVISOR_PLIST_NAME" "$SUPERVISOR_PLIST_DST" "Copilot Supervisor"
+    local service first=1
+    for service in $(svc_all_services); do
+        [ "$first" -eq 1 ] || echo ""
+        first=0
+        check_service_status "$service"
+    done
 
     echo ""
     echo "=== Logs ==="
@@ -316,6 +262,12 @@ cmd_status() {
         tail -5 "$LOG_DIR/live.stderr.log" 2>/dev/null || echo "(empty)"
     else
         echo "(no log file)"
+    fi
+
+    local hint; hint="$(svc_status_hint)"
+    if [ -n "$hint" ]; then
+        echo ""
+        echo "$hint"
     fi
 }
 
@@ -350,26 +302,27 @@ cmd_claude() {
     # Two preconditions it cannot self-fix:
     #   1. The copilot_channel daemon must be running on :8767 — Claude
     #      Code spawns the channel handler from --channels but cannot start
-    #      our HTTP MCP server itself. Normally launchd keeps it up via
-    #      `com.recog.copilot-channel` (installed by `./recog-service.sh
+    #      our HTTP MCP server itself. Normally the service manager keeps it
+    #      up via the copilot-channel unit (installed by `./recog-service.sh
     #      install`); we still probe the port here as a sanity check, and
-    #      try to (re)load the plist if the probe fails.
+    #      try to (re)start the unit if the probe fails.
     #   2. CWD must be the recog project dir so Claude reads the
     #      project-scope mcpServers entry (`copilot` → http://127.0.0.1:8767/mcp).
     #      Launching from $HOME silently produces "no MCP server configured
     #      with that name" because the project entry is invisible there.
+    local channel_unit; channel_unit="$(svc_unit_path copilot-channel)"
     if probe_copilot_daemon; then
         info "Copilot channel daemon is up at http://127.0.0.1:8767/mcp"
-    elif [ ! -f "$COPILOT_PLIST_SRC" ]; then
+    elif [ ! -f "$channel_unit" ]; then
         warn "Copilot channel daemon is NOT responding at http://127.0.0.1:8767/mcp"
-        warn "Plist not found at $COPILOT_PLIST_SRC — start manually:"
-        warn "  cd $SCRIPT_DIR && ./venv-gigaam/bin/python -m recog.copilot_channel"
+        warn "Service unit not installed at $channel_unit — start manually:"
+        warn "  cd $SCRIPT_DIR && $(svc_python) -m recog.copilot_channel"
         warn ""
         warn "Launching Claude Code anyway — channel push will be a no-op until the daemon comes up."
     else
         warn "Copilot channel daemon is NOT responding at http://127.0.0.1:8767/mcp"
-        warn "Attempting to (re)load $COPILOT_PLIST_NAME via launchd..."
-        start_service "$COPILOT_PLIST_NAME" "$COPILOT_PLIST_SRC" "$COPILOT_PLIST_DST"
+        warn "Attempting to restart $(svc_unit_name copilot-channel)..."
+        svc_restart copilot-channel || true
         sleep 1
         if probe_copilot_daemon; then
             info "Copilot channel daemon is up at http://127.0.0.1:8767/mcp"
@@ -489,9 +442,9 @@ cmd_help() {
     echo "Usage: $0 <command>"
     echo ""
     echo "Commands:"
-    echo "  install         - Install and enable all services"
+    echo "  install         - Render and install all service units (no activation)"
     echo "  uninstall       - Stop and remove all services"
-    echo "  start           - Start all services"
+    echo "  start           - Start all installed services"
     echo "  stop            - Stop all services"
     echo "  restart         - Restart all services"
     echo "  restart-web        - Restart frontend only"
@@ -499,6 +452,7 @@ cmd_help() {
     echo "  restart-copilot    - Restart copilot channel daemon only"
     echo "  restart-supervisor - Restart copilot supervisor daemon only"
     echo "  status             - Show status of all services"
+    echo "  render --dry-run <dir> - Render service units into <dir> only"
     echo "  debug              - Show debug info (participants, speaker, mics)"
     echo "  logs               - Tail live stderr logs"
     echo "  logs-out           - Tail live stdout logs (transcripts)"
@@ -507,8 +461,8 @@ cmd_help() {
     echo "  logs-supervisor    - Tail copilot supervisor daemon logs"
     echo "  claude             - Launch Claude Code wired to the Copilot channel"
     echo ""
-    echo "Services:"
-    echo "  - Live transcription: mp4_notes.py live --screencapture --ktalk"
+    echo "Services ($(svc_backend_name)):"
+    echo "  - Live transcription: mp4_notes.py live --system-audio auto --ktalk"
     echo "  - Frontend: http://127.0.0.1:9080"
     echo "  - Copilot channel daemon: python -m recog.copilot_channel (http://127.0.0.1:8767/mcp)"
     echo "  - Copilot supervisor: python -m recog.copilot_supervisor (auto-spawns Claude per meeting)"
@@ -526,6 +480,7 @@ case "${1:-}" in
     restart-copilot)    cmd_restart_copilot ;;
     restart-supervisor) cmd_restart_supervisor ;;
     status)             cmd_status ;;
+    render)             shift; cmd_render "$@" ;;
     debug)              cmd_debug ;;
     logs)               cmd_logs ;;
     logs-out)           cmd_logs_out ;;
