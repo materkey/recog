@@ -147,6 +147,7 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
   - `ai_provider.py` - AIProvider ABC, CodexCliProvider, resolve_cli() — shared AI provider interface used by increment.py and title_generator.py
   - `asr.py` - GigaAM ASR wrapper
   - `speaker_db.py` - ECAPA-TDNN embeddings matching
+  - `system_audio.py` - `ScreenCaptureAudio`: system audio via the ScreenCaptureKit Swift helper (`sck_audio_capture`, resolved from `REPO_ROOT` — the binary and its `.swift` source stay at the repo root, outside the package)
   - `live.py` - Real-time transcription (LiveTranscriber with decomposed methods: _setup_meeting_storage, _setup_ktalk_bridge, _start_audio_captures, _process_chunk, _handle_mic_chunk, _handle_ktalk_chunk, _handle_embedding_chunk, _process_pending, _teardown_session; module-level helpers: normalize_word, deduplicate)
   - `increment.py` - Auto-generate versioned AI summaries on ktalk_leave; multi-prompt support via generate_all(), stores per-prompt results in meetings/<id>/increments/<prompt-id>/vN.md
   - `prompt_registry.py` - Load and filter prompt definitions from prompts/*.md files (YAML frontmatter + template body)

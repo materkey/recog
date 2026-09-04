@@ -6,7 +6,7 @@ Captures system audio without BlackHole or Multi-Output Device.
 Volume control works normally.
 
 Usage:
-    from screencapture_audio import ScreenCaptureAudio
+    from recog.system_audio import ScreenCaptureAudio
 
     capture = ScreenCaptureAudio()
     capture.start()
@@ -29,6 +29,9 @@ from pathlib import Path
 from recog.audio_capture import BufferedAudioCapture
 from recog.config import ASR_PENDING_BUFFER_CAP_S
 from recog.log_utils import log_rate_limited
+
+# The Swift helper and its source live at the repo root, not inside the package.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class ScreenCaptureAudio(BufferedAudioCapture):
@@ -56,10 +59,8 @@ class ScreenCaptureAudio(BufferedAudioCapture):
 
     def _find_utility(self) -> str:
         """Find the sck_audio_capture utility."""
-        # Check in same directory as this script
-        script_dir = Path(__file__).parent
-        utility = script_dir / "sck_audio_capture"
-        source = script_dir / "sck_audio_capture.swift"
+        utility = REPO_ROOT / "sck_audio_capture"
+        source = REPO_ROOT / "sck_audio_capture.swift"
 
         def compile_utility():
             print(f"[ScreenCaptureAudio] Compiling {source}...", file=sys.stderr)
