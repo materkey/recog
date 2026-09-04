@@ -9,7 +9,7 @@ MP4 Notes - CLI-утилита для live-транскрибирования и
 - meetings: просмотр сохранённых митингов
 
 Пример:
-    python mp4_notes.py live --ktalk --screencapture
+    python mp4_notes.py live --ktalk --system-audio auto
     python mp4_notes.py meetings
 """
 
@@ -22,7 +22,33 @@ from pathlib import Path
 from recog import MIC_SPEAKER_NAME
 
 
-def main():
+def parse_device(dev):
+    """ID устройства: число, если оно числовое, иначе имя/сентинел как есть."""
+    if dev is None:
+        return None
+    try:
+        return int(dev)
+    except ValueError:
+        return dev
+
+
+def system_audio_spec(args) -> str:
+    """Спека системного звука из аргументов live.
+
+    Приоритет `--system-audio` > `--screencapture` > `--system-device`
+    реализован в `normalize_system_audio` — общей точке для CLI и прямых
+    вызовов `live_pipeline`.
+    """
+    from recog.live import normalize_system_audio
+
+    return normalize_system_audio(
+        args.system_audio,
+        parse_device(args.system_device),
+        args.screencapture,
+    )
+
+
+def build_parser():
     parser = argparse.ArgumentParser(
         prog="mp4-notes",
         description="CLI-утилита для live-транскрибирования и управления митингами"
@@ -33,16 +59,26 @@ def main():
     # Команда: live (ADR-0010)
     live_parser = subparsers.add_parser(
         "live",
-        help="Live транскрипция с микрофона/BlackHole"
+        help="Live транскрипция с микрофона и/или системного звука"
     )
     live_parser.add_argument(
         "--mic-device",
         default="auto",
-        help="ID устройства микрофона или 'auto' для встроенного MacBook (по умолчанию: auto)"
+        help="ID устройства микрофона, 'auto' — устройство ввода по умолчанию, "
+             "'none' — без микрофона (по умолчанию: auto)"
     )
     live_parser.add_argument(
+        "--system-audio",
+        metavar="BACKEND",
+        help="Источник системного звука: auto (по ОС) | screencapture (macOS, "
+             "ScreenCaptureKit) | pulse (Linux, PulseAudio/PipeWire) | "
+             "device:<id> (устройство ввода, device:auto — найти BlackHole) | "
+             "none (по умолчанию: none)"
+    )
+    # Скрытые алиасы прежнего CLI: --system-audio их перекрывает.
+    live_parser.add_argument(
         "--system-device",
-        help="ID устройства системного звука или 'auto' для BlackHole"
+        help=argparse.SUPPRESS
     )
     live_parser.add_argument(
         "--chunk-duration",
@@ -76,7 +112,7 @@ def main():
     live_parser.add_argument(
         "--screencapture",
         action="store_true",
-        help="Использовать ScreenCaptureKit для захвата системного звука (не нужен BlackHole, громкость работает)"
+        help=argparse.SUPPRESS
     )
     live_parser.add_argument(
         "--mic-speaker-name",
@@ -111,30 +147,25 @@ def main():
         help="Пересканировать внешние директории (обновить кэш)"
     )
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.command == "live":
         from recog.live import live_pipeline
 
-        # Convert device ID to int if it's a number
-        def parse_device(dev):
-            if dev is None:
-                return None
-            try:
-                return int(dev)
-            except ValueError:
-                return dev
-
         live_pipeline(
             mic_device=parse_device(args.mic_device),
-            system_device=parse_device(args.system_device),
+            system_audio=system_audio_spec(args),
             speaker_db_path=args.speaker_db,
             chunk_duration=args.chunk_duration,
             output_file=args.output,
             no_diarization=args.no_diarization,
             list_devices=args.list_devices,
             use_ktalk=args.ktalk,
-            use_screencapture=args.screencapture,
             mic_speaker_name=args.mic_speaker_name,
             save_audio=not args.no_save_audio
         )

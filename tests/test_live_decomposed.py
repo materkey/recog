@@ -300,7 +300,7 @@ class TestSetupMeetingStorage:
         transcriber.mic_capture = None
         transcriber.system_capture = None
         transcriber.use_ktalk = True
-        transcriber.use_screencapture = True
+        transcriber.system_audio = "screencapture"
         transcriber.chunk_duration = 3.0
         transcriber.save_audio = False
         transcriber._meeting_storage = None

@@ -3,6 +3,7 @@
 """
 
 import struct
+import subprocess
 import sys
 import time
 import threading
@@ -38,6 +39,43 @@ MAX_WAV_DATA_BYTES = 2**31
 # How often the live loop rotates old meeting audio (mtime-based 24h
 # retention in MeetingStorage.cleanup_old_audio — a stat-only scan).
 AUDIO_CLEANUP_INTERVAL_S = 3600
+
+# `--mic-device none`: явный отказ от микрофона. Отличается от None, который
+# означает «устройство ввода по умолчанию» для sounddevice.
+NO_MIC = "none"
+
+# Спека системного звука без источника (та же строка, что понимает
+# recog.system_audio.resolve_system_audio_backend).
+NO_SYSTEM_AUDIO = "none"
+
+PACTL_TIMEOUT_S = 2.0
+
+
+def normalize_system_audio(system_audio=None, system_device=None,
+                           use_screencapture: bool = False) -> str:
+    """Одна спека системного звука из нового флага и старых аргументов.
+
+    Приоритет `--system-audio` > `--screencapture` > `--system-device`
+    держится здесь, чтобы CLI и прямые вызовы `LiveTranscriber` не разошлись.
+    """
+    if system_audio:
+        return system_audio
+    if use_screencapture:
+        return "screencapture"
+    if system_device is not None:
+        return f"device:{system_device}"
+    return NO_SYSTEM_AUDIO
+
+
+def parse_system_audio_device(spec: str):
+    """Устройство из спеки `device:<id>`; None для остальных бэкендов."""
+    if not spec.startswith("device:"):
+        return None
+    device = spec[len("device:"):]
+    try:
+        return int(device)
+    except ValueError:
+        return device
 
 
 class IncrementalWavWriter:
@@ -239,27 +277,69 @@ class SingleDeviceCapture(BufferedAudioCapture):
             self.running = False
 
     @staticmethod
-    def list_devices():
+    def list_devices(platform: str = "", run=subprocess.run):
         import sounddevice as sd
         print("Доступные аудио устройства:")
         print(sd.query_devices())
+        platform = platform or sys.platform
+        if platform.startswith("linux"):
+            SingleDeviceCapture.print_pulse_sources(run=run)
 
     @staticmethod
-    def find_builtin_mic():
-        """Находит встроенный микрофон MacBook."""
+    def print_pulse_sources(run=subprocess.run):
+        """Источники PulseAudio/PipeWire — их имена не видны в PortAudio.
+
+        `--system-audio pulse` берёт монитор sink'а, а не PortAudio-устройство,
+        поэтому список из `sd.query_devices()` для него бесполезен.
+        """
+        try:
+            result = run(["pactl", "list", "short", "sources"],
+                         capture_output=True, text=True, timeout=PACTL_TIMEOUT_S)
+        except Exception as e:
+            print(f"\n(pactl недоступен: {e})", file=sys.stderr)
+            return
+        if getattr(result, "returncode", 1) != 0:
+            print(f"\n(pactl list short sources завершился с кодом {result.returncode})",
+                  file=sys.stderr)
+            return
+        print()
+        print("Источники PulseAudio/PipeWire (pactl list short sources):")
+        print((getattr(result, "stdout", "") or "").rstrip())
+
+    @staticmethod
+    def find_default_mic(platform: str = ""):
+        """Устройство ввода по умолчанию для текущей ОС.
+
+        macOS: встроенный микрофон MacBook (как раньше). Linux: устройство
+        PortAudio, проксирующее звуковой сервер (`pulse`/`pipewire`/`default`)
+        — оно само следует за дефолтным источником сервера. Дальше —
+        дефолтный вход PortAudio, и только потом None.
+        """
         import sounddevice as sd
         devices = sd.query_devices()
-        for i, dev in enumerate(devices):
-            name = dev['name'].lower()
-            # Ищем встроенный микрофон MacBook
-            if 'macbook' in name and ('microphone' in name or 'микрофон' in name) and dev['max_input_channels'] > 0:
-                return i
-        # Fallback: любое устройство с "built-in" или "internal"
-        for i, dev in enumerate(devices):
-            name = dev['name'].lower()
-            if ('built-in' in name or 'internal' in name) and dev['max_input_channels'] > 0:
-                return i
-        return None
+        platform = platform or sys.platform
+
+        if platform == "darwin":
+            for i, dev in enumerate(devices):
+                name = dev['name'].lower()
+                # Ищем встроенный микрофон MacBook
+                if 'macbook' in name and ('microphone' in name or 'микрофон' in name) and dev['max_input_channels'] > 0:
+                    return i
+            # Fallback: любое устройство с "built-in" или "internal"
+            for i, dev in enumerate(devices):
+                name = dev['name'].lower()
+                if ('built-in' in name or 'internal' in name) and dev['max_input_channels'] > 0:
+                    return i
+
+        for preferred in ("pulse", "pipewire", "default"):
+            for i, dev in enumerate(devices):
+                if dev['name'].strip().lower() == preferred and dev['max_input_channels'] > 0:
+                    return i
+
+        try:
+            return sd.query_devices(kind="input")["index"]
+        except Exception:
+            return None
 
     @staticmethod
     def find_blackhole():
@@ -358,46 +438,60 @@ class LiveTranscriber:
     def __init__(
         self,
         mic_device=None,
-        system_device=None,
+        system_audio=None,  # auto|screencapture|pulse|device:<id>|none
         speaker_db_path=None,
         chunk_duration=3.0,  # Баланс между задержкой и качеством
         output_file=None,
         no_diarization=False,
         use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
-        use_screencapture=False,  # Использовать ScreenCaptureKit вместо BlackHole
         save_audio=False,  # Сохранять аудио для последующей диаризации
         mic_speaker_name=MIC_SPEAKER_NAME,
+        system_device=None,  # legacy-алиас: device:<id>
+        use_screencapture=False,  # legacy-алиас: screencapture
     ):
-        self.mic_device = mic_device
-        self.system_device = system_device
+        from recog.system_audio import (create_system_capture,
+                                        resolve_system_audio_backend)
+
+        # `auto` разрешается в конкретный бэкенд здесь, чтобы прямые вызовы
+        # (тесты, e2e) вели себя так же, как CLI.
+        self.system_audio = resolve_system_audio_backend(
+            normalize_system_audio(system_audio, system_device, use_screencapture)
+        )
+        self.system_device = parse_system_audio_device(self.system_audio)
+
+        # `none` — явный отказ от микрофона; None — устройство по умолчанию.
+        self.mic_enabled = mic_device != NO_MIC
+        self.mic_device = mic_device if self.mic_enabled else None
         self.sample_rate = 16000
-        self.use_screencapture = use_screencapture
         self.save_audio = save_audio
         # Per-speaker PCM transport is the only ingest path for KTalk
         # meetings. Without KTalk there is no extension to source per-pid
         # PCM from, so the path is implicitly off.
         self.use_pcm_transport = bool(use_ktalk)
 
-        # Определяем режим: dual (оба), mic-only, system-only, screencapture
-        self.dual_mode = (mic_device is not None and (system_device is not None or use_screencapture))
-
         # Создаём capture устройства
         self.mic_capture = None
         self.system_capture = None
 
-        if use_screencapture:
-            # Используем ScreenCaptureKit для системного звука
-            from recog.system_audio import create_system_capture
-            self.system_capture = create_system_capture("screencapture", self.sample_rate)
-            if mic_device is not None:
-                self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
-        elif self.dual_mode:
-            self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
-            self.system_capture = SingleDeviceCapture(system_device, self.sample_rate, "system")
-        elif system_device is not None:
-            self.system_capture = SingleDeviceCapture(system_device, self.sample_rate, "system")
-        else:
-            self.mic_capture = SingleDeviceCapture(mic_device, self.sample_rate, "mic")
+        if self.system_audio in ("screencapture", "pulse"):
+            self.system_capture = create_system_capture(self.system_audio, self.sample_rate)
+            if self.mic_enabled and self.mic_device is not None:
+                self.mic_capture = SingleDeviceCapture(self.mic_device, self.sample_rate, "mic")
+        elif self.system_device is not None:
+            self.system_capture = SingleDeviceCapture(self.system_device, self.sample_rate, "system")
+            if self.mic_enabled and self.mic_device is not None:
+                self.mic_capture = SingleDeviceCapture(self.mic_device, self.sample_rate, "mic")
+        elif self.mic_enabled:
+            self.mic_capture = SingleDeviceCapture(self.mic_device, self.sample_rate, "mic")
+
+        if self.mic_capture is None and self.system_capture is None:
+            raise ValueError(
+                "нечего захватывать: микрофон отключён (--mic-device none) "
+                "и системный звук выключен (--system-audio none)"
+            )
+
+        # Определяем режим: dual (оба), mic-only, system-only
+        self.dual_mode = (self.mic_capture is not None and self.system_capture is not None)
 
         self.asr = build_asr()
         self.speaker_db = SpeakerDatabase(speaker_db_path) if speaker_db_path else None
@@ -468,6 +562,19 @@ class LiveTranscriber:
         # Tracks the last-observed watchdog state so we emit a transition
         # marker only on actual flips (see plan §4.5).
         self._last_pcm_degraded: bool = False
+        # Захват системного звука сдался (исчерпал рестарты) — состояние
+        # необратимое, поэтому маркер пишется ровно один раз за сессию.
+        self._system_capture_lost: bool = False
+
+    def system_audio_label(self) -> str:
+        """Человекочитаемое имя источника системного звука для баннера."""
+        if self.system_audio == "screencapture":
+            return "ScreenCaptureKit"
+        if self.system_audio == "pulse":
+            return "PulseAudio/PipeWire (parec)"
+        if self.system_device is not None:
+            return str(self.system_device)
+        return "none"
 
     def _asr_available(self) -> bool:
         """True, когда ASR может обслужить запрос прямо сейчас.
@@ -697,7 +804,8 @@ class LiveTranscriber:
                 mic=self.mic_capture is not None,
                 system_audio=self.system_capture is not None,
                 ktalk=self.use_ktalk,
-                screencapture=self.use_screencapture,
+                screencapture=self.system_audio == "screencapture",
+                system_audio_backend=self.system_audio,
                 chunk_duration_ms=int(self.chunk_duration * 1000)
             )
             print(f"Meeting started: {meeting_id}")
@@ -1331,6 +1439,50 @@ class LiveTranscriber:
                     audio_offset_ms=0,
                 )
 
+    def _check_system_capture_alive(self):
+        """Один маркер, когда системный захват исчерпал рестарты и сдался.
+
+        Отдельно от `_emit_pcm_transition_marker`: PCM-путь при этом может
+        быть совершенно здоров (звук участников идёт из расширения), поэтому
+        watchdog-переход PCM↔mixed не срабатывает и сообщать о нём было бы
+        враньём. Refine здесь не трогаем по той же причине — per-pid PCM на
+        месте, тир-2 остаётся рабочим.
+        """
+        capture = self.system_capture
+        if capture is None or self._system_capture_lost:
+            return
+        if not getattr(capture, "dead", False):
+            return
+        self._system_capture_lost = True
+        with self._state_lock:
+            marker_gen = self._meeting_generation
+        self._emit_capture_loss_marker(marker_gen)
+
+    def _emit_capture_loss_marker(self, marker_gen: int):
+        """Пишет маркер потери системного захвата в stdout и в транскрипт."""
+        msg = "[Системный звук потерян — захват не восстановился]"
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        line = f"\n*{msg}* *[{timestamp}]*\n"
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        self.transcript_lines.append(line)
+        # Та же защита от смены встречи между наблюдением и записью, что и у
+        # watchdog-маркера: `_invalidate_pending_chunks` бампает поколение.
+        with self._state_lock:
+            if self._meeting_generation != marker_gen:
+                return
+            if self._meeting_storage:
+                self._meeting_storage.append_segment(
+                    speaker="Система",
+                    speaker_id="__system__",
+                    text=msg,
+                    is_local=False,
+                    is_continuation=False,
+                    uncertain=False,
+                    uncertain_reason="system_audio_capture_lost",
+                    audio_offset_ms=0,
+                )
+
     def _start_audio_captures(self):
         """Start mic and system audio capture devices."""
         if self.mic_capture:
@@ -1946,17 +2098,13 @@ class LiveTranscriber:
 
         print("=" * 60)
         print(" LIVE TRANSCRIPTION")
-        if self.use_screencapture:
-            if self.mic_capture:
-                print(f" Mode: DUAL (Mic: {self.mic_device} + ScreenCaptureKit)")
-            else:
-                print(f" System audio: ScreenCaptureKit (no BlackHole needed)")
-        elif self.dual_mode:
-            print(f" Mode: DUAL (Mic: {self.mic_device} + System: {self.system_device})")
-        elif self.system_device is not None:
-            print(f" Mic: none | System: {self.system_device}")
+        system_display = self.system_audio_label()
+        mic_display = self.mic_device if self.mic_device is not None else 'default'
+        if self.dual_mode:
+            print(f" Mode: DUAL (Mic: {mic_display} + System: {system_display})")
+        elif self.system_capture is not None:
+            print(f" Mic: none | System: {system_display}")
         else:
-            mic_display = self.mic_device if self.mic_device is not None else 'default'
             print(f" Mic: {mic_display} | System: none")
 
         if self.use_ktalk:
@@ -2013,6 +2161,7 @@ class LiveTranscriber:
                 if self.mic_capture:
                     self._process_chunk(self.mic_capture, self._mic_state, executor, is_mic=True)
                 if self.system_capture:
+                    self._check_system_capture_alive()
                     self._process_chunk(self.system_capture, self._sys_state, executor, is_mic=False)
 
         except KeyboardInterrupt:
@@ -2158,50 +2307,56 @@ class LiveTranscriber:
 
 def live_pipeline(
     mic_device=None,
-    system_device=None,
+    system_audio=None,
     speaker_db_path=None,
     chunk_duration=5.0,
     output_file=None,
     no_diarization=False,
     list_devices=False,
     use_ktalk=False,
-    use_screencapture=False,
     mic_speaker_name=MIC_SPEAKER_NAME,
     save_audio=True,
+    system_device=None,  # legacy-алиас: device:<id>
+    use_screencapture=False,  # legacy-алиас: screencapture
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
         LiveAudioCapture.list_devices()
         return
 
+    system_audio = normalize_system_audio(system_audio, system_device, use_screencapture)
+
     # Автоопределение устройств
     if mic_device == "auto":
-        mic_device = SingleDeviceCapture.find_builtin_mic()
+        mic_device = SingleDeviceCapture.find_default_mic()
         if mic_device is not None:
             import sounddevice as sd
             name = sd.query_devices(mic_device)['name']
             print(f"Auto-detected mic: {name} (device {mic_device})", file=sys.stderr)
         else:
-            print("Warning: Could not find built-in microphone", file=sys.stderr)
+            print("Warning: Could not find an input device", file=sys.stderr)
 
-    if not use_screencapture and system_device == "auto":
-        system_device = SingleDeviceCapture.find_blackhole()
-        if system_device is not None:
+    # BlackHole ищем только для явного `device:auto` — у screencapture/pulse
+    # свой источник, а не PortAudio-устройство.
+    if system_audio == "device:auto":
+        blackhole = SingleDeviceCapture.find_blackhole()
+        if blackhole is not None:
             import sounddevice as sd
-            name = sd.query_devices(system_device)['name']
-            print(f"Auto-detected system audio: {name} (device {system_device})", file=sys.stderr)
+            name = sd.query_devices(blackhole)['name']
+            print(f"Auto-detected system audio: {name} (device {blackhole})", file=sys.stderr)
+            system_audio = f"device:{blackhole}"
         else:
             print("Warning: Could not find BlackHole device", file=sys.stderr)
+            system_audio = NO_SYSTEM_AUDIO
 
     transcriber = LiveTranscriber(
         mic_device=mic_device,
-        system_device=system_device if not use_screencapture else None,
+        system_audio=system_audio,
         speaker_db_path=speaker_db_path,
         chunk_duration=chunk_duration,
         output_file=output_file,
         no_diarization=no_diarization,
         use_ktalk=use_ktalk,
-        use_screencapture=use_screencapture,
         mic_speaker_name=mic_speaker_name,
         save_audio=save_audio,
     )
