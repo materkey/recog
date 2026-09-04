@@ -98,16 +98,20 @@
 
 
 ### Task 9: feat: `setup.sh` — установка одной командой
-- [ ] Прочитать подраздел «9. feat: `setup.sh` — установка одной командой» ниже (все 12 пунктов + требования к идемпотентности)
-- [ ] `setup_venvs.sh` → `setup.sh`: OS-детект, питон ≥3.12, таблица found/missing системных зависимостей с подсказками apt/pacman/brew
-- [ ] venv переиспользуется (в т.ч. symlink), torch/torchaudio с `RECOG_TORCH_INDEX_URL` (без nvidia-smi — CPU-индекс), GigaAM всегда из git-пина (`RECOG_GIGAAM_URL`/`RECOG_GIGAAM_REF`, editable только по `RECOG_GIGAAM_EDITABLE`), requirements + `requirements-macos.txt` на darwin
-- [ ] `.env`/`frontend/.env`/`speakers_ecapa.json` из `.example`; сборка расширения при наличии npm; macOS — компиляция helper'а или проверка рабочего
-- [ ] `scripts/prefetch_gigaam.py`: потоковая проверка/докачка весов и токенизатора без `gigaam.load_model`/`torch.load`, блочное хеширование, атомарная публикация, warning без порчи кеша
-- [ ] Порядок активации: `install` без запуска → проверка готовности (remote URL, ffmpeg, `parec`/`pactl`/PortAudio, macOS helper) → `svc_restart` ранее работавших и `svc_start` остальных; при незавершённой установке — ненулевой код, работавшие сервисы не останавливать. `recog-service.sh start/restart` использует ту же проверку
-- [ ] Флаги `--no-services`/`--no-prefetch`/`--no-extension`; итог различает «запущены»/«подготовлено»/«не завершена»; скрипт идемпотентен
-- [ ] `requirements.txt`: добавить `sounddevice>=0.5`, `speechbrain>=1.0`, `scipy`, `python-dotenv`, `httpx`; убрать `pyannote.audio` и bare `gigaam`; `requirements-macos.txt` + `constraints/macos.txt` (torch/torchaudio 2.8.0, numpy 2.3.5, pyobjc-core 12.1)
-- [ ] `tests/test_setup.py` со stub-командами; `bash -n setup.sh`
-- [ ] Коммит: `feat: install the whole pipeline with a single setup script`
+- [x] Прочитать подраздел «9. feat: `setup.sh` — установка одной командой» ниже (все 12 пунктов + требования к идемпотентности)
+- [x] `setup_venvs.sh` → `setup.sh`: OS-детект, питон ≥3.12, таблица found/missing системных зависимостей с подсказками apt/pacman/brew
+- [x] venv переиспользуется (в т.ч. symlink), torch/torchaudio с `RECOG_TORCH_INDEX_URL` (без nvidia-smi — CPU-индекс), GigaAM всегда из git-пина (`RECOG_GIGAAM_URL`/`RECOG_GIGAAM_REF`, editable только по `RECOG_GIGAAM_EDITABLE`), requirements + `requirements-macos.txt` на darwin
+- [x] `.env`/`frontend/.env`/`speakers_ecapa.json` из `.example`; сборка расширения при наличии npm; macOS — компиляция helper'а или проверка рабочего
+- [x] `scripts/prefetch_gigaam.py`: потоковая проверка/докачка весов и токенизатора без `gigaam.load_model`/`torch.load`, блочное хеширование, атомарная публикация, warning без порчи кеша
+- [x] Порядок активации: `install` без запуска → проверка готовности (remote URL, ffmpeg, `parec`/`pactl`/PortAudio, macOS helper) → `svc_restart` ранее работавших и `svc_start` остальных; при незавершённой установке — ненулевой код, работавшие сервисы не останавливать. `recog-service.sh start/restart` использует ту же проверку
+- [x] Флаги `--no-services`/`--no-prefetch`/`--no-extension`; итог различает «запущены»/«подготовлено»/«не завершена»; скрипт идемпотентен
+- [x] `requirements.txt`: добавить `sounddevice>=0.5`, `speechbrain>=1.0`, `scipy`, `python-dotenv`, `httpx`; убрать `pyannote.audio` и bare `gigaam`; `requirements-macos.txt` + `constraints/macos.txt` (torch/torchaudio 2.8.0, numpy 2.3.5, pyobjc-core 12.1)
+- [x] `tests/test_setup.py` со stub-командами; `bash -n setup.sh`
+- [x] Коммит: `feat: install the whole pipeline with a single setup script`
+- ➕ `scripts/deps.sh` — общий слой проверок (не назван в плане, но требуется пунктом «`recog-service.sh start/restart` использует ту же проверку»): `deps_readiness_problems` вызывается и из `setup.sh`, и из `cmd_start`/`cmd_restart`.
+- ➕ `RECOG_SKIP_READINESS=1` обходит гейт (осознанный запуск подмножества сервисов); выставлен в `stub_env` в `tests/test_service_templates.py`, иначе исход тех тестов зависел бы от `.env` и наличия ffmpeg/parec на машине разработчика.
+- ➕ `RECOG_HOST_OS` переопределяет `uname -s` для проверок — Linux-ветки (CPU-индекс torch, parec/pactl/PortAudio) тестируются с macOS и наоборот.
+- ⚠️ `constraints/macos.txt` намеренно без `onnxruntime`: закреплённый GigaAM ограничивает его сам, а версия в эталонном venv (1.19.2) старше этого пина.
 
 ### Task 10: docs: README, CLAUDE.md, ADR-0021, копия плана
 - [ ] Прочитать подраздел «10. docs: README, CLAUDE.md, ADR-0021, копия плана» ниже

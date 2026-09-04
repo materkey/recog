@@ -26,8 +26,8 @@ Russian speech recognition with speaker diarization and identification.
 git clone <repo>
 cd recog
 
-# Full setup (creates venv and .env)
-./setup_venvs.sh
+# Full setup (venv, dependencies, config files, services)
+./setup.sh
 
 # Or manual setup:
 ln -s ../GigaAM/venv venv-gigaam
