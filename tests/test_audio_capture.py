@@ -1,6 +1,6 @@
 """Тесты контракта BufferedAudioCapture.get_chunk (recog/audio_capture.py).
 
-Общий буфер вырос из двух копий (`SingleDeviceCapture` / `ScreenCaptureAudio`)
+Общий буфер вырос из двух копий (`SingleDeviceCapture` / `SubprocessPCMCapture`)
 с расходящимися `get_chunk`. Здесь фиксируется сведённый контракт: 1-D моно
 float32 и ранний выход при остановленном захвате. Кейсы capture-времени и капа
 покрыты параметризованно по обоим подклассам в tests/test_live_buffering.py.
