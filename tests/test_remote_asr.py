@@ -34,12 +34,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gigaam.types import TranscriptionResult, Word
 
+import recog.config as config
 import recog.remote_asr as remote_asr_mod
 from recog.remote_asr import (
     ASRTemporarilyUnavailable,
     FallbackASR,
     RemoteASRClient,
     RemoteASRError,
+    build_asr,
 )
 
 
@@ -954,3 +956,71 @@ def test_live_timeout_passed_to_chunk_requests():
     client.transcribe_chunk(np.zeros(SAMPLE_RATE, dtype=np.float32))
 
     assert fake.posts[0]["timeout"] == 5.0
+
+
+# -----------------------------------------------------------------------------
+# build_asr() config validation — the gateway URL has no default (step 7)
+# -----------------------------------------------------------------------------
+
+
+def test_build_asr_remote_without_url_raises_runtime_error(monkeypatch):
+    """
+    given: RECOG_ASR_BACKEND=remote, RECOG_ASR_REMOTE_URL пуст
+    when: build_asr()
+    then: RuntimeError с именами обеих переменных, ни один backend не создан
+          (молчаливый уход на локальную модель — другая RAM и латентность)
+    """
+    monkeypatch.setattr(config, "RECOG_ASR_BACKEND", "remote")
+    monkeypatch.setattr(config, "RECOG_ASR_REMOTE_URL", "")
+
+    with pytest.raises(RuntimeError) as exc:
+        build_asr()
+
+    assert "RECOG_ASR_BACKEND=remote" in str(exc.value)
+    assert "RECOG_ASR_REMOTE_URL" in str(exc.value)
+
+
+def test_build_asr_remote_with_blank_url_raises_runtime_error(monkeypatch):
+    """
+    given: URL из одних пробелов (типовой результат правки .env)
+    when: build_asr()
+    then: та же RuntimeError — пустой URL после strip не считается настроенным
+    """
+    monkeypatch.setattr(config, "RECOG_ASR_BACKEND", "remote")
+    monkeypatch.setattr(config, "RECOG_ASR_REMOTE_URL", "   ")
+
+    with pytest.raises(RuntimeError):
+        build_asr()
+
+
+def test_build_asr_remote_with_url_returns_fallback(monkeypatch):
+    """
+    given: remote-backend с заданным URL
+    when: build_asr()
+    then: отдаётся FallbackASR поверх RemoteASRClient с этим URL
+          (локальный ASRModule конструируется, но веса не грузятся)
+    """
+    monkeypatch.setattr(config, "RECOG_ASR_BACKEND", "remote")
+    monkeypatch.setattr(config, "RECOG_ASR_REMOTE_URL", "https://gw.test/asr")
+    asr = build_asr()
+
+    assert isinstance(asr, FallbackASR)
+    assert asr.remote.base_url == "https://gw.test/asr"
+
+
+def test_build_asr_local_does_not_need_url(monkeypatch):
+    """
+    given: local-backend и пустой URL
+    when: build_asr()
+    then: конструируется ASRModule (без загрузки весов), URL не требуется
+    """
+    monkeypatch.setattr(config, "RECOG_ASR_BACKEND", "local")
+    monkeypatch.setattr(config, "RECOG_ASR_REMOTE_URL", "")
+
+    built = []
+    monkeypatch.setattr(
+        remote_asr_mod, "ASRModule", lambda *a, **kw: built.append(1) or "LOCAL"
+    )
+
+    assert build_asr() == "LOCAL"
+    assert built == [1]

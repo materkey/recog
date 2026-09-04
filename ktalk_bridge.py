@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 from recog.config import load_dotenv, MIC_SPEAKER_NAME
 from recog.log_utils import log_rate_limited
-from recog.ws_origin import origin_allowed
+from recog.ws_origin import EXTRA_ORIGINS, origin_allowed
 from meeting_storage import is_conference_source
 
 if TYPE_CHECKING:
@@ -1451,7 +1451,7 @@ class KTalkBridge:
                 # LookupError) when the handshake carries duplicate Origin
                 # headers — never a legitimate client; reject cleanly.
                 rejected_reason = "duplicate Origin headers"
-        if rejected_reason is None and not origin_allowed(origin):
+        if rejected_reason is None and not origin_allowed(origin, extra=EXTRA_ORIGINS):
             rejected_reason = f"disallowed origin {origin!r}"
         if rejected_reason is not None:
             # Rate-limited: this path is attacker-reachable (a hostile page

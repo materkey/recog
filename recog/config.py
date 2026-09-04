@@ -172,7 +172,10 @@ PCM_REFINE_MONOLOG_CAP_S: float = 15.0
 # circuit breaker'ом и ленивым локальным fallback'ом (см. recog/remote_asr.py).
 
 RECOG_ASR_BACKEND = os.environ.get("RECOG_ASR_BACKEND", "local")            # "local" | "remote"
-RECOG_ASR_REMOTE_URL = os.environ.get("RECOG_ASR_REMOTE_URL", "https://materkey-z270x-1.tail4799d.ts.net/asr")
+# Адрес шлюза не имеет дефолта: он у каждой установки свой. Пусто + backend
+# "remote" — ошибка конфигурации (build_asr поднимает RuntimeError), а не
+# молчаливый поход в чужую сеть.
+RECOG_ASR_REMOTE_URL = os.environ.get("RECOG_ASR_REMOTE_URL", "").strip()
 RECOG_ASR_REMOTE_MODEL = os.environ.get("RECOG_ASR_REMOTE_MODEL", "gigaam")
 RECOG_ASR_REMOTE_TIMEOUT_S = float(os.environ.get("RECOG_ASR_REMOTE_TIMEOUT_S", "15"))
 RECOG_ASR_CIRCUIT_FAILS = int(os.environ.get("RECOG_ASR_CIRCUIT_FAILS", "3"))
@@ -201,3 +204,15 @@ ASR_PENDING_BUFFER_CAP_S = float(os.environ.get("ASR_PENDING_BUFFER_CAP_S", "600
 # метка времени буфера ресинхронизируется с wall-clock на каждом блоке. Больше —
 # бэклог при недоступном ASR, метки считаются по числу сэмплов (время произнесения).
 CAPTURE_RESYNC_MAX_S = 6.0
+
+
+# ============================================================================
+# WS ORIGIN ALLOWLIST
+# ============================================================================
+
+# Дополнительные origin'ы для WS-серверов (bridge + frontend live-stream),
+# через запятую, точным совпадением: "https://meet.example.com,https://ec.example.com".
+# Хосты конференций из manifest.json расширения зашиты в recog/ws_origin.py и
+# здесь не дублируются — эта ручка для чужой установки, где конференция живёт
+# на своём домене (его же надо добавить в manifest.json и пересобрать расширение).
+RECOG_EXTRA_WS_ORIGINS = os.environ.get("RECOG_EXTRA_WS_ORIGINS", "")
