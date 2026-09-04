@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +34,10 @@ import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-AUDIO_SHORT = Path("/Users/vkkovalev/projects/GigaAM/example.wav")  # 11.3s
+# GigaAM checkout supplies example.wav; override with GIGAAM_DIR when the
+# clone does not sit next to this repo.
+GIGAAM_DIR = Path(os.environ.get("GIGAAM_DIR") or PROJECT_ROOT.parent / "GigaAM")
+AUDIO_SHORT = GIGAAM_DIR / "example.wav"                             # 11.3s
 AUDIO_60S = PROJECT_ROOT / "vlad_sample.wav"                         # 60s
 AUDIO_30S = PROJECT_ROOT / "tests/e2e/fixtures/speech_reference.wav" # 30s
 
@@ -56,13 +60,33 @@ def median_min_max(xs: list[float]) -> dict[str, float]:
     }
 
 
+def _require_audio() -> None:
+    """Skip (under pytest) or bail out (as a script) when bench audio is absent.
+
+    None of these files are in the repo: example.wav lives in the GigaAM
+    checkout, vlad_sample.wav is a personal recording.
+    """
+    missing = [p for p in (AUDIO_SHORT, AUDIO_60S, AUDIO_30S) if not p.exists()]
+    if not missing:
+        return
+    reason = (
+        "bench audio missing: "
+        + ", ".join(str(p) for p in missing)
+        + " (set GIGAAM_DIR to a GigaAM checkout containing example.wav)"
+    )
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(reason, allow_module_level=True)
+    raise SystemExit(f"[bench] {reason}")
+
+
 def run():
     results: dict = {}
 
     print(f"[bench] audio_short: {AUDIO_SHORT}")
     print(f"[bench] audio_60s:   {AUDIO_60S}")
     print(f"[bench] audio_30s:   {AUDIO_30S}")
-    assert AUDIO_SHORT.exists() and AUDIO_60S.exists() and AUDIO_30S.exists()
+    _require_audio()
 
     from gigaam.preprocess import SAMPLE_RATE, load_audio
     from recog.asr import ASRModule

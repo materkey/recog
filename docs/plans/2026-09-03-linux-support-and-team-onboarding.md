@@ -72,13 +72,16 @@
 - [x] Коммит: `fix: resolve ffmpeg from PATH instead of a Homebrew path`
 
 ### Task 7: chore: личные дефолты → конфиг, личные файлы → из git
-- [ ] Прочитать подраздел «7. chore: личные дефолты → конфиг, личные файлы → из git» ниже
-- [ ] `RECOG_ASR_REMOTE_URL` дефолт `""`; `build_asr()` при `remote` + пустом URL — `RuntimeError` (тест в `tests/test_remote_asr.py`); read-only проверка миграции, существующую `.env` не редактировать
-- [ ] `recog/ws_origin.py`: литералы конференц-хостов остаются, добавить `RECOG_EXTRA_WS_ORIGINS` отдельным множеством + `origin_allowed(origin, extra=...)`, тесты
-- [ ] `git rm --cached` для `speakers*.json` ×4 и `sck_audio_capture`; `.gitignore` (`/speakers*.json`, `!/speakers_ecapa.json.example`, `/sck_audio_capture`); добавить `speakers_ecapa.json.example` = `{}` и проверить `SpeakerDatabase` на пустом файле
-- [ ] `tests/bench_gigaam_rtf.py`: путь через `GIGAAM_DIR` с `pytest.skip`
-- [ ] `.env.example`: placeholder gateway-URL, `HF_TOKEN` опционален, новые `RECOG_ASR_DEVICE`/`RECOG_PULSE_MONITOR_SOURCE`/`RECOG_EXTRA_WS_ORIGINS`, `RECOG_COPILOT_AUTOSPAWN=0`
-- [ ] Коммит: `chore: move personal defaults and data files out of the repo`
+- [x] Прочитать подраздел «7. chore: личные дефолты → конфиг, личные файлы → из git» ниже
+- [x] `RECOG_ASR_REMOTE_URL` дефолт `""`; `build_asr()` при `remote` + пустом URL — `RuntimeError` (тест в `tests/test_remote_asr.py`); read-only проверка миграции, существующую `.env` не редактировать
+- ⚠️ **Миграция на рабочем Mac не выполнена (действие пользователя).** Read-only проверка: `.env` содержит `RECOG_ASR_BACKEND=remote`, но `RECOG_ASR_REMOTE_URL` отсутствует (эффективно `''`). Live-сервис сейчас работает на старом дефолте; после рестарта он упадёт с `RuntimeError`. Перед `./recog-service.sh restart` дописать в `.env`: `RECOG_ASR_REMOTE_URL=https://materkey-z270x-1.tail4799d.ts.net/asr`. `.env` не редактировался, сервисы не перезапускались.
+- ➕ `tests/conftest.py`: autouse-фикстура `local_asr_backend` пинит `RECOG_ASR_BACKEND=local` — без неё `.env` разработчика (`remote` без URL) валил 6 тестов, конструирующих `LiveTranscriber`
+- [x] `recog/ws_origin.py`: литералы конференц-хостов остаются, добавить `RECOG_EXTRA_WS_ORIGINS` отдельным множеством + `origin_allowed(origin, extra=...)`, тесты
+- [x] `git rm --cached` для `speakers*.json` ×4 и `sck_audio_capture`; `.gitignore` (`/speakers*.json`, `!/speakers_ecapa.json.example`, `/sck_audio_capture`); добавить `speakers_ecapa.json.example` = `{}` и проверить `SpeakerDatabase` на пустом файле
+- [x] `example_1_named.md` (реальный транскрипт с именами) — `git rm --cached` + `.gitignore`, файл остаётся в рабочей копии
+- [x] `tests/bench_gigaam_rtf.py`: путь через `GIGAAM_DIR` с `pytest.skip`
+- [x] `.env.example`: placeholder gateway-URL, `HF_TOKEN` опционален, новые `RECOG_ASR_DEVICE`/`RECOG_PULSE_MONITOR_SOURCE`/`RECOG_EXTRA_WS_ORIGINS`, `RECOG_COPILOT_AUTOSPAWN=0`
+- [x] Коммит: `chore: move personal defaults and data files out of the repo`
 
 ### Task 8: feat: сервисный слой — шаблоны launchd + systemd --user
 - [ ] Прочитать подраздел «8. feat: сервисный слой — шаблоны launchd + systemd --user» ниже

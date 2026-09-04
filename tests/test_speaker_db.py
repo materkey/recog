@@ -161,3 +161,43 @@ class TestSpeakerDatabasePersistence:
         assert speaker.display_name == "Persistent User"
         assert speaker.embeddings[0].source_file == "persist.wav"
         assert speaker.embeddings[0].transcript == "hello world"
+
+
+class TestSpeakerDatabaseFreshInstall:
+    """A fresh clone ships speakers_ecapa.json.example ('{}') and no real DB."""
+
+    def test_empty_json_object_file_loads_as_no_speakers(self, tmp_path):
+        """
+        given: the shipped example DB — a file containing just `{}`
+        when: SpeakerDatabase is constructed on it
+        then: it loads cleanly with zero speakers and matches nothing
+        """
+        db_path = tmp_path / "speakers_ecapa.json"
+        db_path.write_text("{}\n", encoding="utf-8")
+
+        db = SpeakerDatabase(str(db_path))
+
+        assert db.speakers == {}
+        assert db.match_speaker(np.ones(192, dtype=np.float32)) is None
+
+    def test_missing_file_loads_as_no_speakers(self, tmp_path):
+        """
+        given: --speaker-db pointing at a file that does not exist yet
+        when: SpeakerDatabase is constructed
+        then: it starts empty instead of raising (enrollment creates it later)
+        """
+        db = SpeakerDatabase(str(tmp_path / "absent.json"))
+
+        assert db.speakers == {}
+
+    def test_shipped_example_file_is_an_empty_database(self):
+        """
+        given: speakers_ecapa.json.example committed for fresh installs
+        when: it is loaded
+        then: it parses and holds no personal enrollment data
+        """
+        example = Path(__file__).parent.parent / "speakers_ecapa.json.example"
+
+        db = SpeakerDatabase(str(example))
+
+        assert db.speakers == {}

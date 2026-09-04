@@ -15,8 +15,22 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import recog.config as recog_config
 from recog.speaker_db import SpeakerDatabase
 from recog.models import Segment
+
+
+@pytest.fixture(autouse=True)
+def local_asr_backend(monkeypatch):
+    """Pin the ASR backend to "local" for every unit test.
+
+    `recog.config` reads the developer's `.env` at import, so a machine
+    running the remote offload would otherwise make every test that
+    constructs a LiveTranscriber take the gateway path (and now fail
+    outright when RECOG_ASR_REMOTE_URL is unset). Tests that exercise the
+    remote path override this with their own monkeypatch.
+    """
+    monkeypatch.setattr(recog_config, "RECOG_ASR_BACKEND", "local", raising=False)
 
 
 @pytest.fixture

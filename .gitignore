@@ -35,6 +35,12 @@ kontur-diarize/ktalk-speaker-extension/injected.js
 logs/
 meetings/
 
+# Personal data / locally built artifacts (see docs: setup.sh rebuilds these)
+/speakers*.json
+!/speakers_ecapa.json.example
+/sck_audio_capture
+/example_1_named.md
+
 # Git worktrees
 .worktrees/
 

@@ -541,10 +541,19 @@ def build_asr() -> "Union[ASRModule, FallbackASR]":
     ``RECOG_ASR_BACKEND == "remote"`` -> ``FallbackASR`` поверх шлюза;
     иначе чистый локальный ``ASRModule`` (committed default — поведение
     репозитория не меняется, пока пользователь не выставит env).
+
+    Raises:
+        RuntimeError: backend ``remote``, но ``RECOG_ASR_REMOTE_URL`` пуст —
+            адреса шлюза по умолчанию нет, и молча уходить на локальную
+            модель нельзя: это разное потребление RAM и разная латентность.
     """
     from . import config
 
     if config.RECOG_ASR_BACKEND == "remote":
+        if not (config.RECOG_ASR_REMOTE_URL or "").strip():
+            raise RuntimeError(
+                "RECOG_ASR_BACKEND=remote requires RECOG_ASR_REMOTE_URL"
+            )
         remote = RemoteASRClient(
             config.RECOG_ASR_REMOTE_URL,
             config.RECOG_ASR_REMOTE_MODEL,

@@ -8,7 +8,12 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from recog.ws_origin import ALLOWED_ORIGINS, KTALK_WILDCARD_DOMAIN, origin_allowed
+from recog.ws_origin import (
+    ALLOWED_ORIGINS,
+    KTALK_WILDCARD_DOMAIN,
+    origin_allowed,
+    parse_extra_origins,
+)
 
 
 @pytest.mark.parametrize("origin", [
@@ -150,3 +155,75 @@ def test_given_extension_manifest_when_compared_then_allowlist_matches_both_ways
     }
     assert wildcard_hosts == {f"*.{KTALK_WILDCARD_DOMAIN}"}
     assert ALLOWED_ORIGINS == exact_origins | webapp_origins
+
+
+# -----------------------------------------------------------------------------
+# RECOG_EXTRA_WS_ORIGINS — per-installation exact origins (step 7)
+# -----------------------------------------------------------------------------
+
+
+def test_given_extra_origin_when_checked_then_allowed():
+    """given: an origin outside the built-in allowlist, passed via extra
+    when: origin_allowed is evaluated
+    then: the connection is allowed
+    """
+    extra = frozenset({"https://meet.example.com"})
+
+    assert origin_allowed("https://meet.example.com", extra=extra) is True
+
+
+def test_given_extra_origin_when_not_passed_then_rejected():
+    """given: the same origin, but no extra set supplied
+    when: origin_allowed is evaluated
+    then: it is rejected — the knob is opt-in, never a silent widening
+    """
+    assert origin_allowed("https://meet.example.com") is False
+
+
+def test_given_extra_origins_when_other_origin_checked_then_still_rejected():
+    """given: an extra allowlist configured
+    when: some other origin connects
+    then: extra entries match exactly and widen nothing else
+    """
+    extra = frozenset({"https://meet.example.com"})
+
+    assert origin_allowed("https://evil.example.com", extra=extra) is False
+    assert origin_allowed("https://meet.example.com.evil.tld", extra=extra) is False
+
+
+def test_given_extra_origin_when_null_origin_checked_then_still_rejected():
+    """given: an extra allowlist configured
+    when: a sandboxed iframe sends the literal "null" Origin
+    then: it stays rejected — extra does not touch the null/None contract
+    """
+    extra = frozenset({"https://meet.example.com", "null"})
+
+    assert origin_allowed("null", extra=frozenset({"https://meet.example.com"})) is False
+    # even a literal "null" entry only matches the exact-set branch, which is
+    # what an operator explicitly asked for
+    assert origin_allowed("null", extra=extra) is True
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, frozenset()),
+    ("", frozenset()),
+    ("   ", frozenset()),
+    ("https://a.test", frozenset({"https://a.test"})),
+    (" https://a.test , https://b.test ", frozenset({"https://a.test", "https://b.test"})),
+    ("https://a.test,,https://a.test", frozenset({"https://a.test"})),
+])
+def test_given_env_value_when_parsed_then_exact_origins_extracted(raw, expected):
+    """given: a RECOG_EXTRA_WS_ORIGINS value (possibly empty/padded)
+    when: parse_extra_origins runs
+    then: whitespace and empty items are dropped, entries stay exact strings
+    """
+    assert parse_extra_origins(raw) == expected
+
+
+def test_given_extra_origins_when_manifest_compared_then_builtin_set_unchanged():
+    """given: the extra-origins knob exists
+    when: the built-in ALLOWED_ORIGINS set is inspected
+    then: it still contains only manifest hosts + webapp origins, so the
+          manifest-equality test above keeps guarding the extension mirror
+    """
+    assert "https://meet.example.com" not in ALLOWED_ORIGINS
