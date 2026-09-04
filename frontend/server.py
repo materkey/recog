@@ -39,6 +39,7 @@ from recog.ws_origin import origin_allowed
 from bridge_subscriber import BridgeSubscriber
 from live_watcher import LiveWatcher
 from transcript_watcher import TranscriptWatcher
+from meeting_catalog import MeetingCatalog
 
 # Configuration
 HOST = "127.0.0.1"
@@ -450,6 +451,7 @@ transcript_watcher = TranscriptWatcher()
 live_watcher = LiveWatcher()
 observer: Optional[Observer] = None
 bridge_subscriber: Optional[BridgeSubscriber] = None
+meeting_catalog: Optional[MeetingCatalog] = None
 
 
 async def _forward_bridge_message(raw: str) -> None:
@@ -564,7 +566,7 @@ async def handle_client_frame(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    global observer, bridge_subscriber
+    global observer, bridge_subscriber, meeting_catalog
 
     # Start file watcher
     loop = asyncio.get_running_loop()
@@ -575,27 +577,43 @@ async def lifespan(app: FastAPI):
     observer = Observer()
     observer.schedule(transcript_watcher, str(MEETINGS_DIR), recursive=True)
     observer.schedule(live_watcher, str(MEETINGS_DIR), recursive=True)
-    observer.start()
+    meeting_catalog = MeetingCatalog(MEETINGS_DIR, get_external_paths())
+    observer.schedule(meeting_catalog, str(MEETINGS_DIR), recursive=True)
+    observer_started = False
 
-    # Subscribe to KTalk bridge for downstream live-stream frames and
-    # upstream Copilot requests. D10 refine frames use this channel because
-    # the JSONL tail-reader cannot see post-rewrite refines.
-    bridge_subscriber = BridgeSubscriber(
-        bridge_url=BRIDGE_WS_URL,
-        forward_callback=_on_bridge_frame,
-    )
-    await bridge_subscriber.start()
+    try:
+        observer.start()
+        observer_started = True
+        for root in meeting_catalog.roots:
+            if root == meeting_catalog.base_path:
+                continue
+            try:
+                if root.is_dir():
+                    observer.schedule(meeting_catalog, str(root), recursive=True)
+            except OSError as exc:
+                print(f"[Catalog] Cannot watch {root}; using periodic reconciliation: {exc}", file=sys.stderr)
+        await meeting_catalog.start()
 
-    print(f"Server started at http://{HOST}:{PORT}")
+        # Subscribe to KTalk bridge for downstream live-stream frames and
+        # upstream Copilot requests. D10 refine frames use this channel because
+        # the JSONL tail-reader cannot see post-rewrite refines.
+        bridge_subscriber = BridgeSubscriber(
+            bridge_url=BRIDGE_WS_URL,
+            forward_callback=_on_bridge_frame,
+        )
+        await bridge_subscriber.start()
 
-    yield
+        print(f"Server started at http://{HOST}:{PORT}")
 
-    # Shutdown
-    if bridge_subscriber:
-        await bridge_subscriber.stop()
-    if observer:
+        yield
+    finally:
+        if bridge_subscriber:
+            await bridge_subscriber.stop()
         observer.stop()
-        observer.join()
+        if observer_started:
+            await asyncio.to_thread(observer.join)
+        await meeting_catalog.stop()
+        meeting_catalog = None
 
 
 app = FastAPI(title="Recog Transcripts", lifespan=lifespan)
@@ -607,8 +625,10 @@ app = FastAPI(title="Recog Transcripts", lifespan=lifespan)
 async def list_meetings():
     """Get list of all meetings."""
     try:
-        storage = get_storage()
-        meetings = storage.list_meetings()
+        if meeting_catalog is not None:
+            meetings = meeting_catalog.list_meetings()
+        else:
+            meetings = await asyncio.to_thread(get_storage().list_meetings)
         return JSONResponse(content=meetings)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -704,6 +724,8 @@ async def delete_meeting(meeting_id: str):
         # (meeting ended but watcher not yet refreshed), release it.
         if live_watcher.current_meeting_id == meeting_id:
             live_watcher.set_current_meeting(None)
+        if meeting_catalog is not None:
+            await meeting_catalog.refresh()
         return JSONResponse(content={"success": True})
     except HTTPException:
         raise
@@ -927,6 +949,8 @@ async def generate_meeting_title(meeting_id: str):
                         encoding="utf-8"
                     )
 
+        if meeting_catalog is not None:
+            await meeting_catalog.refresh()
         return JSONResponse(content={
             "meeting_id": meeting_id,
             "title": title,
@@ -944,7 +968,7 @@ async def get_live_status():
     """Get current live transcription status."""
     try:
         storage = get_storage()
-        active_meetings = storage.list_active_meetings()
+        active_meetings = await asyncio.to_thread(storage.list_active_meetings)
 
         return JSONResponse(content={
             "active": len(active_meetings) > 0,
@@ -1014,8 +1038,9 @@ async def get_debug_status():
     # Get active meetings
     try:
         storage = get_storage()
-        active_meetings = storage.list_active_meetings()
-        all_meetings = storage.list_meetings()
+        active_meetings = await asyncio.to_thread(storage.list_active_meetings)
+        all_meetings = (meeting_catalog.list_meetings() if meeting_catalog is not None
+                        else await asyncio.to_thread(storage.list_meetings))
     except Exception as e:
         active_meetings = []
         all_meetings = []
@@ -1216,7 +1241,7 @@ async def live_anchor(request: AnchorRequest):
 
         if not segments:
             if not meeting_id:
-                active = storage.list_active_meetings()
+                active = await asyncio.to_thread(storage.list_active_meetings)
                 meeting_id = active[0]["id"] if active else None
 
             if not meeting_id:
@@ -1502,7 +1527,7 @@ async def live_stream(websocket: WebSocket):
     # Send current meeting info
     try:
         storage = get_storage()
-        active_meetings = storage.list_active_meetings()
+        active_meetings = await live_watcher.read_active_meetings(storage)
         current = active_meetings[0] if active_meetings else None
 
         if current:
