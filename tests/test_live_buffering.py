@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from recog.config import CAPTURE_RESYNC_MAX_S
+from recog.audio_capture import BufferedAudioCapture
 from recog.live import LiveTranscriber, SingleDeviceCapture, SourceState
 from recog.remote_asr import ASRTemporarilyUnavailable
 from screencapture_audio import ScreenCaptureAudio
@@ -31,38 +31,31 @@ from screencapture_audio import ScreenCaptureAudio
 SR = 16000
 
 
-def _init_buffer_fields(cap, max_buffer_s: float = 10.0):
-    """Общие поля буферизации (capture-время, кап)."""
-    cap.buffer = []
-    cap._lock = threading.Lock()
-    cap._buffer_start_ts = None
-    cap._buffered_samples = 0
-    cap._overlap_samples = int(0.5 * SR)
-    cap._max_buffered_samples = int(max_buffer_s * SR)
-    cap._resync_max_samples = int(CAPTURE_RESYNC_MAX_S * SR)
+def _init_buffer_fields(cap, name: str, max_buffer_s: float = 10.0):
+    """Общие поля буферизации через базовый __init__.
+
+    Кап задаётся явно: на него ассертит test_oldest_audio_dropped_beyond_cap,
+    а дефолт из конфига (ASR_PENDING_BUFFER_CAP_S) — сотни секунд."""
+    BufferedAudioCapture.__init__(cap, SR, name, max_buffer_s=max_buffer_s)
 
 
 def _make_single_device_capture() -> SingleDeviceCapture:
     """SingleDeviceCapture без sounddevice."""
     cap = SingleDeviceCapture.__new__(SingleDeviceCapture)
+    _init_buffer_fields(cap, "test-mic")
     cap.sd = None
-    cap.sample_rate = SR
     cap.device = None
-    cap.name = "test-mic"
-    cap.running = True
     cap.stream = None
-    _init_buffer_fields(cap)
+    cap.running = True
     return cap
 
 
 def _make_screencapture() -> ScreenCaptureAudio:
     """ScreenCaptureAudio без swift-сабпроцесса."""
     cap = ScreenCaptureAudio.__new__(ScreenCaptureAudio)
-    cap.sample_rate = SR
+    _init_buffer_fields(cap, "test-screencapture")
     cap.process = None
     cap.running = True
-    cap.name = "test-screencapture"
-    _init_buffer_fields(cap)
     return cap
 
 
