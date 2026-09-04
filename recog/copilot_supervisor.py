@@ -34,7 +34,9 @@ import enum
 import inspect
 import json
 import os
+import platform
 import shlex
+import shutil
 import sys
 import time
 from dataclasses import dataclass
@@ -65,6 +67,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # imported from there on purpose: ktalk_bridge is a heavy top-level module and
 # importing it here would invert the layering.
 MANUAL_MEETING_ID = "manual"
+# On Linux the tmux session runs in its own transient user unit instead of the
+# supervisor's cgroup, so a supervisor restart (systemctl --user restart) does
+# not take the live Copilot down with it. Stable name — the session is a
+# singleton per machine, exactly like the tmux socket.
+SYSTEMD_SESSION_UNIT = "recog-copilot-session"
+# Environment the transient unit needs but would not inherit: `systemd-run
+# --user` starts it from the *user manager's* environment, not the supervisor's.
+SESSION_ENV_KEYS = ("PATH", "HOME", "TERM", "SHELL", "LANG")
+SYSTEMD_UNIT_STOP_TIMEOUT_S = 5.0
+SYSTEMD_UNIT_POLL_S = 0.1
+
+
+def _linux_session_manager() -> bool:
+    """Whether the copilot session must be wrapped in a transient systemd unit.
+
+    Monkeypatched in tests; `systemd-run` is checked so a systemd-less Linux
+    (container, chroot) falls back to plain tmux rather than failing to spawn.
+    """
+    return platform.system() == "Linux" and shutil.which("systemd-run") is not None
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -208,6 +229,12 @@ class TmuxRunner:
     verb (`kill`, `alive`, `send_keys`, `capture`) targets it, so a
     preemption kills the manual name and creates the default one (DW-9).
 
+    On Linux the `tmux new-session` call is wrapped in a transient
+    `systemd --user` unit (`recog-copilot-session.service`) so the session
+    lives outside the supervisor's own cgroup and survives `systemctl --user
+    restart recog-copilot-supervisor` — a restarted supervisor re-adopts it
+    through the usual `alive()` probe. macOS keeps the plain tmux path.
+
     The subprocess runner is injectable for tests: an async callable
     `run(args) -> (returncode, output)`.
     """
@@ -223,6 +250,8 @@ class TmuxRunner:
         run: Optional[Callable] = None,
         socket_name: str = TMUX_SOCKET,
         session_name: str = TMUX_SESSION,
+        use_systemd_run: Optional[bool] = None,
+        systemd_unit: str = SYSTEMD_SESSION_UNIT,
     ) -> None:
         self.repo_root = Path(repo_root) if repo_root is not None else REPO_ROOT
         self.mcp_url = mcp_url or os.environ.get("RECOG_COPILOT_MCP_URL", DEFAULT_MCP_URL)
@@ -230,9 +259,78 @@ class TmuxRunner:
         self.socket_name = socket_name
         self.session_name = session_name
         self._default_session_name = session_name
+        self.use_systemd_run = (
+            _linux_session_manager() if use_systemd_run is None else use_systemd_run
+        )
+        self.systemd_unit = systemd_unit
 
     def _tmux(self, *args: str) -> list:
         return ["tmux", "-L", self.socket_name, *args]
+
+    @property
+    def session_unit_name(self) -> str:
+        return f"{self.systemd_unit}.service"
+
+    @staticmethod
+    def _systemctl(*args: str) -> list:
+        return ["systemctl", "--user", *args]
+
+    def _systemd_run(self, argv: list) -> list:
+        """Wrap `argv` in a transient `systemd --user` service.
+
+        Type=oneshot + RemainAfterExit=yes match `tmux new-session -d`, which
+        forks the server and returns immediately: without RemainAfterExit the
+        unit would be considered finished (and, with --collect, garbage
+        collected) the moment tmux detaches. KillMode=control-group makes an
+        explicit stop reap the whole session, and no Restart= is set — respawn
+        is the supervisor's decision, not systemd's.
+        """
+        cmd = [
+            "systemd-run",
+            "--user",
+            "--collect",
+            f"--unit={self.systemd_unit}",
+            "--property=Type=oneshot",
+            "--property=RemainAfterExit=yes",
+            "--property=KillMode=control-group",
+            f"--working-directory={self.repo_root}",
+        ]
+        for key in SESSION_ENV_KEYS:
+            value = os.environ.get(key)
+            if value:
+                cmd.append(f"--setenv={key}={value}")
+        return cmd + list(argv)
+
+    async def _session_unit_loaded(self) -> bool:
+        """True while systemd still holds the transient unit under our name."""
+        rc, out = await self._run(
+            self._systemctl("show", "-p", "LoadState", "--value", self.session_unit_name)
+        )
+        if rc != 0:
+            return False
+        return out.strip() not in ("", "not-found")
+
+    async def _reset_session_unit(self) -> None:
+        """Stop the transient unit and wait until systemd drops the name.
+
+        A RemainAfterExit unit stays loaded after its session dies, and
+        `systemd-run` refuses to reuse a loaded unit name — so a leftover would
+        turn every later spawn into a hard failure.
+        """
+        if not self.use_systemd_run:
+            return
+        if not await self._session_unit_loaded():
+            return
+        await self._run(self._systemctl("stop", self.session_unit_name))
+        deadline = time.monotonic() + SYSTEMD_UNIT_STOP_TIMEOUT_S
+        while True:
+            if not await self._session_unit_loaded():
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"transient unit {self.session_unit_name} still loaded after stop"
+                )
+            await asyncio.sleep(SYSTEMD_UNIT_POLL_S)
 
     @staticmethod
     def _exact_target(session_name: str) -> str:
@@ -313,17 +411,21 @@ class TmuxRunner:
                 ) from exc
         if await self.alive():
             return False
-        rc, out = await self._run(
-            self._tmux(
-                "new-session",
-                "-d",
-                "-s",
-                self.session_name,
-                "-c",
-                str(self.repo_root),
-                self.build_claude_command(),
-            )
+        argv = self._tmux(
+            "new-session",
+            "-d",
+            "-s",
+            self.session_name,
+            "-c",
+            str(self.repo_root),
+            self.build_claude_command(),
         )
+        if self.use_systemd_run:
+            # Only on the creating path: adoption above returns before this, so
+            # a healthy session's unit is never torn down and recreated.
+            await self._reset_session_unit()
+            argv = self._systemd_run(argv)
+        rc, out = await self._run(argv)
         if rc != 0:
             raise RuntimeError(f"tmux new-session failed (rc={rc}): {out.strip()}")
         return True
@@ -343,6 +445,14 @@ class TmuxRunner:
         error log instead of silently orphaning a live Copilot session.
         """
         target = session_name or self.session_name
+        await self._kill_tmux_session(target)
+        # Killing the session empties the transient unit's cgroup, but
+        # RemainAfterExit keeps the unit loaded — drop it here so the next
+        # spawn can claim the name (a raise above leaves it to that spawn's
+        # own _reset_session_unit).
+        await self._reset_session_unit()
+
+    async def _kill_tmux_session(self, target: str) -> None:
         rc, out = 0, ""
         for attempt in range(self.KILL_RETRIES):
             if attempt:
