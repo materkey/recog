@@ -66,10 +66,10 @@
 - [x] Коммит: `feat: make the ASR device configurable with CUDA support`
 
 ### Task 6: fix: ffmpeg из PATH
-- [ ] Прочитать подраздел «6. fix: ffmpeg из PATH» ниже
-- [ ] `frontend/server.py`: константа `FFMPEG = shutil.which("ffmpeg") or "ffmpeg"`, применить на обоих сайтах вместо `/opt/homebrew/bin/ffmpeg` и bare-строки
-- [ ] Тест добавлять только если на ручку уже есть тест
-- [ ] Коммит: `fix: resolve ffmpeg from PATH instead of a Homebrew path`
+- [x] Прочитать подраздел «6. fix: ffmpeg из PATH» ниже
+- [x] `frontend/server.py`: константа `FFMPEG = shutil.which("ffmpeg") or "ffmpeg"`, применить на обоих сайтах вместо `/opt/homebrew/bin/ffmpeg` и bare-строки
+- [x] Тест добавлять только если на ручку уже есть тест (тестов на эти ручки нет — не добавлял)
+- [x] Коммит: `fix: resolve ffmpeg from PATH instead of a Homebrew path`
 
 ### Task 7: chore: личные дефолты → конфиг, личные файлы → из git
 - [ ] Прочитать подраздел «7. chore: личные дефолты → конфиг, личные файлы → из git» ниже

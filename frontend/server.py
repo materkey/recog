@@ -11,6 +11,7 @@ FastAPI server providing:
 import asyncio
 import json
 import os
+import shutil
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -46,6 +47,7 @@ HOST = "127.0.0.1"
 PORT = 9080
 MEETINGS_DIR = Path(__file__).parent.parent / "meetings"
 BRIDGE_WS_URL = os.environ.get("RECOG_BRIDGE_WS_URL", "ws://localhost:8766")
+FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 
 
 def get_storage() -> MeetingStorage:
@@ -1757,7 +1759,7 @@ async def get_segment_audio(
 
     try:
         result = subprocess.run([
-            "/opt/homebrew/bin/ffmpeg", "-y",
+            FFMPEG, "-y",
             "-i", str(audio_path),
             "-ss", str(audio_offset_ms / 1000),
             "-t", str(segment_duration_ms / 1000),
@@ -1902,7 +1904,7 @@ async def enroll_from_segments(request: EnrollFromSegmentsRequest):
 
             try:
                 ffmpeg_result = subprocess.run([
-                    "ffmpeg", "-y",
+                    FFMPEG, "-y",
                     "-i", str(audio_path),
                     "-ss", str(start_ms / 1000),
                     "-t", str(segment_duration_ms / 1000),
