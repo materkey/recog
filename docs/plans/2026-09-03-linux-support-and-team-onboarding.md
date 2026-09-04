@@ -33,11 +33,11 @@
 - [x] Коммит: `refactor: extract BufferedAudioCapture shared by mic and system capture`
 
 ### Task 2: refactor: `screencapture_audio.py` → `recog/system_audio.py` (чистый перенос)
-- [ ] Прочитать подраздел «2. refactor: `screencapture_audio.py` → `recog/system_audio.py`» ниже
-- [ ] `git mv screencapture_audio.py recog/system_audio.py`, обновить импорты (`recog/live.py`, `tests/test_live_buffering.py`, `CLAUDE.md`)
-- [ ] В этом же коммите починить `_find_utility()`: helper/`.swift` искать от корня репо (`REPO_ROOT`), а не от `Path(__file__).parent`
-- [ ] `python -m pytest tests/ -q -m "not e2e"` зелёный, `python -m compileall recog frontend` без ошибок
-- [ ] Коммит: `refactor: move screencapture audio module into recog package`
+- [x] Прочитать подраздел «2. refactor: `screencapture_audio.py` → `recog/system_audio.py`» ниже
+- [x] `git mv screencapture_audio.py recog/system_audio.py`, обновить импорты (`recog/live.py`, `tests/test_live_buffering.py`, `CLAUDE.md`)
+- [x] В этом же коммите починить `_find_utility()`: helper/`.swift` искать от корня репо (`REPO_ROOT`), а не от `Path(__file__).parent`
+- [x] `python -m pytest tests/ -q -m "not e2e"` зелёный, `python -m compileall recog frontend` без ошибок
+- [x] Коммит: `refactor: move screencapture audio module into recog package`
 
 ### Task 3: feat: generic subprocess-capture + PulseAudio-бэкенд
 - [ ] Прочитать подраздел «3. feat: generic subprocess-capture + PulseAudio-бэкенд» ниже

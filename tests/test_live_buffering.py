@@ -6,7 +6,7 @@
 
 Покрывает оба capture-класса с одинаковым контрактом get_chunk:
 - SingleDeviceCapture (recog/live.py) — микрофон/sounddevice
-- ScreenCaptureAudio (screencapture_audio.py) — системный звук/ScreenCaptureKit
+- ScreenCaptureAudio (recog/system_audio.py) — системный звук/ScreenCaptureKit
 
 Оба конструируются через __new__ без внешних зависимостей (sounddevice /
 swift-бинарь) — паттерн из tests/test_asr.py::_make_mocked_asr.
@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from recog.audio_capture import BufferedAudioCapture
 from recog.live import LiveTranscriber, SingleDeviceCapture, SourceState
 from recog.remote_asr import ASRTemporarilyUnavailable
-from screencapture_audio import ScreenCaptureAudio
+from recog.system_audio import ScreenCaptureAudio
 
 
 SR = 16000
