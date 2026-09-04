@@ -114,12 +114,15 @@
 - ⚠️ `constraints/macos.txt` намеренно без `onnxruntime`: закреплённый GigaAM ограничивает его сам, а версия в эталонном venv (1.19.2) старше этого пина.
 
 ### Task 10: docs: README, CLAUDE.md, ADR-0021, копия плана
-- [ ] Прочитать подраздел «10. docs: README, CLAUDE.md, ADR-0021, копия плана» ниже
-- [ ] `README.md` переписать как онбординг (требования по ОС, quick start, system audio на обеих ОС, сервисы, copilot, remote ASR, troubleshooting, переменные установки); убрать примеры вывода с реальными именами
-- [ ] `CLAUDE.md`: команды (`setup.sh`, `--system-audio`, systemd), заголовок Services, Module Organization (`recog/audio_capture.py`, `recog/system_audio.py`), переименование `ScreenCaptureAudio` в абзаце про буферизацию, новые env-переменные, Linux-жизненный цикл copilot, раздел про system audio backends, список ADR
-- [ ] `adr/0021-cross-platform-capture-and-services.md` — контекст, решения, последствия
-- [ ] `adr/0010-*.md` пометить как вытесненный ADR-0021
-- [ ] Коммит: `docs: document cross-platform setup and services`
+- [x] Прочитать подраздел «10. docs: README, CLAUDE.md, ADR-0021, копия плана» ниже
+- [x] `README.md` переписать как онбординг (требования по ОС, quick start, system audio на обеих ОС, сервисы, copilot, remote ASR, troubleshooting, переменные установки); убрать примеры вывода с реальными именами
+- [x] `CLAUDE.md`: команды (`setup.sh`, `--system-audio`, systemd), заголовок Services, Module Organization (`recog/audio_capture.py`, `recog/system_audio.py`), переименование `ScreenCaptureAudio` в абзаце про буферизацию, новые env-переменные, Linux-жизненный цикл copilot, раздел про system audio backends, список ADR
+- [x] `adr/0021-cross-platform-capture-and-services.md` — контекст, решения, последствия
+- [x] `adr/0010-*.md` пометить как вытесненный ADR-0021
+- [x] Коммит: `docs: document cross-platform setup and services`
+- ➕ `README.md`: раздел «Output format» сохранён (полезное описание формата), но имена в примере обезличены — план требовал убрать реальные имена, а не сам пример.
+- ➕ `CLAUDE.md`: попутно уточнены заголовок раздела copilot (код-дефолт `1`, `.env.example` — `0`), путь к юниту supervisor'а (шаблоны вместо закоммиченного plist) и пометка, что `speakers_ecapa.json` теперь gitignored.
+- ⚠️ `scripts/check.sh` в README не упоминается — он появляется в шаге 11; строку про него добавит тот коммит.
 
 ### Task 11: chore: проверка и CI
 - [ ] Прочитать подраздел «11. chore: проверка и CI» ниже
