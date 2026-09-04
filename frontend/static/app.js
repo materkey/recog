@@ -56,7 +56,9 @@ const api = {
             const error = await res.json().catch(() => ({}));
             throw new Error(error.detail || 'Failed to generate title');
         }
-        return res.json();
+        const result = await res.json();
+        views.meetings.invalidate();
+        return result;
     },
 
     async deleteMeeting(id) {
@@ -65,7 +67,9 @@ const api = {
             const error = await res.json().catch(() => ({}));
             throw new Error(error.detail || 'Failed to delete meeting');
         }
-        return res.json();
+        const result = await res.json();
+        views.meetings.invalidate();
+        return result;
     },
 
     async getPrompts() {
@@ -147,6 +151,37 @@ const router = {
 
 // --- Views ---
 
+const meetingListCache = {
+    key: 'recog.meetings.v1',
+    maxAgeMs: 5 * 60 * 1000,
+
+    read() {
+        try {
+            const cached = JSON.parse(sessionStorage.getItem(this.key));
+            const age = Date.now() - cached?.savedAt;
+            if (!Number.isFinite(age) || age < 0 || age > this.maxAgeMs) return null;
+            if (!Array.isArray(cached.meetings) || !cached.meetings.every(m =>
+                m && typeof m.id === 'string' && typeof m.created_at === 'string' &&
+                (m.title == null || typeof m.title === 'string') &&
+                (m.participants == null || Array.isArray(m.participants))
+            )) return null;
+            return cached.meetings;
+        } catch {
+            return null;
+        }
+    },
+
+    write(meetings) {
+        try {
+            sessionStorage.setItem(this.key, JSON.stringify({ savedAt: Date.now(), meetings }));
+        } catch { /* Storage can be disabled or full; the in-memory list still works. */ }
+    },
+
+    clear() {
+        try { sessionStorage.removeItem(this.key); } catch { /* Optional cache. */ }
+    }
+};
+
 const views = {
     meetings: {
         meetings: [],
@@ -155,10 +190,25 @@ const views = {
         searchMode: localStorage.getItem('searchMode') ?? 'title',
         searchTimeout: null,
         _listenersInitialized: false,
+        _hasLoaded: false,
+        _loadId: 0,
+
+        invalidate() {
+            // A GET started before a mutation must not repopulate either cache.
+            this._loadId++;
+            this._hasLoaded = false;
+            this.meetings = [];
+            meetingListCache.clear();
+            if ((window.location.hash.slice(1) || '/') === '/') this.load();
+        },
 
         async load() {
+            const loadId = ++this._loadId;
             const container = document.getElementById('meetings-list');
-            container.innerHTML = '<div class="loading">Loading meetings...</div>';
+            const status = document.getElementById('meetings-status');
+            const saved = this._hasLoaded ? this.meetings : meetingListCache.read();
+            container.setAttribute('aria-busy', 'true');
+            status.textContent = saved !== null ? 'Updating saved meetings…' : '';
 
             // Restore filter values to UI
             const sourceSelect = document.getElementById('filter-source');
@@ -171,11 +221,11 @@ const views = {
             // Init date picker
             DatePicker.init('filter-date', () => this.render());
 
-            try {
-                this.meetings = await api.getMeetings();
+            if (saved !== null) {
+                this.meetings = saved;
                 this.render();
-            } catch (e) {
-                container.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+            } else {
+                container.innerHTML = '<div class="loading">Loading meetings...</div>';
             }
 
             // Setup filter listeners only once (prevents duplicates on view re-entry)
@@ -204,6 +254,25 @@ const views = {
                     clearTimeout(this.searchTimeout);
                     this.searchTimeout = setTimeout(() => this.handleSearch(), 300);
                 });
+            }
+
+            try {
+                const meetings = await api.getMeetings();
+                if (loadId !== this._loadId) return;
+                this.meetings = meetings;
+                this._hasLoaded = true;
+                this.render();
+                status.textContent = '';
+                meetingListCache.write(meetings);
+            } catch (e) {
+                if (loadId !== this._loadId) return;
+                if (saved !== null) {
+                    status.textContent = 'Could not refresh meetings. Showing saved list.';
+                } else {
+                    container.innerHTML = `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
+                }
+            } finally {
+                if (loadId === this._loadId) container.removeAttribute('aria-busy');
             }
         },
 
@@ -1963,7 +2032,6 @@ async function deleteMeeting() {
     try {
         await api.deleteMeeting(meeting.id);
         showNotification('Митинг удалён', 'success');
-        views.meetings.meetings = null;   // сбросить кэш списка -> load() перечитает
         router.navigate('/');
     } catch (e) {
         showNotification('Ошибка удаления: ' + e.message, 'error');
