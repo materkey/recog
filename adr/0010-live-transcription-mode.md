@@ -1,7 +1,7 @@
 # ADR-0010: Live-режим транскрипции с BlackHole
 
 ## Status
-Accepted
+Superseded by ADR-0021 (2026-09-03) — системный звук больше не требует BlackHole и не привязан к macOS: ScreenCaptureKit на macOS, `parec` (PulseAudio/PipeWire) на Linux. Остальная часть решения (команда `live`, чанки, dual-режим) в силе.
 
 ## Context
 Текущий инструмент работает только с файлами. Пользователи хотят:

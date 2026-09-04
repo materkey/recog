@@ -12,13 +12,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Setup
 ```bash
-# Full setup (venv, dependencies, config files, services)
+# Full setup on macOS and Linux (venv, deps, GigaAM from a git pin, config
+# files, extension build, weight cache, service units). Idempotent — this is
+# also how you update after a git pull.
 ./setup.sh
 
-# Or manual setup:
-# GigaAM venv (requires ../GigaAM to exist)
-python3.12 -m venv venv-gigaam
-./venv-gigaam/bin/pip install -e ../GigaAM torch torchaudio soundfile sounddevice
+# Flags: --no-services | --no-prefetch | --no-extension
+# Call-shell env (NOT .env): RECOG_TORCH_INDEX_URL, RECOG_GIGAAM_URL/REF,
+# RECOG_GIGAAM_EDITABLE (local checkout installed with pip install -e)
+RECOG_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 ./setup.sh
 ```
 
 ### Running
@@ -26,18 +28,21 @@ python3.12 -m venv venv-gigaam
 # Always use venv-gigaam for main CLI
 source venv-gigaam/bin/activate
 
-# Live transcription from system audio (BlackHole)
-python mp4_notes.py live --system-device 0 --speaker-db speakers_ecapa.json
+# Live with the conference Chrome extension + system audio (backend per OS)
+python mp4_notes.py live --ktalk --system-audio auto
 
-# Live with KTalk Chrome extension (speaker names from conference)
-python mp4_notes.py live --ktalk --screencapture
+# Explicit backends: screencapture (macOS) | pulse (Linux) | device:<id> | none
+python mp4_notes.py live --system-audio pulse --speaker-db speakers_ecapa.json
 
-# List audio devices
+# List audio devices (on Linux also prints `pactl list short sources`)
 python mp4_notes.py live --list-devices
 
 # Add speaker to database (records 5 seconds from mic)
 python add_speaker_live.py "Speaker Name"
 ```
+
+`--screencapture` and `--system-device <id>` remain as hidden aliases of
+`--system-audio screencapture` / `--system-audio device:<id>`.
 
 ### Frontend (web UI)
 ```bash
@@ -46,16 +51,28 @@ pip install -r requirements.txt
 python server.py  # http://127.0.0.1:9080
 ```
 
-### macOS Services
+### Services (launchd / systemd --user)
 ```bash
-./recog-service.sh install            # Install launchd services (live + frontend + copilot-channel + copilot-supervisor)
-./recog-service.sh start              # Start all services
+./recog-service.sh install            # Render + register the 4 units (live + frontend + copilot-channel + copilot-supervisor) WITHOUT starting them
+./recog-service.sh start              # Start all installed services (readiness-gated)
 ./recog-service.sh status             # Show service status
 ./recog-service.sh logs               # Tail live transcription logs
 ./recog-service.sh restart            # Restart after code changes
 ./recog-service.sh restart-supervisor # Restart copilot supervisor daemon only
 ./recog-service.sh logs-supervisor    # Tail copilot supervisor daemon logs
+./recog-service.sh render --dry-run D # Render units into D only (tests/CI)
 ```
+
+The backend is chosen from `uname -s` (`RECOG_SERVICE_OS` overrides it, which
+only changes which templates/verbs are used, so a Mac can render Linux units):
+launchd on macOS, `systemd --user` on Linux. Units are rendered from
+`deploy/{launchd,systemd}/*.in` by `scripts/service/{common,launchd,systemd}.sh`
+behind the `svc_*` contract. `install` never activates anything — that split is
+what lets `setup.sh` verify dependencies before starting a pipeline that cannot
+serve; `start`/`restart` run the same probes (`scripts/deps.sh`) and refuse to
+activate an incomplete install rather than stop a working one. On Linux the
+services need `loginctl enable-linger $USER` to survive logout (`status` prints
+the reminder).
 
 **Important**: After modifying `frontend/server.py` or other backend code, run `./recog-service.sh restart` to apply changes. After modifying `recog/copilot_supervisor.py`, run `./recog-service.sh restart-supervisor`.
 
@@ -73,12 +90,40 @@ The extension connects to `ws://localhost:8765` (ktalk_bridge.py) and sends spea
 
 **Element Call (matrix)** — Element Call is bundled inside Element Web as a same-origin iframe (`https://element.vkkovalev.work/widgets/element-call/index.html`); the standalone `call.element.*` host is unused for room calls. The manifest scopes the Element match to `/widgets/element-call/*` with `"all_frames": true`, so the content script injects **only into the EC iframe, never the Element top frame** (a top-frame injection would open a stray second WS that outlives the call). `ElementCallAdapter` (`src/platforms/matrix.js`) sources lifecycle/participants/names from page globals `window.rtcSession` (MatrixRTCSession) + `window.matrixclient` (matrix-js-sdk), and active-speaker events from a React fiber-walk (`__reactFiber$*` → `.return` up to the livekit `Room`). Participant identity is the legacy plain format `${userId}:${deviceId}` (e.g. `@test2:matrix.vkkovalev.work:IZFUKTQLPX`), parsed by `parseRtcIdentity()` with a sha256-hash fallback for future MatrixRTC. Display names come from `matrixclient.getRoom(roomId).getMember(userId).name`. The meeting URL is a **synthesized** `https://element.vkkovalev.work/#/room/<roomId>` (via the optional `getMeetingUrl()` adapter hook) so the backend derives a stable `live_id` from the room fragment instead of `index.html`. Matrix uses the same mixed-audio path + floating panel (transcript + copilot chat view) as the Jitsi platforms; per-participant PCM/refine (Tier 2) is out of scope. See ADR/plan `docs/plans/completed/20260709-element-call-matrix-platform.md`.
 
-### Swift Binary (screen capture)
-If modifying `sck_audio_capture.swift`, rebuild:
-```bash
-swiftc -o sck_audio_capture sck_audio_capture.swift \
-    -framework ScreenCaptureKit -framework CoreMedia -framework AVFoundation
-```
+### System audio backends
+Both backends are the same `SubprocessPCMCapture` (`recog/system_audio.py`): a
+child process writes raw mono float32 PCM at 16 kHz to stdout, a reader thread
+appends it to the shared `BufferedAudioCapture`. `resolve_system_audio_backend`
+turns `auto` into `screencapture` on darwin and `pulse` on linux (and rejects a
+backend asked for on the wrong OS); `create_system_capture` builds it.
+
+- **macOS — `screencapture`**: the ScreenCaptureKit Swift helper
+  `sck_audio_capture`. `find_or_build_sck_utility()` compiles it on demand from
+  `sck_audio_capture.swift` (both live at the repo root, outside the package,
+  and the binary is gitignored). Manual rebuild:
+  ```bash
+  swiftc -o sck_audio_capture sck_audio_capture.swift \
+      -framework ScreenCaptureKit -framework CoreMedia -framework AVFoundation
+  ```
+- **Linux — `pulse`**: `PulseAudioCapture` runs `parec --raw
+  --format=float32le --rate=16000 --channels=1 --latency-msec=100
+  --device=<monitor>` (PulseAudio or PipeWire via `pipewire-pulse`). A
+  non-empty `RECOG_PULSE_MONITOR_SOURCE` pins the source and turns the follow
+  logic off; otherwise the capture starts on `@DEFAULT_MONITOR@` **and polls
+  `pactl get-default-sink`**, explicitly reconnecting when the default sink
+  changes — the `@DEFAULT_MONITOR@` name alone is resolved once at stream
+  creation and does not follow. A planned reconnect marks the source boundary
+  (no overlap glued across the gap) and does not spend the crash-retry budget;
+  a transient `pactl` error is rate-limited-logged and retried. Without
+  `--device`, `parec` would record the default *source* (the mic), so the
+  monitor name is mandatory.
+
+Restart policy is shared: a died child is respawned with a bounded backoff
+(1/2/5/10 s) that **does not leave the reader loop while `running`**; only
+after `MAX_RESTARTS` does the capture give up, set `_dead`/`running=False`, and
+let `recog/live.py` write one system-capture-lost marker. That marker is
+separate from `_emit_pcm_transition_marker` on purpose: a mixed-capture death
+must not claim a PCM→mixed transition or pause refine.
 
 ## Architecture
 
@@ -89,7 +134,7 @@ The project uses a single `venv-gigaam` virtual environment. Speaker identificat
 `FallbackASR` implements all four GigaAM paths (`transcribe_batch` per-speaker, `transcribe_simple` offline, `transcribe_with_timestamps` refine, and the direct mic/mixed `transcribe_chunk`) over a network gateway (Z270XX, OpenAI-Whisper-compatible). Three are reached today through `build_asr()` (the single constructor, `recog/remote_asr.py`) via the live pipeline; the offline `transcribe_simple` path is implemented but not yet wired to a CLI command (`mp4_notes.py` has only `live`/`meetings`). When constructed, ASR comes exclusively from `build_asr()`: `RECOG_ASR_BACKEND="local"` (committed default — repo behavior unchanged) returns a plain `ASRModule`; `"remote"` returns a `FallbackASR` wrapping a `RemoteASRClient`. `FallbackASR` constructs the local `ASRModule` eagerly but loads its weights **lazily in a background thread** — triggered by the first remote failure. While neither backend can serve (circuit open + local still loading) it raises `ASRTemporarilyUnavailable` and exposes `available=False`; consumers (`_process_chunk`, `PerSpeakerIngest.tick`, `RefineWorker`) gate on it and keep their audio buffered instead of dropping chunks (see `docs/plans/2026-06-02-asr-fallback-buffering-design.md`). The circuit breaker is thread-safe and trips after `RECOG_ASR_CIRCUIT_FAILS` consecutive failures (open for `RECOG_ASR_CIRCUIT_OPEN_S`, then one half-open probe). Live chunk/batch requests use the shorter `RECOG_ASR_LIVE_TIMEOUT_S`; refine/offline keep `RECOG_ASR_REMOTE_TIMEOUT_S`. It delegates `model` / `device` / `_model_lock` / `_maybe_empty_mps_cache` to the local module so `RefineWorker` keeps working; refine skips the abortable-decode monkey-patch when `asr.using_remote`. Gateway patch + deploy steps live in-repo at `deploy/z270xx/`.
 
 ### ASR fallback buffering (always-on)
-No speech is lost when ASR is temporarily unavailable (remote down + local loading): capture buffers (`SingleDeviceCapture`, `ScreenCaptureAudio`) are not consumed while `asr.available` is False (capped at `ASR_PENDING_BUFFER_CAP_S`), `get_chunk()` returns `(chunk, capture_start_ts)` so backlog segments get spoken-time timestamps (while the buffer holds ≤ `CAPTURE_RESYNC_MAX_S` the start timestamp is re-anchored to wall-clock on every captured block — sample counting alone drifts forever because the 0.5 s overlap never lets the buffer empty), and a chunk caught mid-failure is held in a single-slot retry (`SourceState.pending_chunk`, mirrors `PerSpeakerIngest._pending_retry_batch`) and re-dispatched first once ASR recovers — without re-writing it to the meeting WAV. Live dedup applies only within `DEDUP_MAX_GAP_S` of the previous segment (a phrase repeated after a pause is real speech). Swallowed ASR exceptions are logged via `recog/log_utils.py` (rate-limited).
+No speech is lost when ASR is temporarily unavailable (remote down + local loading): capture buffers (`SingleDeviceCapture`, `SubprocessPCMCapture`) are not consumed while `asr.available` is False (capped at `ASR_PENDING_BUFFER_CAP_S`), `get_chunk()` returns `(chunk, capture_start_ts)` so backlog segments get spoken-time timestamps (while the buffer holds ≤ `CAPTURE_RESYNC_MAX_S` the start timestamp is re-anchored to wall-clock on every captured block — sample counting alone drifts forever because the 0.5 s overlap never lets the buffer empty), and a chunk caught mid-failure is held in a single-slot retry (`SourceState.pending_chunk`, mirrors `PerSpeakerIngest._pending_retry_batch`) and re-dispatched first once ASR recovers — without re-writing it to the meeting WAV. Live dedup applies only within `DEDUP_MAX_GAP_S` of the previous segment (a phrase repeated after a pause is real speech). Swallowed ASR exceptions are logged via `recog/log_utils.py` (rate-limited).
 
 ### Meeting audio recording (24h retention, on by default)
 `live` records per-meeting WAVs (`audio_mic.wav` / `audio_system.wav`, 16 kHz mono int16) for segment playback via `GET /api/meetings/{id}/audio/{segment_index}`; disable with `--no-save-audio`. Load-conscious design:
@@ -126,14 +171,15 @@ On refine arrival the webapp renders tier-1 (opacity 0.6, dashed border) → tie
 
 See `docs/plans/2026-04-24-per-speaker-refine-backend.md`, `openspec/changes/per-speaker-stream-refine/`, and ADR-0019 for the decisions table and task breakdown.
 
-### Auto-spawn Copilot supervisor (meeting-triggered, on by default)
-A launchd daemon (`com.recog.copilot-supervisor.plist` → `recog/copilot_supervisor.py`) spawns a fresh headless Claude Code copilot session per conference meeting (any `is_conference_source`: KTalk / Jitsi vas3k·vkkovalev / Matrix) and tears it down after the meeting, so the manual `./recog-service.sh claude` step disappears. Lifecycle model is "по триггеру" (variant B): fresh session per meeting, zero cost between meetings, ~6–10 s cold start.
+### Auto-spawn Copilot supervisor (meeting-triggered; code default on, `.env.example` ships it off)
+A service daemon (`deploy/launchd/com.recog.copilot-supervisor.plist.in` or `deploy/systemd/recog-copilot-supervisor.service.in` → `recog/copilot_supervisor.py`) spawns a fresh headless Claude Code copilot session per conference meeting (any `is_conference_source`: KTalk / Jitsi vas3k·vkkovalev / Matrix) and tears it down after the meeting, so the manual `./recog-service.sh claude` step disappears. Lifecycle model is "по триггеру" (variant B): fresh session per meeting, zero cost between meetings, ~6–10 s cold start.
 
-- `claude -p` is impossible (`--dangerously-load-development-channels` isn't parsed by print mode, `channel_enable` needs a marketplace plugin) — the only path is an interactive TUI in a PTY. The supervisor runs it in a detached tmux on a dedicated socket (`tmux -L recog-copilot`) so its env is deterministic (from the plist) and isolated from the personal tmux.
+- `claude -p` is impossible (`--dangerously-load-development-channels` isn't parsed by print mode, `channel_enable` needs a marketplace plugin) — the only path is an interactive TUI in a PTY. The supervisor runs it in a detached tmux on a dedicated socket (`tmux -L recog-copilot`) so its env is deterministic (from the service unit) and isolated from the personal tmux.
 - **State machine** (`SessionLifecycle`, pure/no-I/O): `IDLE → SPAWNING → RUNNING → GRACE`. Inputs `meeting_started(id)/meeting_ended(id)/timer/session_died/stop_now(id)` yield commands `spawn(id)/kill/none`. A flap (`meeting_ended` then `meeting_started` with the **same** id within grace — guaranteed by `meeting_storage._find_same_day_meeting`) keeps the session alive; a different id kills + respawns. `RECOG_COPILOT_GRACE_S` (default 90) is the kill delay after `meeting_ended`; an explicit webapp Stop (`stop_now`) kills immediately with no grace — the grace window only shields conference rejoin flaps.
 - **BridgeClient**: WS to `ktalk_bridge` (default `ws://127.0.0.1:8766`) with reconnect/backoff. On connect sends `supervisor_hello`; bridge replies `meeting_state {active, meeting_id, meeting_title}` for reconciliation. `active` means a copilot session should exist: either an `is_conference_source(meta["source"])` meeting (ktalk / vas3k / vkkovalev / matrix) with a live extension client, or the bridge's armed manual-session mirror — never merely `current_meeting_path`, which is always populated. Reconcile branches: live session + no meeting → synthetic `meeting_ended` → GRACE (not instant kill, so a bridge restart mid-meeting doesn't kill the copilot — rejoin returns the same id); no session + active meeting → spawn; live session + active meeting → adopt (no respawn).
 - **Watchdog** (~2 s while a session should live): `classify_screen(text) → spawning|online|working|blocked|offline` by fixed-order rules; the known startup dialogs (dev-channels, workspace-trust) are auto-dismissed tmux-natively (`send-keys 1`, per-dialog latch); `spawning` past a 60 s deadline → `blocked` (fail-visible). Reports `copilot_agent_status {status, meeting_id}` on change + a ~5 s heartbeat; `offline` feeds `session_died` → respawn with backoff (5/15/30 s, ≤3/meeting).
 - **Status merge lives in bridge (D4)**: two authors — supervisor (screen) via `copilot_agent_status`, and `recog/copilot_channel.py` (MCP-session count) via `claude_sessions {count|null}` (`null` = unknown, not a confident 0). Bridge computes the effective status (`offline` if the supervisor is silent > 10 s OR a debounced `sessions==0` while either a conference or manual session should be alive) and broadcasts `copilot_status {status: "agent_state", ...}` to extension and subscriber clients only on effective-status change. The extension and webapp render their chips (🟢 online / 🟡 working / 🔴 blocked / ⚫ offline) independently of per-request indicators.
+- **Linux session lifecycle (independent of the supervisor)**: on Linux `TmuxRunner` wraps `tmux new-session -d` in a transient user unit — `systemd-run --user --collect --unit=recog-copilot-session --property=Type=oneshot --property=RemainAfterExit=yes --property=KillMode=control-group` — so the session lives outside the supervisor's cgroup and `systemctl --user restart recog-copilot-supervisor` does not take a live Copilot down with it; the restarted supervisor re-adopts it through the usual `alive()` probe. `Type=oneshot` + `RemainAfterExit=yes` match `tmux new-session -d` (it forks the server and returns, so without them the unit would be considered finished and garbage-collected the moment tmux detaches); no `Restart=` — respawn is the supervisor's decision. Env the user manager would not otherwise pass is forwarded explicitly (`SESSION_ENV_KEYS`: PATH, HOME, TERM, SHELL, LANG). A `RemainAfterExit` unit stays *loaded* after its session dies and `systemd-run` refuses to reuse a loaded name, so `_reset_session_unit()` stops it and waits for the name to drop before the next spawn. The unit is never installed or enabled; `restart`/`restart-supervisor` do not touch it, explicit Stop/`uninstall` clear it plus both tmux names. Detection is `platform.system() == "Linux" and shutil.which("systemd-run")` (`_linux_session_manager`), so a systemd-less Linux falls back to plain tmux; macOS keeps the plain tmux path unchanged. The watchdog still probes tmux, not the oneshot unit's `active` state.
 - **Master switch** `RECOG_COPILOT_AUTOSPAWN=1|0` (default 1) keeps the daemon connected; `0` makes only the meeting frames (`meeting_started`/`meeting_state`/`meeting_ended`) inert — manual spawn/stop and crash-respawn (`on_session_died`) work regardless of the flag (webapp plan D3).
 - **Manual sessions from the webapp** (`#/live`): a "Recog Copilot" button with agent-state chip + chat panel in `frontend/static/app.js`. Spawn/stop travel as `copilot_spawn_request {request_id}` / `copilot_stop_request {request_id}` (browser → `/api/live/stream` → frontend server → bidirectional `BridgeSubscriber` → bridge → supervisor); the supervisor maps them onto the constant synthetic lifecycle id `"manual"` (`MANUAL_MEETING_ID`, mirrored in both `ktalk_bridge.py` and `recog/copilot_supervisor.py`), so a repeated spawn is the existing same-id flap (an explicit click also resets the respawn backoff budget when no retry is pending — Start revives a session parked after 3 exhausted respawn attempts) and Stop is `stop_now` → immediate kill (no grace; the webapp reports a stop as lost if no ⚫ offline arrives within 15 s). Closing or reloading the tab does NOT stop the session — the browser holds no session state and no stop frame is sent on WS close. Error echoes bound to the originating click's `request_id`: `bridge_disconnected` (frontend server, bridge link down), `supervisor_disconnected` (bridge, no supervisor client), `conference_active` (bridge rejects spawn — never forwarded while a conference is already active; a conference starting mid-relay may see the frame delivered, but the manual flag is not armed and the originator still gets `conference_active`). Shared-audience Copilot broadcasts (`copilot_reply` plus broadcast `copilot_status` frames) fan out to `_subscriber_clients` as well as extension clients; per-request rejection echoes remain originator-only and `manual_preempted` is subscriber-only. Manual chat captures `meeting_id` as None when no conference is active, so an orphan-meeting silence-split rotation cannot drop the reply as stale.
 - **Conference precedence & known v1 desync**: with meeting-driven autospawn enabled, a conference `meeting_started` preempts a live manual session (kill + respawn under the meeting); the bridge clears `_manual_copilot_active` and broadcasts `copilot_status {status: "manual_preempted"}` to subscriber clients. With `AUTOSPAWN=0` the supervisor ignores meeting frames, so on preemption the bridge still clears its flag and emits the notice but the `"manual"` tmux session lingers untracked — only killable via explicit Stop (documented v1 limitation).
@@ -147,7 +193,8 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
   - `ai_provider.py` - AIProvider ABC, CodexCliProvider, resolve_cli() — shared AI provider interface used by increment.py and title_generator.py
   - `asr.py` - GigaAM ASR wrapper
   - `speaker_db.py` - ECAPA-TDNN embeddings matching
-  - `system_audio.py` - `ScreenCaptureAudio`: system audio via the ScreenCaptureKit Swift helper (`sck_audio_capture`, resolved from `REPO_ROOT` — the binary and its `.swift` source stay at the repo root, outside the package)
+  - `audio_capture.py` - `BufferedAudioCapture`: the buffer/overlap/re-anchor machinery shared by the mic (`SingleDeviceCapture`) and the system-audio subprocess captures. Owns `_append_locked`, `clear_buffer`, `get_chunk() -> (chunk, capture_start_ts)`; the contract is 1-D mono float32
+  - `system_audio.py` - `SubprocessPCMCapture` (generic child-process PCM reader) + `PulseAudioCapture` (Linux `parec`, follows the default sink) + `find_or_build_sck_utility` (macOS ScreenCaptureKit helper, `sck_audio_capture` resolved from `REPO_ROOT` — the binary and its `.swift` source stay at the repo root, outside the package) + `resolve_system_audio_backend` / `create_system_capture`. Manual smoke: `python -m recog.system_audio`
   - `live.py` - Real-time transcription (LiveTranscriber with decomposed methods: _setup_meeting_storage, _setup_ktalk_bridge, _start_audio_captures, _process_chunk, _handle_mic_chunk, _handle_ktalk_chunk, _handle_embedding_chunk, _process_pending, _teardown_session; module-level helpers: normalize_word, deduplicate)
   - `increment.py` - Auto-generate versioned AI summaries on ktalk_leave; multi-prompt support via generate_all(), stores per-prompt results in meetings/<id>/increments/<prompt-id>/vN.md
   - `prompt_registry.py` - Load and filter prompt definitions from prompts/*.md files (YAML frontmatter + template body)
@@ -176,16 +223,20 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
 
 ## Environment Variables
 
-Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env`:
+Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env` (`setup.sh` does both). `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL`/`RECOG_GIGAAM_REF`/`RECOG_GIGAAM_EDITABLE` are deliberately **not** in `.env`: `.env` is read by Python (`load_dotenv` in `recog/config.py`), no shell script reads it, and `setup.sh` needs those variables before it creates `.env` — they are call-shell variables (`RECOG_TORCH_INDEX_URL=… ./setup.sh`).
 
 - `HF_TOKEN` - HuggingFace token (optional, was required for pyannote diarization which is now removed)
 - `AI_PROVIDER` - `claude` | `codex` | `openrouter` (for transcript analysis)
 - `CLAUDE_MODEL` - `haiku` | `sonnet` | `opus`
 - `OPENROUTER_API_KEY` - Required if using OpenRouter
 - `MIC_SPEAKER_NAME` - Speaker label for microphone input in live mode (default: `Me`)
+- `RECOG_ASR_DEVICE` - `auto` (cuda > mps > cpu) | `cuda` | `mps` | `cpu` (default `auto`). An explicitly requested device that is unavailable raises instead of quietly landing on CPU; only an auto-resolved `cuda` is demoted to `cpu` on OOM.
+- `RECOG_TORCH_THREADS` - Optional `torch.set_num_threads()` cap for CPU inference (live and refine share one `_model_lock` and all cores). Best-effort — an unparsable value is logged and ignored.
+- `RECOG_PULSE_MONITOR_SOURCE` - Pins the PulseAudio/PipeWire monitor for the `pulse` backend (Linux) and disables follow-the-default-sink. Empty (default) = follow the current default sink.
+- `RECOG_EXTRA_WS_ORIGINS` - Comma-separated extra exact origins allowed to open the bridge / live-stream WS. Kept as a separate set so `ALLOWED_ORIGINS` in `recog/ws_origin.py` stays a literal mirror of the extension's `manifest.json` (a test asserts that equality); a new conference host must be added here **and** to `manifest.json` (separate rebuild).
 - `RECOG_BRIDGE_WS_URL` - Overrides the bridge WebSocket URL the frontend subscriber connects to (default `ws://localhost:8766`). Used by `frontend/bridge_subscriber.py` to forward `transcript_refine` events from `ktalk_bridge.py` to webapp clients (D10 — JSONL tail cannot see refine rewrites).
 - `RECOG_ASR_BACKEND` - `local` (default — repo behavior unchanged) | `remote` (offload GigaAM to the Z270XX gateway via `recog/remote_asr.py`'s `build_asr()`, with lazy local fallback + circuit breaker).
-- `RECOG_ASR_REMOTE_URL` - Gateway base URL (default `https://materkey-z270x-1.tail4799d.ts.net/asr`). Only read when `RECOG_ASR_BACKEND=remote`.
+- `RECOG_ASR_REMOTE_URL` - Gateway base URL. **No default**: `RECOG_ASR_BACKEND=remote` with an empty URL makes `build_asr()` raise at startup instead of silently serving from the local model (different RAM and latency). `scripts/deps.sh` checks the pair before any service is activated.
 - `RECOG_ASR_REMOTE_MODEL` - Model alias sent to the gateway (default `gigaam`).
 - `RECOG_ASR_REMOTE_TIMEOUT_S` - Per-request HTTP timeout (default `15`).
 - `RECOG_ASR_CIRCUIT_FAILS` - Consecutive remote failures before the circuit opens (default `3`).
@@ -193,13 +244,13 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env`:
 - `RECOG_ASR_LIVE_TIMEOUT_S` - Remote timeout for live chunk/batch requests (default `5`). Refine/offline keep `RECOG_ASR_REMOTE_TIMEOUT_S`.
 - `DEDUP_MAX_GAP_S` - Live dedup window (default `2.0`): last-words dedup applies only to chunks captured within this many seconds of the previous segment.
 - `ASR_PENDING_BUFFER_CAP_S` - Max audio buffered in memory while ASR is unavailable (default `600`).
-- `RECOG_COPILOT_AUTOSPAWN` - Gate for meeting-driven auto-spawn only (`1` default | `0` keeps the daemon connected and makes meeting frames inert; manual webapp spawn/stop and crash-respawn work regardless — webapp plan D3). Read by `recog/copilot_supervisor.py`.
+- `RECOG_COPILOT_AUTOSPAWN` - Gate for meeting-driven auto-spawn only (code default `1`, but `.env.example` ships `0` so a fresh install never spawns Claude unattended | `0` keeps the daemon connected and makes meeting frames inert; manual webapp spawn/stop and crash-respawn work regardless — webapp plan D3). Read by `recog/copilot_supervisor.py`.
 - `RECOG_COPILOT_GRACE_S` - Seconds the supervisor waits after `meeting_ended` before killing the copilot tmux session (default `90`); cancelled by a same-id `meeting_started` (flap). Not used for an explicit webapp Stop — that kills immediately.
 - `RECOG_COPILOT_MCP_URL` - URL of the copilot MCP daemon the spawned Claude session connects to (default `http://127.0.0.1:8767/mcp`).
 
 ## Data Files
 
-- `speakers_ecapa.json` - Speaker embedding database
+- `speakers_ecapa.json` - Speaker embedding database (gitignored — real voice embeddings; `setup.sh` seeds it from `speakers_ecapa.json.example`)
 - `meetings/` - Stored meeting transcripts (JSONL format, gitignored)
 - `prompts/` - Prompt definitions for AI analysis (.md files with YAML frontmatter); prompt ID = filename stem
 - `logs/` - Service logs (gitignored)
@@ -216,8 +267,10 @@ python mp4_notes.py --help           # CLI smoke test
 
 Architecture Decision Records in `adr/`:
 - **ADR-0006**: Dual venv subprocess (obsolete — pyannote diarization removed, single venv now)
-- **ADR-0010**: Live transcription mode
+- **ADR-0010**: Live transcription mode (audio-capture part superseded by ADR-0021)
 - **ADR-0011**: Meeting storage
 - **ADR-0013**: AI transcript analysis
 - **ADR-0018**: Per-speaker ASR pipeline (PCM transport from Chrome extension; always-on for KTalk meetings)
 - **ADR-0019**: Stream-refine — tier-2 re-transcription with 20 s context (always-on)
+- **ADR-0020**: Remote GigaAM offload with lazy local fallback (opt-in)
+- **ADR-0021**: Cross-platform capture and services (parec system audio, `systemd --user`, rendered unit templates)
