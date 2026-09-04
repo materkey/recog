@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 import numpy as np
 import torch
 
+from . import config
 from .config import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP
 from .log_utils import log_rate_limited
 from .models import Segment
@@ -43,6 +44,101 @@ def _mps_autoreleasepool(device: str) -> Iterator[None]:
         yield
 
 
+def _cuda_available() -> bool:
+    """True if this torch build can actually reach a CUDA device."""
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        # A broken driver/runtime raises here on some hosts; treat as absent.
+        return False
+
+
+def _mps_available() -> bool:
+    """True on Apple Silicon builds where the MPS backend is usable.
+
+    `torch.backends.mps` is missing entirely on Linux CPU/CUDA wheels, so the
+    attribute is probed instead of assumed.
+    """
+    mps = getattr(torch.backends, "mps", None)
+    if mps is None:
+        return False
+    try:
+        return bool(mps.is_available())
+    except Exception:
+        return False
+
+
+def resolve_device(spec: Optional[str] = None) -> str:
+    """Resolve an ASR device spec into a concrete torch device string.
+
+    `"auto"` (the default) probes cuda > mps > cpu. An explicitly requested
+    device that is unavailable raises `RuntimeError` — silently demoting a
+    host that asked for a GPU hides a misconfigured machine. An unknown spec
+    raises `ValueError`.
+    """
+    normalized = (spec or "auto").strip().lower()
+
+    if normalized == "auto":
+        if _cuda_available():
+            return "cuda"
+        if _mps_available():
+            return "mps"
+        return "cpu"
+    if normalized == "cpu":
+        return "cpu"
+    if normalized == "cuda":
+        if not _cuda_available():
+            raise RuntimeError(
+                "RECOG_ASR_DEVICE=cuda, but torch.cuda.is_available() is False. "
+                "Install a CUDA-enabled torch build or use auto/cpu."
+            )
+        return "cuda"
+    if normalized == "mps":
+        if not _mps_available():
+            raise RuntimeError(
+                "RECOG_ASR_DEVICE=mps, but the MPS backend is unavailable. "
+                "MPS needs macOS on Apple Silicon; use auto/cpu elsewhere."
+            )
+        return "mps"
+
+    raise ValueError(
+        f"Unknown ASR device {spec!r}; expected one of: auto, cuda, mps, cpu"
+    )
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """True for the two shapes a CUDA out-of-memory failure arrives in."""
+    oom_cls = getattr(torch.cuda, "OutOfMemoryError", None)
+    if oom_cls is not None and isinstance(exc, oom_cls):
+        return True
+    return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+
+
+def _apply_torch_threads() -> None:
+    """Honour RECOG_TORCH_THREADS, if set. Best-effort — never fatal."""
+    raw = config.RECOG_TORCH_THREADS
+    if not raw:
+        return
+    try:
+        threads = int(raw)
+        if threads <= 0:
+            raise ValueError(raw)
+    except (TypeError, ValueError):
+        print(
+            f"[ASRModule] ignoring RECOG_TORCH_THREADS={raw!r}: "
+            "expected a positive integer",
+            file=sys.stderr,
+        )
+        return
+    try:
+        torch.set_num_threads(threads)
+    except Exception as e:
+        print(
+            f"[ASRModule] torch.set_num_threads({threads}) failed: {e}",
+            file=sys.stderr,
+        )
+
+
 class ASRModule:
     """Модуль для транскрибирования с GigaAM."""
 
@@ -59,10 +155,14 @@ class ASRModule:
         self.model_name = model_name
         # Upstream gigaam.load_model treats device=None as "cuda" if available
         # else "cpu" — it does not probe MPS. Resolve here so Apple-Silicon
-        # hosts default to MPS without the caller opting in explicitly.
-        if device is None:
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
-        self.device = device
+        # hosts default to MPS and Linux hosts pick up CUDA, with
+        # RECOG_ASR_DEVICE as the override.
+        spec = config.RECOG_ASR_DEVICE if device is None else device
+        # Only an auto-resolved cuda may be demoted to cpu on OOM: an explicit
+        # request names the device the operator wants, failures included.
+        self._device_auto = str(spec).strip().lower() == "auto"
+        self.device = resolve_device(spec)
+        _apply_torch_threads()
         self.model = None
         # Serializes model load and model.forward across threads: live
         # mic/system ASR runs on the main loop, PerSpeakerIngest batches run
@@ -108,7 +208,30 @@ class ASRModule:
                             f"Загрузка модели {self.model_name} (device={self.device})...",
                             file=sys.stderr,
                         )
-                    self.model = self.gigaam.load_model(self.model_name, device=self.device)
+                    try:
+                        self.model = self.gigaam.load_model(
+                            self.model_name, device=self.device
+                        )
+                    except Exception as e:
+                        if not (
+                            self.device == "cuda"
+                            and self._device_auto
+                            and _is_cuda_oom(e)
+                        ):
+                            raise
+                        # An occupied or small card must not put the live
+                        # service into a systemd restart loop — CPU is a
+                        # measured-viable fallback (RTF 0.05–0.2).
+                        print(
+                            f"[ASRModule] CUDA out of memory ({e}); "
+                            "retrying on cpu",
+                            file=sys.stderr,
+                        )
+                        self.device = "cpu"
+                        self._mps_inference_count = 0
+                        self.model = self.gigaam.load_model(
+                            self.model_name, device="cpu"
+                        )
         return self.model
 
     def transcribe_longform(self, audio_path: str) -> List[Segment]:

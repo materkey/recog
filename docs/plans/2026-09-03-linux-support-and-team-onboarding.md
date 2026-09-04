@@ -57,13 +57,13 @@
 - [x] Коммит: `feat: select system audio backend from the CLI`
 
 ### Task 5: feat: выбор устройства ASR `RECOG_ASR_DEVICE`
-- [ ] Прочитать подраздел «5. feat: выбор устройства ASR `RECOG_ASR_DEVICE`» ниже
-- [ ] `recog/config.py`: `RECOG_ASR_DEVICE` (`auto|cuda|mps|cpu`, дефолт `auto`)
-- [ ] `recog/asr.py`: `resolve_device(spec)` (`auto` → cuda > mps > cpu; явное недоступное — `RuntimeError`; неизвестное — `ValueError`), `ASRModule.__init__(device=None)` использует его; MPS-контракты не трогать
-- [ ] CUDA OOM при `auto` → warning и повтор на `cpu`; при явном `cuda` исключение пробрасывается
-- [ ] Опциональный `RECOG_TORCH_THREADS` → `torch.set_num_threads()`
-- [ ] `tests/test_asr.py`: monkeypatch-варианты приоритета устройств, явный `cpu` при доступном cuda, env override, OOM-fallback и его отсутствие при явном `cuda`
-- [ ] Коммит: `feat: make the ASR device configurable with CUDA support`
+- [x] Прочитать подраздел «5. feat: выбор устройства ASR `RECOG_ASR_DEVICE`» ниже
+- [x] `recog/config.py`: `RECOG_ASR_DEVICE` (`auto|cuda|mps|cpu`, дефолт `auto`)
+- [x] `recog/asr.py`: `resolve_device(spec)` (`auto` → cuda > mps > cpu; явное недоступное — `RuntimeError`; неизвестное — `ValueError`), `ASRModule.__init__(device=None)` использует его; MPS-контракты не трогать
+- [x] CUDA OOM при `auto` → warning и повтор на `cpu`; при явном `cuda` исключение пробрасывается
+- [x] Опциональный `RECOG_TORCH_THREADS` → `torch.set_num_threads()`
+- [x] `tests/test_asr.py`: monkeypatch-варианты приоритета устройств, явный `cpu` при доступном cuda, env override, OOM-fallback и его отсутствие при явном `cuda`
+- [x] Коммит: `feat: make the ASR device configurable with CUDA support`
 
 ### Task 6: fix: ffmpeg из PATH
 - [ ] Прочитать подраздел «6. fix: ffmpeg из PATH» ниже
