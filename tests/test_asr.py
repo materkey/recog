@@ -26,7 +26,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from recog.asr import ASRModule
+from recog import asr as asr_module
+from recog.asr import ASRModule, resolve_device
 
 
 @dataclass
@@ -356,43 +357,243 @@ def test_transcribe_with_timestamps_accepts_torch_tensor():
     assert not os.path.exists(tmp_path)
 
 
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(),
-    reason="MPS backend not available on this machine",
-)
-def test_asrmodule_autodetects_mps_device_when_device_none():
+# -----------------------------------------------------------------------------
+# Device resolution (RECOG_ASR_DEVICE) + CUDA OOM fallback
+# -----------------------------------------------------------------------------
+
+
+def _stub_availability(monkeypatch, *, cuda: bool, mps: bool) -> None:
+    """Pin both accelerator probes so device tests hold on any host."""
+    monkeypatch.setattr(asr_module, "_cuda_available", lambda: cuda)
+    monkeypatch.setattr(asr_module, "_mps_available", lambda: mps)
+
+
+def test_resolve_device_auto_prefers_cuda_over_mps(monkeypatch):
     """
-    given: a host with torch.backends.mps.is_available() == True
+    given: both CUDA and MPS report available
+    when: resolve_device("auto") is called
+    then: "cuda" wins the priority order
+    """
+    _stub_availability(monkeypatch, cuda=True, mps=True)
+    assert resolve_device("auto") == "cuda"
+
+
+def test_resolve_device_auto_falls_back_to_mps_without_cuda(monkeypatch):
+    """
+    given: no CUDA but an available MPS backend
+    when: resolve_device("auto") is called
+    then: "mps" is chosen
+    """
+    _stub_availability(monkeypatch, cuda=False, mps=True)
+    assert resolve_device("auto") == "mps"
+
+
+def test_resolve_device_auto_falls_back_to_cpu(monkeypatch):
+    """
+    given: neither CUDA nor MPS is available
+    when: resolve_device("auto") is called
+    then: "cpu" is chosen
+    """
+    _stub_availability(monkeypatch, cuda=False, mps=False)
+    assert resolve_device("auto") == "cpu"
+
+
+def test_resolve_device_explicit_cpu_wins_over_available_cuda(monkeypatch):
+    """
+    given: CUDA is available
+    when: resolve_device("cpu") is called
+    then: the explicit request is honoured — no auto-detect
+    """
+    _stub_availability(monkeypatch, cuda=True, mps=True)
+    assert resolve_device("cpu") == "cpu"
+
+
+@pytest.mark.parametrize("spec", ["cuda", "mps"])
+def test_resolve_device_explicit_unavailable_raises_runtime_error(monkeypatch, spec):
+    """
+    given: an explicitly requested accelerator that is not available
+    when: resolve_device is called
+    then: RuntimeError is raised (fail-fast, no silent CPU demotion)
+    """
+    _stub_availability(monkeypatch, cuda=False, mps=False)
+    with pytest.raises(RuntimeError, match=spec):
+        resolve_device(spec)
+
+
+def test_resolve_device_unknown_spec_raises_value_error(monkeypatch):
+    """
+    given: a device spec outside auto/cuda/mps/cpu
+    when: resolve_device is called
+    then: ValueError is raised
+    """
+    _stub_availability(monkeypatch, cuda=True, mps=True)
+    with pytest.raises(ValueError, match="Unknown ASR device"):
+        resolve_device("tpu")
+
+
+def test_asrmodule_uses_config_device_when_device_none(monkeypatch):
+    """
+    given: RECOG_ASR_DEVICE="cpu" in config and an available CUDA host
     when: ASRModule is instantiated with the default device=None
-    then: self.device is auto-resolved to "mps"
+    then: the env-configured device wins over auto-detect
     """
+    _stub_availability(monkeypatch, cuda=True, mps=True)
+    monkeypatch.setattr(asr_module.config, "RECOG_ASR_DEVICE", "cpu")
     asr = ASRModule(device=None)
-    assert asr.device == "mps"
+    assert asr.device == "cpu"
+    assert asr._device_auto is False
+
+
+def test_asrmodule_auto_config_resolves_cuda(monkeypatch):
+    """
+    given: RECOG_ASR_DEVICE="auto" and CUDA available
+    when: ASRModule is instantiated with device=None
+    then: self.device is "cuda" and the auto flag is set (OOM fallback armed)
+    """
+    _stub_availability(monkeypatch, cuda=True, mps=False)
+    monkeypatch.setattr(asr_module.config, "RECOG_ASR_DEVICE", "auto")
+    asr = ASRModule(device=None)
+    assert asr.device == "cuda"
+    assert asr._device_auto is True
 
 
 def test_asrmodule_explicit_cpu_overrides_mps_autodetect(monkeypatch):
     """
-    given: an explicit device="cpu" kwarg and MPS is available
+    given: an explicit device="cpu" kwarg while MPS is available
     when: ASRModule is instantiated
     then: self.device stays "cpu" — auto-detect path is bypassed
-
-    Without the monkeypatch, this test would be tautological on CPU-only
-    hosts: both the explicit and auto-detect branches yield "cpu".
     """
-    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    _stub_availability(monkeypatch, cuda=False, mps=True)
     asr = ASRModule(device="cpu")
     assert asr.device == "cpu"
 
 
 def test_asrmodule_falls_back_to_cpu_when_mps_unavailable(monkeypatch):
     """
-    given: torch.backends.mps.is_available() returns False
-    when: ASRModule is instantiated with device=None
+    given: no accelerator is available
+    when: ASRModule is instantiated with device=None under RECOG_ASR_DEVICE=auto
     then: self.device falls back to "cpu"
     """
-    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    _stub_availability(monkeypatch, cuda=False, mps=False)
+    monkeypatch.setattr(asr_module.config, "RECOG_ASR_DEVICE", "auto")
     asr = ASRModule(device=None)
     assert asr.device == "cpu"
+
+
+def _make_loadable_asr(monkeypatch, *, device: str, load_side_effect) -> ASRModule:
+    """ASRModule pinned to `device` with a stubbed gigaam.load_model."""
+    _stub_availability(monkeypatch, cuda=True, mps=False)
+    monkeypatch.setattr(asr_module.config, "RECOG_ASR_DEVICE", "auto")
+    asr = ASRModule(device=device)
+    fake_gigaam = MagicMock()
+    fake_gigaam.load_model.side_effect = load_side_effect
+    asr.gigaam = fake_gigaam
+    return asr
+
+
+def test_load_model_retries_on_cpu_after_cuda_oom(monkeypatch):
+    """
+    given: an auto-resolved cuda device whose first load raises CUDA OOM
+    when: load_model is called
+    then: the model is re-loaded on cpu and self.device becomes "cpu"
+    """
+    sentinel = object()
+    calls: list[str] = []
+
+    def side_effect(_name, device=None):
+        calls.append(device)
+        if device == "cuda":
+            raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+        return sentinel
+
+    asr = _make_loadable_asr(monkeypatch, device=None, load_side_effect=side_effect)
+    assert asr.device == "cuda"
+
+    model = asr.load_model(quiet=True)
+
+    assert model is sentinel
+    assert asr.device == "cpu"
+    assert calls == ["cuda", "cpu"]
+
+
+def test_load_model_retries_on_typed_cuda_oom(monkeypatch):
+    """
+    given: the failure arrives as torch.cuda.OutOfMemoryError, not a RuntimeError
+    when: load_model is called on an auto-resolved cuda device
+    then: the same cpu retry happens
+    """
+    oom_cls = getattr(torch.cuda, "OutOfMemoryError", None)
+    if oom_cls is None:
+        pytest.skip("this torch build has no torch.cuda.OutOfMemoryError")
+    sentinel = object()
+
+    def side_effect(_name, device=None):
+        if device == "cuda":
+            raise oom_cls("out of memory")
+        return sentinel
+
+    asr = _make_loadable_asr(monkeypatch, device=None, load_side_effect=side_effect)
+    assert asr.load_model(quiet=True) is sentinel
+    assert asr.device == "cpu"
+
+
+def test_load_model_propagates_oom_for_explicit_cuda(monkeypatch):
+    """
+    given: device="cuda" was requested explicitly and the load OOMs
+    when: load_model is called
+    then: the exception propagates — no silent CPU demotion
+    """
+    def side_effect(_name, device=None):
+        raise RuntimeError("CUDA out of memory")
+
+    asr = _make_loadable_asr(monkeypatch, device="cuda", load_side_effect=side_effect)
+    with pytest.raises(RuntimeError, match="out of memory"):
+        asr.load_model(quiet=True)
+    assert asr.device == "cuda"
+
+
+def test_load_model_propagates_non_oom_errors(monkeypatch):
+    """
+    given: an auto-resolved cuda device whose load fails for another reason
+    when: load_model is called
+    then: the error propagates instead of hiding a real bug behind a cpu retry
+    """
+    def side_effect(_name, device=None):
+        raise RuntimeError("checkpoint is corrupted")
+
+    asr = _make_loadable_asr(monkeypatch, device=None, load_side_effect=side_effect)
+    with pytest.raises(RuntimeError, match="corrupted"):
+        asr.load_model(quiet=True)
+    assert asr.device == "cuda"
+
+
+def test_asrmodule_applies_torch_threads(monkeypatch):
+    """
+    given: RECOG_TORCH_THREADS="3"
+    when: ASRModule is instantiated
+    then: torch.set_num_threads is called with 3
+    """
+    _stub_availability(monkeypatch, cuda=False, mps=False)
+    monkeypatch.setattr(asr_module.config, "RECOG_TORCH_THREADS", "3")
+    set_threads = MagicMock()
+    monkeypatch.setattr(torch, "set_num_threads", set_threads)
+    ASRModule(device="cpu")
+    set_threads.assert_called_once_with(3)
+
+
+@pytest.mark.parametrize("raw", ["", "many", "0"])
+def test_asrmodule_ignores_unusable_torch_threads(monkeypatch, raw):
+    """
+    given: RECOG_TORCH_THREADS unset or not a positive integer
+    when: ASRModule is instantiated
+    then: torch.set_num_threads is left alone
+    """
+    _stub_availability(monkeypatch, cuda=False, mps=False)
+    monkeypatch.setattr(asr_module.config, "RECOG_TORCH_THREADS", raw)
+    set_threads = MagicMock()
+    monkeypatch.setattr(torch, "set_num_threads", set_threads)
+    ASRModule(device="cpu")
+    set_threads.assert_not_called()
 
 
 # -----------------------------------------------------------------------------
