@@ -74,13 +74,13 @@ const api = {
 
     async getPrompts() {
         const res = await fetch('/api/prompts');
-        if (!res.ok) return [];
+        if (!res.ok) throw new Error('Failed to load prompts');
         return res.json();
     },
 
     async getIncrements(meetingId) {
         const res = await fetch(`/api/meetings/${meetingId}/increments`);
-        if (!res.ok) return {};
+        if (!res.ok) throw new Error('Failed to load saved results');
         return res.json();
     },
 
@@ -2074,8 +2074,10 @@ function showNotification(message, type = 'success') {
 
 let aiResponses = {};  // Store responses for each provider
 let aiProviderNames = {};  // Store provider display names
-let activeAiTab = 'claude';
+let activeAiTab = null;
 let aiEventSource = null;
+let aiModalSession = null;
+let aiContentRequest = 0;
 let incrementPollTimer = null;
 let _incrementState = null;  // Stored increment modal state, including participant selection
 const SYSTEM_PARTICIPANT_ID = '__system__';
@@ -2083,87 +2085,148 @@ const SYSTEM_PARTICIPANT_ID = '__system__';
 async function analyzeIncrement() {
     const meeting = views.meeting;
     if (!meeting.id) return;
-
-    // Clear stale state from previous meeting
-    _incrementState = null;
-
-    // Fetch prompts and stored increments in parallel
-    try {
-        const [prompts, increments] = await Promise.all([
-            api.getPrompts(),
-            api.getIncrements(meeting.id)
-        ]);
-
-        const promptIds = Object.keys(increments);
-        if (promptIds.length > 0) {
-            showStoredIncrements(meeting.id, increments, prompts);
-            return;
-        }
-    } catch (e) {
-        console.error('Failed to fetch stored increments:', e);
-    }
-
-    // Fall back to SSE generation
-    generateIncrementSSE(meeting.id);
+    closeAiModal();
+    aiModalSession = {
+        meetingId: meeting.id, mode: 'saved', historyRequest: 0,
+        historyStatus: 'loading', runStatus: 'idle', providerStates: {}, runError: ''
+    };
+    aiResponses = {};
+    aiProviderNames = {};
+    activeAiTab = null;
+    document.getElementById('ai-modal').style.display = 'flex';
+    renderNewAnalysis();
+    switchAiMode('saved');
+    await loadAiHistory(true);
 }
 
-function generateIncrementSSE(meetingId) {
-    // Close any existing connection
-    if (aiEventSource) {
-        aiEventSource.close();
-        aiEventSource = null;
+async function loadAiHistory(selectEmpty = false) {
+    const session = aiModalSession;
+    if (!session) return;
+    const request = ++session.historyRequest;
+    session.historyStatus = 'loading';
+    const saved = document.getElementById('ai-saved-view');
+    saved.querySelector('.modal-tabs').innerHTML = '';
+    saved.querySelector('.modal-body').innerHTML = '<div class="loading">Загрузка сохранённых результатов...</div>';
+    saved.querySelector('.modal-footer').innerHTML = '<button class="btn" onclick="closeAiModal()">Close</button>';
+    try {
+        const [prompts, increments] = await Promise.all([
+            api.getPrompts(), api.getIncrements(session.meetingId)
+        ]);
+        if (aiModalSession !== session || session.historyRequest !== request) return;
+        session.historyStatus = 'ready';
+        if (Object.keys(increments).length) {
+            showStoredIncrements(session.meetingId, increments, prompts);
+        } else {
+            saved.querySelector('.modal-body').innerHTML = '<div class="empty">Сохранённых результатов пока нет.</div>';
+            if (selectEmpty && session.mode === 'saved') switchAiMode('new');
+        }
+    } catch (e) {
+        if (aiModalSession !== session || session.historyRequest !== request) return;
+        session.historyStatus = 'error';
+        saved.querySelector('.modal-body').innerHTML =
+            '<div class="error">Не удалось загрузить сохранённые результаты: ' + escapeHtml(e.message) + '</div>' +
+            '<button class="btn" onclick="loadAiHistory()">Повторить загрузку</button>';
     }
+}
+
+function switchAiMode(mode) {
+    if (!aiModalSession || !['saved', 'new'].includes(mode)) return;
+    aiModalSession.mode = mode;
+    aiContentRequest++;
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
     }
+    document.querySelectorAll('#ai-modal [data-ai-mode]').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.aiMode === mode);
+        btn.setAttribute('aria-pressed', String(btn.dataset.aiMode === mode));
+    });
+    document.getElementById('ai-saved-view').hidden = mode !== 'saved';
+    document.getElementById('ai-new-view').hidden = mode !== 'new';
+    updateAiRunNotice();
+    if (mode === 'saved' && _incrementState) {
+        if (_incrementState.needsRefresh) {
+            _incrementState.needsRefresh = false;
+            switchPromptTab(_incrementState.meetingId, _incrementState.currentPromptId);
+        } else if (_incrementState.currentVersion == null) {
+            renderMissingIncrement();
+        } else if (!_incrementState.content) {
+            loadIncrementContent(_incrementState.meetingId, _incrementState.currentPromptId, _incrementState.currentVersion);
+        }
+    }
+}
 
-    // Reset state
+function updateAiRunNotice() {
+    const notice = document.getElementById('ai-run-notice');
+    notice.hidden = !aiModalSession || aiModalSession.mode !== 'saved' || aiModalSession.runStatus === 'idle';
+    notice.textContent = aiModalSession?.runStatus === 'running'
+        ? 'Новый анализ продолжается. Результаты — во вкладке «Новый анализ».'
+        : 'Новый анализ завершён. Результаты — во вкладке «Новый анализ».';
+}
+
+function renderNewAnalysis() {
+    const session = aiModalSession;
+    if (!session) return;
+    const providers = Object.keys(aiProviderNames);
+    document.getElementById('ai-provider-tabs').innerHTML = providers.map(function(provider) {
+        return '<button class="tab-btn' + (provider === activeAiTab ? ' active' : '') +
+            '" data-provider="' + escapeHtml(provider) + '" onclick="switchAiTab(\'' + escapeJsString(provider) + '\')">' +
+            escapeHtml(aiProviderNames[provider]) + '</button>';
+    }).join('');
+    const content = document.getElementById('ai-new-content');
+    content.innerHTML = (session.runError ? '<div class="error">' + escapeHtml(session.runError) + '</div>' : '') +
+        (providers.length ? providers.map(function(provider) {
+            const state = session.providerStates[provider];
+            const answer = aiResponses[provider];
+            return '<div id="ai-response-' + escapeHtml(provider) + '" class="ai-tab-content' +
+                (provider === activeAiTab ? ' active' : '') + '">' +
+                '<div class="increment-result-meta"><span class="increment-model-badge">Model: ' +
+                escapeHtml(aiProviderNames[provider]) + '</span></div>' +
+                (answer ? '<div class="ai-answer">' + (state.status === 'running' ? '<span class="streaming-indicator">●</span> ' : '') + renderMarkdown(answer) + '</div>' : '') +
+                (state.error ? '<div class="error">' + escapeHtml(state.error) + '</div>' :
+                    !answer && state.status === 'running' ? '<div class="loading">Анализ...</div>' : '') + '</div>';
+        }).join('') : session.runStatus === 'running' ? '<div class="loading">Подключение...</div>' :
+            session.runStatus === 'idle' ? '<div class="empty">Нажмите «Запустить анализ», чтобы начать.</div>' : '');
+    const button = document.getElementById('ai-run-button');
+    button.disabled = session.runStatus === 'running';
+    button.textContent = session.runStatus === 'running' ? 'Анализ выполняется...' :
+        session.runStatus === 'idle' ? 'Запустить анализ' : 'Запустить заново';
+    updateAiRunNotice();
+}
+
+function generateIncrementSSE() {
+    const session = aiModalSession;
+    if (!session || session.runStatus === 'running') return;
     aiResponses = {};
     aiProviderNames = {};
-    activeAiTab = 'claude';
-
-    // Show modal with SSE UI
-    const modal = document.getElementById('ai-modal');
-    modal.style.display = 'flex';
-
-    modal.querySelector('.modal-header h3').textContent = 'AI Analysis';
-    modal.querySelector('.modal-tabs').innerHTML =
-        '<button class="tab-btn active" data-provider="claude" onclick="switchAiTab(\'claude\')">Claude</button>' +
-        '<button class="tab-btn" data-provider="codex" onclick="switchAiTab(\'codex\')">Codex</button>';
-    modal.querySelector('.modal-body').innerHTML =
-        '<div id="ai-response-claude" class="ai-tab-content active"><div class="loading">Connecting to Claude...</div></div>' +
-        '<div id="ai-response-codex" class="ai-tab-content"><div class="loading">Connecting to Codex...</div></div>';
-    modal.querySelector('.modal-footer').innerHTML =
-        '<button class="btn" onclick="copyAiResponse()">Copy</button>' +
-        '<button class="btn" onclick="closeAiModal()">Close</button>';
-
-    // Use SSE for streaming
-    const url = `/api/meetings/${meetingId}/analyze-stream?question=increment`;
-    aiEventSource = new EventSource(url);
-
-    aiEventSource.onmessage = (event) => {
+    activeAiTab = null;
+    session.providerStates = {};
+    session.runStatus = 'running';
+    session.runError = '';
+    renderNewAnalysis();
+    const source = new EventSource(`/api/meetings/${encodeURIComponent(session.meetingId)}/analyze-stream?question=increment`);
+    aiEventSource = source;
+    source.onmessage = (event) => {
+        if (aiModalSession !== session || aiEventSource !== source) return;
         try {
-            const data = JSON.parse(event.data);
-            handleAiStreamEvent(data);
+            handleAiStreamEvent(JSON.parse(event.data));
         } catch (e) {
             console.error('Failed to parse SSE event:', e);
         }
     };
-
-    aiEventSource.onerror = (e) => {
-        console.error('SSE error:', e);
-        aiEventSource.close();
-        aiEventSource = null;
-
-        // Show error if no responses received
-        if (Object.keys(aiResponses).length === 0) {
-            document.getElementById('ai-response-claude').innerHTML =
-                '<div class="error">Connection error</div>';
-            document.getElementById('ai-response-codex').innerHTML =
-                '<div class="error">Connection error</div>';
-        }
+    source.onerror = () => {
+        if (aiModalSession !== session || aiEventSource !== source) return;
+        session.runError = 'Соединение прервано. Полученные результаты показаны ниже; анализ можно запустить заново.';
+        finishAiStream();
     };
+}
+
+function finishAiStream() {
+    if (aiEventSource) aiEventSource.close();
+    aiEventSource = null;
+    aiModalSession.runStatus = 'complete';
+    Object.values(aiModalSession.providerStates).forEach(function(state) { state.status = 'done'; });
+    renderNewAnalysis();
 }
 
 function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
@@ -2171,10 +2234,8 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
     }
-    if (aiEventSource) {
-        aiEventSource.close();
-        aiEventSource = null;
-    }
+    if (!aiModalSession || aiModalSession.meetingId !== meetingId) return;
+    const previous = _incrementState;
 
     // Build prompt name lookup
     const promptNames = {};
@@ -2203,10 +2264,7 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
         name: localNames.length > 0 ? localNames.join(', ') : 'Me'
     }].concat(otherParticipants);
 
-    const modal = document.getElementById('ai-modal');
-    modal.style.display = 'flex';
-
-    modal.querySelector('.modal-header h3').textContent = 'AI Analysis';
+    const modal = document.getElementById('ai-saved-view');
 
     // Level 1: prompt tabs
     const promptTabsHtml = promptIds.map(function(pid, i) {
@@ -2237,11 +2295,14 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
         meetingId: meetingId,
         incrementsByPrompt: incrementsByPrompt,
         promptNames: promptNames,
-        currentPromptId: promptIds[0],
+        currentPromptId: previous && promptIds.includes(previous.currentPromptId) ? previous.currentPromptId : promptIds[0],
         currentVersion: null,
-        currentParticipantId: null,
+        currentParticipantId: previous ? previous.currentParticipantId : null,
         participants: incrementParticipants,
-        pendingGenerations: new Set()
+        pendingGenerations: previous ? previous.pendingGenerations : new Set(),
+        generationErrors: previous ? previous.generationErrors : {},
+        content: '',
+        selectionRevision: 0
     };
 
     const participantSelect = document.getElementById('increment-participant-select');
@@ -2252,13 +2313,22 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
         participantSelect.appendChild(option);
     });
 
-    // Load first prompt
-    switchPromptTab(meetingId, promptIds[0]);
+    participantSelect.value = _incrementState.currentParticipantId || '';
+    switchPromptTab(meetingId, _incrementState.currentPromptId);
 }
 
 function switchPromptTab(meetingId, promptId) {
+    if (!_incrementState || _incrementState.meetingId !== meetingId) return;
+    _incrementState.needsRefresh = false;
+    aiContentRequest++;
+    _incrementState.selectionRevision++;
+    _incrementState.content = '';
+    if (incrementPollTimer) {
+        clearInterval(incrementPollTimer);
+        incrementPollTimer = null;
+    }
     // Update Level 1 prompt tab active state
-    document.querySelectorAll('#ai-modal .modal-tabs .tab-btn').forEach(function(btn) {
+    document.querySelectorAll('#ai-saved-view .modal-tabs .tab-btn').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.promptId === promptId);
     });
 
@@ -2281,12 +2351,8 @@ function switchPromptTab(meetingId, promptId) {
 
     if (metas.length === 0) {
         if (versionTabsContainer) versionTabsContainer.innerHTML = '';
-        if (isParticipantIncrement) {
-            generateParticipantIncrement();
-        } else {
-            document.getElementById('increment-content').innerHTML =
-                '<div class="empty">No versions generated yet</div>';
-        }
+        _incrementState.currentVersion = null;
+        renderMissingIncrement();
         return;
     }
 
@@ -2312,6 +2378,20 @@ function switchPromptTab(meetingId, promptId) {
     loadIncrementContent(meetingId, promptId, latestVersion);
 }
 
+function renderMissingIncrement() {
+    const state = _incrementState;
+    if (!state) return;
+    const key = state.currentParticipantId || '__local__';
+    const isParticipantIncrement = state.currentPromptId === 'my-increment';
+    const pending = isParticipantIncrement && state.pendingGenerations.has(key);
+    const error = isParticipantIncrement && state.generationErrors[key];
+    document.getElementById('increment-content').innerHTML = pending
+        ? '<div class="loading">Generating increment...</div>'
+        : (error ? '<div class="error">Generation failed: ' + escapeHtml(error) + '</div>' :
+            '<div class="empty">Сохранённых версий пока нет.</div>') +
+            (isParticipantIncrement ? '<button class="btn" onclick="generateParticipantIncrement()">Создать сохранённый результат</button>' : '');
+}
+
 function switchIncrementParticipant(participantId) {
     if (!_incrementState) return;
 
@@ -2320,7 +2400,7 @@ function switchIncrementParticipant(participantId) {
 }
 
 async function generateParticipantIncrement() {
-    if (!_incrementState || _incrementState.currentPromptId !== 'my-increment') return;
+    if (aiModalSession?.mode !== 'saved' || !_incrementState || _incrementState.currentPromptId !== 'my-increment') return;
 
     const state = _incrementState;
     const meetingId = state.meetingId;
@@ -2334,6 +2414,7 @@ async function generateParticipantIncrement() {
     }
 
     state.pendingGenerations.add(pendingKey);
+    delete state.generationErrors[pendingKey];
     if (container) container.innerHTML = '<div class="loading">Generating increment...</div>';
 
     try {
@@ -2354,20 +2435,24 @@ async function generateParticipantIncrement() {
         const increments = await api.getIncrements(meetingId);
         if (_incrementState !== state) return;
         state.incrementsByPrompt = increments;
+        state.needsRefresh = true;
 
-        if (state.currentPromptId === 'my-increment' && state.currentParticipantId === participantId) {
+        if (aiModalSession?.mode === 'saved' && state.currentPromptId === 'my-increment' && state.currentParticipantId === participantId) {
             switchPromptTab(meetingId, 'my-increment');
         }
     } catch (e) {
-        if (_incrementState === state && state.currentParticipantId === participantId && container) {
-            container.innerHTML = '<div class="error">Generation failed: ' + escapeHtml(e.message) + '</div>';
-        }
+        if (_incrementState === state) state.generationErrors[pendingKey] = e.message;
     } finally {
         state.pendingGenerations.delete(pendingKey);
+        if (_incrementState === state && aiModalSession?.mode === 'saved' &&
+            state.currentPromptId === 'my-increment' && state.currentParticipantId === participantId &&
+            state.currentVersion == null) renderMissingIncrement();
     }
 }
 
 function switchIncrementVersion(meetingId, promptId, version) {
+    if (!_incrementState) return;
+    _incrementState.selectionRevision++;
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
@@ -2392,6 +2477,12 @@ function stripYamlFrontmatter(text) {
 }
 
 async function loadIncrementContent(meetingId, promptId, version) {
+    if (!aiModalSession || aiModalSession.mode !== 'saved') return;
+    const session = aiModalSession;
+    const state = _incrementState;
+    const request = ++aiContentRequest;
+    const isCurrent = () => aiModalSession === session && session.mode === 'saved' &&
+        _incrementState === state && request === aiContentRequest;
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
@@ -2400,32 +2491,23 @@ async function loadIncrementContent(meetingId, promptId, version) {
     const container = document.getElementById('increment-content');
     if (!container) return;
 
-    const requestedParticipantId = _incrementState ? _incrementState.currentParticipantId : null;
-
+    state.content = '';
     container.innerHTML = '<div class="loading">Loading...</div>';
 
     try {
         const result = await api.getIncrement(meetingId, promptId, version);
+        if (!isCurrent()) return;
         if (!result) {
             container.innerHTML = '<div class="error">Version not found</div>';
             return;
         }
 
         const { meta, content } = result;
-        if (_incrementState && (
-            _incrementState.meetingId !== meetingId ||
-            _incrementState.currentPromptId !== promptId ||
-            _incrementState.currentVersion !== version ||
-            _incrementState.currentParticipantId !== requestedParticipantId
-        )) {
-            return;
-        }
 
         if (meta.status === 'failed') {
             const errorMsg = meta.error || 'Generation failed';
             container.innerHTML = '<div class="error">Generation failed: ' + escapeHtml(errorMsg) + '</div>';
-            aiResponses['increment'] = '';
-            activeAiTab = 'increment';
+            state.content = '';
             return;
         }
 
@@ -2451,10 +2533,9 @@ async function loadIncrementContent(meetingId, promptId, version) {
         const participantStr = meta.participant_name ? ' · ' + meta.participant_name : '';
         const infoStr = promptName + participantStr + ' · v' + meta.version + ' · ' + meta.segment_count + ' segments' +
             (durationStr ? ' · ' + durationStr : '');
-        const providerName = meta.provider === 'codex' ? 'Codex' : (meta.provider || '');
-        const modelStr = meta.model
-            ? [providerName, meta.model, meta.reasoning_effort].filter(Boolean).join(' · ')
-            : 'Model unavailable';
+        const providerName = meta.provider === 'codex' ? 'Codex' : meta.provider === 'claude' ? 'Claude' : (meta.provider || '');
+        const modelStr = [providerName, meta.model || 'Model unavailable', meta.reasoning_effort || meta.effort]
+            .filter(Boolean).join(' · ');
 
         container.innerHTML =
             '<div class="increment-result-meta">' +
@@ -2463,14 +2544,21 @@ async function loadIncrementContent(meetingId, promptId, version) {
             '</div>' +
             '<div class="ai-answer">' + rendered + '</div>';
 
-        aiResponses['increment'] = strippedContent;
-        activeAiTab = 'increment';
+        state.content = strippedContent;
     } catch (e) {
+        if (!isCurrent()) return;
         container.innerHTML = '<div class="error">Failed to load: ' + escapeHtml(e.message) + '</div>';
     }
 }
 
 async function regeneratePrompt() {
+    const session = aiModalSession;
+    const state = _incrementState;
+    if (!session || session.mode !== 'saved' || !state) return;
+    aiContentRequest++;
+    const selectionRevision = state.selectionRevision;
+    const isCurrent = () => aiModalSession === session && _incrementState === state &&
+        session.mode === 'saved' && selectionRevision === state.selectionRevision;
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
@@ -2481,13 +2569,10 @@ async function regeneratePrompt() {
         ? _incrementState.currentParticipantId
         : null;
 
-    if (!meetingId || !promptId) {
-        // Fall back to SSE if no prompt context
-        if (meetingId) generateIncrementSSE(meetingId);
-        return;
-    }
+    if (!meetingId || !promptId) return;
 
     // Show generating state
+    state.content = '';
     var container = document.getElementById('increment-content');
     if (container) container.innerHTML = '<div class="loading">Generating...</div>';
 
@@ -2504,8 +2589,9 @@ async function regeneratePrompt() {
             throw new Error(err.detail || 'Generation failed');
         }
         var result = await res.json();
+        if (aiModalSession !== session || _incrementState !== state) return;
         if (result.status === 'skipped') {
-            if (container) container.innerHTML = '<div class="empty">' + escapeHtml(result.message || 'No new segments') + '</div>';
+            if (isCurrent() && container) container.innerHTML = '<div class="empty">' + escapeHtml(result.message || 'No new segments') + '</div>';
             return;
         }
         // Refresh the stored increments view
@@ -2513,81 +2599,41 @@ async function regeneratePrompt() {
             api.getPrompts(),
             api.getIncrements(meetingId)
         ]);
-        showStoredIncrements(meetingId, increments, prompts);
-        // Switch to the prompt that was regenerated
-        if (_incrementState && participantId) {
-            _incrementState.currentParticipantId = participantId;
-            var participantSelect = document.getElementById('increment-participant-select');
-            if (participantSelect) participantSelect.value = participantId;
-        }
-        switchPromptTab(meetingId, promptId);
+        if (aiModalSession !== session || _incrementState !== state) return;
+        state.incrementsByPrompt = increments;
+        state.needsRefresh = selectionRevision === state.selectionRevision;
+        if (isCurrent()) showStoredIncrements(meetingId, increments, prompts);
     } catch (e) {
-        if (container) container.innerHTML = '<div class="error">Regeneration failed: ' + escapeHtml(e.message) + '</div>';
+        if (isCurrent() && container) container.innerHTML = '<div class="error">Regeneration failed: ' + escapeHtml(e.message) + '</div>';
     }
 }
 
 function handleAiStreamEvent(data) {
+    if (!aiModalSession) return;
     const { type, provider, name, text, message } = data;
-
-    switch (type) {
-        case 'start':
-            // Provider started
-            aiProviderNames[provider] = name;
-            const startContainer = document.getElementById(`ai-response-${provider}`);
-            if (startContainer) {
-                startContainer.innerHTML = '<div class="loading">Analyzing...</div>';
-            }
-            break;
-
-        case 'chunk':
-            // Partial response
-            aiResponses[provider] = text;
-            updateAiResponseDisplay(provider, text, false);
-            break;
-
-        case 'done':
-            // Final response from provider
-            aiResponses[provider] = text;
-            updateAiResponseDisplay(provider, text, true);
-            break;
-
-        case 'error':
-            // Error from provider
-            if (provider) {
-                const errorContainer = document.getElementById(`ai-response-${provider}`);
-                if (errorContainer) {
-                    errorContainer.innerHTML = `<div class="error">Error: ${escapeHtml(message)}</div>`;
-                }
-            } else {
-                // Global error
-                document.getElementById('ai-response-claude').innerHTML =
-                    `<div class="error">Error: ${escapeHtml(message)}</div>`;
-                document.getElementById('ai-response-codex').innerHTML =
-                    `<div class="error">Error: ${escapeHtml(message)}</div>`;
-            }
-            break;
-
-        case 'complete':
-            // All providers done
-            if (aiEventSource) {
-                aiEventSource.close();
-                aiEventSource = null;
-            }
-            break;
+    const states = aiModalSession.providerStates;
+    if (type === 'start' && provider) {
+        aiProviderNames[provider] = name || provider;
+        states[provider] = { status: 'running', error: '' };
+        if (!activeAiTab) activeAiTab = provider;
+    } else if ((type === 'chunk' || type === 'done') && states[provider]) {
+        aiResponses[provider] = text;
+        states[provider].status = type === 'done' ? 'done' : 'running';
+    } else if (type === 'error') {
+        if (states[provider]) {
+            states[provider].error = message || 'Анализ завершился с ошибкой';
+            states[provider].status = 'done';
+        } else {
+            aiModalSession.runError = message || 'Не удалось запустить анализ';
+            finishAiStream();
+            return;
+        }
+    } else if (type === 'complete') {
+        if (!Object.keys(states).length) aiModalSession.runError = 'Нет доступных провайдеров для анализа.';
+        finishAiStream();
+        return;
     }
-}
-
-function updateAiResponseDisplay(provider, text, isDone) {
-    const container = document.getElementById(`ai-response-${provider}`);
-    if (!container) return;
-
-    const providerName = aiProviderNames[provider] || provider;
-    const statusIndicator = isDone ? '' : '<span class="streaming-indicator">●</span> ';
-    const formattedText = renderMarkdown(text);
-
-    container.innerHTML =
-        `<div class="ai-answer">${statusIndicator}${formattedText}</div>
-         <div class="ai-provider">via ${escapeHtml(providerName)}</div>`;
+    renderNewAnalysis();
 }
 
 function renderMarkdown(text) {
@@ -2629,39 +2675,38 @@ function renderMarkdown(text) {
 }
 
 function switchAiTab(provider) {
+    if (!aiModalSession || !aiProviderNames[provider]) return;
     activeAiTab = provider;
-
-    // Update tab buttons
-    document.querySelectorAll('.tab-btn').forEach(btn => {
+    document.querySelectorAll('#ai-provider-tabs .tab-btn').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.provider === provider);
     });
-
-    // Update tab content
-    document.querySelectorAll('.ai-tab-content').forEach(content => {
+    document.querySelectorAll('#ai-new-content .ai-tab-content').forEach(function(content) {
         content.classList.toggle('active', content.id === `ai-response-${provider}`);
     });
 }
 
 function closeAiModal() {
-    // Close SSE connection if active
     if (aiEventSource) {
         aiEventSource.close();
         aiEventSource = null;
     }
-    // Clear increment polling if active
     if (incrementPollTimer) {
         clearInterval(incrementPollTimer);
         incrementPollTimer = null;
     }
+    aiModalSession = null;
+    _incrementState = null;
+    aiContentRequest++;
     document.getElementById('ai-modal').style.display = 'none';
 }
 
 function copyAiResponse() {
-    // Copy raw markdown from aiResponses, not rendered HTML
-    const text = aiResponses[activeAiTab];
+    if (!aiModalSession) return;
+    const text = aiModalSession.mode === 'saved' ? _incrementState?.content : aiResponses[activeAiTab];
     if (text) {
+        const pane = document.getElementById(aiModalSession.mode === 'saved' ? 'ai-saved-view' : 'ai-new-view');
+        const btn = pane.querySelector('.modal-footer .btn[onclick="copyAiResponse()"]');
         navigator.clipboard.writeText(text).then(() => {
-            const btn = document.querySelector('.modal-footer .btn');
             const originalText = btn.textContent;
             btn.textContent = 'Copied!';
             setTimeout(() => btn.textContent = originalText, 1500);

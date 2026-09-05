@@ -25,6 +25,11 @@ and a web UI. Runs on macOS and Linux.
   (what you hear), stored per meeting and streamed to the web UI.
 - **Copilot** (optional): a headless Claude Code session attached to the live
   meeting, spawned manually from the web UI or automatically per meeting.
+- **AI Analysis**: browse saved prompt/participant versions under
+  **Сохранённые результаты**, or explicitly start **Новый анализ** to compare
+  available CLI providers. New comparison answers remain in the open window;
+  they are not automatically added to saved history. Switching modes keeps the
+  running comparison and its answers; closing the window ends that view.
 
 ## Requirements
 
