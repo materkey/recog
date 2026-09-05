@@ -28,7 +28,7 @@ jest.unstable_mockModule('./ws_api.js', () => ({
 const { getMeetingUrl, sendMeetingJoin, sendMeetingLeave, handleMeetingJoinRejected, startMeetingCheck } = await import('./meeting.js');
 const { state } = await import('./state.js');
 
-const MATRIX_URL = 'https://element.vkkovalev.work/#/room/!spike:matrix.vkkovalev.work';
+const MATRIX_URL = 'https://element.example.org/#/room/!spike:matrix.example.org';
 
 const matrixAdapter = {
   getMeetingUrl: () => MATRIX_URL,
@@ -59,7 +59,7 @@ describe('getMeetingUrl', () => {
     expect(getMeetingUrl()).toBe(MATRIX_URL);
   });
 
-  test('falls back to window.location.href for ktalk/vas3k/vkkovalev', () => {
+  test('falls back to window.location.href for ktalk/vas3k/jitsi', () => {
     mockAdapter = ktalkAdapter;
     mockPlatform = 'ktalk';
     expect(getMeetingUrl()).toBe(window.location.href);
@@ -164,8 +164,8 @@ describe('sendDelayedTitle prefers the adapter title', () => {
 
   test('a stale title retry from meeting A does not lock meeting B to document.title', () => {
     document.title = 'Element Call';
-    const urlA = 'https://element.vkkovalev.work/#/room/!A:matrix.vkkovalev.work';
-    const urlB = 'https://element.vkkovalev.work/#/room/!B:matrix.vkkovalev.work';
+    const urlA = 'https://element.example.org/#/room/!A:matrix.example.org';
+    const urlB = 'https://element.example.org/#/room/!B:matrix.example.org';
     let currentUrl = urlA;
     const titleByUrl = { [urlA]: '', [urlB]: '' }; // neither room name synced yet
     mockAdapter = {
@@ -205,7 +205,7 @@ describe('sendDelayedTitle prefers the adapter title', () => {
     document.title = 'Element Call';
     // Distinct room url so a prior test's module-level `titleSentForUrl` lock
     // does not short-circuit this one.
-    const url = 'https://element.vkkovalev.work/#/room/!rejoin:matrix.vkkovalev.work';
+    const url = 'https://element.example.org/#/room/!rejoin:matrix.example.org';
     let roomName = ''; // room name not synced yet
     mockAdapter = {
       getMeetingUrl: () => url,
@@ -246,7 +246,7 @@ describe('sendDelayedTitle prefers the adapter title', () => {
     document.title = 'Element Call';
     // Distinct room url so the module-level titleSentForUrl lock from the prior
     // test does not short-circuit this one.
-    const otherUrl = 'https://element.vkkovalev.work/#/room/!other:matrix.vkkovalev.work';
+    const otherUrl = 'https://element.example.org/#/room/!other:matrix.example.org';
     mockAdapter = {
       getMeetingUrl: () => otherUrl,
       getMeetingTitle: () => '', // never resolves

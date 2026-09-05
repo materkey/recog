@@ -3441,7 +3441,7 @@ def test_meeting_state_ktalk_without_extension_is_inactive():
     assert frame["meeting_id"] is None
 
 
-# --- conference-source predicate: matrix / vas3k / vkkovalev parity with ktalk ---
+# --- conference-source predicate: matrix / vas3k / jitsi parity with ktalk ---
 
 
 def test_is_conference_source_covers_all_four_platforms():
@@ -3449,23 +3449,23 @@ def test_is_conference_source_covers_all_four_platforms():
     given: the four extension-driven conference platforms and the two
            non-conference sources (orphan / local)
     when:  is_conference_source is queried
-    then:  ktalk + vas3k + vkkovalev + matrix are conferences; orphan / local
+    then:  ktalk + vas3k + jitsi + matrix are conferences; orphan / local
            / None are not — this is the single predicate that widens the
            previously ktalk-only lifecycle gates to all conference platforms
     """
     from recog.meeting_storage import is_conference_source
 
-    for source in ("ktalk", "vas3k", "vkkovalev", "matrix"):
+    for source in ("ktalk", "vas3k", "jitsi", "matrix"):
         assert is_conference_source(source) is True
     for source in ("orphan", "local", None, "", "unknown"):
         assert is_conference_source(source) is False
 
 
-@pytest.mark.parametrize("source", ["matrix", "vas3k", "vkkovalev"])
+@pytest.mark.parametrize("source", ["matrix", "vas3k", "jitsi"])
 def test_meeting_state_active_true_for_conference_source_with_extension(source):
     """
     given: a meeting opened by a conference platform other than ktalk
-           (matrix / vas3k / vkkovalev) and one connected extension client
+           (matrix / vas3k / jitsi) and one connected extension client
     when:  the bridge builds a meeting_state reply
     then:  active is True with meeting_id/title populated — the supervisor
            reconcile now adopts these meetings the same way it adopts ktalk
@@ -3501,10 +3501,10 @@ def test_meeting_state_local_source_is_inactive():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["matrix", "vas3k", "vkkovalev"])
+@pytest.mark.parametrize("source", ["matrix", "vas3k", "jitsi"])
 async def test_extension_disconnect_ends_conference_meeting_and_generates_increment(source):
     """
-    given: an active conference meeting (matrix / vas3k / vkkovalev) with an
+    given: an active conference meeting (matrix / vas3k / jitsi) with an
            increment generator wired and the only extension client connected
     when:  that last extension client disconnects (page reload / crash — no
            explicit meeting_leave frame arrives)

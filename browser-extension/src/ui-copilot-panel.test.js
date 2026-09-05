@@ -9,7 +9,7 @@
  * the agent-status chip, and pending/unread bookkeeping.
  *
  * @jest-environment jsdom
- * @jest-environment-options {"url": "https://element.vkkovalev.work/widgets/element-call/index.html"}
+ * @jest-environment-options {"url": "https://element.example.org/widgets/element-call/index.html"}
  */
 
 import { jest } from '@jest/globals';

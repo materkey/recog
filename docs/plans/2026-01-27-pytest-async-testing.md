@@ -13,11 +13,11 @@
 ## Task 1: Add test dependencies to requirements
 
 **Files:**
-- Modify: `/Users/vkkovalev/projects/recog/requirements.txt`
+- Modify: `/Users/user/projects/recog/requirements.txt`
 
 **Step 1: Read current requirements**
 
-Run: `cat /Users/vkkovalev/projects/recog/requirements.txt`
+Run: `cat /Users/user/projects/recog/requirements.txt`
 
 **Step 2: Add test dependencies**
 
@@ -30,7 +30,7 @@ pytest-asyncio>=0.23
 
 **Step 3: Install dependencies**
 
-Run: `source /Users/vkkovalev/projects/recog/venv-gigaam/bin/activate && pip install pytest pytest-asyncio`
+Run: `source /Users/user/projects/recog/venv-gigaam/bin/activate && pip install pytest pytest-asyncio`
 Expected: Successfully installed packages
 
 **Step 4: Commit**
@@ -45,7 +45,7 @@ git commit -m "feat(tests): add pytest and pytest-asyncio dependencies"
 ## Task 2: Create conftest.py with speaker database fixture
 
 **Files:**
-- Create: `/Users/vkkovalev/projects/recog/tests/conftest.py`
+- Create: `/Users/user/projects/recog/tests/conftest.py`
 
 **Step 1: Write conftest.py with fixtures**
 
@@ -141,7 +141,7 @@ def diarization_segments() -> list[DiarizationSegment]:
 
 **Step 2: Verify syntax**
 
-Run: `python -m py_compile /Users/vkkovalev/projects/recog/tests/conftest.py`
+Run: `python -m py_compile /Users/user/projects/recog/tests/conftest.py`
 Expected: No output (syntax OK)
 
 **Step 3: Commit**
@@ -156,7 +156,7 @@ git commit -m "feat(tests): add conftest.py with speaker DB and alignment fixtur
 ## Task 3: Create test_speaker_db.py for SpeakerDatabase
 
 **Files:**
-- Create: `/Users/vkkovalev/projects/recog/tests/test_speaker_db.py`
+- Create: `/Users/user/projects/recog/tests/test_speaker_db.py`
 
 **Step 1: Write the failing test for speaker matching**
 
@@ -327,7 +327,7 @@ class TestSpeakerDatabasePersistence:
 
 **Step 2: Run tests to verify they pass**
 
-Run: `cd /Users/vkkovalev/projects/recog && source venv-gigaam/bin/activate && python -m pytest tests/test_speaker_db.py -v`
+Run: `cd /Users/user/projects/recog && source venv-gigaam/bin/activate && python -m pytest tests/test_speaker_db.py -v`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -342,7 +342,7 @@ git commit -m "feat(tests): add SpeakerDatabase unit tests"
 ## Task 4: Create test_alignment.py for segment alignment
 
 **Files:**
-- Create: `/Users/vkkovalev/projects/recog/tests/test_alignment.py`
+- Create: `/Users/user/projects/recog/tests/test_alignment.py`
 
 **Step 1: Write alignment tests**
 
@@ -448,7 +448,7 @@ class TestAlignSegmentsWithSpeakers:
 
 **Step 2: Run tests**
 
-Run: `cd /Users/vkkovalev/projects/recog && source venv-gigaam/bin/activate && python -m pytest tests/test_alignment.py -v`
+Run: `cd /Users/user/projects/recog && source venv-gigaam/bin/activate && python -m pytest tests/test_alignment.py -v`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -463,7 +463,7 @@ git commit -m "feat(tests): add segment alignment unit tests"
 ## Task 5: Add pytest.ini configuration
 
 **Files:**
-- Create: `/Users/vkkovalev/projects/recog/pytest.ini`
+- Create: `/Users/user/projects/recog/pytest.ini`
 
 **Step 1: Write pytest configuration**
 
@@ -482,7 +482,7 @@ filterwarnings =
 
 **Step 2: Verify all tests run**
 
-Run: `cd /Users/vkkovalev/projects/recog && source venv-gigaam/bin/activate && python -m pytest`
+Run: `cd /Users/user/projects/recog && source venv-gigaam/bin/activate && python -m pytest`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -497,7 +497,7 @@ git commit -m "feat(tests): add pytest.ini configuration"
 ## Task 6: Add async fixture example for future WebSocket tests
 
 **Files:**
-- Modify: `/Users/vkkovalev/projects/recog/tests/conftest.py`
+- Modify: `/Users/user/projects/recog/tests/conftest.py`
 
 **Step 1: Add pytest_asyncio import and async fixture**
 
@@ -540,7 +540,7 @@ async def mock_websocket():
 
 **Step 2: Add async marker to test_ktalk_bridge**
 
-Update `/Users/vkkovalev/projects/recog/tests/test_ktalk_bridge.py` to use shared fixtures by adding import:
+Update `/Users/user/projects/recog/tests/test_ktalk_bridge.py` to use shared fixtures by adding import:
 
 ```python
 # Add at top of file after existing imports
@@ -549,7 +549,7 @@ from conftest import *  # noqa - import fixtures
 
 **Step 3: Run all tests**
 
-Run: `cd /Users/vkkovalev/projects/recog && source venv-gigaam/bin/activate && python -m pytest -v`
+Run: `cd /Users/user/projects/recog && source venv-gigaam/bin/activate && python -m pytest -v`
 Expected: All tests PASS
 
 **Step 4: Commit**
@@ -564,7 +564,7 @@ git commit -m "feat(tests): add async WebSocket fixture for future tests"
 ## Task 7: Update .gitignore for pytest artifacts
 
 **Files:**
-- Modify: `/Users/vkkovalev/projects/recog/.gitignore`
+- Modify: `/Users/user/projects/recog/.gitignore`
 
 **Step 1: Add pytest artifacts**
 

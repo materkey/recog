@@ -289,7 +289,7 @@ if (container) {
 ### Task 8: Update documentation and complete plan
 
 **Files:**
-- Modify (если нужно): `/Users/vkkovalev/projects/recog/CLAUDE.md`
+- Modify (если нужно): `/Users/user/projects/recog/CLAUDE.md`
 - Move: `docs/plans/2026-05-04-ktalk-paused-scroll-anchor.md` → `docs/plans/completed/`
 
 - [x] Если в `CLAUDE.md` секция «Per-speaker refine contour» / «Per-speaker ASR path» нужно обновить (новый pattern — anchor helpers) — добавить 1 строку упоминания. Если нет — пропустить. (skipped — change is overlay-rendering only; existing sections cover audio pipelines and extension build, no natural fit for a 1-line scroll-anchor mention.)

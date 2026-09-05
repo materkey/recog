@@ -17,7 +17,7 @@ warnings: []
 
 **Problem:** The bridge WebSocket server (`ktalk_bridge._handle_client`, port 8766 — the intent's "8765/8766" both land here; the bridge serves one configurable port and the extension's `WS_URL` is `ws://localhost:8766`) and the frontend live-stream endpoint (`recog/web/server.live_stream`, port 9080) accept connections from any browser page: WebSockets bypass CORS, so a malicious webpage can open the localhost socket, speak the protocol (`subscriber_hello` + `copilot_chat_message` / `copilot_spawn_request`), and inject copilot frames into the tool-bearing Claude session.
 
-**Approach:** Add an Origin allowlist checked at accept-time in both endpoints, backed by one shared helper module (`recog/ws_origin.py`). Admit: conference-page origins used by the Chrome extension (`https://*.ktalk.ru` wildcard, `https://meet.vas3k.cloud`, `https://meet.vkkovalev.work`, `https://element.vkkovalev.work`), the webapp origin (`http://127.0.0.1:9080` and its `http://localhost:9080` equivalent), and connections with **no** Origin header (Python clients — supervisor, copilot-channel daemon, `BridgeSubscriber` — send none). Everything else is rejected before any frame is processed or client-set registration happens.
+**Approach:** Add an Origin allowlist checked at accept-time in both endpoints, backed by one shared helper module (`recog/ws_origin.py`). Admit: conference-page origins used by the Chrome extension (`https://*.ktalk.ru` wildcard, `https://meet.vas3k.cloud`, `https://meet.example.org`, `https://element.example.org`), the webapp origin (`http://127.0.0.1:9080` and its `http://localhost:9080` equivalent), and connections with **no** Origin header (Python clients — supervisor, copilot-channel daemon, `BridgeSubscriber` — send none). Everything else is rejected before any frame is processed or client-set registration happens.
 
 ## Boundaries & Constraints
 
@@ -43,7 +43,7 @@ warnings: []
 |----------|--------------|---------------------------|----------------|
 | Python client | No Origin header | Connection proceeds as today | No error expected |
 | Extension on KTalk | `Origin: https://example.ktalk.ru` | Allowed (wildcard subdomain) | No error expected |
-| Extension on Jitsi/Element | `Origin: https://meet.vas3k.cloud` (or vkkovalev.work / element.vkkovalev.work) | Allowed | No error expected |
+| Extension on Jitsi/Element | `Origin: https://meet.vas3k.cloud` (or example.org / element.example.org) | Allowed | No error expected |
 | Webapp page | `Origin: http://127.0.0.1:9080` or `http://localhost:9080` | Allowed | No error expected |
 | Malicious page → bridge | `Origin: https://evil.example` to port 8766 | Socket closed (code 1008) before registration; no frame processed | Logged to stderr |
 | Malicious page → frontend | `Origin: https://evil.example` to `/api/live/stream` | Handshake denied (close before `accept()`); `live_watcher` never registers it | Rejected connection, no crash |

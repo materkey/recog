@@ -4,14 +4,18 @@
  * Supports:
  * - KTalk (ktalk.ru) - uses custom $conf wrapper with RxJS observables
  * - vas3k.cloud - uses standard Jitsi Meet APP object
- * - vkkovalev.work - uses standard Jitsi Meet APP object
- * - Element Call / Matrix (element.vkkovalev.work) - bundled EC iframe at
+ * - Configured Jitsi hosts - uses standard Jitsi Meet APP object
+ * - Configured Element Call / Matrix hosts - bundled EC iframe at
  *   /widgets/element-call/*; sources data from matrix-js-sdk + livekit
  */
 
 import { KTalkAdapter } from './ktalk.js';
 import { Vas3kAdapter } from './vas3k.js';
 import { ElementCallAdapter } from './matrix.js';
+
+const conferenceHosts = typeof __RECOG_CONFERENCE_HOSTS__ === 'undefined'
+  ? { jitsi: [], matrix: [] }
+  : __RECOG_CONFERENCE_HOSTS__;
 
 let currentPlatform = null;
 let currentAdapter = null;
@@ -22,30 +26,23 @@ let currentAdapter = null;
  * `loc` defaults to `window.location` but is injectable so tests can exercise
  * multiple URLs in one file (jsdom forbids mutating `location` after setup).
  */
-export function detectPlatform(loc = window.location) {
-  const hostname = loc.hostname;
-  const pathname = loc.pathname || '';
+export function detectPlatform(loc = window.location, hosts = conferenceHosts) {
+  const { hostname, pathname = '', protocol, port, origin } = loc;
+  if (protocol !== 'https:' || (port && port !== '443')) return null;
 
-  if (hostname.includes('ktalk.ru')) {
+  if (hostname === 'ktalk.ru' || hostname.endsWith('.ktalk.ru')) {
     return 'ktalk';
   }
-  if (hostname.includes('vas3k.cloud')) {
+  if (hostname === 'meet.vas3k.cloud') {
     return 'vas3k';
   }
-  // Element Call is bundled inside Element Web as a same-origin iframe served
-  // from /widgets/element-call/*. This check MUST come before the generic
-  // vkkovalev.work host check below, which would otherwise misroute
-  // element.* to the Jitsi (vkkovalev) adapter. Only the EC iframe path gets
-  // an adapter — the Element top frame (path '/') returns null so the
-  // extension does not open a second stray WS there.
-  if (hostname.includes('element.vkkovalev.work')) {
-    if (pathname.startsWith('/widgets/element-call/')) {
-      return 'matrix';
-    }
-    return null;
+  // Only the bundled call iframe gets an adapter; the Element top frame
+  // must not open a second WebSocket that outlives the call.
+  if (hosts.matrix.includes(origin)) {
+    return pathname.startsWith('/widgets/element-call/') ? 'matrix' : null;
   }
-  if (hostname.includes('vkkovalev.work')) {
-    return 'vkkovalev';
+  if (hosts.jitsi.includes(origin)) {
+    return 'jitsi';
   }
 
   return null;
@@ -74,7 +71,7 @@ export function getPlatformAdapter() {
         currentAdapter = new KTalkAdapter();
         break;
       case 'vas3k':
-      case 'vkkovalev':
+      case 'jitsi':
         currentAdapter = new Vas3kAdapter();
         break;
       case 'matrix':
@@ -109,8 +106,8 @@ export function getPlatformDisplayName() {
       return 'KTalk';
     case 'vas3k':
       return 'Вастрик Мит';
-    case 'vkkovalev':
-      return 'VK Meet';
+    case 'jitsi':
+      return 'Jitsi Meet';
     case 'matrix':
       return 'Element Call';
     default:
@@ -129,5 +126,5 @@ export function getPlatformDisplayName() {
  */
 export function isJitsiPlatform() {
   const platform = getPlatform();
-  return platform === 'vas3k' || platform === 'vkkovalev' || platform === 'matrix';
+  return platform === 'vas3k' || platform === 'jitsi' || platform === 'matrix';
 }

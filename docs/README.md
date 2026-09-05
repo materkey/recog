@@ -14,6 +14,7 @@ the current implementation contracts and commands used by coding agents.
 | [BMAD artifacts](bmad/) | BMAD brainstorming, specs, stories, reviews and deferred-work records; `_bmad-output` points here for tool compatibility |
 | [OpenSpec](../openspec/) | Tool-managed [specifications](../openspec/specs/) and [change proposals](../openspec/changes/), including [archived changes](../openspec/changes/archive/) |
 | [ASR server guide](asr-server.md) | Optional gateway/backend installation, configuration and transcription checks |
+| [Conference hosts](conference-hosts.md) | Local Jitsi/Element addresses, extension build and existing-recording aliases |
 
 Completed plans and experiment reports describe the implementation and paths
 at the time of the work. Use the repository layout and current source for

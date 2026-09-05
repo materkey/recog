@@ -50,7 +50,7 @@ missing.
 git clone <repo-url> recog && cd recog
 ./setup.sh
 # → chrome://extensions → Developer mode → Load unpacked →
-#   browser-extension
+#   browser-extension/dist
 # → open http://127.0.0.1:9080
 ```
 
@@ -289,10 +289,10 @@ an empty URL. Fix what it lists and re-run `./setup.sh`. The same probes gate
 ./recog-service.sh start` bypasses the gate.
 
 **The extension never connects.** The WS handshake is Origin-gated. If your
-conference host is not one of the built-in ones, add it to
-`RECOG_EXTRA_WS_ORIGINS` *and* to the extension's `manifest.json`, then rebuild
-the extension (`cd browser-extension && npm run build`) and
-reload it in `chrome://extensions`.
+conference host is not one of the built-in ones, add its exact HTTPS origin to
+[`.local/conference-hosts.json`](docs/conference-hosts.md), rebuild the extension
+(`cd browser-extension && npm run build`), restart Recog and reload
+`browser-extension/dist/` in `chrome://extensions`.
 
 ## Personal data outside the checkout
 
@@ -334,7 +334,7 @@ logs).
 
 For the repository layout change, follow the [upgrade steps](docs/repository-layout.md#updating-an-existing-checkout):
 re-render service units, update any manual launch commands, and reload the
-extension from `browser-extension/` if Chrome still points to its old path.
+extension from `browser-extension/dist/` if Chrome still points to its old path.
 The macOS dependency and data safeguards below still apply.
 
 1. **Before pulling**, if you run `RECOG_ASR_BACKEND=remote`: write your actual

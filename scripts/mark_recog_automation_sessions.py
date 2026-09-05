@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from recog.ai_provider import CCS_AUTOMATION_MARKER_PREFIX, mark_ccs_automation
 RECOG_PROJECT_PREFIX = str(REPO_ROOT)
 CODEX_DEFAULT_ROOT = Path.home() / ".codex" / "sessions"
 CLAUDE_DEFAULT_ROOT = Path.home() / ".claude" / "projects"
+CLAUDE_PROJECT_PREFIX = re.sub(r"[^a-zA-Z0-9]", "-", str(REPO_ROOT))
 BACKUP_DEFAULT_ROOT = Path.home() / ".ccs-recog-automation-backups"
 
 
@@ -188,7 +190,7 @@ def should_scan_claude_path(path: Path) -> bool:
     return (
         "/subagents/" not in path_s
         and not path.name.startswith("agent-")
-        and "/.claude/projects/-Users-vkkovalev-projects-recog" in path_s
+        and path.parent.name.startswith(CLAUDE_PROJECT_PREFIX)
     )
 
 
@@ -292,7 +294,7 @@ def iter_codex_files(root: Path):
 
 def iter_claude_files(root: Path):
     if root.exists():
-        for path in root.glob("-Users-vkkovalev-projects-recog*/*.jsonl"):
+        for path in root.glob(f"{CLAUDE_PROJECT_PREFIX}*/*.jsonl"):
             if should_scan_claude_path(path):
                 yield path
 

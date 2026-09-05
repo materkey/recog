@@ -13,7 +13,7 @@ Recog работал только на macOS одной машины:
 - ASR выбирал `mps`-или-`cpu` и никогда CUDA (`recog/asr.py`), то есть машина с
   NVIDIA молча работала на CPU.
 - Сервисы — четыре закоммиченных launchd-plist с захардкоженными
-  `/Users/vkkovalev` и nvm-путём к `node`.
+  `/Users/user` и nvm-путём к `node`.
 - `setup_venvs.sh` требовал Homebrew и sibling-checkout `../GigaAM`.
 - В git лежали arm64-бинарь хелпера и `speakers*.json` с голосовыми
   эмбеддингами реальных людей; дефолтами были личный Tailscale-URL ASR-gateway

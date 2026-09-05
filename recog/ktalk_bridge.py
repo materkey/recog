@@ -1278,7 +1278,7 @@ class KTalkBridge:
         never None (`on_ktalk_leave` immediately creates an orphan). A meeting
         is active only when the current meeting was opened by a conference
         platform (`is_conference_source(meta["source"])` — ktalk / vas3k /
-        vkkovalev / matrix) AND at least one extension client is connected to
+        jitsi / matrix) AND at least one extension client is connected to
         drive it.
         """
         storage = self._meeting_storage

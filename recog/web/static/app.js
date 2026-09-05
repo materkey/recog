@@ -1035,7 +1035,7 @@ const COPILOT_AGENT_CHIP = {
     offline: { icon: '⚫', label: 'offline', cls: 'offline' }
 };
 
-const COPILOT_CONFERENCE_SOURCES = new Set(['ktalk', 'vas3k', 'vkkovalev', 'matrix']);
+const COPILOT_CONFERENCE_SOURCES = new Set(['ktalk', 'vas3k', 'jitsi', 'matrix']);
 
 const copilotState = {
     messages: [],           // {id, kind, text, request_id, status, time}

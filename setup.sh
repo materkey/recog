@@ -552,7 +552,7 @@ esac
 
 echo ""
 echo "  Extension: chrome://extensions → Developer mode → Load unpacked →"
-echo "             $EXTENSION_DIR"
+echo "             $EXTENSION_DIR/dist"
 if [ "$HOST_OS" = "darwin" ]; then
     echo "  Screen Recording permission is required for system audio:"
     echo "             System Settings → Privacy & Security → Screen Recording"

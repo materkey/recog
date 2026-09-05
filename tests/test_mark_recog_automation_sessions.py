@@ -14,6 +14,17 @@ sys.modules[SPEC.name] = mark_sessions
 SPEC.loader.exec_module(mark_sessions)
 
 
+def test_custom_project_location_when_scanning_then_only_matching_sessions_are_selected(tmp_path, monkeypatch):
+    monkeypatch.setattr(mark_sessions, "CLAUDE_PROJECT_PREFIX", "-work-projects-recog")
+    expected = tmp_path / "-work-projects-recog" / "session.jsonl"
+    other = tmp_path / "-work-projects-other" / "session.jsonl"
+    agent = expected.parent / "agent-child.jsonl"
+    for path in (expected, other, agent):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n")
+    assert list(mark_sessions.iter_claude_files(tmp_path)) == [expected]
+
+
 def test_mark_codex_text_marks_recog_exec_prompt_and_event():
     text = "\n".join([
         json.dumps({
@@ -29,7 +40,7 @@ def test_mark_codex_text_marks_recog_exec_prompt_and_event():
             "payload": {
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": "# AGENTS.md instructions for /Users/vkkovalev/projects/recog\n\n<INSTRUCTIONS>...</INSTRUCTIONS>"}],
+                "content": [{"type": "input_text", "text": "# AGENTS.md instructions for /Users/user/projects/recog\n\n<INSTRUCTIONS>...</INSTRUCTIONS>"}],
             },
         }, ensure_ascii=False),
         json.dumps({
