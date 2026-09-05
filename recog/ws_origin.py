@@ -56,14 +56,19 @@ def origin_allowed(
 ) -> bool:
     """Return True if a WS connection with this Origin header may proceed.
 
-    ``extra`` — additional exact-match origins (callers pass ``EXTRA_ORIGINS``);
-    they never widen the ktalk.ru wildcard rule.
+    ``extra`` — additional exact-match origins; they never widen the ktalk.ru
+    wildcard rule. Omitted means the configured ``EXTRA_ORIGINS``: threading
+    the module's own constant through every call site made forgetting the
+    argument silently drop the operator's configured hosts. Pass an explicit
+    (possibly empty) iterable to override.
     """
     if origin is None:
         return True
     if origin in ALLOWED_ORIGINS:
         return True
-    if extra is not None and origin in extra:
+    if extra is None:
+        extra = EXTRA_ORIGINS
+    if origin in extra:
         return True
     if any(char.isspace() for char in origin):
         return False
