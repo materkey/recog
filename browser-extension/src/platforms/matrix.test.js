@@ -8,6 +8,7 @@
  * unit-tested here; the live fiber-walk against a real Element Call bundle is
  * covered by the manual e2e task.
  *
+ * @jest-environment-options {"url": "https://element.example.org/widgets/element-call/index.html"}
  * @jest-environment jsdom
  */
 
@@ -30,8 +31,8 @@ import {
 
 describe('parseRtcIdentity', () => {
   test('parses the legacy plain `${userId}:${deviceId}` format', () => {
-    expect(parseRtcIdentity('@test2:matrix.vkkovalev.work:IZFUKTQLPX')).toEqual({
-      userId: '@test2:matrix.vkkovalev.work',
+    expect(parseRtcIdentity('@test2:matrix.example.org:IZFUKTQLPX')).toEqual({
+      userId: '@test2:matrix.example.org',
       deviceId: 'IZFUKTQLPX',
     });
   });
@@ -46,10 +47,10 @@ describe('parseRtcIdentity', () => {
   test('falls back to a memberships match for a sha256-hash identity', () => {
     const memberships = [
       { userId: '@other:s', deviceId: 'D1', rtcBackendIdentity: 'hashOTHER' },
-      { userId: '@u:matrix.vkkovalev.work', deviceId: 'D2', rtcBackendIdentity: 'deadbeefhash' },
+      { userId: '@u:matrix.example.org', deviceId: 'D2', rtcBackendIdentity: 'deadbeefhash' },
     ];
     expect(parseRtcIdentity('deadbeefhash', memberships)).toEqual({
-      userId: '@u:matrix.vkkovalev.work',
+      userId: '@u:matrix.example.org',
       deviceId: 'D2',
     });
   });
@@ -142,8 +143,14 @@ describe('membershipToParticipant', () => {
 
 describe('buildMeetingUrl / buildMeetingTitle', () => {
   test('synthesizes a canonical #/room/<roomId> Element URL', () => {
-    expect(buildMeetingUrl('!uNYpZ:matrix.vkkovalev.work')).toBe(
-      'https://element.vkkovalev.work/#/room/!uNYpZ:matrix.vkkovalev.work'
+    expect(buildMeetingUrl('!uNYpZ:matrix.example.org')).toBe(
+      'https://element.example.org/#/room/!uNYpZ:matrix.example.org'
+    );
+  });
+
+  test('different Element origin - building room URL - preserves that deployment', () => {
+    expect(buildMeetingUrl('!room:matrix.example.org', 'https://another-element.example.org')).toBe(
+      'https://another-element.example.org/#/room/!room:matrix.example.org'
     );
   });
 
@@ -251,21 +258,21 @@ describe('ElementCallAdapter', () => {
 
   function makeMatrixClient() {
     return {
-      getUserId: () => '@me:matrix.vkkovalev.work',
+      getUserId: () => '@me:matrix.example.org',
       getDeviceId: () => 'MYDEVICE',
       getRoom: () => ({
         name: 'Recog Spike',
-        getMember: (uid) => ({ name: uid === '@me:matrix.vkkovalev.work' ? 'Me' : 'Test Two' }),
+        getMember: (uid) => ({ name: uid === '@me:matrix.example.org' ? 'Me' : 'Test Two' }),
       }),
     };
   }
 
   function makeRtcSession() {
     return {
-      room: { roomId: '!spike:matrix.vkkovalev.work' },
+      room: { roomId: '!spike:matrix.example.org' },
       memberships: [
-        { userId: '@me:matrix.vkkovalev.work', deviceId: 'MYDEVICE' },
-        { userId: '@test2:matrix.vkkovalev.work', deviceId: 'IZFUKTQLPX' },
+        { userId: '@me:matrix.example.org', deviceId: 'MYDEVICE' },
+        { userId: '@test2:matrix.example.org', deviceId: 'IZFUKTQLPX' },
       ],
     };
   }
@@ -311,7 +318,7 @@ describe('ElementCallAdapter', () => {
   test('getConference returns the rtcSession, getMeetingUrl the synthesized url', () => {
     expect(adapter.getConference()).toBe(window.rtcSession);
     expect(adapter.getMeetingUrl()).toBe(
-      'https://element.vkkovalev.work/#/room/!spike:matrix.vkkovalev.work'
+      'https://element.example.org/#/room/!spike:matrix.example.org'
     );
   });
 
@@ -342,18 +349,18 @@ describe('ElementCallAdapter', () => {
   test('getParticipants maps memberships with names and isLocal', () => {
     const parts = adapter.getParticipants();
     expect(parts).toHaveLength(2);
-    const me = parts.find((p) => p.id === '@me:matrix.vkkovalev.work');
-    const other = parts.find((p) => p.id === '@test2:matrix.vkkovalev.work');
+    const me = parts.find((p) => p.id === '@me:matrix.example.org');
+    const other = parts.find((p) => p.id === '@test2:matrix.example.org');
     expect(me).toMatchObject({ name: 'Me', isLocal: true });
     expect(other).toMatchObject({ name: 'Test Two', isLocal: false });
   });
 
   test('getParticipantName resolves via matrixclient', () => {
-    expect(adapter.getParticipantName('@test2:matrix.vkkovalev.work')).toBe('Test Two');
+    expect(adapter.getParticipantName('@test2:matrix.example.org')).toBe('Test Two');
   });
 
   test('getActiveSpeaker reads the livekit active speaker and resolves its name', () => {
-    const speaking = { identity: '@test2:matrix.vkkovalev.work:IZFUKTQLPX', isSpeaking: true };
+    const speaking = { identity: '@test2:matrix.example.org:IZFUKTQLPX', isSpeaking: true };
     const livekitRoom = {
       remoteParticipants: new Map(),
       localParticipant: null,
@@ -368,7 +375,7 @@ describe('ElementCallAdapter', () => {
     document.body.appendChild(audio);
 
     expect(adapter.getActiveSpeaker()).toEqual({
-      id: '@test2:matrix.vkkovalev.work',
+      id: '@test2:matrix.example.org',
       name: 'Test Two',
       isLocal: false,
     });
@@ -382,7 +389,7 @@ describe('ElementCallAdapter', () => {
     // Same matrix userId as the local client, but a different deviceId — this is
     // a second device of "me", whose speech is captured on the remote/mixed
     // path, so it must NOT be reported isLocal.
-    const speaking = { identity: '@me:matrix.vkkovalev.work:OTHERDEVICE', isSpeaking: true };
+    const speaking = { identity: '@me:matrix.example.org:OTHERDEVICE', isSpeaking: true };
     const livekitRoom = {
       remoteParticipants: new Map(),
       localParticipant: null,
@@ -397,12 +404,12 @@ describe('ElementCallAdapter', () => {
     document.body.appendChild(audio);
 
     const speaker = adapter.getActiveSpeaker();
-    expect(speaker.id).toBe('@me:matrix.vkkovalev.work');
+    expect(speaker.id).toBe('@me:matrix.example.org');
     expect(speaker.isLocal).toBe(false);
   });
 
   test('getActiveSpeaker flags the local user speaking from the local device as local', () => {
-    const speaking = { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isSpeaking: true };
+    const speaking = { identity: '@me:matrix.example.org:MYDEVICE', isSpeaking: true };
     const livekitRoom = {
       remoteParticipants: new Map(),
       localParticipant: null,
@@ -436,8 +443,8 @@ describe('ElementCallAdapter', () => {
     mountRoom({
       localParticipant: null,
       remoteParticipants: new Map([
-        ['a', { identity: '@test2:matrix.vkkovalev.work:IZFUKTQLPX', isSpeaking: true, isMicrophoneEnabled: true }],
-        ['b', { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isSpeaking: false, isMicrophoneEnabled: false }],
+        ['a', { identity: '@test2:matrix.example.org:IZFUKTQLPX', isSpeaking: true, isMicrophoneEnabled: true }],
+        ['b', { identity: '@me:matrix.example.org:MYDEVICE', isSpeaking: false, isMicrophoneEnabled: false }],
       ]),
       activeSpeakers: [],
       on() {},
@@ -445,11 +452,11 @@ describe('ElementCallAdapter', () => {
     });
 
     const parts = adapter.getParticipants();
-    const other = parts.find((p) => p.id === '@test2:matrix.vkkovalev.work');
-    const me = parts.find((p) => p.id === '@me:matrix.vkkovalev.work');
+    const other = parts.find((p) => p.id === '@test2:matrix.example.org');
+    const me = parts.find((p) => p.id === '@me:matrix.example.org');
     expect(other).toMatchObject({ isSpeaking: true, micMuted: false });
     expect(me).toMatchObject({ isSpeaking: false, micMuted: true });
-    expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(true);
+    expect(adapter.isMicMuted('@me:matrix.example.org')).toBe(true);
     expect(adapter.anyMicOn()).toBe(true);
   });
 
@@ -460,9 +467,9 @@ describe('ElementCallAdapter', () => {
     // transcript as mics_off. Both devices must therefore agree with
     // isMicMuted()'s "every device muted" rule.
     mountRoom({
-      localParticipant: { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isMicrophoneEnabled: false },
+      localParticipant: { identity: '@me:matrix.example.org:MYDEVICE', isMicrophoneEnabled: false },
       remoteParticipants: new Map([
-        ['b', { identity: '@me:matrix.vkkovalev.work:OTHERDEVICE', isSpeaking: true, isMicrophoneEnabled: true }],
+        ['b', { identity: '@me:matrix.example.org:OTHERDEVICE', isSpeaking: true, isMicrophoneEnabled: true }],
       ]),
       activeSpeakers: [],
       on() {},
@@ -471,10 +478,10 @@ describe('ElementCallAdapter', () => {
     adapter.isConferenceReady(); // discover the livekit Room (caches _room)
 
     const parts = adapter.getParticipants();
-    const me = parts.filter((p) => p.id === '@me:matrix.vkkovalev.work');
+    const me = parts.filter((p) => p.id === '@me:matrix.example.org');
     expect(me.length).toBeGreaterThan(0);
     expect(me.every((p) => p.micMuted === false)).toBe(true);
-    expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(false);
+    expect(adapter.isMicMuted('@me:matrix.example.org')).toBe(false);
   });
 
   test('isMicMuted is false when a same-user second device has its mic on', () => {
@@ -484,9 +491,9 @@ describe('ElementCallAdapter', () => {
     // local device first and suppress the remote device's speech, so mute must
     // be reported only when EVERY device of the user is muted.
     mountRoom({
-      localParticipant: { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isMicrophoneEnabled: false },
+      localParticipant: { identity: '@me:matrix.example.org:MYDEVICE', isMicrophoneEnabled: false },
       remoteParticipants: new Map([
-        ['b', { identity: '@me:matrix.vkkovalev.work:OTHERDEVICE', isSpeaking: true, isMicrophoneEnabled: true }],
+        ['b', { identity: '@me:matrix.example.org:OTHERDEVICE', isSpeaking: true, isMicrophoneEnabled: true }],
       ]),
       activeSpeakers: [],
       on() {},
@@ -494,14 +501,14 @@ describe('ElementCallAdapter', () => {
     });
     adapter.isConferenceReady(); // discover the livekit Room (caches _room)
 
-    expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(false);
+    expect(adapter.isMicMuted('@me:matrix.example.org')).toBe(false);
   });
 
   test('isMicMuted is true when every device of the user is muted', () => {
     mountRoom({
-      localParticipant: { identity: '@me:matrix.vkkovalev.work:MYDEVICE', isMicrophoneEnabled: false },
+      localParticipant: { identity: '@me:matrix.example.org:MYDEVICE', isMicrophoneEnabled: false },
       remoteParticipants: new Map([
-        ['b', { identity: '@me:matrix.vkkovalev.work:OTHERDEVICE', isMicrophoneEnabled: false }],
+        ['b', { identity: '@me:matrix.example.org:OTHERDEVICE', isMicrophoneEnabled: false }],
       ]),
       activeSpeakers: [],
       on() {},
@@ -509,7 +516,7 @@ describe('ElementCallAdapter', () => {
     });
     adapter.isConferenceReady(); // discover the livekit Room (caches _room)
 
-    expect(adapter.isMicMuted('@me:matrix.vkkovalev.work')).toBe(true);
+    expect(adapter.isMicMuted('@me:matrix.example.org')).toBe(true);
   });
 
   test('reattach after dispose wires exactly one participantConnected join handler', () => {

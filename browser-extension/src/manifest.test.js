@@ -9,15 +9,19 @@
 
 import { readFileSync } from 'node:fs';
 
-const manifest = JSON.parse(
+import { createManifest } from '../scripts/conference-hosts.js';
+
+const template = JSON.parse(
   readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'),
 );
 
-const EC_PATTERN = 'https://element.vkkovalev.work/widgets/element-call/*';
-const EC_IFRAME_URL = 'https://element.vkkovalev.work/widgets/element-call/index.html';
-const EC_IFRAME_URL_HASH = 'https://element.vkkovalev.work/widgets/element-call/index.html#/room/!abc';
-const ELEMENT_TOP_FRAME_URL = 'https://element.vkkovalev.work/';
-const ELEMENT_TOP_FRAME_ROOM_URL = 'https://element.vkkovalev.work/#/room/!abc';
+const manifest = createManifest(template, { jitsi: ['https://meet.example.org'], matrix: ['https://element.example.org'] });
+
+const EC_PATTERN = 'https://element.example.org/widgets/element-call/*';
+const EC_IFRAME_URL = 'https://element.example.org/widgets/element-call/index.html';
+const EC_IFRAME_URL_HASH = 'https://element.example.org/widgets/element-call/index.html#/room/!abc';
+const ELEMENT_TOP_FRAME_URL = 'https://element.example.org/';
+const ELEMENT_TOP_FRAME_ROOM_URL = 'https://element.example.org/#/room/!abc';
 
 /**
  * Minimal Chrome match-pattern → boolean matcher.
@@ -97,7 +101,23 @@ describe('manifest Element Call scoping', () => {
     // origins may fetch injected.js; top-frame injection is prevented by content_scripts
     // (asserted above), not by WAR.
     const war = manifest.web_accessible_resources[0];
-    expect(war.matches).toContain('https://element.vkkovalev.work/*');
+    expect(war.matches).toContain('https://element.example.org/*');
     expect(war.matches).not.toContain(EC_PATTERN);
+  });
+});
+
+
+describe('manifest configuration boundaries', () => {
+  test('empty config - building manifest - retains built-ins only', () => {
+    expect(createManifest(template, { jitsi: [], matrix: [] })).toEqual(template);
+    expect(template.host_permissions).toEqual(['https://*.ktalk.ru/*', 'https://meet.vas3k.cloud/*']);
+  });
+
+  test('custom Jitsi config - building manifest - allows only the exact host', () => {
+    const patterns = manifest.content_scripts.flatMap(entry => entry.matches);
+    expect(patterns.some(pattern => matchPatternMatches(pattern, 'https://meet.example.org/room'))).toBe(true);
+    expect(patterns.some(pattern => matchPatternMatches(pattern, 'https://other.example.org/room'))).toBe(false);
+    expect(patterns.some(pattern => matchPatternMatches(pattern, 'https://meet.example.org.evil.test/room'))).toBe(false);
+    expect(patterns).not.toContain('<all_urls>');
   });
 });

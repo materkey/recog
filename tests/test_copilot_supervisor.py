@@ -2100,7 +2100,7 @@ STARTUP_SCREEN = "\n\n  Starting up…\n"
 TRUST_DIALOG_SCREEN = (
     " Accessing workspace:\n"
     "\n"
-    " /Users/vkkovalev/projects/recog\n"
+    " /Users/user/projects/recog\n"
     "\n"
     " Quick safety check: Is this a project you created or one you trust?\n"
     "\n"

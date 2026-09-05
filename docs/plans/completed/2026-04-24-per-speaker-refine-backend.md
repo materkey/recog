@@ -46,7 +46,7 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 2: Spike on cooperative abort hook in upstream decoder
 
-- [x] 2.1 Read `/Users/vkkovalev/projects/GigaAM/gigaam/decoding.py` — the greedy RNN-T decoder's `decode()` step loop (post-upstream, `6e4b027`). Identify whether there's a natural poll point per decoder step (e.g., an iteration over frames/timesteps).
+- [x] 2.1 Read `/Users/user/projects/GigaAM/gigaam/decoding.py` — the greedy RNN-T decoder's `decode()` step loop (post-upstream, `6e4b027`). Identify whether there's a natural poll point per decoder step (e.g., an iteration over frames/timesteps).
 - [x] 2.2 Prototype a monkey-patched `step_callback` approach: wrap the decoder's inner loop with a hook that returns early if a `should_abort()` callable returns True. Try it on a short wav, measure abort latency.
 - [x] 2.3 Record outcome in `docs/experiments/2026-04-24-refine-abort-spike.md`:
   - Section "Can we hook the decoder step loop?" — yes/no with evidence.

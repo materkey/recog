@@ -27,6 +27,7 @@ import threading
 import time
 
 from recog.config import get_data_dir
+from recog.conference_hosts import canonical_source
 
 
 UTC = timezone.utc
@@ -37,17 +38,17 @@ EXTERNAL_INDEX_CACHE_DIR = Path.home() / ".cache" / "recog" / "external_indexes"
 # increment generation — so the bridge gates them through a single predicate
 # instead of a hardcoded `source == "ktalk"`. "orphan"/"local" are plain
 # recordings, not conferences.
-CONFERENCE_SOURCES = frozenset({"ktalk", "vas3k", "vkkovalev", "matrix"})
+CONFERENCE_SOURCES = frozenset({"ktalk", "vas3k", "jitsi", "matrix"})
 
 
 def is_conference_source(source: Optional[str]) -> bool:
     """True when `source` is an extension-driven conference platform.
 
-    Groups ktalk + the Jitsi platforms (vas3k/vkkovalev) + matrix so copilot
+    Groups ktalk + the Jitsi platforms (vas3k/jitsi) + matrix so copilot
     lifecycle, end-on-last-extension-gone, and increment generation treat them
     identically. orphan/local meetings are not conferences.
     """
-    return source in CONFERENCE_SOURCES
+    return canonical_source(source) in CONFERENCE_SOURCES
 
 
 def get_external_paths() -> list[tuple[Path, Optional[str]]]:
@@ -224,7 +225,7 @@ class MeetingStorage:
             "created_at": now.isoformat(),
             "ended_at": None,
             "updated_at": now.isoformat(),
-            "source": source,
+            "source": canonical_source(source),
             "end_reason": None,
             "mode": self._mode.copy(),
             "chunk_duration_ms": getattr(self, '_chunk_duration_ms', 3000),
@@ -263,7 +264,7 @@ class MeetingStorage:
 
         return meeting_id
 
-    def _find_same_day_meeting(self, live_id: str, platform: str) -> Optional[str]:
+    def _find_same_day_meeting(self, live_id: str, platform: str, host: str) -> Optional[str]:
         """
         Найти завершённую встречу с тем же live_id и platform за сегодня.
 
@@ -271,7 +272,8 @@ class MeetingStorage:
 
         Args:
             live_id: ID комнаты (например, abcd1234wxyz)
-            platform: Платформа встречи (ktalk, vas3k, vkkovalev)
+            platform: Платформа встречи (ktalk, vas3k, jitsi)
+            host: Сервер конференции; одинаковые комнаты на разных серверах независимы
 
         Returns:
             meeting_id если найдена, иначе None
@@ -295,11 +297,15 @@ class MeetingStorage:
                 # Только завершённые встречи с той же платформой
                 if meta.get("ended_at") is None:
                     continue
-                if meta.get("source") != platform:
+                if canonical_source(meta.get("source")) != canonical_source(platform):
                     continue
 
                 # Тот же live_id
                 if meta.get("conference", {}).get("live_id") != live_id:
+                    continue
+                conference = meta.get("conference", {})
+                stored_host = conference.get("host") or urlparse(conference.get("live_url") or "").netloc
+                if stored_host != host:
                     continue
 
                 # Тот же день (по локальному времени)
@@ -374,7 +380,7 @@ class MeetingStorage:
         Args:
             url: URL встречи (https://example.ktalk.ru/abcd1234wxyz)
             title: Заголовок страницы (опционально)
-            platform: Платформа встречи (ktalk, vas3k, vkkovalev)
+            platform: Платформа встречи (ktalk, vas3k, jitsi)
 
         Returns:
             meeting_id текущей встречи
@@ -385,7 +391,7 @@ class MeetingStorage:
         live_id = path_parts[-1] if path_parts else None
 
         # Fallback для платформ, где id комнаты живёт во фрагменте URL, а не в
-        # пути (Element Call: https://element.vkkovalev.work/#/room/<roomId>).
+        # пути (Element Call: https://element.example.org/#/room/<roomId>).
         # Там путь пустой, поэтому вытаскиваем id из полной строки url.
         # Используем именно full `url`, а не parsed.fragment: urlparse срезает
         # ведущий '#', ломая alias-форму #/room/#recog-spike:...
@@ -402,8 +408,14 @@ class MeetingStorage:
             meta = self._load_meta()
             current_live_id = meta.get("conference", {}).get("live_id")
 
-            # Случай 1: другая комната
-            if current_live_id and current_live_id != live_id:
+            conference = meta.get("conference", {})
+            current_host = conference.get("host") or urlparse(conference.get("live_url") or "").netloc
+
+            # Случай 1: другая комната, сервер или платформа
+            if current_live_id and (
+                current_live_id != live_id or current_host != parsed.netloc
+                or canonical_source(meta.get("source")) != canonical_source(platform)
+            ):
                 self._end_current_meeting(end_reason="changed_meeting")
                 need_new_or_reopen = True
 
@@ -416,7 +428,7 @@ class MeetingStorage:
             # Случай 3: пустой orphan -> ищем существующую или обновляем source
             elif meta["source"] == "orphan" and meta["stats"]["segment_count"] == 0:
                 # Сначала проверим, есть ли существующая встреча за сегодня
-                existing_meeting_id = self._find_same_day_meeting(live_id, platform)
+                existing_meeting_id = self._find_same_day_meeting(live_id, platform, parsed.netloc)
                 if existing_meeting_id:
                     # Удалить пустой orphan и переоткрыть существующую
                     orphan_path = self.current_meeting_path
@@ -426,12 +438,12 @@ class MeetingStorage:
                         shutil.rmtree(orphan_path, ignore_errors=True)
                     print(f"Reopened same-day meeting: {existing_meeting_id}")
                 else:
-                    meta["source"] = platform
+                    meta["source"] = canonical_source(platform)
                     self._save_meta(meta)
 
         if need_new_or_reopen:
             # Попробовать найти существующую встречу с тем же live_id за сегодня
-            existing_meeting_id = self._find_same_day_meeting(live_id, platform)
+            existing_meeting_id = self._find_same_day_meeting(live_id, platform, parsed.netloc)
             if existing_meeting_id:
                 # Переоткрыть существующую встречу (группировка)
                 self._reopen_meeting(existing_meeting_id)
@@ -955,7 +967,8 @@ class MeetingStorage:
         # Sort by created_at descending
         meetings.sort(key=lambda m: m.get("created_at", ""), reverse=True)
 
-        return meetings
+        return [dict(meeting, source=canonical_source(meeting.get("source")))
+                for meeting in meetings]
 
     def _get_external_index(self, ext_path: Path, source_override: Optional[str], refresh: bool = False) -> list[dict]:
         """Get or create cached index for external path."""
@@ -1006,7 +1019,7 @@ class MeetingStorage:
                     "ended_at": meta.get("ended_at"),
                     "duration_seconds": meta.get("stats", {}).get("duration_seconds", 0),
                     "title": meta.get("title"),
-                    "source": source,
+                    "source": canonical_source(source),
                     "end_reason": meta.get("end_reason"),
                     "conference_url": meta.get("conference", meta.get("ktalk", {})).get("live_url"),
                     "segment_count": meta.get("stats", {}).get("segment_count", 0),
@@ -1053,7 +1066,7 @@ class MeetingStorage:
                     "ended_at": None,
                     "duration_seconds": self._calc_duration(meta["created_at"]),
                     "title": meta.get("title"),
-                    "source": meta.get("source"),
+                    "source": canonical_source(meta.get("source")),
                     "end_reason": None,
                     "ktalk_live_url": meta.get("conference", meta.get("ktalk", {})).get("live_url"),
                     "segment_count": meta.get("stats", {}).get("segment_count", 0),
@@ -1102,6 +1115,8 @@ class MeetingStorage:
     def _read_meeting_meta(self, meeting_path: Path) -> dict:
         """Разрешает WAV относительно встречи, не переписывая сохранённые метаданные."""
         meta = json.loads((meeting_path / "meta.json").read_text(encoding="utf-8"))
+        if "source" in meta:
+            meta["source"] = canonical_source(meta["source"])
         for track in ("mic", "system"):
             audio_path = meeting_path / f"audio_{track}.wav"
             if audio_path.is_file():

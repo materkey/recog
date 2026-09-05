@@ -8,32 +8,35 @@
  * location-like objects (jsdom forbids mutating window.location after setup).
  *
  * @jest-environment jsdom
- * @jest-environment-options {"url": "https://element.vkkovalev.work/widgets/element-call/index.html"}
+ * @jest-environment-options {"url": "https://element.example.org/widgets/element-call/index.html"}
  */
 
-import { detectPlatform, getPlatform, getPlatformDisplayName, isJitsiPlatform, resetAdapter } from './index.js';
+const hosts = { jitsi: ['https://meet.example.org'], matrix: ['https://element.example.org'] };
+globalThis.__RECOG_CONFERENCE_HOSTS__ = hosts;
+const { detectPlatform, getPlatform, getPlatformDisplayName, isJitsiPlatform, resetAdapter } = await import('./index.js');
+afterAll(() => { delete globalThis.__RECOG_CONFERENCE_HOSTS__; });
 
-const loc = (hostname, pathname = '/') => ({ hostname, pathname });
+const loc = (hostname, pathname = '/') => new URL(`https://${hostname}${pathname}`);
 
 describe('detectPlatform', () => {
-  test('EC iframe location on element.vkkovalev.work resolves to matrix', () => {
-    expect(detectPlatform(loc('element.vkkovalev.work', '/widgets/element-call/index.html'))).toBe('matrix');
+  test('EC iframe location on element.example.org resolves to matrix', () => {
+    expect(detectPlatform(loc('element.example.org', '/widgets/element-call/index.html'))).toBe('matrix');
   });
 
   test('deep EC iframe subpaths still resolve to matrix', () => {
-    expect(detectPlatform(loc('element.vkkovalev.work', '/widgets/element-call/index.html#/room/!abc'))).toBe('matrix');
+    expect(detectPlatform(loc('element.example.org', '/widgets/element-call/index.html#/room/!abc'))).toBe('matrix');
   });
 
   test('Element top frame (path "/") gets NO adapter', () => {
-    expect(detectPlatform(loc('element.vkkovalev.work', '/'))).toBeNull();
+    expect(detectPlatform(loc('element.example.org', '/'))).toBeNull();
   });
 
   test('Element top frame on an arbitrary non-EC path gets NO adapter', () => {
-    expect(detectPlatform(loc('element.vkkovalev.work', '/#/room/!abc'))).toBeNull();
+    expect(detectPlatform(loc('element.example.org', '/#/room/!abc'))).toBeNull();
   });
 
-  test('meet.vkkovalev.work still resolves to vkkovalev (not misrouted to matrix)', () => {
-    expect(detectPlatform(loc('meet.vkkovalev.work', '/somemeeting'))).toBe('vkkovalev');
+  test('configured Jitsi host - detecting platform - resolves to jitsi', () => {
+    expect(detectPlatform(loc('meet.example.org', '/somemeeting'))).toBe('jitsi');
   });
 
   test('ktalk detection unchanged', () => {
@@ -42,6 +45,16 @@ describe('detectPlatform', () => {
 
   test('vas3k detection unchanged', () => {
     expect(detectPlatform(loc('meet.vas3k.cloud', '/room'))).toBe('vas3k');
+  });
+
+  test.each(['https://element.example.org.evil.test/widgets/element-call/index.html',
+    'https://evilktalk.ru/', 'http://meet.example.org/', 'https://meet.example.org:8443/',
+    'https://sub.meet.example.org/'])('unapproved URL %s - detecting platform - rejects it', url => {
+    expect(detectPlatform(new URL(url), hosts)).toBeNull();
+  });
+
+  test('empty config - detecting custom host - rejects it', () => {
+    expect(detectPlatform(loc('meet.example.org'), { jitsi: [], matrix: [] })).toBeNull();
   });
 
   test('unknown host resolves to null', () => {

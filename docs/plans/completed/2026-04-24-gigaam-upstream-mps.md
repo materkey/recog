@@ -10,7 +10,7 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ## Context (from discovery)
 
-- Upstream GigaAM lives at `/Users/vkkovalev/projects/GigaAM` and is editable-installed into `venv-gigaam/` via `pip install -e ../GigaAM`. Current local main is at `0a3f103`; upstream `origin/main` is at `6e4b027` (9 commits ahead).
+- Upstream GigaAM lives at `/Users/user/projects/GigaAM` and is editable-installed into `venv-gigaam/` via `pip install -e ../GigaAM`. Current local main is at `0a3f103`; upstream `origin/main` is at `6e4b027` (9 commits ahead).
 - BREAKING upstream change in commit `a755fec`: `model.decoding.decode(...)` now returns `List[Tuple[str, List[int], List[int]]]` (text + token_ids + token_frames) instead of `List[str]`. Our `recog/asr.py::ASRModule.transcribe_batch` calls this directly at one known site and will crash without a patch. Public signature `transcribe_batch(pcm_list) -> List[str]` must stay stable so callers in `recog/live.py::_on_pcm_batch` are unaffected.
 - New API: `gigaam.load_model(...).transcribe(path, word_timestamps=True)` returns a `TranscriptionResult` with `.text` and `.words` (list of `Word(text, start, end)`). We'll wrap this as `ASRModule.transcribe_with_timestamps`.
 - Grid-search baseline: `docs/experiments/2026-04-23-gigaam-grid.md`. Configs 20/1.0 = 23.9% WER and 10/0.5 = 24.5% WER on take-2 reference (`docs/experiments/reference_take2.txt`, 48 s speech window trim 17-65). Post-merge WER must stay within ±1% of these.
@@ -34,12 +34,12 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ### Task 1: Upgrade upstream GigaAM checkout
 
-- [x] 1.1 In `/Users/vkkovalev/projects/GigaAM`: `git fetch origin` then `git log --oneline 0a3f103..origin/main` — verify the 9 expected commits (cfef5e7, 33be2c4, e580e38, 7ce42d2, d427e5a, 7448b74, a0deb50, 5b5b4ad, a755fec, 6e4b027) are visible. *(All 10 listed hashes reachable; origin/main is 20 linear commits ahead of 0a3f103, which is fine — plan's "9 ahead" count was an undercount, not a blocker.)*
-- [x] 1.2 **Resolved via Variant A (fresh branch at `origin/main`):** user stashed in-progress `transcribe_mp3.py` and pre-created `upstream-main` branch at `origin/main`. HEAD in `/Users/vkkovalev/projects/GigaAM` is now `6e4b027`. Local branches `local-experiment` (7 ahead / 20 behind) and `main` (6 ahead / 21 behind) are preserved untouched; uncommitted work is in `stash@{0}: On local-experiment: wip transcribe_mp3 helper`. The editable install at `venv-gigaam/bin/python` resolves to `/Users/vkkovalev/projects/GigaAM/gigaam/__init__.py` — that path now points at upstream main content. Do NOT run `git merge --ff-only origin/main` or switch branches here; proceed directly to 1.3.
-- [x] 1.3 Verify the editable-install still resolves the new version: `/Users/vkkovalev/projects/recog/venv-gigaam/bin/python -c "import gigaam; print(gigaam.__file__)"` — path should still point at `../GigaAM/gigaam/__init__.py`. *(Verified: resolves to `/Users/vkkovalev/projects/GigaAM/gigaam/__init__.py`.)*
+- [x] 1.1 In `/Users/user/projects/GigaAM`: `git fetch origin` then `git log --oneline 0a3f103..origin/main` — verify the 9 expected commits (cfef5e7, 33be2c4, e580e38, 7ce42d2, d427e5a, 7448b74, a0deb50, 5b5b4ad, a755fec, 6e4b027) are visible. *(All 10 listed hashes reachable; origin/main is 20 linear commits ahead of 0a3f103, which is fine — plan's "9 ahead" count was an undercount, not a blocker.)*
+- [x] 1.2 **Resolved via Variant A (fresh branch at `origin/main`):** user stashed in-progress `transcribe_mp3.py` and pre-created `upstream-main` branch at `origin/main`. HEAD in `/Users/user/projects/GigaAM` is now `6e4b027`. Local branches `local-experiment` (7 ahead / 20 behind) and `main` (6 ahead / 21 behind) are preserved untouched; uncommitted work is in `stash@{0}: On local-experiment: wip transcribe_mp3 helper`. The editable install at `venv-gigaam/bin/python` resolves to `/Users/user/projects/GigaAM/gigaam/__init__.py` — that path now points at upstream main content. Do NOT run `git merge --ff-only origin/main` or switch branches here; proceed directly to 1.3.
+- [x] 1.3 Verify the editable-install still resolves the new version: `/Users/user/projects/recog/venv-gigaam/bin/python -c "import gigaam; print(gigaam.__file__)"` — path should still point at `../GigaAM/gigaam/__init__.py`. *(Verified: resolves to `/Users/user/projects/GigaAM/gigaam/__init__.py`.)*
 - [x] 1.4 Quick API probe (path-based transcription only, no batch yet):
   ```bash
-  /Users/vkkovalev/projects/recog/venv-gigaam/bin/python -c "
+  /Users/user/projects/recog/venv-gigaam/bin/python -c "
   import gigaam
   m = gigaam.load_model('v3_e2e_rnnt', device='cpu')
   r = m.transcribe('/tmp/recog_exp/raw_take2/d9e189e5__Example.wav', word_timestamps=True)
@@ -57,7 +57,7 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 - [x] 2.1 Read `recog/asr.py::ASRModule.transcribe_batch` in full; also grep for any other call to `model.decoding.decode` or `.decoding.decode` across `recog/` and `scripts/`. *(Three production call sites found: `recog/asr.py:122` in `transcribe_simple`, `recog/asr.py:191` in `transcribe_batch`, `recog/live.py:441` in `_transcribe_direct`. Benchmark `scripts/benchmarks/bench_gigaam_rtf.py` discards the return value so no change needed there — kept out of scope per "minimal change" rule. Upstream signature confirmed at `../GigaAM/gigaam/decoding.py:57,129`: both CTC and RNN-T greedy decoders return `List[Tuple[str, List[int], List[int]]]`.)*
 - [x] 2.2 Update each call site: old `texts = model.decoding.decode(...)` (List[str]) → new `decoded = model.decoding.decode(...); texts = [t[0] for t in decoded]` (first tuple element is text). Token IDs and frames are unused; don't store them. *(For single-sample paths `transcribe_simple` and `_transcribe_direct` the existing `[0]` kept its batch-index meaning and a second `[0]` now extracts the text from the tuple → `...decode(...)[0][0]`. For `transcribe_batch` the plan's list-comprehension pattern is applied verbatim.)*
 - [x] 2.3 The public `ASRModule.transcribe_batch(pcm_list) -> List[str]` signature MUST stay stable. Callers in `recog/live.py::_on_pcm_batch` must not need edits. Verify by grep after the change: no call sites changed. *(Confirmed: `recog/live.py:770` caller untouched; `tests/test_live_speaker_attribution.py` mocks `t.asr.transcribe_batch.return_value = [...]` (list of strings) remain compatible; `tests/test_asr.py` mock helper internally maps `decoded_texts` → `(text, [], [])` tuples so the public helper signature stays `list[str]`.)*
-- [x] 2.4 Run full unit suite: `cd /Users/vkkovalev/projects/recog && venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green. *(`164 passed, 2 deselected in 0.85s`.)*
+- [x] 2.4 Run full unit suite: `cd /Users/user/projects/recog && venv-gigaam/bin/python -m pytest tests/ -v -m "not e2e"` — all green. *(`164 passed, 2 deselected in 0.85s`.)*
 - [x] 2.5 Manual live smoke:
   - `./recog-service.sh restart`
   - Open a short KTalk meeting or run a quick `python -m recog live --list-devices` sanity check.
@@ -121,7 +121,7 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 ### Task 8: Update tasks.md progress in openspec change
 
-- [x] 8.1 In `/Users/vkkovalev/projects/recog/openspec/changes/per-speaker-stream-refine/tasks.md`, mark §0 (0.1–0.4) and §1 (1.1–1.4) as `[x]` — these are covered by the tasks above. Don't modify task bodies. *(Eight checkboxes flipped; task bodies untouched, verified by targeted `- [ ] 0.` / `- [x] 0.` substring edits rather than any prose rewrite.)*
+- [x] 8.1 In `/Users/user/projects/recog/openspec/changes/per-speaker-stream-refine/tasks.md`, mark §0 (0.1–0.4) and §1 (1.1–1.4) as `[x]` — these are covered by the tasks above. Don't modify task bodies. *(Eight checkboxes flipped; task bodies untouched, verified by targeted `- [ ] 0.` / `- [x] 0.` substring edits rather than any prose rewrite.)*
 - [x] 8.2 Run `openspec validate per-speaker-stream-refine` — must still say "is valid". *(Output: `Change 'per-speaker-stream-refine' is valid` — clean exit 0.)*
 - [x] 8.3 Commit: `plan(openspec): mark stream-refine §0 and §1 complete (upstream GigaAM + MPS)`
 

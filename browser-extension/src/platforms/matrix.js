@@ -13,7 +13,7 @@
  *   mounts late (first unmute), so it is discovered lazily and cached.
  *
  * Identity note: on this deploy `participant.identity` is the LEGACY plain
- * format `${userId}:${deviceId}` (e.g. `@test2:matrix.vkkovalev.work:IZFUKTQLPX`),
+ * format `${userId}:${deviceId}` (e.g. `@test2:matrix.example.org:IZFUKTQLPX`),
  * not the sha256 hash. `parseRtcIdentity` parses it directly and keeps a
  * memberships (`rtcBackendIdentity`) fallback for the future sticky-event
  * MatrixRTC hash format.
@@ -22,7 +22,6 @@
  * the first `livekitRoom` found in the fiber tree is used.
  */
 
-export const ELEMENT_BASE_URL = 'https://element.vkkovalev.work';
 
 const FIBER_KEY_PREFIX = '__reactFiber$';
 const MAX_FIBER_HOPS = 50;
@@ -106,9 +105,9 @@ export function membershipToParticipant(membership, ctx = {}) {
 }
 
 /** Synthesize the canonical Element deep-link `#/room/<roomId>`. */
-export function buildMeetingUrl(roomId) {
+export function buildMeetingUrl(roomId, origin = window.location.origin) {
   if (!roomId) return null;
-  return `${ELEMENT_BASE_URL}/#/room/${roomId}`;
+  return `${origin}/#/room/${roomId}`;
 }
 
 /** Resolve the room name from matrixclient (fallback: empty string). */
@@ -508,7 +507,7 @@ export class ElementCallAdapter {
    * this synthesized `#/room/<roomId>` url instead.
    */
   getMeetingUrl() {
-    return buildMeetingUrl(this._roomId());
+    return buildMeetingUrl(this._roomId(), this._win.location.origin);
   }
 
   /**

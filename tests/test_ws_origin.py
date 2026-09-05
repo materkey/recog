@@ -34,8 +34,6 @@ def test_given_ktalk_https_origin_when_checked_then_allowed(origin):
 
 @pytest.mark.parametrize("origin", [
     "https://meet.vas3k.cloud",
-    "https://meet.vkkovalev.work",
-    "https://element.vkkovalev.work",
 ])
 def test_given_exact_conference_origin_when_checked_then_allowed(origin):
     """given: an exact conference-page origin from the extension manifest

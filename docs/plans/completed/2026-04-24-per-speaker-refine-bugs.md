@@ -6,7 +6,7 @@
 
 ## Context (from discovery)
 
-- Исходный архитектурный план: `/Users/vkkovalev/.claude/plans/rippling-mixing-giraffe.md` (277 строк, прошёл GAN-review).
+- Исходный архитектурный план: `/Users/user/.claude/plans/rippling-mixing-giraffe.md` (277 строк, прошёл GAN-review).
 - `browser-extension/src/ui.js:1140-1306` — `handleTranscript` и `handleTranscriptRefine`. Merge-блок в районе 1203 не проверяет `speaker` при `is_continuation=true` → разные говорящие склеиваются в один bubble, refine на continuation-chunk контаминирует чужой текст.
 - `recog/live.py:893` — batch tuple `(pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms, pid_audio_ms_start, pid_audio_ms_end)`. `_on_pcm_batch` уже держит `_state_lock`, есть per-pid `_pcm_prev_words` / `_pcm_pid_state` / `_pcm_segment_texts`.
 - `recog/live.py:307-329` — `normalize_word`, `deduplicate` для per-pid dedup; переиспользуется для phrase-token overlap.

@@ -11,7 +11,7 @@ context_file: ''
 
 # Brainstorming Session Results
 
-**Facilitator:** Vkkovalev
+**Facilitator:** jitsi
 **Date:** 2026-04-26 14:57:16 Europe/Istanbul
 
 ## Session Overview

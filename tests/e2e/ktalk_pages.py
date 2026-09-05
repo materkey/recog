@@ -8,7 +8,7 @@ from pathlib import Path
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright
 
-EXTENSION_PATH = str(Path(__file__).parent.parent.parent / "browser-extension")
+EXTENSION_PATH = str(Path(__file__).parent.parent.parent / "browser-extension" / "dist")
 
 
 def _fake_audio_flags() -> list[str]:

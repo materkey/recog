@@ -68,10 +68,10 @@ Update shortcuts or custom service definitions that used `mp4_notes.py` or
 `frontend/server.py` to those module commands. The bridge and storage modules
 are now imported as `recog.ktalk_bridge` and `recog.meeting_storage`.
 
-In Chrome, reload the unpacked extension from `browser-extension/`. If the
+In Chrome, reload the unpacked extension from `browser-extension/dist/`. If the
 registration still points to the old `kontur-diarize/ktalk-speaker-extension/`
 path and cannot reload, remove that registration and use **Load unpacked** with
-`browser-extension/`. A local compatibility symlink can keep an existing
+`browser-extension/dist/`. A local compatibility symlink can keep an existing
 registration usable during the move, but fresh clones use the new directory.
 After source changes, rebuild with `npm run build` in `browser-extension/`
 before reloading.
@@ -93,3 +93,6 @@ audio or inference performance.
 Local retired environments and old root bytecode are preserved under `.local/retired/`.
 Archived virtualenvs retain their original absolute paths; restore their original
 location or recreate them before use. The active `venv-gigaam` is unchanged.
+
+Conference addresses belong in [local host configuration](conference-hosts.md),
+which is shared by the backend and the generated extension build.

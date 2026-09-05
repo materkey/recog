@@ -19,7 +19,7 @@
  * — the module-level activate handler would already be registered).
  *
  * @jest-environment jsdom
- * @jest-environment-options {"url": "https://element.vkkovalev.work/widgets/element-call/index.html"}
+ * @jest-environment-options {"url": "https://element.example.org/widgets/element-call/index.html"}
  */
 
 import { jest } from '@jest/globals';

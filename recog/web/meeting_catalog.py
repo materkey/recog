@@ -11,6 +11,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from recog.conference_hosts import canonical_source
+
 from watchdog.events import FileSystemEventHandler
 
 
@@ -203,7 +205,7 @@ class MeetingCatalog(FileSystemEventHandler):
             "id": meta["id"], "created_at": meta["created_at"],
             "ended_at": meta.get("ended_at"),
             "duration_seconds": meta.get("stats", {}).get("duration_seconds", 0),
-            "title": meta.get("title"), "source": source,
+            "title": meta.get("title"), "source": canonical_source(source),
             "end_reason": None if active else meta.get("end_reason"),
             "conference_url" if external else "ktalk_live_url":
                 meta.get("conference", meta.get("ktalk", {})).get("live_url"),

@@ -12,25 +12,23 @@ supervisor, the copilot-channel daemon, `BridgeSubscriber`) send none.
 The literal string ``"null"`` (sandboxed iframe) is NOT an absent header
 and is rejected.
 
-An installation whose conferences live on other hosts extends the list via
-``RECOG_EXTRA_WS_ORIGINS`` (comma-separated exact origins) — kept as a
-separate set so ``ALLOWED_ORIGINS`` stays a literal mirror of the
-extension's `manifest.json` (tests assert that equality). The same host
-must be added to `manifest.json` and the extension rebuilt, otherwise no
-page ever opens the socket in the first place.
+Installation-specific Jitsi/Element hosts come from `.local/conference-hosts.json`,
+shared with the extension build (see docs/conference-hosts.md). The generated
+extension manifest includes only those configured hosts. RECOG_EXTRA_WS_ORIGINS
+remains an additional backend-only exact-origin override; it does not cause
+extension injection on a host by itself.
 """
 
 from typing import Iterable, Optional
 from urllib.parse import urlsplit
 
 from .config import RECOG_EXTRA_WS_ORIGINS
+from .conference_hosts import CONFERENCE_HOSTS
 
 # Exact-match origins: Jitsi/Element conference hosts used by the extension
 # (https only) plus the webapp's own origin on port 9080.
 ALLOWED_ORIGINS = frozenset({
     "https://meet.vas3k.cloud",
-    "https://meet.vkkovalev.work",
-    "https://element.vkkovalev.work",
     "http://127.0.0.1:9080",
     "http://localhost:9080",
 })
@@ -47,7 +45,8 @@ def parse_extra_origins(raw: str | None) -> frozenset[str]:
 
 
 # Installation-specific exact origins from the environment (empty by default).
-EXTRA_ORIGINS = parse_extra_origins(RECOG_EXTRA_WS_ORIGINS)
+EXTRA_ORIGINS = (parse_extra_origins(RECOG_EXTRA_WS_ORIGINS)
+                 | frozenset(CONFERENCE_HOSTS["jitsi"] + CONFERENCE_HOSTS["matrix"]))
 
 
 def origin_allowed(
