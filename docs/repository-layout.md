@@ -71,8 +71,10 @@ are now imported as `recog.ktalk_bridge` and `recog.meeting_storage`.
 In Chrome, reload the unpacked extension from `browser-extension/dist/`. If the
 registration still points to the old `kontur-diarize/ktalk-speaker-extension/`
 path and cannot reload, remove that registration and use **Load unpacked** with
-`browser-extension/dist/`. A local compatibility symlink can keep an existing
-registration usable during the move, but fresh clones use the new directory.
+`browser-extension/dist/`. A symlink does not preserve the registration's ID:
+Chrome resolves its target and can leave the old card stuck at `Reloading…`
+while registering the new path separately. Keep only the registration loaded
+directly from `browser-extension/dist/`.
 After source changes, rebuild with `npm run build` in `browser-extension/`
 before reloading.
 
