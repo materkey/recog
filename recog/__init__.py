@@ -38,7 +38,6 @@ __all__ = [
     "generate_markdown",
     # Live
     "SingleDeviceCapture",
-    "LiveAudioCapture",
     "LiveTranscriber",
     "live_pipeline",
 ]
@@ -60,7 +59,6 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "generate_markdown": ("recog.output", "generate_markdown"),
     # Live
     "SingleDeviceCapture": ("recog.live", "SingleDeviceCapture"),
-    "LiveAudioCapture": ("recog.live", "LiveAudioCapture"),
     "LiveTranscriber": ("recog.live", "LiveTranscriber"),
     "live_pipeline": ("recog.live", "live_pipeline"),
 }

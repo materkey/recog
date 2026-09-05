@@ -270,6 +270,7 @@ def _make_transcriber_stub() -> Mock:
     t.chunk_duration = 3.0
     t.sample_rate = SR
     t._system_wav_anchor = None
+    t._system_source_epoch = 0
     t.transcript_lines = []
     t.mic_speaker_name = "Me"
     t._asr_available = lambda: True
@@ -279,6 +280,7 @@ def _make_transcriber_stub() -> Mock:
 def _capture_returning(chunk: np.ndarray) -> Mock:
     capture = Mock()
     capture.get_chunk.return_value = (chunk, 1000.0)
+    capture.chunk_epoch = 0
     return capture
 
 
@@ -363,6 +365,7 @@ class TestSystemWavAnchor:
         then: якорь = (wall первого сэмпла в ms, WAV offset 0)"""
         t = _pcm_primary_stub(tmp_path)
         capture = Mock()
+        capture.chunk_epoch = 0
         capture.get_chunk.return_value = (
             np.ones(3 * SR, dtype=np.float32) * 0.1, 1000.0
         )
@@ -381,6 +384,7 @@ class TestSystemWavAnchor:
         t = _pcm_primary_stub(tmp_path)
         overlap = t._wav_writer_system._overlap_samples
         capture = Mock()
+        capture.chunk_epoch = 0
         chunk = np.ones(3 * SR, dtype=np.float32) * 0.1
         capture.get_chunk.side_effect = [(chunk, 1000.0), (chunk, 1003.0)]
 
@@ -424,6 +428,75 @@ class TestSystemWavAnchor:
         )
 
         assert t._system_wav_anchor == sentinel
+
+    def test_boundary_during_the_read_belongs_to_the_chunk_it_produced(self, tmp_path):
+        """given: граница источников проходит внутри самого get_chunk — чанк
+              уже с нового выхода, буфер перед ним сброшен
+        when: _process_chunk
+        then: чанк записан целиком. Эпоху берём у чанка (capture фиксирует её
+              под локом нарезки), а снимок ДО чтения буфера отнёс бы его к
+              прежнему источнику и срезал бы 0.5 с нового выхода как overlap"""
+        t = _pcm_primary_stub(tmp_path)
+        chunk = np.ones(3 * SR, dtype=np.float32) * 0.1
+
+        class _SwitchingCapture:
+            """Граница источников проходит внутри второго get_chunk: снимок
+            source_epoch, сделанный до вызова, показал бы ещё старый отрезок."""
+
+            def __init__(self):
+                self.source_epoch = 0
+                self.chunk_epoch = 0
+                self._calls = 0
+
+            def get_chunk(self, duration):
+                self._calls += 1
+                if self._calls == 2:
+                    self.source_epoch = 1
+                    self.chunk_epoch = 1
+                return chunk, 1000.0 + 3.0 * self._calls
+
+        capture = _SwitchingCapture()
+        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        after_first = t._wav_writer_system._samples_written
+        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+
+        assert t._wav_writer_system._samples_written == after_first + len(chunk)
+
+    def test_source_switch_does_not_replay_the_missing_overlap(self, tmp_path):
+        """given: пишущий system-writer, захват сменил источник (chunk_epoch
+        вырос) и сбросил буфер
+        when: _process_chunk с первым чанком нового источника
+        then: чанк записан целиком — 0.5 с речи с нового выхода не выброшены
+              как «уже записанный» overlap"""
+        t = _pcm_primary_stub(tmp_path)
+        capture = Mock()
+        capture.chunk_epoch = 0
+        chunk = np.ones(3 * SR, dtype=np.float32) * 0.1
+        capture.get_chunk.side_effect = [(chunk, 1000.0), (chunk, 1003.0)]
+
+        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        after_first = t._wav_writer_system._samples_written
+        capture.chunk_epoch = 1
+        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+
+        assert t._wav_writer_system._samples_written == after_first + len(chunk)
+
+    def test_same_source_still_skips_the_overlap(self, tmp_path):
+        """given: тот же chunk_epoch у двух подряд идущих чанков
+        when: два _process_chunk
+        then: overlap второго срезан — дублей в WAV нет"""
+        t = _pcm_primary_stub(tmp_path)
+        overlap = t._wav_writer_system._overlap_samples
+        capture = Mock()
+        capture.chunk_epoch = 0
+        chunk = np.ones(3 * SR, dtype=np.float32) * 0.1
+        capture.get_chunk.side_effect = [(chunk, 1000.0), (chunk, 1003.0)]
+
+        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        after_first = t._wav_writer_system._samples_written
+        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+
+        assert t._wav_writer_system._samples_written == after_first + len(chunk) - overlap
 
     def test_mic_write_does_not_set_anchor(self, tmp_path):
         """given: якорь-sentinel, mic-запись речевого чанка
