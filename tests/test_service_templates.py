@@ -7,6 +7,7 @@ covered from either OS. The lifecycle tests drive the real script against stub
 `launchctl` / `systemctl` binaries on PATH.
 """
 import os
+import plistlib
 import re
 import shutil
 import subprocess
@@ -46,6 +47,27 @@ def render(target_os, out_dir):
         env_extra={"RECOG_SERVICE_OS": target_os},
     )
     return {path.name: path for path in sorted(Path(out_dir).iterdir())}
+
+
+@pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
+def test_custom_data_root_when_rendering_then_env_and_logs_share_it(target_os, tmp_path):
+    """Сервис не должен читать один архив, пока CLI и логи используют другой."""
+    data = tmp_path / "My data & archive"
+    out = tmp_path / "out"
+    run_service_sh("render", "--dry-run", str(out), env_extra={
+        "RECOG_SERVICE_OS": target_os, "RECOG_DATA_DIR": str(data),
+    })
+    for path in out.iterdir():
+        if target_os == "Darwin":
+            unit = plistlib.loads(path.read_bytes())
+            assert unit["EnvironmentVariables"]["RECOG_DATA_DIR"] == str(data)
+            assert Path(unit["StandardOutPath"]).parent == data / "logs"
+            assert Path(unit["StandardErrorPath"]).parent == data / "logs"
+        else:
+            content = path.read_text()
+            assert f'Environment="RECOG_DATA_DIR={data}"' in content
+            assert f"StandardOutput=append:{data}/logs/" in content
+            assert f"StandardError=append:{data}/logs/" in content
 
 
 def stub_bin(tmp_path, names=("launchctl", "systemctl", "tmux")):

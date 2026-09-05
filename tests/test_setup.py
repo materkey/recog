@@ -36,6 +36,7 @@ import prefetch_gigaam  # noqa: E402
 PYTHON_STUB = r"""#!/bin/sh
 printf '%s\n' "python $*" >> "$STUB_LOG"
 case "$*" in
+  *get_data_dir*)       exec "$STUB_REAL_PYTHON" "$@" ;;
   *sys.version_info*)   echo "${STUB_PY_VERSION:-3.12}"; exit 0 ;;
   *"-m venv"*)
       for arg in "$@"; do target="$arg"; done
@@ -135,6 +136,7 @@ def run_setup(repo, stubs, *args, host_os="Linux", env_extra=None, check=False):
         "PATH": f"{bin_dir}{os.pathsep}{sys_dir}",
         "STUB_LOG": str(log),
         "STUB_BIN": str(bin_dir),
+        "STUB_REAL_PYTHON": sys.executable,
         "RECOG_HOST_OS": host_os,
         # Pinned with the OS: setup.sh rejects macOS on anything but arm64,
         # and the Darwin decisions are exercised from a Linux CI runner.
@@ -346,7 +348,7 @@ def test_creates_config_files_from_the_examples(repo, stubs):
 
     assert (repo / ".env").read_text() == (repo / ".env.example").read_text()
     assert (repo / "frontend/.env").is_file()
-    assert (repo / "speakers_ecapa.json").read_text() == \
+    assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text() == \
         (repo / "speakers_ecapa.json.example").read_text()
 
 
@@ -415,7 +417,7 @@ def test_pull_that_removed_a_tracked_speaker_database_is_reported(repo, stubs, t
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo / "speakers_ecapa.json").read_text().strip() == "{}"
+    assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text().strip() == "{}"
     assert "speakers_ecapa.json is empty" in result.stdout
     assert f"git show {orig_head}:speakers_ecapa.json" in result.stdout
 
@@ -458,7 +460,7 @@ def test_a_colleague_is_never_told_to_restore_the_database_from_history(repo, st
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo / "speakers_ecapa.json").read_text().strip() == "{}"
+    assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text().strip() == "{}"
     assert "speakers_ecapa.json is empty" not in result.stdout
     assert "git show" not in result.stdout
 
@@ -468,8 +470,23 @@ def test_fresh_clone_does_not_warn_about_the_empty_speaker_database(repo, stubs)
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo / "speakers_ecapa.json").read_text().strip() == "{}"
+    assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text().strip() == "{}"
     assert "speakers_ecapa.json is empty" not in result.stdout
+
+
+def test_migrated_database_when_setup_runs_then_preserved_outside_checkout(repo, stubs):
+    """Обновление после миграции не должно заново создать пустую базу в git-дереве."""
+    data = repo.parent / "home/.recog"
+    data.mkdir(parents=True)
+    database = data / "speakers_ecapa.json"
+    database.write_bytes(b'{"Someone": {"embeddings": []}}')
+    before = (database.read_bytes(), database.stat().st_ino)
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (database.read_bytes(), database.stat().st_ino) == before
+    assert not (repo / "speakers_ecapa.json").exists()
 
 
 def test_a_populated_speaker_database_is_not_flagged(repo, stubs, tmp_path):
@@ -628,6 +645,7 @@ def test_recog_service_activation_runs_the_same_readiness_check(repo, stubs, com
         "STUB_BIN": str(bin_dir),
         "RECOG_HOST_OS": "Linux",
         "RECOG_SERVICE_OS": "Linux",
+        "DEPS_PYTHON": sys.executable,
     }
     Path(env["HOME"]).mkdir(exist_ok=True)
     subprocess.run(

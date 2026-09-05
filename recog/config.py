@@ -3,6 +3,7 @@
 """
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -29,6 +30,43 @@ def load_dotenv(env_path: Path = None):
 
 # Загружаем .env при импорте модуля
 load_dotenv()
+
+
+def data_entries(root: Path) -> list[Path]:
+    """Переносимые данные, без .env и примера базы спикеров."""
+    candidates = [root / "meetings", root / "logs", *sorted(root.glob("speakers*.json"))]
+    return [path for path in candidates if path.exists() or path.is_symlink()]
+
+
+def data_dir_target() -> Path:
+    """Новый каталог: одинаковый для CLI, setup и сервисов, независимо от cwd."""
+    value = os.environ.get("RECOG_DATA_DIR", "").strip()
+    path = Path(value).expanduser() if value else Path.home() / ".recog"
+    if not path.is_absolute():
+        raise ValueError("RECOG_DATA_DIR must be an absolute path (or start with ~/)")
+    return path
+
+
+def get_data_dir(repo_dir: Path = None) -> Path:
+    """Старую установку переключает только явная миграция или env override."""
+    target = data_dir_target()
+    if os.environ.get("RECOG_DATA_DIR", "").strip():
+        return target
+    repo_dir = repo_dir or Path(__file__).resolve().parent.parent
+    legacy = data_entries(repo_dir)
+    if legacy and repo_dir.resolve() != target.resolve():
+        if data_entries(target):
+            raise RuntimeError(
+                f"Recog data exists in both {repo_dir} and {target}; "
+                "resolve the conflict before starting services (scripts/migrate-data.py)."
+            )
+        print(
+            f"Recog: using legacy data in {repo_dir}; "
+            "run scripts/migrate-data.py to move it outside the checkout.",
+            file=sys.stderr,
+        )
+        return repo_dir
+    return target
 
 # ============================================================================
 # КОНФИГУРАЦИЯ

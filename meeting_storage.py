@@ -26,6 +26,8 @@ import sys
 import threading
 import time
 
+from recog.config import get_data_dir
+
 
 UTC = timezone.utc
 EXTERNAL_INDEX_CACHE_DIR = Path.home() / ".cache" / "recog" / "external_indexes"
@@ -107,8 +109,8 @@ class MeetingStorage:
     """
 
     def __init__(self, base_path: Path = None, external_paths: list[tuple[Path, Optional[str]]] = None):
-        self.base_path = base_path or Path(__file__).parent / "meetings"
-        self.base_path.mkdir(exist_ok=True)
+        self.base_path = base_path or get_data_dir() / "meetings"
+        self.base_path.mkdir(parents=True, exist_ok=True)
         # External paths are read-only (for federated access)
         # Format: list of (path, source_override) tuples
         self.external_paths = external_paths or []
@@ -1097,9 +1099,18 @@ class MeetingStorage:
 
         return None
 
+    def _read_meeting_meta(self, meeting_path: Path) -> dict:
+        """Разрешает WAV относительно встречи, не переписывая сохранённые метаданные."""
+        meta = json.loads((meeting_path / "meta.json").read_text(encoding="utf-8"))
+        for track in ("mic", "system"):
+            audio_path = meeting_path / f"audio_{track}.wav"
+            if audio_path.is_file():
+                meta[f"audio_{track}_path"] = str(audio_path)
+        return meta
+
     def _load_meeting_from_path(self, meeting_path: Path) -> dict:
         """Load meeting data from a specific path."""
-        meta = json.loads((meeting_path / "meta.json").read_text(encoding="utf-8"))
+        meta = self._read_meeting_meta(meeting_path)
 
         segments = []
         transcript_path = meeting_path / "transcript.jsonl"
@@ -1254,7 +1265,7 @@ class MeetingStorage:
         if not meta_path.exists():
             return (None, None)
 
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = self._read_meeting_meta(meeting_path)
 
         mic_path = meta.get("audio_mic_path")
         system_path = meta.get("audio_system_path")
