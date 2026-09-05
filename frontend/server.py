@@ -36,7 +36,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 from meeting_storage import MeetingStorage, get_external_paths
 from recog.log_utils import log_rate_limited
-from recog.ws_origin import EXTRA_ORIGINS, origin_allowed
+from recog.ws_origin import origin_allowed
 from bridge_subscriber import BridgeSubscriber
 from live_watcher import LiveWatcher
 from transcript_watcher import TranscriptWatcher
@@ -1511,7 +1511,7 @@ async def live_stream(websocket: WebSocket):
     origins = websocket.headers.getlist("origin")
     origin = origins[0] if len(origins) == 1 else None
     rejected_reason = "duplicate Origin headers" if len(origins) > 1 else None
-    if rejected_reason is None and not origin_allowed(origin, extra=EXTRA_ORIGINS):
+    if rejected_reason is None and not origin_allowed(origin):
         rejected_reason = f"disallowed origin {origin!r}"
     if rejected_reason is not None:
         # Rate-limited: this path is attacker-reachable (a hostile page can

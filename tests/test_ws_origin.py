@@ -2,12 +2,14 @@
 import json
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from recog import ws_origin
 from recog.ws_origin import (
     ALLOWED_ORIGINS,
     KTALK_WILDCARD_DOMAIN,
@@ -172,12 +174,26 @@ def test_given_extra_origin_when_checked_then_allowed():
     assert origin_allowed("https://meet.example.com", extra=extra) is True
 
 
-def test_given_extra_origin_when_not_passed_then_rejected():
-    """given: the same origin, but no extra set supplied
+def test_given_extra_origin_when_explicitly_empty_then_rejected():
+    """given: the same origin, with the extra set explicitly empty
     when: origin_allowed is evaluated
     then: it is rejected — the knob is opt-in, never a silent widening
     """
-    assert origin_allowed("https://meet.example.com") is False
+    assert origin_allowed("https://meet.example.com", extra=frozenset()) is False
+
+
+def test_given_configured_extra_origins_when_argument_omitted_then_still_applied():
+    """given: RECOG_EXTRA_WS_ORIGINS configured for the installation
+    when: origin_allowed is called without the extra argument
+    then: the configured origins still apply — every production call site
+          omits it, so a None default meaning "no extras" would have made the
+          whole knob silently dead
+    """
+    configured = frozenset({"https://meet.example.com"})
+
+    with mock.patch.object(ws_origin, "EXTRA_ORIGINS", configured):
+        assert origin_allowed("https://meet.example.com") is True
+        assert origin_allowed("https://evil.example.com") is False
 
 
 def test_given_extra_origins_when_other_origin_checked_then_still_rejected():
@@ -191,10 +207,11 @@ def test_given_extra_origins_when_other_origin_checked_then_still_rejected():
     assert origin_allowed("https://meet.example.com.evil.tld", extra=extra) is False
 
 
-def test_given_extra_origin_when_null_origin_checked_then_still_rejected():
+def test_given_extra_origin_when_null_origin_checked_then_only_an_explicit_entry_allows_it():
     """given: an extra allowlist configured
     when: a sandboxed iframe sends the literal "null" Origin
-    then: it stays rejected — extra does not touch the null/None contract
+    then: it stays rejected unless the operator listed "null" itself — extra
+          matches exactly and does not touch the null/None contract
     """
     extra = frozenset({"https://meet.example.com", "null"})
 

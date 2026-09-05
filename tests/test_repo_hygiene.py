@@ -65,3 +65,46 @@ def test_gitignore_covers_the_pattern(pattern, _allowed):
 
 def test_the_seed_example_stays_tracked(tracked_root_files):
     assert "speakers_ecapa.json.example" in tracked_root_files
+
+
+# ---------------------------------------------------------------------------
+# `scripts/deps.sh` reads the ASR config with the *host* interpreter, before
+# the venv exists (setup.sh step 3 runs before step 4 creates it). That only
+# works while `import recog.config` needs nothing but the stdlib — one
+# third-party import at the top of either file would abort every clean-machine
+# install with a ModuleNotFoundError, while CI (which always has the venv)
+# stayed green.
+# ---------------------------------------------------------------------------
+
+BARE_IMPORT_FILES = ("recog/__init__.py", "recog/config.py")
+
+
+def _module_level_imports(path):
+    import ast
+
+    tree = ast.parse(path.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield alias.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:  # relative import inside the package
+                continue
+            if node.module:
+                yield node.module.split(".")[0]
+
+
+@pytest.mark.parametrize("relpath", BARE_IMPORT_FILES)
+def test_asr_config_probe_stays_importable_without_the_venv(relpath):
+    import sys
+
+    third_party = sorted(
+        name
+        for name in _module_level_imports(REPO_ROOT / relpath)
+        if name not in sys.stdlib_module_names and name != "recog"
+    )
+    assert third_party == [], (
+        f"{relpath} imports {third_party} at module level — scripts/deps.sh "
+        "runs `import recog.config` with the host python before the venv "
+        "exists; import it lazily inside the function that needs it"
+    )
