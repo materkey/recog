@@ -34,7 +34,8 @@ load_dotenv()
 
 def data_entries(root: Path) -> list[Path]:
     """Переносимые данные, без .env и примера базы спикеров."""
-    candidates = [root / "meetings", root / "logs", *sorted(root.glob("speakers*.json"))]
+    candidates = [root / "meetings", root / "logs", root / "user-profile.json",
+                  *sorted(root.glob("speakers*.json"))]
     return [path for path in candidates if path.exists() or path.is_symlink()]
 
 

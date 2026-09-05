@@ -145,6 +145,13 @@ except (OSError, ValueError) as error:
     print(f"Invalid conference host configuration: {error}")
     sys.exit(1)
 
+try:
+    from recog.user_profile import UserProfileStore
+    UserProfileStore(config.get_data_dir()).read()
+except (OSError, ValueError) as error:
+    print(f"Invalid user profile: {error}")
+    sys.exit(1)
+
 if config.RECOG_ASR_BACKEND == "remote" and not (config.RECOG_ASR_REMOTE_URL or "").strip():
     print("RECOG_ASR_BACKEND=remote but RECOG_ASR_REMOTE_URL is empty — "
           "add your gateway URL to .env (build_asr() refuses to fall back to "

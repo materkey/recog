@@ -17,7 +17,12 @@
                 <a href="#/" class="nav-link" data-route="meetings">Meetings</a>
                 <a href="#/live" class="nav-link" data-route="live">Live</a>
             </div>
+            <details class="profile-settings" id="profile-settings">
+                <summary>Настройки</summary>
+                <button type="button" id="profile-open">Мой профиль</button>
+            </details>
         </nav>
+        <div id="profile-notice" class="profile-notice" role="status" hidden></div>
 
         <!-- Main Content -->
         <main class="main">
@@ -93,6 +98,7 @@
                         <span class="copilot-agent-chip offline" id="copilot-chip">&#9899; offline</span>
                         <span class="copilot-unread-dot" id="copilot-unread-dot" hidden></span>
                     </button>
+                    <button type="button" class="profile-setup-link" id="profile-setup" hidden>Указать имя</button>
                     <div class="live-status" id="live-status">
                         <span class="status-dot"></span>
                         <span class="status-text">Connecting...</span>
@@ -103,6 +109,31 @@
             </div>
         </main>
     </div>
+
+    <dialog id="profile-dialog" class="profile-dialog" aria-labelledby="profile-title" aria-describedby="profile-description">
+        <form id="profile-form">
+            <div class="modal-header">
+                <h2 id="profile-title">Как к вам обращаться?</h2>
+                <button type="button" class="modal-close" id="profile-close" aria-label="Закрыть">&times;</button>
+            </div>
+            <div class="profile-body">
+                <p id="profile-description">Copilot будет узнавать обращения к вам по имени. Этот профиль общий для всех браузеров, подключённых к Recog.</p>
+                <label for="profile-name">Ваше имя</label>
+                <input id="profile-name" name="name" type="text" maxlength="80" required autocomplete="name" autofocus>
+                <label for="profile-aliases">Другие варианты обращения <span class="profile-optional">(необязательно)</span></label>
+                <textarea id="profile-aliases" name="aliases" rows="3" aria-describedby="profile-aliases-hint"></textarea>
+                <p id="profile-aliases-hint" class="profile-hint">Каждый вариант с новой строки, до 16 вариантов. Само имя повторять не нужно.</p>
+                <p class="profile-hint">Изменения действуют для новых событий. Имена в прошлых записях сохранятся. Запись голоса не нужна.</p>
+                <p id="profile-error" class="profile-error" role="alert" hidden></p>
+                <p id="profile-dialog-status" class="profile-hint" role="status"></p>
+            </div>
+            <div class="modal-footer profile-actions">
+                <button type="button" class="btn btn-danger" id="profile-clear" hidden>Очистить профиль</button>
+                <button type="button" class="btn" id="profile-later">Позже</button>
+                <button type="submit" class="btn profile-save" id="profile-save">Сохранить</button>
+            </div>
+        </form>
+    </dialog>
 
     <!-- AI Analysis Modal -->
     <div id="ai-modal" class="modal" style="display: none;">
@@ -172,6 +203,7 @@
     </div>
 
     <script src="/static/datepicker.js"></script>
+    <script src="/static/user-profile.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

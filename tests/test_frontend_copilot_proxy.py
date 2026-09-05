@@ -608,7 +608,7 @@ async def test_lifespan_wires_bridge_frames_bidirectionally(monkeypatch, tmp_pat
     class FakeBridgeSubscriber:
         instance = None
 
-        def __init__(self, bridge_url, forward_callback):
+        def __init__(self, bridge_url, forward_callback, **_callbacks):
             self.forward_callback = forward_callback
             self.sent = []
             FakeBridgeSubscriber.instance = self

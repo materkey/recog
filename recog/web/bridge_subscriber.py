@@ -40,7 +40,8 @@ class BridgeSubscriber:
     queueing across reconnects; a frame that failed is never redelivered).
     """
 
-    FORWARD_TYPES = frozenset({"transcript_refine", "copilot_reply", "copilot_status"})
+    FORWARD_TYPES = frozenset({"transcript_refine", "copilot_reply", "copilot_status",
+                               "user_profile_applied", "user_profile_error"})
 
     INITIAL_BACKOFF_S = 1.0
     MAX_BACKOFF_S = 30.0
@@ -52,6 +53,8 @@ class BridgeSubscriber:
         forward_callback: ForwardCallback,
         *,
         log_prefix: str = "[bridge-subscriber]",
+        connected_callback=None,
+        disconnected_callback=None,
     ):
         self.bridge_url = bridge_url
         self._forward = forward_callback
@@ -64,6 +67,8 @@ class BridgeSubscriber:
         self._connected_once = False
         self._last_failure_log_ts: float = 0.0
         self._failure_streak = 0
+        self._connected_callback = connected_callback
+        self._disconnected_callback = disconnected_callback
 
     async def start(self) -> None:
         """Spawn the run loop on the current event loop."""
@@ -128,6 +133,8 @@ class BridgeSubscriber:
                         # as an extension client.
                         self._ws = ws
                         self._on_connected()
+                        if self._connected_callback:
+                            await self._notify_connection(self._connected_callback, self.send)
                         delay = self.INITIAL_BACKOFF_S
                         async for raw in ws:
                             await self._handle_message(raw)
@@ -135,6 +142,8 @@ class BridgeSubscriber:
                         # Clear before the backoff sleep starts so send()
                         # fails fast for the whole disconnected window.
                         self._ws = None
+                        if self._disconnected_callback:
+                            await self._notify_connection(self._disconnected_callback)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -148,6 +157,14 @@ class BridgeSubscriber:
             except asyncio.TimeoutError:
                 pass
             delay = min(delay * 2, self.MAX_BACKOFF_S)
+
+    async def _notify_connection(self, callback, *args):
+        try:
+            await callback(*args)
+        except Exception as exc:
+            # A profile/readiness callback must not disconnect the transport
+            # used by transcripts, refine updates and manual Copilot requests.
+            print(f"{self._log_prefix} connection callback failed: {exc!r}", file=sys.stderr)
 
     async def send(self, raw: str) -> bool:
         """Best-effort upstream send; True once the frame is written to the transport.

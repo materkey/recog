@@ -3,7 +3,8 @@
 # backup-data.sh — снимок пользовательских данных recog (вне git).
 #
 # Что сохраняется: meetings/ (транскрипты + аудио), speakers*.json (база
-# эмбеддингов), .env / recog/web/.env (секреты). logs/ — только с --with-logs.
+# эмбеддингов), user-profile.json, .env / recog/web/.env (секреты).
+# logs/ — только с --with-logs.
 #
 # Usage:
 #   ./scripts/backup-data.sh                        # снимок в ~/backups/recog-<дата>
@@ -45,6 +46,10 @@ fi
 for f in "$DATA_DIR"/speakers*.json; do
     [ -f "$f" ] && cp -p "$f" "$DEST/"
 done
+if [ -f "$DATA_DIR/user-profile.json" ]; then
+    (umask 077; cp "$DATA_DIR/user-profile.json" "$DEST/user-profile.json")
+    chmod 600 "$DEST/user-profile.json"
+fi
 # .env копируется под другим именем: иначе случайный `cp -r` обратно в репо
 # перезапишет рабочий .env, а его правит только человек.
 [ -f .env ] && { cp -p .env "$DEST/env.backup"; chmod 600 "$DEST/env.backup"; }

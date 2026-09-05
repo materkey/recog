@@ -97,3 +97,18 @@ def test_partial_move_when_rerunning_then_remaining_items_complete(migration, da
     migration.migrate(repo, target, apply=True)
     assert (target / "meetings/transcript.jsonl").read_bytes() == b"transcript\n"
     assert (target / "logs/live.log").read_bytes() == b"log\n"
+
+
+def test_saved_profile_when_migrating_then_bytes_permissions_and_inode_survive(migration, data):
+    repo, target = data
+    profile = repo / "user-profile.json"
+    raw = b'{"version":1,"revision":"test","name":"Test","aliases":[]}'
+    profile.write_bytes(raw)
+    profile.chmod(0o600)
+    inode = profile.stat().st_ino
+    migration.migrate(repo, target, apply=True)
+    moved = target / profile.name
+    assert moved.read_bytes() == raw
+    assert moved.stat().st_ino == inode
+    assert moved.stat().st_mode & 0o777 == 0o600
+    assert not profile.exists()

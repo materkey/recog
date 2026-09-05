@@ -36,7 +36,7 @@ import prefetch_gigaam  # noqa: E402
 PYTHON_STUB = r"""#!/bin/sh
 printf '%s\n' "python $*" >> "$STUB_LOG"
 case "$*" in
-  *get_data_dir*)       exec "$STUB_REAL_PYTHON" "$@" ;;
+  *"print(get_data_dir())"*) exec "$STUB_REAL_PYTHON" "$@" ;;
   *sys.version_info*)   echo "${STUB_PY_VERSION:-3.12}"; exit 0 ;;
   *"-m venv"*)
       for arg in "$@"; do target="$arg"; done
