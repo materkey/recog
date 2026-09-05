@@ -19,7 +19,7 @@ and a web UI. Runs on macOS and Linux.
 
 | | macOS | Linux |
 |---|---|---|
-| OS | 13+ (Apple Silicon or Intel) | any distro with systemd (Ubuntu/Debian, Arch/Manjaro tested) |
+| OS | 13+, Apple Silicon (Intel is not supported: no macOS x86_64 torch wheels past 2.2.2) | any distro with systemd (Ubuntu/Debian, Arch/Manjaro tested) |
 | Python | 3.12+ | 3.12+ |
 | System audio | ScreenCaptureKit — built in, needs `swiftc` (`xcode-select --install`) to build the helper | PulseAudio **or** PipeWire with `pipewire-pulse`, plus `parec`/`pactl` (`pulseaudio-utils` / `libpulse`) |
 | Microphone | built in (PortAudio ships with the wheel) | PortAudio (`libportaudio2` / `portaudio`) |
@@ -79,14 +79,15 @@ RECOG_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 ./setup.sh
 ```bash
 source venv-gigaam/bin/activate
 
-# Live: system audio + speaker names from the conference extension
+# Live: mic + system audio + speaker names from the conference extension.
+# The mic is on by default (--mic-device auto); --mic-device none turns it off.
 python mp4_notes.py live --ktalk --system-audio auto
+
+# System audio only
+python mp4_notes.py live --ktalk --system-audio auto --mic-device none
 
 # Microphone only, speakers from the embedding database
 python mp4_notes.py live --speaker-db speakers_ecapa.json
-
-# Both mic and system audio, processed separately
-python mp4_notes.py live --ktalk --system-audio auto --mic-device auto
 
 # What audio devices do I have?
 python mp4_notes.py live --list-devices
@@ -103,8 +104,9 @@ ScreenCaptureKit), `pulse` (Linux, PulseAudio/PipeWire), `device:<id>` (an
 input device, `device:auto` looks for BlackHole), or `none` (default).
 `--mic-device` takes a device id, `auto` (default input), or `none`.
 
-The startup banner prints which sources are live, e.g.
-`Mode: DUAL (Mic: default + System: pulse)`.
+The startup banner prints which sources are live, naming the resolved mic
+device and the backend in full, e.g.
+`Mode: DUAL (Mic: 3 + System: PulseAudio/PipeWire (parec))`.
 
 ### Output format
 
@@ -138,8 +140,8 @@ install it, create a Multi-Output Device in Audio MIDI Setup, then run with
 output. Works on PulseAudio and on PipeWire through `pipewire-pulse`.
 
 Without an override the capture follows the default sink: it resolves the
-current monitor at start and re-connects when you switch outputs (a single
-`@DEFAULT_MONITOR@` name does not guarantee that on its own). To pin one
+current monitor itself at start and re-connects when you switch outputs (a
+single `@DEFAULT_MONITOR@` name does not guarantee that on its own). To pin one
 specific monitor instead:
 
 ```bash
@@ -168,9 +170,10 @@ directory substituted in.
 ```
 
 `install` deliberately never activates anything — that is what lets `setup.sh`
-verify dependencies before starting a pipeline that cannot work. `start` and
-`restart` run the same readiness probes as setup and refuse to activate an
-incomplete install rather than take a working one down.
+verify dependencies before starting a pipeline that cannot work. `start`,
+`restart` and the targeted `restart-web` / `restart-live` / `restart-copilot` /
+`restart-supervisor` all run the same readiness probes as setup and refuse to
+activate an incomplete install rather than take a working one down.
 
 On Linux, add `loginctl enable-linger $USER` so the user services survive
 logout — `status` prints the reminder.
@@ -268,7 +271,10 @@ failure to be loud instead.
 **Setup says the install is not complete.** Nothing was activated on purpose.
 Missing `ffmpeg`, `parec`/`pactl`, PortAudio, or a macOS helper that will not
 build (`swiftc`) all block activation, as does `RECOG_ASR_BACKEND=remote` with
-an empty URL. Fix what it lists and re-run `./setup.sh`.
+an empty URL. Fix what it lists and re-run `./setup.sh`. The same probes gate
+`./recog-service.sh start|restart|restart-*`; if you deliberately want a subset
+(the web UI on a box with no audio stack, say), `RECOG_SKIP_READINESS=1
+./recog-service.sh start` bypasses the gate.
 
 **The extension never connects.** The WS handshake is Origin-gated. If your
 conference host is not one of the built-in ones, add it to
@@ -290,6 +296,14 @@ reload it in `chrome://extensions`.
 3. `./recog-service.sh install && ./recog-service.sh restart` if you skipped
    services during setup — the units must be re-rendered from the templates
    (the committed `.plist` files are gone).
+4. **Check `speakers_ecapa.json` after the pull.** It used to be tracked, so
+   untracking it deletes your working copy (`.gitignore` has no power over an
+   already-tracked file) and setup seeds an empty `{}` in its place — speaker
+   identification then silently does nothing. Setup says so when it happens;
+   the embeddings stay in git history, so restore them from the last commit
+   that still carries the file:
+   `git show <sha>:speakers_ecapa.json > speakers_ecapa.json`. A copy you had
+   modified since its last commit stops the pull instead of being deleted.
 
 Memory behaviour is meant to be unchanged, but that is verified by a separate
 before/after comparison, not promised by setup.

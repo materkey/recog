@@ -67,6 +67,22 @@ override опрашивает `pactl get-default-sink` и **явно переп�
 присваиваются новые timestamps) и **не расходует бюджет crash-retry**.
 Непустой `RECOG_PULSE_MONITOR_SOURCE` фиксирует источник и выключает слежение.
 
+Исходный источник пиннится до спавна: `start()` сам резолвит default sink и
+запускает `parec` на конкретном `<sink>.monitor`. Иначе базой наблюдения
+становится не то, во что резолвился `@DEFAULT_MONITOR@`, а то, что стоит на
+момент первого опроса, — sink, переключённый в этом промежутке, расхождения не
+даёт, и захват молча остаётся на прежнем выходе. Если `pactl` в этот момент
+недоступен, остаёмся на `@DEFAULT_MONITOR@`, но и тогда первый успешный опрос
+не берёт текущий sink за базу, а явно переподключается на конкретный монитор:
+имя, в которое резолвился `@DEFAULT_MONITOR@`, уже не восстановить, и лишний
+рестарт дешевле немого захвата не того выхода.
+
+Граница источников доезжает до писателя WAV: `mark_source_boundary()` не только
+чистит буфер, но и двигает `source_epoch`, по которому `_process_chunk` зовёт
+`IncrementalWavWriter.mark_discontinuity()`. Без этого писатель срезал бы с
+первого чанка нового источника 0.5 с как уже записанный overlap — которого в
+WAV нет, потому что буфер сброшен.
+
 `--device` обязателен: без него `parec` пишет дефолтный *source*, то есть
 микрофон, а не то, что слышно.
 
@@ -244,7 +260,7 @@ torch/torchaudio с `RECOG_TORCH_INDEX_URL` (на Linux без NVIDIA — CPU-и
 ## References
 
 - ADR-0010 (вытеснен в части захвата), ADR-0018, ADR-0019, ADR-0020.
-- План: `docs/plans/2026-09-03-linux-support-and-team-onboarding.md`.
+- План: `docs/plans/completed/2026-09-03-linux-support-and-team-onboarding.md`.
 - `systemd-run`, transient services и `RemainAfterExit`:
   https://github.com/systemd/systemd/blob/main/man/systemd-run.xml
 - Выбор конкретного target в PipeWire (почему `@DEFAULT_MONITOR@` не следит за

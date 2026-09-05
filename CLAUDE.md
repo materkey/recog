@@ -23,6 +23,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 RECOG_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 ./setup.sh
 ```
 
+Dependencies: `requirements.txt` + `frontend/requirements.txt`, plus
+`requirements-macos.txt` on darwin. **Every macOS pip step runs under
+`-c constraints/macos.txt`** (the verified torch/torchaudio/numpy/pyobjc set) —
+install into `venv-gigaam` with the same constraint file, because a bare
+`pip install` can bump the ML stack the MPS contracts were measured against.
+GigaAM is deliberately not in `requirements.txt`: it comes from the git pin in
+`setup.sh` (`GIGAAM_REF`), mirrored in `.github/workflows/ci.yml`.
+
 ### Running
 ```bash
 # Always use venv-gigaam for main CLI
@@ -46,9 +54,10 @@ python add_speaker_live.py "Speaker Name"
 
 ### Frontend (web UI)
 ```bash
-cd frontend
-pip install -r requirements.txt
-python server.py  # http://127.0.0.1:9080
+# Deps are already installed into venv-gigaam by ./setup.sh; normally the
+# frontend runs as a service unit and this is only for debugging.
+source venv-gigaam/bin/activate
+python frontend/server.py  # http://127.0.0.1:9080
 ```
 
 ### Services (launchd / systemd --user)
@@ -69,8 +78,9 @@ launchd on macOS, `systemd --user` on Linux. Units are rendered from
 `deploy/{launchd,systemd}/*.in` by `scripts/service/{common,launchd,systemd}.sh`
 behind the `svc_*` contract. `install` never activates anything — that split is
 what lets `setup.sh` verify dependencies before starting a pipeline that cannot
-serve; `start`/`restart` run the same probes (`scripts/deps.sh`) and refuse to
-activate an incomplete install rather than stop a working one. On Linux the
+serve; `start`/`restart`/`restart-*` run the same probes (`scripts/deps.sh`) and
+refuse to activate an incomplete install rather than stop a working one
+(`RECOG_SKIP_READINESS=1` bypasses the gate). On Linux the
 services need `loginctl enable-linger $USER` to survive logout (`status` prints
 the reminder).
 
@@ -109,19 +119,33 @@ backend asked for on the wrong OS); `create_system_capture` builds it.
   --format=float32le --rate=16000 --channels=1 --latency-msec=100
   --device=<monitor>` (PulseAudio or PipeWire via `pipewire-pulse`). A
   non-empty `RECOG_PULSE_MONITOR_SOURCE` pins the source and turns the follow
-  logic off; otherwise the capture starts on `@DEFAULT_MONITOR@` **and polls
-  `pactl get-default-sink`**, explicitly reconnecting when the default sink
+  logic off; otherwise `start()` resolves the default sink itself and pins
+  `parec` to that concrete `<sink>.monitor` (falling back to
+  `@DEFAULT_MONITOR@` when `pactl` is unavailable — the first successful poll
+  then reconnects to a concrete monitor instead of adopting the current sink
+  as its baseline), then **polls
+  `pactl get-default-sink`** and explicitly reconnects when the default sink
   changes — the `@DEFAULT_MONITOR@` name alone is resolved once at stream
-  creation and does not follow. A planned reconnect marks the source boundary
-  (no overlap glued across the gap) and does not spend the crash-retry budget;
+  creation and does not follow, and taking the *first poll* as the baseline
+  would silently adopt a sink switched between the spawn and that poll,
+  leaving the capture on the old output. A planned reconnect marks the source
+  boundary (`mark_source_boundary()`: buffer dropped, `source_epoch` bumped, so
+  no overlap is glued across the gap and `_process_chunk` tells the WAV writer
+  to write the first post-switch chunk whole instead of cutting 0.5 s that
+  never reached the file) and does not spend the crash-retry budget;
   a transient `pactl` error is rate-limited-logged and retried. Without
   `--device`, `parec` would record the default *source* (the mic), so the
   monitor name is mandatory.
 
 Restart policy is shared: a died child is respawned with a bounded backoff
-(1/2/5/10 s) that **does not leave the reader loop while `running`**; only
-after `MAX_RESTARTS` does the capture give up, set `_dead`/`running=False`, and
-let `recog/live.py` write one system-capture-lost marker. That marker is
+(1/2/5/10 s) charged **before every respawn attempt**, not only before a retry
+after a failed one — a child that starts fine and dies half a second later
+otherwise burned the whole budget in ~3 s without a single pause. The wait
+**does not leave the reader loop while `running`** (and a `stop()` arriving
+during it aborts the respawn instead of orphaning a fresh child); only after
+`MAX_RESTARTS` does the capture give up, set `_dead`/`running=False`, and let
+`recog/live.py` write one system-capture-lost marker (with the child's last
+stderr lines appended). That marker is
 separate from `_emit_pcm_transition_marker` on purpose: a mixed-capture death
 must not claim a PCM→mixed transition or pause refine.
 
@@ -140,7 +164,7 @@ No speech is lost when ASR is temporarily unavailable (remote down + local loadi
 `live` records per-meeting WAVs (`audio_mic.wav` / `audio_system.wav`, 16 kHz mono int16) for segment playback via `GET /api/meetings/{id}/audio/{segment_index}`; disable with `--no-save-audio`. Load-conscious design:
 - Silent chunks (`rms < VAD_RMS_THRESHOLD`) are not written — EXCEPT while PCM-primary, where PCM segment offsets are extrapolated from a wall-clock↔WAV anchor and need a continuous real-time timeline in `audio_system.wav`. Mixed-path segments capture their offset at write time, so gaps are safe for them.
 - PCM-primary segment offsets (`_on_pcm_batch`): `audio_offset_ms` is extrapolated from `_system_wav_anchor` = `(wall_ms of the last system write's first sample, WAV offset before it)`, updated on every `_process_chunk` system write (`write_chunk` returns the skipped-overlap sample count). Offset = `anchor_wav + (chunk_start_ms - anchor_wall)`, keeping consecutive segments' offsets tracking their real capture times. The old `wav_offset_now - chunk_age` formula drifted 0–5 s (the WAV sample count advances in `chunk_duration` steps while chunk age is continuous), collapsing consecutive segments onto one offset. Fallback to the old formula when the anchor is absent (before the first write) or stale (`> PCM_WAV_ANCHOR_MAX_AGE_MS` — degraded-mode silence-skip broke the timeline ahead of it).
-- WAV headers are re-patched after every chunk (`IncrementalWavWriter._patch_header_sizes`), so a SIGKILL (launchd restart does not run teardown — sessions end as `stale_session`) never leaves a header claiming 0 data bytes. Per-file cap `MAX_WAV_DATA_BYTES` (2 GiB) protects the format's 32-bit sizes.
+- WAV headers are re-patched after every chunk (`IncrementalWavWriter._patch_header_sizes`), so a SIGKILL (a service-manager restart — launchd or `systemd --user` — does not run teardown; sessions end as `stale_session`) never leaves a header claiming 0 data bytes. Per-file cap `MAX_WAV_DATA_BYTES` (2 GiB) protects the format's 32-bit sizes.
 - Retention: `MeetingStorage.cleanup_old_audio(retention_hours=24)` deletes WAVs by file mtime (an actively-written file is always fresh — the current meeting is safe) with a stat-only scan (meta.json parsed only for dirs that still have audio). Runs at `start_session` and hourly from the live loop.
 - Every meeting switch must rotate writers via `_on_meeting_change`: the KTalk bridge callback does it, and `_check_silence_split` does it for orphan silence-splits (with `continuation=True` + re-writing the triggering chunk so the first segment points into the new meeting's own file). A switch path that skips rotation reproduces "No audio file available for this meeting". Writer rotation also resets `_system_wav_anchor` (the new WAV starts a fresh timeline); the first system write of the new meeting re-seeds it.
 - Playback slice duration is bounded per track (`compute_segment_duration_ms` in `frontend/server.py`): mic/system WAV timelines diverge under silence-skip, so only same-`is_local` segments bound each other.
@@ -198,7 +222,7 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
   - `live.py` - Real-time transcription (LiveTranscriber with decomposed methods: _setup_meeting_storage, _setup_ktalk_bridge, _start_audio_captures, _process_chunk, _handle_mic_chunk, _handle_ktalk_chunk, _handle_embedding_chunk, _process_pending, _teardown_session; module-level helpers: normalize_word, deduplicate)
   - `increment.py` - Auto-generate versioned AI summaries on ktalk_leave; multi-prompt support via generate_all(), stores per-prompt results in meetings/<id>/increments/<prompt-id>/vN.md
   - `prompt_registry.py` - Load and filter prompt definitions from prompts/*.md files (YAML frontmatter + template body)
-  - `node_env.py` - Node/nvm PATH utilities for subprocess calls under launchd (shared by frontend/, ktalk_bridge.py, and title_generator.py)
+  - `node_env.py` - Node/nvm PATH utilities for subprocess calls under the service manager (launchd / `systemd --user`) (shared by frontend/, ktalk_bridge.py, and title_generator.py)
   - `copilot_supervisor.py` - Auto-spawn Copilot supervisor: asyncio daemon (`SessionLifecycle` state machine + `TmuxRunner` + `Watchdog`) that spawns a headless Claude session per conference meeting (`is_conference_source`: ktalk/vas3k/vkkovalev/matrix) via `tmux -L recog-copilot`, drives lifecycle from bridge `meeting_started/ended`, and reports `copilot_agent_status` to the bridge
   - `copilot_channel.py` - copilot MCP daemon (channel push); `SessionCountReporter` polls `session_manager._server_instances` and reports `claude_sessions {count}` to the bridge for the status merge
   - `ws_origin.py` - Shared WS Origin allowlist (`origin_allowed`): conference hosts mirroring the extension `manifest.json` (`*.ktalk.ru` wildcard via hostname parse, exact Jitsi/Element hosts) + webapp origin (9080); no-Origin clients (Python daemons) pass, `Origin: null` and everything else is rejected. Used by `ktalk_bridge.py` and `frontend/server.py`
@@ -248,6 +272,15 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env` (
 - `RECOG_COPILOT_GRACE_S` - Seconds the supervisor waits after `meeting_ended` before killing the copilot tmux session (default `90`); cancelled by a same-id `meeting_started` (flap). Not used for an explicit webapp Stop — that kills immediately.
 - `RECOG_COPILOT_MCP_URL` - URL of the copilot MCP daemon the spawned Claude session connects to (default `http://127.0.0.1:8767/mcp`).
 
+### Call-shell variables (read by the scripts, never from `.env`)
+
+- `RECOG_SKIP_READINESS=1` - bypass the `scripts/deps.sh` gate that `recog-service.sh start` / `restart` / `restart-*` run before touching a service. For deliberately running a subset, and for tests driving stub service managers.
+- `RECOG_SERVICE_OS` - overrides the `uname -s` backend choice (which templates and `svc_*` verbs are used), so a Mac can render Linux units.
+- `RECOG_PYTHON` - the interpreter baked into the rendered units (`scripts/service/common.sh`). Deliberately **not** `DEPS_PYTHON`, which only selects the interpreter `scripts/deps.sh` uses for its library probes.
+- `RECOG_HOST_OS` - overrides `uname -s` for the `scripts/deps.sh` probes (lets a Mac exercise the Linux ones).
+- `RECOG_CHECK_PYTHON` - interpreter override for `scripts/check.sh`.
+- `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL` / `RECOG_GIGAAM_REF` / `RECOG_GIGAAM_EDITABLE` - see Setup above.
+
 ## Data Files
 
 - `speakers_ecapa.json` - Speaker embedding database (gitignored — real voice embeddings; `setup.sh` seeds it from `speakers_ecapa.json.example`)
@@ -258,9 +291,12 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env` (
 ## Testing
 
 ```bash
-python -m pytest tests/ -v           # Unit tests (ktalk_bridge, live speaker attribution, retroactive correction)
-python -m compileall recog frontend  # Syntax check
-python mp4_notes.py --help           # CLI smoke test
+./scripts/check.sh                        # everything below; exactly what CI runs (macOS + Linux)
+
+python -m pytest tests/ -q -m "not e2e"   # unit tests (e2e needs playwright + a real conference)
+python -m compileall recog frontend       # syntax check
+python mp4_notes.py --help                # CLI smoke test
+./recog-service.sh render --dry-run "$(mktemp -d)"   # unit templates, both backends via RECOG_SERVICE_OS
 ```
 
 ## ADR Documents

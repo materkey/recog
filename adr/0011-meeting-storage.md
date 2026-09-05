@@ -1,7 +1,9 @@
 # ADR-0011: Хранилище митингов для KTalk режима
 
 ## Status
-Accepted
+Accepted. `mode` amended by ADR-0021: `system_audio_backend` carries the
+resolved backend (`screencapture` | `pulse` | `device:<id>` | `none`), while
+`screencapture` stays a boolean meaning ScreenCaptureKit specifically.
 
 ## Context
 При использовании live-режима с KTalk возникают следующие потребности:
@@ -96,7 +98,8 @@ recog/
     "mic": true,
     "system_audio": true,
     "ktalk": true,
-    "screencapture": false
+    "screencapture": false,
+    "system_audio_backend": "pulse"
   },
 
   "ktalk": {
@@ -204,7 +207,8 @@ class MeetingStorage:
         self.base_path = base_path or Path("meetings")
 
     # Lifecycle
-    def start_session(mic, system_audio, ktalk, screencapture) -> str
+    def start_session(mic, system_audio, ktalk, screencapture,
+                      system_audio_backend, chunk_duration_ms) -> str
     def end_session()
 
     # KTalk events
@@ -234,7 +238,8 @@ class LiveTranscriber:
             mic=self.mic_capture is not None,
             system_audio=self.system_capture is not None,
             ktalk=self.use_ktalk,
-            screencapture=self.use_screencapture
+            screencapture=self.system_audio == "screencapture",
+            system_audio_backend=self.system_audio
         )
         try:
             # ... transcription loop ...
