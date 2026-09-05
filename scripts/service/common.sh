@@ -68,10 +68,23 @@ svc_extra_path() {
 
 # --- template rendering ----------------------------------------------------
 
+# Escape a value for the unit-file *format*. Backends override it; the default
+# (systemd, an ini-like format where the templates quote the values) is a
+# pass-through.
+svc_escape_value() {
+    printf '%s' "$1"
+}
+
 # sed replacement values are interpolated into `s|@X@|value|g`, so the three
 # characters with meaning there must be escaped.
 _svc_sed_escape() {
     printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'
+}
+
+# Format escaping first, sed escaping second: `&` produced by the former must
+# reach the replacement literally.
+_svc_value() {
+    _svc_sed_escape "$(svc_escape_value "$1")"
 }
 
 # Render <src> into <dst>, substituting every @PLACEHOLDER@. Fails (leaving
@@ -87,12 +100,12 @@ svc_render_template() {
 
     local tmp="$dst.tmp.$$"
     sed \
-        -e "s|@REPO_DIR@|$(_svc_sed_escape "$SVC_REPO_DIR")|g" \
-        -e "s|@HOME@|$(_svc_sed_escape "$HOME")|g" \
-        -e "s|@PYTHON@|$(_svc_sed_escape "$(svc_python)")|g" \
-        -e "s|@LOG_DIR@|$(_svc_sed_escape "$SVC_LOG_DIR")|g" \
-        -e "s|@NODE_BIN@|$(_svc_sed_escape "$(svc_node_bin)")|g" \
-        -e "s|@EXTRA_PATH@|$(_svc_sed_escape "$(svc_extra_path)")|g" \
+        -e "s|@REPO_DIR@|$(_svc_value "$SVC_REPO_DIR")|g" \
+        -e "s|@HOME@|$(_svc_value "$HOME")|g" \
+        -e "s|@PYTHON@|$(_svc_value "$(svc_python)")|g" \
+        -e "s|@LOG_DIR@|$(_svc_value "$SVC_LOG_DIR")|g" \
+        -e "s|@NODE_BIN@|$(_svc_value "$(svc_node_bin)")|g" \
+        -e "s|@EXTRA_PATH@|$(_svc_value "$(svc_extra_path)")|g" \
         "$src" > "$tmp" || { rm -f "$tmp"; return 1; }
 
     local leftovers

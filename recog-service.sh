@@ -125,13 +125,19 @@ kill_copilot_tmux() {
     fi
 }
 
+# Targeted restart (restart-web / restart-live / ...). Goes through the same
+# readiness gate as `start`/`restart`: it stops and re-activates a service, so
+# an incomplete install would take a working one down without being able to
+# bring it back. The missing-unit case is checked before svc_restart so a real
+# activation failure is not reported as "not installed".
 restart_one() {
     local service="$1" tail="${2-}"
     local label; label="$(svc_label "$service")"
-    info "Restarting $label..."
-    if ! svc_restart "$service"; then
+    [ -f "$(svc_unit_path "$service")" ] || \
         error "$label is not installed — run './recog-service.sh install' first"
-    fi
+    require_ready
+    info "Restarting $label..."
+    svc_restart "$service" || error "Failed to restart $label"
     info "$label restarted.${tail:+ $tail}"
 }
 

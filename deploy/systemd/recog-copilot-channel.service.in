@@ -6,9 +6,9 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=@REPO_DIR@
 Environment=PYTHONUNBUFFERED=1
-Environment=HOME=@HOME@
-Environment=PATH=@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-ExecStart=@PYTHON@ -m recog.copilot_channel
+Environment="HOME=@HOME@"
+Environment="PATH=@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ExecStart="@PYTHON@" -m recog.copilot_channel
 Restart=always
 RestartSec=5
 StandardOutput=append:@LOG_DIR@/copilot-channel.stdout.log

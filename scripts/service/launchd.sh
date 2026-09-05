@@ -10,6 +10,12 @@ SVC_TEMPLATE_DIR="$SVC_REPO_DIR/deploy/launchd"
 
 svc_backend_name() { echo "launchd"; }
 
+# Plists are XML: a checkout path or $HOME containing `&`, `<` or `>` would
+# render an unparseable file that `launchctl load` silently refuses.
+svc_escape_value() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
 svc_unit_file() { echo "com.recog.$1.plist"; }
 svc_unit_name() { echo "com.recog.$1"; }
 svc_template()  { echo "$SVC_TEMPLATE_DIR/com.recog.$1.plist.in"; }
@@ -36,13 +42,27 @@ svc_loaded() {
 
 # Activate an installed agent. Loading an already-loaded plist is an error and
 # would not re-read it anyway — that is what svc_restart is for.
+#
+# The load rc is returned, not swallowed: with `|| true` here every caller's
+# "Failed to start ..." branch was dead, so a plist launchd refuses (bad XML,
+# duplicate label, missing program) was still reported as started.
 svc_start() {
     local dst; dst="$(svc_unit_path "$1")"
     [ -f "$dst" ] || return 1
     if svc_loaded "$1"; then
-        return 0
+        if [ -n "$(svc_pid "$1")" ]; then
+            return 0
+        fi
+        # Загружен, но не запущен (PID `-` в `launchctl list`): это frontend
+        # после чистого выхода при KeepAlive={SuccessfulExit:false}. Ранний
+        # `return 0` здесь врал дважды: `start` не мог его поднять, а setup.sh
+        # относил такой юнит к «не работал раньше» (снимок делается по
+        # svc_pid), шёл сюда — и свежий плист launchd так и не перечитывал,
+        # рапортуя «Started» поверх старой копии в памяти.
+        svc_restart "$1"
+        return
     fi
-    launchctl load "$dst" 2>/dev/null || true
+    launchctl load "$dst" 2>/dev/null
 }
 
 # Re-read the plist. `launchctl start` after `stop` reuses the in-memory copy,
@@ -54,7 +74,7 @@ svc_restart() {
     [ -f "$dst" ] || return 1
     launchctl unload "$dst" 2>/dev/null || true
     sleep 1
-    launchctl load "$dst" 2>/dev/null || true
+    launchctl load "$dst" 2>/dev/null
 }
 
 svc_stop() {

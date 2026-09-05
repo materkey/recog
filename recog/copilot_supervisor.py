@@ -449,8 +449,28 @@ class TmuxRunner:
         # Killing the session empties the transient unit's cgroup, but
         # RemainAfterExit keeps the unit loaded — drop it here so the next
         # spawn can claim the name (a raise above leaves it to that spawn's
-        # own _reset_session_unit).
+        # own _reset_session_unit). Not while the sibling kind is still alive:
+        # both sessions share one tmux server inside that single cgroup, so
+        # `systemctl stop` (KillMode=control-group) would take the survivor
+        # down with it — exactly what the startup both-alive cleanup is
+        # trying to preserve.
+        if await self._sibling_session_alive(target):
+            return
         await self._reset_session_unit()
+
+    async def _sibling_session_alive(self, killed: str) -> bool:
+        """True while a session of the *other* kind still lives on the socket."""
+        if not self.use_systemd_run:
+            return False
+        sibling = (
+            self._default_session_name
+            if killed == TMUX_SESSION_MANUAL
+            else TMUX_SESSION_MANUAL
+        )
+        try:
+            return bool(await self.alive(sibling))
+        except Exception:
+            return False
 
     async def _kill_tmux_session(self, target: str) -> None:
         rc, out = 0, ""

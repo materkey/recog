@@ -151,6 +151,43 @@ def test_systemd_restart_policy_matches_launchd_keepalive(tmp_path):
         assert "RestartSec=5" in text
 
 
+@pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
+def test_render_survives_a_home_with_a_space_and_an_xml_character(target_os, tmp_path):
+    """given: $HOME containing a space and `&`
+    when: the units are rendered
+    then: the plist is still well-formed XML and the systemd values stay a
+          single token — an unescaped path used to produce a unit the service
+          manager refuses while install reported success
+    """
+    home = tmp_path / "My Home & Co"
+    home.mkdir()
+    out = tmp_path / "out"
+    run_service_sh(
+        "render", "--dry-run", str(out),
+        env_extra={"RECOG_SERVICE_OS": target_os, "HOME": str(home)},
+    )
+    units = {path.name: path for path in sorted(out.iterdir())}
+
+    if target_os == "Darwin":
+        import xml.etree.ElementTree as ET
+
+        for name, path in units.items():
+            ET.parse(path)  # raises ParseError on a stray & or <
+            assert "&amp;" in path.read_text(), name
+    else:
+        for name, path in units.items():
+            text = path.read_text()
+            assert f'Environment="HOME={home}"' in text, name
+            exec_start = next(
+                line for line in text.splitlines() if line.startswith("ExecStart=")
+            )
+            assert exec_start.startswith('ExecStart="'), name
+            path_line = next(
+                line for line in text.splitlines() if line.startswith('Environment="PATH=')
+            )
+            assert path_line.endswith('"'), name
+
+
 def test_render_rejects_a_template_with_an_unknown_placeholder(tmp_path):
     """given: a template carrying a placeholder the renderer does not know
     when: it is rendered
@@ -249,6 +286,41 @@ def test_launchd_start_loads_every_installed_agent(tmp_path):
     calls = log.read_text()
     for name in SERVICES:
         assert f"load {env['HOME']}/Library/LaunchAgents/com.recog.{name}.plist" in calls
+
+
+def test_launchd_start_reloads_a_loaded_but_stopped_agent(tmp_path):
+    """`launchctl list` печатает и загруженный, но не запущенный job (PID `-`)
+    — так выглядит frontend после чистого выхода при KeepAlive. Ранний выход
+    по «уже загружен» делал `start` бессильным поднять его, а setup.sh после
+    git pull рапортовал «Started» на плист, который launchd не перечитывал."""
+    env, log, home = stub_env(tmp_path)
+    env["RECOG_SERVICE_OS"] = "Darwin"
+
+    run_service_sh("install", env_extra=env)
+
+    launchctl = Path(env["PATH"].split(os.pathsep)[0]) / "launchctl"
+    launchctl.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "launchctl $*" >> "$STUB_LOG"\n'
+        'if [ "$1" = "list" ]; then\n'
+        "  for n in " + " ".join(SERVICES) + "; do\n"
+        '    printf -- "-\\t0\\tcom.recog.$n\\n"\n'
+        "  done\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    launchctl.chmod(0o755)
+
+    log.write_text("")
+    run_service_sh("start", env_extra=env)
+
+    calls = log.read_text().splitlines()
+    for name in SERVICES:
+        plist = f"{home}/Library/LaunchAgents/com.recog.{name}.plist"
+        assert f"launchctl unload {plist}" in calls
+        assert calls.index(f"launchctl unload {plist}") < calls.index(
+            f"launchctl load {plist}"
+        )
 
 
 def test_systemd_start_enables_and_starts_every_installed_unit(tmp_path):

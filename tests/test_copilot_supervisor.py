@@ -2862,6 +2862,21 @@ async def test_linux_kill_stops_the_transient_unit():
     assert "stop" in fake.systemctl_verbs()
 
 
+async def test_linux_kill_of_one_kind_leaves_the_unit_alone_while_the_other_lives():
+    """given: both session kinds alive in the one transient unit's cgroup
+    when: the stale manual session is killed (startup both-alive cleanup)
+    then: the unit is NOT stopped — KillMode=control-group would reap the tmux
+          server and take the live conference session down with it, which is
+          exactly what that cleanup is trying to preserve
+    """
+    fake = LinuxFake(sessions={TMUX_SESSION, TMUX_SESSION_MANUAL}, loaded=True)
+
+    await _linux_runner(fake).kill(TMUX_SESSION_MANUAL)
+
+    assert fake.calls[0][:4] == ["tmux", "-L", "recog-copilot", "kill-session"]
+    assert fake.systemctl_verbs() == []
+
+
 async def test_linux_kill_skips_the_stop_when_no_unit_is_loaded():
     fake = LinuxFake(sessions={TMUX_SESSION}, loaded=False)
 
