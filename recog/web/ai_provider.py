@@ -90,7 +90,7 @@ ANCHOR_PROMPT = """Ты — помощник для быстрого восст�
 
 
 class ClaudeCliProvider(AIProvider):
-    """Claude CLI - uses Max/Pro subscription."""
+    """Claude CLI - keeps subscription auth while isolating analysis context."""
 
     def __init__(self, task: str = "analysis"):
         self.model = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
@@ -109,6 +109,7 @@ class ClaudeCliProvider(AIProvider):
         marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
             self._cli, "-p", marked_prompt,
+            "--safe-mode", "--disable-slash-commands",
             "--model", self.model,
             "--output-format", "text",
             stdout=asyncio.subprocess.PIPE,
@@ -130,6 +131,7 @@ class ClaudeCliProvider(AIProvider):
         marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
             self._cli, "-p", marked_prompt,
+            "--safe-mode", "--disable-slash-commands",
             "--model", self.model,
             "--output-format", "stream-json",
             "--verbose",

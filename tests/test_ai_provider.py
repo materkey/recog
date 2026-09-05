@@ -167,6 +167,19 @@ class TestCodexCliProvider:
             "-",
         ]
 
+    def test_isolated_analysis_when_building_command_then_custom_context_is_disabled(self):
+        cmd = build_codex_exec_command("/mock/codex", "test-model", "xhigh", isolated=True)
+        assert "--ignore-user-config" in cmd
+        overrides = {cmd[index + 1] for index, value in enumerate(cmd) if value == "-c"}
+        assert overrides == {
+            'model_reasoning_effort="xhigh"',
+            "skills.include_instructions=false", "skills.bundled.enabled=false",
+            "features.plugins=false", "features.hooks=false", "features.memories=false",
+            "features.skill_search=false", "project_doc_max_bytes=0",
+        }
+        assert "--ephemeral" in cmd
+        assert cmd[-2:] == ["--json", "-"]
+
     @pytest.mark.asyncio
     async def test_complete_marks_prompt_and_runs_ephemeral_codex(self):
         """given: CodexCliProvider - when: complete - then: prompt is marked and command is ephemeral"""
@@ -194,10 +207,33 @@ class TestCodexCliProvider:
 
         assert answer == "answer"
         assert "--ephemeral" in created["cmd"]
+        assert "--ignore-user-config" in created["cmd"]
+        assert "skills.include_instructions=false" in created["cmd"]
         assert created["cmd"][-2:] == ("--json", "-")
         assert created["input"].decode().startswith(
             f"{CCS_AUTOMATION_MARKER_PREFIX} task=increment -->\nhello"
         )
+
+    @pytest.mark.asyncio
+    async def test_streaming_analysis_when_spawning_codex_then_context_is_isolated(self):
+        async def lines():
+            yield b'{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}\n'
+            yield b'{"type":"turn.completed"}\n'
+
+        proc = MagicMock(returncode=0)
+        proc.stdout = lines()
+        proc.stdin.drain = AsyncMock()
+        spawn = AsyncMock(return_value=proc)
+        with patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"), \
+             patch("asyncio.create_subprocess_exec", new=spawn):
+            result = [item async for item in CodexCliProvider().stream("hello")]
+
+        assert result == [("answer", False), ("answer", True)]
+        cmd = spawn.call_args.args
+        assert "--ignore-user-config" in cmd
+        assert "skills.include_instructions=false" in cmd
+        assert "project_doc_max_bytes=0" in cmd
+        assert cmd[-2:] == ("--json", "-")
 
 
 class TestFrontendClaudeProvider:
@@ -227,3 +263,36 @@ class TestFrontendClaudeProvider:
         prompt = created["cmd"][2]
         assert created["cmd"][:2] == ("/mock/claude", "-p")
         assert prompt.startswith("<!-- ccs-automation:recog task=anchor -->\nhello")
+        assert "--safe-mode" in created["cmd"]
+        assert "--bare" not in created["cmd"]
+        assert "--disable-slash-commands" in created["cmd"]
+
+    @pytest.mark.asyncio
+    async def test_streaming_analysis_when_spawning_claude_then_safe_mode_preserves_auth_and_disables_skills(self):
+        from recog.web.ai_provider import ClaudeCliProvider
+
+        created = {}
+
+        class FakeProcess:
+            returncode = 0
+
+            @property
+            def stdout(self):
+                async def lines():
+                    yield b'{"type":"assistant","message":{"content":[{"type":"text","text":"answer"}]}}\n'
+                    yield b'{"type":"result","result":"answer"}\n'
+                return lines()
+
+        async def spawn(*cmd, **kwargs):
+            created["cmd"] = cmd
+            return FakeProcess()
+
+        with patch("recog.web.ai_provider.resolve_cli", return_value="/mock/claude"), \
+             patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=spawn)):
+            result = [item async for item in ClaudeCliProvider().stream("hello")]
+
+        assert result == [("answer", False), ("answer", True)]
+        assert "--safe-mode" in created["cmd"]
+        assert "--bare" not in created["cmd"]
+        assert "--disable-slash-commands" in created["cmd"]
+        assert created["cmd"][created["cmd"].index("--output-format") + 1] == "stream-json"
