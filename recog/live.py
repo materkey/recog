@@ -177,6 +177,16 @@ class IncrementalWavWriter:
         self._patch_header_sizes()
         return skipped_samples
 
+    def mark_discontinuity(self):
+        """Следующий чанк писать целиком: поток захвата прервался.
+
+        Срез overlap исходит из того, что первые 0.5 с чанка уже записаны
+        предыдущим. После разрыва (сменился источник системного звука) буфер
+        захвата сброшен, и эти 0.5 с — новое аудио: срезать их значит
+        выкинуть из WAV полсекунды речи.
+        """
+        self._first_chunk = True
+
     def _patch_header_sizes(self):
         """Update RIFF/data size fields in place, preserving file position."""
         data_size = self._samples_written * 2
@@ -352,19 +362,6 @@ class SingleDeviceCapture(BufferedAudioCapture):
         return None
 
 
-class LiveAudioCapture:
-    """Захват аудио с микрофона и/или системного звука (BlackHole)."""
-
-    def __init__(self, mic_device=None, system_device=None, sample_rate=16000):
-        self.sample_rate = sample_rate
-        self.mic_device = mic_device
-        self.system_device = system_device
-
-    @staticmethod
-    def list_devices():
-        SingleDeviceCapture.list_devices()
-
-
 @dataclass
 class RecentSegment:
     """Tracks a recent system-audio segment for retroactive correction."""
@@ -529,6 +526,9 @@ class LiveTranscriber:
         # because the system WAV advances in ~chunk_duration steps (sawtooth lag)
         # while chunk age runs on a continuous clock. Guarded by _wav_lock.
         self._system_wav_anchor: Optional[Tuple[float, int]] = None
+        # Снимок source_epoch системного захвата: расхождение = разрыв потока
+        # (смена default sink), после которого чанк пишется в WAV целиком.
+        self._system_source_epoch = 0
         self._state_lock = threading.Lock()  # Guards per-source state during meeting transitions
         self._meeting_generation = 0  # Incremented on meeting change; used to discard stale chunks
         self._mic_state: Optional[SourceState] = None
@@ -562,9 +562,14 @@ class LiveTranscriber:
         # Tracks the last-observed watchdog state so we emit a transition
         # marker only on actual flips (see plan §4.5).
         self._last_pcm_degraded: bool = False
-        # Захват системного звука сдался (исчерпал рестарты) — состояние
-        # необратимое, поэтому маркер пишется ровно один раз за сессию.
+        # Захват системного звука сдался (исчерпал рестарты) — до конца
+        # процесса это необратимо, но каждая встреча, оставшаяся без
+        # системного звука, должна получить свой маркер. Ключ — встреча, в
+        # которую маркер уже записан: reconnect в ту же встречу второго не
+        # добавит, а любая новая (в том числе orphan-сплит по тишине, идущий
+        # мимо `_invalidate_pending_chunks`) получит собственный.
         self._system_capture_lost: bool = False
+        self._system_capture_lost_meeting = None
 
     def system_audio_label(self) -> str:
         """Человекочитаемое имя источника системного звука для баннера."""
@@ -1449,14 +1454,35 @@ class LiveTranscriber:
         месте, тир-2 остаётся рабочим.
         """
         capture = self.system_capture
-        if capture is None or self._system_capture_lost:
+        if capture is None:
             return
         if not getattr(capture, "dead", False):
             return
-        self._system_capture_lost = True
+        # Compare-and-set вместе с чтением встречи и поколения под одним
+        # локом: взвод вне лока успевал попасть в окно «взвели → встреча
+        # сменилась → читаем уже новое поколение», и новая встреча получала
+        # два одинаковых маркера подряд.
         with self._state_lock:
+            meeting_key = self._current_meeting_key()
+            if self._system_capture_lost and self._system_capture_lost_meeting == meeting_key:
+                return
+            self._system_capture_lost = True
+            self._system_capture_lost_meeting = meeting_key
             marker_gen = self._meeting_generation
         self._emit_capture_loss_marker(marker_gen)
+
+    def _current_meeting_key(self):
+        """Текущая встреча как ключ per-meeting состояний watchdog'а.
+
+        `current_meeting_path` меняется ровно на смене встречи — и на
+        bridge-пути, и на orphan-сплите по тишине — и остаётся прежним при
+        reconnect расширения в ту же встречу. Поэтому идентичность встречи
+        берётся отсюда, а не из событий, которые её только сопровождают.
+        """
+        storage = self._meeting_storage
+        if storage is None:
+            return None
+        return getattr(storage, "current_meeting_path", None)
 
     def _emit_capture_loss_marker(self, marker_gen: int):
         """Пишет маркер потери системного захвата в stdout и в транскрипт."""
@@ -1927,6 +1953,9 @@ class LiveTranscriber:
             retry_pending = None
         if retry_pending is not None:
             chunk, capture_start_ts, _ = retry_pending
+            # Retry-чанк в WAV уже записан первой попыткой, до сравнения
+            # эпох ниже дело не дойдёт.
+            capture_epoch = self._system_source_epoch
         else:
             result = capture.get_chunk(self.chunk_duration)
             if result is None:
@@ -1934,6 +1963,12 @@ class LiveTranscriber:
             chunk, capture_start_ts = result
             if len(chunk) < 1000:
                 return
+            # Номер отрезка спрашиваем у самого чанка, а не снимком до/после
+            # чтения буфера: capture фиксирует его под тем же локом, что и
+            # нарезку (см. BufferedAudioCapture.chunk_epoch), поэтому граница
+            # источников, прошедшая рядом с этим чтением, не отнесётся к
+            # чужому чанку.
+            capture_epoch = capture.chunk_epoch
         # Времена чанка — от capture-времени (НЕ time.time()): при обработке
         # бэклога после сбоя ASR сегменты должны лечь в то время, когда речь
         # была произнесена.
@@ -1982,6 +2017,11 @@ class LiveTranscriber:
                 state.audio_offset = self._wav_writer_mic.get_offset_ms()
                 self._wav_writer_mic.write_chunk(chunk)
             elif not is_mic and self._wav_writer_system:
+                if capture_epoch != self._system_source_epoch:
+                    # Захват сменил источник и сбросил буфер: overlap-головы,
+                    # которую писатель срезает по умолчанию, в WAV нет.
+                    self._system_source_epoch = capture_epoch
+                    self._wav_writer_system.mark_discontinuity()
                 offset_before = self._wav_writer_system.get_offset_ms()
                 state.audio_offset = offset_before
                 skipped = self._wav_writer_system.write_chunk(chunk)
@@ -2127,8 +2167,6 @@ class LiveTranscriber:
         self._setup_per_speaker_ingest()
         self._start_ktalk_bridge()
 
-        self._start_audio_captures()
-
         self.running = True
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -2139,6 +2177,13 @@ class LiveTranscriber:
         last_audio_cleanup = time.monotonic()
 
         try:
+            # Внутри try: отказ старта захвата (микрофон занят, устройство
+            # исчезло) до этого уходил наружу мимо `_teardown_session` —
+            # встреча оставалась открытой навсегда (`stale_session`), а WAV'ы
+            # недописанными. Под сервисом с Restart=always каждый рестарт
+            # добавлял ещё одну такую встречу.
+            self._start_audio_captures()
+
             while self.running:
                 time.sleep(0.1)
 
@@ -2321,7 +2366,7 @@ def live_pipeline(
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
-        LiveAudioCapture.list_devices()
+        SingleDeviceCapture.list_devices()
         return
 
     system_audio = normalize_system_audio(system_audio, system_device, use_screencapture)

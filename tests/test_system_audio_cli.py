@@ -13,7 +13,9 @@
 """
 import sys
 import threading
+import time
 import types
+from collections import deque
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -296,18 +298,27 @@ def test_meta_reports_screencapture_only_for_screencapture(monkeypatch):
 # =============================================================================
 
 
-def _transcriber_with_dead_capture(dead: bool):
+def _transcriber_with_dead_capture(dead: bool, meeting: str = "meeting-A"):
     transcriber = Mock(spec=LiveTranscriber)
     transcriber.system_capture = Mock(dead=dead)
     transcriber._system_capture_lost = False
+    transcriber._system_capture_lost_meeting = None
     transcriber._state_lock = threading.RLock()
     transcriber._meeting_generation = 7
     transcriber._meeting_storage = Mock()
+    transcriber._meeting_storage.current_meeting_path = Path("/meetings") / meeting
     transcriber._refine_worker = Mock()
     transcriber.transcript_lines = []
+    transcriber._current_meeting_key = types.MethodType(
+        LiveTranscriber._current_meeting_key, transcriber)
     transcriber._emit_capture_loss_marker = types.MethodType(
         LiveTranscriber._emit_capture_loss_marker, transcriber)
     return transcriber
+
+
+def _switch_meeting(transcriber, meeting: str):
+    """Смена встречи так, как её видит watchdog: новый current_meeting_path."""
+    transcriber._meeting_storage.current_meeting_path = Path("/meetings") / meeting
 
 
 def test_exhausted_capture_restarts_write_one_capture_loss_marker():
@@ -341,6 +352,70 @@ def test_healthy_capture_writes_nothing():
     assert transcriber._system_capture_lost is False
 
 
+def test_reconnect_into_the_same_meeting_does_not_repeat_the_marker():
+    """
+    given: захват сдался во встрече A, маркер записан
+    when:  расширение переподключается в ту же встречу — bridge зовёт
+           pre-switch callback, но current_meeting_path не меняется
+    then:  второго маркера в той же встрече нет. Пока состояние сбрасывалось
+           по факту `_invalidate_pending_chunks`, каждый reconnect добавлял
+           в транскрипт ещё одну копию.
+    """
+    transcriber = _transcriber_with_dead_capture(dead=True, meeting="meeting-A")
+    transcriber._recent_system_segments = deque()
+    transcriber._mic_state = None
+    transcriber._sys_state = None
+    transcriber._pcm_prev_words = {}
+    transcriber._pcm_pid_state = {}
+    transcriber._pcm_live_segments = {}
+    transcriber._pcm_segment_texts = {}
+    transcriber._last_pcm_degraded = False
+    transcriber._per_speaker_ingest = None
+    transcriber.mic_capture = None
+
+    LiveTranscriber._check_system_capture_alive(transcriber)
+    # Reconnect: bridge зовёт pre-switch callback, но on_meeting_join
+    # оставляет current_meeting_path прежним (ktalk_bridge.py).
+    LiveTranscriber._invalidate_pending_chunks(transcriber)
+    LiveTranscriber._check_system_capture_alive(transcriber)
+
+    assert transcriber._meeting_storage.append_segment.call_count == 1
+
+
+def test_bridge_switch_to_a_new_meeting_writes_its_own_marker():
+    """
+    given: захват сдался во встрече A, маркер записан
+    when:  bridge переводит live на встречу B
+    then:  встреча B получает собственный маркер — иначе у неё пустой
+           audio_system.wav при meta с system_audio: true и ни следа в
+           транскрипте
+    """
+    transcriber = _transcriber_with_dead_capture(dead=True, meeting="meeting-A")
+
+    LiveTranscriber._check_system_capture_alive(transcriber)
+    _switch_meeting(transcriber, "meeting-B")
+    LiveTranscriber._check_system_capture_alive(transcriber)
+
+    assert transcriber._meeting_storage.append_segment.call_count == 2
+
+
+def test_silence_split_meeting_gets_its_own_marker():
+    """
+    given: захват сдался во встрече A, маркер записан
+    when:  orphan-сплит по тишине заводит встречу B — этот путь идёт через
+           `_on_meeting_change` мимо `_invalidate_pending_chunks`
+    then:  встреча B тоже получает маркер. Пока состояние сбрасывалось по
+           факту инвалидации, сплит-встречи молча оставались без него.
+    """
+    transcriber = _transcriber_with_dead_capture(dead=True, meeting="meeting-A")
+
+    LiveTranscriber._check_system_capture_alive(transcriber)
+    _switch_meeting(transcriber, "meeting-A-2")  # split_on_silence_timeout
+    LiveTranscriber._check_system_capture_alive(transcriber)
+
+    assert transcriber._meeting_storage.append_segment.call_count == 2
+
+
 def test_marker_is_dropped_when_the_meeting_changed_under_it():
     transcriber = _transcriber_with_dead_capture(dead=True)
 
@@ -355,6 +430,34 @@ def test_marker_is_dropped_when_the_meeting_changed_under_it():
     transcriber._meeting_storage.append_segment.assert_not_called()
 
 
+def test_the_lost_flag_is_set_under_the_same_lock_as_the_generation_read():
+    """given: смена встречи (`_invalidate_pending_chunks`) держит _state_lock
+              и сбрасывает флаг потери захвата
+    when: watchdog в это время обнаруживает мёртвый захват
+    then: флаг ещё не взведён — взвод вне лока попадал в окно «взвели →
+          встреча сменилась и сбросила флаг → читаем уже новое поколение», и
+          новая встреча получала два одинаковых маркера подряд
+    """
+    transcriber = _transcriber_with_dead_capture(dead=True)
+    started = threading.Event()
+
+    def watchdog():
+        started.set()
+        LiveTranscriber._check_system_capture_alive(transcriber)
+
+    worker = threading.Thread(target=watchdog)
+    with transcriber._state_lock:
+        worker.start()
+        started.wait(timeout=2.0)
+        time.sleep(0.1)
+        assert transcriber._system_capture_lost is False
+        transcriber._meeting_storage.append_segment.assert_not_called()
+
+    worker.join(timeout=2.0)
+    assert transcriber._system_capture_lost is True
+    assert transcriber._meeting_storage.append_segment.call_count == 1
+
+
 def test_capture_without_a_dead_flag_is_never_reported():
     """SingleDeviceCapture не имеет `dead` — getattr не должен падать."""
     transcriber = _transcriber_with_dead_capture(dead=False)
@@ -363,3 +466,89 @@ def test_capture_without_a_dead_flag_is_never_reported():
     LiveTranscriber._check_system_capture_alive(transcriber)
 
     transcriber._meeting_storage.append_segment.assert_not_called()
+
+
+# =============================================================================
+# live_pipeline: склейка нормализации спеки и автоопределения устройств
+# =============================================================================
+
+
+@pytest.fixture
+def captured_transcriber(monkeypatch):
+    """Перехватывает конструктор LiveTranscriber, отдаёт его kwargs."""
+    from recog import live as live_mod
+
+    seen = {}
+
+    class _FakeTranscriber:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def run(self, force_exit=False):
+            seen["ran"] = True
+
+    monkeypatch.setattr(live_mod, "LiveTranscriber", _FakeTranscriber)
+    return seen
+
+
+def test_live_pipeline_resolves_auto_mic_to_a_device_index(fake_sd, captured_transcriber):
+    """`--mic-device auto` — единственный путь, где индекс микрофона вообще
+    появляется: LiveTranscriber строку "auto" уже не понимает."""
+    from recog.live import live_pipeline
+
+    fake_sd(_devices(("pulse", 32)))
+
+    live_pipeline(mic_device="auto", system_audio=NO_SYSTEM_AUDIO)
+
+    assert captured_transcriber["mic_device"] == 0
+    assert captured_transcriber["ran"] is True
+
+
+def test_live_pipeline_expands_device_auto_to_the_blackhole_index(
+    fake_sd, captured_transcriber
+):
+    from recog.live import live_pipeline
+
+    fake_sd(_devices(("MacBook Pro Microphone", 1), ("BlackHole 2ch", 2)))
+
+    live_pipeline(mic_device="none", system_audio="device:auto")
+
+    assert captured_transcriber["system_audio"] == "device:1"
+
+
+def test_live_pipeline_downgrades_device_auto_to_none_without_blackhole(
+    fake_sd, captured_transcriber, capsys
+):
+    """Без BlackHole `device:auto` некуда разворачивать: захват молча писал бы
+    вход по умолчанию, то есть второй микрофон."""
+    from recog.live import live_pipeline
+
+    fake_sd(_devices(("MacBook Pro Microphone", 1)))
+
+    live_pipeline(mic_device="none", system_audio="device:auto")
+
+    assert captured_transcriber["system_audio"] == NO_SYSTEM_AUDIO
+    assert "BlackHole" in capsys.readouterr().err
+
+
+def test_live_pipeline_normalizes_the_legacy_kwargs(captured_transcriber):
+    """Прямые вызовы (не через CLI) всё ещё передают старые аргументы."""
+    from recog.live import live_pipeline
+
+    live_pipeline(mic_device="none", system_device=5)
+
+    assert captured_transcriber["system_audio"] == "device:5"
+
+
+def test_live_pipeline_list_devices_builds_no_transcriber(
+    fake_sd, captured_transcriber, monkeypatch
+):
+    from recog.live import live_pipeline
+
+    fake_sd(_devices(("pulse", 32)))
+    monkeypatch.setattr(SingleDeviceCapture, "print_pulse_sources",
+                        staticmethod(lambda **kw: None))
+
+    live_pipeline(list_devices=True)
+
+    assert captured_transcriber == {}
