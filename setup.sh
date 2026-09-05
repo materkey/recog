@@ -87,12 +87,12 @@ case "$HOST_OS" in
 esac
 
 # Upstream torch publishes no macOS x86_64 wheels past 2.2.2, and
-# constraints/macos.txt pins the verified 2.8.0 — pip on an Intel Mac cannot
+# deploy/python/constraints/macos.txt pins the verified 2.8.0 — pip on an Intel Mac cannot
 # resolve the install at all. Say so in the first second instead of after a
 # venv and a failed resolve.
 HOST_ARCH="${RECOG_HOST_ARCH:-$(uname -m)}"
 if [ "$HOST_OS" = "darwin" ] && [ "$HOST_ARCH" != "arm64" ]; then
-    fail "macOS on $HOST_ARCH is not supported: the pinned torch/torchaudio (constraints/macos.txt) have macOS wheels for Apple Silicon only. Use an Apple Silicon Mac or Linux. (A Rosetta shell on Apple Silicon also reports x86_64 — rerun in a native arm64 terminal.)"
+    fail "macOS on $HOST_ARCH is not supported: the pinned torch/torchaudio (deploy/python/constraints/macos.txt) have macOS wheels for Apple Silicon only. Use an Apple Silicon Mac or Linux. (A Rosetta shell on Apple Silicon also reports x86_64 — rerun in a native arm64 terminal.)"
 fi
 
 # The service backend follows the host unless a test pins it.
@@ -238,8 +238,8 @@ DEPS_PYTHON="$VENV_PY"
 # Every pip stage runs under the macOS constraints file so a Linux port cannot
 # drag the working Mac's ML stack to new versions as a side effect.
 PIP_CONSTRAINTS=()
-if [ "$HOST_OS" = "darwin" ] && [ -f "$REPO_DIR/constraints/macos.txt" ]; then
-    PIP_CONSTRAINTS=(-c "$REPO_DIR/constraints/macos.txt")
+if [ "$HOST_OS" = "darwin" ] && [ -f "$REPO_DIR/deploy/python/constraints/macos.txt" ]; then
+    PIP_CONSTRAINTS=(-c "$REPO_DIR/deploy/python/constraints/macos.txt")
 fi
 
 pip_install() {
@@ -308,9 +308,9 @@ fi
 
 step "Python requirements"
 
-REQ_ARGS=(-r "$REPO_DIR/requirements.txt" -r "$REPO_DIR/frontend/requirements.txt")
+REQ_ARGS=(-r "$REPO_DIR/deploy/python/requirements.txt" -r "$REPO_DIR/deploy/python/requirements-web.txt")
 if [ "$HOST_OS" = "darwin" ]; then
-    REQ_ARGS+=(-r "$REPO_DIR/requirements-macos.txt")
+    REQ_ARGS+=(-r "$REPO_DIR/deploy/python/requirements-macos.txt")
 fi
 pip_install "${REQ_ARGS[@]}"
 info "Requirements installed"
@@ -343,10 +343,10 @@ copy_example() {
 }
 
 copy_example "$REPO_DIR/.env" "$REPO_DIR/.env.example"
-copy_example "$REPO_DIR/frontend/.env" "$REPO_DIR/frontend/.env.example"
+copy_example "$REPO_DIR/recog/web/.env" "$REPO_DIR/recog/web/.env.example"
 DATA_DIR="$(DEPS_PYTHON="$VENV_PY" bash "$REPO_DIR/scripts/data-dir.sh")"
 mkdir -p "$DATA_DIR"
-copy_example "$DATA_DIR/speakers_ecapa.json" "$REPO_DIR/speakers_ecapa.json.example"
+copy_example "$DATA_DIR/speakers_ecapa.json" "$REPO_DIR/deploy/examples/speakers_ecapa.json.example"
 
 # A pull that crossed the untracking of speakers_ecapa.json deletes the working
 # copy along with it (.gitignore has no power over an already-tracked file), and
@@ -382,7 +382,7 @@ fi
 # 9. Chrome extension
 # ---------------------------------------------------------------------------
 
-EXTENSION_DIR="$REPO_DIR/kontur-diarize/ktalk-speaker-extension"
+EXTENSION_DIR="$REPO_DIR/browser-extension"
 
 step "Chrome extension"
 
@@ -412,7 +412,7 @@ if [ "$HOST_OS" = "darwin" ]; then
     step "System audio helper (ScreenCaptureKit)"
 
     if deps_have swiftc && swiftc -o "$REPO_DIR/sck_audio_capture" \
-            "$REPO_DIR/native/macos/sck_audio_capture.swift" \
+            "$REPO_DIR/recog/native/macos/sck_audio_capture.swift" \
             -framework ScreenCaptureKit -framework CoreMedia -framework AVFoundation; then
         info "Built sck_audio_capture"
     elif deps_sck_helper_ok; then

@@ -6,7 +6,7 @@ Investigation on 2026-04-22 confirmed that KTalk's Jitsi SFU already exposes **p
 
 ## What Changes
 
-- **Per-speaker audio capture** for KTalk meetings: Chrome extension extracts each remote participant's `MediaStream`, downsamples 48 → 16 kHz in an `AudioWorkletNode`, and streams Int16 PCM chunks over the existing WebSocket to `ktalk_bridge.py`.
+- **Per-speaker audio capture** for KTalk meetings: Chrome extension extracts each remote participant's `MediaStream`, downsamples 48 → 16 kHz in an `AudioWorkletNode`, and streams Int16 PCM chunks over the existing WebSocket to `recog/ktalk_bridge.py`.
 - **New WebSocket frame type**: binary `pcm_chunk {pid, seq, pcm_bytes}` alongside the current JSON control messages.
 - **Per-PID ingest pipeline** in `recog/live.py`: ring buffer per participant + batch collector + one shared `GigaAM` instance with batched `forward()` inference. Attribution is now an input (from `pid`), not a guess.
 - **Deterministic speaker tagging**: text emitted to transcript is tagged with the SFU-provided participant identity on the chunk it came from — no dominant-speaker timing heuristics.
@@ -27,8 +27,8 @@ None. The repository currently has no `openspec/specs/` entries; this is a green
 ## Impact
 
 **Code**:
-- `kontur-diarize/ktalk-speaker-extension/src/` — new `audio-worklet.js` (downsampler processor), new PCM-sink module, wiring in `init.js` / `ws.js`, rebuild of `injected.js`.
-- `ktalk_bridge.py` — new binary frame handling, PCM fan-out to live pipeline.
+- `browser-extension/src/` — new `audio-worklet.js` (downsampler processor), new PCM-sink module, wiring in `init.js` / `ws.js`, rebuild of `injected.js`.
+- `recog/ktalk_bridge.py` — new binary frame handling, PCM fan-out to live pipeline.
 - `recog/live.py` — per-PID ingest path, gated on `use_ktalk` and bridge-reports-new-protocol. Old mixed path stays as fallback.
 - `recog/asr.py` — may grow a `transcribe_batch(wavs, lengths)` helper for batched forward (small, additive).
 - `tests/e2e/` — new test that asserts correct attribution during overlapping speech.

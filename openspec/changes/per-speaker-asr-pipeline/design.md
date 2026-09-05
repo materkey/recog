@@ -25,7 +25,7 @@ Dominant-speaker attribution is a guess: the ASR sees one stream containing over
 - Jitsi exposes `_participantsMap.get(pid)._audioTrack$.value.jitsiTrack.stream` as a live `MediaStream` per participant. Already touched by the extension's `audio-analyzer.js:32-47` (used only for VAD flatness today).
 - These streams are **demultiplexed by SFU** — each carries only its speaker's audio. Verified via RMS + spectral flatness tests; Alice=speech and Bob=pink-noise simultaneously showed 29× flatness separation. KTalk keeps SFU even for 2-participant rooms (no P2P fallback).
 - Track metadata: `{channelCount: 1, sampleRate: 48000, sampleSize: 16, latency: 0.01, readyState: 'live'}`.
-- GigaAM benchmark (`tests/bench_gigaam_rtf.py`): **RTF=0.032** single-stream on CPU, 30× realtime headroom, **60× when batched** at B=8. No remote worker needed.
+- GigaAM benchmark (`scripts/benchmarks/bench_gigaam_rtf.py`): **RTF=0.032** single-stream on CPU, 30× realtime headroom, **60× when batched** at B=8. No remote worker needed.
 
 **Constraints**:
 - Must not regress current mixed-capture path (non-KTalk users: YouTube, Zoom, offline files).
@@ -62,7 +62,7 @@ Dominant-speaker attribution is a guess: the ASR sees one stream containing over
 ### D2. Int16 PCM over WebSocket binary frames, JSON envelope for metadata
 **Choice**: Each PCM chunk is sent as a WebSocket binary message with a short JSON prefix (pid, seq, sample_count, ts_ms) followed by raw Int16 little-endian samples. Alternative: one binary-only frame with a fixed header struct.
 
-**Why binary + JSON prefix**: Reuses the existing JSON-parse path in `ktalk_bridge.py` for the header; only the PCM payload is binary. Parseable without a schema library.
+**Why binary + JSON prefix**: Reuses the existing JSON-parse path in `recog/ktalk_bridge.py` for the header; only the PCM payload is binary. Parseable without a schema library.
 
 **Concrete frame**: a single WS message with two parts: first 4 bytes = header-length u32 LE, then UTF-8 JSON header `{type:"pcm_chunk", pid, seq, samples, ts_ms}`, then `2 * samples` bytes of Int16LE PCM.
 

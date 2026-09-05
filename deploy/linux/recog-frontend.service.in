@@ -1,0 +1,20 @@
+[Unit]
+Description=Recog web UI (FastAPI on http://127.0.0.1:9080)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO_DIR@
+Environment=PYTHONUNBUFFERED=1
+Environment="HOME=@HOME@"
+Environment="RECOG_DATA_DIR=@DATA_DIR@"
+Environment="PATH=@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ExecStart="@PYTHON@" -m recog.web.server
+# Mirrors launchd KeepAlive.SuccessfulExit=false — a clean exit is intentional.
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:@LOG_DIR@/frontend.stdout.log
+StandardError=append:@LOG_DIR@/frontend.stderr.log
+
+[Install]
+WantedBy=default.target

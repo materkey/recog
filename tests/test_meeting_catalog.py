@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from watchdog.events import FileModifiedEvent, FileMovedEvent
 
-from frontend.meeting_catalog import MeetingCatalog
+from recog.web.meeting_catalog import MeetingCatalog
 
 
 def write_meta(root, meeting_id="meeting", **updates):

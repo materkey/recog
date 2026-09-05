@@ -286,7 +286,7 @@ def test_default_my_increment_prompt_loads():
     when: loaded via PromptRegistry
     then: has correct id, name, null filter, and contains expected placeholders
     """
-    prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
+    prompts_dir = Path(__file__).resolve().parent.parent / "recog/prompts"
     registry = PromptRegistry(prompts_dir)
     config = registry.get("my-increment")
 

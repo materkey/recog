@@ -20,7 +20,7 @@ import pytest
 
 # The orchestrator imports playwright at module level, and `-m "not e2e"`
 # deselects *after* collection has already imported this file — without the
-# guard a checkout that installed only requirements.txt fails collection
+# guard a checkout that installed only deploy/python/requirements.txt fails collection
 # (exit code 2) instead of running the unit suite.
 pytest.importorskip("playwright.sync_api")
 
@@ -208,7 +208,7 @@ def test_per_speaker_degraded_mode_on_extension_dispose():
             "PCM transport never activated in this e2e run (pcm_ever_seen "
             "stayed False for the full warmup window). Cannot simulate a "
             "pcm-active→silent transition. Checklist:\n"
-            "  - kontur-diarize/ktalk-speaker-extension rebuilt? "
+            "  - browser-extension rebuilt? "
             "`npm run build`\n"
             "  - manifest.json version 1.3.0?\n"
             "  - RECOG_PCM_TRANSPORT=1 visible to the bridge process?\n"

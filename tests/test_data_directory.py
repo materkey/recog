@@ -60,14 +60,14 @@ def test_two_populated_roots_when_resolving_then_conflict_is_visible(roots):
 
 
 def test_explicit_storage_when_constructing_then_override_is_preserved(roots):
-    from meeting_storage import MeetingStorage
+    from recog.meeting_storage import MeetingStorage
 
     path = roots[1] / "isolated" / "meetings"
     assert MeetingStorage(base_path=path).base_path == path
 
 
 def test_configured_root_when_constructing_storage_then_nested_directory_created(roots, monkeypatch):
-    from meeting_storage import MeetingStorage
+    from recog.meeting_storage import MeetingStorage
 
     target = roots[1]
     monkeypatch.setenv("RECOG_DATA_DIR", str(target))
@@ -79,7 +79,7 @@ def test_configured_root_when_constructing_storage_then_nested_directory_created
 @pytest.mark.parametrize("old_path_exists", [False, True])
 def test_moved_audio_when_loading_meeting_then_current_files_win_without_rewriting_meta(tmp_path, old_path_exists):
     """Enroll и playback должны читать перенесённый WAV, даже если старый путь снова занят."""
-    from meeting_storage import MeetingStorage
+    from recog.meeting_storage import MeetingStorage
 
     storage = MeetingStorage(tmp_path / "new/meetings")
     meeting = storage.base_path / "recording"
@@ -107,8 +107,7 @@ def test_configured_root_when_frontend_imports_then_storage_and_speakers_share_i
         [sys.executable, "-c", """
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path.cwd() / 'frontend'))
-import server
+from recog.web import server
 expected = Path(sys.argv[1])
 assert server.MEETINGS_DIR == expected / 'meetings'
 assert server.SPEAKER_DB_PATH == expected / 'speakers_ecapa.json'

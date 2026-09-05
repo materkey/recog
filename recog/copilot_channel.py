@@ -20,7 +20,7 @@ separate process from the bridge and serves two roles simultaneously:
    alongside the extension-side `Copilot` tab.
 
 Reconnect uses simple exponential backoff (1s -> 2s -> 4s -> ... -> max 30s),
-modelled on `frontend/bridge_subscriber.py` which serves the analogous role
+modelled on `recog/web/bridge_subscriber.py` which serves the analogous role
 for refine events (see ADR-0019 / D10).
 
 ## System prompt for Claude
@@ -742,7 +742,7 @@ async def _ws_loop(
 ) -> None:
     """Maintain the bridge WS connection with reconnect+backoff.
 
-    Mirrors `frontend/bridge_subscriber.py::BridgeSubscriber._run`. On every
+    Mirrors `recog/web/bridge_subscriber.py::BridgeSubscriber._run`. On every
     successful connect we send `copilot_channel_hello` so the bridge tags
     this socket as a channel client; failure to send is non-fatal but the
     bridge will treat us as a regular extension client.

@@ -11,7 +11,7 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 1. **Fallback_mixed integration (§9)**: refine worker must pause when `PerSpeakerIngest._degraded=True` (PCM silence watchdog trip) and resume on recovery. No `transcript_refine` broadcast during degraded mode.
 2. **Tests (§10)**: unit + scripted e2e that exercises the full contour with synthetic PCM.
-3. **Benchmarking (§11)**: `scripts/refine_benchmark.py` replays per-pid WAVs, measures live-WER vs refined-WER and latency under multi-pid load. Acceptance thresholds from design gate the default-flip decision.
+3. **Benchmarking (§11)**: `scripts/benchmarks/refine_benchmark.py` replays per-pid WAVs, measures live-WER vs refined-WER and latency under multi-pid load. Acceptance thresholds from design gate the default-flip decision.
 4. **Docs (§12.1–12.5)**: ADR-0019, CLAUDE.md architecture note, `.env.example` entry.
 5. **Leave default-flip (§12.6) and archive (§12.7) for user** — ralphex marks them `[ ]` with a note; user does the flip manually after real-meeting validation.
 
@@ -64,17 +64,17 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 - [x] 2.2 Second scenario: same pipeline but with `_degraded=True` set mid-stream. Assert no `update_segments(text=...)` calls after the trip.
 - [x] 2.3 Commit: `test(refine): scripted e2e for full contour (PCM → alignment → apply → send_refine)`
 
-### Task 3: scripts/refine_benchmark.py — WER harness
+### Task 3: scripts/benchmarks/refine_benchmark.py — WER harness
 
-- [x] 3.1 New `scripts/refine_benchmark.py`: reads per-pid WAVs from a `--wav` argument (repeatable), a `--reference-file` for WER ground truth, and replays the WAVs through the full refine contour (not just the offline harness). Output: for each WAV, report per-segment live-text, refined-text, live-WER, refined-WER, and overall avg.
+- [x] 3.1 New `scripts/benchmarks/refine_benchmark.py`: reads per-pid WAVs from a `--wav` argument (repeatable), a `--reference-file` for WER ground truth, and replays the WAVs through the full refine contour (not just the offline harness). Output: for each WAV, report per-segment live-text, refined-text, live-WER, refined-WER, and overall avg.
 - [x] 3.2 Implementation approach:
-  - Use `scripts/pcm_experiment.py` as a reference for WER computation.
+  - Use `scripts/benchmarks/pcm_experiment.py` as a reference for WER computation.
   - Instead of calling `ASRModule.transcribe_simple` directly, build a mini-harness:
     - Slice the input WAV into 3-second chunks (matching `PCM_CHUNK_DURATION_S`).
     - Feed chunks into a real `PerSpeakerIngest` instance (stubbed pid), drain via `LiveTranscriber._on_pcm_batch` equivalent.
     - Stash emitted segments by `segment_id`.
     - Let `RefineWorker` process and call `_apply_refine`; stash refined segments.
-    - Compute WER (via `scripts/pcm_experiment.py::wer` helper — import it) for both live and refined segment texts joined.
+    - Compute WER (via `scripts/benchmarks/pcm_experiment.py::wer` helper — import it) for both live and refined segment texts joined.
 - [x] 3.3 Support `--device {cpu,mps}` (defaults to auto).
 - [x] 3.4 Write markdown report to `docs/experiments/2026-04-24-refine-wer.md`: one table per config, showing live-WER vs refined-WER, delta, per-pid if multiple.
 - [x] 3.5 No commit yet — script is built but not yet run. (ralphex per-iteration commit: script lands without bench output; Task 4 appends the actual WER table to `docs/experiments/2026-04-24-refine-wer.md`.)
@@ -82,14 +82,14 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 ### Task 4: Run the refine benchmark on take-2 fixtures
 
 - [x] 4.1 If `/tmp/recog_exp/raw_take2/d9e189e5__Example.wav` missing, regenerate from the most recent `/tmp/recog_pcm_capture/` subdirectory via `scripts/pcm_capture_reconstruct.py`. If no capture exists either, ⚠️-flag and skip task 4.2 + 4.3 — leave a note in `docs/experiments/2026-04-24-refine-wer.md` that user must re-capture.
-- [x] 4.2 Run: `venv-gigaam/bin/python scripts/refine_benchmark.py --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav --reference-file docs/experiments/reference_take2.txt --trim 17-65`.
+- [x] 4.2 Run: `venv-gigaam/bin/python scripts/benchmarks/refine_benchmark.py --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav --reference-file docs/experiments/reference_take2.txt --trim 17-65`.
 - [x] 4.3 Acceptance: refined-WER ≤ 25% on at least one of the two tracks (baseline is 33%); delta (refined vs live) is negative (better) on both tracks. ⚠️ Absolute 25% gate MISSED (both tracks landed at 32.6%); delta criterion PASS (-4.3% / -3.3%). See Observations in `docs/experiments/2026-04-24-refine-wer.md` — do not flip `RECOG_PCM_REFINE` default.
 - [x] 4.4 Write results to `docs/experiments/2026-04-24-refine-wer.md` including any edge cases observed (empty word lists, boundary-straddling, sanity-filter rejections).
 - [x] 4.5 Commit: `exp: refine benchmark on take-2 fixtures (WER live vs refined)`
 
 ### Task 5: Latency micro-benchmark — first-paint under refine load
 
-- [x] 5.1 Extend `scripts/refine_benchmark.py` with `--latency-profile` flag (or new script `scripts/refine_latency_bench.py`): simulate 4 parallel pids each with 30 seconds of synthetic PCM; measure wall-clock from chunk `enqueue` → `append_segment` return (first-paint) for each chunk. Report p50, p95, max.
+- [x] 5.1 Extend `scripts/benchmarks/refine_benchmark.py` with `--latency-profile` flag (or new script `scripts/benchmarks/refine_latency_bench.py`): simulate 4 parallel pids each with 30 seconds of synthetic PCM; measure wall-clock from chunk `enqueue` → `append_segment` return (first-paint) for each chunk. Report p50, p95, max.
 - [x] 5.2 Run twice: once with `RECOG_PCM_REFINE=0` (baseline), once with `RECOG_PCM_REFINE=1`.
 - [x] 5.3 Acceptance: p95 first-paint regression ≤ 100 ms with refine enabled (per design D6 / Open Question 3). Δ p95 = +23.4 ms — **PASS**.
 - [x] 5.4 Append results to `docs/experiments/2026-04-24-refine-wer.md` in a "Latency" section.

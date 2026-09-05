@@ -15,7 +15,7 @@ two near-identical streams. Trimmed to the speech window, normalised
 by `normalize()` (lowercase, ё→е, punctuation stripped), scored
 against the reference by word-level Levenshtein (S/I/D/WER).
 
-Harness: `scripts/pcm_experiment.py`. Supports `--configs
+Harness: `scripts/benchmarks/pcm_experiment.py`. Supports `--configs
 chunk:overlap,…`, `--no-dedup`, `--longform` (pyannote VAD),
 `--device cpu|mps`, `--trim start-end`.
 
@@ -90,7 +90,7 @@ Keep the live 3 s pipeline as-is (instant feedback at 33% WER).
 Add a parallel 20 s buffer that retranscribes on a slower cadence and
 **replaces** the UI line with the corrected text when ready. Drops
 final WER to ~24% without live-latency cost. Requires changes in
-`recog/live.py`, `ktalk_bridge.py` (new message type `transcript_replace`),
+`recog/live.py`, `recog/ktalk_bridge.py` (new message type `transcript_replace`),
 and the frontend WebSocket handler + transcript.jsonl format.
 
 **Decision**: pursue Option B.
@@ -98,7 +98,7 @@ and the frontend WebSocket handler + transcript.jsonl format.
 ## Reproducing
 
 ```bash
-./scripts/pcm_experiment.py \
+./scripts/benchmarks/pcm_experiment.py \
   --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav \
   --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav \
   --trim 17-65 \

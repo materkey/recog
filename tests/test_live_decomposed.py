@@ -310,7 +310,7 @@ class TestSetupMeetingStorage:
         """given: MeetingStorage.start_session raises OSError (disk full) - when: _setup_meeting_storage - then: error propagates instead of running without persistence"""
         transcriber = self._make_transcriber_mock()
 
-        with patch("meeting_storage.MeetingStorage") as storage_cls:
+        with patch("recog.meeting_storage.MeetingStorage") as storage_cls:
             storage_cls.return_value.start_session.side_effect = OSError(28, "No space left on device")
             with pytest.raises(OSError):
                 LiveTranscriber._setup_meeting_storage(transcriber)

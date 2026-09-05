@@ -10,8 +10,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "frontend"))
-import server
+from recog.web import server
 
 
 @pytest.fixture(autouse=True)

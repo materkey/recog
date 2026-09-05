@@ -35,10 +35,10 @@ Lifecycle-модель — «по триггеру» (вариант B из expl
   дедуплицирован по смене `current_meeting_path`.
 - **Демон видит MCP-сессии**: `mcp.session_manager._server_instances`
   (`recog/copilot_channel.py:199-204`) — сейчас используется только для push.
-- **Прецеденты паттернов**: `frontend/bridge_subscriber.py` (WS-клиент bridge с backoff),
+- **Прецеденты паттернов**: `recog/web/bridge_subscriber.py` (WS-клиент bridge с backoff),
   `com.recog.copilot-channel.plist` (launchd-демон), `copilot_status`-фреймы bridge↔extension
   (`ktalk_bridge.py:1510-1640`, `ui.js:1404-1871`).
-- Extension-тесты: `npm test` (jest) в `kontur-diarize/ktalk-speaker-extension/`;
+- Extension-тесты: `npm test` (jest) в `browser-extension/`;
   Python-тесты: `python -m pytest tests/ -v`.
 
 ## Development Approach
@@ -196,7 +196,7 @@ Key design decisions:
 - Create: `tests/test_copilot_supervisor.py`
 
 - [x] каркас `copilot_supervisor.py`: argparse (`--bridge-url`, default `ws://127.0.0.1:8766`),
-      reconnect-loop с экспоненциальным backoff (по образцу `frontend/bridge_subscriber.py`),
+      reconnect-loop с экспоненциальным backoff (по образцу `recog/web/bridge_subscriber.py`),
       `supervisor_hello` при коннекте
 - [x] state machine `SessionLifecycle` (чистый класс без I/O): состояния
       `IDLE/SPAWNING/RUNNING/GRACE`, входы `meeting_started(id)/meeting_ended(id)/timer/session_died`,
@@ -262,7 +262,7 @@ Key design decisions:
 ### Task 4: Bridge — supervisor_hello, meeting_state, merge и broadcast статуса
 
 **Files:**
-- Modify: `ktalk_bridge.py`
+- Modify: `recog/ktalk_bridge.py`
 - Modify: `tests/test_ktalk_bridge.py`
 
 - [x] обработчик `supervisor_hello`: перевод сокета в `_supervisor_clients` (по образцу
@@ -315,8 +315,8 @@ Key design decisions:
 ### Task 6: Extension — статус-чип агента в Copilot-табе
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.js`
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/copilot.test.js`
+- Modify: `browser-extension/src/ui.js`
+- Modify: `browser-extension/src/copilot.test.js`
 
 - [x] обработка `copilot_status {status: "agent_state"}`: чип у заголовка Copilot-таба,
       состояния 🟢 online / 🟡 working / 🔴 blocked / ⚫ offline (+ spawning как working-вариант);
@@ -379,7 +379,7 @@ Key design decisions:
       extension: `copilot.test.js` agent_state chip тесты (8 шт.)
 - [x] verify: ручной `./recog-service.sh claude` содержит --strict-mcp-config (grep) — строки 388, 425
 - [x] run full test suite: `python -m pytest tests/ -v` — 542 passed, 2 deselected
-- [x] run extension tests: `cd kontur-diarize/ktalk-speaker-extension && npm test` — 123 passed
+- [x] run extension tests: `cd browser-extension && npm test` — 123 passed
 - [x] `python -m compileall recog frontend` — OK
 
 ### Task 9: [Final] Update documentation

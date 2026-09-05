@@ -1,0 +1,8 @@
+# macOS-only dependencies. setup.sh installs these on darwin in addition to
+# deploy/python/requirements.txt, under deploy/python/constraints/macos.txt.
+
+# objc.autorelease_pool drains the Metal/MPS objects an inference call
+# autoreleases (recog/asr.py:_mps_autoreleasepool). Without PyObjC that
+# context manager degrades to a no-op and an MPS run leaks per call, so this
+# is a hard requirement on Apple Silicon, not an optional extra.
+pyobjc-core>=10.0

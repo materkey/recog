@@ -3,13 +3,13 @@
 # backup-data.sh — снимок пользовательских данных recog (вне git).
 #
 # Что сохраняется: meetings/ (транскрипты + аудио), speakers*.json (база
-# эмбеддингов), .env / frontend/.env (секреты). logs/ — только с --with-logs.
+# эмбеддингов), .env / recog/web/.env (секреты). logs/ — только с --with-logs.
 #
 # Usage:
 #   ./scripts/backup-data.sh                        # снимок в ~/backups/recog-<дата>
 #   ./scripts/backup-data.sh --dest /Volumes/T7/recog
-#   ./scripts/backup-data.sh --remote Z270XX:backups/recog-mac
-#   ./scripts/backup-data.sh --with-logs --remote Z270XX:backups/recog-mac
+#   ./scripts/backup-data.sh --remote <backup-host>:backups/recog
+#   ./scripts/backup-data.sh --with-logs --remote <backup-host>:backups/recog
 #
 # Снимок делается rsync'ом, поэтому повторный запуск в тот же --dest
 # докидывает только изменившееся. Ничего не удаляет в репозитории.
@@ -48,7 +48,7 @@ done
 # .env копируется под другим именем: иначе случайный `cp -r` обратно в репо
 # перезапишет рабочий .env, а его правит только человек.
 [ -f .env ] && { cp -p .env "$DEST/env.backup"; chmod 600 "$DEST/env.backup"; }
-[ -f frontend/.env ] && { cp -p frontend/.env "$DEST/frontend-env.backup"; chmod 600 "$DEST/frontend-env.backup"; }
+[ -f recog/web/.env ] && { cp -p recog/web/.env "$DEST/frontend-env.backup"; chmod 600 "$DEST/frontend-env.backup"; }
 
 # Проверка целостности: сравниваем суммарный размер в байтах, а не du —
 # du показывает занятые блоки и на разных ФС расходится при равном содержимом.

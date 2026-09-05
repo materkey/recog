@@ -7,10 +7,10 @@
 
 ## Context (from discovery)
 - Files involved:
-  - `kontur-diarize/ktalk-speaker-extension/src/ui.js` — `getAnchorModelOptions()` + summary modal HTML
-  - `kontur-diarize/ktalk-speaker-extension/src/ui-vas3k.js` — summary modal HTML with `<select>` options
-  - `ktalk_bridge.py` — `_call_codex_cli()` passes `model_reasoning_effort=xhigh` for all codex models, spark doesn't support reasoning
-  - `kontur-diarize/ktalk-speaker-extension/src/ui-vas3k.test.js` — existing tests for model selector
+  - `browser-extension/src/ui.js` — `getAnchorModelOptions()` + summary modal HTML
+  - `browser-extension/src/ui-vas3k.js` — summary modal HTML with `<select>` options
+  - `recog/ktalk_bridge.py` — `_call_codex_cli()` passes `model_reasoning_effort=xhigh` for all codex models, spark doesn't support reasoning
+  - `browser-extension/src/ui-vas3k.test.js` — existing tests for model selector
 - Model format: `codex:gpt-5.3-codex-spark` (parsed by ktalk_bridge.py as `codex_model = "gpt-5.3-codex-spark"`)
 - Default remains `codex` (GPT-5.4), spark is just an additional option
 
@@ -44,7 +44,7 @@
 - [x] Run `npm test` in extension directory — must pass
 
 ### Task 5: Build and verify
-- [x] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension/`
+- [x] Run `npm run build` in `browser-extension/`
 - [x] Verify `injected.js` bundle is regenerated
 
 ## Technical Details

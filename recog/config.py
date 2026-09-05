@@ -199,11 +199,11 @@ PCM_REFINE_MONOLOG_CAP_S: float = 15.0
 # REMOTE ASR OFFLOAD (ADR-0020)
 # ============================================================================
 #
-# Опционально выносит GigaAM-инференс на сетевой шлюз (Z270XX,
-# OpenAI-Whisper-совместимый). FallbackASR реализует все четыре пути
+# Опционально выносит GigaAM-инференс на сетевой шлюз
+# (OpenAI-Whisper-совместимый). FallbackASR реализует все четыре пути
 # (transcribe_batch / transcribe_simple / transcribe_with_timestamps /
 # transcribe_chunk), но через `build_asr()` сегодня ходят только три live-пути —
-# offline `transcribe_simple` пока не подключён к CLI (mp4_notes.py имеет лишь
+# offline `transcribe_simple` пока не подключён к CLI (recog/cli.py имеет лишь
 # `live`/`meetings`). committed default `local` — поведение
 # репозитория не меняется, пока пользователь не выставит env в `.env`.
 # При `remote` `build_asr()` отдаёт FallbackASR поверх RemoteASRClient с

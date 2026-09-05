@@ -1,10 +1,10 @@
 # Runs scripts/check.sh on both supported hosts in a clean environment.
 #
 # The dependency set mirrors setup.sh (torch from the CPU index, GigaAM from
-# the pinned git ref, requirements.txt + frontend/requirements.txt, plus
-# requirements-macos.txt on darwin) so a run here fails for the same reasons a
+# the pinned git ref, deploy/python/requirements.txt + deploy/python/requirements-web.txt, plus
+# deploy/python/requirements-macos.txt on darwin) so a run here fails for the same reasons a
 # fresh install would. On macOS every pip stage carries
-# `-c constraints/macos.txt`: CI must not resolve the ML stack to versions the
+# `-c deploy/python/constraints/macos.txt`: CI must not resolve the ML stack to versions the
 # Mac's MPS/PyObjC contracts were never verified against.
 #
 # No service is installed, no audio is captured and no model weights are
@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
-            echo "PIP_ARGS=-c constraints/macos.txt" >> "$GITHUB_ENV"
+            echo "PIP_ARGS=-c deploy/python/constraints/macos.txt" >> "$GITHUB_ENV"
           else
             echo "PIP_ARGS=" >> "$GITHUB_ENV"
           fi
@@ -59,9 +59,9 @@ jobs:
       - name: Install requirements
         shell: bash
         run: |
-          reqs=(-r requirements.txt -r frontend/requirements.txt)
+          reqs=(-r deploy/python/requirements.txt -r deploy/python/requirements-web.txt)
           if [ "$RUNNER_OS" = "macOS" ]; then
-            reqs+=(-r requirements-macos.txt)
+            reqs+=(-r deploy/python/requirements-macos.txt)
           fi
           pip install $PIP_ARGS "${reqs[@]}"
 

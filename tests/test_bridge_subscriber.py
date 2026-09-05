@@ -1,4 +1,4 @@
-"""Tests for frontend/bridge_subscriber.py — bidirectional WS client to the bridge."""
+"""Tests for recog/web/bridge_subscriber.py — bidirectional WS client to the bridge."""
 import asyncio
 import json
 import sys
@@ -8,9 +8,8 @@ import pytest
 import websockets
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "frontend"))
 
-from bridge_subscriber import BridgeSubscriber
+from recog.web.bridge_subscriber import BridgeSubscriber
 
 
 async def _start_mock_bridge(handler):

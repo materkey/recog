@@ -61,7 +61,7 @@ class IncrementGenerator:
     # are created (e.g. server endpoint vs ktalk_bridge).
     _locks: dict[tuple[str, str], asyncio.Lock] = {}
 
-    def __init__(self, meetings_base: Path, prompts_dir: Path = Path("prompts")):
+    def __init__(self, meetings_base: Path, prompts_dir: Path = Path(__file__).parent / "prompts"):
         self._meetings_base = meetings_base
         self._prompts_dir = prompts_dir
         self._callback: Optional[Callable] = None

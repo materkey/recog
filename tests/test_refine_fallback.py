@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gigaam.types import Word
 
-from meeting_storage import MeetingStorage
+from recog.meeting_storage import MeetingStorage
 from recog.live import LiveTranscriber
 from recog.refine import RefineTask, RefineWorker
 

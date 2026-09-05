@@ -19,11 +19,11 @@ import threading
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ktalk_bridge import KTalkBridge, Participant
+from recog.ktalk_bridge import KTalkBridge, Participant
 from recog.live import (LiveTranscriber, SourceState, RecentSegment,
                         RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS)
 import numpy as np
-from meeting_storage import MeetingStorage
+from recog.meeting_storage import MeetingStorage
 
 
 # --- Scenario 1: Speaker switch with mute → sole unmuted fallback ---
@@ -368,7 +368,7 @@ def test_correction_flag_in_send_transcript():
         captured_messages.append(obj)
         return original_dumps(obj, **kwargs)
 
-    with patch('ktalk_bridge.json.dumps', side_effect=capturing_dumps):
+    with patch('recog.ktalk_bridge.json.dumps', side_effect=capturing_dumps):
         bridge.send_transcript(
             "Alice", "hello", "12:00:00",
             is_continuation=False, is_local=False,

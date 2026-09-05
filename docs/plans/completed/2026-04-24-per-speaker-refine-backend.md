@@ -160,7 +160,7 @@ Downstream surfaces (WS `transcript_refine`, webapp tier-1/tier-2 UI, extension 
 
 ### Task 10: JSONL schema extension
 
-- [x] 10.1 In `meeting_storage.py`, add `refined: bool = False` to the `TranscriptSegment` dataclass. Default False — existing rows on reload will deserialise with `refined=False` if the field is missing (use `dataclasses.field(default=False)` and tolerate absent keys on read).
+- [x] 10.1 In `recog/meeting_storage.py`, add `refined: bool = False` to the `TranscriptSegment` dataclass. Default False — existing rows on reload will deserialise with `refined=False` if the field is missing (use `dataclasses.field(default=False)` and tolerate absent keys on read).
 - [x] 10.2 Extend `MeetingStorage.update_segments(updates, meeting_path=None)` to accept an optional `text` key per row. When present: set the segment's `text` field AND set `refined=True`. Other fields (speaker, uncertain, etc.) still honoured if present in the update dict.
 - [x] 10.3 Unit test in `tests/test_meeting_storage.py`:
   - `test_update_segments_rewrites_text_and_sets_refined_true`.

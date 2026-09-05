@@ -23,11 +23,11 @@ Spike ran on a live call (room `#recog-spike:matrix.vkkovalev.work`, users `@vkk
 
 Key recog facts (file:line):
 
-- Extension platform registry: `kontur-diarize/ktalk-speaker-extension/src/platforms/index.js:19-31` (`detectPlatform` — ⚠️ `hostname.includes('vkkovalev.work')` would misroute element.* to the Jitsi adapter; matrix check must come first), adapter interface reference: `src/platforms/vas3k.js`.
+- Extension platform registry: `browser-extension/src/platforms/index.js:19-31` (`detectPlatform` — ⚠️ `hostname.includes('vkkovalev.work')` would misroute element.* to the Jitsi adapter; matrix check must come first), adapter interface reference: `src/platforms/vas3k.js`.
 - `meeting_join {url, platform, title}` → `MeetingStorage.on_meeting_join` (`meeting_storage.py:345-421`); `source = platform` flows through automatically. ⚠️ `live_id` is parsed from URL *path* (`:359-360`) — Element room ids live in the *fragment* (`#/room/!id`) → `live_id` would be `""` and same-day grouping would merge different rooms.
-- `source == "ktalk"` gates: two **break Tier-1 matrix meetings** — `ktalk_bridge.py:1148` (`_is_meeting_active` → supervisor reconcile kills copilot on reconnect) and `:1887` (`_end_meeting_on_last_extension_gone` → hard disconnect never ends meeting / no increments). `meeting_storage.py:484` (session_pause marker) is cosmetic. `ktalk_bridge.py:518` (`_has_active_ktalk_meeting`, used only at `:2527` to gate PCM ingest) is **a no-op for Tier 1** — matrix sends no PCM (no worklet) — so widening it is forward-compat for Tier 2, not a Tier-1 fix. Refine gates (`frontend/server.py:1385`, `frontend/live_watcher.py:156,193`) stay ktalk-only — refine needs PCM (Tier 2).
+- `source == "ktalk"` gates: two **break Tier-1 matrix meetings** — `ktalk_bridge.py:1148` (`_is_meeting_active` → supervisor reconcile kills copilot on reconnect) and `:1887` (`_end_meeting_on_last_extension_gone` → hard disconnect never ends meeting / no increments). `meeting_storage.py:484` (session_pause marker) is cosmetic. `ktalk_bridge.py:518` (`_has_active_ktalk_meeting`, used only at `:2527` to gate PCM ingest) is **a no-op for Tier 1** — matrix sends no PCM (no worklet) — so widening it is forward-compat for Tier 2, not a Tier-1 fix. Refine gates (`recog/web/server.py:1385`, `recog/web/live_watcher.py:156,193`) stay ktalk-only — refine needs PCM (Tier 2).
 - Copilot lifecycle (`meeting_started`/`meeting_ended` via `_emit_lifecycle`, `ktalk_bridge.py:1100`; `meeting_started` emit `:2243-2249`) and increments-on-leave (`:2322-2325`) are already platform-agnostic → **copilot auto-spawn works for matrix with zero backend change**.
-- Frontend category is a pure `source` string: dropdown `frontend/static/index.html:42-50`, badge CSS `frontend/static/style.css:373-393`.
+- Frontend category is a pure `source` string: dropdown `recog/web/static/index.html:42-50`, badge CSS `recog/web/static/style.css:373-393`.
 - Floating panel (`src/ui-vas3k.js`, gated by `isJitsiPlatform()` via `initPlatformUI` `src/ui.js:3206`) has transcript + one-shot `summarize_request` AI (`ui-vas3k.js:837,865`); the real copilot chat subsystem exists only in KTalk tabs (`src/ui.js` `handleCopilotReply`/`handleCopilotStatus` `:1756,1805`, `.ktalk-copilot-*` elements, `sendCopilotChatMessage` in `src/ws_api.js:70-82`) — this is a full view (input, message list, agent status chip, pending/unread bookkeeping), not the "plain text swap" the KTalk overlay uses.
 - ⚠️ `isJitsiPlatform()` (`src/platforms/index.js:99-103`) is NOT just a floating-panel predicate — it also gates the **conference retry-forever loop** (`init.js:49-58`: Jitsi platforms retry, non-Jitsi give up after `maxAttempts`) plus prejoin UI (`init.js:36,50,98`) and 8+ `ui.js` sites (`:2115,2134,2194,2255,2334,3207,3219,3228`). Element/livekit mounts late, so matrix MUST be inside this predicate or it will give up before the conference appears.
 - ⚠️ `src/index.js:5` calls `init()` unconditionally (no per-frame guard in `content.js`); a `null`-adapter frame still opens a WS. Top-frame injection must be prevented by scoping the manifest match, not by the adapter.
@@ -48,7 +48,7 @@ Test assets kept for verification: user `@test2:matrix.vkkovalev.work` (password
 ## Testing Strategy
 
 - Python: `python -m pytest tests/ -v` (extend `tests/test_meeting_storage.py`, `tests/test_ktalk_bridge.py`)
-- Extension: `cd kontur-diarize/ktalk-speaker-extension && npm test` (the script sets `NODE_OPTIONS=--experimental-vm-modules`; bare `npx jest` fails on the ESM source). Mirror `src/*.test.js` patterns; jsdom for DOM-adjacent helpers.
+- Extension: `cd browser-extension && npm test` (the script sets `NODE_OPTIONS=--experimental-vm-modules`; bare `npx jest` fails on the ESM source). Mirror `src/*.test.js` patterns; jsdom for DOM-adjacent helpers.
 - No e2e framework in repo — end-to-end is the manual verification task using the Recog spike room
 - `python -m compileall recog frontend` as syntax gate
 
@@ -77,7 +77,7 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 ### Task 1: live_id fragment fallback in on_meeting_join (TDD)
 
 **Files:**
-- Modify: `meeting_storage.py` (`on_meeting_join`, ~line 357)
+- Modify: `recog/meeting_storage.py` (`on_meeting_join`, ~line 357)
 - Modify: `tests/test_meeting_storage.py`
 
 - [x] write failing tests: Element URL `https://element.vkkovalev.work/#/room/!abc` → `conference.live_id == "!abc"`; alias form `#/room/#recog-spike:...` → `"#recog-spike:..."` (locks that the regex runs on the full URL, not `parsed.fragment` which drops the leading `#`); KTalk URL behavior unchanged; URL with neither path id nor fragment → live_id None/""
@@ -87,20 +87,20 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 ### Task 2: conference-source predicate + widen ktalk gates (TDD)
 
 **Files:**
-- Modify: `ktalk_bridge.py` (`:518`, `:1148`, `:1887`)
-- Modify: `meeting_storage.py` (add `CONFERENCE_SOURCES` / `is_conference_source()`; `:484`)
+- Modify: `recog/ktalk_bridge.py` (`:518`, `:1148`, `:1887`)
+- Modify: `recog/meeting_storage.py` (add `CONFERENCE_SOURCES` / `is_conference_source()`; `:484`)
 - Modify: `tests/test_ktalk_bridge.py`
 
 - [x] write failing tests: meeting with `source="matrix"` → `_compute_meeting_state` reports `active=True` with a live extension client (supervisor reconcile adopts, does not kill); hard disconnect of last extension client ends a matrix meeting and triggers increment generation (mirror existing ktalk disconnect tests); **also assert `source="vas3k"` / `"vkkovalev"` now report active + end on disconnect** (locks the "finishes wiring the half-connected platforms" claim); `source="orphan"`/`"local"` still report inactive
-- [x] add `is_conference_source(source)` over `{"ktalk", "vas3k", "vkkovalev", "matrix"}` in `meeting_storage.py`; use it at `ktalk_bridge.py:1148`, `:1887` and `meeting_storage.py:484`. Also widen `:518` (PCM gate) with the same predicate — a no-op for Tier 1 (matrix sends no PCM) but forward-compat for Tier 2 and keeps all four gates consistent
+- [x] add `is_conference_source(source)` over `{"ktalk", "vas3k", "vkkovalev", "matrix"}` in `recog/meeting_storage.py`; use it at `ktalk_bridge.py:1148`, `:1887` and `meeting_storage.py:484`. Also widen `:518` (PCM gate) with the same predicate — a no-op for Tier 1 (matrix sends no PCM) but forward-compat for Tier 2 and keeps all four gates consistent
 - [x] note in the PR description that this deliberately activates copilot auto-spawn + end-on-disconnect + increment generation for vas3k/vkkovalev (previously half-wired, ktalk-only); the copilot half is still globally gated by `RECOG_COPILOT_AUTOSPAWN`, the increment half is not — this is intended and tested above (captured in the commit body of this task)
 - [x] run full pytest — must pass before task 3
 
 ### Task 3: frontend "matrix" category
 
 **Files:**
-- Modify: `frontend/static/index.html` (source filter options, ~line 50)
-- Modify: `frontend/static/style.css` (`--source-matrix` var, `.source-matrix` class)
+- Modify: `recog/web/static/index.html` (source filter options, ~line 50)
+- Modify: `recog/web/static/style.css` (`--source-matrix` var, `.source-matrix` class)
 
 - [x] add `<option value="matrix">` to the source filter
 - [x] add badge color var + `.source-matrix` rule (pick a distinct color, e.g. Element green)
@@ -109,9 +109,9 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 ### Task 4: extension platform detection + manifest (TDD)
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/manifest.json`
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/platforms/index.js`
-- Create: `kontur-diarize/ktalk-speaker-extension/src/platforms/index.test.js` (if absent)
+- Modify: `browser-extension/manifest.json`
+- Modify: `browser-extension/src/platforms/index.js`
+- Create: `browser-extension/src/platforms/index.test.js` (if absent)
 
 - [x] write failing jest tests for `detectPlatform`: EC iframe location (`element.vkkovalev.work` + path `/widgets/element-call/index.html`) → `'matrix'`; top frame `element.vkkovalev.work` (path `/`) → `null` (no adapter in top frame); `meet.vkkovalev.work` → still `'vkkovalev'`; ktalk/vas3k unchanged (drop the speculative `call.element.vkkovalev.work` case — standalone EC is unused for room calls) — `src/platforms/index.test.js` (`detectPlatform` takes an injectable `loc` so multiple hosts are exercised in one jsdom file)
 - [x] implement detection (matrix checks BEFORE `includes('vkkovalev.work')`); extend platform display names (`'matrix'` → `'Element Call'`). NOTE: the `getPlatformAdapter` factory case (`new ElementCallAdapter()`) is deferred to Task 5's explicit "wire adapter" step since `matrix.js` does not exist yet; detection returning `'matrix'` with a not-yet-wired adapter is a harmless intermediate state (extension isn't shipped until Task 8 rebuild)
@@ -123,11 +123,11 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 ### Task 5: ElementCallAdapter (TDD for pure helpers)
 
 **Files:**
-- Create: `kontur-diarize/ktalk-speaker-extension/src/platforms/matrix.js`
-- Create: `kontur-diarize/ktalk-speaker-extension/src/platforms/matrix.test.js`
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/platforms/index.js` (wire adapter)
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/meeting.js` (add module-level `getMeetingUrl()` helper; use it in `sendMeetingJoin()` for the sent `url` + stored `state.currentMeetingUrl`, and in `startMeetingCheck()` at line 84/86 for the change-detection comparison — same source on both sides, or matrix flaps every 2 s)
-- Create: `kontur-diarize/ktalk-speaker-extension/src/meeting.test.js` (new — none exists): assert `getMeetingUrl()` returns `adapter.getMeetingUrl()` for matrix (synthesized `#/room/<roomId>`) and falls back to `window.location.href` for ktalk/vas3k/vkkovalev; assert the value stored in `state.currentMeetingUrl` equals the value `startMeetingCheck()` compares against (no-flap invariant)
+- Create: `browser-extension/src/platforms/matrix.js`
+- Create: `browser-extension/src/platforms/matrix.test.js`
+- Modify: `browser-extension/src/platforms/index.js` (wire adapter)
+- Modify: `browser-extension/src/meeting.js` (add module-level `getMeetingUrl()` helper; use it in `sendMeetingJoin()` for the sent `url` + stored `state.currentMeetingUrl`, and in `startMeetingCheck()` at line 84/86 for the change-detection comparison — same source on both sides, or matrix flaps every 2 s)
+- Create: `browser-extension/src/meeting.test.js` (new — none exists): assert `getMeetingUrl()` returns `adapter.getMeetingUrl()` for matrix (synthesized `#/room/<roomId>`) and falls back to `window.location.href` for ktalk/vas3k/vkkovalev; assert the value stored in `state.currentMeetingUrl` equals the value `startMeetingCheck()` compares against (no-flap invariant)
 - Note: `ws.js` needs NO edit — its onopen (`:39`/`:45`) only calls `sendMeetingJoin()`, so centralizing in `meeting.js` fixes both call sites automatically
 
 - [x] write failing jest tests for pure helpers: `parseRtcIdentity` (legacy format, hash fallback via memberships match, malformed input); membership→participant mapping incl. display-name resolution and `isLocal`; meeting URL/title builders — `src/platforms/matrix.test.js`
@@ -140,7 +140,7 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 ### Task 6: floating panel for matrix + copilot chat view
 
 **Files:**
-- Modify/Create: `kontur-diarize/ktalk-speaker-extension/src/ui-vas3k.js` (or new `src/ui-copilot-panel.js`)
+- Modify/Create: `browser-extension/src/ui-vas3k.js` (or new `src/ui-copilot-panel.js`)
 - Create: copilot-view jest tests alongside
 
 - [x] write failing jest tests: Transcript | Copilot view toggle; `copilot_chat_message` sent via `sendCopilotChatMessage` with meeting context; `copilot_reply` renders/updates a message; `copilot_status` chip states (online/working/blocked/offline); pending/unread bookkeeping — `src/ui-copilot-panel.test.js` (8 tests, jsdom scoped to the EC iframe URL)
@@ -150,8 +150,8 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 ### Task 7: route copilot frames to the floating panel
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ws.js` (server→client dispatch)
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.js` (platform dispatch: `initPlatformUI`, `addTranscriptLinePlatform`, copilot reply/status routing)
+- Modify: `browser-extension/src/ws.js` (server→client dispatch)
+- Modify: `browser-extension/src/ui.js` (platform dispatch: `initPlatformUI`, `addTranscriptLinePlatform`, copilot reply/status routing)
 - Modify/Create: jest tests alongside
 
 - [x] write failing jest tests: `copilot_reply`/`copilot_status` reach the floating-panel copilot view when `supportsTabInjection() === false`, and still reach the KTalk tab path otherwise — `src/copilot-routing.test.js` (6 tests, one jsdom file that flips `isJitsiPlatform` per describe-block, asserting the mount surface differs by platform: floating-panel `.jitsi-copilot-host` vs KTalk `.slide-menu-wrapper .content .ktalk-ai-panel`, and that the *other* surface is never created). The tests are discriminating — a routing regression fails one direction: the floating-panel branch would return null without `.slide-menu-wrapper`, the KTalk branch would create a stray `.jitsi-transcript-panel`
@@ -161,7 +161,7 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 ### Task 8: verify iframe init / no double-inject (build + regression)
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/injected.js` (generated by webpack)
+- Modify: `browser-extension/injected.js` (generated by webpack)
 
 - [x] `npm run build` in the extension dir (rebuild `injected.js`) — webpack compiled successfully, `injected.js` 312 KiB, now bundles `matrix.js` (15.1 KiB)
 - [x] full extension suite `npm test` — all green (188 passed, 12 suites)
@@ -196,7 +196,7 @@ New `ElementCallAdapter` in the extension implements the same interface as `Vas3
 ```
 
 **External / deferred**
-- Tier 2 follow-up plan: per-participant PCM (`mediaStreamTrack` confirmed available) + refine — needs `pcm_transport.js` generalization (it is Jitsi-track-shaped), PCM gate is already widened by Task 2, refine gates (`frontend/server.py:1385`, `frontend/live_watcher.py:156,193`) still to widen.
+- Tier 2 follow-up plan: per-participant PCM (`mediaStreamTrack` confirmed available) + refine — needs `pcm_transport.js` generalization (it is Jitsi-track-shaped), PCM gate is already widened by Task 2, refine gates (`recog/web/server.py:1385`, `recog/web/live_watcher.py:156,193`) still to widen.
 - Posting transcripts/summaries INTO the Matrix room + two-way chat bot (original idea) — orthogonal, can reuse `@test2`-style bot account later.
 - Decide the fate of test assets when done: keep `@test2` + `#recog-spike` for future regression testing (recommended) or deactivate.
 - `call.element.vkkovalev.work` standalone deployment is currently unused by room calls — if the server config ever switches to it, the manifest already covers the host.

@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from recog.ai_provider import CCS_AUTOMATION_MARKER_PREFIX, mark_ccs_automation
 
-RECOG_PROJECT_PREFIX = "/Users/vkkovalev/projects/recog"
+RECOG_PROJECT_PREFIX = str(REPO_ROOT)
 CODEX_DEFAULT_ROOT = Path.home() / ".codex" / "sessions"
 CLAUDE_DEFAULT_ROOT = Path.home() / ".claude" / "projects"
 BACKUP_DEFAULT_ROOT = Path.home() / ".ccs-recog-automation-backups"

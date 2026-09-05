@@ -9,7 +9,7 @@ from collections import deque
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from unittest.mock import Mock
-from ktalk_bridge import KTalkBridge, Participant
+from recog.ktalk_bridge import KTalkBridge, Participant
 from recog.live import LiveTranscriber, SourceState, RETROACTIVE_MAX_SEGMENTS
 
 

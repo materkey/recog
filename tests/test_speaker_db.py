@@ -164,7 +164,7 @@ class TestSpeakerDatabasePersistence:
 
 
 class TestSpeakerDatabaseFreshInstall:
-    """A fresh clone ships speakers_ecapa.json.example ('{}') and no real DB."""
+    """A fresh clone ships deploy/examples/speakers_ecapa.json.example ('{}') and no real DB."""
 
     def test_empty_json_object_file_loads_as_no_speakers(self, tmp_path):
         """
@@ -192,11 +192,11 @@ class TestSpeakerDatabaseFreshInstall:
 
     def test_shipped_example_file_is_an_empty_database(self):
         """
-        given: speakers_ecapa.json.example committed for fresh installs
+        given: deploy/examples/speakers_ecapa.json.example committed for fresh installs
         when: it is loaded
         then: it parses and holds no personal enrollment data
         """
-        example = Path(__file__).parent.parent / "speakers_ecapa.json.example"
+        example = Path(__file__).parent.parent / "deploy/examples/speakers_ecapa.json.example"
 
         db = SpeakerDatabase(str(example))
 

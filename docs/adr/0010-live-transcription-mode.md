@@ -60,7 +60,7 @@ Superseded by ADR-0021 (2026-09-03) — системный звук больше
 
 ### CLI:
 ```bash
-python mp4_notes.py live [OPTIONS]
+python -m recog live [OPTIONS]
 
 Options:
   --mic-device ID        # Микрофон (default: системный)

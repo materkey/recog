@@ -21,7 +21,7 @@
 
 ## Validated Assumptions
 
-Перед написанием этого документа прогнаны пробы и бенчмарки на `app.ktalk.ru`; детали в `tests/e2e/research/README.md` и `tests/bench_gigaam_rtf.py`. Резюме:
+Перед написанием этого документа прогнаны пробы и бенчмарки на `app.ktalk.ru`; детали в `tests/e2e/research/README.md` и `scripts/benchmarks/bench_gigaam_rtf.py`. Резюме:
 
 | Вопрос | Ответ | Источник |
 |---|---|---|
@@ -120,7 +120,7 @@ conf._participantsMap
 
 ### Что не меняется
 
-- `ktalk_bridge.py` контракты `meeting_join` / `meeting_leave` / `transcript` — как есть.
+- `recog/ktalk_bridge.py` контракты `meeting_join` / `meeting_leave` / `transcript` — как есть.
 - `meetings/<id>/transcript.jsonl` формат — как есть.
 - Frontend WS-консьюмер — как есть.
 - Microphone capture через `sounddevice` — как есть.
@@ -168,7 +168,7 @@ Design choices:
 
 ## Implementation Scope by Module
 
-### 1. Browser extension (`kontur-diarize/ktalk-speaker-extension/`)
+### 1. Browser extension (`browser-extension/`)
 
 - `src/audio-worklet/downsampler.js` (new) — `AudioWorkletProcessor`, 48 → 16 kHz через простой FIR (кратность 3), аккумулирует 3 с → emits Float32Array в main thread.
 - `src/pcm_transport.js` (new) — на каждого удалённого participant аттачит `MediaStreamSource` → `AudioWorkletNode`. Получает чанки, конвертит в Int16, шлёт на WS. Управляет aттач/детач по событиям `trackAdded` / `trackRemoved` / `trackMuteChanged`.
@@ -176,7 +176,7 @@ Design choices:
 - `src/ws_api.js` — добавляется `sendWsPcmChunk(pid, speaker, seq, start, end, int16_array)`.
 - Не ломаем существующий `audio-analyzer.js` — он остаётся для spectral-flatness VAD.
 
-### 2. `ktalk_bridge.py`
+### 2. `recog/ktalk_bridge.py`
 
 - Новый тип сообщения `pcm_chunk` в `_process_message`: читает, clock-корректит, кладёт в per-pid `asyncio.Queue`.
 - Новый вспомогательный `PcmChannelBuffer` (один на pid) — хранит чанки с timestamps, умеет предоставить последние N чанков по запросу.
@@ -280,7 +280,7 @@ Design choices:
 ## References
 
 - Пробы: `tests/e2e/research/README.md`, probes 1-3
-- Бенчмарк: `tests/bench_gigaam_rtf.py`, results `/tmp/bench_gigaam_rtf.json`
-- Существующий per-participant audio handling: `kontur-diarize/ktalk-speaker-extension/src/audio-analyzer.js:32-47`, `:92-112`
+- Бенчмарк: `scripts/benchmarks/bench_gigaam_rtf.py`, results `/tmp/bench_gigaam_rtf.json`
+- Существующий per-participant audio handling: `browser-extension/src/audio-analyzer.js:32-47`, `:92-112`
 - Existing WS bridge: `ktalk_bridge.py:1145-1391`
 - Speaker attribution: `2026-02-19-ktalk-diarization-optimization-design.md` (related prior work)

@@ -2,7 +2,7 @@
 
 The live KTalk transcription pipeline already produces speaker-attributed, refined meeting text, but during a call it is still mostly a passive transcript. The next useful step is a chat-first live copilot: a small Copilot tab inside the KTalk DOM where the user can ask a running Claude Code session questions that combine the freshest meeting transcript with the local repository, existing skills, Jira/TeamCity tooling, and other configured developer context.
 
-This proposal intentionally starts with a tracer bullet rather than a polished product: prove that KTalk DOM chat, `ktalk_bridge.py`, a Claude Code Channel, the live transcript buffer, and Claude Code's existing agent/tool environment can work together end-to-end. Proactive behaviour is included in a minimal Claude-first form: transcript ticks wake Claude, and Claude decides whether to post a message or stay silent.
+This proposal intentionally starts with a tracer bullet rather than a polished product: prove that KTalk DOM chat, `recog/ktalk_bridge.py`, a Claude Code Channel, the live transcript buffer, and Claude Code's existing agent/tool environment can work together end-to-end. Proactive behaviour is included in a minimal Claude-first form: transcript ticks wake Claude, and Claude decides whether to post a message or stay silent.
 
 ## What Changes
 
@@ -11,7 +11,7 @@ This proposal intentionally starts with a tracer bullet rather than a polished p
 - Extend the existing extension-to-bridge WebSocket protocol with `copilot_chat_message`, `copilot_status`, and `copilot_reply` frames.
 - Add a local Claude Code Channel bridge that forwards Copilot chat messages into a running Claude Code session and exposes a reply tool that sends assistant responses back to the KTalk DOM chat.
 - Provide Claude with current meeting context by including a recent transcript window in the first tracer-bullet request, then formalise a `get_recent_transcript` / meeting snapshot tool for longer-running answers and proactive ticks.
-- Add Claude-first proactive mode: `ktalk_bridge.py` sends throttled `transcript_tick` events to the Claude Code Channel; Claude posts to Copilot only when it judges the event worth interrupting the user for.
+- Add Claude-first proactive mode: `recog/ktalk_bridge.py` sends throttled `transcript_tick` events to the Claude Code Channel; Claude posts to Copilot only when it judges the event worth interrupting the user for.
 - Keep local meeting-layer logic deliberately thin for this change: buffering, batching, throttling, and transport only. Meeting understanding lives primarily in Claude for the MVP.
 - Run the first version in YOLO mode: Claude Code can use the user's existing repo/tools/skills according to the running Claude Code session's permissions. Security hardening, egress gating, and Side Panel isolation are explicit follow-ups, not part of this tracer bullet.
 
@@ -28,11 +28,11 @@ None. This is additive and does not change the existing per-speaker transcriptio
 ## Impact
 
 **Code:**
-- `kontur-diarize/ktalk-speaker-extension/src/ui.js` — add Copilot tab/content, chat DOM, input handling, render helpers, and copy/dismiss affordances.
-- `kontur-diarize/ktalk-speaker-extension/src/ws.js` — route `copilot_status` and `copilot_reply` frames to the Copilot UI.
-- `kontur-diarize/ktalk-speaker-extension/src/state.js` — store Copilot messages, pending request metadata, and proactive mute/cooldown state.
-- `ktalk_bridge.py` — handle `copilot_chat_message`, maintain a recent transcript buffer, emit `transcript_tick` events, and relay replies/status frames.
-- New local channel bridge module/script — MCP/Claude Code Channel server that receives bridge events, pushes `notifications/claude/channel`, exposes reply/status/snapshot tools, and talks back to `ktalk_bridge.py`.
+- `browser-extension/src/ui.js` — add Copilot tab/content, chat DOM, input handling, render helpers, and copy/dismiss affordances.
+- `browser-extension/src/ws.js` — route `copilot_status` and `copilot_reply` frames to the Copilot UI.
+- `browser-extension/src/state.js` — store Copilot messages, pending request metadata, and proactive mute/cooldown state.
+- `recog/ktalk_bridge.py` — handle `copilot_chat_message`, maintain a recent transcript buffer, emit `transcript_tick` events, and relay replies/status frames.
+- New local channel bridge module/script — MCP/Claude Code Channel server that receives bridge events, pushes `notifications/claude/channel`, exposes reply/status/snapshot tools, and talks back to `recog/ktalk_bridge.py`.
 - Tests for extension message formatting, bridge protocol handling, transcript tick throttling, and channel bridge request/reply routing.
 
 **APIs / Protocols:**
@@ -58,7 +58,7 @@ None. This is additive and does not change the existing per-speaker transcriptio
 
 **Operational:**
 - The user starts or attaches a Claude Code session in the repository, with the Copilot channel enabled.
-- KTalk extension connects to `ktalk_bridge.py` over the existing `ws://localhost:8766` transport.
+- KTalk extension connects to `recog/ktalk_bridge.py` over the existing `ws://localhost:8766` transport.
 - Proactive ticks are throttled by default, e.g. every 10-20 seconds and only while a meeting is active.
 - UI anti-noise controls are included as product ergonomics: `dismiss`, `mute proactive 10m`, and a minimum interval between proactive messages.
 

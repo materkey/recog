@@ -14,8 +14,8 @@ from unittest.mock import Mock, AsyncMock, patch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import ktalk_bridge
-from ktalk_bridge import KTalkBridge, Participant, PcmChunk
+from recog import ktalk_bridge
+from recog.ktalk_bridge import KTalkBridge, Participant, PcmChunk
 
 
 class FakeWebSocket:
@@ -151,7 +151,7 @@ async def test_given_disallowed_origin_when_bridge_handles_client_then_closed_be
     fake_ws = FakeOriginWebSocket("https://evil.example")
     fake_ws.add_message(json.dumps({"type": "subscriber_hello"}))
 
-    with patch("ktalk_bridge.log_rate_limited") as log_rejection:
+    with patch("recog.ktalk_bridge.log_rate_limited") as log_rejection:
         await bridge._handle_client(fake_ws)
 
     assert fake_ws.close_calls == [1008]
@@ -868,7 +868,7 @@ async def test_send_refine_omits_meeting_id_when_none():
     assert "meeting_id" not in payload
 
 
-# --- subscriber_hello protocol (frontend/bridge_subscriber.py ←→ bridge) ---
+# --- subscriber_hello protocol (recog/web/bridge_subscriber.py ←→ bridge) ---
 
 
 class ControllableFakeWebSocket(FakeWebSocket):
@@ -2119,7 +2119,7 @@ def test_send_transcript_includes_source_id_when_non_empty():
 
     bridge = KTalkBridge()
     bridge._loop = None  # skip dispatch; we only inspect the built payload
-    with patch("ktalk_bridge.json.dumps") as mock_dumps:
+    with patch("recog.ktalk_bridge.json.dumps") as mock_dumps:
         bridge.send_transcript(
             "Alice", "привет", "10:00:00", source_id="pid-a"
         )
@@ -2138,7 +2138,7 @@ def test_send_transcript_omits_source_id_when_empty_default():
 
     bridge = KTalkBridge()
     bridge._loop = None
-    with patch("ktalk_bridge.json.dumps") as mock_dumps:
+    with patch("recog.ktalk_bridge.json.dumps") as mock_dumps:
         bridge.send_transcript("Alice", "привет", "10:00:00")
         payload = mock_dumps.call_args.args[0]
         assert "source_id" not in payload
@@ -2514,7 +2514,7 @@ async def test_transcript_tick_fires_on_time_trigger():
     then:  a `transcript_tick` still fires — the time trigger fires
            independently of the count trigger
     """
-    import ktalk_bridge as bridge_module
+    from recog import ktalk_bridge as bridge_module
 
     bridge = KTalkBridge()
     bridge._loop = asyncio.get_event_loop()
@@ -3453,7 +3453,7 @@ def test_is_conference_source_covers_all_four_platforms():
            / None are not — this is the single predicate that widens the
            previously ktalk-only lifecycle gates to all conference platforms
     """
-    from meeting_storage import is_conference_source
+    from recog.meeting_storage import is_conference_source
 
     for source in ("ktalk", "vas3k", "vkkovalev", "matrix"):
         assert is_conference_source(source) is True

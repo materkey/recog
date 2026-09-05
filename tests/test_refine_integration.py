@@ -32,8 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gigaam.types import Word
 
-from ktalk_bridge import PcmChunk
-from meeting_storage import MeetingStorage
+from recog.ktalk_bridge import PcmChunk
+from recog.meeting_storage import MeetingStorage
 from recog.config import PCM_REFINE_WINDOW_S
 from recog.live import LiveTranscriber
 from recog.per_speaker import PerSpeakerIngest

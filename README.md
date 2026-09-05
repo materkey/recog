@@ -3,6 +3,17 @@
 Russian speech recognition with live speaker identification, meeting storage
 and a web UI. Runs on macOS and Linux.
 
+## Navigation
+
+| Area | Start here |
+| --- | --- |
+| Application | [`recog/`](recog/) — CLI, audio/ASR, meetings and Copilot; [`recog/web/`](recog/web/) — web UI |
+| Browser integration | [`browser-extension/`](browser-extension/) — conference adapters and PCM transport |
+| Installation | [`setup.sh`](setup.sh), [`recog-service.sh`](recog-service.sh), [`deploy/`](deploy/) — dependencies and OS service templates |
+| Development | [`tests/`](tests/), [`scripts/`](scripts/), [agent instructions](CLAUDE.md) |
+| Documentation | [Documentation index](docs/README.md), [repository layout and upgrade steps](docs/repository-layout.md) |
+
+
 ## Features
 
 - **ASR**: GigaAM (`v3_e2e_rnnt`) for Russian speech recognition, on CUDA, MPS,
@@ -39,7 +50,7 @@ missing.
 git clone <repo-url> recog && cd recog
 ./setup.sh
 # → chrome://extensions → Developer mode → Load unpacked →
-#   kontur-diarize/ktalk-speaker-extension
+#   browser-extension
 # → open http://127.0.0.1:9080
 ```
 
@@ -81,22 +92,22 @@ source venv-gigaam/bin/activate
 
 # Live: mic + system audio + speaker names from the conference extension.
 # The mic is on by default (--mic-device auto); --mic-device none turns it off.
-python mp4_notes.py live --ktalk --system-audio auto
+python -m recog live --ktalk --system-audio auto
 
 # System audio only
-python mp4_notes.py live --ktalk --system-audio auto --mic-device none
+python -m recog live --ktalk --system-audio auto --mic-device none
 
 # Microphone only, speakers from the embedding database
-python mp4_notes.py live --speaker-db ~/.recog/speakers_ecapa.json
+python -m recog live --speaker-db ~/.recog/speakers_ecapa.json
 
 # What audio devices do I have?
-python mp4_notes.py live --list-devices
+python -m recog live --list-devices
 
 # Enroll a speaker (records 5 seconds from the mic; 10 with a trailing "10")
 python scripts/add_speaker_live.py "Speaker Name"
 
 # Browse stored meetings
-python mp4_notes.py meetings
+python -m recog meetings
 ```
 
 `--system-audio` takes `auto` (per OS), `screencapture` (macOS,
@@ -157,7 +168,7 @@ With the override set, the automatic follow-the-default-sink behaviour is off.
 `./recog-service.sh` manages four permanent services — live transcription, the
 web UI, the copilot MCP channel and the copilot supervisor — through launchd on
 macOS and `systemd --user` on Linux. The units are rendered from the templates
-in `deploy/{launchd,systemd}/` with your repo path, interpreter and log
+in `deploy/{macos,linux}/` with your repo path, interpreter and log
 directory substituted in.
 
 ```bash
@@ -178,7 +189,7 @@ activate an incomplete install rather than take a working one down.
 On Linux, add `loginctl enable-linger $USER` so the user services survive
 logout — `status` prints the reminder.
 
-After editing backend code (`frontend/server.py`, `recog/*.py`) run
+After editing backend code (`recog/web/server.py`, `recog/*.py`) run
 `./recog-service.sh restart`; for `recog/copilot_supervisor.py` alone,
 `./recog-service.sh restart-supervisor` is enough.
 
@@ -203,8 +214,9 @@ restarted supervisor re-adopts it. An explicit Stop in the web UI (or
 ## Remote ASR
 
 Instead of running GigaAM locally you can point recog at your own
-OpenAI-Whisper-compatible ASR gateway (see `deploy/z270xx/` for the gateway
-patch we run):
+OpenAI-Whisper-compatible ASR gateway. The optional server implementation lives
+in `recog/asr_server/`; see the [ASR server guide](docs/asr-server.md) for
+installation and configuration:
 
 ```dotenv
 RECOG_ASR_BACKEND=remote
@@ -236,7 +248,7 @@ comment per variable. The ones you are most likely to touch:
 - `RECOG_ASR_BACKEND`, `RECOG_ASR_REMOTE_URL` — see [Remote ASR](#remote-asr).
 - `RECOG_COPILOT_AUTOSPAWN`, `RECOG_COPILOT_GRACE_S`, `RECOG_COPILOT_MCP_URL` —
   see [Copilot](#copilot).
-- `CODEX_MODEL` / `AI_PROVIDER` (also in `frontend/.env`) — model used for
+- `CODEX_MODEL` / `AI_PROVIDER` (also in `recog/web/.env`) — model used for
   transcript analysis, auto-increments, anchors and titles.
 
 The per-speaker ASR path (per-participant PCM streams from the extension) and
@@ -279,7 +291,7 @@ an empty URL. Fix what it lists and re-run `./setup.sh`. The same probes gate
 **The extension never connects.** The WS handshake is Origin-gated. If your
 conference host is not one of the built-in ones, add it to
 `RECOG_EXTRA_WS_ORIGINS` *and* to the extension's `manifest.json`, then rebuild
-the extension (`cd kontur-diarize/ktalk-speaker-extension && npm run build`) and
+the extension (`cd browser-extension && npm run build`) and
 reload it in `chrome://extensions`.
 
 ## Personal data outside the checkout
@@ -287,8 +299,8 @@ reload it in `chrome://extensions`.
 New installs store meetings in `~/.recog/meetings`, service logs in
 `~/.recog/logs`, and speaker databases in `~/.recog/speakers*.json`.
 `RECOG_DATA_DIR` overrides that root; use an absolute path (or `~/…`), since
-the CLI and services have different working directories. `.env` and
-`frontend/.env` stay in the checkout. An explicit `--speaker-db PATH` still
+data paths must not depend on the caller's working directory. `.env` and
+`recog/web/.env` stay in the checkout. An explicit `--speaker-db PATH` still
 uses exactly the path you pass.
 
 Existing installs continue using their entire old data root and print a
@@ -318,14 +330,19 @@ not migrate existing data. `scripts/backup-data.sh` backs up the resolved
 data root plus the environment files in the checkout (`--with-logs` includes
 logs).
 
-## Updating an existing macOS install
+## Updating an existing install
+
+For the repository layout change, follow the [upgrade steps](docs/repository-layout.md#updating-an-existing-checkout):
+re-render service units, update any manual launch commands, and reload the
+extension from `browser-extension/` if Chrome still points to its old path.
+The macOS dependency and data safeguards below still apply.
 
 1. **Before pulling**, if you run `RECOG_ASR_BACKEND=remote`: write your actual
    gateway URL into `.env` as `RECOG_ASR_REMOTE_URL=…`. The personal default is
    gone, and setup refuses to activate services with `remote` + empty URL
    (nothing edits your `.env` for you).
 2. `git pull && ./setup.sh` — the venv and the weight cache are reused; macOS
-   pip steps run under `constraints/macos.txt`, which pins the verified
+   pip steps run under `deploy/python/constraints/macos.txt`, which pins the verified
    torch/torchaudio/numpy/pyobjc set, so a Linux port does not silently bump
    your ML stack. Weight-cache preparation streams and hashes files without
    deserializing them, so no temporary model is created in RAM.
@@ -359,9 +376,9 @@ The individual steps:
 
 ```bash
 source venv-gigaam/bin/activate
-python -m pytest tests/ -v            # unit tests
-python -m compileall recog frontend   # syntax check
-python mp4_notes.py --help            # CLI smoke test
+python -m pytest tests/ -v -m "not e2e"  # unit tests
+python -m compileall recog               # syntax check
+python -m recog --help                   # CLI smoke test
 ```
 
 ## Architecture
@@ -384,35 +401,6 @@ See [ADR documents](docs/adr/) for architecture decisions:
 - ADR-0019: Stream-refine — tier-2 re-transcription with 20 s context
 - ADR-0020: Remote GigaAM offload with lazy local fallback
 - ADR-0021: Cross-platform capture and services (parec, systemd --user, templates)
-
-## Files
-
-The root holds the entry points (`mp4_notes.py`, `setup.sh`,
-`recog-service.sh`), shared bridge/storage modules (`ktalk_bridge.py`,
-`meeting_storage.py`), dependency manifests and project configuration.
-
-| Directory | Contents |
-| --- | --- |
-| `recog/` | Speech recognition, audio capture, speakers and Copilot |
-| `frontend/` | FastAPI server + SPA on http://127.0.0.1:9080 |
-| `kontur-diarize/ktalk-speaker-extension/` | Conference Chrome extension |
-| `scripts/` | Setup helpers, speaker enrollment, embedding worker and benchmarks |
-| `native/macos/` | ScreenCaptureKit Swift source |
-| `deploy/` | Service templates and remote ASR deployment |
-| `constraints/` | Verified platform dependency constraints |
-| `prompts/` | AI summary prompt templates |
-| `tests/` | Unit tests and E2E fixtures/tools |
-| `docs/adr/` | Architecture decisions |
-| `docs/plans/` | Implementation plans; finished plans in `completed/` |
-| `docs/research/` | Research notes |
-| `docs/experiments/` | Benchmark reports, measurements and reference text |
-| `examples/` | Local sample recordings and transcripts (gitignored) |
-| `openspec/` | OpenSpec specifications and change records |
-
-Meetings, logs and speaker databases live in `~/.recog/` (or `RECOG_DATA_DIR`).
-The generated `sck_audio_capture` binary keeps its root path for existing
-installations; its source lives in `native/macos/`. Local virtual environments
-and agent-tool directories keep the paths expected by those tools.
 
 ## License
 

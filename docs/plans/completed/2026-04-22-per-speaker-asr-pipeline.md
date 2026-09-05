@@ -4,7 +4,7 @@
 **Status**: Ready for ralphex execution
 **Reference design**: `docs/plans/2026-04-22-per-speaker-asr-pipeline-design.md` (detailed rationale)
 **Reference OpenSpec**: `openspec/changes/per-speaker-asr-pipeline/` (alternate formulation)
-**Validated by**: `tests/e2e/research/` probes + `tests/bench_gigaam_rtf.py` bench (committed 445d8c3, b580ea2)
+**Validated by**: `tests/e2e/research/` probes + `scripts/benchmarks/bench_gigaam_rtf.py` bench (committed 445d8c3, b580ea2)
 
 ## Summary
 
@@ -58,16 +58,16 @@
   - `PCM_CHUNK_OVERLAP_MS = 300`
   - `PCM_SILENCE_WATCHDOG_S = 30.0` (fallback на mixed-path после тишины PCM в активной встрече)
   - `RECOG_PCM_TRANSPORT` — чтение `os.getenv("RECOG_PCM_TRANSPORT", "0") == "1"` через helper `pcm_transport_enabled()`.
-- [ ] 1.2 В `ktalk_bridge.py` в `_process_message`: обрабатывать `type == "pcm_chunk"`. Распарсить поля (`pid`, `speaker_name`, `is_local`, `seq`, `chunk_start_ms`, `chunk_end_ms`, `sample_rate`, `pcm_base64`). Применить `clock_offset` к timestamp'ам. На этом этапе — просто логировать и возвращать; никуда не диспатчить.
-- [ ] 1.3 Добавить API `set_pcm_chunk_callback(callback: Callable[[PcmChunk], None])` + dataclass `PcmChunk` в `ktalk_bridge.py`. Если callback установлен, вызывать его.
+- [ ] 1.2 В `recog/ktalk_bridge.py` в `_process_message`: обрабатывать `type == "pcm_chunk"`. Распарсить поля (`pid`, `speaker_name`, `is_local`, `seq`, `chunk_start_ms`, `chunk_end_ms`, `sample_rate`, `pcm_base64`). Применить `clock_offset` к timestamp'ам. На этом этапе — просто логировать и возвращать; никуда не диспатчить.
+- [ ] 1.3 Добавить API `set_pcm_chunk_callback(callback: Callable[[PcmChunk], None])` + dataclass `PcmChunk` в `recog/ktalk_bridge.py`. Если callback установлен, вызывать его.
 - [ ] 1.4 Unit test в `tests/test_ktalk_bridge.py`:
   - `test_pcm_chunk_parsing_dispatches_to_callback`: синтетический JSON → callback вызван с корректным `PcmChunk`.
   - `test_pcm_chunk_malformed_payload_logged_not_raised`: invalid base64 → warning, bridge не падает.
-- [ ] 1.5 В `ktalk_bridge.py`: при каждом WS-connect клиента (extension) сразу после `self._connected_clients.add(websocket)` отправить ему `{"type": "pcm_transport_enabled", "enabled": pcm_transport_enabled()}`. Env читается один раз на старте bridge. Это делает гейт server-authoritative: extension НЕ имеет собственного toggle'а, только уважает серверный флаг.
+- [ ] 1.5 В `recog/ktalk_bridge.py`: при каждом WS-connect клиента (extension) сразу после `self._connected_clients.add(websocket)` отправить ему `{"type": "pcm_transport_enabled", "enabled": pcm_transport_enabled()}`. Env читается один раз на старте bridge. Это делает гейт server-authoritative: extension НЕ имеет собственного toggle'а, только уважает серверный флаг.
 
 **Acceptance**: `python -m pytest tests/test_ktalk_bridge.py::test_pcm_chunk_parsing_dispatches_to_callback -v` зелёный; `python -m compileall recog` без ошибок; существующие тесты `test_ktalk_bridge.py` зелёные.
 
-**Files touched**: `recog/config.py`, `ktalk_bridge.py`, `tests/test_ktalk_bridge.py`.
+**Files touched**: `recog/config.py`, `recog/ktalk_bridge.py`, `tests/test_ktalk_bridge.py`.
 
 **Commit**: `pcm: add protocol scaffold + config flag for per-speaker transport`
 
@@ -77,8 +77,8 @@
 
 **Goal**: extension привязывает worklet к каждому remote participant'у, шлёт PCM-чанки в bridge. Bridge логирует, дальше не пропускает (пока).
 
-- [ ] 2.1 Создать `kontur-diarize/ktalk-speaker-extension/src/audio-worklet/downsampler.js` как `AudioWorkletProcessor`. 48 → 16 kHz через 3-tap low-pass + decimation. Ring-буфер держит 3300 ms (52800 samples @ 16 kHz); эмитить полный 3300 ms payload каждые 3000 ms stride — последние 300 ms предыдущего чанка повторяются в начале следующего (sliding window: `[t, t+3300ms]` → `[t+3000ms, t+6300ms]` → …). На каждый готовый чанк: `this.port.postMessage({int16Pcm, sampleCount, chunkStartMs, chunkEndMs})`, где `chunkEndMs − chunkStartMs ≈ 3300 ms`. **Sample-rate contract**: в ctor processor'а прочитать `sampleRate` из `AudioWorkletGlobalScope`, проверить `== 48000`; если нет — `console.error('[PcmDownsampler] expected 48 kHz, got ${sampleRate}')` + `this.port.postMessage({type:"error", reason:"sample_rate_mismatch"})` один раз, выключить эмиссию.
-- [ ] 2.2 Создать `kontur-diarize/ktalk-speaker-extension/src/pcm_transport.js`:
+- [ ] 2.1 Создать `browser-extension/src/audio-worklet/downsampler.js` как `AudioWorkletProcessor`. 48 → 16 kHz через 3-tap low-pass + decimation. Ring-буфер держит 3300 ms (52800 samples @ 16 kHz); эмитить полный 3300 ms payload каждые 3000 ms stride — последние 300 ms предыдущего чанка повторяются в начале следующего (sliding window: `[t, t+3300ms]` → `[t+3000ms, t+6300ms]` → …). На каждый готовый чанк: `this.port.postMessage({int16Pcm, sampleCount, chunkStartMs, chunkEndMs})`, где `chunkEndMs − chunkStartMs ≈ 3300 ms`. **Sample-rate contract**: в ctor processor'а прочитать `sampleRate` из `AudioWorkletGlobalScope`, проверить `== 48000`; если нет — `console.error('[PcmDownsampler] expected 48 kHz, got ${sampleRate}')` + `this.port.postMessage({type:"error", reason:"sample_rate_mismatch"})` один раз, выключить эмиссию.
+- [ ] 2.2 Создать `browser-extension/src/pcm_transport.js`:
   - `attachParticipant(pid, speakerName, isLocal, mediaStream)` — заводит `MediaStreamSource → AudioWorkletNode`. AudioContext создаётся **локально в `pcm_transport.js`** через `new AudioContext({sampleRate: 48000, latencyHint: "interactive"})`; **не реиспользовать** `audioCtx` из `audio-analyzer.js:10` (он без sampleRate, берёт hardware default — может быть 44.1 kHz на некоторых конфигурациях, что уронит 3-tap decimator в aliasing).
   - `detachParticipant(pid)` — tear-down.
   - `dispose()` — все worklet'ы + close локальный `AudioContext`.
@@ -93,14 +93,14 @@
 - [ ] 2.6 Обновить `manifest.json`:
   - Bump `version` → `1.3.0`.
   - Добавить worklet файл в `web_accessible_resources`.
-- [ ] 2.7 `npm run build` в `kontur-diarize/ktalk-speaker-extension/`. Убедиться, что `injected.js` пересобрался и ссылается на worklet через `chrome.runtime.getURL()`.
+- [ ] 2.7 `npm run build` в `browser-extension/`. Убедиться, что `injected.js` пересобрался и ссылается на worklet через `chrome.runtime.getURL()`.
 - [ ] 2.8 В `src/ws_api.js` добавить обработчик входящего `{type: "pcm_transport_enabled", enabled: bool}`: сохранить в in-memory boolean, экспортировать `isPcmTransportEnabled()`. `pcm_transport.js` проверяет этот флаг при каждом чанке перед отправкой. Если bridge reconnect'ится с новым значением — обновить состояние, при переходе `true→false` вызвать `pcmTransportDispose()` (детач всех worklet'ов).
 
 **Acceptance**:
 - `npm run build` успешно.
-- Manual smoke: перезагрузить extension, убедиться что `RECOG_PCM_TRANSPORT=1` в env, `./recog-service.sh restart`. Открыть KTalk встречу с 1+ другим участником. В Chrome DevTools → Network → WS → incoming message `pcm_transport_enabled: true`. В Console: `[PcmTransport] Attached participant <pid>`. В логе `ktalk_bridge.py`: `pcm_chunk received from <pid>` каждые ~3 секунды.
+- Manual smoke: перезагрузить extension, убедиться что `RECOG_PCM_TRANSPORT=1` в env, `./recog-service.sh restart`. Открыть KTalk встречу с 1+ другим участником. В Chrome DevTools → Network → WS → incoming message `pcm_transport_enabled: true`. В Console: `[PcmTransport] Attached participant <pid>`. В логе `recog/ktalk_bridge.py`: `pcm_chunk received from <pid>` каждые ~3 секунды.
 
-**Files touched**: `kontur-diarize/ktalk-speaker-extension/src/audio-worklet/downsampler.js` (new), `src/pcm_transport.js` (new), `src/ws_api.js`, `src/platforms/ktalk.js`, `manifest.json`, `injected.js` (rebuilt).
+**Files touched**: `browser-extension/src/audio-worklet/downsampler.js` (new), `src/pcm_transport.js` (new), `src/ws_api.js`, `src/platforms/ktalk.js`, `manifest.json`, `injected.js` (rebuilt).
 
 **Commit**: `extension: add AudioWorklet PCM transport per participant`
 
@@ -171,7 +171,7 @@
 - Unit + regression тесты зелёные.
 - Smoke manual: `RECOG_PCM_TRANSPORT=1 ./recog-service.sh restart`, зайти в KTalk с 2 участниками, оба говорят по очереди — в `meetings/<id>/transcript.jsonl` entries с корректными `speaker`, timestamps монотонны, overlap (если был) даёт два раздельных entries.
 
-**Files touched**: `recog/live.py`, `tests/test_live_speaker_attribution.py`, `mp4_notes.py` (если нужно передать новый флаг из CLI).
+**Files touched**: `recog/live.py`, `tests/test_live_speaker_attribution.py`, `recog/cli.py` (если нужно передать новый флаг из CLI).
 
 **Commit**: `live: wire per-speaker PCM ingest behind RECOG_PCM_TRANSPORT flag`
 
@@ -210,7 +210,7 @@
 
 - [ ] 6.1 Создать `docs/adr/ADR-0014-per-speaker-asr-pipeline.md` с кратким резюме: Context / Decision / Consequences. Ссылки на 10 Decisions из этого plan'а, ссылки на research commits (445d8c3, b580ea2) и OpenSpec change.
 - [ ] 6.2 Обновить `CLAUDE.md` (репозиторный) — в секции Architecture добавить параграф про per-speaker path: когда включается (`RECOG_PCM_TRANSPORT=1 + --ktalk`), какие компоненты задействованы.
-- [ ] 6.3 Обновить `kontur-diarize/ktalk-speaker-extension/README.md` — добавить секцию про PCM transport: управляется server-side через `RECOG_PCM_TRANSPORT` env на Python-стороне, extension уважает bridge handshake `pcm_transport_enabled`. Ссылка на plan.
+- [ ] 6.3 Обновить `browser-extension/README.md` — добавить секцию про PCM transport: управляется server-side через `RECOG_PCM_TRANSPORT` env на Python-стороне, extension уважает bridge handshake `pcm_transport_enabled`. Ссылка на plan.
 - [ ] 6.4 Ручной smoke на реальной встрече 15-20 мин с 3+ участниками. Записать результат в `docs/plans/2026-04-22-per-speaker-asr-pipeline.md` как секцию «Smoke result» в конце файла (без перезаписи всего плана).
 - [ ] 6.5 Если smoke OK — в `recog/config.py` поменять default `RECOG_PCM_TRANSPORT` на `1`, оставить env-override для force-off. Если smoke показал проблемы — зафиксировать follow-up'ы, оставить default `0`.
 
@@ -220,7 +220,7 @@
 - «Smoke result» секция в этом plan'е заполнена.
 - Default `RECOG_PCM_TRANSPORT` установлен в соответствии с результатом smoke.
 
-**Files touched**: `docs/adr/ADR-0014-per-speaker-asr-pipeline.md` (new), `CLAUDE.md`, `kontur-diarize/ktalk-speaker-extension/README.md`, `recog/config.py`, этот plan.
+**Files touched**: `docs/adr/ADR-0014-per-speaker-asr-pipeline.md` (new), `CLAUDE.md`, `browser-extension/README.md`, `recog/config.py`, этот plan.
 
 **Commit**: `docs: ADR-0014 + rollout default for per-speaker ASR`
 
@@ -250,11 +250,11 @@
 ## References
 
 - Research: `tests/e2e/research/README.md`, commit 445d8c3
-- Bench: `tests/bench_gigaam_rtf.py`, `/tmp/bench_gigaam_rtf.json`, commit b580ea2
+- Bench: `scripts/benchmarks/bench_gigaam_rtf.py`, `/tmp/bench_gigaam_rtf.json`, commit b580ea2
 - OpenSpec change: `openspec/changes/per-speaker-asr-pipeline/` (параллельное формулирование, применимо для справки)
 - Design doc: `docs/plans/2026-04-22-per-speaker-asr-pipeline-design.md` (подробности по архитектуре и решениям)
 - Prior work: `docs/plans/2026-02-19-ktalk-diarization-optimization-design.md`
-- Existing per-participant MediaStream access: `kontur-diarize/ktalk-speaker-extension/src/audio-analyzer.js:92-112`
+- Existing per-participant MediaStream access: `browser-extension/src/audio-analyzer.js:92-112`
 - Existing WS bridge message dispatcher: `ktalk_bridge.py:1145-1391`
 
 ## Smoke result

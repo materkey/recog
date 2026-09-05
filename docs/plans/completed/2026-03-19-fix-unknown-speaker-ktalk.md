@@ -19,7 +19,7 @@
 7. live.py:878 → `speaker = "Unknown"`, doesn't update `last_speaker` → chain continues
 
 ### Files involved
-- `ktalk_bridge.py` — `get_dominant_speaker_for_period()`, `get_current_speaker()`, `_get_current_speaker_unlocked()`, participants tracking
+- `recog/ktalk_bridge.py` — `get_dominant_speaker_for_period()`, `get_current_speaker()`, `_get_current_speaker_unlocked()`, participants tracking
 - `recog/live.py:850-890` — speaker assignment logic for system audio chunks
 - `recog/live.py:685-740` — `process_pending()` where retroactive correction would apply
 
@@ -76,7 +76,7 @@
 - [x] Verify orphan meetings (no extension) behavior unchanged
 - [x] Verify mic/local speaker ("Me"/configured name) unaffected
 - [x] Run `python -m compileall recog frontend ktalk_bridge.py`
-- [x] Run `python mp4_notes.py --help` — CLI smoke test
+- [x] Run `python -m recog --help` — CLI smoke test
 
 ### Task 5: [Final] Update documentation
 - [x] Update CLAUDE.md if new patterns discovered

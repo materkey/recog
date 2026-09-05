@@ -12,7 +12,7 @@
   - `recog/live.py:1135` — `live_pipeline()` default `"Me"`
   - `recog/config.py` — loads `.env` on import, defines constants
   - `.env` / `.env.example` — env var files
-- `recog/config.py` already calls `load_dotenv()` at import time, and `mp4_notes.py` imports from `recog` before argparse setup — so env vars from `.env` are available when defaults are evaluated
+- `recog/config.py` already calls `load_dotenv()` at import time, and `recog/cli.py` imports from `recog` before argparse setup — so env vars from `.env` are available when defaults are evaluated
 - The launchd plist (`com.recog.live.plist`) doesn't pass `--mic-speaker-name` — it will pick up the new default automatically
 - Frontend (`server.py`) doesn't start live transcription — only CLI does
 
@@ -34,13 +34,13 @@
 - [x] In `recog/live.py:280`, change `LiveAudioCapture.__init__` default to `None`, use `MIC_SPEAKER_NAME` inside
 - [x] In `recog/live.py:1135`, change `live_pipeline()` default to `None`, use `MIC_SPEAKER_NAME` inside
 - [x] Run `python -m compileall recog mp4_notes.py` — must pass
-- [x] Run `python mp4_notes.py --help` — verify `--mic-speaker-name` help shows new default
+- [x] Run `python -m recog --help` — verify `--mic-speaker-name` help shows new default
 
 ### Task 3: Verify acceptance criteria
 - [x] Verify `--mic-speaker-name` CLI arg still overrides the env var
 - [x] Verify existing meetings with "Me" are unaffected (read-only data)
 - [x] Run `python -m compileall recog frontend` — must pass
-- [x] Run `python mp4_notes.py --help` — CLI smoke test
+- [x] Run `python -m recog --help` — CLI smoke test
 
 ## Technical Details
 - `MIC_SPEAKER_NAME` env var → `recog/config.py` constant → used as default in CLI and pipeline

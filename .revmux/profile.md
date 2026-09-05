@@ -57,15 +57,21 @@ In descending order of what actually hurts:
   dotenv parsing for that reason.
 - **`os._exit(0)` in teardown** after state is flushed: daemon threads and MPS make a clean interpreter
   shutdown unreliable.
-- **Vanilla JS + a hand-written SPA** in `frontend/static/`, no build step, no framework. The Chrome
+- **Vanilla JS + a hand-written SPA** in `recog/web/static/`, no build step, no framework. The Chrome
   extension is the only thing with a webpack build.
-- **`mp4_notes.py` is a single-file CLI entry point**; reusable logic lives in `recog/`.
+- **`python -m recog` is the CLI entry point** (`recog/__main__.py` delegates to
+  `recog/cli.py`); reusable logic lives in `recog/`. The web UI runs as
+  `python -m recog.web.server`, from the repository root.
 
 ## The design record
 
+[`docs/README.md`](../docs/README.md) is the documentation index;
+[`docs/repository-layout.md`](../docs/repository-layout.md) maps current paths and upgrade steps.
 `docs/adr/` holds the decisions (ADR-0010 live mode, 0011 meeting storage, 0018 per-speaker ASR, 0019
 stream-refine, 0020 remote ASR, 0021 cross-platform capture and services), `CLAUDE.md` the working
-contract, `docs/plans/` the plans behind changes. A code change that contradicts a current ADR or
+contract, `docs/plans/` the plans behind changes. BMAD artifacts live in `docs/bmad/` (the tool-facing
+`_bmad-output` symlink points there), while `openspec/` retains its tool-required layout.
+A code change that contradicts a current ADR or
 `CLAUDE.md` is a real finding — usually minor, since prose executes nothing, except where a document is
 the contract an agent or script executes against.
 

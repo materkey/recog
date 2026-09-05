@@ -16,7 +16,7 @@ import soundfile as sf
 from pathlib import Path
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-SOURCE = Path(__file__).parent.parent.parent / "examples/example_5min.wav"
+SOURCE = Path(__file__).parent.parent.parent / ".local/examples/example_5min.wav"
 
 # Raw speech segments extracted from example_5min.wav
 SEGMENTS = [
@@ -41,7 +41,7 @@ def main():
     FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
 
     if not SOURCE.exists():
-        print(f"ERROR: {SOURCE} not found. Place example_5min.wav in examples/.")
+        print(f"ERROR: {SOURCE} not found. Place example_5min.wav in .local/examples/.")
         return
 
     data, sr = sf.read(str(SOURCE))
@@ -105,7 +105,7 @@ def main():
     # reference transcript source. Generated from speaker_b so the voice is
     # different from speech_reference; if vlad_sample.wav is available in the
     # examples directory, prefer that (longer and unambiguously a different speaker).
-    vlad_src = Path(__file__).parent.parent.parent / "examples/vlad_sample.wav"
+    vlad_src = Path(__file__).parent.parent.parent / ".local/examples/vlad_sample.wav"
     if vlad_src.exists():
         vlad_data, vlad_sr = sf.read(str(vlad_src))
         clip = vlad_data[:int(20 * vlad_sr)]

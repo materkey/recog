@@ -16,9 +16,8 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "frontend"))
 
-from transcript_watcher import TranscriptWatcher  # noqa: E402
+from recog.web.transcript_watcher import TranscriptWatcher  # noqa: E402
 
 
 class _FakeWebSocket:

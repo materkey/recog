@@ -23,7 +23,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import mp4_notes
+from recog import cli as mp4_notes
 from recog.live import (
     LiveTranscriber,
     NO_SYSTEM_AUDIO,
@@ -284,7 +284,7 @@ def test_meta_reports_screencapture_only_for_screencapture(monkeypatch):
     storage = Mock()
     transcriber._meeting_storage = None
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("meeting_storage.MeetingStorage", Mock(return_value=storage))
+        mp.setattr("recog.meeting_storage.MeetingStorage", Mock(return_value=storage))
         storage.start_session.return_value = "meeting-1"
         LiveTranscriber._setup_meeting_storage(transcriber)
 

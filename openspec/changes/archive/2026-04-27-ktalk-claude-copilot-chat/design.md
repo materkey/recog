@@ -1,10 +1,10 @@
 ## Context
 
-The current KTalk extension is a vanilla JS/webpack MV3 content-script bundle. It injects transcript and context tabs directly into the KTalk/Jitsi page DOM and talks to `ktalk_bridge.py` over the existing `ws://localhost:8766` WebSocket. The bridge already receives meeting lifecycle events, participant metadata, per-speaker PCM chunks, live transcript rows, and refine updates. It also already handles request/response AI flows (`summarize_request`, `anchor_request`) from the extension.
+The current KTalk extension is a vanilla JS/webpack MV3 content-script bundle. It injects transcript and context tabs directly into the KTalk/Jitsi page DOM and talks to `recog/ktalk_bridge.py` over the existing `ws://localhost:8766` WebSocket. The bridge already receives meeting lifecycle events, participant metadata, per-speaker PCM chunks, live transcript rows, and refine updates. It also already handles request/response AI flows (`summarize_request`, `anchor_request`) from the extension.
 
 The new Copilot capability should therefore reuse the existing DOM injection and bridge transport. The tracer bullet is not a new browser-extension architecture; it is a new live chat route from KTalk DOM to a running Claude Code session, with the bridge acting as the local router and transcript source.
 
-Claude Code Channels are treated as the agent transport for this change. The channel server is a long-running local MCP server exposed over **Streamable HTTP**; Claude Code connects to it as a configured MCP server (`claude mcp add --transport http ...`) rather than launching it as a stdio subprocess. In parallel, the channel server connects back to `ktalk_bridge.py` as a WebSocket client so it can receive Copilot events and return tool results.
+Claude Code Channels are treated as the agent transport for this change. The channel server is a long-running local MCP server exposed over **Streamable HTTP**; Claude Code connects to it as a configured MCP server (`claude mcp add --transport http ...`) rather than launching it as a stdio subprocess. In parallel, the channel server connects back to `recog/ktalk_bridge.py` as a WebSocket client so it can receive Copilot events and return tool results.
 
 ## Goals / Non-Goals
 
@@ -89,7 +89,7 @@ Status frames:
 
 ### D4. Claude channel topology: channel server as bridge WS client, MCP Streamable HTTP toward Claude Code
 
-**Choice:** the Claude Code channel server is a long-running local process. It exposes an MCP **Streamable HTTP** endpoint that Claude Code connects to (registered once via `claude mcp add --transport http copilot http://127.0.0.1:8767/mcp`). In parallel, the channel server connects to `ktalk_bridge.py` as a special WebSocket client and sends a `copilot_channel_hello` frame. The bridge stores these connections separately from extension clients, similar in spirit to `subscriber_hello`, so they do not affect meeting lifecycle or speaker-clock state.
+**Choice:** the Claude Code channel server is a long-running local process. It exposes an MCP **Streamable HTTP** endpoint that Claude Code connects to (registered once via `claude mcp add --transport http copilot http://127.0.0.1:8767/mcp`). In parallel, the channel server connects to `recog/ktalk_bridge.py` as a special WebSocket client and sends a `copilot_channel_hello` frame. The bridge stores these connections separately from extension clients, similar in spirit to `subscriber_hello`, so they do not affect meeting lifecycle or speaker-clock state.
 
 Flow:
 ```
@@ -105,7 +105,7 @@ Claude channel server  ── HTTP MCP ── Claude Code
     └──────────────────────────────────┘
 ```
 
-**Why:** Streamable HTTP keeps the channel server independent of Claude Code's process lifecycle (survives `/exit`, supports multiple sessions, can run under launchd alongside other recog services) and matches the long-running posture of `ktalk_bridge.py`. Streamable HTTP is bidirectional (SSE-style), so server-pushed channel notifications (`copilot_user_message`, `transcript_tick`, ...) work the same as they would over stdio. Having the channel server dial into the existing bridge as a WS client (rather than the bridge calling out) keeps all meeting routing in one process and reuses the existing reconnect/lifecycle code.
+**Why:** Streamable HTTP keeps the channel server independent of Claude Code's process lifecycle (survives `/exit`, supports multiple sessions, can run under launchd alongside other recog services) and matches the long-running posture of `recog/ktalk_bridge.py`. Streamable HTTP is bidirectional (SSE-style), so server-pushed channel notifications (`copilot_user_message`, `transcript_tick`, ...) work the same as they would over stdio. Having the channel server dial into the existing bridge as a WS client (rather than the bridge calling out) keeps all meeting routing in one process and reuses the existing reconnect/lifecycle code.
 
 **Alternative — bridge launches Claude/CLI directly:** rejected. Existing `_call_claude_cli` and `_call_codex_cli` are good for one-shot prompts, but they do not preserve the user's running Claude Code session, repo context, tools, or skills.
 
@@ -234,7 +234,7 @@ The channel server exposes three MVP tools to Claude:
 
 ## Open Questions
 
-1. Should the first channel server be Python to stay close to `ktalk_bridge.py`, or TypeScript/Bun to match Claude fakechat examples? Default recommendation: **Python** — Streamable HTTP is supported by the Python `mcp` SDK and removes the main reason fakechat was Bun-shaped (stdio + Node ergonomics). Reach for Bun only if the Python MCP HTTP server proves limiting.
+1. Should the first channel server be Python to stay close to `recog/ktalk_bridge.py`, or TypeScript/Bun to match Claude fakechat examples? Default recommendation: **Python** — Streamable HTTP is supported by the Python `mcp` SDK and removes the main reason fakechat was Bun-shaped (stdio + Node ergonomics). Reach for Bun only if the Python MCP HTTP server proves limiting.
 2. Should manual chat include transcript text from the extension immediately, or should it only send request metadata and force Claude to call `get_recent_transcript`? Default recommendation: do both for the tracer bullet, then simplify after observing latency/context size.
 3. Should Copilot chat history persist in `meetings/<id>/`? Default recommendation: no for this change; keep it ephemeral until the UX proves useful.
 4. What is the local user's canonical name for proactive detection prompts? Default recommendation: use extension participants/local transcript speaker if available, otherwise `MIC_SPEAKER_NAME`.

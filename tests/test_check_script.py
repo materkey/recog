@@ -7,7 +7,7 @@ or running the real suite a second time.
 
 The workflow tests are drift guards: CI must keep installing what setup.sh
 installs (same GigaAM pin, same requirements, macOS under
-`constraints/macos.txt`), otherwise a green CI stops saying anything about a
+`deploy/python/constraints/macos.txt`), otherwise a green CI stops saying anything about a
 fresh install.
 """
 import os
@@ -29,7 +29,7 @@ PYTHON_STUB = r"""#!/bin/sh
 printf '%s\n' "python $*" >> "$STUB_LOG"
 case "$*" in
   *compileall*)    exit "${STUB_COMPILEALL_RC:-0}" ;;
-  *mp4_notes.py*)  exit "${STUB_HELP_RC:-0}" ;;
+  *"-m recog --help"*)  exit "${STUB_HELP_RC:-0}" ;;
   *pytest*)        exit "${STUB_PYTEST_RC:-0}" ;;
 esac
 exit 0
@@ -52,8 +52,7 @@ def repo(tmp_path):
     (dst / "recog-service.sh").write_text(SERVICE_STUB)
     (dst / "recog-service.sh").chmod(0o755)
 
-    (dst / "mp4_notes.py").write_text("")
-    for pkg in ("recog", "frontend"):
+    for pkg in ("recog",):
         (dst / pkg).mkdir()
         (dst / pkg / "__init__.py").write_text("")
 
@@ -111,14 +110,13 @@ def test_runs_all_five_steps_and_reports_ok(repo, stub_bin):
     assert result.stdout.strip().endswith("check: OK")
 
 
-def test_compiles_the_packages_and_the_root_modules(repo, stub_bin):
+def test_source_packages_when_checking_then_application_and_scripts_are_compiled(repo, stub_bin):
     result = run_check(repo, stub_bin)
 
     compile_calls = [c for c in result.calls if "compileall" in c]
     assert len(compile_calls) == 1
     assert "recog" in compile_calls[0]
-    assert "frontend" in compile_calls[0]
-    assert "mp4_notes.py" in compile_calls[0]
+    assert "scripts" in compile_calls[0]
 
 
 def test_checks_the_syntax_of_every_shell_script(repo, stub_bin):
@@ -310,8 +308,8 @@ def test_ci_pins_the_same_gigaam_ref_as_setup(workflow):
 
 def test_ci_installs_the_same_requirements_as_setup(workflow):
     script = _run_script(workflow)
-    for req in ("requirements.txt", "frontend/requirements.txt",
-                "requirements-macos.txt"):
+    for req in ("deploy/python/requirements.txt", "deploy/python/requirements-web.txt",
+                "deploy/python/requirements-macos.txt"):
         assert req in script
 
 
@@ -319,7 +317,7 @@ def test_ci_constrains_macos_installs(workflow):
     """Without the constraints file CI would resolve the ML stack to versions
     the Mac's MPS/PyObjC behaviour was never verified against."""
     script = _run_script(workflow)
-    assert "-c constraints/macos.txt" in script
+    assert "-c deploy/python/constraints/macos.txt" in script
     # Every pip stage goes through the same variable, so none can skip it.
     assert script.count("pip install $PIP_ARGS") == 3
 

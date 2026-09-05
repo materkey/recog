@@ -19,7 +19,7 @@ Usage:
 Guests keep playing until the process is killed (Ctrl+C).
 
 Prerequisites:
-    - Extension built: ``cd kontur-diarize/ktalk-speaker-extension && npm run build``
+    - Extension built: ``cd browser-extension && npm run build``
     - Playwright installed: ``./venv-gigaam/bin/playwright install chromium``
     - You have already created the room in your browser (any KTalk workspace
       on app.ktalk.ru or a corporate subdomain works) and enabled public-mode.

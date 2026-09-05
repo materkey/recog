@@ -48,7 +48,7 @@ from .remote_asr import ASRTemporarilyUnavailable
 # callers would break static type checkers, so we re-import at module level.
 # `ktalk_bridge` imports from `recog.config` but not from this module, so
 # this does not introduce a cycle.
-from ktalk_bridge import PcmChunk
+from recog.ktalk_bridge import PcmChunk
 
 
 # Payload produced for ASRModule.transcribe_batch:

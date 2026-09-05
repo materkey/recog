@@ -296,7 +296,7 @@ function isSpeech(flatness, pcLevelCV, zcr, centroid) {
 
 ### Where to implement
 
-The extension (`kontur-diarize/ktalk-speaker-extension/`) is the right place because:
+The extension (`browser-extension/`) is the right place because:
 1. It already has access to participant objects and Jitsi tracks
 2. It controls what `speaker_update` messages are sent to the bridge
 3. Per-participant MediaStream is available via `_audioTrack$.value.jitsiTrack.stream`
@@ -327,11 +327,11 @@ on dominantSpeaker change:
 
 ## Files involved
 
-- `kontur-diarize/ktalk-speaker-extension/src/speaker.js` — `updateSpeakerStatus()` → `sendWsSpeakerUpdate(activeSpeaker)` (line 349, unconditional)
-- `kontur-diarize/ktalk-speaker-extension/src/platforms/ktalk.js` — `subscribeToSpeakerChanges()`, Jitsi event subscriptions
-- `kontur-diarize/ktalk-speaker-extension/src/ws_api.js` — WebSocket protocol to bridge
-- `kontur-diarize/ktalk-speaker-extension/src/constants.js` — thresholds
-- `ktalk_bridge.py` — bridge receives speaker_update, could add defense-in-depth
+- `browser-extension/src/speaker.js` — `updateSpeakerStatus()` → `sendWsSpeakerUpdate(activeSpeaker)` (line 349, unconditional)
+- `browser-extension/src/platforms/ktalk.js` — `subscribeToSpeakerChanges()`, Jitsi event subscriptions
+- `browser-extension/src/ws_api.js` — WebSocket protocol to bridge
+- `browser-extension/src/constants.js` — thresholds
+- `recog/ktalk_bridge.py` — bridge receives speaker_update, could add defense-in-depth
 
 ## Raw Data Reference
 

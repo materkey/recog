@@ -20,7 +20,7 @@ Z270XX (RTX PRO 6000 Blackwell, 96 GiB) fronts GigaAM v3 behind an OpenAI-Whispe
 - Committed default must leave repository behaviour unchanged (`RECOG_ASR_BACKEND=local`).
 - Remote structures must be byte-compatible with the local `ASRModule` so downstream (refine alignment, `segment_id` contract, AI summary) is untouched.
 - Network and remote GPU are external; remote failure must not crash a live meeting.
-- One repository: the gateway patch and deploy steps live in `deploy/z270xx/`, not a separate `asr-api` repo.
+- One repository: the gateway patch and deploy steps live in `recog/asr_server/`, not a separate `asr-api` repo.
 
 ## Goals / Non-Goals
 
@@ -43,11 +43,11 @@ Z270XX (RTX PRO 6000 Blackwell, 96 GiB) fronts GigaAM v3 behind an OpenAI-Whispe
 
 ### D1. `build_asr()` is the only ASR constructor
 
-**Choice:** `recog/remote_asr.py::build_asr() -> ASRModule | FallbackASR` reads `recog.config`. When `RECOG_ASR_BACKEND == "remote"` it returns `FallbackASR(RemoteASRClient(RECOG_ASR_REMOTE_URL, RECOG_ASR_REMOTE_MODEL, RECOG_ASR_REMOTE_TIMEOUT_S), fail_threshold=RECOG_ASR_CIRCUIT_FAILS, open_seconds=RECOG_ASR_CIRCUIT_OPEN_S)`. Otherwise it returns a plain `ASRModule()`. `LiveTranscriber.__init__` and the offline CLI in `mp4_notes.py` both construct ASR exclusively through `build_asr()`.
+**Choice:** `recog/remote_asr.py::build_asr() -> ASRModule | FallbackASR` reads `recog.config`. When `RECOG_ASR_BACKEND == "remote"` it returns `FallbackASR(RemoteASRClient(RECOG_ASR_REMOTE_URL, RECOG_ASR_REMOTE_MODEL, RECOG_ASR_REMOTE_TIMEOUT_S), fail_threshold=RECOG_ASR_CIRCUIT_FAILS, open_seconds=RECOG_ASR_CIRCUIT_OPEN_S)`. Otherwise it returns a plain `ASRModule()`. `LiveTranscriber.__init__` and the offline CLI in `recog/cli.py` both construct ASR exclusively through `build_asr()`.
 
 **Why:** a single branch point means every caller sees one interface. No call site needs to know whether inference is local or remote. `FallbackASR` is structurally interchangeable with `ASRModule` (same method names + the delegated attributes in D4), so the swap is invisible to `LiveTranscriber`, `RefineWorker`, and the CLI.
 
-**Alternative — per-call-site env checks:** rejected. Scatters the local/remote decision across `live.py`, `refine.py`, and `mp4_notes.py`; easy to miss a path and silently leave it local.
+**Alternative — per-call-site env checks:** rejected. Scatters the local/remote decision across `live.py`, `refine.py`, and `recog/cli.py`; easy to miss a path and silently leave it local.
 
 ### D2. Offload all four paths; extract `transcribe_chunk` for the fourth
 
@@ -59,7 +59,7 @@ ASRModule.transcribe_chunk(self, audio: np.ndarray, sample_rate: int = 16000) ->
 
 It calls `load_model(quiet=True)`, moves the array to device/dtype, then under `self._model_lock`, `torch.inference_mode()`, and `_mps_autoreleasepool(self.device)` runs `model.forward` + `decode[0][0]`, calls `_maybe_empty_mps_cache()`, and returns `text.strip()` or `None`. It returns `None` on any exception (best-effort, matching the current direct path). `_transcribe_direct` keeps its `refine_worker.set_live_pending()/clear_live_pending()` try/finally wrapper and its outer try/except, and inside simply `return self.asr.transcribe_chunk(audio_chunk)`.
 
-**Why offload refine too (user decision):** refine is a major share of inference load and the main competitor for the live mutex (ADR-0019 D6). Leaving it local would forfeit half the benefit. The price — extending the gateway for word timestamps — is paid once in `deploy/z270xx/` (D7).
+**Why offload refine too (user decision):** refine is a major share of inference load and the main competitor for the live mutex (ADR-0019 D6). Leaving it local would forfeit half the benefit. The price — extending the gateway for word timestamps — is paid once in `recog/asr_server/` (D7).
 
 **Why extract a method rather than offload inline:** `RemoteASRClient` and `FallbackASR` must expose the same `transcribe_chunk` name so `_transcribe_direct` is backend-agnostic. Extracting also de-duplicates the forward/decode pattern that already appears in `transcribe_batch` and `transcribe_simple`.
 
@@ -141,11 +141,11 @@ else:
 
 ### D7. Gateway extended in-repo for word timestamps
 
-**Choice:** `deploy/z270xx/gigaam_backend.py` is a patched copy of the current Z270XX backend. It adds an optional form field `timestamp_granularities` (string; `"word"` enables word timestamps). When word timestamps are requested, the backend calls `state["model"].transcribe(wav_path, word_timestamps=True)` (returns `TranscriptionResult` with `.text` and `.words[Word(text, start_sec, end_sec)]`) instead of `transcribe_longform`, and includes a top-level `"words": [{"word": w.text, "start": float(w.start), "end": float(w.end)}]` in the JSON response alongside `text`. All existing behaviour (json / verbose_json / diarized / srt / vtt, ffmpeg transcode) is intact when word ts is not requested.
+**Choice:** `recog/asr_server/gigaam_backend.py` is a patched copy of the current Z270XX backend. It adds an optional form field `timestamp_granularities` (string; `"word"` enables word timestamps). When word timestamps are requested, the backend calls `state["model"].transcribe(wav_path, word_timestamps=True)` (returns `TranscriptionResult` with `.text` and `.words[Word(text, start_sec, end_sec)]`) instead of `transcribe_longform`, and includes a top-level `"words": [{"word": w.text, "start": float(w.start), "end": float(w.end)}]` in the JSON response alongside `text`. All existing behaviour (json / verbose_json / diarized / srt / vtt, ffmpeg transcode) is intact when word ts is not requested.
 
-`deploy/z270xx/README.md` documents: scp target `~/projects/asr-api/gigaam_backend.py` on Z270XX, restart `systemctl --user restart asr-gigaam`, curl smoke test that the response carries `words` when `timestamp_granularities=word` is sent.
+`docs/asr-server.md` documents: scp target `~/projects/asr-api/gigaam_backend.py` on Z270XX, restart `systemctl --user restart asr-gigaam`, curl smoke test that the response carries `words` when `timestamp_granularities=word` is sent.
 
-**Why in-repo (user decision):** the client (`recog/remote_asr.py`) and the gateway contract it depends on must version together. A separate `asr-api` repo would let the two drift; a deploy artifact in `deploy/z270xx/` keeps them in one place.
+**Why in-repo (user decision):** the client (`recog/remote_asr.py`) and the gateway contract it depends on must version together. A separate `asr-api` repo would let the two drift; a deploy artifact in `recog/asr_server/` keeps them in one place.
 
 **Why additive form field:** absent `timestamp_granularities`, the gateway is byte-identical to today — other consumers (MacWhisper custom provider, `local-linux-models`) are unaffected. Word timestamps are opt-in per request, mirroring the recog opt-in.
 
@@ -159,14 +159,14 @@ else:
 
 - **[Network on the live path]** → every live batch may traverse the LAN. LAN 3–5 ms makes it negligible, but a Tailscale DERP relay (WAN, another country) would wreck latency. Mitigation: `RECOG_ASR_REMOTE_TIMEOUT_S=15` + circuit breaker; user enables only on confirmed LAN (per global CLAUDE.md `ping` rule).
 - **[Cold-fallback first-paint]** → the first real fallback loads the 1.6 GB local model (~seconds), once per incident. Circuit breaker prevents repeated remote hammering; subsequent calls hit the warm local path.
-- **[Gateway contract drift]** → word timestamps are added by patching our own backend in `deploy/z270xx/`. An incompatible gateway redeploy makes `transcribe_with_timestamps` fail → fallback to local. The README smoke test is mandatory after deploy.
+- **[Gateway contract drift]** → word timestamps are added by patching our own backend in `recog/asr_server/`. An incompatible gateway redeploy makes `transcribe_with_timestamps` fail → fallback to local. The README smoke test is mandatory after deploy.
 - **[Lost batched-forward win]** → remote `transcribe_batch` is N independent requests, not one padded forward. At 99× RTF + LAN this is tolerable; any item-raise falls the whole batch back to the local padded forward.
 - **[In-memory WAV encode cost]** → `soundfile.write` per chunk adds CPU on the MacBook. For 3 s 16 kHz clips this is negligible.
 - **[`using_remote` flips mid-refine]** → if the circuit opens between `_refine_transcribe_fn`'s `using_remote` check and the call, the remote call raises and `FallbackASR` re-runs locally without the abort hook. Acceptable: that local run is a one-off, not a steady-state preemption target.
 
 ## Migration Plan
 
-1. **Phase 0 — gateway patch:** deploy `deploy/z270xx/gigaam_backend.py` to Z270XX; `systemctl --user restart asr-gigaam`; curl smoke test confirms `words` in the response for `timestamp_granularities=word`.
+1. **Phase 0 — gateway patch:** deploy `recog/asr_server/gigaam_backend.py` to Z270XX; `systemctl --user restart asr-gigaam`; curl smoke test confirms `words` in the response for `timestamp_granularities=word`.
 2. **Phase 1 — client + fallback:** land `recog/remote_asr.py`, `transcribe_chunk` extraction, config consts, `build_asr()` wiring, exports. Default `RECOG_ASR_BACKEND=local` — repository behaviour unchanged; full unit suite green.
 3. **Phase 2 — opt-in validation:** set `RECOG_ASR_BACKEND=remote` in a personal `.env`; run a real KTalk meeting on confirmed LAN; verify live + refine offload, force a remote outage and confirm transparent fallback + circuit-breaker logs.
 4. **Rollback:** `RECOG_ASR_BACKEND=local` (or unset) + restart → `build_asr()` returns plain `ASRModule`; zero data migration.

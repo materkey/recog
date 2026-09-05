@@ -116,7 +116,7 @@ CPU — жизнеспособный режим, а не деградация: �
 
 ### D5. Сервисы — шаблоны, а не закоммиченные юниты
 
-Юниты рендерятся из `deploy/launchd/*.plist.in` и `deploy/systemd/*.service.in`
+Юниты рендерятся из `deploy/macos/*.plist.in` и `deploy/linux/*.service.in`
 подстановкой `@REPO_DIR@ @HOME@ @PYTHON@ @LOG_DIR@ @NODE_BIN@ @EXTRA_PATH@`
 (`sed` — `envsubst` на стоковой macOS нет), с проверкой, что не осталось
 `@TOKEN@`. Четыре закоммиченных `com.recog.*.plist` удалены из git и
@@ -233,7 +233,7 @@ torch/torchaudio с `RECOG_TORCH_INDEX_URL` (на Linux без NVIDIA — CPU-и
 
 ### Mitigation
 
-- `constraints/macos.txt` фиксирует проверенный набор версий (torch/torchaudio
+- `deploy/python/constraints/macos.txt` фиксирует проверенный набор версий (torch/torchaudio
   2.8.0, numpy 2.3.5, pyobjc-core 12.1) и применяется во всех pip-этапах
   macOS-установки, чтобы перенос на Linux не обновил ML-стек попутно.
 - `tests/test_system_audio.py`, `tests/test_service_templates.py`,

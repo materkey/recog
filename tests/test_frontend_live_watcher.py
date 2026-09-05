@@ -1,4 +1,4 @@
-"""Tests for frontend/server.py LiveWatcher rewrite detection (D10).
+"""Tests for recog/web/server.py LiveWatcher rewrite detection (D10).
 
 `MeetingStorage.update_segments` rewrites `transcript.jsonl` via
 `tmp.write_text(...) + os.replace(tmp, target)`. That atomic swap changes
@@ -15,9 +15,8 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "frontend"))
 
-from live_watcher import LiveWatcher  # noqa: E402
+from recog.web.live_watcher import LiveWatcher  # noqa: E402
 
 
 def _write_jsonl(path: Path, segments: list[dict]) -> None:

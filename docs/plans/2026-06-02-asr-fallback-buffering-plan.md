@@ -1095,7 +1095,7 @@ Expected: 8 passed
 
 - [x] **Step 5.5: Найти и обновить существующие вызовы `get_chunk`**
 
-Run: `grep -rn "get_chunk" recog/ tests/ frontend/ *.py`
+Run: `grep -rn "get_chunk" recog/ tests/ recog/web/ *.py`
 
 Ожидаемые места:
 - `recog/live.py:1662` (`_process_chunk`) — обновляется в Task 6

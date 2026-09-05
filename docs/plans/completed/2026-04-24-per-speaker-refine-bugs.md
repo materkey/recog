@@ -7,12 +7,12 @@
 ## Context (from discovery)
 
 - Исходный архитектурный план: `/Users/vkkovalev/.claude/plans/rippling-mixing-giraffe.md` (277 строк, прошёл GAN-review).
-- `kontur-diarize/ktalk-speaker-extension/src/ui.js:1140-1306` — `handleTranscript` и `handleTranscriptRefine`. Merge-блок в районе 1203 не проверяет `speaker` при `is_continuation=true` → разные говорящие склеиваются в один bubble, refine на continuation-chunk контаминирует чужой текст.
+- `browser-extension/src/ui.js:1140-1306` — `handleTranscript` и `handleTranscriptRefine`. Merge-блок в районе 1203 не проверяет `speaker` при `is_continuation=true` → разные говорящие склеиваются в один bubble, refine на continuation-chunk контаминирует чужой текст.
 - `recog/live.py:893` — batch tuple `(pid, speaker_name, is_local, _pcm, chunk_start_ms, _end_ms, pid_audio_ms_start, pid_audio_ms_end)`. `_on_pcm_batch` уже держит `_state_lock`, есть per-pid `_pcm_prev_words` / `_pcm_pid_state` / `_pcm_segment_texts`.
 - `recog/live.py:307-329` — `normalize_word`, `deduplicate` для per-pid dedup; переиспользуется для phrase-token overlap.
 - `recog/live.py:1371-1411` — `_handle_mic_chunk` пишет напрямую в `transcript_lines` с `is_local=True`, не проходит через `_on_pcm_batch` (ADR-0018 D9).
-- `kontur-diarize/ktalk-speaker-extension/src/pcm_transport.js:234` — hard early-return `if (isLocal) return;` для mic.
-- `kontur-diarize/ktalk-speaker-extension/manifest.json:4` — уже `"1.4.1"` (из коммита `1bf0674`); для cache-bust bump в 1.4.2.
+- `browser-extension/src/pcm_transport.js:234` — hard early-return `if (isLocal) return;` для mic.
+- `browser-extension/manifest.json:4` — уже `"1.4.1"` (из коммита `1bf0674`); для cache-bust bump в 1.4.2.
 - `ktalk_bridge.KTalkBridge.send_transcript(...)` — точка, где добавляется optional `source_id` в WS payload.
 - `recog/config.py` — место для нового gate `pcm_cross_pid_echo_suppression_enabled()`; default off.
 - `tests/test_live_speaker_attribution.py` — есть fixture `_fresh_transcriber_mock`; паттерн PCM-тестов через `_on_pcm_batch` с конструированным batch tuple.
@@ -33,9 +33,9 @@
 
 ### Task 1: Stable source guard on merge (Bug 1)
 
-- [x] Add optional `source_id: str = ""` parameter to `KTalkBridge.send_transcript` in `ktalk_bridge.py`; include `"source_id": source_id` in the WS payload only when non-empty. Preserve existing positional call sites.
+- [x] Add optional `source_id: str = ""` parameter to `KTalkBridge.send_transcript` in `recog/ktalk_bridge.py`; include `"source_id": source_id` in the WS payload only when non-empty. Preserve existing positional call sites.
 - [x] In `recog/live.py` `_on_pcm_batch`, pass `source_id=pid` to `send_transcript(...)`; do not touch legacy / non-PCM call sites in `_handle_mic_chunk` etc.
-- [x] In `kontur-diarize/ktalk-speaker-extension/src/ui.js` `handleTranscript` (around 1140): read `source_id` from the payload, store it on `state.transcriptLines[i].source_id` for every line (both new and continuation).
+- [x] In `browser-extension/src/ui.js` `handleTranscript` (around 1140): read `source_id` from the payload, store it on `state.transcriptLines[i].source_id` for every line (both new and continuation).
 - [x] Rewrite the continuation merge predicate at `ui.js:1203`:
   ```js
   const prev = state.transcriptLines[state.transcriptLines.length - 1];
@@ -48,12 +48,12 @@
       prev.text += ' ' + text;
       // ... existing segment_ids/segment_texts bookkeeping (keep as is) ...
   ```
-- [x] Add three tests to `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`:
+- [x] Add three tests to `browser-extension/src/ui.test.js`:
   1. `'handleTranscript pushes new line when continuation source_id differs'` — Alice sid=20 `source_id="pid-a"` `is_continuation=false`, Alice sid=21 `source_id="pid-b"` `is_continuation=true`. Assert two lines, `segment_ids` are not mixed.
   2. `'handleTranscript merges continuation when source_id matches even if speaker label changes'` — Alice sid=22 `source_id="pid-a"`, "Alice Renamed" sid=23 `source_id="pid-a"` `is_continuation=true`. Assert one line, `segment_ids === [22, 23]`.
   3. Legacy fallback: no `source_id`; same speaker merges, different speaker pushes new line.
-- [x] Run `cd kontur-diarize/ktalk-speaker-extension && npm run test` — all tests green.
-- [x] Commit as `fix(extension): keep different-source chunks in separate bubbles` listing the three changed files explicitly (`ktalk_bridge.py`, `recog/live.py`, `kontur-diarize/ktalk-speaker-extension/src/ui.js`, `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`).
+- [x] Run `cd browser-extension && npm run test` — all tests green.
+- [x] Commit as `fix(extension): keep different-source chunks in separate bubbles` listing the three changed files explicitly (`recog/ktalk_bridge.py`, `recog/live.py`, `browser-extension/src/ui.js`, `browser-extension/src/ui.test.js`).
 
 ### Task 2: Regression coverage for refine on continuation-chunks (Bug 2)
 
@@ -175,8 +175,8 @@
 
 ### Task 4: Rebuild extension and bump manifest
 
-- [x] Edit `kontur-diarize/ktalk-speaker-extension/manifest.json:4` — bump `"version": "1.4.1"` → `"version": "1.4.2"`. Leave `package.json:3` on `"1.0.0"` (pre-existing drift, out of scope).
-- [x] `cd kontur-diarize/ktalk-speaker-extension && npm run build` — verify `injected.js` regenerated without errors.
+- [x] Edit `browser-extension/manifest.json:4` — bump `"version": "1.4.1"` → `"version": "1.4.2"`. Leave `package.json:3` on `"1.0.0"` (pre-existing drift, out of scope).
+- [x] `cd browser-extension && npm run build` — verify `injected.js` regenerated without errors.
 - [x] Amend the Task 1 extension commit (or add as a trailing commit on top of Task 1) so the manifest bump and rebuilt `injected.js` live in the same commit as the extension source changes. Do not amend if Task 2 or Task 3 commits were already pushed — in that case add a new commit `chore(extension): bump manifest 1.4.1 → 1.4.2 and rebuild`.
 
 ### Task 5: Commit and push

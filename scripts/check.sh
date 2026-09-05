@@ -47,7 +47,7 @@ list_shell_scripts() {
 echo "check: python is $PYTHON"
 
 step "compileall"
-"$PYTHON" -m compileall -q recog frontend scripts ./*.py
+"$PYTHON" -m compileall -q recog scripts
 
 step "shell syntax"
 while IFS= read -r -d '' script; do
@@ -56,7 +56,7 @@ while IFS= read -r -d '' script; do
 done < <(list_shell_scripts)
 
 step "CLI help"
-"$PYTHON" mp4_notes.py --help > /dev/null
+"$PYTHON" -m recog --help > /dev/null
 
 step "service units render"
 RENDER_DIR="$(mktemp -d)"

@@ -20,13 +20,13 @@ Proposed
 ### 1. Архитектура
 
 ```
-frontend/
+recog/web/
 ├── server.py              # FastAPI backend
 ├── static/
 │   ├── index.html         # SPA entry point
 │   ├── app.js             # Vanilla JS application
 │   └── style.css          # Styles
-└── requirements.txt       # Python dependencies
+└── deploy/python/requirements.txt       # Python dependencies
 ```
 
 **Почему эта структура:**
@@ -107,10 +107,10 @@ async def get_transcript(meeting_id: str):
 **Вариант A: Чтение из файла (выбран)**
 - Сервер наблюдает за `transcript.jsonl` через watchdog
 - При изменении файла — отправка новых строк через WebSocket
-- Плюс: не требует изменений в `mp4_notes.py`
+- Плюс: не требует изменений в `recog/cli.py`
 
 **Вариант B: IPC через socket** (отложен)
-- `mp4_notes.py` отправляет сегменты на локальный socket
+- `recog/cli.py` отправляет сегменты на локальный socket
 - Сервер ретранслирует в WebSocket
 - Минус: требует изменений в live transcriber
 
@@ -172,7 +172,7 @@ async def get_transcript(meeting_id: str):
 
 ```bash
 cd frontend
-pip install -r requirements.txt
+pip install -r deploy/python/requirements.txt
 python server.py
 # Opens http://localhost:8080
 ```

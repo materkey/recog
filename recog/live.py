@@ -803,7 +803,7 @@ class LiveTranscriber:
     def _setup_meeting_storage(self):
         """Initialize MeetingStorage and audio recording writers."""
         try:
-            from meeting_storage import MeetingStorage
+            from recog.meeting_storage import MeetingStorage
             self._meeting_storage = MeetingStorage()
             meeting_id = self._meeting_storage.start_session(
                 mic=self.mic_capture is not None,
@@ -845,7 +845,7 @@ class LiveTranscriber:
         if not self.use_ktalk:
             return
         try:
-            from ktalk_bridge import KTalkBridge
+            from recog.ktalk_bridge import KTalkBridge
             self._ktalk_bridge = KTalkBridge()
             self._ktalk_bridge.set_speaker_callback(self._ktalk_speaker_callback)
             # Connect MeetingStorage to KTalk bridge
@@ -855,7 +855,7 @@ class LiveTranscriber:
                 from recog.increment import IncrementGenerator
                 self._increment_generator = IncrementGenerator(
                     self._meeting_storage.base_path,
-                    prompts_dir=Path(__file__).parent.parent / "prompts",
+                    prompts_dir=Path(__file__).parent / "prompts",
                 )
                 self._increment_generator.set_callback(
                     lambda mid, ver, pid: print(

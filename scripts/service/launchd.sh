@@ -6,7 +6,7 @@
 # recog-service.sh when the target OS is Darwin.
 
 SVC_UNIT_DIR="${SVC_UNIT_DIR:-$HOME/Library/LaunchAgents}"
-SVC_TEMPLATE_DIR="$SVC_REPO_DIR/deploy/launchd"
+SVC_TEMPLATE_DIR="$SVC_REPO_DIR/deploy/macos"
 
 svc_backend_name() { echo "launchd"; }
 

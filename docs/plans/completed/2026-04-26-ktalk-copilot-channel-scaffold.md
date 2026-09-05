@@ -10,7 +10,7 @@
 - Cleanup happens in `_handle_client` disconnect path — channel clients must also be removed there.
 - Test model: `tests/test_ktalk_bridge.py` (~469 lines). Convention: `pytest-asyncio`, instantiate `KTalkBridge()` directly, call `await bridge._process_message({...})`, assert via `unittest.mock.Mock`/`AsyncMock`. Fixture `_attach_meeting_storage(bridge)` at line 207.
 - New Python module location: `recog/copilot_channel.py` (no similar file exists). `recog/` already contains `asr.py`, `live.py`, `per_speaker.py`, `refine.py`, `ai_provider.py`, `speaker_db.py`, `increment.py`, `prompt_registry.py`, `node_env.py`.
-- Dependency gap: neither root `requirements.txt` nor `frontend/requirements.txt` includes `mcp`. Must be added for the Streamable-HTTP server.
+- Dependency gap: neither root `deploy/python/requirements.txt` nor `deploy/python/requirements-web.txt` includes `mcp`. Must be added for the Streamable-HTTP server.
 - Bridge is currently WS-only (`websockets` library). No HTTP server in-process — the channel server is its own process.
 
 ## Development Approach
@@ -27,12 +27,12 @@
 ## Implementation Steps
 
 ### Task 1: Add `mcp` Python SDK dependency
-- [x] Add a line `mcp>=1.2.0` to `requirements.txt` near the other Python deps (alphabetical or end of list — match existing style)
-- [x] Install: `./venv-gigaam/bin/pip install -r requirements.txt`
+- [x] Add a line `mcp>=1.2.0` to `deploy/python/requirements.txt` near the other Python deps (alphabetical or end of list — match existing style)
+- [x] Install: `./venv-gigaam/bin/pip install -r deploy/python/requirements.txt`
 - [x] Verify import: `./venv-gigaam/bin/python -c "from mcp.server.fastmcp import FastMCP; print('mcp ok')"`
 
 ### Task 2: Bridge — register Copilot channel clients on `copilot_channel_hello`
-- [x] In `ktalk_bridge.py` `KTalkBridge.__init__`, add `self._copilot_channel_clients: set = set()` next to `_subscriber_clients` (around line 294)
+- [x] In `recog/ktalk_bridge.py` `KTalkBridge.__init__`, add `self._copilot_channel_clients: set = set()` next to `_subscriber_clients` (around line 294)
 - [x] In `_process_message` (line 1339+), add a new `elif msg_type == "copilot_channel_hello":` branch that adds `websocket` to `self._copilot_channel_clients` and logs at INFO level (model on subscriber_hello at line 1252)
 - [x] In the disconnect / `finally` block of `_handle_client` (search for `_subscriber_clients.discard` or equivalent cleanup), also `self._copilot_channel_clients.discard(websocket)`
 - [x] Add a unit test `test_copilot_channel_hello_registers_client` in `tests/test_ktalk_bridge.py` modelled on the closest existing subscriber test: send the frame via `_process_message`, assert `bridge._copilot_channel_clients` contains the mock websocket
@@ -78,12 +78,12 @@
 - [x] Do NOT push yet
 
 ### Task 8: Commit channel-server scaffold + bridge protocol (second atomic commit)
-- [x] `git status` — verify only `requirements.txt`, `ktalk_bridge.py`, `recog/copilot_channel.py`, `tests/test_ktalk_bridge.py` are modified/new
-- [x] Stage explicitly: `git add requirements.txt ktalk_bridge.py recog/copilot_channel.py tests/test_ktalk_bridge.py`
+- [x] `git status` — verify only `deploy/python/requirements.txt`, `recog/ktalk_bridge.py`, `recog/copilot_channel.py`, `tests/test_ktalk_bridge.py` are modified/new
+- [x] Stage explicitly: `git add deploy/python/requirements.txt ktalk_bridge.py recog/copilot_channel.py tests/test_ktalk_bridge.py`
 - [x] Commit with message `feat(copilot): scaffold MCP HTTP channel server and bridge routing` and a body covering: new module `recog/copilot_channel.py` exposing `send_copilot_message`/`set_copilot_status` MCP tools over Streamable HTTP at `127.0.0.1:8767`; new bridge frame types `copilot_channel_hello`/`copilot_chat_message`/`copilot_channel_reply`/`copilot_channel_status`; isolated channel-client set; unit tests for hello/forward/relay/disconnected paths
 - [x] Push: `git push` (current branch is `main` — do not force-push; if push is rejected, stop and surface the error in the progress log)
 
 ## Post-Completion
-- Manual smoke (not automated by ralphex): start `./recog-service.sh start` (or `python ktalk_bridge.py`), in another terminal run `./venv-gigaam/bin/python -m recog.copilot_channel`, then `claude mcp add --transport http copilot http://127.0.0.1:8767/mcp` once. In a Claude Code session ask Claude to call `send_copilot_message(kind="manual", text="hello from Claude")` — expect the bridge log to show a relayed `copilot_reply` broadcast.
+- Manual smoke (not automated by ralphex): start `./recog-service.sh start` (or `python -m recog.ktalk_bridge`), in another terminal run `./venv-gigaam/bin/python -m recog.copilot_channel`, then `claude mcp add --transport http copilot http://127.0.0.1:8767/mcp` once. In a Claude Code session ask Claude to call `send_copilot_message(kind="manual", text="hello from Claude")` — expect the bridge log to show a relayed `copilot_reply` broadcast.
 - Next plan candidates: KTalk DOM `Copilot` tab UI (extension `ui.js`/`ws.js`/`state.js`), `get_recent_transcript` MCP tool + bridge transcript buffer, proactive `transcript_tick` scheduler.
 - Spec tasks 1.1, 1.4, 2.x, 3.x, 4.x partially covered by this plan; spec tasks 5–8 untouched.
