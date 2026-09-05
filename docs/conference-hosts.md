@@ -32,8 +32,11 @@ Load or reload **`browser-extension/dist/`** in `chrome://extensions`.
 The generated manifest and bundle contain the installation's configured hosts;
 `dist/` is ignored by Git. The tracked manifest remains a generic template.
 If Chrome still registers the source directory, use Load unpacked with `dist/`
-and remove the old registration. A registration pointing at a maintained local
-compatibility link can continue using that link when it points at `dist/`.
+and remove the old registration. Do not use a symlink to migrate a registration:
+Chrome resolves the target path and derives an unpacked extension's ID from it.
+Reloading the old registration can install a second ID while the old card stays
+at `Reloading…`. In that case, keep the registration loaded directly from
+`browser-extension/dist/` and remove the old card; then refresh the conference tab.
 
 Jitsi runs on its configured hosts. Element Call injects only into the bundled
 `/widgets/element-call/*` iframe, never the top-level Element page. The meeting
