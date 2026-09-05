@@ -18,6 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR"
+DATA_DIR="$(bash "$SCRIPT_DIR/scripts/data-dir.sh")"
 
 DEST="$HOME/backups/recog-$(date +%Y%m%d-%H%M)"
 REMOTE=""
@@ -36,12 +37,12 @@ done
 mkdir -p "$DEST"
 
 echo "=== Локальный снимок → $DEST"
-[ -d meetings ] && rsync -a meetings/ "$DEST/meetings/"
-if [ "$WITH_LOGS" = "1" ] && [ -d logs ]; then
-    rsync -a logs/ "$DEST/logs/"
+[ -d "$DATA_DIR/meetings" ] && rsync -a "$DATA_DIR/meetings/" "$DEST/meetings/"
+if [ "$WITH_LOGS" = "1" ] && [ -d "$DATA_DIR/logs" ]; then
+    rsync -a "$DATA_DIR/logs/" "$DEST/logs/"
 fi
 
-for f in speakers.json speakers_ecapa.json speakers_multi.json speakers_new.json; do
+for f in "$DATA_DIR"/speakers*.json; do
     [ -f "$f" ] && cp -p "$f" "$DEST/"
 done
 # .env копируется под другим именем: иначе случайный `cp -r` обратно в репо
@@ -51,9 +52,9 @@ done
 
 # Проверка целостности: сравниваем суммарный размер в байтах, а не du —
 # du показывает занятые блоки и на разных ФС расходится при равном содержимом.
-if [ -d meetings ]; then
+if [ -d "$DATA_DIR/meetings" ]; then
     total_bytes() { find "$1" -type f -exec stat -f%z {} + 2>/dev/null || find "$1" -type f -printf '%s\n'; }
-    src=$(total_bytes meetings | awk '{s+=$1} END{print s+0}')
+    src=$(total_bytes "$DATA_DIR/meetings" | awk '{s+=$1} END{print s+0}')
     dst=$(total_bytes "$DEST/meetings" | awk '{s+=$1} END{print s+0}')
     echo "meetings: src=$src dst=$dst байт"
     [ "$src" = "$dst" ] || echo "WARNING: размеры расходятся (идёт запись митинга?) — перезапусти скрипт" >&2

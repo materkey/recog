@@ -25,11 +25,14 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/logs"
 
 SVC_REPO_DIR="$SCRIPT_DIR"
-SVC_LOG_DIR="$LOG_DIR"
+# Stopping writers must still work if a partial migration left conflicting roots.
+case "${1:-}" in
+    stop|uninstall) SVC_DATA_DIR="${RECOG_DATA_DIR:-$HOME/.recog}" ;;
+esac
 source "$SCRIPT_DIR/scripts/service/common.sh"
+LOG_DIR="$SVC_LOG_DIR"
 
 DEPS_REPO_DIR="$SCRIPT_DIR"
 source "$SCRIPT_DIR/scripts/deps.sh"

@@ -87,7 +87,7 @@ python mp4_notes.py live --ktalk --system-audio auto
 python mp4_notes.py live --ktalk --system-audio auto --mic-device none
 
 # Microphone only, speakers from the embedding database
-python mp4_notes.py live --speaker-db speakers_ecapa.json
+python mp4_notes.py live --speaker-db ~/.recog/speakers_ecapa.json
 
 # What audio devices do I have?
 python mp4_notes.py live --list-devices
@@ -282,6 +282,42 @@ conference host is not one of the built-in ones, add it to
 the extension (`cd kontur-diarize/ktalk-speaker-extension && npm run build`) and
 reload it in `chrome://extensions`.
 
+## Personal data outside the checkout
+
+New installs store meetings in `~/.recog/meetings`, service logs in
+`~/.recog/logs`, and speaker databases in `~/.recog/speakers*.json`.
+`RECOG_DATA_DIR` overrides that root; use an absolute path (or `~/…`), since
+the CLI and services have different working directories. `.env` and
+`frontend/.env` stay in the checkout. An explicit `--speaker-db PATH` still
+uses exactly the path you pass.
+
+Existing installs continue using their entire old data root and print a
+migration hint. If both the checkout and `~/.recog` contain data, startup
+refuses to choose silently. An explicit `RECOG_DATA_DIR` selects that root
+without legacy detection. The shell scripts use the same resolver as Python;
+service installation records the resolved root in the units, so re-run
+`install` and `restart` after changing it.
+
+To migrate an existing install, finish the current recording and stop any
+manually launched recording or speaker-enrollment commands, then run:
+
+```bash
+./venv-gigaam/bin/python scripts/migrate-data.py  # inspect the proposed moves
+./recog-service.sh stop
+./venv-gigaam/bin/python scripts/migrate-data.py --apply
+./recog-service.sh install
+./recog-service.sh restart
+```
+
+Migration moves `meetings/`, `logs/`, and every `speakers*.json` using renames
+on the same filesystem. It leaves no old directories or symlinks, does not
+copy data, and refuses collisions or a destination inside the checkout.
+An interrupted migration can be re-run to move the remaining entries; it
+never merges two meeting archives or overwrites a database. `setup.sh` does
+not migrate existing data. `scripts/backup-data.sh` backs up the resolved
+data root plus the environment files in the checkout (`--with-logs` includes
+logs).
+
 ## Updating an existing macOS install
 
 1. **Before pulling**, if you run `RECOG_ASR_BACKEND=remote`: write your actual
@@ -296,13 +332,13 @@ reload it in `chrome://extensions`.
 3. `./recog-service.sh install && ./recog-service.sh restart` if you skipped
    services during setup — the units must be re-rendered from the templates
    (the committed `.plist` files are gone).
-4. **Check `speakers_ecapa.json` after the pull.** It used to be tracked, so
+4. **Check the speaker database after the pull.** `speakers_ecapa.json` used to be tracked, so
    untracking it deletes your working copy (`.gitignore` has no power over an
    already-tracked file) and setup seeds an empty `{}` in its place — speaker
    identification then silently does nothing. Setup says so when it happens;
    the embeddings stay in git history, so restore them from the last commit
-   that still carries the file:
-   `git show <sha>:speakers_ecapa.json > speakers_ecapa.json`. A copy you had
+   that still carries the file, using the destination printed by setup (normally
+   `git show <sha>:speakers_ecapa.json > ~/.recog/speakers_ecapa.json`). A copy you had
    modified since its last commit stops the pull instead of being deleted.
 
 Memory behaviour is meant to be unchanged, but that is verified by a separate
@@ -356,7 +392,7 @@ See [ADR documents](adr/) for architecture decisions:
 - `ktalk_bridge.py` — WebSocket server for the conference Chrome extension
 - `add_speaker_live.py` — enroll speakers via the microphone
 - `frontend/` — FastAPI server + SPA on http://127.0.0.1:9080
-- `speakers_ecapa.json` — speaker embedding database (local, gitignored)
+- `~/.recog/speakers_ecapa.json` — local speaker embedding database
 
 ## License
 

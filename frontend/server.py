@@ -36,6 +36,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 from meeting_storage import MeetingStorage, get_external_paths
 from recog.log_utils import log_rate_limited
+from recog.config import get_data_dir
 from recog.ws_origin import origin_allowed
 from bridge_subscriber import BridgeSubscriber
 from live_watcher import LiveWatcher
@@ -45,7 +46,8 @@ from meeting_catalog import MeetingCatalog
 # Configuration
 HOST = "127.0.0.1"
 PORT = 9080
-MEETINGS_DIR = Path(__file__).parent.parent / "meetings"
+DATA_DIR = get_data_dir()
+MEETINGS_DIR = DATA_DIR / "meetings"
 BRIDGE_WS_URL = os.environ.get("RECOG_BRIDGE_WS_URL", "ws://localhost:8766")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 
@@ -1583,7 +1585,7 @@ async def live_stream(websocket: WebSocket):
 
 # --- Speaker Database Management ---
 
-SPEAKER_DB_PATH = Path(__file__).parent.parent / "speakers_ecapa.json"
+SPEAKER_DB_PATH = DATA_DIR / "speakers_ecapa.json"
 
 
 def get_speaker_db():

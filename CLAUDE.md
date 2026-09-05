@@ -40,7 +40,7 @@ source venv-gigaam/bin/activate
 python mp4_notes.py live --ktalk --system-audio auto
 
 # Explicit backends: screencapture (macOS) | pulse (Linux) | device:<id> | none
-python mp4_notes.py live --system-audio pulse --speaker-db speakers_ecapa.json
+python mp4_notes.py live --system-audio pulse --speaker-db ~/.recog/speakers_ecapa.json
 
 # List audio devices (on Linux also prints `pactl list short sources`)
 python mp4_notes.py live --list-devices
@@ -150,6 +150,23 @@ separate from `_emit_pcm_transition_marker` on purpose: a mixed-capture death
 must not claim a PCM→mixed transition or pause refine.
 
 ## Architecture
+
+### Data directory
+
+`recog.config.get_data_dir()` resolves the shared data root: `~/.recog`, or
+the absolute/`~/…` `RECOG_DATA_DIR` override. Meetings, logs and `speakers*.json`
+live under it; `.env` stays in the checkout. Python consumers, setup, backup
+and service rendering share this resolver via `scripts/data-dir.sh`.
+Without an explicit override, legacy data keeps the entire root in the
+checkout with a migration warning; data in both roots is a fatal conflict.
+Service units pin the resolved root in their environment; re-render and
+restart after changing it. Working directories still point at code.
+
+`scripts/migrate-data.py` defaults to a dry run; `--apply` requires stopped
+services and manual writers, then renames all data on the same filesystem
+without overwriting or merging entries. Re-run after an interruption to
+finish remaining moves, then `./recog-service.sh install` and
+`./recog-service.sh restart`. `setup.sh` never migrates existing data.
 
 ### Single-venv Architecture
 The project uses a single `venv-gigaam` virtual environment. Speaker identification is handled via the KTalk Chrome extension (real-time) and SpeechBrain ECAPA-TDNN embeddings (enrollment). The former dual-venv pyannote subprocess architecture (ADR-0006) is obsolete.
@@ -283,10 +300,10 @@ Copy `.env.example` → `.env` and `frontend/.env.example` → `frontend/.env` (
 
 ## Data Files
 
-- `speakers_ecapa.json` - Speaker embedding database (gitignored — real voice embeddings; `setup.sh` seeds it from `speakers_ecapa.json.example`)
-- `meetings/` - Stored meeting transcripts (JSONL format, gitignored)
+- `~/.recog/speakers_ecapa.json` - Speaker embedding database (real voice embeddings; `setup.sh` seeds it from `speakers_ecapa.json.example`)
+- `~/.recog/meetings/` - Stored meeting transcripts (JSONL format)
 - `prompts/` - Prompt definitions for AI analysis (.md files with YAML frontmatter); prompt ID = filename stem
-- `logs/` - Service logs (gitignored)
+- `~/.recog/logs/` - Service logs
 
 ## Testing
 

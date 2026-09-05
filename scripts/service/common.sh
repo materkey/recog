@@ -9,7 +9,8 @@
 # Requires SVC_REPO_DIR to be set by the caller.
 
 SVC_REPO_DIR="${SVC_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-SVC_LOG_DIR="${SVC_LOG_DIR:-$SVC_REPO_DIR/logs}"
+SVC_DATA_DIR="${SVC_DATA_DIR:-$(bash "$SVC_REPO_DIR/scripts/data-dir.sh")}"
+SVC_LOG_DIR="${SVC_LOG_DIR:-$SVC_DATA_DIR/logs}"
 
 # Canonical service names. Order matters: install/start/status walk it as-is.
 # Transient units (the copilot tmux session on Linux) are deliberately absent —
@@ -101,6 +102,7 @@ svc_render_template() {
     local tmp="$dst.tmp.$$"
     sed \
         -e "s|@REPO_DIR@|$(_svc_value "$SVC_REPO_DIR")|g" \
+        -e "s|@DATA_DIR@|$(_svc_value "$SVC_DATA_DIR")|g" \
         -e "s|@HOME@|$(_svc_value "$HOME")|g" \
         -e "s|@PYTHON@|$(_svc_value "$(svc_python)")|g" \
         -e "s|@LOG_DIR@|$(_svc_value "$SVC_LOG_DIR")|g" \

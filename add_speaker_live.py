@@ -49,9 +49,10 @@ def main():
     
     # Загружаем базу и добавляем спикера
     import json
-    from pathlib import Path
+    from recog.config import get_data_dir
     
-    db_path = Path(__file__).parent / "speakers_ecapa.json"
+    db_path = get_data_dir() / "speakers_ecapa.json"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     
     if db_path.exists():
         with open(db_path, 'r') as f:
