@@ -115,23 +115,66 @@ def is_cached(path: Path, md5: Optional[str]) -> bool:
     return file_md5(path) == md5
 
 
+def expected_length(response) -> Optional[int]:
+    """Content-Length of `response`, or None when the server did not send one.
+
+    urllib never decompresses: it asks for `Accept-Encoding: identity` and
+    hands the body over exactly as it came off the wire, so Content-Length
+    always describes the bytes `read()` returns — including a compressed body.
+    A server that ignores `identity` anyway is therefore not a reason to skip
+    the truncation check; it is a reason to fail, because the bytes we would
+    write are the compressed ones and nothing downstream decompresses them
+    (for the tokenizer there is no checksum to catch that later).
+    """
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    encoding = (headers.get("Content-Encoding") or "identity").strip().lower()
+    if encoding not in ("identity", ""):
+        raise PrefetchError(
+            f"server answered with Content-Encoding: {encoding} — urllib does "
+            f"not decompress, so the cached file would be unreadable"
+        )
+    raw = headers.get("Content-Length")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def download_to(url: str, dst: Path, md5: Optional[str],
                 timeout: float = DEFAULT_TIMEOUT_S,
                 block_size: int = BLOCK_SIZE) -> None:
     """Stream `url` into `dst`, verifying before publishing it atomically."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.md5()
+    written = 0
     fd, tmp_name = tempfile.mkstemp(dir=str(dst.parent), prefix=f".{dst.name}.")
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as out:
             with urllib.request.urlopen(url, timeout=timeout) as source:
+                declared = expected_length(source)
                 while True:
                     block = source.read(block_size)
                     if not block:
                         break
                     digest.update(block)
+                    written += len(block)
                     out.write(block)
+        # A body cut short mid-stream is NOT an exception: http.client
+        # deliberately returns b"" instead of raising IncompleteRead ("it
+        # might break compatibility"), so a premature EOF is indistinguishable
+        # from a finished download by the read loop alone. For the tokenizer
+        # there is no published checksum, so the declared length is the only
+        # thing standing between a truncated file and atomic publication —
+        # after which `is_cached` accepts it by existence, forever.
+        if declared is not None and written != declared:
+            raise PrefetchError(
+                f"truncated download for {url}: got {written} of {declared} bytes"
+            )
         if md5 is not None and digest.hexdigest() != md5:
             raise PrefetchError(
                 f"checksum mismatch for {url}: expected {md5}, "

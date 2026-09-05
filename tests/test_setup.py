@@ -10,6 +10,7 @@ at all — without installing anything.
 RECOG_HOST_OS / RECOG_SERVICE_OS pin the OS, so the Linux decisions are
 covered from a Mac and vice versa.
 """
+import email.message
 import hashlib
 import os
 import shutil
@@ -135,6 +136,9 @@ def run_setup(repo, stubs, *args, host_os="Linux", env_extra=None, check=False):
         "STUB_LOG": str(log),
         "STUB_BIN": str(bin_dir),
         "RECOG_HOST_OS": host_os,
+        # Pinned with the OS: setup.sh rejects macOS on anything but arm64,
+        # and the Darwin decisions are exercised from a Linux CI runner.
+        "RECOG_HOST_ARCH": "arm64" if host_os == "Darwin" else "x86_64",
         "RECOG_SERVICE_OS": host_os,
         "TERM": "dumb",
     }
@@ -228,12 +232,28 @@ def test_python_older_than_312_is_refused(repo, stubs):
 def test_linux_without_nvidia_uses_the_cpu_torch_index(repo, stubs):
     """Default PyPI torch on Linux drags in a CUDA runtime a GPU-less box
     never uses."""
-    (stubs[0] / "nvidia-smi").unlink(missing_ok=True)
+    assert not (stubs[0] / "nvidia-smi").exists(), "nvidia-smi must not be stubbed here"
 
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
     torch_call = next(c for c in pip_calls(result) if " torch " in f" {c} ")
     assert "--index-url https://download.pytorch.org/whl/cpu" in torch_call
+
+
+def test_linux_with_nvidia_keeps_the_default_cuda_torch_wheels(repo, stubs):
+    """given: a Linux box where nvidia-smi is on PATH
+    when: setup installs torch
+    then: no --index-url is forced — the CPU-only override would leave
+          RECOG_ASR_DEVICE=cuda failing at startup on a GPU machine
+    """
+    stub = stubs[0] / "nvidia-smi"
+    stub.write_text(PLAIN_STUB.format(name="nvidia-smi", code=0))
+    stub.chmod(0o755)
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    torch_call = next(c for c in pip_calls(result) if " torch " in f" {c} ")
+    assert "--index-url" not in torch_call
 
 
 def test_torch_index_url_env_overrides_the_default(repo, stubs):
@@ -338,6 +358,132 @@ def test_existing_config_files_are_never_overwritten(repo, stubs):
     assert (repo / ".env").read_text() == "RECOG_ASR_BACKEND=remote\nMINE=1\n"
 
 
+def _preexisting_venv(repo, stubs, tmp_path):
+    """venv-gigaam на месте: для setup.sh это обновление, а не первый запуск."""
+    real_venv = tmp_path / "existing-venv"
+    (real_venv / "bin").mkdir(parents=True)
+    shutil.copy2(stubs[0] / "python3.12", real_venv / "bin/python")
+    shutil.copy2(stubs[0] / "pip", real_venv / "bin/pip")
+    (repo / "venv-gigaam").symlink_to(real_venv)
+
+
+def _git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def _repo_pulled_across_the_untracking(repo, db_was_tracked: bool) -> str:
+    """git-репозиторий в состоянии «только что сделали pull».
+
+    db_was_tracked=True  — эта рабочая копия держала базу под git до pull
+                           (машина автора: pull снёс файл с диска);
+    db_was_tracked=False — коллега, склонировавший репозиторий уже без базы.
+    Возвращает sha, на который указывает ORIG_HEAD.
+    """
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
+    if db_was_tracked:
+        (repo / "speakers_ecapa.json").write_text('{"кто-то": [0.1, 0.2]}')
+        _git(repo, "add", "speakers_ecapa.json")
+    (repo / "setup.sh.marker").write_text("x\n")
+    _git(repo, "add", "setup.sh.marker")
+    _git(repo, "commit", "-qm", "before the pull")
+    orig_head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    (repo / ".git" / "ORIG_HEAD").write_text(orig_head + "\n")
+    if db_was_tracked:
+        # Тот самый pull: файл снят с учёта и удалён из рабочей копии.
+        _git(repo, "rm", "-q", "--cached", "speakers_ecapa.json")
+        (repo / "speakers_ecapa.json").unlink()
+        _git(repo, "commit", "-qm", "untrack the speaker database")
+    return orig_head
+
+
+def test_pull_that_removed_a_tracked_speaker_database_is_reported(repo, stubs, tmp_path):
+    """
+    given: рабочая копия держала speakers_ecapa.json под git, pull снял его с
+           учёта и удалил файл
+    when:  setup.sh засевает на его место пустой `{}` из .example
+    then:  об этом сказано вслух, с командой восстановления из ORIG_HEAD —
+           того самого состояния, что было на этой машине до pull. Молчаливый
+           посев выключал распознавание говорящих без единого сообщения.
+    """
+    _preexisting_venv(repo, stubs, tmp_path)
+    orig_head = _repo_pulled_across_the_untracking(repo, db_was_tracked=True)
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / "speakers_ecapa.json").read_text().strip() == "{}"
+    assert "speakers_ecapa.json is empty" in result.stdout
+    assert f"git show {orig_head}:speakers_ecapa.json" in result.stdout
+
+
+def test_the_restore_hint_never_claims_the_embeddings_are_the_user_own(repo, stubs, tmp_path):
+    """
+    given: клон, сделанный ДО снятия базы с учёта — в его ORIG_HEAD лежит ровно
+           авторский блоб, байт в байт, и отличить его от копии автора отсюда
+           нечем
+    when:  setup.sh печатает подсказку по восстановлению
+    then:  она не утверждает, что голоса свои, и называет альтернативу —
+           записать собственных спикеров. Иначе коллега одной командой
+           разворачивает у себя чужие голосовые эмбеддинги, ради удаления
+           которых базу из git и убирали.
+    """
+    _preexisting_venv(repo, stubs, tmp_path)
+    _repo_pulled_across_the_untracking(repo, db_was_tracked=True)
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "someone else's voice embeddings" in result.stdout
+    assert "add_speaker_live.py" in result.stdout
+
+
+def test_a_colleague_is_never_told_to_restore_the_database_from_history(repo, stubs, tmp_path):
+    """
+    given: коллега склонировал репозиторий уже без базы и никого не записывал,
+           пустая база у него — норма; повторный ./setup.sh после git pull
+    when:  проверка пустой базы срабатывает
+    then:  ни предупреждения, ни команды восстановления. Команда достала бы из
+           истории чужие голосовые эмбеддинги — ровно то, ради чего файл и
+           убирали из git.
+    """
+    # Второй запуск: venv с первого раза уже лежит — «не первый запуск» само
+    # по себе не означает, что на машине были записанные голоса.
+    _preexisting_venv(repo, stubs, tmp_path)
+    _repo_pulled_across_the_untracking(repo, db_was_tracked=False)
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / "speakers_ecapa.json").read_text().strip() == "{}"
+    assert "speakers_ecapa.json is empty" not in result.stdout
+    assert "git show" not in result.stdout
+
+
+def test_fresh_clone_does_not_warn_about_the_empty_speaker_database(repo, stubs):
+    """Свежий клон без единого pull: ORIG_HEAD нет, предупреждать не о чем."""
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / "speakers_ecapa.json").read_text().strip() == "{}"
+    assert "speakers_ecapa.json is empty" not in result.stdout
+
+
+def test_a_populated_speaker_database_is_not_flagged(repo, stubs, tmp_path):
+    """База на месте — обычное обновление, предупреждения нет."""
+    _preexisting_venv(repo, stubs, tmp_path)
+    _repo_pulled_across_the_untracking(repo, db_was_tracked=True)
+    (repo / "speakers_ecapa.json").write_text('{"Someone": [0.1, 0.2]}')
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "speakers_ecapa.json is empty" not in result.stdout
+
+
 # ---------------------------------------------------------------------------
 # ASR configuration gate
 # ---------------------------------------------------------------------------
@@ -401,6 +547,30 @@ def test_a_running_service_is_restarted_not_started(repo, stubs):
     assert "systemctl --user restart recog-live.service" in result.calls
     assert not any("enable --now recog-live.service" in c for c in result.calls)
     assert any("enable --now recog-frontend.service" in c for c in result.calls)
+
+
+def test_a_failed_activation_is_not_reported_as_success(repo, stubs):
+    """given: systemctl, который не может активировать юниты (типовой Linux
+              без user-D-Bus или без linger)
+    when: setup доходит до активации
+    then: сводка не рапортует «services are running» и код возврата ненулевой
+          — иначе коллега и любой скриптовый вызов считают установку удачной,
+          хотя не поднялся ни один юнит
+    """
+    systemctl = stubs[0] / "systemctl"
+    systemctl.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "systemctl $*" >> "$STUB_LOG"\n'
+        'case "$*" in *"enable --now"*) exit 1 ;; esac\n'
+        "exit 0\n"
+    )
+    systemctl.chmod(0o755)
+
+    result = run_setup(repo, stubs, *offline_args())
+
+    assert result.returncode != 0
+    assert "services are running" not in result.stdout
+    assert "failed to activate" in result.stdout.lower()
 
 
 def test_a_missing_required_dependency_blocks_activation(repo, stubs):
@@ -491,6 +661,20 @@ def test_a_second_run_is_an_update_not_a_reinstall(repo, stubs):
     assert (repo / ".env").read_text() == "MINE=1\n"
 
 
+def test_intel_mac_is_rejected_before_anything_is_installed(repo, stubs):
+    """given: macOS на x86_64
+    when: ./setup.sh
+    then: отказ до venv — constraints/macos.txt закрепляет torch 2.8.0, а
+          macOS-колёс под x86_64 upstream не публикует с 2.2.2, и установка
+          всё равно упёрлась бы в pip"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"),
+                       host_os="Darwin", env_extra={"RECOG_HOST_ARCH": "x86_64"})
+
+    assert result.returncode != 0
+    assert "x86_64" in result.stderr
+    assert not any("-m venv" in call for call in result.calls)
+
+
 # ---------------------------------------------------------------------------
 # scripts/prefetch_gigaam.py
 # ---------------------------------------------------------------------------
@@ -570,6 +754,94 @@ def test_a_checksum_mismatch_leaves_the_cache_untouched(tmp_path):
 
     assert dst.read_bytes() == b"previous good weights"
     assert list(dst.parent.iterdir()) == [dst]
+
+
+class _FakeResponse:
+    """Ответ, отдающий `body` блоками и объявляющий `declared` байт.
+
+    Обрыв тела на середине http.client возвращает как b"" — исключения нет
+    ("it might break compatibility"), поэтому по одному циклу чтения полная
+    загрузка и оборванная неразличимы.
+    """
+
+    def __init__(self, body: bytes, declared=None, encoding=None):
+        self._body = body
+        self._pos = 0
+        self.headers = email.message.Message()
+        if declared is not None:
+            self.headers["Content-Length"] = str(declared)
+        if encoding is not None:
+            self.headers["Content-Encoding"] = encoding
+
+    def read(self, size):
+        block = self._body[self._pos:self._pos + size]
+        self._pos += len(block)
+        return block
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _serve(monkeypatch, response):
+    monkeypatch.setattr(
+        prefetch_gigaam.urllib.request, "urlopen",
+        lambda url, timeout=None: response,
+    )
+
+
+def test_a_truncated_download_is_not_published(tmp_path, monkeypatch):
+    """given: сервер объявил 12 байт и оборвал тело на третьем
+    when: докачка токенизатора (контрольной суммы у него нет)
+    then: PrefetchError, каталог кеша пуст — неполный файл не публикуется и
+          не принимается следующими запусками по факту существования"""
+    _serve(monkeypatch, _FakeResponse(b"abc", declared=12))
+    dst = tmp_path / "cache" / "v3_e2e_rnnt_tokenizer.model"
+
+    with pytest.raises(prefetch_gigaam.PrefetchError):
+        prefetch_gigaam.ensure_file("http://cdn.test/tok", dst, None)
+
+    assert not dst.exists()
+    assert list(dst.parent.iterdir()) == []
+
+
+def test_a_complete_download_is_published(tmp_path, monkeypatch):
+    _serve(monkeypatch, _FakeResponse(b"tokenizer", declared=9))
+    dst = tmp_path / "cache" / "v3_e2e_rnnt_tokenizer.model"
+
+    assert prefetch_gigaam.ensure_file("http://cdn.test/tok", dst, None) == "downloaded"
+    assert dst.read_bytes() == b"tokenizer"
+
+
+def test_a_compressed_body_is_rejected_instead_of_being_published(tmp_path, monkeypatch):
+    """given: сервер проигнорировал `Accept-Encoding: identity` и ответил gzip
+    when: докачка токенизатора
+    then: PrefetchError, ничего не опубликовано. urllib тело не распаковывает,
+          так что в кеш легли бы сжатые байты — а токенизатор без контрольной
+          суммы принимается следующими запусками по факту существования"""
+    _serve(monkeypatch, _FakeResponse(b"\x1f\x8b compressed", encoding="gzip"))
+    dst = tmp_path / "cache" / "tok.model"
+
+    with pytest.raises(prefetch_gigaam.PrefetchError):
+        prefetch_gigaam.ensure_file("http://cdn.test/tok", dst, None)
+
+    assert not dst.exists()
+    assert list(dst.parent.iterdir()) == []
+
+
+def test_content_length_is_checked_for_every_declared_encoding(tmp_path, monkeypatch):
+    """given: тело оборвано, сервер объявил identity-кодирование явно
+    when: докачка токенизатора
+    then: обрыв пойман — явный `identity` не отключает проверку длины"""
+    _serve(monkeypatch, _FakeResponse(b"abc", declared=12, encoding="identity"))
+    dst = tmp_path / "cache" / "tok.model"
+
+    with pytest.raises(prefetch_gigaam.PrefetchError):
+        prefetch_gigaam.ensure_file("http://cdn.test/tok", dst, None)
+
+    assert not dst.exists()
 
 
 def test_prefetch_fetches_the_checkpoint_and_the_tokenizer(tmp_path):

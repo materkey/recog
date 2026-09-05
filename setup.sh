@@ -24,6 +24,7 @@
 #   RECOG_GIGAAM_URL/REF    git source of GigaAM (defaults: upstream @ pin)
 #   RECOG_GIGAAM_EDITABLE   path to a local GigaAM checkout to install -e
 #   RECOG_HOST_OS           override the detected OS (tests)
+#   RECOG_HOST_ARCH         override the detected CPU architecture (tests)
 #   RECOG_SERVICE_OS        override the service backend (tests)
 
 # No `set -u`: empty-array expansions ("${PIP_CONSTRAINTS[@]}") are an
@@ -66,7 +67,7 @@ warn() { echo -e "${YELLOW}[warn]${NC} $1"; WARNINGS+=("$1"); }
 fail() { echo -e "${RED}[error]${NC} $1" >&2; exit 1; }
 
 usage() {
-    sed -n '2,27p' "$REPO_DIR/setup.sh" | sed 's/^#\{0,1\} \{0,1\}//'
+    sed -n '2,28p' "$REPO_DIR/setup.sh" | sed 's/^#\{0,1\} \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -84,6 +85,15 @@ case "$HOST_OS" in
     darwin|linux) ;;
     *) fail "Unsupported OS: $HOST_OS (recog runs on macOS and Linux)" ;;
 esac
+
+# Upstream torch publishes no macOS x86_64 wheels past 2.2.2, and
+# constraints/macos.txt pins the verified 2.8.0 — pip on an Intel Mac cannot
+# resolve the install at all. Say so in the first second instead of after a
+# venv and a failed resolve.
+HOST_ARCH="${RECOG_HOST_ARCH:-$(uname -m)}"
+if [ "$HOST_OS" = "darwin" ] && [ "$HOST_ARCH" != "arm64" ]; then
+    fail "macOS on $HOST_ARCH is not supported: the pinned torch/torchaudio (constraints/macos.txt) have macOS wheels for Apple Silicon only. Use an Apple Silicon Mac or Linux. (A Rosetta shell on Apple Silicon also reports x86_64 — rerun in a native arm64 terminal.)"
+fi
 
 # The service backend follows the host unless a test pins it.
 if [ -z "${RECOG_SERVICE_OS:-}" ]; then
@@ -336,6 +346,36 @@ copy_example "$REPO_DIR/.env" "$REPO_DIR/.env.example"
 copy_example "$REPO_DIR/frontend/.env" "$REPO_DIR/frontend/.env.example"
 copy_example "$REPO_DIR/speakers_ecapa.json" "$REPO_DIR/speakers_ecapa.json.example"
 
+# A pull that crossed the untracking of speakers_ecapa.json deletes the working
+# copy along with it (.gitignore has no power over an already-tracked file), and
+# copy_example above then seeds `{}` in its place — speaker identification stops
+# working without a word. Say it, and name the commit the embeddings come back
+# from.
+#
+# The trigger is ORIG_HEAD, not "the DB is empty": an empty database is the
+# normal state for anyone who has not enrolled anyone yet, and telling *them* to
+# restore it from history would hand them somebody else's voice embeddings —
+# exactly what untracking the file was for. ORIG_HEAD still carrying the file
+# means this working copy itself held it before its last pull.
+speaker_db="$REPO_DIR/speakers_ecapa.json"
+if [ -f "$speaker_db" ] && [ "$(tr -d '[:space:]' < "$speaker_db")" = "{}" ] \
+   && deps_have git; then
+    orig_head="$(git -C "$REPO_DIR" rev-parse --verify --quiet ORIG_HEAD || true)"
+    if [ -n "$orig_head" ] \
+       && git -C "$REPO_DIR" cat-file -e "$orig_head:speakers_ecapa.json" 2>/dev/null; then
+        # Whose embeddings that blob holds cannot be decided here: a clone made
+        # before the database was untracked carries the author's own copy, byte
+        # for byte, so the two cases are indistinguishable from this side. Name
+        # both rather than asserting the speakers are local.
+        warn "speakers_ecapa.json is empty — the pull untracked it and removed your copy"
+        echo "       Speakers enrolled on this machine are still in the pre-pull commit:"
+        echo "         git show $orig_head:speakers_ecapa.json > speakers_ecapa.json"
+        echo "       If you cloned this repo before the database was untracked, that blob"
+        echo "       holds someone else's voice embeddings — enroll your own instead:"
+        echo "         ./venv-gigaam/bin/python add_speaker_live.py \"Name\""
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # 9. Chrome extension
 # ---------------------------------------------------------------------------
@@ -439,17 +479,26 @@ else
         done <<< "$readiness"
         echo "  Previously running services were left alone." >&2
     else
+        # Отказ активации виден только здесь: дальше остаётся один
+        # SETUP_STATE, и без этого флага сводка печатала зелёное «services
+        # are running» с exit 0, даже когда не поднялся ни один юнит
+        # (на Linux это штатный случай — нет user-D-Bus или linger).
+        ACTIVATION_FAILED=""
         for service in $(svc_installed_services); do
             case " $RUNNING_BEFORE " in
                 *" $service "*)
                     svc_restart "$service" && info "Restarted $(svc_label "$service")" \
-                        || warn "Failed to restart $(svc_label "$service")" ;;
+                        || { warn "Failed to restart $(svc_label "$service")"; ACTIVATION_FAILED=1; } ;;
                 *)
                     svc_start "$service" && info "Started $(svc_label "$service")" \
-                        || warn "Failed to start $(svc_label "$service")" ;;
+                        || { warn "Failed to start $(svc_label "$service")"; ACTIVATION_FAILED=1; } ;;
             esac
         done
-        SETUP_STATE="running"
+        if [ -n "$ACTIVATION_FAILED" ]; then
+            SETUP_STATE="partial"
+        else
+            SETUP_STATE="running"
+        fi
     fi
 fi
 
@@ -486,6 +535,10 @@ case "$SETUP_STATE" in
             echo -e "  ${YELLOW}Live capture is not ready yet — missing: ${MISSING_REQUIRED[*]}${NC}"
         fi
         ;;
+    partial)
+        echo -e "${RED}=== Setup NOT complete — some services failed to activate ===${NC}"
+        echo "  See the warnings below, then: ./recog-service.sh status"
+        ;;
     incomplete)
         echo -e "${RED}=== Setup NOT complete — services were not activated ===${NC}"
         if [ ${#MISSING_REQUIRED[@]} -gt 0 ]; then
@@ -515,7 +568,7 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
     done
 fi
 
-if [ "$SETUP_STATE" = "incomplete" ]; then
+if [ "$SETUP_STATE" = "incomplete" ] || [ "$SETUP_STATE" = "partial" ]; then
     exit 1
 fi
 exit 0
