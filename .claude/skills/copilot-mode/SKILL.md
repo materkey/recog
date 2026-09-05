@@ -184,5 +184,5 @@ If the user asks for something unrelated (e.g. "напиши тест для X")
 - Spec: `openspec/specs/ktalk-copilot-chat/spec.md` (capability)
 - Server: `recog/copilot_channel.py`
 - Bridge protocol: `ktalk_bridge.py` `_process_message` for `copilot_*` cases
-- Extension UI: `kontur-diarize/ktalk-speaker-extension/src/ui.js` `handleCopilotReply`
+- Extension UI: `browser-extension/src/ui.js` `handleCopilotReply`
 - Architecture decision: `openspec/changes/archive/2026-04-27-ktalk-claude-copilot-chat/design.md`

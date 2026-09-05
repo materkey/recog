@@ -27,7 +27,8 @@ def data(tmp_path):
     (repo / "logs/live.log").write_bytes(b"log\n")
     (repo / "speakers_custom.json").write_bytes(b'{"private": []}')
     (repo / ".env").write_bytes(b"PRIVATE=keep\n")
-    (repo / "speakers_ecapa.json.example").write_bytes(b"{}")
+    (repo / "deploy/examples").mkdir(parents=True)
+    (repo / "deploy/examples/speakers_ecapa.json.example").write_bytes(b"{}")
     return repo, tmp_path / "home/.recog"
 
 
@@ -46,7 +47,7 @@ def test_data_when_migrating_then_bytes_and_inodes_survive_and_config_stays(migr
               and not p.name.endswith(".example")}
     migration.migrate(repo, target, apply=True)
     assert (repo / ".env").read_bytes() == b"PRIVATE=keep\n"
-    assert (repo / "speakers_ecapa.json.example").read_bytes() == b"{}"
+    assert (repo / "deploy/examples/speakers_ecapa.json.example").read_bytes() == b"{}"
     for relative, expected in before.items():
         moved = target / relative
         assert (moved.read_bytes(), moved.stat().st_ino) == expected

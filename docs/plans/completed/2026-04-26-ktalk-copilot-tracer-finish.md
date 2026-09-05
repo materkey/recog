@@ -7,12 +7,12 @@
 - Branch: `ktalk-copilot-channel-scaffold` (forked off `main`).
 - Backend scaffold landed in commits `BASE_REVISION..BASE_REVISION` on this branch:
   - `recog/copilot_channel.py` — MCP Streamable HTTP server + bridge WS client + `send_copilot_message`/`set_copilot_status` tools, with `request_id` auto-generation when caller omits it.
-  - `ktalk_bridge.py` — `_copilot_channel_clients` set, frame handlers for `copilot_channel_hello` / `copilot_chat_message` / `copilot_channel_reply` / `copilot_channel_status`, `channel_disconnected` status fallback, meeting-end-recovery race fix.
-  - `requirements.txt` — `mcp` SDK added.
+  - `recog/ktalk_bridge.py` — `_copilot_channel_clients` set, frame handlers for `copilot_channel_hello` / `copilot_chat_message` / `copilot_channel_reply` / `copilot_channel_status`, `channel_disconnected` status fallback, meeting-end-recovery race fix.
+  - `deploy/python/requirements.txt` — `mcp` SDK added.
   - `tests/test_ktalk_bridge.py` — channel-scaffold tests.
 - Spec: `openspec/changes/ktalk-claude-copilot-chat/{proposal,design,tasks,specs/...}.md` (committed on `main` as `BASE_REVISION`).
 - Extension files (read-only context for this plan):
-  - `kontur-diarize/ktalk-speaker-extension/src/ui.js:773` — `addTranscriptTab()`; `:805` — `addContextTab()`. New `addCopilotTab()` mirrors these.
+  - `browser-extension/src/ui.js:773` — `addTranscriptTab()`; `:805` — `addContextTab()`. New `addCopilotTab()` mirrors these.
   - `src/ws.js:72-88` — incoming-frame dispatcher; `copilot_reply` / `copilot_status` / `meeting_started` / `meeting_ended` need new branches.
   - `src/state.js:15` — shared `state` object; copilot fields go here.
   - `src/ws_api.js` — outbound frame helpers; new `sendCopilotChatMessage()` goes here.
@@ -33,29 +33,29 @@
 ## Implementation Steps
 
 ### Task 1: KTalk DOM Copilot UI scaffold (`tasks.md` 3.1–3.6)
-- [x] In `kontur-diarize/ktalk-speaker-extension/src/state.js`, extend the exported `state` object with: `copilotMessages: []`, `copilotPending: new Map()`, `copilotProactiveMutedUntil: 0`, `copilotChannelStatus: "unknown"`, `copilotLastProactiveAt: 0`. Match existing field-style and indentation.
-- [x] In `kontur-diarize/ktalk-speaker-extension/src/ui.js`, add `addCopilotTab()` modelled on `addTranscriptTab()` (line 773) and `addContextTab()` (line 805). Reuse existing tab CSS/classes; do not introduce a CSS framework. Wire the tab insertion into the same flow that calls `addTranscriptTab` / `addContextTab`.
+- [x] In `browser-extension/src/state.js`, extend the exported `state` object with: `copilotMessages: []`, `copilotPending: new Map()`, `copilotProactiveMutedUntil: 0`, `copilotChannelStatus: "unknown"`, `copilotLastProactiveAt: 0`. Match existing field-style and indentation.
+- [x] In `browser-extension/src/ui.js`, add `addCopilotTab()` modelled on `addTranscriptTab()` (line 773) and `addContextTab()` (line 805). Reuse existing tab CSS/classes; do not introduce a CSS framework. Wire the tab insertion into the same flow that calls `addTranscriptTab` / `addContextTab`.
 - [x] Inside the Copilot panel: scrollable message list `<div>`, a multi-line input (`<textarea>` or `<input>`), a send button. Enter (without Shift) sends; Shift+Enter inserts a newline. Disable input while a request is pending.
 - [x] Add a `renderCopilotMessage(msg)` helper supporting `kind ∈ {"user","assistant","proactive","status","error"}` with distinct CSS classes (`copilot-msg-user`, `copilot-msg-assistant`, `copilot-msg-proactive`, `copilot-msg-status`, `copilot-msg-error`). Define minimal CSS where missing.
 - [x] Per-message actions for `assistant` and `proactive`: `copy` button (writes text via `navigator.clipboard.writeText`), `dismiss` button (filters the entry out of `state.copilotMessages` and re-renders). Add a global "mute proactive 10m" toggle in the panel header that sets `state.copilotProactiveMutedUntil = Date.now() + 10 * 60 * 1000`.
-- [x] In `kontur-diarize/ktalk-speaker-extension/src/ws_api.js`, add `sendCopilotChatMessage({ text, meetingId, meetingTitle, transcriptWindow })`. Generates `request_id = "copilot_" + crypto.randomUUID()`, sends `{"type":"copilot_chat_message", request_id, text, meeting_id, meeting_title, transcript_window, created_at: Date.now()}`. Returns `request_id`.
+- [x] In `browser-extension/src/ws_api.js`, add `sendCopilotChatMessage({ text, meetingId, meetingTitle, transcriptWindow })`. Generates `request_id = "copilot_" + crypto.randomUUID()`, sends `{"type":"copilot_chat_message", request_id, text, meeting_id, meeting_title, transcript_window, created_at: Date.now()}`. Returns `request_id`.
 - [x] Wire input submission through `sendCopilotChatMessage`: append a user message + a pending assistant placeholder (`status="working"`) to `state.copilotMessages` keyed on `request_id`; record in `state.copilotPending`.
-- [x] In `kontur-diarize/ktalk-speaker-extension/src/ws.js` `onmessage` dispatcher (lines 72-88), add branches for:
+- [x] In `browser-extension/src/ws.js` `onmessage` dispatcher (lines 72-88), add branches for:
   - `copilot_reply` — resolve the pending entry by `request_id`, replace placeholder with the assistant message; if `kind === "proactive"`, run through the proactive gate (Task 4).
   - `copilot_status` — update the matching pending entry's status; if `status === "channel_disconnected"`, render an error message and clear the pending state.
-- [x] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension` — verify it succeeds and `injected.js` is updated. (Covers Task 8.8.)
+- [x] Run `npm run build` in `browser-extension` — verify it succeeds and `injected.js` is updated. (Covers Task 8.8.)
 
 ### Task 2: Meeting lifecycle events from bridge to channel (`tasks.md` 7.1, 7.2, 7.3, 7.5)
-- [x] In `ktalk_bridge.py`, find the existing `meeting_join` and `meeting_leave` branches in `_process_message`. After the bridge's existing meeting-state update, also broadcast a frame to every websocket in `self._copilot_channel_clients`:
+- [x] In `recog/ktalk_bridge.py`, find the existing `meeting_join` and `meeting_leave` branches in `_process_message`. After the bridge's existing meeting-state update, also broadcast a frame to every websocket in `self._copilot_channel_clients`:
   - join: `{"type": "meeting_started", "meeting_id", "meeting_title", "created_at"}`
   - leave: `{"type": "meeting_ended", "meeting_id", "created_at"}`
 - [x] Add `self._copilot_pending_requests: dict[str, str]` in `__init__` (request_id → meeting_id). When `_process_message` forwards a `copilot_chat_message` (existing handler from previous ralphex), record the mapping. On `meeting_leave`, mark all entries for the leaving meeting as stale (e.g. prefix the value with `"stale:"`).
 - [x] When a `copilot_channel_reply` or `copilot_channel_status` arrives for a stale `request_id`, log at INFO and drop instead of broadcasting to extension clients.
-- [x] In `kontur-diarize/ktalk-speaker-extension/src/ws.js`, add branches for `meeting_started` / `meeting_ended` — push a system-style entry (`kind="status"`) into `state.copilotMessages` (e.g. "встреча началась" / "встреча закончилась").
+- [x] In `browser-extension/src/ws.js`, add branches for `meeting_started` / `meeting_ended` — push a system-style entry (`kind="status"`) into `state.copilotMessages` (e.g. "встреча началась" / "встреча закончилась").
 - [x] Add unit tests in `tests/test_ktalk_bridge.py`: `meeting_started`/`meeting_ended` frames sent to channel clients; stale reply dropped after `meeting_leave`; non-stale reply still relayed.
 
 ### Task 3: Recent transcript buffer + `get_recent_transcript` MCP tool (`tasks.md` 5.1–5.5)
-- [x] In `ktalk_bridge.py` `__init__`, add `self._copilot_transcript_buffer: dict[int, dict] = {}` plus `self._copilot_transcript_order: collections.deque = collections.deque(maxlen=300)` (segment_id order). Each entry: `{"segment_id", "speaker", "text", "start_ms", "end_ms", "refined": False, "meeting_id"}`.
+- [x] In `recog/ktalk_bridge.py` `__init__`, add `self._copilot_transcript_buffer: dict[int, dict] = {}` plus `self._copilot_transcript_order: collections.deque = collections.deque(maxlen=300)` (segment_id order). Each entry: `{"segment_id", "speaker", "text", "start_ms", "end_ms", "refined": False, "meeting_id"}`.
 - [x] Find where the bridge currently emits `{"type": "transcript", ...}` (search `transcript` broadcast site). After the broadcast, append/replace the buffer entry by `segment_id` (drop oldest if deque is full — also `del self._copilot_transcript_buffer[old_id]`).
 - [x] On `transcript_refine`, find the entry by `segment_id` and update `text` + `refined=True`. If the segment is not in the buffer, ignore silently.
 - [x] Add `_process_message` branch for `msg_type == "get_recent_transcript_request"` from a channel client. Args: `request_id`, `window_seconds?` (default 180), `since_segment_id?`, `include_refined?` (default True). Reply with `{"type": "get_recent_transcript_response", "request_id", "segments": [...]}` filtered to the current `meeting_id` only.
@@ -63,9 +63,9 @@
 - [x] Add unit tests in `tests/test_ktalk_bridge.py`: append, refine update by segment_id, snapshot returns segments within window, snapshot filters by `meeting_id`.
 
 ### Task 4: Proactive transcript ticks (`tasks.md` 6.1, 6.2, 6.4, 6.5, 7.4)
-- [x] In `ktalk_bridge.py`, add `self._copilot_tick_state: dict | None = None`. On `meeting_join`, initialize `{"meeting_id", "last_seg_count": 0, "last_emit_ts": 0.0}`. On `meeting_leave`, set to `None` and cancel any scheduled task.
+- [x] In `recog/ktalk_bridge.py`, add `self._copilot_tick_state: dict | None = None`. On `meeting_join`, initialize `{"meeting_id", "last_seg_count": 0, "last_emit_ts": 0.0}`. On `meeting_leave`, set to `None` and cancel any scheduled task.
 - [x] After every `transcript` broadcast, if `_copilot_tick_state is not None` AND `_copilot_channel_clients` is non-empty, check the trigger: at least 5 new segments since last emit OR at least 15 seconds elapsed. If triggered, broadcast `{"type": "transcript_tick", "meeting_id", "meeting_title", "new_segments": [...], "recent_context": "<last ~10 segments as text>", "local_user_name": <MIC_SPEAKER_NAME>}` to channel clients. Update `last_seg_count` / `last_emit_ts`.
-- [x] In `kontur-diarize/ktalk-speaker-extension/src/ws.js`, when a `copilot_reply` has `kind === "proactive"`:
+- [x] In `browser-extension/src/ws.js`, when a `copilot_reply` has `kind === "proactive"`:
   - if `state.copilotProactiveMutedUntil > Date.now()`, drop silently.
   - otherwise enforce a 60 s UI cooldown: if `Date.now() - state.copilotLastProactiveAt < 60_000`, drop the new proactive (do not queue). Otherwise render via `renderCopilotMessage` with `kind="proactive"` and update `copilotLastProactiveAt`.
 - [x] Make sure proactive messages render with `copilot-msg-proactive` CSS class (already added in Task 1) so they stand out visually.
@@ -91,8 +91,8 @@
 - [x] For task 6.3 (channel instructions), add a short `## System prompt for Claude` section to `recog/copilot_channel.py` module docstring (or a sibling `.md`) describing: default to silence, post only on direct questions to the local user, missing owner/deadline, technical risks, etc. This is what Claude Code's MCP server description carries.
 - [x] Run `./venv-gigaam/bin/python -m pytest tests/ -v` — must pass.
 - [x] Run `./venv-gigaam/bin/python -m compileall recog frontend`.
-- [x] In `kontur-diarize/ktalk-speaker-extension`: check `package.json` for a `test` script. If present, run `npm test`. If absent, skip and note "Task 8.7 deferred — no JS test runner configured" in plan progress.
-- [x] Run `npm run build` in `kontur-diarize/ktalk-speaker-extension` — must succeed.
+- [x] In `browser-extension`: check `package.json` for a `test` script. If present, run `npm test`. If absent, skip and note "Task 8.7 deferred — no JS test runner configured" in plan progress.
+- [x] Run `npm run build` in `browser-extension` — must succeed.
 
 ### Task 7: Commit and push
 - [x] `git status` — confirm only intended files changed.

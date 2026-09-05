@@ -191,9 +191,9 @@ Three work streams that can be implemented concurrently:
 
 | Stream | Agent | Files | Fixes |
 |--------|-------|-------|-------|
-| 1 (Bridge) | worker-bridge | `ktalk_bridge.py` | #1, #2, #3, #4 |
+| 1 (Bridge) | worker-bridge | `recog/ktalk_bridge.py` | #1, #2, #3, #4 |
 | 2 (Live) | worker-live | `recog/live.py` | #5, #6, #7 |
-| 3 (Extension) | worker-live | `kontur-diarize/ktalk-speaker-extension/src/ws_api.js`, `speaker.js` | #8, #9 |
+| 3 (Extension) | worker-live | `browser-extension/src/ws_api.js`, `speaker.js` | #8, #9 |
 
 **Dependencies:**
 - Stream 2 depends on Stream 1 (Fix 5 uses new `get_dominant_speaker_for_period()` method)
@@ -205,7 +205,7 @@ Three work streams that can be implemented concurrently:
 No automated test suite (per CLAUDE.md). Manual verification:
 ```bash
 python -m compileall recog ktalk_bridge.py  # Syntax check
-python mp4_notes.py --help                   # CLI smoke test
+python -m recog --help                   # CLI smoke test
 ```
 
 For live testing:

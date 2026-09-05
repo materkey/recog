@@ -67,7 +67,7 @@ To enable end-to-end locally:
 RECOG_PCM_TRANSPORT=1 ./recog-service.sh restart
 
 # 2. Rebuild the extension if you changed src/.
-cd kontur-diarize/ktalk-speaker-extension
+cd browser-extension
 npm run build
 
 # 3. Reload the extension in chrome://extensions.

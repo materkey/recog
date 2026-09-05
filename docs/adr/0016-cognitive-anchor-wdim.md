@@ -8,8 +8,8 @@ Proposed
 Live-транскрипт в Recog обновляется непрерывно (web UI + хранение в `meetings/`). Пользователь с СДВГ часто "выпадает" на 1-3 минуты и испытывает тревожность при попытке понять, что сейчас происходит. Скролл по длинной ленте текста создаёт дополнительную когнитивную нагрузку, особенно в моменте.
 
 В проекте уже есть:
-- Live view в `frontend/static` с websocket потоком сегментов.
-- Хранилище транскриптов в `meeting_storage.py`.
+- Live view в `recog/web/static` с websocket потоком сегментов.
+- Хранилище транскриптов в `recog/meeting_storage.py`.
 - AI-провайдеры и промпты (ADR-0013), которые можно использовать для кратких summaries.
 - Идея Bionic Reading (ADR-0015), которую можно применить для облегчения сканирования.
 
@@ -18,7 +18,7 @@ Live-транскрипт в Recog обновляется непрерывно (
 ## Decision
 
 ### 1) Где живёт фича
-MVP реализуется в web UI (страница Live) + backend endpoint в `frontend/server.py`.
+MVP реализуется в web UI (страница Live) + backend endpoint в `recog/web/server.py`.
 Chrome extension (KTalk) не трогаем в MVP, чтобы не усложнять доставку и не дублировать UI. Возможна интеграция позже.
 
 ### 2) Окно контекста
@@ -85,12 +85,12 @@ WDIM работает локально для пользователя и не �
 
 | Шаг | Файл | Изменение |
 |-----|------|-----------|
-| 1 | `frontend/ai_provider.py` | Добавить `ANCHOR_PROMPT`, расширить `build_prompt()` |
-| 2 | `frontend/server.py` | Добавить `AnchorRequest/Response`, endpoint `/api/live/anchor` |
-| 3 | `frontend/static/index.html` | Добавить кнопку и разметку HUD |
-| 4 | `frontend/static/app.js` | Hotkey, вызов API, рендер карточки, скролл к сегменту |
-| 5 | `frontend/static/style.css` | Стили для overlay/HUD |
-| 6 | `frontend/static/utils` (опц.) | BioRead для буллетов |
+| 1 | `recog/web/ai_provider.py` | Добавить `ANCHOR_PROMPT`, расширить `build_prompt()` |
+| 2 | `recog/web/server.py` | Добавить `AnchorRequest/Response`, endpoint `/api/live/anchor` |
+| 3 | `recog/web/static/index.html` | Добавить кнопку и разметку HUD |
+| 4 | `recog/web/static/app.js` | Hotkey, вызов API, рендер карточки, скролл к сегменту |
+| 5 | `recog/web/static/style.css` | Стили для overlay/HUD |
+| 6 | `recog/web/static/utils` (опц.) | BioRead для буллетов |
 
 ## Consequences
 

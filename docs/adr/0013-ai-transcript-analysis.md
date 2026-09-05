@@ -61,7 +61,7 @@ Proposed
 
 ### 3. Конфигурация
 
-**frontend/.env:**
+**recog/web/.env:**
 ```bash
 # AI Provider: "claude" | "codex" | "openrouter"
 AI_PROVIDER=claude
@@ -73,7 +73,7 @@ OPENROUTER_MODEL=anthropic/claude-3-haiku
 
 ### 4. AI Provider абстракция
 
-**frontend/ai_provider.py:**
+**recog/web/ai_provider.py:**
 ```python
 import os
 import asyncio
@@ -388,13 +388,13 @@ function copyAiResponse() {
 
 | Шаг | Файл | Описание |
 |-----|------|----------|
-| 1 | `frontend/ai_provider.py` | Создать абстракцию провайдеров |
-| 2 | `frontend/.env.example` | Пример конфигурации |
-| 3 | `frontend/server.py` | Добавить `/api/meetings/{id}/analyze` |
-| 4 | `frontend/static/index.html` | Добавить кнопку и модальное окно |
-| 5 | `frontend/static/app.js` | Добавить analyzeIncrement() |
-| 6 | `frontend/static/style.css` | Стили для модалки и кнопки |
-| 7 | `frontend/requirements.txt` | Добавить httpx (для OpenRouter) |
+| 1 | `recog/web/ai_provider.py` | Создать абстракцию провайдеров |
+| 2 | `recog/web/.env.example` | Пример конфигурации |
+| 3 | `recog/web/server.py` | Добавить `/api/meetings/{id}/analyze` |
+| 4 | `recog/web/static/index.html` | Добавить кнопку и модальное окно |
+| 5 | `recog/web/static/app.js` | Добавить analyzeIncrement() |
+| 6 | `recog/web/static/style.css` | Стили для модалки и кнопки |
+| 7 | `deploy/python/requirements-web.txt` | Добавить httpx (для OpenRouter) |
 
 ### 10. Ограничения и TODO
 

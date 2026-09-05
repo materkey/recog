@@ -636,7 +636,7 @@ def speaker_c_wav(fixtures_dir):
 These tests require:
 - KONTUR_LOGIN and KONTUR_PASSWORD env vars
 - BlackHole virtual audio device installed
-- Chrome extension built (npm run build in kontur-diarize/ktalk-speaker-extension/)
+- Chrome extension built (npm run build in browser-extension/)
 - Audio fixtures prepared (python tests/e2e/prepare_fixtures.py)
 - GigaAM model available
 
@@ -899,7 +899,7 @@ Tests speaker attribution through the full pipeline: real KTalk conference → C
 
 1. **Kontur account** with KTalk access
 2. **BlackHole** virtual audio device installed
-3. **Chrome extension** built: `cd kontur-diarize/ktalk-speaker-extension && npm run build`
+3. **Chrome extension** built: `cd browser-extension && npm run build`
 4. **Playwright**: `./venv-gigaam/bin/pip install playwright pytest-playwright && ./venv-gigaam/bin/playwright install chromium`
 5. **Audio fixtures**: `./venv-gigaam/bin/python tests/e2e/prepare_fixtures.py`
 

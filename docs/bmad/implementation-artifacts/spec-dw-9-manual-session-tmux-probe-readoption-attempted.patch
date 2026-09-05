@@ -1,0 +1,431 @@
+diff --git c/CLAUDE.md w/CLAUDE.md
+index 2ada488..66c65e5 100644
+--- c/CLAUDE.md
++++ w/CLAUDE.md
+@@ -137,7 +137,7 @@ A launchd daemon (`com.recog.copilot-supervisor.plist` → `recog/copilot_superv
+ - **Master switch** `RECOG_COPILOT_AUTOSPAWN=1|0` (default 1) keeps the daemon connected; `0` makes only the meeting frames (`meeting_started`/`meeting_state`/`meeting_ended`) inert — manual spawn/stop and crash-respawn (`on_session_died`) work regardless of the flag (webapp plan D3).
+ - **Manual sessions from the webapp** (`#/live`): a "Recog Copilot" button with agent-state chip + chat panel in `recog/web/static/app.js`. Spawn/stop travel as `copilot_spawn_request {request_id}` / `copilot_stop_request {request_id}` (browser → `/api/live/stream` → frontend server → bidirectional `BridgeSubscriber` → bridge → supervisor); the supervisor maps them onto the constant synthetic lifecycle id `"manual"` (`MANUAL_MEETING_ID`, mirrored in both `ktalk_bridge.py` and `recog/copilot_supervisor.py`), so a repeated spawn is the existing same-id flap (an explicit click also resets the respawn backoff budget when no retry is pending — Start revives a session parked after 3 exhausted respawn attempts) and Stop is `meeting_ended` → GRACE → kill. Closing or reloading the tab does NOT stop the session — the browser holds no session state and no stop frame is sent on WS close. Error echoes bound to the originating click's `request_id`: `bridge_disconnected` (frontend server, bridge link down), `supervisor_disconnected` (bridge, no supervisor client), `conference_active` (bridge rejects spawn — never forwarded while a conference is already active; a conference starting mid-relay may see the frame delivered, but the manual flag is not armed and the originator still gets `conference_active`). Shared-audience Copilot broadcasts (`copilot_reply` plus broadcast `copilot_status` frames) fan out to `_subscriber_clients` as well as extension clients; per-request rejection echoes remain originator-only and `manual_preempted` is subscriber-only. Manual chat captures `meeting_id` as None when no conference is active, so an orphan-meeting silence-split rotation cannot drop the reply as stale.
+ - **Conference precedence & known v1 desync**: with meeting-driven autospawn enabled, a conference `meeting_started` preempts a live manual session (kill + respawn under the meeting); the bridge clears `_manual_copilot_active` and broadcasts `copilot_status {status: "manual_preempted"}` to subscriber clients. With `AUTOSPAWN=0` the supervisor ignores meeting frames, so on preemption the bridge still clears its flag and emits the notice but the `"manual"` tmux session lingers untracked — only killable via explicit Stop (documented v1 limitation).
+-- **Manual-session restart recovery (webapp plan D5)**: manual-session truth has one runtime owner — the supervisor (it physically holds the tmux session). `supervisor_hello` carries `current_meeting_id` — the id of a session the supervisor intends to keep alive (SPAWNING/RUNNING; GRACE and IDLE report null, so a reconnect inside the grace window cannot defeat Stop); a hello with `"manual"` and no active conference re-arms the bridge's `_manual_copilot_active` BEFORE `meeting_state` is computed, so reconcile replies `{active: true, meeting_id: "manual"}` and adopts instead of killing. This covers a bridge-only restart while the supervisor stays alive. A full `./recog-service.sh restart` also restarts the supervisor, whose fresh lifecycle reports null; preserving the manual binding across that path remains deferred.
++- **Manual-session restart recovery (webapp plan D5)**: manual-session truth has one runtime owner — the supervisor (it physically holds the tmux session). `supervisor_hello` carries `current_meeting_id` — the id of a session the supervisor intends to keep alive (SPAWNING/RUNNING; GRACE and IDLE report null, so a reconnect inside the grace window cannot defeat Stop); a hello with `"manual"` and no active conference re-arms the bridge's `_manual_copilot_active` BEFORE `meeting_state` is computed, so reconcile replies `{active: true, meeting_id: "manual"}` and adopts instead of killing. This covers a bridge-only restart while the supervisor stays alive. A full `./recog-service.sh restart` (supervisor restarts, tmux session deliberately survives) is covered by the startup tmux-probe re-adoption: before the first connect, the supervisor probes `tmux -L recog-copilot has-session` and adopts a surviving session as `"manual"` — the live session itself is the marker, no persistence file. The adoption is provisional: if the first `meeting_state` reconcile reports an active conference, the session is re-adopted under that conference id (no kill+spawn); an explicit spawn/stop request also clears the provisional guess.
+ - **No proactive ticks in manual sessions (webapp plan D4)**: `_copilot_tick_state` is seeded only on conference join paths (the `meeting_started` emit and the same-meeting reconnect re-arm) — never by manual frames, so a manual session gets manual chat only; transcript context still flows via `get_recent_transcript`.
+ 
+ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state machine diagram, decisions table (D1–D7), and known v1 limitations (one copilot per machine, unknown startup screen → `blocked`, positive classifiers frozen on claude 2.1.197). See `docs/plans/completed/20260724-webapp-copilot-live.md` for the webapp manual-session decisions (D1–D5) and protocol frames.
+diff --git c/docs/plans/completed/20260724-webapp-copilot-live.md w/docs/plans/completed/20260724-webapp-copilot-live.md
+index a4c0f0c..33f5695 100644
+--- c/docs/plans/completed/20260724-webapp-copilot-live.md
++++ w/docs/plans/completed/20260724-webapp-copilot-live.md
+@@ -70,9 +70,17 @@ conference tab; no manual session start at all.
+   meeting is active, it re-arms `_manual_copilot_active` BEFORE computing
+   `meeting_state`, so the reconcile reply is `{active: true, meeting_id: "manual"}`
+   and `_reconcile` adopts instead of killing. This covers both restart
+-  permutations (bridge-only, and bridge+frontend via `./recog-service.sh restart`)
+-  without persistence and without any frontend-side flag — the frontend keeps
+-  NO manual state. Defense-in-depth guard: the bridge REJECTS
++  permutations without persistence and without any frontend-side flag — the
++  frontend keeps NO manual state: bridge-only restarts recover via the hello
++  re-arm above, and a supervisor restart (including the full
++  `./recog-service.sh restart`) recovers via the startup tmux-probe
++  re-adoption (DW-9) — at startup, before the first connect, the supervisor
++  probes `tmux -L recog-copilot has-session` and adopts a surviving session
++  as `"manual"` (the live session itself is the marker). That adoption is
++  provisional: the first `meeting_state` reconcile re-adopts under the
++  conference id (no kill+spawn) if a conference actually owns the session,
++  and an explicit spawn/stop request clears the guess. Defense-in-depth
++  guard: the bridge REJECTS
+   `copilot_spawn_request` while a conference meeting is active
+   (`_is_meeting_active()` true) — not forwarded, flag untouched, reply
+   `copilot_status {status: "conference_active", request_id}` to the originator —
+@@ -401,10 +409,12 @@ extension chip.
+   verify preemption (session respawns bound to the meeting), verify the webapp
+   shows "сессия переключена на конференцию", and that the extension panel still
+   works unchanged
+-- restart resilience (known gap): `./recog-service.sh restart` also restarts the
+-  supervisor, so its fresh lifecycle cannot report the surviving manual binding
+-  and the tmux session enters GRACE. Re-run this acceptance case after the
+-  deferred lifecycle-id recovery is implemented.
++- restart resilience: `./recog-service.sh restart` also restarts the supervisor;
++  its startup tmux-probe re-adoption (DW-9) adopts the surviving `recog-copilot`
++  session as `"manual"`, so `supervisor_hello` reports the binding and the
++  bridge's reconcile reply adopts instead of GRACE-killing — verify the manual
++  session survives the full restart (`tmux -L recog-copilot ls` still lists it
++  after grace would have expired, chat still answers).
+ 
+ **Known v1 limitations** (documented, not tasks):
+ - no proactive ticks in manual sessions (D4)
+diff --git c/recog/copilot_supervisor.py w/recog/copilot_supervisor.py
+index 1d1d3c2..314d9e9 100644
+--- c/recog/copilot_supervisor.py
++++ w/recog/copilot_supervisor.py
+@@ -493,6 +493,12 @@ class Supervisor:
+         self._last_failure_log_ts: float = 0.0
+         self._failure_streak = 0
+         self._ws = None
++        # True while the startup tmux-probe adoption (DW-9) is an unconfirmed
++        # guess: a surviving session was adopted as "manual", but the first
++        # `meeting_state` reconcile may reveal it belongs to a conference and
++        # must re-adopt under that id instead of kill+spawn. Cleared by the
++        # first reconcile and by any explicit manual spawn/stop request.
++        self._manual_adoption_provisional = False
+         # True while `_execute` is running a spawn (and any preceding kill):
+         # during that window the tmux session is transiently absent, so the
+         # watchdog must not read OFFLINE as a death (see Watchdog.tick).
+@@ -551,6 +557,8 @@ class Supervisor:
+                 return
+             await self._apply(self.lifecycle.meeting_ended(data.get("meeting_id")))
+         elif ftype == "copilot_spawn_request":
++            # Explicit user intent supersedes the startup adoption guess.
++            self._manual_adoption_provisional = False
+             # An explicit click is fresh user intent, not a flap: reset the
+             # respawn budget here. A session that burned all its attempts parks
+             # in SPAWNING("manual"), where the same-id flap emits no `Spawn` —
+@@ -561,8 +569,35 @@ class Supervisor:
+                 self._reset_respawn_backoff()
+             await self._apply(self.lifecycle.meeting_started(MANUAL_MEETING_ID))
+         elif ftype == "copilot_stop_request":
++            # Explicit user intent supersedes the startup adoption guess.
++            self._manual_adoption_provisional = False
+             await self._apply(self.lifecycle.meeting_ended(MANUAL_MEETING_ID))
+ 
++    async def _startup_manual_readoption(self) -> None:
++        """Adopt a copilot tmux session that survived a supervisor restart.
++
++        Runs once at the top of `run()` (DW-9): `./recog-service.sh restart`
++        deliberately keeps the tmux session alive, but a fresh lifecycle is
++        IDLE, so `supervisor_hello` would carry None and the bridge's
++        reconcile would GRACE-kill the live manual session. The session's
++        existence IS the marker (no persistence file): probe it and adopt as
++        `MANUAL_MEETING_ID` so hello re-arms the bridge's manual mirror. The
++        adoption is provisional — the tmux session name cannot say whether a
++        conference owns it, so the first `meeting_state` reconcile corrects a
++        wrong guess (see `_reconcile`). Not gated on `autospawn` (D3).
++        """
++        if self.lifecycle.state is not State.IDLE:
++            return
++        if not await self._probe_session_alive():
++            return
++        self.lifecycle.adopt(MANUAL_MEETING_ID)
++        self._manual_adoption_provisional = True
++        print(
++            f"{self._log_prefix} adopted surviving tmux session as "
++            f"{MANUAL_MEETING_ID!r} (provisional until first meeting_state)",
++            file=sys.stderr,
++        )
++
+     async def _probe_session_alive(self) -> bool:
+         try:
+             result = self._session_alive_probe()
+@@ -587,8 +622,16 @@ class Supervisor:
+         - no session + meeting active → spawn.
+         - session alive + meeting active → adopt (no respawn): a supervisor
+           restart mid-meeting must not kill a live copilot.
++
++        A provisional startup adoption (DW-9) is confirmed or corrected here:
++        the first reconcile clears the flag, and when the bridge reports an
++        active conference while the machine provisionally holds "manual", the
++        live session belongs to that conference (supervisor restarted
++        mid-meeting) — re-adopt under the conference id, never kill+spawn.
+         """
+         machine = self.lifecycle
++        provisional = self._manual_adoption_provisional
++        self._manual_adoption_provisional = False
+         session_exists = machine.state is not State.IDLE or session_alive
+ 
+         if active and meeting_id:
+@@ -596,6 +639,12 @@ class Supervisor:
+                 return machine.meeting_started(str(meeting_id))
+             if machine.state is State.IDLE:
+                 return machine.adopt(str(meeting_id))
++            if (
++                provisional
++                and machine.meeting_id == MANUAL_MEETING_ID
++                and str(meeting_id) != MANUAL_MEETING_ID
++            ):
++                return machine.adopt(str(meeting_id))
+             # Machine already tracks a session: same id is a no-op / GRACE
+             # revival, different id is a kill+spawn — exactly meeting_started.
+             return machine.meeting_started(str(meeting_id))
+@@ -793,6 +842,10 @@ class Supervisor:
+         delay = self.INITIAL_BACKOFF_S
+         if self._stop_event is None:
+             self._stop_event = asyncio.Event()
++        # A tmux session that survived a supervisor restart is re-adopted as
++        # "manual" before the watchdog starts and before the first connect,
++        # so the hello below already carries the binding (DW-9).
++        await self._startup_manual_readoption()
+         # The watchdog polls tmux for the supervisor's whole lifetime; it
+         # sends status only while `self._ws` is connected and drops silently
+         # otherwise (bridge merge reads silence as offline).
+diff --git c/tests/test_copilot_supervisor.py w/tests/test_copilot_supervisor.py
+index 8b754e8..a24c91b 100644
+--- c/tests/test_copilot_supervisor.py
++++ w/tests/test_copilot_supervisor.py
+@@ -715,6 +715,268 @@ async def test_reconcile_adopts_live_manual_session():
+     assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
+ 
+ 
++# ---------------------------------------------------------------------------
++# Startup tmux-probe manual re-adoption (DW-9)
++# ---------------------------------------------------------------------------
++
++
++async def test_startup_probe_adopts_manual_and_hello_reports_it():
++    """given: a copilot tmux session survived a full restart and no conference
++           is active (the bridge replies meeting_state {active, "manual"})
++    when: a fresh supervisor starts
++    then: the startup probe adopts the session as "manual", supervisor_hello
++          carries "manual", and the same-id reconcile is a no-op — zero kills,
++          zero spawns; the session survives the restart
++    """
++    received = []
++
++    async def handler(websocket):
++        try:
++            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
++            received.append(first)
++            await websocket.send(json.dumps({
++                "type": "meeting_state",
++                "active": True,
++                "meeting_id": MANUAL_MEETING_ID,
++            }))
++        except Exception:
++            pass
++        await asyncio.sleep(0.3)
++
++    server, port = await _start_mock_bridge(handler)
++    runner = FakeRunner()
++    sup = Supervisor(
++        f"ws://127.0.0.1:{port}",
++        runner=runner,
++        grace_s=10.0,
++        autospawn=True,
++        session_alive_probe=lambda: True,
++    )
++    await sup.start()
++    try:
++        assert await _collect_hello(received) == {
++            "type": "supervisor_hello",
++            "current_meeting_id": MANUAL_MEETING_ID,
++        }
++        for _ in range(20):
++            if not sup._manual_adoption_provisional:
++                break
++            await asyncio.sleep(0.05)
++        assert runner.spawned == []
++        assert runner.kills == 0
++        assert sup.lifecycle.state is State.RUNNING
++        assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
++        assert sup._manual_adoption_provisional is False
++    finally:
++        await sup.stop()
++        server.close()
++        await server.wait_closed()
++
++
++async def test_provisional_manual_adoption_corrected_to_conference():
++    """given: the startup probe adopted a surviving session as "manual", but
++           the session actually belongs to conference "A" (supervisor-only
++           restart mid-meeting)
++    when: the bridge's meeting_state {active: true, meeting_id: "A"} arrives
++    then: the provisional guess is corrected by re-adopting under "A" — zero
++          kills, zero spawns (the tested mid-meeting invariant holds)
++    """
++    runner = FakeRunner()
++    sup = Supervisor(
++        runner=runner,
++        grace_s=10.0,
++        autospawn=True,
++        session_alive_probe=lambda: True,
++    )
++    await sup._startup_manual_readoption()
++    assert sup.lifecycle.state is State.RUNNING
++    assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
++    assert sup._manual_adoption_provisional is True
++
++    await sup.handle_frame({"type": "meeting_state", "active": True, "meeting_id": "A"})
++
++    assert runner.spawned == []
++    assert runner.kills == 0
++    assert sup.lifecycle.state is State.RUNNING
++    assert sup.lifecycle.meeting_id == "A"
++    assert sup._manual_adoption_provisional is False
++
++
++async def test_startup_probe_dead_no_adoption():
++    """given: no copilot tmux session survives the restart
++    when: the startup re-adoption probe runs
++    then: nothing is adopted — the machine stays IDLE and hello would carry
++          None (byte-identical to the pre-DW-9 behavior)
++    """
++    runner = FakeRunner()
++    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
++
++    await sup._startup_manual_readoption()
++
++    assert sup.lifecycle.state is State.IDLE
++    assert sup._manual_adoption_provisional is False
++    assert sup._live_meeting_id() is None
++
++
++async def test_provisional_manual_meeting_state_inactive_goes_grace_not_kill():
++    """given: a provisional RUNNING("manual") adoption (defensive: with the
++           in-repo bridge, hello "manual" + no conference always re-arms, so
++           active=false should be unreachable)
++    when: meeting_state {active: false} arrives
++    then: fall through to the existing synthetic meeting_ended → GRACE, no
++          instant kill — recoverable via Start within the grace window
++    """
++    runner = FakeRunner()
++    sup = Supervisor(
++        runner=runner,
++        grace_s=10.0,
++        autospawn=True,
++        session_alive_probe=lambda: True,
++    )
++    await sup._startup_manual_readoption()
++
++    await sup.handle_frame({"type": "meeting_state", "active": False, "meeting_id": None})
++
++    assert sup.lifecycle.state is State.GRACE
++    assert runner.kills == 0
++    assert sup._manual_adoption_provisional is False
++    await sup.stop()
++
++
++async def test_established_manual_session_meeting_state_still_preempts():
++    """given: an established (non-provisional) manual session
++    when: meeting_state reports an active conference "B"
++    then: conference precedence is unaffected — kill + spawn under "B"
++    """
++    runner = FakeRunner()
++    sup = Supervisor(runner=runner, grace_s=10.0, autospawn=True)
++    await sup.handle_frame({"type": "copilot_spawn_request", "request_id": "r1"})
++    sup.lifecycle.session_ready()
++
++    await sup.handle_frame({"type": "meeting_state", "active": True, "meeting_id": "B"})
++
++    assert runner.kills == 1
++    assert runner.spawned == [MANUAL_MEETING_ID, "B"]
++    assert sup.lifecycle.state is State.SPAWNING
++    assert sup.lifecycle.meeting_id == "B"
++    await sup.stop()
++
++
++@pytest.mark.parametrize("frame_type", ["copilot_spawn_request", "copilot_stop_request"])
++async def test_manual_request_clears_provisional_flag(frame_type):
++    """given: a provisional startup adoption
++    when: an explicit manual spawn/stop request arrives before any reconcile
++    then: the provisional flag is cleared — user intent supersedes the guess
++    """
++    runner = FakeRunner()
++    sup = Supervisor(
++        runner=runner,
++        grace_s=10.0,
++        autospawn=False,
++        session_alive_probe=lambda: True,
++    )
++    await sup._startup_manual_readoption()
++    assert sup._manual_adoption_provisional is True
++
++    await sup.handle_frame({"type": frame_type, "request_id": "r1"})
++
++    assert sup._manual_adoption_provisional is False
++    await sup.stop()
++
++
++async def test_startup_probe_exception_no_adoption():
++    """given: the tmux probe raises (tmux missing/unresponsive)
++    when: the startup re-adoption probe runs
++    then: the failure is swallowed by _probe_session_alive (logged, False) —
++          no adoption, machine stays IDLE, hello would carry None
++    """
++    def raising_probe():
++        raise RuntimeError("tmux exploded")
++
++    runner = FakeRunner()
++    sup = Supervisor(runner=runner, grace_s=10.0, session_alive_probe=raising_probe)
++
++    await sup._startup_manual_readoption()
++
++    assert sup.lifecycle.state is State.IDLE
++    assert sup._manual_adoption_provisional is False
++    assert sup._live_meeting_id() is None
++
++
++async def test_startup_adoption_happens_with_autospawn_off():
++    """given: RECOG_COPILOT_AUTOSPAWN=0 and a surviving tmux session
++    when: a fresh supervisor connects to the bridge
++    then: adoption and the "manual" hello still happen (not autospawn-gated,
++          D3); the meeting_state reply is inert per the existing gate and the
++          session stays RUNNING("manual") — zero kills, zero spawns
++    """
++    received = []
++
++    async def handler(websocket):
++        try:
++            first = await asyncio.wait_for(websocket.recv(), timeout=1.0)
++            received.append(first)
++            await websocket.send(json.dumps({
++                "type": "meeting_state",
++                "active": True,
++                "meeting_id": MANUAL_MEETING_ID,
++            }))
++        except Exception:
++            pass
++        await asyncio.sleep(0.3)
++
++    server, port = await _start_mock_bridge(handler)
++    runner = FakeRunner()
++    sup = Supervisor(
++        f"ws://127.0.0.1:{port}",
++        runner=runner,
++        grace_s=10.0,
++        autospawn=False,
++        session_alive_probe=lambda: True,
++    )
++    await sup.start()
++    try:
++        assert await _collect_hello(received) == {
++            "type": "supervisor_hello",
++            "current_meeting_id": MANUAL_MEETING_ID,
++        }
++        await asyncio.sleep(0.2)  # let the (inert) meeting_state arrive
++        assert runner.spawned == []
++        assert runner.kills == 0
++        assert sup.lifecycle.state is State.RUNNING
++        assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
++    finally:
++        await sup.stop()
++        server.close()
++        await server.wait_closed()
++
++
++async def test_session_dies_after_startup_adoption_respawns_manual():
++    """given: the startup probe adopted a surviving session as "manual", but
++           the session is gone by the first watchdog tick (probe raced)
++    when: session_died is reported
++    then: the existing respawn path revives it under "manual" with backoff
++    """
++    runner = FakeRunner()
++    sup = Supervisor(
++        runner=runner,
++        grace_s=10.0,
++        autospawn=True,
++        session_alive_probe=lambda: True,
++    )
++    sup.RESPAWN_BACKOFF_S = (0.01, 0.01, 0.01)
++    await sup._startup_manual_readoption()
++    assert sup.lifecycle.state is State.RUNNING
++
++    await sup.on_session_died()
++    await asyncio.sleep(0.05)
++
++    assert runner.spawned == [MANUAL_MEETING_ID]
++    assert sup.lifecycle.state is State.SPAWNING
++    assert sup.lifecycle.meeting_id == MANUAL_MEETING_ID
++    await sup.stop()
++
++
+ async def test_manual_session_respawns_after_crash_with_autospawn_off():
+     """given: autospawn off and a live manual session
+     when: the watchdog keeps reporting session_died

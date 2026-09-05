@@ -3,12 +3,12 @@
 - [x] 0.1 Upgrade `../GigaAM` checkout to upstream `origin/main` (commits through `6e4b027`); verify `import gigaam` + `gigaam.load_model("v3_e2e_rnnt").transcribe(wav_path, word_timestamps=True)` returns a `TranscriptionResult` with `.words` list of `Word(text, start, end)`
 - [x] 0.2 Adapt `recog/asr.py::ASRModule.transcribe_batch` to the new `decoding.decode()` return type (was `List[str]`; after commit `a755fec` is `List[Tuple[str, List[int], List[int]]]`). Keep public method signature stable — callers unaffected
 - [x] 0.3 Full unit suite green (`python -m pytest tests/ -v`); manual live smoke: `./recog-service.sh restart` + short KTalk meeting; confirm no regression on live 3-s path
-- [x] 0.4 Grid-search regression: re-run `scripts/pcm_experiment.py` against take-2 fixtures with configs 20:1.0 and 10:0.5; WER must stay within ±1% of the baseline in `docs/experiments/2026-04-23-gigaam-grid.md`
+- [x] 0.4 Grid-search regression: re-run `scripts/benchmarks/pcm_experiment.py` against take-2 fixtures with configs 20:1.0 and 10:0.5; WER must stay within ±1% of the baseline in `docs/experiments/2026-04-23-gigaam-grid.md`
 
 ## 1. MPS (Metal) backend
 
 - [x] 1.1 Add MPS auto-detect to `ASRModule.__init__` when `device` arg is `None`: `"mps" if torch.backends.mps.is_available() else "cpu"`. Explicit override (`device="cpu"`) always honoured
-- [x] 1.2 Manual smoke: `scripts/pcm_experiment.py --device mps --configs 20:1.0,10:0.5 --wav ...` produces text bit-identical to CPU run on same input (compare stdout line-by-line)
+- [x] 1.2 Manual smoke: `scripts/benchmarks/pcm_experiment.py --device mps --configs 20:1.0,10:0.5 --wav ...` produces text bit-identical to CPU run on same input (compare stdout line-by-line)
 - [x] 1.3 Benchmark batched forward on MPS with B ∈ {1, 4, 8} and variable-length inputs padded to `T_max`; record wall-clock per batch in `docs/experiments/2026-04-XX-mps-batch.md`; confirm no regression vs CPU
 - [x] 1.4 Default device stays `None` (auto-detect) — no CLI / env changes needed by users
 
@@ -50,8 +50,8 @@
 ## 6. WebSocket transport
 
 - [x] 6.1 Add `KTalkBridge.send_refine(updates: list[dict])` mirroring `send_transcript`; broadcasts `{type: "transcript_refine", updates: [{segment_id, text, refined_at}]}` to all connected extension clients on `ws://localhost:8766`
-- [x] 6.2 In `frontend/server.py`, add a WS-client subscription to `ws://localhost:8766` (the bridge) on startup that forwards `transcript_refine` messages to webapp clients on `ws://127.0.0.1:9080` (per D10). Reconnect loop with exponential backoff (1s → 30s cap). The existing JSONL tail watcher remains for cold-start / reconnect replay of `segments` only; it does NOT forward refines
-- [x] 6.3 Fix `_notify_new_segments` rewrite-blind bug (`frontend/server.py:183-208`): when the tailer observes `os.stat(path).st_size < self.file_position`, reset `self.file_position = 0` and diff against a seen-id watermark before re-broadcasting. Prevents the retroactive-speaker-correction path from stalling. Unit test in `tests/test_frontend_server.py`
+- [x] 6.2 In `recog/web/server.py`, add a WS-client subscription to `ws://localhost:8766` (the bridge) on startup that forwards `transcript_refine` messages to webapp clients on `ws://127.0.0.1:9080` (per D10). Reconnect loop with exponential backoff (1s → 30s cap). The existing JSONL tail watcher remains for cold-start / reconnect replay of `segments` only; it does NOT forward refines
+- [x] 6.3 Fix `_notify_new_segments` rewrite-blind bug (`recog/web/server.py:183-208`): when the tailer observes `os.stat(path).st_size < self.file_position`, reset `self.file_position = 0` and diff against a seen-id watermark before re-broadcasting. Prevents the retroactive-speaker-correction path from stalling. Unit test in `tests/test_frontend_server.py`
 - [x] 6.4 Unit test in `tests/test_ktalk_bridge.py`: `send_refine` produces correct JSON shape; sequential `send_transcript` → `send_refine` do not interleave on a single client *(covered by 6 tests in `tests/test_ktalk_bridge.py:607+` added during Plan 3 task 1.3)*
 
 ## 7. UI — extension overlay
@@ -63,7 +63,7 @@
 
 ## 8. UI — webapp frontend
 
-- [x] 8.1 In the transcript-row rendering code (`frontend/static/`), add `data-segment-id={id}` and `data-refined={refined}` attributes to each row
+- [x] 8.1 In the transcript-row rendering code (`recog/web/static/`), add `data-segment-id={id}` and `data-refined={refined}` attributes to each row
 - [x] 8.2 CSS rules: `[data-refined="false"] { opacity: .6; border-left: 2px dashed var(--muted); }` and `[data-refined="true"] { opacity: 1; border-left: 2px solid var(--accent); transition: opacity 200ms, border-color 200ms; }`
 - [x] 8.3 JS handler for `transcript_refine`: update row textContent, set `data-refined="true"`, relying on the CSS transition for the visual
 - [x] 8.4 Tooltip / title attribute on tier-1 rows: "Предварительная расшифровка — будет уточнена"
@@ -85,9 +85,9 @@
 
 ## 11. Benchmarking + validation
 
-- [x] 11.1 New harness `scripts/refine_benchmark.py`: replays recorded per-pid WAVs through `PerSpeakerIngest` + `RefineWorker`; outputs per-segment live-WER and refined-WER against a reference transcript, plus overall avg
+- [x] 11.1 New harness `scripts/benchmarks/refine_benchmark.py`: replays recorded per-pid WAVs through `PerSpeakerIngest` + `RefineWorker`; outputs per-segment live-WER and refined-WER against a reference transcript, plus overall avg
 - [x] 11.2 Run on take-2 fixture; acceptance: overall refined-WER ≤ 25% (vs live 33% baseline); write results to `docs/experiments/2026-04-XX-stream-refine.md`
-- [x] 11.3 Latency measurement: `scripts/refine_benchmark.py --latency-profile` with 4 simulated pids in parallel; first-paint p50/p95 must regress ≤ 100 ms vs baseline live-only
+- [x] 11.3 Latency measurement: `scripts/benchmarks/refine_benchmark.py --latency-profile` with 4 simulated pids in parallel; first-paint p50/p95 must regress ≤ 100 ms vs baseline live-only
 - [x] 11.4 If 11.2 or 11.3 fail acceptance thresholds, flag in `docs/experiments/2026-04-XX-stream-refine.md` and do NOT proceed to default-flip task 12.6; iterate design
 
 ## 12. Rollout + docs

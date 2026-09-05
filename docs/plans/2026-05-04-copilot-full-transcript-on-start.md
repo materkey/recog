@@ -67,8 +67,8 @@
 
 ## Где в коде что меняем
 
-- `ktalk_bridge.py` — новый dispatcher case `get_full_transcript_request` → читает `MeetingStorage` (текущий meeting), формирует response. Прокидывает meeting_id, meeting_title, last_segment_id.
-- `meeting_storage.py` — возможно переиспользовать `get_current_transcript()` (уже читает JSONL целиком). Добавить тонкую обёртку `get_meeting_transcript_or_current(meeting_id: Optional[str])` для случая, когда ID не передан.
+- `recog/ktalk_bridge.py` — новый dispatcher case `get_full_transcript_request` → читает `MeetingStorage` (текущий meeting), формирует response. Прокидывает meeting_id, meeting_title, last_segment_id.
+- `recog/meeting_storage.py` — возможно переиспользовать `get_current_transcript()` (уже читает JSONL целиком). Добавить тонкую обёртку `get_meeting_transcript_or_current(meeting_id: Optional[str])` для случая, когда ID не передан.
 - `recog/copilot_channel.py`:
   - Новый MCP tool `get_full_transcript(format="compact", page=1, page_size_chars=15000, include_refined=True, meeting_id=None) -> dict`. Внутри запрашивает bridge `get_full_transcript_request`, paginates по символам.
   - Новый MCP resource `copilot://meetings/{id}/transcript` (или дефолт `copilot://meetings/active/transcript`). Реализуется через `@mcp.resource(...)` декоратор FastMCP. Полный текст без paging — поток через resource gracefully handled харнессом.
@@ -84,8 +84,8 @@
 
 **Goal**: bridge умеет по WS запросить полный транскрипт активной (или указанной) встречи, отвечает структурированным response.
 
-- [ ] 1.1 В `meeting_storage.py` добавить метод `get_meeting_transcript(meeting_id: str) -> list[dict]` — читает `meetings/<id>/transcript.jsonl` для произвольного meeting_id (не только текущего). Если meeting_id не существует → пустой список.
-- [ ] 1.2 В `ktalk_bridge.py` `_process_message`: добавить ветку `elif msg_type == "get_full_transcript_request":` после `get_recent_transcript_request`. Поля: `request_id` (required), `meeting_id` (optional — fallback на current).
+- [ ] 1.1 В `recog/meeting_storage.py` добавить метод `get_meeting_transcript(meeting_id: str) -> list[dict]` — читает `meetings/<id>/transcript.jsonl` для произвольного meeting_id (не только текущего). Если meeting_id не существует → пустой список.
+- [ ] 1.2 В `recog/ktalk_bridge.py` `_process_message`: добавить ветку `elif msg_type == "get_full_transcript_request":` после `get_recent_transcript_request`. Поля: `request_id` (required), `meeting_id` (optional — fallback на current).
 - [ ] 1.3 Handler читает segments через `MeetingStorage.get_current_transcript()` (если meeting_id не передан) или `get_meeting_transcript(meeting_id)`. Формирует response:
   ```
   {
@@ -108,7 +108,7 @@
 
 **Acceptance**: `pytest tests/test_ktalk_bridge.py -k "full_transcript" -v` зелёный.
 
-**Files**: `meeting_storage.py`, `ktalk_bridge.py`, `tests/test_ktalk_bridge.py`.
+**Files**: `recog/meeting_storage.py`, `recog/ktalk_bridge.py`, `tests/test_ktalk_bridge.py`.
 
 **Commit**: `bridge: add get_full_transcript request/response for whole-meeting snapshot`
 

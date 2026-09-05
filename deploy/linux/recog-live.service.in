@@ -1,0 +1,22 @@
+[Unit]
+Description=Recog live transcription (system audio + mic + KTalk bridge)
+# StartLimitIntervalSec belongs in [Unit], not [Service] — systemd ignores it
+# there with "Unknown key" while systemd-analyze verify still exits 0. Zero
+# disables the rate limiter, matching launchd KeepAlive: never give up.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO_DIR@
+Environment=PYTHONUNBUFFERED=1
+Environment="HOME=@HOME@"
+Environment="RECOG_DATA_DIR=@DATA_DIR@"
+Environment="PATH=@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ExecStart="@PYTHON@" -m recog live --system-audio auto --ktalk
+Restart=always
+RestartSec=5
+StandardOutput=append:@LOG_DIR@/live.stdout.log
+StandardError=append:@LOG_DIR@/live.stderr.log
+
+[Install]
+WantedBy=default.target

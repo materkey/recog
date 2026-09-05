@@ -12,12 +12,12 @@
   - `recog/increment.py` (new) — IncrementGenerator module
   - `ktalk_bridge.py:1161-1175,1374-1395` — two leave trigger points
   - `recog/live.py` — wiring IncrementGenerator into session startup
-  - `frontend/server.py` — REST API for increments
-  - `frontend/static/app.js:1362-1416` — UI for stored versions
-  - `frontend/static/index.html:110-130` — modal markup
-  - `frontend/ai_provider.py:33-56` — INCREMENT_PROMPT, CodexCliProvider
-- Related patterns: `meeting_storage.py` stores per-meeting data in `meetings/<id>/`; `on_ktalk_leave()` ends meeting and creates new orphan; KTalkBridge uses callbacks (`_on_meeting_change`, `_on_pre_meeting_switch`)
-- Dependencies: `CodexCliProvider` from `frontend/ai_provider.py`; `MeetingStorage` for transcript/meta access
+  - `recog/web/server.py` — REST API for increments
+  - `recog/web/static/app.js:1362-1416` — UI for stored versions
+  - `recog/web/static/index.html:110-130` — modal markup
+  - `recog/web/ai_provider.py:33-56` — INCREMENT_PROMPT, CodexCliProvider
+- Related patterns: `recog/meeting_storage.py` stores per-meeting data in `meetings/<id>/`; `on_ktalk_leave()` ends meeting and creates new orphan; KTalkBridge uses callbacks (`_on_meeting_change`, `_on_pre_meeting_switch`)
+- Dependencies: `CodexCliProvider` from `recog/web/ai_provider.py`; `MeetingStorage` for transcript/meta access
 
 ## Development Approach
 - **Testing approach**: TDD — tests first for core module, then integration
@@ -32,7 +32,7 @@
 ## Testing Strategy
 - **Unit tests**: `tests/test_increment.py` — version numbering, delta ranges, frontmatter, error handling
 - **Existing tests**: `tests/test_ktalk_bridge.py` — must continue to pass after bridge changes
-- **Smoke test**: `python mp4_notes.py --help` — no import errors
+- **Smoke test**: `python -m recog --help` — no import errors
 - **Manual E2E**: join KTalk → leave → check files → rejoin → leave → check v2
 
 ## Progress Tracking
@@ -72,13 +72,13 @@
 - [x] add `from recog.increment import IncrementGenerator` and create instance with `storage.base_path`
 - [x] call `bridge.set_increment_generator(increment_gen)`
 - [x] add `on_increment_ready` callback that logs to stderr
-- [x] smoke test: `./venv-gigaam/bin/python mp4_notes.py --help` — no import errors
+- [x] smoke test: `./venv-gigaam/bin/python -m recog --help` — no import errors
 - [x] run all tests: `./venv-gigaam/bin/python -m pytest tests/ -v` — all must pass
 
 ### Task 4: REST API endpoints for increments
-- [x] add `GET /api/meetings/{meeting_id}/increments` endpoint in `frontend/server.py` — returns list of increment meta dicts
+- [x] add `GET /api/meetings/{meeting_id}/increments` endpoint in `recog/web/server.py` — returns list of increment meta dicts
 - [x] add `GET /api/meetings/{meeting_id}/increments/{version}` endpoint — returns `{meta, content}` or 404
-- [x] run: `./venv-gigaam/bin/python -m compileall frontend/server.py` — no syntax errors
+- [x] run: `./venv-gigaam/bin/python -m compileall recog/web/server.py` — no syntax errors
 - [x] run all tests: `./venv-gigaam/bin/python -m pytest tests/ -v` — all must pass
 
 ### Task 5: Frontend UI — show stored increments

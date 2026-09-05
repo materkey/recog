@@ -29,7 +29,7 @@ venv-qwen3
 
 # Node
 node_modules/
-kontur-diarize/ktalk-speaker-extension/injected.js
+browser-extension/injected.js
 
 # Service logs
 logs/
@@ -37,11 +37,8 @@ meetings/
 
 # Personal data / locally built artifacts (see docs: setup.sh rebuilds these)
 /speakers*.json
-!/speakers_ecapa.json.example
 /sck_audio_capture
 /example_1_named.md
-/examples/*
-!/examples/README.md
 /com.recog.*.plist
 
 # Git worktrees
@@ -61,3 +58,9 @@ _bmad/
 .bmad-loop/runs/
 .bmad-loop/cache/
 .bmad-loop/policy.toml
+
+# Local build products and legacy unpacked-extension location
+/build/
+/kontur-diarize/
+.DS_Store
+/.local/

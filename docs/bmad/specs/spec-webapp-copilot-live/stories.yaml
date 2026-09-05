@@ -1,0 +1,72 @@
+- id: "1"
+  title: Bridge broadcasts copilot frames to subscriber clients
+  description: >-
+    CAP-1: add _broadcast_copilot_frame fan-out (extension + subscriber
+    clients) and route ALL copilot broadcast sites through it, type-based.
+    Companion plan Task 1 carries the call-site anchors.
+  invoke_dev_with: >-
+    Follow companion plan "Task 1" checklist (docs/plans/20260724-webapp-copilot-live.md).
+    TDD: failing tests first in tests/test_ktalk_bridge.py. Verify no
+    non-copilot _broadcast_message site leaks frames to subscribers.
+- id: "2"
+  title: Bridge relays manual spawn/stop and tracks manual session state
+  description: >-
+    CAP-2/CAP-4 bridge side: _manual_copilot_active flag, spawn/stop frame
+    relay to supervisor, conference_active rejection, manual branch in
+    _compute_meeting_state, supervisor_hello re-arm (D5), manual_preempted
+    broadcast, sessions-zero merge eligibility, staleness escape for manual chat.
+  invoke_dev_with: >-
+    Follow companion plan "Task 2" checklist. TDD in tests/test_ktalk_bridge.py.
+    Do NOT change _is_meeting_active itself — add _copilot_should_be_alive.
+- id: "3"
+  title: Supervisor manual lifecycle; autospawn gate narrowed
+  description: >-
+    CAP-2/CAP-3 supervisor side: handle spawn/stop frames with synthetic id
+    "manual", move the autospawn gate into meeting-frame branches (D3), remove
+    the on_session_died gate, add current_meeting_id to supervisor_hello (D5).
+  invoke_dev_with: >-
+    Follow companion plan "Task 3" checklist. TDD in
+    tests/test_copilot_supervisor.py; split the existing
+    test_autospawn_off_is_noop into meeting-frames-inert vs manual-still-works.
+- id: "4"
+  title: BridgeSubscriber becomes bidirectional
+  description: >-
+    Widen the forward filter to a FORWARD_TYPES frozenset {transcript_refine,
+    copilot_reply, copilot_status} and add best-effort async send(raw) that
+    fails fast while disconnected.
+  invoke_dev_with: >-
+    Follow companion plan "Task 4" checklist. TDD in
+    tests/test_bridge_subscriber.py. No queueing across reconnects.
+- id: "5"
+  title: Frontend server — inbound copilot frames over /api/live/stream
+  description: >-
+    CAP-5: testable handle_client_frame helper with the three-type inbound
+    whitelist, bridge_disconnected error echo bound to request_id, and the
+    cached agent_state primer sent after init to new live-stream clients.
+  invoke_dev_with: >-
+    Follow companion plan "Task 5" checklist. Create
+    tests/test_frontend_copilot_proxy.py. Server holds NO manual-session
+    state (D5). No _forward_bridge_message change needed.
+- id: "6"
+  title: Webapp UI — Copilot button, status chip, chat panel
+  description: >-
+    CAP-6: Recog Copilot button + agent-state chip + chat panel on #/live
+    with per-request_id pending state, transcript_window (<=15 segments),
+    renderMarkdown replies, and all status renderings incl conference_active /
+    manual_preempted info lines.
+  invoke_dev_with: >-
+    Follow companion plan "Task 6" checklist. The extension panel
+    (browser-extension/src/ui-copilot-panel.test.js) is
+    the behavioral spec. No JS test harness — verify with python -m compileall
+    recog frontend and the full pytest suite.
+- id: "7"
+  title: Acceptance verification and documentation
+  description: >-
+    Plan Tasks 7+8: automated acceptance pass (full pytest, compileall,
+    edge-case checklist from Task 7) and docs — CLAUDE.md copilot section,
+    openspec ktalk-copilot-chat spec, move the plan to docs/plans/completed/.
+  invoke_dev_with: >-
+    Follow companion plan "Task 7" and "Task 8" checklists. The manual smoke
+    (launchd restart + real meeting) is post-completion for the human — do
+    not attempt it; verify everything automatable and state clearly what
+    remains manual.

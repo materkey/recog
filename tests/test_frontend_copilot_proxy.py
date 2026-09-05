@@ -1,4 +1,4 @@
-"""Tests for frontend/server.py copilot proxy (CAP-5, story 5).
+"""Tests for recog/web/server.py copilot proxy (CAP-5, story 5).
 
 `/api/live/stream` used to discard everything the browser sends. Now the
 receive loop routes frames through `handle_client_frame`: a three-type
@@ -20,9 +20,8 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "frontend"))
 
-import server  # noqa: E402
+from recog.web import server  # noqa: E402
 
 
 # =============================================================================

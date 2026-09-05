@@ -65,6 +65,6 @@
 - [x] 8.4 Add extension tests for Copilot message rendering and WS frame handling
 - [x] 8.5 Add a scripted channel-server smoke test with a fake Claude tool call response
 - [x] 8.6 Run `python -m pytest tests/ -v`
-- [x] 8.7 Run extension tests with `npm test` in `kontur-diarize/ktalk-speaker-extension`
-- [x] 8.8 Run `npm run build` in `kontur-diarize/ktalk-speaker-extension`
+- [x] 8.7 Run extension tests with `npm test` in `browser-extension`
+- [x] 8.8 Run `npm run build` in `browser-extension`
 - [ ] 8.9 Run manual live smoke: KTalk meeting, Copilot manual chat, Claude repo lookup, proactive transcript tick # requires human smoke

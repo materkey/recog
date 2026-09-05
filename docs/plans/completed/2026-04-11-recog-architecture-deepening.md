@@ -1,27 +1,27 @@
 # Recog Architecture Deepening
 
 ## Overview
-- Углубление модулей проекта Recog: удаление мёртвого кода диаризации (~1800 строк), устранение инвертированных зависимостей `recog/` → `frontend/`, декомпозиция `LiveTranscriber.run()` (570 → ~60 строк оркестрации)
+- Углубление модулей проекта Recog: удаление мёртвого кода диаризации (~1800 строк), устранение инвертированных зависимостей `recog/` → `recog/web/`, декомпозиция `LiveTranscriber.run()` (570 → ~60 строк оркестрации)
 - Проблема: `recog/` не может быть standalone-библиотекой из-за циклических зависимостей; `run()` — нетестируемый god method; ~1800 строк неиспользуемого кода (pyannote-диаризация, batch pipeline)
-- Результат: чистая однонаправленная зависимость `frontend/ → recog/`, тестируемые методы вместо closures, удаление мёртвого кода
+- Результат: чистая однонаправленная зависимость `recog/web/ → recog/`, тестируемые методы вместо closures, удаление мёртвого кода
 - ~~Дедупликация speaker assignment~~ — **отменена**: агент-исследователь установил, что 3 реализации принципиально разные (batch overlap vs real-time KTalk vs per-chunk embedding), а после удаления `alignment.py` и `diarize_session.py` остаётся только одна реализация в `live.py`
 
 ## Context (from deep agent research)
 
 ### Инверсия слоёв — точная карта
-Ровно 2 файла в `recog/` импортируют из `frontend/`:
+Ровно 2 файла в `recog/` импортируют из `recog/web/`:
 - `recog/increment.py:18` — `from frontend.ai_provider import CodexCliProvider`
 - `recog/title_generator.py:12` — `from frontend.ai_provider import _resolve_cli`
 
-Транзитивная цепочка: `meeting_storage.py` → `recog.title_generator` → `frontend.ai_provider`
+Транзитивная цепочка: `recog/meeting_storage.py` → `recog.title_generator` → `frontend.ai_provider`
 
-Что переносить из `frontend/ai_provider.py` в `recog/ai_provider.py`:
+Что переносить из `recog/web/ai_provider.py` в `recog/ai_provider.py`:
 - `_resolve_cli()` (строки 34–57) — поиск CLI binary через PATH/nvm
 - `_nvm_version_key()` (строки 27–31) — helper для `_resolve_cli`
 - `AIProvider` ABC (строки 132–157) — базовый класс
 - `CodexCliProvider` (строки 241–353) — единственный провайдер, нужный `recog/`
 
-Что остаётся в `frontend/ai_provider.py`:
+Что остаётся в `recog/web/ai_provider.py`:
 - `ClaudeCliProvider` (строки 159–238)
 - `OpenRouterProvider` (строки 356–393)
 - `get_provider()`, `get_all_providers()`, `build_prompt()` (строки 396–431)
@@ -33,12 +33,12 @@
 |------|----------|-----------------|
 | `diarize_worker.py` | DELETE | `recog/diarization.py:46`, `build_speaker_db.py:61` (оба удаляются) |
 | `recog/diarization.py` | DELETE | `recog/pipeline.py:16`, `recog/diarize_session.py:13` (оба удаляются) |
-| `recog/diarize_session.py` | DELETE | `frontend/server.py:986` (endpoint удаляется) |
+| `recog/diarize_session.py` | DELETE | `recog/web/server.py:986` (endpoint удаляется) |
 | `recog/alignment.py` | DELETE | `recog/pipeline.py:83,87` (удаляется). **НЕ импортируется live.py** |
 | `recog/audio.py` | DELETE | `recog/pipeline.py:49,131,179` (удаляется) |
 | `recog/pipeline.py` | DELETE | `mp4_notes.py:213,336,346` (команды удаляются) |
 | `build_speaker_db.py` | DELETE | нигде (standalone скрипт) |
-| `embedding_worker.py` | KEEP | `frontend/server.py:1877` (`/api/speakers/enroll-from-segments`) |
+| `embedding_worker.py` | KEEP | `recog/web/server.py:1877` (`/api/speakers/enroll-from-segments`) |
 | `recog/models.py` | MODIFY | удалить `DiarizationSegment` (строки 20–24), остальное живое |
 
 CLI команды mp4_notes.py:
@@ -72,7 +72,7 @@ Source-text тесты которые СЛОМАЮТСЯ при декомпоз
 - `test_acceptance_ktalk_unknown.py:test_fallback_chain_order_in_source` — `.index()` на 5 символах после `elif self.use_ktalk:`
 
 ### Дубликаты в ktalk_bridge.py
-- `_find_cli_binary()` (строки 685–707) — функциональный дубликат `_resolve_cli` из `frontend/ai_provider.py`
+- `_find_cli_binary()` (строки 685–707) — функциональный дубликат `_resolve_cli` из `recog/web/ai_provider.py`
 - `_load_dotenv()` (строки 38–50) — функциональный дубликат `recog.config.load_dotenv()`
 
 ## Development Approach
@@ -86,7 +86,7 @@ Source-text тесты которые СЛОМАЮТСЯ при декомпоз
 ## Testing Strategy
 - **Unit tests**: `tests/test_increment.py` (обновить импорты), новый `tests/test_ai_provider.py`
 - **Existing tests**: все должны проходить после каждого task (кроме явно удалённых)
-- **Smoke test**: `python mp4_notes.py --help`, `python -m compileall recog frontend`
+- **Smoke test**: `python -m recog --help`, `python -m compileall recog frontend`
 - **Regression**: `python -m pytest tests/ -v` после каждого task
 - **Source-text тесты**: переписать на поведенческие assertions в Task 5
 
@@ -117,8 +117,8 @@ Source-text тесты которые СЛОМАЮТСЯ при декомпоз
 - [x] `tests/e2e/test_diarization_e2e.py` (e2e тесты pyannote diarization)
 
 **Модифицировать файлы:**
-- [x] `mp4_notes.py`: удалить subparsers и обработку команд `transcribe`, `enroll-speaker`, `build-speaker-db` (строки 35–207, 213, 336, 346). Оставить `live` и `meetings`
-- [x] `frontend/server.py`: удалить `DiarizeRequest` model (строка 941), endpoint `diarize_meeting` (строки 945–1011), endpoint `undo_diarization` (строки 1014–1036), импорт `diarize_session`
+- [x] `recog/cli.py`: удалить subparsers и обработку команд `transcribe`, `enroll-speaker`, `build-speaker-db` (строки 35–207, 213, 336, 346). Оставить `live` и `meetings`
+- [x] `recog/web/server.py`: удалить `DiarizeRequest` model (строка 941), endpoint `diarize_meeting` (строки 945–1011), endpoint `undo_diarization` (строки 1014–1036), импорт `diarize_session`
 - [x] `recog/config.py`: удалить `PYANNOTE4_VENV` и `DIARIZE_WORKER` (строки 65–66)
 - [x] `recog/models.py`: удалить `DiarizationSegment` dataclass (строки 20–24)
 - [x] `recog/__init__.py`: удалить lazy-load entries для всех удалённых модулей (`DiarizationModule`, `run_diarization_pyannote4`, `align_segments_with_speakers`, `resolve_speaker_labels`, `transcribe_pipeline`, `enroll_speaker_pipeline`, `build_speaker_db_pipeline`, `extract_audio_to_wav`, `get_audio_path`, `DiarizationSegment`, `PYANNOTE4_VENV`, `DIARIZE_WORKER`)
@@ -128,21 +128,21 @@ Source-text тесты которые СЛОМАЮТСЯ при декомпоз
 **Verification:**
 - [x] `python -m compileall recog frontend` — без ошибок
 - [x] `python -m pytest tests/ -v` — все оставшиеся тесты проходят (73 passed)
-- [x] `python mp4_notes.py --help` — CLI работает, показывает только `live` и `meetings`
+- [x] `python -m recog --help` — CLI работает, показывает только `live` и `meetings`
 
 ### Task 2: Исправить инверсию слоёв — вынести AI provider в recog/
 
 **Создать `recog/ai_provider.py`:**
-- [x] перенести `AIProvider` ABC из `frontend/ai_provider.py:132–157`
-- [x] перенести `CodexCliProvider` из `frontend/ai_provider.py:241–353`
-- [x] перенести `_resolve_cli()` из `frontend/ai_provider.py:34–57` → сделать публичной `resolve_cli()`
-- [x] перенести `_nvm_version_key()` из `frontend/ai_provider.py:27–31` → заменить на вызов `from recog.node_env import version_key`
+- [x] перенести `AIProvider` ABC из `recog/web/ai_provider.py:132–157`
+- [x] перенести `CodexCliProvider` из `recog/web/ai_provider.py:241–353`
+- [x] перенести `_resolve_cli()` из `recog/web/ai_provider.py:34–57` → сделать публичной `resolve_cli()`
+- [x] перенести `_nvm_version_key()` из `recog/web/ai_provider.py:27–31` → заменить на вызов `from recog.node_env import version_key`
 - [x] импорты внутри нового файла: `from recog.node_env import get_node_env, version_key`
 
-**Обновить `frontend/ai_provider.py`:**
+**Обновить `recog/web/ai_provider.py`:**
 - [x] удалить перенесённый код (`AIProvider`, `CodexCliProvider`, `_resolve_cli`, `_nvm_version_key`)
 - [x] добавить: `from recog.ai_provider import AIProvider, CodexCliProvider, resolve_cli` (для обратной совместимости и использования в `ClaudeCliProvider`)
-- [x] `ClaudeCliProvider` остаётся в `frontend/` — теперь наследует `AIProvider` через реэкспорт
+- [x] `ClaudeCliProvider` остаётся в `recog/web/` — теперь наследует `AIProvider` через реэкспорт
 
 **Обновить импорты в recog/:**
 - [x] `recog/increment.py:18`: `from frontend.ai_provider import CodexCliProvider` → `from recog.ai_provider import CodexCliProvider`
@@ -150,8 +150,8 @@ Source-text тесты которые СЛОМАЮТСЯ при декомпоз
 
 **Сделать приватные символы публичными:**
 - [x] `recog/node_env.py`: `_version_key()` → `version_key()`, обновить внутренний вызов (строка 41)
-- [x] `frontend/ai_provider.py`: обновить импорт `_version_key` → `version_key` (строка 24, использование строка 31)
-- [x] `ktalk_bridge.py`: обновить импорт `_version_key` → `version_key` (строка 32, использование строка 703)
+- [x] `recog/web/ai_provider.py`: обновить импорт `_version_key` → `version_key` (строка 24, использование строка 31)
+- [x] `recog/ktalk_bridge.py`: обновить импорт `_version_key` → `version_key` (строка 32, использование строка 703)
 - [x] `recog/speaker_db.py`: `_cosine_similarity` → `cosine_similarity` (staticmethod, строка 220)
 - [x] `recog/live.py`: `SpeakerDatabase._cosine_similarity` → `SpeakerDatabase.cosine_similarity` (строка 446)
 
@@ -162,7 +162,7 @@ Source-text тесты которые СЛОМАЮТСЯ при декомпоз
 **Verification:**
 - [x] `python -c "from recog.ai_provider import CodexCliProvider, resolve_cli"` — без ошибки
 - [x] `grep -r "from frontend" recog/` — пусто (нет импортов frontend из recog)
-- [x] `grep -rn "_version_key\|_resolve_cli\|_cosine_similarity" recog/ frontend/ ktalk_bridge.py` — нет приватных cross-module imports
+- [x] `grep -rn "_version_key\|_resolve_cli\|_cosine_similarity" recog/ recog/web/ ktalk_bridge.py` — нет приватных cross-module imports
 - [x] `python -m compileall recog frontend` — без ошибок
 - [x] `python -m pytest tests/ -v` — все тесты проходят
 
@@ -232,10 +232,10 @@ Source-text тесты которые СЛОМАЮТСЯ при декомпоз
 
 - [x] `python -m compileall recog frontend` — без ошибок
 - [x] `python -m pytest tests/ -v` — все тесты проходят (109 passed)
-- [x] `python mp4_notes.py --help` — CLI работает (live, meetings)
-- [x] `python mp4_notes.py live --list-devices` — live mode стартует (4 устройства)
+- [x] `python -m recog --help` — CLI работает (live, meetings)
+- [x] `python -m recog live --list-devices` — live mode стартует (4 устройства)
 - [x] `grep -r "from frontend" recog/` — пусто
-- [x] `grep -rn "_version_key\|_resolve_cli\|_cosine_similarity" recog/ frontend/ ktalk_bridge.py` — пусто (только внутренний _nvm_version_key в ai_provider.py)
+- [x] `grep -rn "_version_key\|_resolve_cli\|_cosine_similarity" recog/ recog/web/ ktalk_bridge.py` — пусто (только внутренний _nvm_version_key в ai_provider.py)
 - [x] Подсчитать строки ДО и ПОСЛЕ: recog/ 3194 строк (было ~4822, net -1628)
 
 ### Task 7: Обновить документацию
@@ -251,7 +251,7 @@ Source-text тесты которые СЛОМАЮТСЯ при декомпоз
 ### Граф зависимостей ПОСЛЕ рефакторинга
 
 ```
-frontend/
+recog/web/
   server.py ──→ recog.* (однонаправленно)
   ai_provider.py ──→ recog.ai_provider (импорт AIProvider, CodexCliProvider)
 

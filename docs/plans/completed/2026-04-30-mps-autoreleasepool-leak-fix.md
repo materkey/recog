@@ -73,7 +73,7 @@
   - `transcribe_simple`: per-chunk pool — N chunks → N enter/exit
 - **E2E тестов нет** для этого слоя (real GPU forward не воспроизводится в unit-тесте дёшево); полагаемся на mock'и `objc` и `torch.mps`
 - **Regression**: полный `pytest tests/` после правок
-- **Manual smoke**: `python mp4_notes.py --help` + `recog-service.sh restart` + 24h uptime + `heap <pid>` контроль
+- **Manual smoke**: `python -m recog --help` + `recog-service.sh restart` + 24h uptime + `heap <pid>` контроль
 
 ## Progress Tracking
 
@@ -263,7 +263,7 @@ finally:
 - [x] `python -m pytest tests/test_asr.py -v` — все asr-тесты проходят (31 passed)
 - [x] `python -m pytest tests/test_live_decomposed.py tests/test_per_speaker_refine_e2e.py -v` — live-related регрессия (28 passed)
 - [x] `python -m pytest tests/ -v` — полный suite зелёный (363 passed, 2 deselected)
-- [x] `python mp4_notes.py --help` — CLI грузится без ImportError
+- [x] `python -m recog --help` — CLI грузится без ImportError
 - [x] `git diff --stat BASE_REVISION..HEAD` — изменения только в четырёх файлах: recog/asr.py, recog/live.py, tests/test_asr.py, docs/plans/2026-04-30-mps-autoreleasepool-leak-fix.md (ADR-0019.md заметка отнесена к Task 7)
 - [x] visually review diff — изменения минимальны и по теме: autoreleasepool wrapping всех четырёх hot inference paths (transcribe_simple, transcribe_batch, transcribe_with_timestamps str/ndarray, _transcribe_direct), throttled empty_cache helper, тесты
 

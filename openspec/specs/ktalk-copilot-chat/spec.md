@@ -39,7 +39,7 @@ The system SHALL allow the user to send a free-form chat message from the Copilo
 The bridge SHALL route Copilot messages between the KTalk extension and the local Claude Code channel server without treating the channel server as a meeting participant or extension lifecycle client.
 
 #### Scenario: Channel server connects
-- **WHEN** a local channel server connects to `ktalk_bridge.py` and sends `copilot_channel_hello`
+- **WHEN** a local channel server connects to `recog/ktalk_bridge.py` and sends `copilot_channel_hello`
 - **THEN** the bridge registers it as a Copilot channel client
 - **AND** does not reset speaker clock state, sequence counters, or meeting lifecycle state for extension clients
 

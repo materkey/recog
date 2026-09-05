@@ -1,9 +1,9 @@
-## 0. Gateway patch (deploy/z270xx)
+## 0. Gateway patch (recog/asr_server)
 
-- [ ] 0.1 Copy the current Z270XX backend into `deploy/z270xx/gigaam_backend.py`; add an optional form field `timestamp_granularities` (string) to the `/v1/audio/transcriptions` handler
+- [ ] 0.1 Copy the current Z270XX backend into `recog/asr_server/gigaam_backend.py`; add an optional form field `timestamp_granularities` (string) to the `/v1/audio/transcriptions` handler
 - [ ] 0.2 When `timestamp_granularities == "word"`, call `state["model"].transcribe(wav_path, word_timestamps=True)` instead of `transcribe_longform`; include top-level `"words": [{"word": w.text, "start": float(w.start), "end": float(w.end)}]` in the JSON response alongside `text`
 - [ ] 0.3 Confirm all existing behaviour (json / verbose_json / diarized / srt / vtt, ffmpeg transcode) is byte-identical when `timestamp_granularities` is absent
-- [ ] 0.4 Write `deploy/z270xx/README.md`: scp target `~/projects/asr-api/gigaam_backend.py`, `systemctl --user restart asr-gigaam`, curl smoke test asserting `words` is present for `timestamp_granularities=word` and absent otherwise
+- [ ] 0.4 Write `docs/asr-server.md`: scp target `~/projects/asr-api/gigaam_backend.py`, `systemctl --user restart asr-gigaam`, curl smoke test asserting `words` is present for `timestamp_granularities=word` and absent otherwise
 - [ ] 0.5 Deploy to Z270XX and run the smoke test from the README
 
 ## 1. Config
@@ -45,12 +45,12 @@
 - [ ] 5.3 `recog/live.py` `_transcribe_direct`: keep the `set_live_pending()/clear_live_pending()` try/finally + outer try/except; inside `return self.asr.transcribe_chunk(audio_chunk)`
 - [ ] 5.4 `recog/live.py` `_refine_transcribe_fn`: guard the decoder monkey-patch — `if getattr(self.asr, "using_remote", False): return self.asr.transcribe_with_timestamps(pcm_samples)` (no load_model, no patch); else existing local path
 - [ ] 5.5 Confirm `_setup` `self.asr.load_model(quiet=True)` works for both (remote-mode healthcheck, local-mode load)
-- [ ] 5.6 `mp4_notes.py`: route the offline `transcribe_simple` / `transcribe_longform` call sites through `build_asr()` instead of constructing `ASRModule()` directly
+- [ ] 5.6 `recog/cli.py`: route the offline `transcribe_simple` / `transcribe_longform` call sites through `build_asr()` instead of constructing `ASRModule()` directly
 - [ ] 5.7 `recog/__init__.py`: export `build_asr`, `RemoteASRClient`, `FallbackASR` via the existing lazy-export map
 
 ## 6. Tests + validation
 
-- [ ] 6.1 `python -m compileall recog frontend` clean; `python mp4_notes.py --help` smoke
+- [ ] 6.1 `python -m compileall recog frontend` clean; `python -m recog --help` smoke
 - [ ] 6.2 Full suite `python -m pytest tests/ -v` green with default `RECOG_ASR_BACKEND=local` (repository behaviour unchanged)
 - [ ] 6.3 With `RECOG_ASR_BACKEND=remote` against the live gateway: a real KTalk meeting on confirmed LAN (`ping` < 5 ms) offloads live + refine; verify transcript + tier-2 refine arrive
 - [ ] 6.4 Force a remote outage mid-meeting (stop the gateway / block the URL); confirm transparent fallback, the `[FallbackASR] remote circuit OPEN ...` log, and that the live meeting does not crash

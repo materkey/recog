@@ -1,6 +1,6 @@
 # KTalk Paused-mode scroll anchor
 
-> **Post-iteration-1 amendment (2026-05-04)**: After Task 8 completed, code review iteration 1 simplified the design and **dropped `data-line-index` entirely**. The current implementation in `src/ui.js` uses only the `data-segment-id` anchor key with a best-effort `scrollTop = anchor.top` fallback when the anchor row is gone. Old plan sections that still mention `data-line-index` (the `Solution Overview` design-decision #1, the `Technical Details` code block, Task 2 sub-bullet about adding the attribute, Task 3 in its entirety, etc.) are historical — see `kontur-diarize/ktalk-speaker-extension/src/ui.js:2330-2367` for the live source of truth.
+> **Post-iteration-1 amendment (2026-05-04)**: After Task 8 completed, code review iteration 1 simplified the design and **dropped `data-line-index` entirely**. The current implementation in `src/ui.js` uses only the `data-segment-id` anchor key with a best-effort `scrollTop = anchor.top` fallback when the anchor row is gone. Old plan sections that still mention `data-line-index` (the `Solution Overview` design-decision #1, the `Technical Details` code block, Task 2 sub-bullet about adding the attribute, Task 3 in its entirety, etc.) are historical — see `browser-extension/src/ui.js:2330-2367` for the live source of truth.
 >
 > Iteration-1 simplifications applied:
 > - Helpers no longer carry `lineIndex` in the anchor object; `captureScrollAnchor` returns `null` (not a sentinel) when no row matches.
@@ -17,7 +17,7 @@
 
 ## Overview
 
-В оверлее KTalk-расширения (`kontur-diarize/ktalk-speaker-extension`) переключатель Follow → Paused должен останавливать движение скролла. Сейчас в Paused-режиме верхняя видимая строка транскрипта «прыгает» (обычно — резко уезжает к самому верху списка) при появлении нового live-сегмента или при tier-2 refine.
+В оверлее KTalk-расширения (`browser-extension`) переключатель Follow → Paused должен останавливать движение скролла. Сейчас в Paused-режиме верхняя видимая строка транскрипта «прыгает» (обычно — резко уезжает к самому верху списка) при появлении нового live-сегмента или при tier-2 refine.
 
 **Корневая причина**: `updateTranscriptUI()` в `src/ui.js:2261–2313` пересоздаёт весь контейнер через `container.innerHTML = ...`. Это сбрасывает `scrollTop` в 0. В Follow-режиме код возвращает скролл к нижней кромке (`if (shouldAutoScroll)`), и пользователь не замечает; в Paused — никто не восстанавливает позицию, и пользователь оказывается наверху списка. Дополнительно `handleTranscriptRefine()` (`src/ui.js:2142–2236`, KTalk-ветка) при росте бабла выше viewport сдвигает контент ниже, что тоже нарушает контракт «Paused = без движения».
 
@@ -33,13 +33,13 @@
 ## Context (from discovery)
 
 - **Файлы/компоненты**:
-  - `kontur-diarize/ktalk-speaker-extension/src/ui.js` — `updateTranscriptUI` (2261–2313), `handleTranscriptRefine` KTalk-ветка (2212–2231), `isNearBottom` (2315), `toggleAutoFollow`/`updateFollowButton` (2321–2335), `scrollToAnchorTimestamp` (2540–2551, использует `data-ts` для Alt+J).
-  - `kontur-diarize/ktalk-speaker-extension/src/ui.test.js` — существующий jsdom-набор. Покрывает `handleTranscriptRefine`, но не `updateTranscriptUI` и не scrollTop/offsetTop.
-  - `kontur-diarize/ktalk-speaker-extension/src/state.js` — `autoScrollEnabled: true` (default).
-  - `kontur-diarize/ktalk-speaker-extension/src/test-setup.js` — мокается `Element.prototype.scrollIntoView`; конвенция переопределять DOM-свойства через `Object.defineProperty`.
-  - `kontur-diarize/ktalk-speaker-extension/jest.config.js` — конфиг для jsdom-тестов.
+  - `browser-extension/src/ui.js` — `updateTranscriptUI` (2261–2313), `handleTranscriptRefine` KTalk-ветка (2212–2231), `isNearBottom` (2315), `toggleAutoFollow`/`updateFollowButton` (2321–2335), `scrollToAnchorTimestamp` (2540–2551, использует `data-ts` для Alt+J).
+  - `browser-extension/src/ui.test.js` — существующий jsdom-набор. Покрывает `handleTranscriptRefine`, но не `updateTranscriptUI` и не scrollTop/offsetTop.
+  - `browser-extension/src/state.js` — `autoScrollEnabled: true` (default).
+  - `browser-extension/src/test-setup.js` — мокается `Element.prototype.scrollIntoView`; конвенция переопределять DOM-свойства через `Object.defineProperty`.
+  - `browser-extension/jest.config.js` — конфиг для jsdom-тестов.
 - **Паттерны**: `state.autoScrollEnabled` — единственный источник истины о Paused/Follow. Файл `ui.js` — ES-modules (`export function ...`), не CommonJS. `handleTranscriptRefine` экспортируется как named export (`ui.js:2142`); `isNearBottom`/`toggleAutoFollow`/`updateFollowButton` — приватные внутри модуля и тестируются ЧЕРЕЗ публичные функции (`handleTranscriptRefine`/`handleTranscript`). Новые helpers будут следовать тому же паттерну — приватные, тестируем через `updateTranscriptUI`/`handleTranscriptRefine`.
-- **Зависимости**: backend (`ktalk_bridge.py`, `recog/live.py`) не трогаем — баг чисто фронтовый. Jitsi-путь (vas3k UI) — отдельная история, в этот change не входит.
+- **Зависимости**: backend (`recog/ktalk_bridge.py`, `recog/live.py`) не трогаем — баг чисто фронтовый. Jitsi-путь (vas3k UI) — отдельная история, в этот change не входит.
 - **Совместимость с Anchor (Alt+J)**: `data-ts` атрибут используется в `scrollToAnchorTimestamp` (`ui.js:2545`) и в anchor-bullet-кнопках (`ui.js:2438, 2445, 2475`). **Не удаляем `data-ts`** — добавляем `data-line-index` аддитивно, чтобы не сломать Alt+J context navigation.
 - **Прошедший review**: трёхагентный pipeline (Reviewer → Validator → Improver) подтвердил 4 находки; `planning:plan-review` нашёл ещё 11, в том числе critical конфликт с Alt+J. Все применены ниже.
 
@@ -198,7 +198,7 @@ if (container) {
 ### Task 1: TDD red — failing test for `updateTranscriptUI` paused-mode preserves scrollTop (segment_id present)
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`
+- Modify: `browser-extension/src/ui.test.js`
 
 - [x] Добавить новый `describe('updateTranscriptUI scroll anchor')` в конец `ui.test.js`.
 - [x] Подготовить state: 5+ строк в `state.transcriptLines`, все с `segment_id > 0`, `state.autoScrollEnabled = false`. Создать в jsdom `<div class="ktalk-transcript-messages">` контейнер.
@@ -211,7 +211,7 @@ if (container) {
 ### Task 2: TDD green — implement helpers + render `data-line-index` + integration
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.js`
+- Modify: `browser-extension/src/ui.js`
 
 - [x] Реализовать `captureScrollAnchor` и `restoreScrollAnchor` в `src/ui.js` рядом с `isNearBottom` (≈ 2315). **Приватные функции** (без `export`) в стиле `isNearBottom`/`toggleAutoFollow`. Снабдить JSDoc-блоками (см. Technical Details).
 - [x] Использовать `CSS.escape(anchor.segmentId)` напрямую (не вводить `cssEscapeAttr` helper — `CSS.escape` доступен в MV3). ➕ jsdom не имеет `CSS.escape` — добавлен polyfill в `test-setup.js`.
@@ -231,7 +231,7 @@ if (container) {
 ### Task 3: TDD — `updateTranscriptUI` paused-mode line-index fallback (segment_id=0)
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`
+- Modify: `browser-extension/src/ui.test.js`
 
 - [x] Добавить failing-тест: state с 5 строк, у всех `segment_id: 0` (имитирует history-rows и retroactive correction). `state.autoScrollEnabled = false`, scrollTop в середине. Те же `offsetTop`-моки (`idx * 50`), `scrollTop = 120`.
 - [x] Проверить, что у `.ktalk-msg` НЕТ `data-segment-id` (проверка через `el.hasAttribute('data-segment-id') === false`).
@@ -241,8 +241,8 @@ if (container) {
 ### Task 4: TDD — `handleTranscriptRefine` paused-mode multi-update batch with bubble growth
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.js`
+- Modify: `browser-extension/src/ui.test.js`
+- Modify: `browser-extension/src/ui.js`
 
 - [x] Добавить failing-тест: state с 5 строк (segment_id=11..15), `state.autoScrollEnabled = false`. Контейнер с `scrollTop = 100` (между 2-м и 3-м баблом по моку). Замокать `offsetTop` через `Object.defineProperty(el, 'offsetTop', { get: () => baseOffsets[idx], configurable: true })`, baseOffsets = [0, 50, 100, 150, 200].
 - [x] **Симулировать рост**: переопределить getter ПОСЛЕ `handleTranscriptRefine` так, чтобы offsetTop баблов выше якоря выросли (например, для idx=0 и idx=1: `100` и `150` вместо `0` и `50`). Якорь (idx=2) перейдёт с `offsetTop=100` на `offsetTop=200`. ➕ Реализовано через per-element call-count getter (WeakMap reads counter): первые 2 чтения якоря возвращают base 100, 3-е чтение (внутри `restoreScrollAnchor`) возвращает grown 200. Тест размещён последним в `describe`, чтобы кастомный getter не перетёк в другие тесты (`mockOffsets` пропускает redefine при выставленном `__ktalkOffsetTopMocked`).
@@ -256,7 +256,7 @@ if (container) {
 ### Task 5: Smoke test — Follow mode sticky-bottom unchanged
 
 **Files:**
-- Modify: `kontur-diarize/ktalk-speaker-extension/src/ui.test.js`
+- Modify: `browser-extension/src/ui.test.js`
 
 - [x] Добавить тест: `state.autoScrollEnabled = true`, `isNearBottom(container)` возвращает true (через `scrollHeight`/`scrollTop`/`clientHeight` мок). Push новую строку, вызвать `updateTranscriptUI()`.
 - [x] Assert: `container.scrollTop === container.scrollHeight` (sticky-bottom поведение не сломалось).
@@ -266,9 +266,9 @@ if (container) {
 ### Task 6: Build + manual Chrome smoke
 
 **Files:**
-- (read-only) `kontur-diarize/ktalk-speaker-extension/injected.js` — должен пересобраться.
+- (read-only) `browser-extension/injected.js` — должен пересобраться.
 
-- [x] `cd kontur-diarize/ktalk-speaker-extension && npm run build` — убедиться, что сборка прошла без ошибок.
+- [x] `cd browser-extension && npm run build` — убедиться, что сборка прошла без ошибок.
 - [x] Проверить, что `injected.js` обновился (`git diff -- injected.js` показывает diff). Конвенция repo: `injected.js` — generated, см. AGENTS.md «do not edit directly». Если репо коммитит сборку — отдельный коммит `build: rebuild injected.js for ktalk paused-scroll fix`. Если не коммитит — оставить локально.
 - [x] В Chrome перезагрузить расширение (`chrome://extensions` → KTalk Speaker → Reload). manual test (skipped - not automatable)
 - [x] Открыть конференцию в KTalk, дождаться live-сегментов. manual test (skipped - not automatable)
@@ -282,7 +282,7 @@ if (container) {
 
 - [x] Все 4 acceptance criteria из Overview помечены `[x]`.
 - [x] Edge-cases покрыты тестами: segment_id present + missing, multi-update refine с ростом, Follow-mode sticky-bottom, пустой контейнер.
-- [x] Финальный test suite: `cd kontur-diarize/ktalk-speaker-extension && npm test` — 67 passed / 4 failed; 5 новых scroll-anchor тестов зелёные; 2 fail в `ui.test.js` (vas3k path rewrites, refine continuation child segment_id on vas3k) — pre-existing, явно отмечены в плане как не-регрессия. 2 file-level fail (`speaker.test.js`, `pcm_transport.test.js`) — pre-existing, не связаны с этим change.
+- [x] Финальный test suite: `cd browser-extension && npm test` — 67 passed / 4 failed; 5 новых scroll-anchor тестов зелёные; 2 fail в `ui.test.js` (vas3k path rewrites, refine continuation child segment_id on vas3k) — pre-existing, явно отмечены в плане как не-регрессия. 2 file-level fail (`speaker.test.js`, `pcm_transport.test.js`) — pre-existing, не связаны с этим change.
 - [x] Quick-check: `grep -E '"lint|"typecheck"' package.json` — no lint script configured, skipped.
 - [x] Coverage не падает (jest сконфигурирован без `--coverage` по умолчанию — coverage not enforced by default).
 
@@ -311,5 +311,5 @@ if (container) {
 - Если та же проблема воспроизведётся в Jitsi-пути (`ui-vas3k.js:644`) — отдельная задача.
 
 **External system updates**:
-- Backend (`ktalk_bridge.py`, `recog/live.py`) не трогаем — баг чисто фронтовый.
+- Backend (`recog/ktalk_bridge.py`, `recog/live.py`) не трогаем — баг чисто фронтовый.
 - Расширение распространяется как локальный unpacked в Chrome — после `npm run build` пользователю нужно перезагрузить расширение вручную.

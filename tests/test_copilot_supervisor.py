@@ -620,7 +620,7 @@ def test_manual_meeting_id_matches_bridge_constant():
     when: the supervisor's duplicated constant is compared with the bridge one
     then: the values match — a drift would break flap/adopt id matching
     """
-    from ktalk_bridge import MANUAL_MEETING_ID as BRIDGE_MANUAL_MEETING_ID
+    from recog.ktalk_bridge import MANUAL_MEETING_ID as BRIDGE_MANUAL_MEETING_ID
 
     assert MANUAL_MEETING_ID == "manual"
     assert MANUAL_MEETING_ID == BRIDGE_MANUAL_MEETING_ID
@@ -976,7 +976,7 @@ async def test_given_live_manual_session_when_hello_crosses_wire_then_bridge_rea
           the asserted bytes travelled from Supervisor.run() into the
           bridge's real handler (DW-11)
     """
-    from ktalk_bridge import KTalkBridge
+    from recog.ktalk_bridge import KTalkBridge
 
     received = []
 

@@ -33,13 +33,13 @@ conference tab; no manual session start at all.
   a supervisor reconnect during a manual session would GRACE-kill it unless the
   bridge knows about manual sessions.
 - Frontend already holds a reconnecting WS client to the bridge:
-  `frontend/bridge_subscriber.py` (receive-only, filters to `transcript_refine`).
-- Webapp live WS endpoint `/api/live/stream` (`frontend/server.py:1371`) discards
+  `recog/web/bridge_subscriber.py` (receive-only, filters to `transcript_refine`).
+- Webapp live WS endpoint `/api/live/stream` (`recog/web/server.py:1371`) discards
   everything the browser sends (`receive_text()` loop).
-- Live view SPA: `frontend/static/app.js` — `views.live`, WS message switch at
+- Live view SPA: `recog/web/static/app.js` — `views.live`, WS message switch at
   `handleMessage` (line 675), markdown renderer `renderMarkdown` (line 1869).
 - Reference implementation of the chat UI behavior: extension's
-  `ui-copilot-panel` with tests (`kontur-diarize/ktalk-speaker-extension/src/ui-copilot-panel.test.js`),
+  `ui-copilot-panel` with tests (`browser-extension/src/ui-copilot-panel.test.js`),
   outbound frame shape in `src/ws_api.js:73`.
 - Existing pytest files to extend: `tests/test_ktalk_bridge.py`,
   `tests/test_copilot_supervisor.py`, `tests/test_bridge_subscriber.py`.
@@ -131,7 +131,7 @@ conference tab; no manual session start at all.
 
 - **unit tests**: pytest per task in the existing test files (see tasks)
 - **UI (app.js)**: the frontend SPA has no JS test infrastructure (no npm setup in
-  `frontend/`) — syntax is checked with `node --check`, and protocol logic stays
+  `recog/web/`) — syntax is checked with `node --check`, and protocol logic stays
   server-side under pytest. Browser behavior remains a post-completion manual
   smoke; do not introduce a JS test harness in this plan.
 - **e2e**: `tests/e2e` exists but covers diarization, not the webapp — out of scope
@@ -149,7 +149,7 @@ conference tab; no manual session start at all.
 Браузер (#/live: кнопка + чат)
    │  WS /api/live/stream (9080): copilot_chat_message / copilot_spawn_request / copilot_stop_request
    ▼
-frontend/server.py ── BridgeSubscriber (двунаправленный) ──► ktalk_bridge.py
+recog/web/server.py ── BridgeSubscriber (двунаправленный) ──► ktalk_bridge.py
    ▲                                                            │ spawn/stop → supervisor
    │  copilot_reply / copilot_status (incl. agent_state chip)   │ chat → copilot_channel → Claude (tmux)
    └────────────────────────────────────────────────────────────┘
@@ -190,7 +190,7 @@ extension chip.
 ### Task 1: Bridge broadcasts copilot frames to subscriber clients
 
 **Files:**
-- Modify: `ktalk_bridge.py`
+- Modify: `recog/ktalk_bridge.py`
 - Modify: `tests/test_ktalk_bridge.py`
 
 - [x] write failing tests: a registered subscriber client receives `copilot_reply`
@@ -212,7 +212,7 @@ extension chip.
 ### Task 2: Bridge relays manual spawn/stop and tracks manual session state
 
 **Files:**
-- Modify: `ktalk_bridge.py`
+- Modify: `recog/ktalk_bridge.py`
 - Modify: `tests/test_ktalk_bridge.py`
 
 - [x] write failing tests: `copilot_spawn_request` from a subscriber socket is
@@ -301,7 +301,7 @@ extension chip.
 ### Task 4: BridgeSubscriber becomes bidirectional
 
 **Files:**
-- Modify: `frontend/bridge_subscriber.py`
+- Modify: `recog/web/bridge_subscriber.py`
 - Modify: `tests/test_bridge_subscriber.py`
 
 - [x] write failing tests: forwards `copilot_reply` and `copilot_status` (in
@@ -318,7 +318,7 @@ extension chip.
 ### Task 5: Frontend server — inbound copilot frames over `/api/live/stream`
 
 **Files:**
-- Modify: `frontend/server.py`
+- Modify: `recog/web/server.py`
 - Create: `tests/test_frontend_copilot_proxy.py`
 
 - [x] write failing tests (pure helpers + fake subscriber): inbound whitelist
@@ -331,9 +331,9 @@ extension chip.
       it is a pure relay (D5: recovery is supervisor_hello-driven, bridge-side)
 - [x] extract inbound handling into a testable helper
       `handle_client_frame(raw, subscriber, reply_cb)` and call it from the
-      `/api/live/stream` receive loop (`frontend/server.py:1420`)
+      `/api/live/stream` receive loop (`recog/web/server.py:1420`)
 - [x] note: NO `_forward_bridge_message` change needed — it already broadcasts
-      every forwarded frame unconditionally (`frontend/server.py:453`); widening
+      every forwarded frame unconditionally (`recog/web/server.py:453`); widening
       `FORWARD_TYPES` in Task 4 is sufficient for bridge→webapp fan-out
 - [x] agent-state primer: cache the last `copilot_status {status: "agent_state"}`
       seen from the bridge and send it right after `init` on each new
@@ -344,9 +344,9 @@ extension chip.
 ### Task 6: Webapp UI — Copilot button, status chip, chat panel
 
 **Files:**
-- Modify: `frontend/static/app.js`
-- Modify: `frontend/static/index.html`
-- Modify: `frontend/static/style.css` (or the stylesheet used by the live view)
+- Modify: `recog/web/static/app.js`
+- Modify: `recog/web/static/index.html`
+- Modify: `recog/web/static/style.css` (or the stylesheet used by the live view)
 
 - [x] add a "Recog Copilot" button with status chip to the live view; chip driven
       by `copilot_status {status: "agent_state"}` frames (⚫ offline default)
@@ -370,7 +370,7 @@ extension chip.
       `copilot_status`; unknown `request_id` replies (e.g. authored from the
       extension) are appended, not dropped
 - [x] verify: `python -m compileall recog frontend` and
-      `node --check frontend/static/app.js` pass; full pytest suite passes
+      `node --check recog/web/static/app.js` pass; full pytest suite passes
 
 ### Task 7: Verify acceptance criteria
 
@@ -385,7 +385,7 @@ extension chip.
       rotation mid-flight
 - [x] run full test suite: `python -m pytest tests/ -v`
 - [x] `python -m compileall recog frontend`
-- [x] `node --check frontend/static/app.js`
+- [x] `node --check recog/web/static/app.js`
 - ⚠️ smoke (see Post-Completion) — post-completion manual step, NOT attempted here: launchd restart, real-meeting preemption check, and restart-resilience check remain for a human
 
 ### Task 8: [Final] Update documentation

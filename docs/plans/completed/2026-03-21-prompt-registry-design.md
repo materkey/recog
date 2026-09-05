@@ -184,7 +184,7 @@ Remove the hardcoded INCREMENT_PROMPT from ai_provider.py.
 ### Task 3: Migration + ktalk_bridge update
 
 - [x] Add migration logic in IncrementGenerator to move old flat `increments/v*.md` to `increments/my-increment/v*.md`
-- [x] Update `ktalk_bridge.py` to call `generate_all()` instead of `generate()`
+- [x] Update `recog/ktalk_bridge.py` to call `generate_all()` instead of `generate()`
 - [x] Update `_safe_generate_increment` to call `generate_all`
 - [x] Validate: `python -m pytest tests/ -v` passes
 
@@ -194,7 +194,7 @@ Remove the hardcoded INCREMENT_PROMPT from ai_provider.py.
 - [x] Restructure `GET /api/meetings/{id}/increments` to return `{prompt_id: [metas]}`
 - [x] Add `GET /api/meetings/{id}/increments/{prompt_id}` endpoint
 - [x] Add `GET /api/meetings/{id}/increments/{prompt_id}/{version}` endpoint
-- [x] Validate: `python -m compileall frontend/server.py`
+- [x] Validate: `python -m compileall recog/web/server.py`
 
 ### Task 5: Frontend UI for multi-prompt display
 

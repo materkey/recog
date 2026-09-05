@@ -108,7 +108,7 @@ diarization (subprocess, ADR-0006)
 
 | Шаг | Файл | Описание |
 |-----|------|----------|
-| 1 | `mp4_notes.py` | Добавить `--asr-engine` (`gigaam`/`parakeet-v3`) и описать ограничения (parakeet: Linux+NVIDIA) |
+| 1 | `recog/cli.py` | Добавить `--asr-engine` (`gigaam`/`parakeet-v3`) и описать ограничения (parakeet: Linux+NVIDIA) |
 | 2 | `recog/asr.py` | Вынести текущую реализацию в backend `gigaam` (без изменения поведения), подготовить общий интерфейс вызова |
 | 3 | `recog/pipeline.py` | Пробросить выбор движка из CLI и переключать backend при транскрипции |
 | 4 | `parakeet_worker.py` | Добавить воркер NeMo: загрузка модели, `transcribe(..., timestamps=True)`, выдача JSON сегментов |

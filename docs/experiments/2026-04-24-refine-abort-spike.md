@@ -59,7 +59,7 @@ Polling the inner symbol loop is possible but offers no extra latency savings
 
 ### Evidence — runtime behaviour
 
-The spike script `scripts/refine_abort_spike.py` monkey-patches
+The spike script `scripts/benchmarks/refine_abort_spike.py` monkey-patches
 `model.decoding.decode` with an abortable variant whose body mirrors the
 upstream loop exactly (bytewise-identical logic, one extra check). Running
 with `should_abort = lambda: True` raises `RefineAborted` at `t=0/T` and
@@ -97,7 +97,7 @@ so cooperative saves ~510 ms / window-abort on the target window size.
 
 ## Monkey-patch design (prototype)
 
-The prototype lives in `scripts/refine_abort_spike.py:43-110`.
+The prototype lives in `scripts/benchmarks/refine_abort_spike.py:43-110`.
 Key shape:
 
 ```python
@@ -181,6 +181,6 @@ a `self._should_abort` attr the worker can toggle.
 ## Reproduce
 
 ```bash
-./venv-gigaam/bin/python scripts/refine_abort_spike.py
+./venv-gigaam/bin/python scripts/benchmarks/refine_abort_spike.py
 # → prints timings, writes docs/experiments/2026-04-24-refine-abort-spike.json
 ```

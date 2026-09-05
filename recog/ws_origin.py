@@ -2,9 +2,9 @@
 
 WebSockets bypass CORS: any webpage can open a socket to a localhost port
 and speak the protocol. Both WS servers (`ktalk_bridge._handle_client`,
-`frontend/server.live_stream`) call `origin_allowed()` at accept-time to
+`recog/web/server.live_stream`) call `origin_allowed()` at accept-time to
 reject browser pages that are not the Chrome extension's conference hosts
-(mirroring `kontur-diarize/ktalk-speaker-extension/manifest.json`) or the
+(mirroring `browser-extension/manifest.json`) or the
 webapp itself.
 
 Absent Origin header (``None``) is allowed — non-browser clients (the

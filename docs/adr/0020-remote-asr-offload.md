@@ -9,7 +9,7 @@ Live KTalk-транскрипция и offline-CLI крутят GigaAM (`v3_e2e_
 MacBook. Все hot inference paths делят один экземпляр модели под
 `ASRModule._model_lock` (ADR-0018 per-speaker batched forward, ADR-0019 refine).
 На M1 Pro 16 GB модель занимает ~1.6 GB RSS, throughput на батче ~60× realtime
-(`tests/bench_gigaam_rtf.py`, ADR-0018). Этого хватает на live-путь, но:
+(`scripts/benchmarks/bench_gigaam_rtf.py`, ADR-0018). Этого хватает на live-путь, но:
 
 - Refine-контур (ADR-0019) конкурирует с live за единственный mutex; cooperative
   abort смягчает, но не убирает контеншн.
@@ -66,7 +66,7 @@ offload'ить нельзя — а это один из четырёх путе�
 `recog/remote_asr.py::build_asr() -> ASRModule | FallbackASR`. Читает
 `recog.config`: при `RECOG_ASR_BACKEND == "remote"` возвращает `FallbackASR`
 поверх `RemoteASRClient`, иначе — обычный `ASRModule()`. `LiveTranscriber.__init__`
-и offline-CLI в `mp4_notes.py` конструируют ASR только через `build_asr()`. Это
+и offline-CLI в `recog/cli.py` конструируют ASR только через `build_asr()`. Это
 единственная точка ветвления local/remote — остальной код видит один интерфейс.
 
 ### D2. Offload ВСЕХ четырёх GigaAM-путей
@@ -74,7 +74,7 @@ offload'ить нельзя — а это один из четырёх путе�
 Выносятся все четыре inference-поверхности, а не только «дорогой» offline:
 
 1. `transcribe_batch` — live per-speaker batched forward (ADR-0018).
-2. `transcribe_simple` — offline CLI (`mp4_notes.py`).
+2. `transcribe_simple` — offline CLI (`recog/cli.py`).
 3. `transcribe_with_timestamps` — refine-контур (ADR-0019), требует
    word-timestamps от gateway.
 4. Прямой `model.forward()` mic / mixed-fallback в `live.py::_transcribe_direct`.
@@ -140,7 +140,7 @@ thread-safe circuit breaker (`threading.Lock`, `time.monotonic()`).
 
 ### D5. Gateway расширяется в этом репозитории под word-timestamps
 
-Патч текущего Z270XX backend'а лежит в `deploy/z270xx/gigaam_backend.py` (один
+Патч текущего Z270XX backend'а лежит в `recog/asr_server/gigaam_backend.py` (один
 репозиторий — отдельного asr-api нет). Добавляется опциональное form-поле
 `timestamp_granularities` (string; `"word"` включает word-timestamps). Когда
 запрошены word ts — backend зовёт `state["model"].transcribe(wav_path,
@@ -148,7 +148,7 @@ word_timestamps=True)` (вернёт `TranscriptionResult` с `.text` и
 `.words[Word(text, start_sec, end_sec)]`) вместо `transcribe_longform` и кладёт в
 JSON top-level `"words": [{"word", "start", "end"}]` рядом с `text`. Без флага —
 всё текущее поведение (json/verbose_json/diarized/srt/vtt, ffmpeg transcode)
-нетронуто. Deploy: `deploy/z270xx/README.md` — scp в `~/projects/asr-api/
+нетронуто. Deploy: `docs/asr-server.md` — scp в `~/projects/asr-api/
 gigaam_backend.py` на Z270XX, `systemctl --user restart asr-gigaam`, curl
 smoke-test на word ts.
 
@@ -181,9 +181,9 @@ Env-консты в `recog/config.py` (паттерн `os.environ.get(...)` на
   `self.asr.transcribe_chunk`; `_refine_transcribe_fn` гейтит decoder
   monkey-patch на `getattr(self.asr, "using_remote", False)` (в remote-режиме
   ни load_model, ни patch — сразу `transcribe_with_timestamps`).
-- `mp4_notes.py` — offline-транскрипция через `build_asr()`.
+- `recog/cli.py` — offline-транскрипция через `build_asr()`.
 - `recog/__init__.py` — экспорт `build_asr`, `RemoteASRClient`, `FallbackASR`.
-- `deploy/z270xx/gigaam_backend.py` + `deploy/z270xx/README.md` — патч gateway.
+- `recog/asr_server/gigaam_backend.py` + `docs/asr-server.md` — патч gateway.
 
 ## Consequences
 
@@ -212,7 +212,7 @@ Env-консты в `recog/config.py` (паттерн `os.environ.get(...)` на
   circuit breaker не молотит remote повторно. Тёплый локальный путь после этого.
 - **Контрактный дрейф gateway.** Word-timestamps добавлены патчем нашего же
   backend'а; если на Z270XX выкатят несовместимую версию, `transcribe_with_
-  timestamps` упадёт → fallback на локаль. Smoke-test в `deploy/z270xx/README.md`
+  timestamps` упадёт → fallback на локаль. Smoke-test в `docs/asr-server.md`
   обязателен после деплоя.
 - **Батч теряет batched-forward выигрыш.** `transcribe_batch` на remote'е —
   ThreadPoolExecutor из независимых `transcribe_chunk` (gateway не принимает
@@ -236,12 +236,12 @@ Env-консты в `recog/config.py` (паттерн `os.environ.get(...)` на
 1. **Не выносить refine (только offline + batch).** Отклонено: refine — заметная
    доля inference-load'а и главный конкурент live за mutex; оставить его на
    локали = половина выигрыша. Цена — расширить gateway под word ts — оплачена
-   один раз патчем в `deploy/z270xx/`.
+   один раз патчем в `recog/asr_server/`.
 2. **Eager local load в remote-режиме (страховка).** Отклонено: держать 1.6 GB
    модель загруженной «на всякий» убивает смысл offload'а. Lazy load + circuit
    breaker дают ту же надёжность без постоянной цены.
 3. **Отдельный репозиторий asr-api для gateway-патча.** Отклонено (user decision):
-   один репозиторий, deploy-артефакт в `deploy/z270xx/`, чтобы версия gateway и
+   один репозиторий, deploy-артефакт в `recog/asr_server/`, чтобы версия gateway и
    клиент жили вместе и не расходились.
 4. **gRPC / бинарный протокол вместо OpenAI-Whisper multipart.** Отклонено:
    gateway уже OpenAI-Whisper-совместим и используется другими инструментами
@@ -259,7 +259,7 @@ Env-консты в `recog/config.py` (паттерн `os.environ.get(...)` на
   — `proposal.md`, `design.md`, `tasks.md`.
 - Gateway: `https://materkey-z270x-1.tail4799d.ts.net/asr`
   (`GET /healthz`, `GET /v1/models`, `POST /v1/audio/transcriptions`).
-- Deploy-артефакт: `deploy/z270xx/gigaam_backend.py`, `deploy/z270xx/README.md`.
+- Deploy-артефакт: `recog/asr_server/gigaam_backend.py`, `docs/asr-server.md`.
 - Skill `local-linux-models` — Z270XX (RTX PRO 6000 Blackwell), ASR gateway,
   модельные алиасы.
 - Prior ADRs: ADR-0018 (per-speaker ASR pipeline — `transcribe_batch`,

@@ -100,7 +100,7 @@ field-disjoint, commutes под `_segment_lock`.
 требуется для корректности. Tier promotion стабилен вне зависимости от
 порядка прихода.
 
-**D10. Webapp transport — bridge-push, не JSONL tail.** `frontend/server.py`
+**D10. Webapp transport — bridge-push, не JSONL tail.** `recog/web/server.py`
 подписывается на `ktalk_bridge` через WS-клиент (default `ws://localhost:8766`,
 overridable через `RECOG_BRIDGE_WS_URL`) и форвардит `transcript_refine`
 клиентам на `ws://127.0.0.1:9080`. JSONL tail watcher остаётся для append-событий
@@ -190,11 +190,11 @@ Acceptance gates:
 - `recog/config.py` — `PCM_REFINE_WINDOW_S`, `PCM_REFINE_MONOLOG_CAP_S`,
   `pcm_refine_enabled()` (двойной gate: `RECOG_PCM_TRANSPORT=1` +
   `RECOG_PCM_REFINE=1`).
-- `meeting_storage.py` — `TranscriptSegment.refined`, `update_segments(text=)`.
-- `ktalk_bridge.py` — `send_refine()`, `transcript_refine` WS type.
-- `frontend/server.py` + `frontend/bridge_subscriber.py` — WS-клиент к bridge'у
+- `recog/meeting_storage.py` — `TranscriptSegment.refined`, `update_segments(text=)`.
+- `recog/ktalk_bridge.py` — `send_refine()`, `transcript_refine` WS type.
+- `recog/web/server.py` + `recog/web/bridge_subscriber.py` — WS-клиент к bridge'у
   (default `ws://localhost:8766`, overridable через `RECOG_BRIDGE_WS_URL`).
-- `scripts/refine_benchmark.py` — WER + latency micro-bench.
+- `scripts/benchmarks/refine_benchmark.py` — WER + latency micro-bench.
 
 ## Consequences
 
@@ -277,7 +277,7 @@ upstream issues `pytorch/pytorch#93397`, `pytorch/pytorch#96975`.
   - `docs/experiments/2026-04-24-mps-batch.md` — MPS bit-identity + throughput.
   - `docs/experiments/2026-04-24-refine-abort-spike.md` — cooperative abort spike.
   - `docs/experiments/2026-04-24-refine-wer.md` — acceptance benchmark (WER + latency).
-- Bench script: `scripts/refine_benchmark.py`.
+- Bench script: `scripts/benchmarks/refine_benchmark.py`.
 - Upstream GigaAM: `salute-developers/GigaAM` через `6e4b027` (PR #65 `d427e5a` +
   PR #67 `a755fec`).
 - Prior ADRs: ADR-0010 (live-режим), ADR-0011 (meeting storage), ADR-0013

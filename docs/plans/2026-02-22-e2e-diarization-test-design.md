@@ -44,7 +44,7 @@ Each Playwright browser instance uses Chromium flags:
 - `--use-file-for-fake-audio-capture=/path/to/file.wav` — specific WAV as "microphone"
 - `--use-fake-ui-for-media-stream` — auto-accept media permissions
 
-KTalk (Jitsi internally) detects dominant speaker based on audio levels from WebRTC. The Chrome extension reads `_activeSpeaker$` observable and sends `speaker_update` events via WebSocket to `ktalk_bridge.py`.
+KTalk (Jitsi internally) detects dominant speaker based on audio levels from WebRTC. The Chrome extension reads `_activeSpeaker$` observable and sends `speaker_update` events via WebSocket to `recog/ktalk_bridge.py`.
 
 ## How KTalk Speaker Detection Works
 
@@ -53,7 +53,7 @@ KTalk (Jitsi internally) detects dominant speaker based on audio levels from Web
 3. Jitsi pushes `conference.dominantSpeaker` event to all clients
 4. KTalk wraps this in `_activeSpeaker$` RxJS observable on `window.$conf._participantsMap`
 5. Chrome extension (`speaker.js`) reads this and calls `sendWsSpeakerUpdate({name, id, isLocal})`
-6. `ktalk_bridge.py` receives via WebSocket, tracks in `_speaker_history`
+6. `recog/ktalk_bridge.py` receives via WebSocket, tracks in `_speaker_history`
 7. `LiveTranscriber` queries `get_dominant_speaker_for_period()` for each audio chunk
 
 ## Test Scenarios
@@ -111,9 +111,9 @@ Preparation script (`tests/e2e/prepare_fixtures.py`):
 
 - Kontur account credentials (env vars: `KONTUR_LOGIN`, `KONTUR_PASSWORD`)
 - BlackHole virtual audio device installed
-- Chrome extension built (`npm run build` in `kontur-diarize/ktalk-speaker-extension/`)
+- Chrome extension built (`npm run build` in `browser-extension/`)
 - Playwright installed (`pip install playwright && playwright install chromium`)
-- `examples/example_5min.wav` present locally
+- `.local/examples/example_5min.wav` present locally
 
 ## Running
 

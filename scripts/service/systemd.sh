@@ -6,7 +6,7 @@
 # recog-service.sh when the target OS is Linux.
 
 SVC_UNIT_DIR="${SVC_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}"
-SVC_TEMPLATE_DIR="$SVC_REPO_DIR/deploy/systemd"
+SVC_TEMPLATE_DIR="$SVC_REPO_DIR/deploy/linux"
 
 # Transient unit wrapping the copilot tmux session so it survives a supervisor
 # restart (recog/copilot_supervisor.py creates it via `systemd-run --user`).

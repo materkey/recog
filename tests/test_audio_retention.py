@@ -26,9 +26,8 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "frontend"))
 
-from meeting_storage import MeetingStorage
+from recog.meeting_storage import MeetingStorage
 from recog.config import SILENCE_SPLIT_TIMEOUT
 from recog.live import IncrementalWavWriter, LiveTranscriber, SourceState
 
@@ -638,15 +637,15 @@ class TestSegmentSliceDuration:
         when: compute_segment_duration_ms
         then: длительность 2500 (до следующего mic), а не кламп 1000 от
         system-двойника с тем же offset"""
-        from server import compute_segment_duration_ms
+        from recog.web.server import compute_segment_duration_ms
         assert compute_segment_duration_ms(self._rows(), 2) == 2500
 
     def test_system_segment_bounded_by_next_system_segment(self):
-        from server import compute_segment_duration_ms
+        from recog.web.server import compute_segment_duration_ms
         assert compute_segment_duration_ms(self._rows(), 3) == 5000
 
     def test_last_segment_on_track_uses_default_chunk(self):
-        from server import compute_segment_duration_ms
+        from recog.web.server import compute_segment_duration_ms
         # последний mic-сегмент (5500): дефолтные 3000
         assert compute_segment_duration_ms(self._rows(), 4) == 3000
 
@@ -654,7 +653,7 @@ class TestSegmentSliceDuration:
         """given: продолжения спикера, между ними строки другого трека
         when: compute_segment_duration_ms для начала группы
         then: слайс тянется до конца группы + дефолтный хвост"""
-        from server import compute_segment_duration_ms
+        from recog.web.server import compute_segment_duration_ms
         rows = [
             {"speaker_id": "A", "is_local": False, "audio_offset_ms": 1000},
             {"speaker_id": "local", "is_local": True, "audio_offset_ms": 500},
@@ -667,7 +666,7 @@ class TestSegmentSliceDuration:
         """given: маркер-событие (offset 0) между речевыми сегментами
         when: compute_segment_duration_ms
         then: событие пропускается — иначе отрицательная разница даёт кламп 1s"""
-        from server import compute_segment_duration_ms
+        from recog.web.server import compute_segment_duration_ms
         rows = [
             {"speaker_id": "A", "is_local": False, "audio_offset_ms": 10000},
             {"speaker_id": "system", "is_local": False, "audio_offset_ms": 0,
@@ -677,7 +676,7 @@ class TestSegmentSliceDuration:
         assert compute_segment_duration_ms(rows, 0) == 2000
 
     def test_clamped_to_bounds(self):
-        from server import compute_segment_duration_ms
+        from recog.web.server import compute_segment_duration_ms
         rows = [
             {"speaker_id": "A", "is_local": False, "audio_offset_ms": 0},
             {"speaker_id": "A", "is_local": False, "audio_offset_ms": 100},

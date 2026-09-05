@@ -65,12 +65,9 @@ DEFAULT_STUBS = (
 COPY_FILES = (
     "setup.sh",
     "recog-service.sh",
-    "requirements.txt",
-    "requirements-macos.txt",
     ".env.example",
-    "speakers_ecapa.json.example",
 )
-COPY_TREES = ("scripts", "deploy", "constraints", "recog")
+COPY_TREES = ("scripts", "deploy", "recog")
 
 
 @pytest.fixture
@@ -85,15 +82,12 @@ def repo(tmp_path):
             REPO_ROOT / rel, dst / rel,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
-    (dst / "frontend").mkdir()
-    shutil.copy2(REPO_ROOT / "frontend/requirements.txt", dst / "frontend/requirements.txt")
-    shutil.copy2(REPO_ROOT / "frontend/.env.example", dst / "frontend/.env.example")
     # A prebuilt macOS helper: the darwin readiness probe wants it executable.
     helper = dst / "sck_audio_capture"
     helper.write_text("#!/bin/sh\nexit 0\n")
     helper.chmod(0o755)
-    (dst / "native/macos").mkdir(parents=True)
-    (dst / "native/macos/sck_audio_capture.swift").write_text("// stub\n")
+    (dst / "recog/native/macos").mkdir(parents=True, exist_ok=True)
+    (dst / "recog/native/macos/sck_audio_capture.swift").write_text("// stub\n")
     return dst
 
 
@@ -196,7 +190,7 @@ def test_creates_the_venv_and_installs_the_pinned_gigaam(repo, stubs):
         "gigaam @ git+https://github.com/salute-developers/GigaAM.git@6e4b027" in call
         for call in pip_calls(result)
     ), pip_calls(result)
-    assert any("requirements.txt" in call for call in pip_calls(result))
+    assert any("deploy/python/requirements.txt" in call for call in pip_calls(result))
 
 
 def test_reuses_an_existing_venv_symlink(repo, stubs, tmp_path):
@@ -281,22 +275,22 @@ def test_empty_torch_index_url_falls_back_to_plain_pypi(repo, stubs):
 
 def test_macos_pip_stages_all_apply_the_constraints_file(repo, stubs):
     """Porting to Linux must not bump the working Mac's ML stack — every pip
-    stage on darwin runs under constraints/macos.txt."""
+    stage on darwin runs under deploy/python/constraints/macos.txt."""
     result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
 
     installs = [c for c in pip_calls(result) if c.startswith("pip install")]
     assert installs
     for call in installs:
-        assert "-c " in call and "constraints/macos.txt" in call, call
-    assert any("requirements-macos.txt" in call for call in installs)
+        assert "-c " in call and "deploy/python/constraints/macos.txt" in call, call
+    assert any("deploy/python/requirements-macos.txt" in call for call in installs)
 
 
 def test_linux_does_not_apply_the_macos_constraints(repo, stubs):
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
     for call in pip_calls(result):
-        assert "constraints/macos.txt" not in call
-    assert not any("requirements-macos.txt" in call for call in pip_calls(result))
+        assert "deploy/python/constraints/macos.txt" not in call
+    assert not any("deploy/python/requirements-macos.txt" in call for call in pip_calls(result))
 
 
 def test_editable_gigaam_needs_an_explicit_path(repo, stubs, tmp_path):
@@ -348,9 +342,9 @@ def test_creates_config_files_from_the_examples(repo, stubs):
     run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert (repo / ".env").read_text() == (repo / ".env.example").read_text()
-    assert (repo / "frontend/.env").is_file()
+    assert (repo / "recog/web/.env").is_file()
     assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text() == \
-        (repo / "speakers_ecapa.json.example").read_text()
+        (repo / "deploy/examples/speakers_ecapa.json.example").read_text()
 
 
 def test_existing_config_files_are_never_overwritten(repo, stubs):
@@ -683,7 +677,7 @@ def test_a_second_run_is_an_update_not_a_reinstall(repo, stubs):
 def test_intel_mac_is_rejected_before_anything_is_installed(repo, stubs):
     """given: macOS на x86_64
     when: ./setup.sh
-    then: отказ до venv — constraints/macos.txt закрепляет torch 2.8.0, а
+    then: отказ до venv — deploy/python/constraints/macos.txt закрепляет torch 2.8.0, а
           macOS-колёс под x86_64 upstream не публикует с 2.2.2, и установка
           всё равно упёрлась бы в pip"""
     result = run_setup(repo, stubs, *offline_args("--no-services"),

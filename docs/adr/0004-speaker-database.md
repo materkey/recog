@@ -31,12 +31,12 @@ Accepted
 
 ### Добавление спикера в базу:
 ```bash
-python mp4_notes.py enroll-speaker ruslan sample.wav --display-name "Руслан"
+python -m recog enroll-speaker ruslan sample.wav --display-name "Руслан"
 ```
 
 ### Использование при транскрипции:
 ```bash
-python mp4_notes.py transcribe meeting.mp4 --speaker-db speakers.json
+python -m recog transcribe meeting.mp4 --speaker-db speakers.json
 ```
 
 ### Код идентификации:

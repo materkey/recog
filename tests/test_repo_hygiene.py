@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # (glob matched against tracked paths, exceptions that are meant to be tracked)
 UNTRACKED_PATTERNS = [
-    ("speakers*.json", {"speakers_ecapa.json.example"}),
+    ("speakers*.json", set()),
     ("sck_audio_capture", set()),
     ("com.recog.*.plist", set()),
 ]
@@ -63,8 +63,12 @@ def test_gitignore_covers_the_pattern(pattern, _allowed):
     assert f"/{pattern}" in rules, f"/{pattern} missing from .gitignore"
 
 
-def test_the_seed_example_stays_tracked(tracked_root_files):
-    assert "speakers_ecapa.json.example" in tracked_root_files
+def test_seed_example_when_loading_then_valid_empty_database():
+    import json
+
+    example = "deploy/examples/speakers_ecapa.json.example"
+    assert example in _git("ls-files", "--", example).splitlines()
+    assert json.loads((REPO_ROOT / example).read_text()) == {}
 
 
 # ---------------------------------------------------------------------------

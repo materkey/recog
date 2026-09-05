@@ -16,7 +16,7 @@
 #   ./recog-service.sh render --dry-run <dir> - Render units into <dir> only
 #   ./recog-service.sh claude    - Launch Claude Code wired to the Copilot channel
 #
-# The service units are rendered from deploy/{launchd,systemd}/*.in; the
+# The service units are rendered from deploy/{macos,linux}/*.in; the
 # service-manager verbs live in scripts/service/{launchd,systemd}.sh behind the
 # svc_* contract. RECOG_SERVICE_OS overrides the `uname -s` backend choice —
 # it only affects which templates and verbs are used, so `render --dry-run`

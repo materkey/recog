@@ -7,7 +7,7 @@ Proposed
 
 Транскрипты встреч часто длинные, а в live-режиме текст появляется непрерывно. Пользователям с СДВГ и в целом при сканирующем чтении трудно удерживать внимание на строке: взгляд "соскальзывает", а смысл собирается с задержкой.
 
-В текущей архитектуре KTalk Chrome extension (`kontur-diarize/ktalk-speaker-extension`) уже рендерит собственный transcript UI. Поэтому улучшение читаемости должно:
+В текущей архитектуре KTalk Chrome extension (`browser-extension`) уже рендерит собственный transcript UI. Поэтому улучшение читаемости должно:
 - Работать локально и без задержек (client-side)
 - Быть настраиваемым под индивидуальную чувствительность
 - Не требовать изменений backend pipeline и протоколов
@@ -51,10 +51,10 @@ Proposed
 
 | Шаг | Файл | Изменение |
 |-----|------|-----------|
-| 1 | `kontur-diarize/ktalk-speaker-extension/src/state.js` | Добавить состояние BioRead |
-| 2 | `kontur-diarize/ktalk-speaker-extension/src/ui.js` | Добавить UI-контролы, hotkey, CSS |
-| 3 | `kontur-diarize/ktalk-speaker-extension/src/utils.js` или новый `bioread.js` | Трансформация текста в BioRead |
-| 4 | `kontur-diarize/ktalk-speaker-extension/src/ui.js` | Применить трансформацию в `updateTranscriptUI()` |
+| 1 | `browser-extension/src/state.js` | Добавить состояние BioRead |
+| 2 | `browser-extension/src/ui.js` | Добавить UI-контролы, hotkey, CSS |
+| 3 | `browser-extension/src/utils.js` или новый `bioread.js` | Трансформация текста в BioRead |
+| 4 | `browser-extension/src/ui.js` | Применить трансформацию в `updateTranscriptUI()` |
 
 ## Consequences
 

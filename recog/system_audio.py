@@ -69,7 +69,7 @@ class MissingSwiftc(RuntimeError):
 def find_or_build_sck_utility(repo_root: Path = REPO_ROOT) -> str:
     """Путь до sck_audio_capture; компилирует хелпер, если его нет/он устарел."""
     utility = repo_root / "sck_audio_capture"
-    source = repo_root / "native/macos/sck_audio_capture.swift"
+    source = repo_root / "recog/native/macos/sck_audio_capture.swift"
 
     def compile_utility(prebuilt: bool = False):
         if not shutil.which("swiftc"):

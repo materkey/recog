@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recog.live import RecentSegment, RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS
-from meeting_storage import MeetingStorage
+from recog.meeting_storage import MeetingStorage
 
 
 # --- MeetingStorage.update_segments tests ---

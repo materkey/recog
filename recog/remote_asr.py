@@ -4,7 +4,7 @@
 Этот модуль реализует все четыре GigaAM-пути (live per-speaker
 ``transcribe_batch``, offline CLI ``transcribe_simple``, refine
 ``transcribe_with_timestamps`` и прямой mic/mixed-fallback
-``transcribe_chunk``) поверх сетевого шлюза (Z270XX, OpenAI-Whisper-совместимый),
+``transcribe_chunk``) поверх сетевого шлюза (OpenAI-Whisper-совместимый),
 сохраняя локальный GigaAM как резерв. Через ``build_asr()`` сегодня вызываются
 три live-пути; offline ``transcribe_simple`` реализован, но ещё не подключён к
 CLI (``mp4_notes.py`` — только ``live``/``meetings``).

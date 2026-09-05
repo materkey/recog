@@ -17,7 +17,7 @@ live room and a live account.
 
 ## Prerequisites
 
-1. KTalk extension built: `cd kontur-diarize/ktalk-speaker-extension && npm run build`
+1. KTalk extension built: `cd browser-extension && npm run build`
 2. Playwright installed in the project venv:
    `./venv-gigaam/bin/pip install playwright && ./venv-gigaam/bin/playwright install chromium`
 3. An account on any KTalk workspace where you can create a public room.

@@ -21,7 +21,7 @@ Run: `cat /Users/vkkovalev/projects/recog/requirements.txt`
 
 **Step 2: Add test dependencies**
 
-Add to requirements.txt:
+Add to deploy/python/requirements.txt:
 ```
 # Testing
 pytest>=7.0
@@ -36,7 +36,7 @@ Expected: Successfully installed packages
 **Step 4: Commit**
 
 ```bash
-git add requirements.txt
+git add deploy/python/requirements.txt
 git commit -m "feat(tests): add pytest and pytest-asyncio dependencies"
 ```
 

@@ -21,7 +21,7 @@ GigaAM транскрибировал смешанный поток, а атри
 ### Что подтвердили исследования
 - `tests/e2e/research/` (коммит BASE_REVISION) — реальные overlap'ы в KTalk
   воспроизводимо дают одну mixed-строку вместо двух.
-- `tests/bench_gigaam_rtf.py` (коммит BASE_REVISION) — GigaAM на батче B=8
+- `scripts/benchmarks/bench_gigaam_rtf.py` (коммит BASE_REVISION) — GigaAM на батче B=8
   даёт ~60× realtime; CPU-бюджет свободно держит 5–8 параллельных
   per-speaker потоков.
 - KTalk (Jitsi) на уровне браузера отдаёт per-participant `MediaStream`
@@ -72,12 +72,12 @@ PCM — recovery-маркер `[PCM recovered — back to per-speaker]`.
 
 Разбито на 6 атомарных коммитов в ветке `per-speaker-asr-pipeline`:
 
-1. `pcm: add protocol scaffold + config flag for per-speaker transport` — `recog/config.py` константы, `ktalk_bridge.py` парсер `pcm_chunk`, handshake `pcm_transport_enabled`.
+1. `pcm: add protocol scaffold + config flag for per-speaker transport` — `recog/config.py` константы, `recog/ktalk_bridge.py` парсер `pcm_chunk`, handshake `pcm_transport_enabled`.
 2. `extension: add AudioWorklet PCM transport per participant` — `src/audio-worklet/downsampler.js`, `src/pcm_transport.js`, интеграция в `src/platforms/ktalk.js`, manifest bump.
 3. `asr: per-speaker ingest + batched transcribe_batch in ASRModule` — `recog/per_speaker.py` (ring buffer, reordering, batch collector, watchdog), `ASRModule.transcribe_batch`.
 4. `live: wire per-speaker PCM ingest behind RECOG_PCM_TRANSPORT flag` — `LiveTranscriber._setup_per_speaker_ingest`, generation-guard в batch callback, fallback-переключение в `_process_chunk`.
 5. `e2e: add overlap attribution test for per-speaker pipeline` — `tests/e2e/test_per_speaker_overlap.py` + degraded-mode сценарий.
-6. `docs: ADR-0018 + rollout default for per-speaker ASR` — этот ADR, обновлённые `CLAUDE.md` и `kontur-diarize/ktalk-speaker-extension/README.md`.
+6. `docs: ADR-0018 + rollout default for per-speaker ASR` — этот ADR, обновлённые `CLAUDE.md` и `browser-extension/README.md`.
 
 ### Ключевые файлы
 
@@ -85,9 +85,9 @@ PCM — recovery-маркер `[PCM recovered — back to per-speaker]`.
 - `recog/per_speaker.py` — `PerSpeakerIngest` (ring buffer, batcher, watchdog).
 - `recog/asr.py` — `ASRModule.transcribe_batch`.
 - `recog/live.py` — `LiveTranscriber` с per-speaker ingest + generation-guard.
-- `ktalk_bridge.py` — `PcmChunk` dataclass, `set_pcm_chunk_callback`, handshake.
-- `kontur-diarize/ktalk-speaker-extension/src/audio-worklet/downsampler.js` — worklet.
-- `kontur-diarize/ktalk-speaker-extension/src/pcm_transport.js` — attach/detach,
+- `recog/ktalk_bridge.py` — `PcmChunk` dataclass, `set_pcm_chunk_callback`, handshake.
+- `browser-extension/src/audio-worklet/downsampler.js` — worklet.
+- `browser-extension/src/pcm_transport.js` — attach/detach,
   локальный `AudioContext({sampleRate: 48000})`.
 
 ## Consequences
@@ -125,6 +125,6 @@ PCM — recovery-маркер `[PCM recovered — back to per-speaker]`.
 - Design doc: `docs/plans/2026-04-22-per-speaker-asr-pipeline-design.md`
 - OpenSpec (параллельная формулировка): `openspec/changes/per-speaker-asr-pipeline/`
 - Research: `tests/e2e/research/README.md` (commit BASE_REVISION)
-- Bench: `tests/bench_gigaam_rtf.py`, `/tmp/bench_gigaam_rtf.json` (commit BASE_REVISION)
+- Bench: `scripts/benchmarks/bench_gigaam_rtf.py`, `/tmp/bench_gigaam_rtf.json` (commit BASE_REVISION)
 - Prior ADRs: ADR-0010 (live-режим), ADR-0011 (meeting storage), ADR-0013 (AI-анализ)
 - Prior plan: `docs/plans/2026-02-19-ktalk-diarization-optimization-design.md`

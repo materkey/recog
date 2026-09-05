@@ -133,7 +133,7 @@ def test_given_extension_manifest_when_compared_then_allowlist_matches_both_ways
           the manifest without touching the allowlist fails here
     """
     manifest_path = (
-        PROJECT_ROOT / "kontur-diarize" / "ktalk-speaker-extension" / "manifest.json"
+        PROJECT_ROOT / "browser-extension" / "manifest.json"
     )
     manifest = json.loads(manifest_path.read_text())
 

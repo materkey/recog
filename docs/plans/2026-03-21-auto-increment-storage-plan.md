@@ -614,7 +614,7 @@ Files include YAML frontmatter for self-contained retrieval."
 
 **Step 1: Add IncrementGenerator field and setter to KTalkBridge**
 
-In `ktalk_bridge.py`, after the existing callback fields (line ~303), add:
+In `recog/ktalk_bridge.py`, after the existing callback fields (line ~303), add:
 
 ```python
 # After: self._on_pre_meeting_switch: Optional[Callable[[], None]] = None
@@ -731,7 +731,7 @@ bridge.set_increment_generator(increment_gen)
 
 **Step 3: Run smoke test**
 
-Run: `./venv-gigaam/bin/python mp4_notes.py --help`
+Run: `./venv-gigaam/bin/python -m recog --help`
 Expected: no import errors
 
 **Step 4: Commit**
@@ -748,11 +748,11 @@ and attached to KTalkBridge during live session initialization." -- recog/live.p
 ### Task 4: REST API endpoints for increments
 
 **Files:**
-- Modify: `frontend/server.py` — add 2 endpoints
+- Modify: `recog/web/server.py` — add 2 endpoints
 
 **Step 1: Add list_increments endpoint**
 
-After the existing `analyze_meeting_stream` endpoint in `frontend/server.py`, add:
+After the existing `analyze_meeting_stream` endpoint in `recog/web/server.py`, add:
 
 ```python
 @app.get("/api/meetings/{meeting_id}/increments")
@@ -787,7 +787,7 @@ Expected: `[]` (empty list for meeting with no increments)
 git commit -m "feat: add REST API for listing and fetching increments
 
 GET /api/meetings/{id}/increments — list all versions
-GET /api/meetings/{id}/increments/{version} — get content + meta" -- frontend/server.py
+GET /api/meetings/{id}/increments/{version} — get content + meta" -- recog/web/server.py
 ```
 
 ---
@@ -795,7 +795,7 @@ GET /api/meetings/{id}/increments/{version} — get content + meta" -- frontend/
 ### Task 5: WebSocket notification for increment_ready
 
 **Files:**
-- Modify: `frontend/server.py` — add broadcast on increment ready
+- Modify: `recog/web/server.py` — add broadcast on increment ready
 - Modify: `recog/live.py` — wire callback
 
 **Step 1: Add broadcast function in server.py**
@@ -838,8 +838,8 @@ Frontend uses REST polling for now; WebSocket push is a future enhancement." -- 
 ### Task 6: Frontend UI — show stored increments
 
 **Files:**
-- Modify: `frontend/static/app.js:1362-1416` (analyzeIncrement function)
-- Modify: `frontend/static/index.html:110-130` (ai-modal structure)
+- Modify: `recog/web/static/app.js:1362-1416` (analyzeIncrement function)
+- Modify: `recog/web/static/index.html:110-130` (ai-modal structure)
 
 **Step 1: Modify analyzeIncrement() to check stored versions first**
 
@@ -1016,14 +1016,14 @@ function generateIncrementSSE(meetingId) {
 
 **Step 2: Run syntax check**
 
-Run: `./venv-gigaam/bin/python -m py_compile frontend/static/app.js 2>&1 || echo "JS file, skip py_compile"`
+Run: `./venv-gigaam/bin/python -m py_compile recog/web/static/app.js 2>&1 || echo "JS file, skip py_compile"`
 
 Verify manually in browser: open meeting page, click "My increment" button.
 
 **Step 3: Commit**
 
 ```bash
-git add frontend/static/app.js frontend/static/index.html
+git add recog/web/static/app.js recog/web/static/index.html
 git commit -m "feat: show stored increment versions in UI
 
 My increment button now checks for stored versions first.

@@ -207,7 +207,7 @@ if self._increment_generator:
 
 Нужно захватить `meeting_id` и `meeting_path` ДО вызова `on_ktalk_leave()`, т.к. после вызова storage уже указывает на новую встречу.
 
-### 2. frontend/server.py — REST API
+### 2. recog/web/server.py — REST API
 
 ```python
 @app.get("/api/meetings/{meeting_id}/increments")
@@ -219,7 +219,7 @@ async def get_increment(meeting_id: str, version: int) -> dict:
     """Get specific increment version content + meta."""
 ```
 
-### 3. frontend/server.py — WebSocket notification
+### 3. recog/web/server.py — WebSocket notification
 
 При готовности инкремента отправить через LiveWatcher:
 
@@ -232,7 +232,7 @@ async def get_increment(meeting_id: str, version: int) -> dict:
 }
 ```
 
-### 4. frontend/static/app.js — UI changes
+### 4. recog/web/static/app.js — UI changes
 
 Кнопка "My increment":
 - `onclick` → fetch `/api/meetings/{id}/increments`

@@ -204,7 +204,7 @@ class TestFrontendClaudeProvider:
 
     @pytest.mark.asyncio
     async def test_complete_marks_prompt_for_claude_cli(self):
-        from frontend.ai_provider import ClaudeCliProvider
+        from recog.web.ai_provider import ClaudeCliProvider
 
         created = {}
 
@@ -218,7 +218,7 @@ class TestFrontendClaudeProvider:
             created["cmd"] = cmd
             return FakeProcess()
 
-        with patch("frontend.ai_provider.resolve_cli", return_value="/mock/claude"), \
+        with patch("recog.web.ai_provider.resolve_cli", return_value="/mock/claude"), \
              patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=fake_create_subprocess_exec)):
             provider = ClaudeCliProvider(task="anchor")
             answer = await provider.complete("hello")

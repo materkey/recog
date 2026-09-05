@@ -17,7 +17,7 @@ Three options were considered:
 
 ## Ownership and consistency
 
-`frontend/meeting_catalog.py` owns the web server's read model. Recording still
+`recog/web/meeting_catalog.py` owns the web server's read model. Recording still
 owns `meta.json` and `index.json`; external directories remain read-only.
 
 - Build once at startup in a worker thread. Reuse the existing watchdog observer

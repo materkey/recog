@@ -19,7 +19,7 @@ def test_mark_codex_text_marks_recog_exec_prompt_and_event():
         json.dumps({
             "type": "session_meta",
             "payload": {
-                "cwd": "/Users/vkkovalev/projects/recog",
+                "cwd": mark_sessions.RECOG_PROJECT_PREFIX,
                 "source": "exec",
                 "originator": "codex_exec",
             },
@@ -62,7 +62,7 @@ def test_mark_codex_text_ignores_interactive_recog_cli_session():
     text = json.dumps({
         "type": "session_meta",
         "payload": {
-            "cwd": "/Users/vkkovalev/projects/recog",
+            "cwd": mark_sessions.RECOG_PROJECT_PREFIX,
             "source": "cli",
             "originator": "codex_cli_rs",
         },
@@ -103,7 +103,7 @@ def test_process_file_apply_creates_backup_and_is_idempotent(tmp_path):
     session.write_text(json.dumps({
         "type": "session_meta",
         "payload": {
-            "cwd": "/Users/vkkovalev/projects/recog",
+            "cwd": mark_sessions.RECOG_PROJECT_PREFIX,
             "source": "exec",
             "originator": "codex_exec",
         },

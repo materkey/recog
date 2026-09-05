@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ktalk_bridge import PcmChunk
+from recog.ktalk_bridge import PcmChunk
 from recog.config import PCM_MAX_BATCH_SIZE, PCM_SILENCE_WATCHDOG_S
 from recog.per_speaker import BatchedChunk, PerSpeakerIngest
 

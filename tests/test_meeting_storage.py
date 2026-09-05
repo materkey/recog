@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from meeting_storage import MeetingStorage, TranscriptSegment
+from recog.meeting_storage import MeetingStorage, TranscriptSegment
 
 
 def _read_segments(storage: MeetingStorage) -> list[dict]:
@@ -489,7 +489,7 @@ def test_save_json_concurrent_writers_use_unique_same_directory_temps(
         except BaseException as exc:  # pragma: no cover - failure path
             errors.append(exc)
 
-    monkeypatch.setattr("meeting_storage.os.replace", synchronized_replace)
+    monkeypatch.setattr("recog.meeting_storage.os.replace", synchronized_replace)
     threads = [
         threading.Thread(target=writer, args=({"writer": 1},), daemon=True),
         threading.Thread(target=writer, args=({"writer": 2},), daemon=True),
@@ -526,7 +526,7 @@ def test_save_json_failure_leaves_original_intact_and_no_tmp(tmp_path, monkeypat
     def boom(src, dst):
         raise OSError("simulated replace failure")
 
-    monkeypatch.setattr("meeting_storage.os.replace", boom)
+    monkeypatch.setattr("recog.meeting_storage.os.replace", boom)
 
     with pytest.raises(OSError, match="simulated replace failure"):
         storage._save_json(target, {"new": "data"})
@@ -549,7 +549,7 @@ def test_save_json_first_write_replace_failure_leaves_target_absent(
     def boom(src, dst):
         raise OSError("simulated replace failure")
 
-    monkeypatch.setattr("meeting_storage.os.replace", boom)
+    monkeypatch.setattr("recog.meeting_storage.os.replace", boom)
 
     with pytest.raises(OSError, match="simulated replace failure"):
         storage._save_json(target, {"new": "data"})
@@ -588,7 +588,7 @@ def test_save_json_write_failure_leaves_original_intact_and_no_tmp(
     def failing_fdopen(fd, *args, **kwargs):
         return FailingWriter(real_fdopen(fd, *args, **kwargs))
 
-    monkeypatch.setattr("meeting_storage.os.fdopen", failing_fdopen)
+    monkeypatch.setattr("recog.meeting_storage.os.fdopen", failing_fdopen)
 
     with pytest.raises(OSError, match="simulated write failure"):
         storage._save_json(target, {"new": "data"})
@@ -705,7 +705,7 @@ def test_save_json_restrictive_mode_protects_temp_before_write(
         observed_modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
         return real_fdopen(fd, *args, **kwargs)
 
-    monkeypatch.setattr("meeting_storage.os.fdopen", recording_fdopen)
+    monkeypatch.setattr("recog.meeting_storage.os.fdopen", recording_fdopen)
 
     storage._save_json(target, {"private": True})
 
@@ -749,7 +749,7 @@ def test_save_json_existing_target_stat_error_propagates(tmp_path, monkeypatch):
             raise PermissionError("simulated stat failure")
         return real_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr("meeting_storage.os.stat", failing_target_stat)
+    monkeypatch.setattr("recog.meeting_storage.os.stat", failing_target_stat)
 
     with pytest.raises(PermissionError, match="simulated stat failure"):
         storage._save_json(target, {"new": "data"})

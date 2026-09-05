@@ -36,12 +36,12 @@ None.
 - `recog/refine.py` (new) — `RefineWorker` with cooperative-abort mutex.
 - `recog/live.py` — wire refine worker, new `_apply_refine` method, `_pcm_live_segments` per-pid segment registry.
 - `recog/config.py` — `PCM_REFINE_WINDOW_S`, `PCM_REFINE_MONOLOG_CAP_S`, `pcm_refine_enabled()`.
-- `meeting_storage.py` — extend `update_segments` to accept `text`; add `refined: bool` on `TranscriptSegment`.
-- `ktalk_bridge.py` — `send_refine(updates)`, `transcript_refine` WS type.
-- `frontend/server.py` — forward `transcript_refine` to webapp clients.
-- `frontend/static/` — tier-1/tier-2 CSS + JS handler; `data-segment-id` / `data-refined` attributes.
-- `kontur-diarize/ktalk-speaker-extension/src/` — overlay UI handler for `transcript_refine`.
-- `scripts/refine_benchmark.py` (new) — replays per-pid WAVs through the full contour, measures live-WER vs refined-WER.
+- `recog/meeting_storage.py` — extend `update_segments` to accept `text`; add `refined: bool` on `TranscriptSegment`.
+- `recog/ktalk_bridge.py` — `send_refine(updates)`, `transcript_refine` WS type.
+- `recog/web/server.py` — forward `transcript_refine` to webapp clients.
+- `recog/web/static/` — tier-1/tier-2 CSS + JS handler; `data-segment-id` / `data-refined` attributes.
+- `browser-extension/src/` — overlay UI handler for `transcript_refine`.
+- `scripts/benchmarks/refine_benchmark.py` (new) — replays per-pid WAVs through the full contour, measures live-WER vs refined-WER.
 - `tests/` — unit tests for alignment + trigger + replace; e2e on scripted overlap dialogue.
 
 **APIs:**
