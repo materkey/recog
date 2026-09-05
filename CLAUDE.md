@@ -208,8 +208,10 @@ Precedence: explicit CLI `--mic-speaker-name` > saved name > `MIC_SPEAKER_NAME` 
 acknowledgements and reconciles after bridge reconnect. `user_profile_updated`
 updates an already running Copilot (including manual sessions); meeting/tick/chat
 events and transcript tool responses carry the complete identity snapshot.
-Channel metadata encodes aliases as JSON. Agent instructions treat profile text
-as data, replace old aliases and do not invent names. Profile edits never rewrite
+`build_copilot_context()` in the MCP channel renders one literal profile block
+for push events, long-poll results and transcript snapshots. Legacy identity
+metadata remains for compatibility; the skill consumes the rendered context.
+Agent instructions treat profile text as data, replace old aliases and do not invent names. Profile edits never rewrite
 historical transcript labels or stop the session.
 
 ### Single-venv Architecture
