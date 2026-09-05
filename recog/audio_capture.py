@@ -34,6 +34,8 @@ class BufferedAudioCapture:
         self._overlap_samples = int(0.5 * sample_rate)
         self._max_buffered_samples = int(max_buffer_s * sample_rate)
         self._resync_max_samples = int(CAPTURE_RESYNC_MAX_S * sample_rate)
+        self._source_epoch = 0
+        self._chunk_epoch = 0
 
     def _append_locked(self, data: np.ndarray, captured_at: float) -> int:
         """Добавляет data в буфер; возвращает число сэмплов, отброшенных по капу.
@@ -64,12 +66,49 @@ class BufferedAudioCapture:
         with self._lock:
             return self._append_locked(data, captured_at)
 
+    def _clear_locked(self):
+        self.buffer = []
+        self._buffer_start_ts = None
+        self._buffered_samples = 0
+
     def clear_buffer(self):
         """Discard all buffered audio (used on meeting boundary)."""
         with self._lock:
-            self.buffer = []
-            self._buffer_start_ts = None
-            self._buffered_samples = 0
+            self._clear_locked()
+
+    @property
+    def source_epoch(self) -> int:
+        """Номер отрезка непрерывного потока; растёт на каждой границе источников."""
+        return self._source_epoch
+
+    @property
+    def chunk_epoch(self) -> int:
+        """`source_epoch` отрезка, из которого нарезан последний `get_chunk`.
+
+        Снимок `source_epoch` рядом с вызовом `get_chunk` этого не даёт ни в
+        каком порядке: до чтения буфера — граница, прошедшая между снимком и
+        чтением, отдаёт чанк уже нового источника под старым номером (писатель
+        срежет с него 0.5 с как overlap, которого в WAV нет); после — наоборот,
+        чанк со старого источника получает новый номер и пишется целиком,
+        дублируя overlap. Значение фиксируется под тем же локом, что и нарезка,
+        и переписывается только следующим `get_chunk` — читатель у каждого
+        захвата один (главный цикл `LiveTranscriber.run`).
+        """
+        return self._chunk_epoch
+
+    def mark_source_boundary(self):
+        """Граница источников: буфер сбрасывается, и разрыв виден потребителю.
+
+        Одного сброса буфера мало. `IncrementalWavWriter` срезает с каждого
+        чанка 0.5 с головы как overlap, уже записанный предыдущим чанком, — а
+        после сброса эти 0.5 с и есть новое аудио с нового источника, и
+        срезать их значит потерять их из WAV. Потребитель сравнивает
+        `source_epoch` со своим снимком и на расхождении говорит писателю
+        писать следующий чанк целиком.
+        """
+        with self._lock:
+            self._clear_locked()
+            self._source_epoch += 1
 
     def get_chunk(self, duration: float) -> Optional[Tuple[np.ndarray, float]]:
         """Возвращает (аудио чанк (1-D моно float32), epoch-время его первого сэмпла)."""
@@ -86,6 +125,7 @@ class BufferedAudioCapture:
                 return None
 
             chunk = audio[:samples_needed]
+            self._chunk_epoch = self._source_epoch
             chunk_start_ts = (
                 self._buffer_start_ts
                 if self._buffer_start_ts is not None
