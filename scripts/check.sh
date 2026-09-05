@@ -47,7 +47,7 @@ list_shell_scripts() {
 echo "check: python is $PYTHON"
 
 step "compileall"
-"$PYTHON" -m compileall -q recog frontend ./*.py
+"$PYTHON" -m compileall -q recog frontend scripts ./*.py
 
 step "shell syntax"
 while IFS= read -r -d '' script; do

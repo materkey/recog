@@ -46,7 +46,7 @@ python mp4_notes.py live --system-audio pulse --speaker-db ~/.recog/speakers_eca
 python mp4_notes.py live --list-devices
 
 # Add speaker to database (records 5 seconds from mic)
-python add_speaker_live.py "Speaker Name"
+python scripts/add_speaker_live.py "Speaker Name"
 ```
 
 `--screencapture` and `--system-device <id>` remain as hidden aliases of
@@ -109,10 +109,10 @@ backend asked for on the wrong OS); `create_system_capture` builds it.
 
 - **macOS — `screencapture`**: the ScreenCaptureKit Swift helper
   `sck_audio_capture`. `find_or_build_sck_utility()` compiles it on demand from
-  `sck_audio_capture.swift` (both live at the repo root, outside the package,
-  and the binary is gitignored). Manual rebuild:
+  `native/macos/sck_audio_capture.swift` (the binary stays at the repo root
+  for existing installations and is gitignored). Manual rebuild:
   ```bash
-  swiftc -o sck_audio_capture sck_audio_capture.swift \
+  swiftc -o sck_audio_capture native/macos/sck_audio_capture.swift \
       -framework ScreenCaptureKit -framework CoreMedia -framework AVFoundation
   ```
 - **Linux — `pulse`**: `PulseAudioCapture` runs `parec --raw
@@ -206,7 +206,7 @@ A tier-2 refine pass re-transcribes per-pid PCM windows with word-level timestam
   - `meeting_storage.py` — `TranscriptSegment.refined: bool = False`; `update_segments(...)` accepts optional `text` per row, sets `refined=True` when present.
 - Flow: PCM arrives via `PerSpeakerIngest.enqueue` → per-pid ring + counters update → tick loop calls `get_refine_candidate(pid)` → gap (`SPEAKER_TURN_GAP=3s` silence) or monolog cap (`PCM_REFINE_MONOLOG_CAP_S=15s`) assembles a 20 s trailing window → `RefineWorker.submit` → worker acquires `asr._model_lock`, runs `transcribe_with_timestamps` → `_apply_refine` rebases words via `task.offset_base_ms`, intersects with live segments under `_state_lock` + meeting-generation check → `update_segments` rewrites JSONL rows.
 - Shared model lock: `ASRModule._model_lock` is a `threading.RLock` (not `Lock`). The refine worker acquires it externally to serialise with the live batched-forward path; `transcribe_with_timestamps` re-acquires internally — recursion must not deadlock.
-- Cooperative abort: default `abort_mode="cooperative"`. `LiveTranscriber._refine_transcribe_fn` installs `make_abortable_decode` on `model.decoding.decode` for the duration of one refine call; the hook polls `should_abort()` at the top of the RNN-T time-step loop and raises `RefineAborted`. Worker catches, releases the lock, re-enqueues the task. `LiveTranscriber._on_pcm_batch` calls `refine_worker.set_live_pending()` / `clear_live_pending()` around `asr.transcribe_batch` so live gets priority. Per the spike (`experiments/2026-04-24-refine-abort-spike.md`), cooperative abort saves ~770 ms per preempted refine on MPS (~80 % of inference cost).
+- Cooperative abort: default `abort_mode="cooperative"`. `LiveTranscriber._refine_transcribe_fn` installs `make_abortable_decode` on `model.decoding.decode` for the duration of one refine call; the hook polls `should_abort()` at the top of the RNN-T time-step loop and raises `RefineAborted`. Worker catches, releases the lock, re-enqueues the task. `LiveTranscriber._on_pcm_batch` calls `refine_worker.set_live_pending()` / `clear_live_pending()` around `asr.transcribe_batch` so live gets priority. Per the spike (`docs/experiments/2026-04-24-refine-abort-spike.md`), cooperative abort saves ~770 ms per preempted refine on MPS (~80 % of inference cost).
 
 On refine arrival the webapp renders tier-1 (opacity 0.6, dashed border) → tier-2 (solid) segments via `data-refined` on `.transcript-segment`; the KTalk extension overlay does a plain text swap with a brief `.refine-fade` pulse.
 
@@ -235,7 +235,7 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
   - `asr.py` - GigaAM ASR wrapper
   - `speaker_db.py` - ECAPA-TDNN embeddings matching
   - `audio_capture.py` - `BufferedAudioCapture`: the buffer/overlap/re-anchor machinery shared by the mic (`SingleDeviceCapture`) and the system-audio subprocess captures. Owns `_append_locked`, `clear_buffer`, `get_chunk() -> (chunk, capture_start_ts)`; the contract is 1-D mono float32
-  - `system_audio.py` - `SubprocessPCMCapture` (generic child-process PCM reader) + `PulseAudioCapture` (Linux `parec`, follows the default sink) + `find_or_build_sck_utility` (macOS ScreenCaptureKit helper, `sck_audio_capture` resolved from `REPO_ROOT` — the binary and its `.swift` source stay at the repo root, outside the package) + `resolve_system_audio_backend` / `create_system_capture`. Manual smoke: `python -m recog.system_audio`
+  - `system_audio.py` - `SubprocessPCMCapture` (generic child-process PCM reader) + `PulseAudioCapture` (Linux `parec`, follows the default sink) + `find_or_build_sck_utility` (macOS ScreenCaptureKit helper, `sck_audio_capture` resolved from `REPO_ROOT` — the binary stays at the repo root; its source is `native/macos/sck_audio_capture.swift`) + `resolve_system_audio_backend` / `create_system_capture`. Manual smoke: `python -m recog.system_audio`
   - `live.py` - Real-time transcription (LiveTranscriber with decomposed methods: _setup_meeting_storage, _setup_ktalk_bridge, _start_audio_captures, _process_chunk, _handle_mic_chunk, _handle_ktalk_chunk, _handle_embedding_chunk, _process_pending, _teardown_session; module-level helpers: normalize_word, deduplicate)
   - `increment.py` - Auto-generate versioned AI summaries on ktalk_leave; multi-prompt support via generate_all(), stores per-prompt results in meetings/<id>/increments/<prompt-id>/vN.md
   - `prompt_registry.py` - Load and filter prompt definitions from prompts/*.md files (YAML frontmatter + template body)
@@ -318,7 +318,7 @@ python mp4_notes.py --help                # CLI smoke test
 
 ## ADR Documents
 
-Architecture Decision Records in `adr/`:
+Architecture Decision Records in `docs/adr/`:
 - **ADR-0006**: Dual venv subprocess (obsolete — pyannote diarization removed, single venv now)
 - **ADR-0010**: Live transcription mode (audio-capture part superseded by ADR-0021)
 - **ADR-0011**: Meeting storage

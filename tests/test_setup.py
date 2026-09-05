@@ -92,7 +92,8 @@ def repo(tmp_path):
     helper = dst / "sck_audio_capture"
     helper.write_text("#!/bin/sh\nexit 0\n")
     helper.chmod(0o755)
-    (dst / "sck_audio_capture.swift").write_text("// stub\n")
+    (dst / "native/macos").mkdir(parents=True)
+    (dst / "native/macos/sck_audio_capture.swift").write_text("// stub\n")
     return dst
 
 
@@ -440,7 +441,7 @@ def test_the_restore_hint_never_claims_the_embeddings_are_the_user_own(repo, stu
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "someone else's voice embeddings" in result.stdout
-    assert "add_speaker_live.py" in result.stdout
+    assert "scripts/add_speaker_live.py" in result.stdout
 
 
 def test_a_colleague_is_never_told_to_restore_the_database_from_history(repo, stubs, tmp_path):

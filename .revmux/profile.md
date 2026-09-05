@@ -63,7 +63,7 @@ In descending order of what actually hurts:
 
 ## The design record
 
-`adr/` holds the decisions (ADR-0010 live mode, 0011 meeting storage, 0018 per-speaker ASR, 0019
+`docs/adr/` holds the decisions (ADR-0010 live mode, 0011 meeting storage, 0018 per-speaker ASR, 0019
 stream-refine, 0020 remote ASR, 0021 cross-platform capture and services), `CLAUDE.md` the working
 contract, `docs/plans/` the plans behind changes. A code change that contradicts a current ADR or
 `CLAUDE.md` is a real finding — usually minor, since prose executes nothing, except where a document is

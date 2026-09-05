@@ -58,7 +58,7 @@
 
 ## 9. Documentation + ADR
 
-- [ ] 9.1 Write ADR entry `adr/ADR-0014-per-speaker-asr-pipeline.md` summarizing the decision, alternatives considered (from design.md), and bench results
+- [ ] 9.1 Write ADR entry `docs/adr/ADR-0014-per-speaker-asr-pipeline.md` summarizing the decision, alternatives considered (from design.md), and bench results
 - [ ] 9.2 Update repo-level `CLAUDE.md` Architecture section to mention the per-speaker path and when it activates
 - [ ] 9.3 Update `kontur-diarize/ktalk-speaker-extension/README.md` with the new protocol version note and the VAD-gate toggle
 

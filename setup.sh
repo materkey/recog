@@ -374,7 +374,7 @@ if [ -f "$speaker_db" ] && [ "$(tr -d '[:space:]' < "$speaker_db")" = "{}" ] \
         printf '         git show %s:speakers_ecapa.json > %q\n' "$orig_head" "$speaker_db"
         echo "       If you cloned this repo before the database was untracked, that blob"
         echo "       holds someone else's voice embeddings — enroll your own instead:"
-        echo "         ./venv-gigaam/bin/python add_speaker_live.py \"Name\""
+        echo "         ./venv-gigaam/bin/python scripts/add_speaker_live.py \"Name\""
     fi
 fi
 
@@ -412,7 +412,7 @@ if [ "$HOST_OS" = "darwin" ]; then
     step "System audio helper (ScreenCaptureKit)"
 
     if deps_have swiftc && swiftc -o "$REPO_DIR/sck_audio_capture" \
-            "$REPO_DIR/sck_audio_capture.swift" \
+            "$REPO_DIR/native/macos/sck_audio_capture.swift" \
             -framework ScreenCaptureKit -framework CoreMedia -framework AVFoundation; then
         info "Built sck_audio_capture"
     elif deps_sck_helper_ok; then

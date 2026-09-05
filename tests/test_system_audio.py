@@ -48,7 +48,7 @@ def test_repo_root_points_at_the_repository_not_the_package():
     package_dir = Path(system_audio.__file__).resolve().parent
     assert REPO_ROOT == package_dir.parent
     assert (REPO_ROOT / "mp4_notes.py").exists()
-    assert not (package_dir / "sck_audio_capture.swift").exists()
+    assert (REPO_ROOT / "native/macos/sck_audio_capture.swift").is_file()
 
 
 def test_existing_binary_in_repo_root_is_found(tmp_path):
@@ -65,7 +65,8 @@ def test_missing_binary_and_source_raises(tmp_path):
 
 def test_stale_binary_is_recompiled_from_repo_root_source(tmp_path, monkeypatch):
     binary = tmp_path / "sck_audio_capture"
-    source = tmp_path / "sck_audio_capture.swift"
+    source = tmp_path / "native/macos/sck_audio_capture.swift"
+    source.parent.mkdir(parents=True)
     binary.write_bytes(b"")
     source.write_text("// newer than the binary")
     import os
@@ -98,7 +99,8 @@ def test_stale_binary_without_swiftc_is_reused_instead_of_crashing(tmp_path, mon
     live-сервис в крэш-луп на FileNotFoundError('swiftc').
     """
     binary = tmp_path / "sck_audio_capture"
-    source = tmp_path / "sck_audio_capture.swift"
+    source = tmp_path / "native/macos/sck_audio_capture.swift"
+    source.parent.mkdir(parents=True)
     binary.write_bytes(b"prebuilt")
     source.write_text("// newer than the binary")
     import os
@@ -126,7 +128,8 @@ def test_stale_binary_with_broken_swiftc_is_reused_instead_of_crashing(
     которого ветка переиспользования и заводилась — при живом прежнем хелпере.
     """
     binary = tmp_path / "sck_audio_capture"
-    source = tmp_path / "sck_audio_capture.swift"
+    source = tmp_path / "native/macos/sck_audio_capture.swift"
+    source.parent.mkdir(parents=True)
     binary.write_bytes(b"prebuilt")
     source.write_text("// newer than the binary")
     import os
@@ -155,7 +158,8 @@ def test_stale_reuse_does_not_claim_there_is_nothing_to_fall_back_on(
     _reset_for_tests()
 
     binary = tmp_path / "sck_audio_capture"
-    source = tmp_path / "sck_audio_capture.swift"
+    source = tmp_path / "native/macos/sck_audio_capture.swift"
+    source.parent.mkdir(parents=True)
     binary.write_bytes(b"prebuilt")
     source.write_text("// newer than the binary")
     import os
@@ -172,7 +176,9 @@ def test_stale_reuse_does_not_claim_there_is_nothing_to_fall_back_on(
 
 def test_missing_binary_without_swiftc_names_swiftc_in_the_error(tmp_path, monkeypatch):
     """Нечего переиспользовать — падаем, но с внятной причиной."""
-    (tmp_path / "sck_audio_capture.swift").write_text("// source only")
+    source = tmp_path / "native/macos/sck_audio_capture.swift"
+    source.parent.mkdir(parents=True)
+    source.write_text("// source only")
     monkeypatch.setattr(system_audio.shutil, "which", lambda name: None)
 
     with pytest.raises(system_audio.MissingSwiftc, match="swiftc not found"):

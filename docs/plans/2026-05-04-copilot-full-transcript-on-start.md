@@ -303,7 +303,7 @@
 ## Связь с существующими планами и спеками
 
 - **Parent OpenSpec**: `openspec/changes/archive/2026-04-27-ktalk-claude-copilot-chat/` — этот план продолжает task 4.x (manual chat tracer) и 5.x (transcript snapshot tool) с новой capability «полный транскрипт + bootstrap».
-- **ADR-0019** (`adr/0019-per-speaker-stream-refine.md`) — refined-сегменты учитываются в compact-форматтере (D7).
+- **ADR-0019** (`docs/adr/0019-per-speaker-stream-refine.md`) — refined-сегменты учитываются в compact-форматтере (D7).
 - **`docs/plans/2026-04-22-per-speaker-asr-pipeline.md`** — образец decisions-table формата (D1–D10).
 - **`docs/plans/completed/2026-04-26-ktalk-copilot-channel-scaffold.md`** — образец per-task structure для bridge handlers + channel server tools.
 - **Следующий шаг (не в этом плане)**: создать `openspec/changes/copilot-full-transcript-bootstrap/` с `proposal.md` + `design.md` + `tasks.md` после ручного smoke (Task 8).

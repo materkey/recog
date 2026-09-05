@@ -1,6 +1,6 @@
 ## Context
 
-Grid-search on two reconstructed per-pid WAVs from a real KTalk meeting (`experiments/2026-04-23-gigaam-grid.md`) established:
+Grid-search on two reconstructed per-pid WAVs from a real KTalk meeting (`docs/experiments/2026-04-23-gigaam-grid.md`) established:
 
 - Current prod config `chunk=3s, overlap=0.6s` ⇒ **33.2%** avg WER.
 - Best offline configs: `chunk=20s, overlap=1.0s` ⇒ 23.9%; `chunk=10s, overlap=2.0s` ⇒ 25.0% avg (22.8% on one track).

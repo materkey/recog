@@ -30,7 +30,7 @@ Design notes:
     `append_segment(speaker_id=pid)` pops the n-th enqueue timestamp
     from that pid's deque. For WAVs that produce exactly one segment
     per chunk (the take-2 fixtures, verified in
-    `experiments/2026-04-24-refine-wer.md`) this mapping is exact. If a
+    `docs/experiments/2026-04-24-refine-wer.md`) this mapping is exact. If a
     chunk produces empty text (dedup / ASR hallucinates nothing) the
     subsequent appends get attributed to slightly older enqueues,
     introducing a small pessimistic bias — flagged in the per-pid
@@ -41,7 +41,7 @@ Design notes:
     fast` dumps every chunk immediately — useful for quick iteration on
     pipeline wiring but NOT the acceptance measurement.
 
-The script appends results to `experiments/2026-04-24-refine-wer.md`
+The script appends results to `docs/experiments/2026-04-24-refine-wer.md`
 under a "Latency" heading; override via `--report-out`.
 """
 
@@ -554,7 +554,7 @@ def main() -> int:
     )
     ap.add_argument(
         "--report-out",
-        default=str(PROJECT_ROOT / "experiments" / "2026-04-24-refine-wer.md"),
+        default=str(PROJECT_ROOT / "docs/experiments" / "2026-04-24-refine-wer.md"),
         help="Markdown report path; results are APPENDED.",
     )
     args = ap.parse_args()

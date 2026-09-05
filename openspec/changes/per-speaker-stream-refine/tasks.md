@@ -3,20 +3,20 @@
 - [x] 0.1 Upgrade `../GigaAM` checkout to upstream `origin/main` (commits through `6e4b027`); verify `import gigaam` + `gigaam.load_model("v3_e2e_rnnt").transcribe(wav_path, word_timestamps=True)` returns a `TranscriptionResult` with `.words` list of `Word(text, start, end)`
 - [x] 0.2 Adapt `recog/asr.py::ASRModule.transcribe_batch` to the new `decoding.decode()` return type (was `List[str]`; after commit `a755fec` is `List[Tuple[str, List[int], List[int]]]`). Keep public method signature stable — callers unaffected
 - [x] 0.3 Full unit suite green (`python -m pytest tests/ -v`); manual live smoke: `./recog-service.sh restart` + short KTalk meeting; confirm no regression on live 3-s path
-- [x] 0.4 Grid-search regression: re-run `scripts/pcm_experiment.py` against take-2 fixtures with configs 20:1.0 and 10:0.5; WER must stay within ±1% of the baseline in `experiments/2026-04-23-gigaam-grid.md`
+- [x] 0.4 Grid-search regression: re-run `scripts/pcm_experiment.py` against take-2 fixtures with configs 20:1.0 and 10:0.5; WER must stay within ±1% of the baseline in `docs/experiments/2026-04-23-gigaam-grid.md`
 
 ## 1. MPS (Metal) backend
 
 - [x] 1.1 Add MPS auto-detect to `ASRModule.__init__` when `device` arg is `None`: `"mps" if torch.backends.mps.is_available() else "cpu"`. Explicit override (`device="cpu"`) always honoured
 - [x] 1.2 Manual smoke: `scripts/pcm_experiment.py --device mps --configs 20:1.0,10:0.5 --wav ...` produces text bit-identical to CPU run on same input (compare stdout line-by-line)
-- [x] 1.3 Benchmark batched forward on MPS with B ∈ {1, 4, 8} and variable-length inputs padded to `T_max`; record wall-clock per batch in `experiments/2026-04-XX-mps-batch.md`; confirm no regression vs CPU
+- [x] 1.3 Benchmark batched forward on MPS with B ∈ {1, 4, 8} and variable-length inputs padded to `T_max`; record wall-clock per batch in `docs/experiments/2026-04-XX-mps-batch.md`; confirm no regression vs CPU
 - [x] 1.4 Default device stays `None` (auto-detect) — no CLI / env changes needed by users
 
 ## 2. Refine worker foundations
 
 - [x] 2.1 New constants in `recog/config.py`: `PCM_REFINE_WINDOW_S = 20.0`, `PCM_REFINE_MONOLOG_CAP_S = 15.0`; new `pcm_refine_enabled()` reading `RECOG_PCM_REFINE` (returns `False` unless `pcm_transport_enabled()` is also `True`)
 - [x] 2.2 New method `ASRModule.transcribe_with_timestamps(pcm: Tensor | np.ndarray) -> TranscriptionResult` wrapping upstream `transcribe(word_timestamps=True)`; word start/end normalised to milliseconds (ints)
-- [x] 2.3 **Spike (must precede 2.4):** determine whether upstream GigaAM's RNN-T decoder exposes a per-step hook suitable for cooperative abort. Concretely: inspect `gigaam.decoding.RNNTGreedyDecoder.decode` post upstream merge; attempt a monkey-patched `step_callback` prototype; record outcome in `experiments/2026-04-XX-refine-abort-spike.md`. Outcome drives the abort mode in 2.4 and the worded guarantee in the spec (§"Live batch preempts refine")
+- [x] 2.3 **Spike (must precede 2.4):** determine whether upstream GigaAM's RNN-T decoder exposes a per-step hook suitable for cooperative abort. Concretely: inspect `gigaam.decoding.RNNTGreedyDecoder.decode` post upstream merge; attempt a monkey-patched `step_callback` prototype; record outcome in `docs/experiments/2026-04-XX-refine-abort-spike.md`. Outcome drives the abort mode in 2.4 and the worded guarantee in the spec (§"Live batch preempts refine")
 - [x] 2.4 New module `recog/refine.py` with `RefineWorker(model_lock: threading.Lock, transcribe_fn: Callable, apply_fn: Callable, abort_mode: Literal["cooperative", "coarse"])`. `abort_mode` defaults to spike outcome; background thread; API: `submit(task: RefineTask)`, `pause()`, `resume()`, `stop()`. In `cooperative` mode, the transcribe_fn honours a `should_abort()` callable polled between decoder steps; in `coarse` mode, refine holds the lock until one full window finishes (≤ 3 s CPU worst case)
 - [x] 2.5 Model-lock integration in `LiveTranscriber._on_pcm_batch`: acquire `model_lock` before `transcribe_batch`; set a `live_pending` flag that `RefineWorker` polls (cadence per spike outcome recorded in 2.3)
 - [x] 2.6 Unit test `tests/test_refine_worker.py`: task submission, pause/resume, abort-on-live semantics for BOTH `cooperative` and `coarse` modes with a mock transcribe_fn
@@ -86,15 +86,15 @@
 ## 11. Benchmarking + validation
 
 - [x] 11.1 New harness `scripts/refine_benchmark.py`: replays recorded per-pid WAVs through `PerSpeakerIngest` + `RefineWorker`; outputs per-segment live-WER and refined-WER against a reference transcript, plus overall avg
-- [x] 11.2 Run on take-2 fixture; acceptance: overall refined-WER ≤ 25% (vs live 33% baseline); write results to `experiments/2026-04-XX-stream-refine.md`
+- [x] 11.2 Run on take-2 fixture; acceptance: overall refined-WER ≤ 25% (vs live 33% baseline); write results to `docs/experiments/2026-04-XX-stream-refine.md`
 - [x] 11.3 Latency measurement: `scripts/refine_benchmark.py --latency-profile` with 4 simulated pids in parallel; first-paint p50/p95 must regress ≤ 100 ms vs baseline live-only
-- [x] 11.4 If 11.2 or 11.3 fail acceptance thresholds, flag in `experiments/2026-04-XX-stream-refine.md` and do NOT proceed to default-flip task 12.6; iterate design
+- [x] 11.4 If 11.2 or 11.3 fail acceptance thresholds, flag in `docs/experiments/2026-04-XX-stream-refine.md` and do NOT proceed to default-flip task 12.6; iterate design
 
 ## 12. Rollout + docs
 
 - [x] 12.1 Sanity filter in `_apply_refine` (per D12): word-count-delta and Levenshtein guards with reject counters; unit test in `tests/test_refine_alignment.py` covering pass/reject on synthetic inputs
 - [x] 12.2 Runtime toggle in `/api/pcm-diagnostics` (per D12): `POST {"refine_enabled": bool}` wired to `RefineWorker.pause()` / `resume()`; `GET` reports current enabled state and `refine.rejected_sanity` counter
-- [x] 12.3 Write `adr/ADR-0019-stream-refine.md` summarising decisions D1–D12 and benchmark results
+- [x] 12.3 Write `docs/adr/ADR-0019-stream-refine.md` summarising decisions D1–D12 and benchmark results
 - [x] 12.4 Update `CLAUDE.md` Architecture section: refine contour, tier-1/tier-2 UI, feature flag
 - [x] 12.5 `.env.example`: add `RECOG_PCM_REFINE=0` with one-line explanation
 - [ ] ➕ Default flip pending operational validation: 1 week of opt-in use, ≥ 5 real meetings with refined-WER monitored

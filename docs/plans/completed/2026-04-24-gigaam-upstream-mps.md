@@ -13,7 +13,7 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 - Upstream GigaAM lives at `/Users/vkkovalev/projects/GigaAM` and is editable-installed into `venv-gigaam/` via `pip install -e ../GigaAM`. Current local main is at `0a3f103`; upstream `origin/main` is at `6e4b027` (9 commits ahead).
 - BREAKING upstream change in commit `a755fec`: `model.decoding.decode(...)` now returns `List[Tuple[str, List[int], List[int]]]` (text + token_ids + token_frames) instead of `List[str]`. Our `recog/asr.py::ASRModule.transcribe_batch` calls this directly at one known site and will crash without a patch. Public signature `transcribe_batch(pcm_list) -> List[str]` must stay stable so callers in `recog/live.py::_on_pcm_batch` are unaffected.
 - New API: `gigaam.load_model(...).transcribe(path, word_timestamps=True)` returns a `TranscriptionResult` with `.text` and `.words` (list of `Word(text, start, end)`). We'll wrap this as `ASRModule.transcribe_with_timestamps`.
-- Grid-search baseline: `experiments/2026-04-23-gigaam-grid.md`. Configs 20/1.0 = 23.9% WER and 10/0.5 = 24.5% WER on take-2 reference (`experiments/reference_take2.txt`, 48 s speech window trim 17-65). Post-merge WER must stay within ±1% of these.
+- Grid-search baseline: `docs/experiments/2026-04-23-gigaam-grid.md`. Configs 20/1.0 = 23.9% WER and 10/0.5 = 24.5% WER on take-2 reference (`docs/experiments/reference_take2.txt`, 48 s speech window trim 17-65). Post-merge WER must stay within ±1% of these.
 - Per-pid WAV fixtures exist at `/tmp/recog_exp/raw_take2/{d9e189e5__Example.wav, 8ee8e2d9__Example2.wav}` (local only, not in repo; regeneratable via `scripts/pcm_capture_reconstruct.py` if needed).
 - MPS sanity: `torch.backends.mps.is_available()` returns True on this M-series MacBook. Grid-search already confirmed bit-identical transcripts CPU vs MPS on tested configs (10/0.5, 20/1.0, 10/2.0) on the OLD API. The `word_timestamps=True` path on MPS is untested.
 - Not touching: anything in `openspec/changes/per-speaker-stream-refine/` tasks §2–§12. That's the refine contour itself, scope for the next ralphex plan.
@@ -74,11 +74,11 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
     --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav \
     --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav \
     --trim 17-65 \
-    --reference-file experiments/reference_take2.txt \
+    --reference-file docs/experiments/reference_take2.txt \
     --configs "20:1.0,10:0.5"
   ```
   If `/tmp/recog_exp/raw_take2/` is gone (ephemeral), first regenerate via `scripts/pcm_capture_reconstruct.py` from the most recent capture under `/tmp/recog_pcm_capture/` — or ⚠️-flag and ask. *(Fixtures present at expected path; harness loaded GigaAM on auto-device and produced the four WER figures in under a minute.)*
-- [x] 3.2 Expected numbers (from `experiments/2026-04-23-gigaam-grid.md`):
+- [x] 3.2 Expected numbers (from `docs/experiments/2026-04-23-gigaam-grid.md`):
   - 20/1.0 → Example 23.9% / Example2 23.9% / avg 23.9%
   - 10/0.5 → Example 25.0% / Example2 23.9% / avg 24.5%
 - [x] 3.3 Acceptance: both configs stay within ±1% absolute WER of these numbers. If regression > 1%, stop and ⚠️-flag — upstream either changed the decoder defaults or the tuple unpacking dropped some text. *(Bit-identical to baselines: 20/1.0 → 23.9%/23.9%, 10/0.5 → 25.0%/23.9%. All four per-file WER values match to the tenth of a percent — Δ=0, well within ±1%. S/I/D breakdowns: 20/1.0 = 10/0/12 on both files; 10/0.5 = 14/1/8 on Example, 12/1/9 on Example2. Tuple-unpacking patch verified not to drop any text.)*
@@ -104,8 +104,8 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 
 - [x] 6.1 Re-run grid-search with explicit device flags:
   ```bash
-  ./scripts/pcm_experiment.py --device cpu  --configs "20:1.0,10:0.5" --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --trim 17-65 --reference-file experiments/reference_take2.txt > /tmp/wer_cpu.txt 2>&1
-  ./scripts/pcm_experiment.py --device mps  --configs "20:1.0,10:0.5" --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --trim 17-65 --reference-file experiments/reference_take2.txt > /tmp/wer_mps.txt 2>&1
+  ./scripts/pcm_experiment.py --device cpu  --configs "20:1.0,10:0.5" --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --trim 17-65 --reference-file docs/experiments/reference_take2.txt > /tmp/wer_cpu.txt 2>&1
+  ./scripts/pcm_experiment.py --device mps  --configs "20:1.0,10:0.5" --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --trim 17-65 --reference-file docs/experiments/reference_take2.txt > /tmp/wer_mps.txt 2>&1
   diff /tmp/wer_cpu.txt /tmp/wer_mps.txt
   ```
   *(Ran both via `venv-gigaam/bin/python scripts/pcm_experiment.py ...` (env shebang resolves to system Python without the editable GigaAM install). Both runs exit 0. Raw outputs preserved at `/tmp/wer_cpu.txt` and `/tmp/wer_mps.txt`.)*
@@ -115,7 +115,7 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 ### Task 7: MPS batched-forward micro-bench
 
 - [x] 7.1 Create `scripts/mps_batch_bench.py`: load one `ASRModule` per device (CPU, MPS), synthesise batches of N ∈ {1, 4, 8} copies of a 10-second 16 kHz synthetic sine or silence, call `transcribe_batch`, time wall-clock (use `torch.mps.synchronize()` + `time.perf_counter()` on MPS; just `time.perf_counter()` on CPU). Dump a small markdown table. *(Implemented. One global B=1 warmup after model load, plus one per-batch-size warmup (MPS may recompile on shape change), then 5 measured iterations with `sync(device)` both before and after each `transcribe_batch` so `perf_counter` brackets the full preprocess + pad + forward + decode round-trip. Silence (float32 zeros) is used to keep the decode path deterministic — we're measuring encoder throughput, not ASR realism. Report emits raw ms table, MPS/CPU ratio table, explicit PASS/FAIL acceptance line for B=8, and per-iteration timings for transparency. `--skip-mps` debug flag and graceful `torch.backends.mps.is_available()` fallback are included.)*
-- [x] 7.2 Run and save output: `venv-gigaam/bin/python scripts/mps_batch_bench.py > experiments/2026-04-24-mps-batch.md`. *(Ran on live service idle (no KTalk meeting), exit 0, total wall ~40 s.)*
+- [x] 7.2 Run and save output: `venv-gigaam/bin/python scripts/mps_batch_bench.py > docs/experiments/2026-04-24-mps-batch.md`. *(Ran on live service idle (no KTalk meeting), exit 0, total wall ~40 s.)*
 - [x] 7.3 Acceptance: MPS wall ≤ CPU wall at B=8 (ideally ≤ 0.5×). If MPS is slower, not blocking for the plan — document in the file but flag with ⚠️ for follow-up. *(**PASS** — CPU B=8 median 1287.7 ms vs MPS B=8 median 795.4 ms, ratio 0.62× (speedup 1.62×). Above the ideal 0.5× target, but well inside the non-blocking "MPS ≤ CPU" band. B=4 ratio 0.64× (1.56×); B=1 ratio 0.88× (1.14×, fixed overhead dominates at batch=1, as expected). CPU is extremely deterministic (max–min < 12 ms per cell); MPS has visible jitter at B=8 (732–862 ms across iterations), typical for Metal command scheduling — median is the right statistic here.)*
 - [x] 7.4 Commit: `exp: MPS batched-forward micro-bench (B=1,4,8) results`
 
@@ -134,7 +134,7 @@ Prerequisite phase for `per-speaker-stream-refine` (Option B, stream+refine). Co
 ## Post-Completion
 
 - `openspec/changes/per-speaker-stream-refine/tasks.md` §0 and §1 show `[x]` green; `openspec validate` still passes.
-- `experiments/2026-04-24-mps-batch.md` documents MPS throughput on this machine.
+- `docs/experiments/2026-04-24-mps-batch.md` documents MPS throughput on this machine.
 - `ASRModule.transcribe_with_timestamps(...)` is available and unit-tested; ready to be called from the future `RefineWorker`.
 - If any WER regression (> ±1%) surfaces or MPS fails bit-identical → do NOT proceed to the refine contour plan; ⚠️-flag in a follow-up and diagnose first.
 - Next ralphex plan: `2026-04-XX-per-speaker-stream-refine-contour.md` covering openspec §2 (refine worker foundations) through §8 (webapp UI). Scope it as a fresh plan; don't try to continue this one.

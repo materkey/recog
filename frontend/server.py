@@ -1891,7 +1891,7 @@ async def enroll_from_segments(request: EnrollFromSegmentsRequest):
         # Extract embeddings for each segment
         embeddings = []
         venv_python = Path(__file__).parent.parent / "venv-gigaam" / "bin" / "python"
-        worker_path = Path(__file__).parent.parent / "embedding_worker.py"
+        worker_path = Path(__file__).parent.parent / "scripts/embedding_worker.py"
 
         # Assume ~3 second segments (chunk_duration from live.py)
         segment_duration_ms = 3000

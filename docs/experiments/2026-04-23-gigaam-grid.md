@@ -3,7 +3,7 @@
 **Date**: 2026-04-23
 **Material**: `/tmp/recog_exp/raw_take2/{d9e189e5__Example,8ee8e2d9__Example2}.wav`
 **Trim**: 17-65 s (48 s of speech)
-**Reference**: 4× зайчик-погулять, 92 words (`experiments/reference_take2.txt`)
+**Reference**: 4× зайчик-погулять, 92 words (`docs/experiments/reference_take2.txt`)
 **Model**: GigaAM v3_e2e_rnnt (unchanged across all runs)
 
 ## Methodology
@@ -102,7 +102,7 @@ and the frontend WebSocket handler + transcript.jsonl format.
   --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav \
   --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav \
   --trim 17-65 \
-  --reference-file experiments/reference_take2.txt \
+  --reference-file docs/experiments/reference_take2.txt \
   --configs "2:0,3:0,3:0.3,3:0.6,3:1,5:0,5:0.5,5:1,5:2,10:0,10:0.5,10:1,10:2,10:5,20:0,20:1,30:0,full:0"
 ```
 

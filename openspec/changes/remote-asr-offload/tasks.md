@@ -58,6 +58,6 @@
 
 ## 7. Docs + rollout
 
-- [ ] 7.1 `adr/0020-remote-asr-offload.md` (this change's ADR)
+- [ ] 7.1 `docs/adr/0020-remote-asr-offload.md` (this change's ADR)
 - [ ] 7.2 Update `CLAUDE.md` Architecture section: `build_asr()`, remote backend, lazy fallback, circuit breaker, `RECOG_ASR_*` env vars
 - [ ] 7.3 `openspec archive remote-asr-offload` once tasks 0–6 complete and the gateway smoke test + outage drill pass

@@ -40,6 +40,8 @@ meetings/
 !/speakers_ecapa.json.example
 /sck_audio_capture
 /example_1_named.md
+/examples/*
+!/examples/README.md
 /com.recog.*.plist
 
 # Git worktrees

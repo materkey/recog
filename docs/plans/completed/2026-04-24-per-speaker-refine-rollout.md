@@ -21,8 +21,8 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 - `PerSpeakerIngest._degraded` flips in `recog/per_speaker.py` (existing watchdog logic, see ADR-0018). `_emit_pcm_transition_marker` writes the `[PCM silence → mixed fallback]` and `[PCM recovered — back to per-speaker]` gap markers into transcript JSONL (`recog/live.py:867-911`).
 - `RefineWorker.pause()` and `resume()` already exist (built in Plan 2). They drop queued tasks and halt new submissions.
 - Per-pid WAV fixtures: `/tmp/recog_exp/raw_take2/{d9e189e5__Example.wav, 8ee8e2d9__Example2.wav}` are LOCAL/EPHEMERAL (not in repo). If missing, regenerate via `scripts/pcm_capture_reconstruct.py` from a recent `/tmp/recog_pcm_capture/` capture, or ⚠️-flag to the user.
-- Reference transcript: `experiments/reference_take2.txt` (92 words, 4× зайчик-погулять).
-- Grid-search baseline: `experiments/2026-04-23-gigaam-grid.md`. Target acceptance: refined WER ≤ 25% avg on take-2 (vs live 33% baseline).
+- Reference transcript: `docs/experiments/reference_take2.txt` (92 words, 4× зайчик-погулять).
+- Grid-search baseline: `docs/experiments/2026-04-23-gigaam-grid.md`. Target acceptance: refined WER ≤ 25% avg on take-2 (vs live 33% baseline).
 
 ## Development Approach
 
@@ -76,15 +76,15 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
     - Let `RefineWorker` process and call `_apply_refine`; stash refined segments.
     - Compute WER (via `scripts/pcm_experiment.py::wer` helper — import it) for both live and refined segment texts joined.
 - [x] 3.3 Support `--device {cpu,mps}` (defaults to auto).
-- [x] 3.4 Write markdown report to `experiments/2026-04-24-refine-wer.md`: one table per config, showing live-WER vs refined-WER, delta, per-pid if multiple.
-- [x] 3.5 No commit yet — script is built but not yet run. (ralphex per-iteration commit: script lands without bench output; Task 4 appends the actual WER table to `experiments/2026-04-24-refine-wer.md`.)
+- [x] 3.4 Write markdown report to `docs/experiments/2026-04-24-refine-wer.md`: one table per config, showing live-WER vs refined-WER, delta, per-pid if multiple.
+- [x] 3.5 No commit yet — script is built but not yet run. (ralphex per-iteration commit: script lands without bench output; Task 4 appends the actual WER table to `docs/experiments/2026-04-24-refine-wer.md`.)
 
 ### Task 4: Run the refine benchmark on take-2 fixtures
 
-- [x] 4.1 If `/tmp/recog_exp/raw_take2/d9e189e5__Example.wav` missing, regenerate from the most recent `/tmp/recog_pcm_capture/` subdirectory via `scripts/pcm_capture_reconstruct.py`. If no capture exists either, ⚠️-flag and skip task 4.2 + 4.3 — leave a note in `experiments/2026-04-24-refine-wer.md` that user must re-capture.
-- [x] 4.2 Run: `venv-gigaam/bin/python scripts/refine_benchmark.py --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav --reference-file experiments/reference_take2.txt --trim 17-65`.
-- [x] 4.3 Acceptance: refined-WER ≤ 25% on at least one of the two tracks (baseline is 33%); delta (refined vs live) is negative (better) on both tracks. ⚠️ Absolute 25% gate MISSED (both tracks landed at 32.6%); delta criterion PASS (-4.3% / -3.3%). See Observations in `experiments/2026-04-24-refine-wer.md` — do not flip `RECOG_PCM_REFINE` default.
-- [x] 4.4 Write results to `experiments/2026-04-24-refine-wer.md` including any edge cases observed (empty word lists, boundary-straddling, sanity-filter rejections).
+- [x] 4.1 If `/tmp/recog_exp/raw_take2/d9e189e5__Example.wav` missing, regenerate from the most recent `/tmp/recog_pcm_capture/` subdirectory via `scripts/pcm_capture_reconstruct.py`. If no capture exists either, ⚠️-flag and skip task 4.2 + 4.3 — leave a note in `docs/experiments/2026-04-24-refine-wer.md` that user must re-capture.
+- [x] 4.2 Run: `venv-gigaam/bin/python scripts/refine_benchmark.py --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav --reference-file docs/experiments/reference_take2.txt --trim 17-65`.
+- [x] 4.3 Acceptance: refined-WER ≤ 25% on at least one of the two tracks (baseline is 33%); delta (refined vs live) is negative (better) on both tracks. ⚠️ Absolute 25% gate MISSED (both tracks landed at 32.6%); delta criterion PASS (-4.3% / -3.3%). See Observations in `docs/experiments/2026-04-24-refine-wer.md` — do not flip `RECOG_PCM_REFINE` default.
+- [x] 4.4 Write results to `docs/experiments/2026-04-24-refine-wer.md` including any edge cases observed (empty word lists, boundary-straddling, sanity-filter rejections).
 - [x] 4.5 Commit: `exp: refine benchmark on take-2 fixtures (WER live vs refined)`
 
 ### Task 5: Latency micro-benchmark — first-paint under refine load
@@ -92,13 +92,13 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 - [x] 5.1 Extend `scripts/refine_benchmark.py` with `--latency-profile` flag (or new script `scripts/refine_latency_bench.py`): simulate 4 parallel pids each with 30 seconds of synthetic PCM; measure wall-clock from chunk `enqueue` → `append_segment` return (first-paint) for each chunk. Report p50, p95, max.
 - [x] 5.2 Run twice: once with `RECOG_PCM_REFINE=0` (baseline), once with `RECOG_PCM_REFINE=1`.
 - [x] 5.3 Acceptance: p95 first-paint regression ≤ 100 ms with refine enabled (per design D6 / Open Question 3). Δ p95 = +23.4 ms — **PASS**.
-- [x] 5.4 Append results to `experiments/2026-04-24-refine-wer.md` in a "Latency" section.
+- [x] 5.4 Append results to `docs/experiments/2026-04-24-refine-wer.md` in a "Latency" section.
 - [x] 5.5 If either acceptance (WER or latency) misses, ⚠️-flag in the report and do NOT recommend default-flip to the user — keep `RECOG_PCM_REFINE` default `0`. WER still MISSED on Task 4; latency PASS doesn't unblock default-flip.
 - [x] 5.6 Commit: `exp: refine latency micro-bench (first-paint p50/p95 under multi-pid)`
 
 ### Task 6: ADR-0019
 
-- [x] 6.1 Write `adr/ADR-0019-stream-refine.md` summarising the refine decision: D1-D12 from `openspec/changes/per-speaker-stream-refine/design.md` (brief, one paragraph each). Include benchmark results from Task 4 and 5 (live-WER, refined-WER, latency p50/p95). ➕ File written as `adr/0019-stream-refine.md` to match existing `NNNN-title.md` naming convention used by all 18 prior ADRs in `adr/`.
+- [x] 6.1 Write `docs/adr/ADR-0019-stream-refine.md` summarising the refine decision: D1-D12 from `openspec/changes/per-speaker-stream-refine/design.md` (brief, one paragraph each). Include benchmark results from Task 4 and 5 (live-WER, refined-WER, latency p50/p95). ➕ File written as `docs/adr/0019-stream-refine.md` to match existing `NNNN-title.md` naming convention used by all 18 prior ADRs in `docs/adr/`.
 - [x] 6.2 Reference the OpenSpec change (`openspec/changes/per-speaker-stream-refine/`) as source of truth for detailed design; ADR is a summary.
 - [x] 6.3 Commit: `docs(adr): ADR-0019 stream-refine decision + bench results`
 
@@ -139,7 +139,7 @@ Backend, transport, and UI are done (Plans 1-3). This plan closes out the OpenSp
 
 ### Task 11: Final report
 
-- [x] 11.1 Append a "Final state" section to `experiments/2026-04-24-refine-wer.md`:
+- [x] 11.1 Append a "Final state" section to `docs/experiments/2026-04-24-refine-wer.md`:
   - Commits on `gigaam-upstream-mps`: total 58 since `main`.
   - WER delta: live 36.4% → refined 32.6% avg on take-2 (delta PASS, absolute 25% gate MISS).
   - Latency delta: p95 +23.4 ms (PASS under 100 ms budget).
