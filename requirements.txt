@@ -26,7 +26,10 @@ websockets>=14.0
 # MCP Streamable HTTP server (Copilot channel)
 mcp>=1.2.0
 
-# Configuration and HTTP clients (recog/config.py, recog/remote_asr.py)
+# .env loading for the web app (frontend/server.py) and HTTP client for the
+# remote ASR backend (recog/remote_asr.py). recog/config.py deliberately does
+# NOT use python-dotenv: scripts/deps.sh imports it with the host interpreter
+# before the venv exists, so it must stay free of third-party imports.
 python-dotenv>=1.0
 httpx>=0.25
 
