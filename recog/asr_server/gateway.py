@@ -1,7 +1,7 @@
-"""OpenAI-compatible ASR gateway. Listens on 0.0.0.0:8770.
+"""OpenAI-compatible ASR gateway (default bind: 0.0.0.0:8770).
 
 Routes /v1/audio/transcriptions by `model` form field to local backends.
-Lists available models via /v1/models. No auth (Tailscale-only network).
+Lists configured model aliases via /v1/models. No authentication; use a trusted network.
 
 Word-level timestamps (refine path, ADR-0019/0020): the optional
 `timestamp_granularities` form field is forwarded verbatim to the backend so
@@ -23,6 +23,8 @@ log = logging.getLogger("gateway")
 QWEN_URL = os.environ.get("QWEN_ASR_URL", "http://127.0.0.1:9001")
 GIGAAM_URL = os.environ.get("GIGAAM_URL", "http://127.0.0.1:9002")
 TIMEOUT = float(os.environ.get("ASR_TIMEOUT_S", "1800"))
+HOST = os.environ.get("ASR_GATEWAY_HOST", "0.0.0.0")
+PORT = int(os.environ.get("ASR_GATEWAY_PORT", "8770"))
 
 # Model name → backend URL.
 MODEL_MAP = {
@@ -122,4 +124,4 @@ async def transcribe(
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8770, log_level="info")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info")

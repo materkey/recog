@@ -1,4 +1,4 @@
-"""GigaAM v3 HTTP backend with optional pyannote diarization. Listens on 127.0.0.1:9002.
+"""GigaAM v3 HTTP backend with optional pyannote diarization (default: 127.0.0.1:9002).
 
 OpenAI-Whisper-compatible POST /v1/audio/transcriptions.
   Diarization is enabled when `model` contains "diarized" (e.g. `gigaam-diarized`)
@@ -34,37 +34,49 @@ log = logging.getLogger("gigaam")
 
 VARIANT = os.environ.get("GIGAAM_VARIANT", "v3_e2e_rnnt")
 DIAR_MODEL = os.environ.get("DIAR_MODEL", "pyannote/speaker-diarization-community-1")
-HF_TOKEN_PATH = Path("~/.cache/huggingface/token").expanduser()
+HOST = os.environ.get("GIGAAM_HOST", "127.0.0.1")
+PORT = int(os.environ.get("GIGAAM_PORT", "9002"))
+DEVICE = os.environ.get("GIGAAM_DEVICE", "cuda")
+FP16_ENCODER = os.environ.get(
+    "GIGAAM_FP16_ENCODER", "1" if DEVICE.startswith("cuda") else "0"
+) == "1"
+DIARIZATION_ENABLED = os.environ.get("GIGAAM_DIARIZATION", "1") == "1"
+HF_TOKEN_PATH = Path(os.environ.get(
+    "HF_TOKEN_PATH", "~/.cache/huggingface/token"
+)).expanduser()
 
-if HF_TOKEN_PATH.exists():
-    os.environ.setdefault("HF_TOKEN", HF_TOKEN_PATH.read_text().strip())
-
-import torch
-import torch.serialization
-
-torch.serialization.add_safe_globals([torch.torch_version.TorchVersion])
-_orig_load = torch.load
-torch.load = lambda *a, **kw: _orig_load(*a, **{**kw, "weights_only": False})
 
 state: dict = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if HF_TOKEN_PATH.exists():
+        os.environ.setdefault("HF_TOKEN", HF_TOKEN_PATH.read_text().strip())
+
+    import torch
+    import torch.serialization
+
+    torch.serialization.add_safe_globals([torch.torch_version.TorchVersion])
+    orig_load = torch.load
+    torch.load = lambda *a, **kw: orig_load(*a, **{**kw, "weights_only": False})
+
     log.info("loading gigaam %s", VARIANT)
     import gigaam
 
-    state["model"] = gigaam.load_model(VARIANT, device="cuda", fp16_encoder=True)
+    state["model"] = gigaam.load_model(VARIANT, device=DEVICE, fp16_encoder=FP16_ENCODER)
 
-    log.info("loading diarization pipeline %s", DIAR_MODEL)
-    from pyannote.audio import Pipeline
+    pipeline = None
+    if DIARIZATION_ENABLED:
+        log.info("loading diarization pipeline %s", DIAR_MODEL)
+        from pyannote.audio import Pipeline
 
-    # pyannote 4.0 dropped `use_auth_token`; reads HF_TOKEN from env automatically.
-    pipeline = Pipeline.from_pretrained(DIAR_MODEL)
-    if pipeline is None:
-        log.warning("pyannote pipeline failed to load — diarization will be disabled")
-    else:
-        pipeline.to(torch.device("cuda"))
+        # pyannote 4.0 dropped `use_auth_token`; reads HF_TOKEN from env automatically.
+        pipeline = Pipeline.from_pretrained(DIAR_MODEL)
+        if pipeline is None:
+            log.warning("pyannote pipeline failed to load — diarization will be disabled")
+        else:
+            pipeline.to(torch.device(DEVICE))
     state["diar"] = pipeline
     log.info("ready")
     yield
@@ -254,4 +266,4 @@ def _to_vtt(segments: list, diar: bool) -> str:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=9002, log_level="info")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info")

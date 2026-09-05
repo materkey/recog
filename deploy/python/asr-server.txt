@@ -1,0 +1,9 @@
+# Optional standalone Linux ASR server; install in its own virtualenv.
+# Select a suitable PyTorch build for the target CPU/CUDA runtime first.
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+httpx>=0.25.0
+python-multipart>=0.0.9
+# Longform transcription requires pyannote VAD even without speaker diarization.
+gigaam[longform] @ git+https://github.com/salute-developers/GigaAM.git@6e4b027
+pyannote.audio>=4.0,<5
