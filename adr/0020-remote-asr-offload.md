@@ -162,7 +162,7 @@ Env-консты в `recog/config.py` (паттерн `os.environ.get(...)` на
 | env | default | смысл |
 |---|---|---|
 | `RECOG_ASR_BACKEND` | `local` | `local` \| `remote` |
-| `RECOG_ASR_REMOTE_URL` | `https://materkey-z270x-1.tail4799d.ts.net/asr` | база gateway |
+| `RECOG_ASR_REMOTE_URL` | `""` | база gateway; при `remote` пустое значение — `RuntimeError` на старте (дефолт убран в ADR-0021, адрес задаётся в `.env`) |
 | `RECOG_ASR_REMOTE_MODEL` | `gigaam` | алиас модели |
 | `RECOG_ASR_REMOTE_TIMEOUT_S` | `15` | per-request timeout |
 | `RECOG_ASR_CIRCUIT_FAILS` | `3` | порог открытия circuit |
