@@ -113,7 +113,7 @@ Preparation script (`tests/e2e/prepare_fixtures.py`):
 - BlackHole virtual audio device installed
 - Chrome extension built (`npm run build` in `kontur-diarize/ktalk-speaker-extension/`)
 - Playwright installed (`pip install playwright && playwright install chromium`)
-- `example_5min.wav` present in project root
+- `examples/example_5min.wav` present locally
 
 ## Running
 

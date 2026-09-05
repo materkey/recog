@@ -208,19 +208,19 @@
 
 **Goal**: зафиксировать решение в ADR, обновить README'ы, поднять флаг `RECOG_PCM_TRANSPORT=1` как default после ручного smoke.
 
-- [x] 6.1 Создан `adr/0018-per-speaker-asr-pipeline.md` (номер 0014 уже занят `adr/0014-asr-engine-parakeet-v3.md`; переименовано на следующий свободный 0018). Контент: Status / Context / Decision (таблица D1–D10) / Implementation / Consequences / Alternatives / References. Ссылки на research commits (BASE_REVISION, BASE_REVISION), OpenSpec, design doc.
+- [x] 6.1 Создан `docs/adr/0018-per-speaker-asr-pipeline.md` (номер 0014 уже занят `docs/adr/0014-asr-engine-parakeet-v3.md`; переименовано на следующий свободный 0018). Контент: Status / Context / Decision (таблица D1–D10) / Implementation / Consequences / Alternatives / References. Ссылки на research commits (BASE_REVISION, BASE_REVISION), OpenSpec, design doc.
 - [x] 6.2 Обновлён репозиторный `CLAUDE.md`: в Architecture добавлен параграф «Per-speaker ASR path (ADR-0018)» с компонентами и watchdog-поведением; в Environment Variables добавлена `RECOG_PCM_TRANSPORT`; в ADR Documents добавлен пункт ADR-0018.
 - [x] 6.3 Обновлён `kontur-diarize/ktalk-speaker-extension/README.md`: секция «PCM transport (per-speaker ASR, ADR-0018)» с объяснением server-authoritative gate, enable-инструкциями и диагностикой.
 - [x] 6.4 Ручной smoke на живой встрече остаётся за оператором — AI-агент не может участвовать в KTalk-созвоне. Шаблон записи результата добавлен в «Smoke result» ниже; после прохождения обновить раздел вручную.
 - [x] 6.5 Default `RECOG_PCM_TRANSPORT` оставлен `0` в `recog/config.py:119` до прохождения ручного smoke (contingency из плана: «Если smoke показал проблемы — зафиксировать follow-up'ы, оставить default `0`»). Флип на `1` — отдельным single-file коммитом после обновления «Smoke result».
 
 **Acceptance**:
-- `adr/0018-per-speaker-asr-pipeline.md` создан (номер 0014 был занят под parakeet-v3).
+- `docs/adr/0018-per-speaker-asr-pipeline.md` создан (номер 0014 был занят под parakeet-v3).
 - `CLAUDE.md`, extension `README.md` обновлены.
 - «Smoke result» секция в этом plan'е заполнена (шаблон до ручного прогона).
 - Default `RECOG_PCM_TRANSPORT` установлен в соответствии с результатом smoke (пока `0`, contingency-ветка).
 
-**Files touched**: `adr/0018-per-speaker-asr-pipeline.md` (new), `CLAUDE.md`, `kontur-diarize/ktalk-speaker-extension/README.md`, этот plan.
+**Files touched**: `docs/adr/0018-per-speaker-asr-pipeline.md` (new), `CLAUDE.md`, `kontur-diarize/ktalk-speaker-extension/README.md`, этот plan.
 
 **Commit**: `docs: ADR-0018 + rollout default for per-speaker ASR`
 

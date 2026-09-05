@@ -14,7 +14,7 @@ Approach:
      Difference vs. baseline = "cooperative savings" (decoder loop cost).
 
 Run:
-  ./venv-gigaam/bin/python experiments/2026-04-24-refine-abort-spike.py
+  ./venv-gigaam/bin/python scripts/refine_abort_spike.py
 """
 from __future__ import annotations
 
@@ -226,7 +226,7 @@ def main():
         "decoder_loop_median_ms": round(dec_delta, 1),
         "decoder_loop_pct_of_baseline": round(100 * dec_delta / base_med, 1),
     }
-    out = PROJECT_ROOT / "experiments/2026-04-24-refine-abort-spike.json"
+    out = PROJECT_ROOT / "docs/experiments/2026-04-24-refine-abort-spike.json"
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
     print(f"\n[spike] summary → {out}")
 

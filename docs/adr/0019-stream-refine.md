@@ -6,7 +6,7 @@ Accepted (2026-04-24)
 ## Context
 
 Per-speaker ASR pipeline (ADR-0018) даёт live-транскрипцию через 3-s чанки GigaAM.
-Grid-search на такой конфигурации (`experiments/2026-04-23-gigaam-grid.md`)
+Grid-search на такой конфигурации (`docs/experiments/2026-04-23-gigaam-grid.md`)
 показал avg WER ~33 % на take-2 benchmark'е, при том что на 20-s окнах с overlap
 1–2 s GigaAM достигает 23–25 %. Модели не хватает контекста — бóльшая часть
 ошибок сидит на границах 3-s чанков.
@@ -79,7 +79,7 @@ solid border). Extension overlay делает plain fade-swap без tier-сти
 `threading.RLock` на модель. Refine берёт lock перед inference; live выставляет
 `live_pending` флаг, refine-декодер опрашивает его между RNN-T шагами через
 `make_abortable_decode` hook (cooperative abort). Live wait ≤ ~187 ms (спайк в
-`experiments/2026-04-24-refine-abort-spike.md`). RAM doubling на M1 Pro 16 GB
+`docs/experiments/2026-04-24-refine-abort-spike.md`). RAM doubling на M1 Pro 16 GB
 невозможен, mutex + cooperative abort — компромисс.
 
 **D7. Fallback_mixed = refine off.** Когда `PerSpeakerIngest._degraded == True`
@@ -131,10 +131,10 @@ WS egress (`send_refine`). Narrow surface: три callable + один accessor
 > `RefineWorker.pause()/resume()` через `_emit_pcm_transition_marker`. Расширенный
 > sanity filter (word-count-delta + Levenshtein + `rejected_sanity` counter) и
 > POST `/api/pcm-diagnostics` runtime toggle не реализованы в коде — отмечены как
-> "Known limitations" в `experiments/2026-04-24-refine-wer.md` и остаются
+> "Known limitations" в `docs/experiments/2026-04-24-refine-wer.md` и остаются
 > как follow-up задачи перед default-flip.
 
-## Benchmark results (см. `experiments/2026-04-24-refine-wer.md`)
+## Benchmark results (см. `docs/experiments/2026-04-24-refine-wer.md`)
 
 Take-2 fixtures (per-pid WAVs, два трека ~48 s, 92 reference-слов каждый,
 trim 17–65 s, device MPS):
@@ -273,10 +273,10 @@ upstream issues `pytorch/pytorch#93397`, `pytorch/pytorch#96975`.
   - `docs/plans/2026-04-24-per-speaker-refine-transport-ui.md`
   - `docs/plans/2026-04-24-per-speaker-refine-rollout.md`
 - Experiments:
-  - `experiments/2026-04-23-gigaam-grid.md` — grid-search baseline.
-  - `experiments/2026-04-24-mps-batch.md` — MPS bit-identity + throughput.
-  - `experiments/2026-04-24-refine-abort-spike.md` — cooperative abort spike.
-  - `experiments/2026-04-24-refine-wer.md` — acceptance benchmark (WER + latency).
+  - `docs/experiments/2026-04-23-gigaam-grid.md` — grid-search baseline.
+  - `docs/experiments/2026-04-24-mps-batch.md` — MPS bit-identity + throughput.
+  - `docs/experiments/2026-04-24-refine-abort-spike.md` — cooperative abort spike.
+  - `docs/experiments/2026-04-24-refine-wer.md` — acceptance benchmark (WER + latency).
 - Bench script: `scripts/refine_benchmark.py`.
 - Upstream GigaAM: `salute-developers/GigaAM` через `6e4b027` (PR #65 `d427e5a` +
   PR #67 `a755fec`).

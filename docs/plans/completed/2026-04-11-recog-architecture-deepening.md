@@ -296,4 +296,4 @@ ktalk_bridge.py     ← CHANGED: -_find_cli_binary (→ resolve_cli), -_load_dot
 
 **Cleanup:**
 - Удалить `venv-pyannote/` директорию (больше не нужна, если `embedding_worker.py` переведён на `venv-gigaam`)
-- Решить судьбу `add_speaker_live.py` (использует speechbrain напрямую, не через diarize_worker)
+- Решить судьбу `scripts/add_speaker_live.py` (использует speechbrain напрямую, не через diarize_worker)

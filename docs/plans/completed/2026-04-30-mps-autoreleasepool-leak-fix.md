@@ -23,7 +23,7 @@
   - `recog/asr.py` — три `transcribe_*` метода + module-level helper
   - `recog/live.py` — `_transcribe_direct` (lines 441-474) — четвёртый горячий путь, обходит `transcribe_*` методы
   - `tests/test_asr.py` — unit-тесты (есть фикстуры `_make_mocked_asr`, `_make_timestamps_asr` — переиспользуем)
-  - `adr/ADR-0019.md` — короткая заметка в "Operational concerns"
+  - `docs/adr/ADR-0019.md` — короткая заметка в "Operational concerns"
 - **Контекст (читать, не трогать):**
   - `recog/live.py:875` — `_on_pcm_batch` → `asr.transcribe_batch` (PerSpeakerIngest worker thread)
   - `recog/live.py:820,826` — `_refine_transcribe_fn` → `asr.transcribe_with_timestamps` (RefineWorker thread)
@@ -270,7 +270,7 @@ finally:
 ### Task 7: ADR заметка
 
 **Files:**
-- Modify: `adr/0019-stream-refine.md`
+- Modify: `docs/adr/0019-stream-refine.md`
 
 - [x] добавить в "Notes" / "Operational concerns" один параграф: ссылка на этот план, краткое описание leak'а (5.7 ГБ Apple Metal objects через 3 суток), упоминание `_mps_autoreleasepool` + throttled `empty_cache` как митигации
 

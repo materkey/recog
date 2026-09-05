@@ -11,7 +11,7 @@ enough.
 Writes a markdown report to stdout.  Intended invocation:
 
     venv-gigaam/bin/python scripts/mps_batch_bench.py \\
-        > experiments/2026-04-24-mps-batch.md
+        > docs/experiments/2026-04-24-mps-batch.md
 """
 from __future__ import annotations
 

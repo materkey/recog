@@ -208,19 +208,19 @@
 
 **Goal**: зафиксировать решение в ADR, обновить README'ы, поднять флаг `RECOG_PCM_TRANSPORT=1` как default после ручного smoke.
 
-- [ ] 6.1 Создать `adr/ADR-0014-per-speaker-asr-pipeline.md` с кратким резюме: Context / Decision / Consequences. Ссылки на 10 Decisions из этого plan'а, ссылки на research commits (BASE_REVISION, BASE_REVISION) и OpenSpec change.
+- [ ] 6.1 Создать `docs/adr/ADR-0014-per-speaker-asr-pipeline.md` с кратким резюме: Context / Decision / Consequences. Ссылки на 10 Decisions из этого plan'а, ссылки на research commits (BASE_REVISION, BASE_REVISION) и OpenSpec change.
 - [ ] 6.2 Обновить `CLAUDE.md` (репозиторный) — в секции Architecture добавить параграф про per-speaker path: когда включается (`RECOG_PCM_TRANSPORT=1 + --ktalk`), какие компоненты задействованы.
 - [ ] 6.3 Обновить `kontur-diarize/ktalk-speaker-extension/README.md` — добавить секцию про PCM transport: управляется server-side через `RECOG_PCM_TRANSPORT` env на Python-стороне, extension уважает bridge handshake `pcm_transport_enabled`. Ссылка на plan.
 - [ ] 6.4 Ручной smoke на реальной встрече 15-20 мин с 3+ участниками. Записать результат в `docs/plans/2026-04-22-per-speaker-asr-pipeline.md` как секцию «Smoke result» в конце файла (без перезаписи всего плана).
 - [ ] 6.5 Если smoke OK — в `recog/config.py` поменять default `RECOG_PCM_TRANSPORT` на `1`, оставить env-override для force-off. Если smoke показал проблемы — зафиксировать follow-up'ы, оставить default `0`.
 
 **Acceptance**:
-- `adr/ADR-0014-*.md` создан.
+- `docs/adr/ADR-0014-*.md` создан.
 - `CLAUDE.md`, extension `README.md` обновлены.
 - «Smoke result» секция в этом plan'е заполнена.
 - Default `RECOG_PCM_TRANSPORT` установлен в соответствии с результатом smoke.
 
-**Files touched**: `adr/ADR-0014-per-speaker-asr-pipeline.md` (new), `CLAUDE.md`, `kontur-diarize/ktalk-speaker-extension/README.md`, `recog/config.py`, этот plan.
+**Files touched**: `docs/adr/ADR-0014-per-speaker-asr-pipeline.md` (new), `CLAUDE.md`, `kontur-diarize/ktalk-speaker-extension/README.md`, `recog/config.py`, этот plan.
 
 **Commit**: `docs: ADR-0014 + rollout default for per-speaker ASR`
 

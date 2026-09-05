@@ -93,7 +93,7 @@ python mp4_notes.py live --speaker-db ~/.recog/speakers_ecapa.json
 python mp4_notes.py live --list-devices
 
 # Enroll a speaker (records 5 seconds from the mic; 10 with a trailing "10")
-python add_speaker_live.py "Speaker Name"
+python scripts/add_speaker_live.py "Speaker Name"
 
 # Browse stored meetings
 python mp4_notes.py meetings
@@ -366,7 +366,7 @@ python mp4_notes.py --help            # CLI smoke test
 
 ## Architecture
 
-See [ADR documents](adr/) for architecture decisions:
+See [ADR documents](docs/adr/) for architecture decisions:
 
 - ADR-0001: GigaAM as ASR engine
 - ADR-0002: pyannote.audio for diarization (obsolete — replaced by KTalk extension)
@@ -387,12 +387,32 @@ See [ADR documents](adr/) for architecture decisions:
 
 ## Files
 
-- `mp4_notes.py` — main CLI (commands: `live`, `meetings`)
-- `setup.sh` / `recog-service.sh` — install and service management
-- `ktalk_bridge.py` — WebSocket server for the conference Chrome extension
-- `add_speaker_live.py` — enroll speakers via the microphone
-- `frontend/` — FastAPI server + SPA on http://127.0.0.1:9080
-- `~/.recog/speakers_ecapa.json` — local speaker embedding database
+The root holds the entry points (`mp4_notes.py`, `setup.sh`,
+`recog-service.sh`), shared bridge/storage modules (`ktalk_bridge.py`,
+`meeting_storage.py`), dependency manifests and project configuration.
+
+| Directory | Contents |
+| --- | --- |
+| `recog/` | Speech recognition, audio capture, speakers and Copilot |
+| `frontend/` | FastAPI server + SPA on http://127.0.0.1:9080 |
+| `kontur-diarize/ktalk-speaker-extension/` | Conference Chrome extension |
+| `scripts/` | Setup helpers, speaker enrollment, embedding worker and benchmarks |
+| `native/macos/` | ScreenCaptureKit Swift source |
+| `deploy/` | Service templates and remote ASR deployment |
+| `constraints/` | Verified platform dependency constraints |
+| `prompts/` | AI summary prompt templates |
+| `tests/` | Unit tests and E2E fixtures/tools |
+| `docs/adr/` | Architecture decisions |
+| `docs/plans/` | Implementation plans; finished plans in `completed/` |
+| `docs/research/` | Research notes |
+| `docs/experiments/` | Benchmark reports, measurements and reference text |
+| `examples/` | Local sample recordings and transcripts (gitignored) |
+| `openspec/` | OpenSpec specifications and change records |
+
+Meetings, logs and speaker databases live in `~/.recog/` (or `RECOG_DATA_DIR`).
+The generated `sck_audio_capture` binary keeps its root path for existing
+installations; its source lives in `native/macos/`. Local virtual environments
+and agent-tool directories keep the paths expected by those tools.
 
 ## License
 

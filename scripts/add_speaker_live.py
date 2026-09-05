@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Записывает голос с микрофона и добавляет в базу спикеров."""
 import sys
+from pathlib import Path
 import numpy as np
 import sounddevice as sd
 import tempfile
 import scipy.io.wavfile as wav
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 def record_audio(duration=5, sample_rate=16000):
     """Записывает аудио с микрофона."""
@@ -33,7 +36,7 @@ def get_embedding(audio, sample_rate=16000):
 
 def main():
     if len(sys.argv) < 2:
-        print("Использование: python add_speaker_live.py <имя_спикера> [длительность_сек]")
+        print("Использование: python scripts/add_speaker_live.py <имя_спикера> [длительность_сек]")
         sys.exit(1)
     
     speaker_name = sys.argv[1]

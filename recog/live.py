@@ -940,7 +940,7 @@ class LiveTranscriber:
               lock; takes its own locks for JSONL rewrite (`MeetingStorage._
               segment_lock`) and live state (`self._state_lock`).
             * `abort_mode = "cooperative"` — the default from the spike
-              (see `experiments/2026-04-24-refine-abort-spike.md`); saves
+              (see `docs/experiments/2026-04-24-refine-abort-spike.md`); saves
               ~77 % of inference cost per aborted refine on MPS.
         """
         if self._per_speaker_ingest is None:

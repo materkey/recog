@@ -10,7 +10,7 @@ Threading model (design.md D11):
       live batched-forward path), and runs `transcribe_fn`.
     - In `cooperative` mode the worker passes a `should_abort=` closure
       (reading `_live_pending`) into `transcribe_fn`; the upstream decoder
-      monkey-patch (see `experiments/2026-04-24-refine-abort-spike.md`)
+      monkey-patch (see `docs/experiments/2026-04-24-refine-abort-spike.md`)
       polls it between time-steps and raises `RefineAborted` on request.
       The worker catches the exception, releases the lock, and re-enqueues
       the task so the next live batch can run without waiting for the
@@ -55,7 +55,7 @@ def make_abortable_decode(decoding: Any, should_abort: Callable[[], bool]) -> Ca
     (commit `6e4b027`) verbatim except for the added
     `if should_abort(): raise RefineAborted()` at the top of the outer
     `for t in range(T):` loop. See
-    `experiments/2026-04-24-refine-abort-spike.md` for the spike that
+    `docs/experiments/2026-04-24-refine-abort-spike.md` for the spike that
     validated this hook — worst-case abort latency is the encoder forward
     pass (~187 ms on MPS for 30 s audio), saving ~770 ms per aborted refine.
 
@@ -224,7 +224,7 @@ class RefineWorker:
     In `cooperative` mode the worker polls `_live_pending` via the
     `should_abort=` closure passed into `transcribe_fn`. When the live path
     needs the model, in-flight refine aborts early (see the decoder
-    monkey-patch in `experiments/2026-04-24-refine-abort-spike.md`) and
+    monkey-patch in `docs/experiments/2026-04-24-refine-abort-spike.md`) and
     the task is re-enqueued for a later attempt.
 
     Args:
@@ -236,7 +236,7 @@ class RefineWorker:
         apply_fn: Called with `RefineResult` OUTSIDE `model_lock`; maps to
             `LiveTranscriber._apply_refine`.
         abort_mode: `"cooperative"` polls `should_abort` per decoder step
-            (default — see `experiments/2026-04-24-refine-abort-spike.md`);
+            (default — see `docs/experiments/2026-04-24-refine-abort-spike.md`);
             `"coarse"` always runs to completion.
     """
 

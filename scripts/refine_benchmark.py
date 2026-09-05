@@ -12,7 +12,7 @@ Usage:
     venv-gigaam/bin/python scripts/refine_benchmark.py \
         --wav /tmp/recog_exp/raw_take2/d9e189e5__Example.wav \
         --wav /tmp/recog_exp/raw_take2/8ee8e2d9__Example2.wav \
-        --reference-file experiments/reference_take2.txt \
+        --reference-file docs/experiments/reference_take2.txt \
         --trim 17-65
 
 For each `--wav` the script starts a fresh pipeline (isolated
@@ -29,7 +29,7 @@ trailing gap triggers the final refine). It then computes WER for:
     back to the original live text.
 
 Results are printed as a table and appended to the markdown report at
-`experiments/2026-04-24-refine-wer.md` (override via `--report-out`).
+`docs/experiments/2026-04-24-refine-wer.md` (override via `--report-out`).
 Task 3 of the rollout plan is "build only, do not run yet" — running
 on real fixtures is Task 4.
 """
@@ -481,7 +481,7 @@ def main() -> int:
     )
     ap.add_argument(
         "--report-out",
-        default=str(PROJECT_ROOT / "experiments" / "2026-04-24-refine-wer.md"),
+        default=str(PROJECT_ROOT / "docs/experiments" / "2026-04-24-refine-wer.md"),
         help="Markdown report path; results are APPENDED.",
     )
     args = ap.parse_args()
