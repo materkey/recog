@@ -34,6 +34,7 @@ from recog.config import load_dotenv, MIC_SPEAKER_NAME
 from recog.log_utils import log_rate_limited
 from recog.ws_origin import origin_allowed
 from recog.meeting_storage import is_conference_source
+from recog.user_profile import resolve_identity
 
 if TYPE_CHECKING:
     from recog.meeting_storage import MeetingStorage
@@ -145,6 +146,13 @@ class KTalkBridge:
         self._participants: Dict[str, Participant] = {}
         self._speaker_history: List[SpeakerEvent] = []
         self._lock = threading.Lock()
+        self._user_identity = resolve_identity(
+            {"name": "", "aliases": [], "revision": "unconfigured"},
+            legacy_name=MIC_SPEAKER_NAME,
+        )
+        self._read_user_identity = None
+        self._apply_mic_identity = None
+        self._user_profile_refresh_lock = asyncio.Lock()
         self._server = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -719,6 +727,55 @@ class KTalkBridge:
             )
             self._maybe_emit_transcript_tick()
 
+    def configure_user_profile(self, identity: dict, read_identity, apply_mic) -> None:
+        """Use the live process's resolver and microphone label as one identity."""
+        with self._lock:
+            self._user_identity = {**identity, "local_user_aliases": list(identity["local_user_aliases"])}
+            self._read_user_identity = read_identity
+            self._apply_mic_identity = apply_mic
+
+    def user_identity_snapshot(self) -> dict:
+        with self._lock:
+            return {**self._user_identity, "local_user_aliases": list(self._user_identity["local_user_aliases"])}
+
+    async def _refresh_user_profile(self, websocket) -> None:
+        with self._lock:
+            allowed = websocket is not None and websocket in self._subscriber_clients
+        if not allowed:
+            return
+        async with self._user_profile_refresh_lock:
+            try:
+                if self._read_user_identity is None or self._apply_mic_identity is None:
+                    raise RuntimeError("Live identity is not connected")
+                # The frame revision is only a refresh hint. The file is authoritative.
+                identity = self._read_user_identity()
+                identity = {**identity, "local_user_aliases": list(identity["local_user_aliases"])}
+                with self._lock:
+                    changed = identity != self._user_identity
+                    self._apply_mic_identity(identity)
+                    self._user_identity = identity
+            except Exception:
+                await self._send_bounded(websocket, json.dumps({
+                    "type": "user_profile_error",
+                    "message": "Could not apply the saved user profile",
+                }))
+                return
+            if changed:
+                await self._broadcast_to_channel_clients({
+                    "type": "user_profile_updated", **identity,
+                })
+            await self._send_bounded(websocket, json.dumps({
+                "type": "user_profile_applied",
+                "revision": identity["local_user_profile_revision"],
+                "identity": identity,
+            }, ensure_ascii=False))
+
+    async def _send_identity_tick(self, client, frame: dict) -> None:
+        # The audio thread may have queued this before a refresh. Snapshot on
+        # the WS loop so an old tick cannot restore aliases after the update.
+        frame = {**frame, **self.user_identity_snapshot()}
+        await self._send_bounded(client, json.dumps(frame, ensure_ascii=False))
+
     def _maybe_emit_transcript_tick(self) -> None:
         """Broadcast a `transcript_tick` to channel clients when triggers fire.
 
@@ -784,12 +841,10 @@ class KTalkBridge:
             "meeting_title": meeting_title,
             "new_segments": new_segments_payload,
             "recent_context": recent_context,
-            "local_user_name": MIC_SPEAKER_NAME,
         }
-        message = json.dumps(frame, ensure_ascii=False)
         for client in recipients:
             try:
-                asyncio.run_coroutine_threadsafe(client.send(message), self._loop)
+                asyncio.run_coroutine_threadsafe(self._send_identity_tick(client, frame), self._loop)
             except Exception:
                 pass
 
@@ -1100,6 +1155,8 @@ class KTalkBridge:
         dead supervisor socket cannot crash the lifecycle handlers on the
         transcription path.
         """
+        if frame.get("type") == "meeting_started":
+            frame = {**frame, **self.user_identity_snapshot()}
         await self._broadcast_to_channel_clients(frame)
         await self._broadcast_message(frame)
         with self._lock:
@@ -1729,7 +1786,10 @@ class KTalkBridge:
         """
         msg_type = data.get("type")
 
-        if msg_type == "speaker_update":
+        if msg_type == "user_profile_refresh":
+            await self._refresh_user_profile(websocket)
+
+        elif msg_type == "speaker_update":
             # Проверяем sequence number для обнаружения out-of-order сообщений
             seq = data.get("seq")
             if seq is not None:
@@ -2456,6 +2516,7 @@ class KTalkBridge:
             outbound = json.dumps(
                 {
                     "type": "copilot_user_message",
+                    **self.user_identity_snapshot(),
                     "request_id": request_id,
                     "text": text,
                     "meeting_id": meeting_id,
@@ -2720,6 +2781,7 @@ class KTalkBridge:
 
             response = {
                 "type": "get_recent_transcript_response",
+                **self.user_identity_snapshot(),
                 "request_id": request_id,
                 "segments": segments,
             }
@@ -2967,6 +3029,7 @@ class KTalkBridge:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self._manual_copilot_request_lock = asyncio.Lock()
+        self._user_profile_refresh_lock = asyncio.Lock()
 
         try:
             self._loop.run_until_complete(self._run_server())

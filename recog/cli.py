@@ -116,8 +116,8 @@ def build_parser():
     )
     live_parser.add_argument(
         "--mic-speaker-name",
-        default=MIC_SPEAKER_NAME,
-        help=f"Имя спикера для микрофонного ввода (по умолчанию: {MIC_SPEAKER_NAME})"
+        default=None,
+        help=f"Имя спикера для этого запуска (по умолчанию: профиль, затем {MIC_SPEAKER_NAME})"
     )
     live_parser.add_argument(
         "--no-save-audio",

@@ -41,7 +41,7 @@ def test_relative_override_when_resolving_then_rejected(roots, monkeypatch):
         config.get_data_dir(roots[0])
 
 
-@pytest.mark.parametrize("entry", ["meetings", "logs", "speakers_custom.json"])
+@pytest.mark.parametrize("entry", ["meetings", "logs", "speakers_custom.json", "user-profile.json"])
 def test_legacy_data_when_resolving_then_whole_root_stays_with_warning(roots, capsys, entry):
     repo, target = roots
     (repo / entry).touch()

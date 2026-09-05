@@ -819,6 +819,10 @@ const views = {
                     handleCopilotStatus(msg);
                     break;
 
+                case 'user_profile_status':
+                    window.userProfile?.refresh();
+                    break;
+
                 case 'error':
                     infoEl.innerHTML = `<div class="error">${msg.message}</div>`;
                     break;

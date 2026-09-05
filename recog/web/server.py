@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -33,7 +33,9 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from recog.meeting_storage import MeetingStorage, get_external_paths
 from recog.log_utils import log_rate_limited
-from recog.config import get_data_dir
+from recog.config import get_data_dir, MIC_SPEAKER_NAME
+from recog.user_profile import UserProfileStore
+from recog.web.user_profile import ProfileCoordinator
 from recog.ws_origin import origin_allowed
 from recog.web.bridge_subscriber import BridgeSubscriber
 from recog.web.live_watcher import LiveWatcher
@@ -460,6 +462,10 @@ async def _forward_bridge_message(raw: str) -> None:
     await live_watcher._broadcast(raw)
 
 
+profile_coordinator = ProfileCoordinator(UserProfileStore(DATA_DIR), MIC_SPEAKER_NAME,
+                                         _forward_bridge_message)
+
+
 # --- Copilot proxy (CAP-5) ---
 # The server is a pure relay (D5): no manual-session state, no spawn/stop
 # bookkeeping. The only thing kept is the last agent-state chip frame from
@@ -491,6 +497,13 @@ def _cache_agent_state_frame(raw: str) -> None:
 
 async def _on_bridge_frame(raw: str) -> None:
     """Bridge-frame wrapper: cache the agent-state primer, then delegate."""
+    try:
+        frame = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        frame = None
+    if isinstance(frame, dict) and frame.get("type") in {"user_profile_applied", "user_profile_error"}:
+        await profile_coordinator.handle_frame(frame)
+        return
     _cache_agent_state_frame(raw)
     await _forward_bridge_message(raw)
 
@@ -601,6 +614,8 @@ async def lifespan(app: FastAPI):
         bridge_subscriber = BridgeSubscriber(
             bridge_url=BRIDGE_WS_URL,
             forward_callback=_on_bridge_frame,
+            connected_callback=profile_coordinator.connected,
+            disconnected_callback=profile_coordinator.disconnected,
         )
         await bridge_subscriber.start()
 
@@ -618,6 +633,37 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Recog Transcripts", lifespan=lifespan)
+
+
+class UserProfileRequest(BaseModel):
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+
+
+@app.get("/api/user-profile")
+async def get_user_profile():
+    try:
+        return await profile_coordinator.snapshot()
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=500, detail="Не удалось прочитать профиль пользователя.") from error
+
+
+@app.put("/api/user-profile")
+async def save_user_profile(request: UserProfileRequest):
+    try:
+        return await profile_coordinator.save(request.name, request.aliases)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="Не удалось сохранить профиль пользователя.") from error
+
+
+@app.delete("/api/user-profile")
+async def clear_user_profile():
+    try:
+        return await profile_coordinator.clear()
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=500, detail="Не удалось очистить профиль пользователя.") from error
 
 
 # --- REST API ---

@@ -192,6 +192,26 @@ without overwriting or merging entries. Re-run after an interruption to
 finish remaining moves, then `./recog-service.sh install` and
 `./recog-service.sh restart`. `setup.sh` never migrates existing data.
 
+### Local user profile
+
+`recog/user_profile.py` owns validation, atomic private persistence and identity
+resolution. `user-profile.json` lives under `get_data_dir()`, is backed up and
+migrated with other personal data, and is never committed. The web UI owns writes
+through GET/PUT/DELETE `/api/user-profile`; initial onboarding and
+**Настройки → Мой профиль** share `recog/web/static/user-profile.js`.
+
+Precedence: explicit CLI `--mic-speaker-name` > saved name > `MIC_SPEAKER_NAME` >
+`Me`. Live supplies the same resolved snapshot to its microphone and bridge.
+`user_profile_refresh` is subscriber-only and makes Live reread the file;
+`user_profile_applied` acknowledges the actual revision only after application.
+`recog/web/user_profile.py` distinguishes persisted from applied, rejects stale
+acknowledgements and reconciles after bridge reconnect. `user_profile_updated`
+updates an already running Copilot (including manual sessions); meeting/tick/chat
+events and transcript tool responses carry the complete identity snapshot.
+Channel metadata encodes aliases as JSON. Agent instructions treat profile text
+as data, replace old aliases and do not invent names. Profile edits never rewrite
+historical transcript labels or stop the session.
+
 ### Single-venv Architecture
 The project uses a single `venv-gigaam` virtual environment. Speaker identification is handled via the KTalk Chrome extension (real-time) and SpeechBrain ECAPA-TDNN embeddings (enrollment). The former dual-venv pyannote subprocess architecture (ADR-0006) is obsolete.
 
@@ -296,7 +316,7 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 - `AI_PROVIDER` - `claude` | `codex` | `openrouter` (for transcript analysis)
 - `CLAUDE_MODEL` - `haiku` | `sonnet` | `opus`
 - `OPENROUTER_API_KEY` - Required if using OpenRouter
-- `MIC_SPEAKER_NAME` - Speaker label for microphone input in live mode (default: `Me`)
+- `MIC_SPEAKER_NAME` - Legacy microphone-name fallback before a user profile is saved (default: `Me`)
 - `RECOG_ASR_DEVICE` - `auto` (cuda > mps > cpu) | `cuda` | `mps` | `cpu` (default `auto`). An explicitly requested device that is unavailable raises instead of quietly landing on CPU; only an auto-resolved `cuda` is demoted to `cpu` on OOM.
 - `RECOG_TORCH_THREADS` - Optional `torch.set_num_threads()` cap for CPU inference (live and refine share one `_model_lock` and all cores). Best-effort — an unparsable value is logged and ignored.
 - `RECOG_PULSE_MONITOR_SOURCE` - Pins the PulseAudio/PipeWire monitor for the `pulse` backend (Linux) and disables follow-the-default-sink. Empty (default) = follow the current default sink.

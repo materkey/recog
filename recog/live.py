@@ -30,6 +30,8 @@ from .log_utils import log_rate_limited
 from .remote_asr import ASRTemporarilyUnavailable, build_asr
 from .refine import RefineResult, RefineWorker, make_abortable_decode
 from .speaker_db import SpeakerDatabase
+from .config import get_data_dir
+from .user_profile import UserProfileStore, resolve_identity
 
 # WAV stores RIFF/data sizes as 32-bit values — a data chunk beyond ~4 GiB
 # corrupts the header. Cap at 2 GiB (safe for signed-int32 parsers too);
@@ -442,7 +444,7 @@ class LiveTranscriber:
         no_diarization=False,
         use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
         save_audio=False,  # Сохранять аудио для последующей диаризации
-        mic_speaker_name=MIC_SPEAKER_NAME,
+        mic_speaker_name=None,
         system_device=None,  # legacy-алиас: device:<id>
         use_screencapture=False,  # legacy-алиас: screencapture
     ):
@@ -496,7 +498,10 @@ class LiveTranscriber:
         self.output_file = output_file
         self.no_diarization = no_diarization
         self.use_ktalk = use_ktalk
-        self.mic_speaker_name = mic_speaker_name
+        self._mic_speaker_override = mic_speaker_name
+        self._user_profile_store = UserProfileStore(get_data_dir())
+        self._user_identity = self._read_user_identity()
+        self.mic_speaker_name = self._user_identity["local_user_name"]
         self.running = False
         self.session_speakers = {}  # embedding -> speaker_label
         self._session_lock = threading.Lock()
@@ -570,6 +575,18 @@ class LiveTranscriber:
         # мимо `_invalidate_pending_chunks`) получит собственный.
         self._system_capture_lost: bool = False
         self._system_capture_lost_meeting = None
+
+    def _read_user_identity(self) -> dict:
+        return resolve_identity(
+            self._user_profile_store.read(),
+            legacy_name=MIC_SPEAKER_NAME,
+            override=self._mic_speaker_override,
+        )
+
+    def _apply_user_identity(self, identity: dict) -> None:
+        # Called under the bridge lock, before publishing the same snapshot.
+        self.mic_speaker_name = identity["local_user_name"]
+        self._user_identity = identity
 
     def system_audio_label(self) -> str:
         """Человекочитаемое имя источника системного звука для баннера."""
@@ -847,6 +864,9 @@ class LiveTranscriber:
         try:
             from recog.ktalk_bridge import KTalkBridge
             self._ktalk_bridge = KTalkBridge()
+            self._ktalk_bridge.configure_user_profile(
+                self._user_identity, self._read_user_identity, self._apply_user_identity,
+            )
             self._ktalk_bridge.set_speaker_callback(self._ktalk_speaker_callback)
             # Connect MeetingStorage to KTalk bridge
             if self._meeting_storage:
@@ -2359,7 +2379,7 @@ def live_pipeline(
     no_diarization=False,
     list_devices=False,
     use_ktalk=False,
-    mic_speaker_name=MIC_SPEAKER_NAME,
+    mic_speaker_name=None,
     save_audio=True,
     system_device=None,  # legacy-алиас: device:<id>
     use_screencapture=False,  # legacy-алиас: screencapture

@@ -229,12 +229,32 @@ stays unloaded while the gateway is healthy and loads lazily on the first
 failure; a circuit breaker routes around a dead gateway. Only worth it on a
 real LAN (`ping` RTT < 5 ms).
 
+## Your name and Copilot profile
+
+On your first web UI visit, **Как к вам обращаться?** asks for your name and
+optional forms of address (one per line). **Позже** keeps recording and manual
+Copilot chat available. Open **Настройки → Мой профиль** later to edit or clear
+the profile. A non-generic existing `MIC_SPEAKER_NAME` pre-fills the form but is
+not saved until you choose **Сохранить**.
+
+The profile is private data in `user-profile.json` under the Recog data directory,
+included in backups and data migration. The web UI never modifies `.env`.
+New microphone segments and Copilot events use the new profile without restarting
+services or the agent. If Live is disconnected, the profile is saved and the UI
+shows that application is pending; it is reapplied on reconnect. Past transcripts
+keep their original speaker labels.
+
+Name precedence is an explicit `--mic-speaker-name` for this run, then the saved
+profile, then `MIC_SPEAKER_NAME`, then `Me`. Configured aliases accompany Copilot
+events; clearing/changing them replaces the previous set rather than accumulating
+old nicknames. Without a known name, name-addressed proactive replies stay off.
+
 ## Environment variables
 
 Copy `.env.example` → `.env` (setup does it for you) — it carries an inline
 comment per variable. The ones you are most likely to touch:
 
-- `MIC_SPEAKER_NAME` — speaker label for microphone input (default `Me`).
+- `MIC_SPEAKER_NAME` — legacy microphone-name fallback before a profile is saved (default `Me`).
 - `RECOG_ASR_DEVICE` — `auto` (cuda > mps > cpu) | `cuda` | `mps` | `cpu`. An
   explicitly requested device that is unavailable fails fast instead of quietly
   landing on CPU.
