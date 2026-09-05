@@ -41,9 +41,23 @@ def build_codex_exec_command(
     reasoning_effort: str | None = None,
     *,
     ephemeral: bool = True,
+    isolated: bool = False,
 ) -> list[str]:
     """Build a Codex CLI command for Recog automation calls."""
     cmd = [cli, "exec", "-m", model]
+    if isolated:
+        # Keep CODEX_HOME/auth while excluding customization from analysis.
+        cmd.append("--ignore-user-config")
+        for setting in (
+            "skills.include_instructions=false",
+            "skills.bundled.enabled=false",
+            "features.plugins=false",
+            "features.hooks=false",
+            "features.memories=false",
+            "features.skill_search=false",
+            "project_doc_max_bytes=0",
+        ):
+            cmd += ["-c", setting]
     if "spark" not in model and reasoning_effort:
         cmd += ["-c", f"model_reasoning_effort=\"{reasoning_effort}\""]
     if ephemeral:
@@ -112,7 +126,7 @@ class AIProvider(ABC):
 
 
 class CodexCliProvider(AIProvider):
-    """Codex CLI - uses ChatGPT Pro subscription."""
+    """Isolated automation via Codex CLI with existing subscription auth."""
 
     def __init__(self, task: str = "analysis"):
         self.model = os.getenv("CODEX_MODEL", DEFAULT_CODEX_MODEL)
@@ -134,7 +148,7 @@ class CodexCliProvider(AIProvider):
         import json as json_module
 
         # Codex exec expects prompt via stdin when using "-"
-        cmd = build_codex_exec_command(self._cli, self.model, self.reasoning_effort)
+        cmd = build_codex_exec_command(self._cli, self.model, self.reasoning_effort, isolated=True)
         marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -174,7 +188,7 @@ class CodexCliProvider(AIProvider):
         """Stream Codex CLI response."""
         import json as json_module
 
-        cmd = build_codex_exec_command(self._cli, self.model, self.reasoning_effort)
+        cmd = build_codex_exec_command(self._cli, self.model, self.reasoning_effort, isolated=True)
         marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
