@@ -142,21 +142,27 @@
                 <h3>AI Analysis</h3>
                 <button class="modal-close" onclick="closeAiModal()">&times;</button>
             </div>
-            <div class="modal-tabs">
-                <button class="tab-btn active" data-provider="claude" onclick="switchAiTab('claude')">Claude</button>
-                <button class="tab-btn" data-provider="codex" onclick="switchAiTab('codex')">Codex</button>
+            <div class="ai-mode-tabs" role="group" aria-label="Режим анализа">
+                <button class="tab-btn" data-ai-mode="saved" onclick="switchAiMode('saved')">Сохранённые результаты</button>
+                <button class="tab-btn" data-ai-mode="new" onclick="switchAiMode('new')">Новый анализ</button>
             </div>
-            <div class="modal-body">
-                <div id="ai-response-claude" class="ai-tab-content active">
-                    <div class="loading">Analyzing with Claude...</div>
-                </div>
-                <div id="ai-response-codex" class="ai-tab-content">
-                    <div class="loading">Analyzing with Codex...</div>
-                </div>
+            <div id="ai-run-notice" class="ai-mode-notice" role="status" hidden></div>
+            <div id="ai-saved-view" class="ai-mode-view">
+                <div class="modal-tabs"></div>
+                <div class="modal-body"></div>
+                <div class="modal-footer"></div>
             </div>
-            <div class="modal-footer">
-                <button class="btn" onclick="copyAiResponse()">Copy</button>
-                <button class="btn" onclick="closeAiModal()">Close</button>
+            <div id="ai-new-view" class="ai-mode-view" hidden>
+                <div id="ai-provider-tabs" class="modal-tabs"></div>
+                <div class="modal-body">
+                    <p class="ai-mode-description">Мой инкремент к следующей встрече. Результаты доступны до закрытия окна и не добавляются в сохранённые.</p>
+                    <div id="ai-new-content" aria-live="polite"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn" id="ai-run-button" onclick="generateIncrementSSE()">Запустить анализ</button>
+                    <button class="btn" onclick="copyAiResponse()">Copy</button>
+                    <button class="btn" onclick="closeAiModal()">Close</button>
+                </div>
             </div>
         </div>
     </div>

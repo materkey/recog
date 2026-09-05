@@ -1108,6 +1108,42 @@ a:hover {
     border-bottom-color: var(--accent);
 }
 
+.ai-mode-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+}
+
+.ai-mode-view {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.ai-mode-view[hidden], .ai-mode-notice[hidden] {
+    display: none;
+}
+
+.ai-mode-description, .ai-mode-notice {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.ai-mode-description {
+    margin: 0 0 16px;
+}
+
+.ai-mode-notice {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+#ai-modal .modal-tabs {
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
 .ai-tab-content {
     display: none;
 }
