@@ -157,7 +157,7 @@ def test_deleted_meeting_when_delete_returns_then_list_is_already_refreshed(clie
 def test_title_generated_when_post_returns_then_list_has_new_title(client, tmp_path, monkeypatch):
     import recog.title_generator
 
-    async def generated(transcript):
+    async def generated(transcript, **kwargs):
         return "New title"
 
     monkeypatch.setattr(recog.title_generator, "generate_title_async", generated)

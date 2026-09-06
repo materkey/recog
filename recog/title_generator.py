@@ -1,35 +1,16 @@
 """
-Title generator for orphan live sessions using Codex CLI.
+Title generator using the configured AI provider and prompt.
 
 Generates short descriptive titles (3-7 words) based on transcript content.
 """
 
 import asyncio
-import json
-import os
 from typing import Optional
 
-from recog.ai_provider import (
-    DEFAULT_CODEX_MODEL,
-    build_codex_exec_command,
-    mark_ccs_automation,
-    resolve_cli,
-)
-from recog.node_env import get_node_env
-
-
-TITLE_PROMPT = """Придумай короткое название (3-7 слов) для этого разговора.
-
-Требования:
-- Название должно отражать основную тему разговора
-- Без кавычек, без слова "Разговор" в начале
-- На русском языке
-- Только название, без пояснений
-
-Транскрипт:
-{transcript}
-
-Название:"""
+from recog.ai_defaults import TITLE_PROMPT
+from recog.ai_provider import provider_for_settings
+from recog.ai_settings import AiSettingsStore, render_prompt
+from recog.config import get_data_dir
 
 
 def _sample_transcript(transcript: str, max_chars: int = 6000, blocks: int = 6) -> str:
@@ -63,99 +44,50 @@ def _sample_transcript(transcript: str, max_chars: int = 6000, blocks: int = 6) 
     return "\n[...]\n".join(out_blocks)
 
 
-async def generate_title_async(transcript: str, model: str = None) -> Optional[str]:
-    """
-    Generate a title for transcript using Codex CLI.
+async def generate_title_async(
+    transcript: str, model: str = None, *, settings: dict = None, variables: dict = None,
+) -> Optional[str]:
+    """Generate a title from one resolved settings snapshot; failures return None.
 
-    Args:
-        transcript: Meeting transcript text
-        model: Codex model to use (default from CODEX_MODEL env or gpt-5.6-sol)
-
-    Returns:
-        Generated title or None if generation failed
+    settings is a resolved title task from AiSettingsStore.resolve_task("title").
+    The optional model overrides that task's selected provider for this call.
     """
     if not transcript or len(transcript.strip()) < 50:
         return None
 
-    # Sample evenly across the whole meeting instead of only the head: a long
-    # call's first lines are usual warm-up/small-talk, so head-only truncation
-    # produced titles about the opening topic, not the meeting.
-    transcript = _sample_transcript(transcript)
-
-    model = model or os.getenv("CODEX_MODEL", DEFAULT_CODEX_MODEL)
-    prompt = mark_ccs_automation(TITLE_PROMPT.format(transcript=transcript), "title")
-    cmd = build_codex_exec_command(resolve_cli("codex"), model)
-
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=get_node_env()
-        )
-        # Codex CLI cold start + inference routinely runs ~30s (the increment
-        # provider has no timeout and takes ~28s); 30s here intermittently
-        # timed out -> 500 "Failed to generate title". Give it real headroom.
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=prompt.encode()),
-            timeout=90
-        )
-
-        if proc.returncode != 0:
-            error_msg = stderr.decode().strip() if stderr else "Unknown error"
-            print(f"Codex CLI error: {error_msg}")
-            return None
-
-        # Parse JSON lines output
-        for line in stdout.decode().strip().split('\n'):
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-                if event.get("type") == "item.completed":
-                    item = event.get("item", {})
-                    if item.get("type") == "agent_message":
-                        title = item.get("text", "").strip()
-                        # Clean up: remove quotes if present
-                        title = title.strip('"\'')
-                        # Limit length
-                        if len(title) > 100:
-                            title = title[:100]
-                        return title if title else None
-            except json.JSONDecodeError:
-                continue
-
-        return None
-
+        settings = settings if settings is not None else AiSettingsStore(get_data_dir()).resolve_task("title")
+        if model is not None:
+            settings = {**settings, "models": {**settings["models"], settings["providers"][0]: model}}
+        # Sample the whole meeting: warm-up at the beginning often does not
+        # reflect its main subject. Never let caller variables replace this text.
+        prompt = render_prompt(settings["prompt"], {
+            **(variables or {}), "transcript": _sample_transcript(transcript),
+        })
+        provider = provider_for_settings(settings, task="title")
+        # CLI cold start + inference routinely takes ~30s. Keep enough headroom
+        # while bounding every supported provider with the same timeout.
+        result = await asyncio.wait_for(provider.complete(prompt), timeout=90)
+        title = result.strip().strip('"\'')[:100]
+        return title or None
     except asyncio.TimeoutError:
-        print("Codex CLI timeout")
+        print("Title generation timeout")
         return None
-    except FileNotFoundError:
-        print("Codex CLI not found")
-        return None
-    except Exception as e:
-        print(f"Title generation error: {e}")
+    except Exception as exc:
+        print(f"Title generation error: {exc}")
         return None
 
 
-def generate_title(transcript: str, model: str = None) -> Optional[str]:
-    """
-    Synchronous wrapper for generate_title_async.
-
-    Args:
-        transcript: Meeting transcript text
-        model: Codex model to use
-
-    Returns:
-        Generated title or None if generation failed
-    """
+def generate_title(
+    transcript: str, model: str = None, *, settings: dict = None, variables: dict = None,
+) -> Optional[str]:
+    """Synchronous wrapper with the same settings snapshot and prompt variables."""
     try:
-        return asyncio.run(generate_title_async(transcript, model))
+        return asyncio.run(generate_title_async(transcript, model, settings=settings, variables=variables))
     except RuntimeError:
         # Already in async context - create new event loop
         loop = asyncio.new_event_loop()
         try:
-            return loop.run_until_complete(generate_title_async(transcript, model))
+            return loop.run_until_complete(generate_title_async(transcript, model, settings=settings, variables=variables))
         finally:
             loop.close()

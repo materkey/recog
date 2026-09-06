@@ -99,9 +99,10 @@ def test_partial_move_when_rerunning_then_remaining_items_complete(migration, da
     assert (target / "logs/live.log").read_bytes() == b"log\n"
 
 
-def test_saved_profile_when_migrating_then_bytes_permissions_and_inode_survive(migration, data):
+@pytest.mark.parametrize("filename", ["user-profile.json", "ai-settings.json"])
+def test_saved_private_settings_when_migrating_then_bytes_permissions_and_inode_survive(migration, data, filename):
     repo, target = data
-    profile = repo / "user-profile.json"
+    profile = repo / filename
     raw = b'{"version":1,"revision":"test","name":"Test","aliases":[]}'
     profile.write_bytes(raw)
     profile.chmod(0o600)

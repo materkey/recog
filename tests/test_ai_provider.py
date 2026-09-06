@@ -112,12 +112,11 @@ class TestCodexCliProvider:
             provider = CodexCliProvider()
         assert provider.key == "codex"
 
-    def test_defaults_to_gpt_5_6_sol(self):
-        """given: no CODEX_MODEL - when: provider is created - then: Sol is used"""
+    def test_no_model_override_when_creating_codex_provider_then_astra_is_used(self):
         with patch("recog.ai_provider.resolve_cli", return_value="/usr/bin/codex"), \
              patch.dict(os.environ, {}, clear=True):
             provider = CodexCliProvider()
-        assert provider.model == DEFAULT_CODEX_MODEL
+        assert provider.model == DEFAULT_CODEX_MODEL == "gpt-6-astra"
 
     def test_name_includes_model(self):
         """given: CodexCliProvider - when: .name - then: includes model name"""
@@ -236,7 +235,21 @@ class TestCodexCliProvider:
         assert cmd[-2:] == ("--json", "-")
 
 
+def test_codex_auto_given_command_when_built_then_no_reasoning_override():
+    from recog.ai_provider import build_codex_exec_command
+    command = build_codex_exec_command('/mock/codex', 'gpt-6-astra', '', isolated=True)
+    assert not any('model_reasoning_effort=' in arg for arg in command)
+    assert '--ignore-user-config' in command
+
+
 class TestFrontendClaudeProvider:
+
+    def test_no_model_override_when_creating_claude_provider_then_fable_5_1_is_used(self):
+        from recog.web.ai_provider import ClaudeCliProvider
+
+        with patch("recog.ai_provider.resolve_cli", return_value="/mock/claude"), \
+             patch.dict(os.environ, {}, clear=True):
+            assert ClaudeCliProvider().model == "claude-fable-5-1"
 
     @pytest.mark.asyncio
     async def test_complete_marks_prompt_for_claude_cli(self):
@@ -254,7 +267,7 @@ class TestFrontendClaudeProvider:
             created["cmd"] = cmd
             return FakeProcess()
 
-        with patch("recog.web.ai_provider.resolve_cli", return_value="/mock/claude"), \
+        with patch("recog.ai_provider.resolve_cli", return_value="/mock/claude"), \
              patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=fake_create_subprocess_exec)):
             provider = ClaudeCliProvider(task="anchor")
             answer = await provider.complete("hello")
@@ -287,7 +300,7 @@ class TestFrontendClaudeProvider:
             created["cmd"] = cmd
             return FakeProcess()
 
-        with patch("recog.web.ai_provider.resolve_cli", return_value="/mock/claude"), \
+        with patch("recog.ai_provider.resolve_cli", return_value="/mock/claude"), \
              patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=spawn)):
             result = [item async for item in ClaudeCliProvider().stream("hello")]
 

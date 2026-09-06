@@ -409,6 +409,16 @@ cmd_claude() {
     # server (channel push is a no-op). This mirrors what the supervisor spawns
     # (recog/copilot_supervisor.py:build_claude_command) — built-ins + copilot
     # only, no user MCP servers. URL overridable via RECOG_COPILOT_MCP_URL.
+    local copilot_launch copilot_model copilot_effort
+    copilot_launch="$("$(svc_python)" -c 'from recog.ai_settings import AiSettingsStore; from recog.config import get_data_dir; task = AiSettingsStore(get_data_dir()).resolve_task("copilot"); print(task["models"]["claude"]); print(task["claude_effort"] or "auto")' )" || return 1
+    copilot_model="${copilot_launch%%$'\n'*}"
+    copilot_effort="${copilot_launch##*$'\n'}"
+    local effort_args=()
+    if [ "$copilot_effort" != "auto" ]; then
+        effort_args=(--effort "$copilot_effort")
+    else
+        copilot_effort=""
+    fi
     local mcp_url="${RECOG_COPILOT_MCP_URL:-http://127.0.0.1:8767/mcp}"
     local mcp_config="{\"mcpServers\":{\"copilot\":{\"type\":\"http\",\"url\":\"$mcp_url\"}}}"
 
@@ -416,7 +426,7 @@ cmd_claude() {
         if [ "${RECOG_NO_AUTO_CONFIRM:-0}" != "1" ]; then
             warn "expect(1) not found — falling back to interactive launch (manual Enter needed)"
         fi
-        exec claude --strict-mcp-config --mcp-config "$mcp_config" --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
+        exec claude --model "$copilot_model" "${effort_args[@]}" --strict-mcp-config --mcp-config "$mcp_config" --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
     fi
 
     # Two non-obvious facts dictate this script (verified against
@@ -450,10 +460,14 @@ cmd_claude() {
     # substitutes the value, then Tcl strips one brace level, passing the JSON
     # (with its literal double quotes) as a single argument without any Tcl
     # substitution on `$`/`[`/`\` inside.
-    exec env TERM=xterm-256color expect $expect_debug_arg -c "
+    exec env TERM=xterm-256color RECOG_COPILOT_LAUNCH_MODEL="$copilot_model" RECOG_COPILOT_LAUNCH_EFFORT="$copilot_effort" expect $expect_debug_arg -c "
         set timeout 30
         log_user 1
-        spawn -noecho claude --strict-mcp-config --mcp-config {$mcp_config} --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
+        set effort_args {}
+        if {\$env(RECOG_COPILOT_LAUNCH_EFFORT) ne {}} {
+            set effort_args [list --effort \$env(RECOG_COPILOT_LAUNCH_EFFORT)]
+        }
+        spawn -noecho claude --model \$env(RECOG_COPILOT_LAUNCH_MODEL) {*}\$effort_args --strict-mcp-config --mcp-config {$mcp_config} --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
         expect {
             -re {confirm.*Esc|Esc.*confirm} {
                 # 0.5 s settle: Ink ends the dialog with a synchronized-output

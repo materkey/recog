@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Recog** is a Russian speech recognition system with live speaker identification via KTalk. It combines:
 - **GigaAM** (v3_e2e_rnnt) for Russian ASR
-- **SpeechBrain ECAPA-TDNN** for speaker embeddings
+- **Conference participant signals** for speaker identification
 
 ## Repository layout
 
@@ -62,13 +62,11 @@ source venv-gigaam/bin/activate
 python -m recog live --ktalk --system-audio auto
 
 # Explicit backends: screencapture (macOS) | pulse (Linux) | device:<id> | none
-python -m recog live --system-audio pulse --speaker-db ~/.recog/speakers_ecapa.json
+python -m recog live --system-audio pulse
 
 # List audio devices (on Linux also prints `pactl list short sources`)
 python -m recog live --list-devices
 
-# Add speaker to database (records 5 seconds from mic)
-python scripts/add_speaker_live.py "Speaker Name"
 ```
 
 `--screencapture` and `--system-device <id>` remain as hidden aliases of
@@ -215,7 +213,7 @@ Agent instructions treat profile text as data, replace old aliases and do not in
 historical transcript labels or stop the session.
 
 ### Single-venv Architecture
-The project uses a single `venv-gigaam` virtual environment. Speaker identification is handled via the KTalk Chrome extension (real-time) and SpeechBrain ECAPA-TDNN embeddings (enrollment). The former dual-venv pyannote subprocess architecture (ADR-0006) is obsolete.
+The project uses a single `venv-gigaam` virtual environment. Speaker identification comes from conference participant signals via the Chrome extension. Microphone audio uses the user profile; system audio without conference identity stays uncertain. The former dual-venv pyannote subprocess architecture (ADR-0006) is obsolete.
 
 ### Remote ASR offload (opt-in)
 `FallbackASR` implements all four GigaAM paths (`transcribe_batch` per-speaker, `transcribe_simple` offline, `transcribe_with_timestamps` refine, and the direct mic/mixed `transcribe_chunk`) over a network gateway (OpenAI-Whisper-compatible). Three are reached today through `build_asr()` (the single constructor, `recog/remote_asr.py`) via the live pipeline; the offline `transcribe_simple` path is implemented but not yet wired to a CLI command (`recog/cli.py` has only `live`/`meetings`). When constructed, ASR comes exclusively from `build_asr()`: `RECOG_ASR_BACKEND="local"` (committed default — repo behavior unchanged) returns a plain `ASRModule`; `"remote"` returns a `FallbackASR` wrapping a `RemoteASRClient`. `FallbackASR` constructs the local `ASRModule` eagerly but loads its weights **lazily in a background thread** — triggered by the first remote failure. While neither backend can serve (circuit open + local still loading) it raises `ASRTemporarilyUnavailable` and exposes `available=False`; consumers (`_process_chunk`, `PerSpeakerIngest.tick`, `RefineWorker`) gate on it and keep their audio buffered instead of dropping chunks (see `docs/plans/2026-06-02-asr-fallback-buffering-design.md`). The circuit breaker is thread-safe and trips after `RECOG_ASR_CIRCUIT_FAILS` consecutive failures (open for `RECOG_ASR_CIRCUIT_OPEN_S`, then one half-open probe). Live chunk/batch requests use the shorter `RECOG_ASR_LIVE_TIMEOUT_S`; refine/offline keep `RECOG_ASR_REMOTE_TIMEOUT_S`. It delegates `model` / `device` / `_model_lock` / `_maybe_empty_mps_cache` to the local module so `RefineWorker` keeps working; refine skips the abortable-decode monkey-patch when `asr.using_remote`. The optional server code lives in `recog/asr_server/`; installation and configuration are described in the [ASR server guide](docs/asr-server.md). These server processes are separate from the four client services and are not started by `setup.sh`.
@@ -277,12 +275,12 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
 
 ### Module Organization
 - `recog/` - Core Python package
-  - `ai_provider.py` - AIProvider ABC, CodexCliProvider, resolve_cli() — shared AI provider interface used by increment.py and title_generator.py
+  - `ai_provider.py` - Shared Claude and Codex providers and settings-driven factory; CLI analysis preserves subscription login and isolates personal instructions/plugins.
+  - `ai_settings.py` / `ai_defaults.py` - Revisioned private `ai-settings.json` store and shipped LLM prompts/models. Web Settings edits global models and scenario overrides (analysis, titles, saved prompts, Copilot). Model precedence: scenario > saved global > legacy environment > shipped default. Each generation resolves one snapshot; saved increments and generated titles record model and revision. `web/ai_settings.py` coordinates bridge refresh/ack for Copilot policy; prompt changes reach the next event, model changes the next session. Stable file lock and atomic replacement protect concurrent writes; malformed settings fail visibly.
   - `asr.py` - GigaAM ASR wrapper
-  - `speaker_db.py` - ECAPA-TDNN embeddings matching
   - `audio_capture.py` - `BufferedAudioCapture`: the buffer/overlap/re-anchor machinery shared by the mic (`SingleDeviceCapture`) and the system-audio subprocess captures. Owns `_append_locked`, `clear_buffer`, `get_chunk() -> (chunk, capture_start_ts)`; the contract is 1-D mono float32
   - `system_audio.py` - `SubprocessPCMCapture` (generic child-process PCM reader) + `PulseAudioCapture` (Linux `parec`, follows the default sink) + `find_or_build_sck_utility` (macOS ScreenCaptureKit helper, `sck_audio_capture` resolved from `REPO_ROOT` — the binary stays at the repo root; its source is `recog/native/macos/sck_audio_capture.swift`) + `resolve_system_audio_backend` / `create_system_capture`. Manual smoke: `python -m recog.system_audio`
-  - `live.py` - Real-time transcription (LiveTranscriber with decomposed methods: _setup_meeting_storage, _setup_ktalk_bridge, _start_audio_captures, _process_chunk, _handle_mic_chunk, _handle_ktalk_chunk, _handle_embedding_chunk, _process_pending, _teardown_session; module-level helpers: normalize_word, deduplicate)
+  - `live.py` - Real-time transcription (LiveTranscriber with decomposed methods: _setup_meeting_storage, _setup_ktalk_bridge, _start_audio_captures, _process_chunk, _handle_mic_chunk, _handle_ktalk_chunk, _teardown_session; module-level helpers: normalize_word, deduplicate)
   - `increment.py` - Auto-generate versioned AI summaries on ktalk_leave; multi-prompt support via generate_all(), stores per-prompt results in meetings/<id>/increments/<prompt-id>/vN.md
   - `prompt_registry.py` - Load and filter prompt definitions from recog/prompts/*.md files (YAML frontmatter + template body)
   - `node_env.py` - Node/nvm PATH utilities for subprocess calls under the service manager (launchd / `systemd --user`) (shared by recog/web/, ktalk_bridge.py, and title_generator.py)
@@ -315,9 +313,7 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
 Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env` (`setup.sh` does both). `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL`/`RECOG_GIGAAM_REF`/`RECOG_GIGAAM_EDITABLE` are deliberately **not** in `.env`: `.env` is read by Python (`load_dotenv` in `recog/config.py`), no shell script reads it, and `setup.sh` needs those variables before it creates `.env` — they are call-shell variables (`RECOG_TORCH_INDEX_URL=… ./setup.sh`).
 
 - `HF_TOKEN` - HuggingFace token (optional, was required for pyannote diarization which is now removed)
-- `AI_PROVIDER` - `claude` | `codex` | `openrouter` (for transcript analysis)
-- `CLAUDE_MODEL` - `haiku` | `sonnet` | `opus`
-- `OPENROUTER_API_KEY` - Required if using OpenRouter
+- `CLAUDE_MODEL` / `CODEX_MODEL` - legacy model defaults; saved AI settings take precedence.
 - `MIC_SPEAKER_NAME` - Legacy microphone-name fallback before a user profile is saved (default: `Me`)
 - `RECOG_ASR_DEVICE` - `auto` (cuda > mps > cpu) | `cuda` | `mps` | `cpu` (default `auto`). An explicitly requested device that is unavailable raises instead of quietly landing on CPU; only an auto-resolved `cuda` is demoted to `cpu` on OOM.
 - `RECOG_TORCH_THREADS` - Optional `torch.set_num_threads()` cap for CPU inference (live and refine share one `_model_lock` and all cores). Best-effort — an unparsable value is logged and ignored.
@@ -348,7 +344,6 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 
 ## Data Files
 
-- `~/.recog/speakers_ecapa.json` - Speaker embedding database (real voice embeddings; `setup.sh` seeds it from `deploy/examples/speakers_ecapa.json.example`)
 - `~/.recog/meetings/` - Stored meeting transcripts (JSONL format)
 - `recog/prompts/` - Prompt definitions for AI analysis (.md files with YAML frontmatter); prompt ID = filename stem
 - `~/.recog/logs/` - Service logs

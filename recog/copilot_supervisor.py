@@ -46,6 +46,8 @@ from typing import Callable, Optional
 import websockets
 
 from recog.log_utils import log_rate_limited
+from recog.ai_settings import AiSettingsStore
+from recog.config import get_data_dir
 
 
 LOG_PREFIX = "[copilot-supervisor]"
@@ -252,6 +254,7 @@ class TmuxRunner:
         session_name: str = TMUX_SESSION,
         use_systemd_run: Optional[bool] = None,
         systemd_unit: str = SYSTEMD_SESSION_UNIT,
+        ai_settings_store=None,
     ) -> None:
         self.repo_root = Path(repo_root) if repo_root is not None else REPO_ROOT
         self.mcp_url = mcp_url or os.environ.get("RECOG_COPILOT_MCP_URL", DEFAULT_MCP_URL)
@@ -263,6 +266,7 @@ class TmuxRunner:
             _linux_session_manager() if use_systemd_run is None else use_systemd_run
         )
         self.systemd_unit = systemd_unit
+        self._ai_settings_store = ai_settings_store
 
     def _tmux(self, *args: str) -> list:
         return ["tmux", "-L", self.socket_name, *args]
@@ -365,11 +369,17 @@ class TmuxRunner:
         mcp_config = json.dumps(
             {"mcpServers": {"copilot": {"type": "http", "url": self.mcp_url}}}
         )
+        settings = self._ai_settings_store or AiSettingsStore(get_data_dir())
+        task = settings.resolve_task("copilot")
+        model = task["models"]["claude"]
         return shlex.join(
             [
                 "claude",
                 "--agent",
                 "copilot-session",
+                "--model",
+                model,
+                *(["--effort", task["claude_effort"]] if task["claude_effort"] else []),
                 "--strict-mcp-config",
                 "--mcp-config",
                 mcp_config,

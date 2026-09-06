@@ -11,13 +11,8 @@ torchaudio>=2.0
 # Audio capture and processing
 soundfile>=0.12
 sounddevice>=0.5
-scipy>=1.10
 
-# Speaker embeddings (ECAPA-TDNN)
-speechbrain>=1.0
-
-# Clustering and progress
-scikit-learn>=1.3
+# ASR progress
 tqdm>=4.65
 
 # KTalk integration

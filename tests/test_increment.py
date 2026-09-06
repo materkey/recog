@@ -95,11 +95,12 @@ async def test_generate_v1_creates_increment_files(tmp_path):
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="## Задачи\n- Сделать ревью\n")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider) as mock_cls:
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider) as mock_cls:
         version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version == 1
-    mock_cls.assert_called_with(task="increment")
+    assert mock_cls.call_args.kwargs == {"task": "increment"}
+    assert mock_cls.call_args.args[0]["id"] == "saved:my-increment"
 
     # Files are now in increments/<prompt_id>/ subdirectory
     inc_dir = meeting_path / "increments" / "my-increment"
@@ -152,7 +153,7 @@ async def test_other_participant_when_generated_then_uses_their_name_and_metadat
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="## Задачи\n- Сделать ревью\n")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         version = await gen.generate(
             meeting_id,
             meeting_path,
@@ -193,7 +194,7 @@ async def test_local_increment_exists_when_other_participant_generated_then_full
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="## Задачи\n- Сделать ревью\n")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         version = await gen.generate(
             meeting_id,
             meeting_path,
@@ -233,7 +234,7 @@ async def test_generate_v2_uses_delta_segments(tmp_path):
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="## Задачи\n- Delta task\n")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version == 2
@@ -277,7 +278,7 @@ async def test_skip_generation_when_zero_delta(tmp_path):
     mock_provider = MagicMock()
     mock_provider.complete = AsyncMock()
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version is None
@@ -303,7 +304,7 @@ async def test_generate_handles_codex_failure(tmp_path):
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(side_effect=Exception("Codex CLI error: timeout"))
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         version = await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     assert version is None
@@ -405,7 +406,7 @@ async def test_generate_uses_prompt_template(tmp_path):
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="Facts here")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         version = await gen.generate(meeting_id, meeting_path, custom_prompt)
 
     assert version == 1
@@ -453,7 +454,7 @@ async def test_generate_all_runs_matching_prompts_in_parallel(tmp_path):
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="Generated content")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         await gen.generate_all(meeting_id, meeting_path)
 
     # Both prompts should have generated v1
@@ -486,7 +487,7 @@ async def test_generate_all_skips_non_matching_prompts(tmp_path):
     mock_provider = MagicMock()
     mock_provider.complete = AsyncMock()
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         await gen.generate_all(meeting_id, meeting_path)
 
     # No prompts matched, so no generation
@@ -514,7 +515,7 @@ async def test_callback_receives_prompt_id(tmp_path):
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="Result")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         await gen.generate(meeting_id, meeting_path, DEFAULT_PROMPT)
 
     callback.assert_called_once_with(meeting_id, 1, "my-increment")
@@ -646,7 +647,7 @@ async def test_generate_all_runs_migration_before_generating(tmp_path):
     mock_provider.reasoning_effort = "xhigh"
     mock_provider.complete = AsyncMock(return_value="New content")
 
-    with patch("recog.increment.CodexCliProvider", return_value=mock_provider):
+    with patch("recog.increment.provider_for_settings", return_value=mock_provider):
         await gen.generate_all(meeting_id, meeting_path)
 
     # Old flat files should be migrated
@@ -661,3 +662,76 @@ async def test_generate_all_runs_migration_before_generating(tmp_path):
     # Provider should NOT have been called since all segments [1,3] are covered by v1
     # (the meeting has segments 1-3 and v1 covers [1,3])
     mock_provider.complete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_saved_prompt_override_when_generated_then_config_and_revision_recorded_without_rewriting_history(tmp_path):
+    from types import SimpleNamespace
+    from recog.ai_settings import AiSettingsStore
+
+    meetings = tmp_path / "meetings"
+    meeting_id = "configured"
+    meeting_path = _make_meeting(meetings, meeting_id)
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "my-increment.md").write_text('---\nname: Registry\n---\nRegistry {transcript}')
+    store = AiSettingsStore(tmp_path, prompts)
+    saved = store.write_task("saved:my-increment", {
+        "prompt": 'Custom {user_name}: {transcript}', "providers": ["claude"],
+        "models": {"claude": "custom-claude"},
+    })
+    provider = SimpleNamespace(key="claude", model="custom-claude", complete=AsyncMock(return_value="First result"))
+    generator = IncrementGenerator(meetings, prompts)
+    with patch("recog.increment.provider_for_settings", return_value=provider) as factory:
+        assert await generator.generate(meeting_id, meeting_path, DEFAULT_PROMPT) == 1
+    settings = factory.call_args.args[0]
+    assert settings["providers"] == ["claude"]
+    assert settings["models"]["claude"] == "custom-claude"
+    assert provider.complete.call_args.args[0].startswith("Custom Вася:")
+    version_dir = meeting_path / "increments" / "my-increment"
+    first_meta = (version_dir / "v1_meta.json").read_bytes()
+    first_text = (version_dir / "v1.md").read_bytes()
+    parsed = json.loads(first_meta)
+    assert parsed["settings_revision"] == saved["revision"]
+    assert parsed["provider"] == "claude" and parsed["model"] == "custom-claude"
+    assert parsed["reasoning_effort"] is None
+    store.reset_task("saved:my-increment")
+    provider.complete = AsyncMock(return_value="Second result")
+    with patch("recog.increment.provider_for_settings", return_value=provider):
+        assert await generator.generate(meeting_id, meeting_path, DEFAULT_PROMPT, force=True) == 2
+    assert (version_dir / "v1_meta.json").read_bytes() == first_meta
+    assert (version_dir / "v1.md").read_bytes() == first_text
+    assert provider.complete.call_args.args[0].startswith("Участник: Вася")
+
+
+@pytest.mark.asyncio
+async def test_same_registry_id_when_caller_template_supplied_then_caller_text_and_transcript_braces_preserved(tmp_path):
+    from types import SimpleNamespace
+    from recog.ai_settings import AiSettingsStore
+
+    meetings = tmp_path / "meetings"
+    meeting_id = "single-pass"
+    literal = 'spoken {participants} {meeting_title} {user_name} {"outer":{"key":1}}'
+    meeting_path = _make_meeting(meetings, meeting_id, segments=[{
+        "id": 1, "ts_display": "12:00:00", "speaker": "User", "text": literal,
+    }])
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "my-increment.md").write_text('---\nname: Registry\n---\nRegistry {transcript}')
+    prompt = PromptConfig("my-increment", "Caller", None, "Caller: {transcript} / {participants}")
+    provider = SimpleNamespace(key="codex", model="model", reasoning_effort="high", complete=AsyncMock(return_value="Result"))
+    original_read = AiSettingsStore.read
+    reads = []
+
+    def counted_read(instance):
+        reads.append(instance.path)
+        return original_read(instance)
+
+    with patch("recog.increment.provider_for_settings", return_value=provider), \
+         patch("recog.increment.AiSettingsStore.read", counted_read):
+        assert await IncrementGenerator(meetings, prompts).generate(meeting_id, meeting_path, prompt) == 1
+    assert len(reads) == 1
+    rendered = provider.complete.call_args.args[0]
+    assert rendered.startswith("Caller: ")
+    assert literal in rendered
+    assert rendered.endswith(" / Вася, Петя")

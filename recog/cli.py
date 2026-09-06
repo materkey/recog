@@ -87,17 +87,8 @@ def build_parser():
         help="Длительность чанка для ASR (сек, по умолчанию: 3.0)"
     )
     live_parser.add_argument(
-        "--speaker-db",
-        help="Путь к файлу базы спикеров (JSON)"
-    )
-    live_parser.add_argument(
         "--output",
         help="Сохранять транскрипт в файл"
-    )
-    live_parser.add_argument(
-        "--no-diarization",
-        action="store_true",
-        help="Только ASR без идентификации спикеров"
     )
     live_parser.add_argument(
         "--list-devices",
@@ -107,7 +98,7 @@ def build_parser():
     live_parser.add_argument(
         "--ktalk",
         action="store_true",
-        help="Использовать KTalk Chrome extension для определения спикеров (вместо embedding-based)"
+        help="Использовать KTalk Chrome extension для определения спикеров"
     )
     live_parser.add_argument(
         "--screencapture",
@@ -160,10 +151,8 @@ def main():
         live_pipeline(
             mic_device=parse_device(args.mic_device),
             system_audio=system_audio_spec(args),
-            speaker_db_path=args.speaker_db,
             chunk_duration=args.chunk_duration,
             output_file=args.output,
-            no_diarization=args.no_diarization,
             list_devices=args.list_devices,
             use_ktalk=args.ktalk,
             mic_speaker_name=args.mic_speaker_name,

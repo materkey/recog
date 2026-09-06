@@ -17,7 +17,7 @@ import torch
 from collections import deque
 from dataclasses import dataclass
 
-from .config import (SPEAKER_SIMILARITY_THRESHOLD, VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
+from .config import (VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
                      LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
                      RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
                      SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
@@ -29,7 +29,6 @@ from .audio_capture import BufferedAudioCapture
 from .log_utils import log_rate_limited
 from .remote_asr import ASRTemporarilyUnavailable, build_asr
 from .refine import RefineResult, RefineWorker, make_abortable_decode
-from .speaker_db import SpeakerDatabase
 from .config import get_data_dir
 from .user_profile import UserProfileStore, resolve_identity
 
@@ -379,7 +378,6 @@ class RecentSegment:
 @dataclass
 class SourceState:
     """Tracks per-source (mic / system) state during live transcription."""
-    pending_updates: list = None
     last_words: list = None
     last_speaker: str = None
     last_speech_time: float = 0
@@ -398,8 +396,6 @@ class SourceState:
     pending_chunk: Optional[tuple] = None
 
     def __post_init__(self):
-        if self.pending_updates is None:
-            self.pending_updates = []
         if self.last_words is None:
             self.last_words = []
         if self.last_text_time == 0:
@@ -438,12 +434,10 @@ class LiveTranscriber:
         self,
         mic_device=None,
         system_audio=None,  # auto|screencapture|pulse|device:<id>|none
-        speaker_db_path=None,
         chunk_duration=3.0,  # Баланс между задержкой и качеством
         output_file=None,
-        no_diarization=False,
-        use_ktalk=False,  # Использовать KTalk bridge вместо embedding-based diarization
-        save_audio=False,  # Сохранять аудио для последующей диаризации
+        use_ktalk=False,  # Использовать KTalk bridge для определения спикеров
+        save_audio=False,  # Сохранять аудио для воспроизведения сегментов
         mic_speaker_name=None,
         system_device=None,  # legacy-алиас: device:<id>
         use_screencapture=False,  # legacy-алиас: screencapture
@@ -493,19 +487,14 @@ class LiveTranscriber:
         self.dual_mode = (self.mic_capture is not None and self.system_capture is not None)
 
         self.asr = build_asr()
-        self.speaker_db = SpeakerDatabase(speaker_db_path) if speaker_db_path else None
         self.chunk_duration = chunk_duration
         self.output_file = output_file
-        self.no_diarization = no_diarization
         self.use_ktalk = use_ktalk
         self._mic_speaker_override = mic_speaker_name
         self._user_profile_store = UserProfileStore(get_data_dir())
         self._user_identity = self._read_user_identity()
         self.mic_speaker_name = self._user_identity["local_user_name"]
         self.running = False
-        self.session_speakers = {}  # embedding -> speaker_label
-        self._session_lock = threading.Lock()
-        self.speaker_counter = 0
         self.transcript_lines = []
         self._model_device = None
         self._model_dtype = None
@@ -520,7 +509,7 @@ class LiveTranscriber:
         # Recent system-audio segments for retroactive correction of Unknown runs
         self._recent_system_segments: deque[RecentSegment] = deque(maxlen=RETROACTIVE_MAX_SEGMENTS)
 
-        # Audio recording for on-demand diarization
+        # Audio recording for segment playback
         self._wav_writer_mic: Optional[IncrementalWavWriter] = None
         self._wav_writer_system: Optional[IncrementalWavWriter] = None
         self._wav_lock = threading.Lock()  # Guards _wav_writer_mic/_wav_writer_system
@@ -640,82 +629,6 @@ class LiveTranscriber:
                 f"[LiveTranscriber] _transcribe_direct failed: {type(e).__name__}: {e}",
             )
             return None
-
-    # Кэш для модели embedding (загружается один раз)
-    _ecapa_classifier = None
-    _ecapa_lock = threading.Lock()
-
-    def _get_embedding(self, audio_chunk: np.ndarray) -> Optional[np.ndarray]:
-        """Извлекает embedding из аудио чанка используя SpeechBrain ECAPA-TDNN."""
-        if self.no_diarization:
-            return None
-
-        try:
-            import warnings
-
-            # Ленивая загрузка модели (один раз) с double-checked locking
-            if LiveTranscriber._ecapa_classifier is None:
-                with LiveTranscriber._ecapa_lock:
-                    if LiveTranscriber._ecapa_classifier is None:
-                        with warnings.catch_warnings():
-                            warnings.filterwarnings("ignore", category=UserWarning)
-                            warnings.filterwarnings("ignore", category=FutureWarning)
-                            from speechbrain.inference.speaker import EncoderClassifier
-                            LiveTranscriber._ecapa_classifier = EncoderClassifier.from_hparams(
-                                source="speechbrain/spkrec-ecapa-voxceleb",
-                                savedir="/tmp/speechbrain_ecapa"
-                            )
-
-            # Прямое извлечение embedding без temp файлов
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore")
-                audio_tensor = torch.from_numpy(audio_chunk).float().unsqueeze(0)
-                emb = LiveTranscriber._ecapa_classifier.encode_batch(audio_tensor)
-            return emb.squeeze().cpu().numpy()
-
-        except Exception as e:
-            print(f"Embedding error: {e}", file=sys.stderr)
-
-        return None
-
-    def _identify_speaker(self, embedding: Optional[np.ndarray]) -> str:
-        """Идентифицирует спикера по embedding."""
-        if embedding is None:
-            return "speaker"
-
-        # Приводим к float32 для консистентности
-        embedding = embedding.astype(np.float32)
-
-        # Сначала проверяем speaker-DB
-        if self.speaker_db:
-            match = self.speaker_db.match_speaker(embedding, SPEAKER_SIMILARITY_THRESHOLD)
-            if match:
-                return match[1]  # display_name
-
-        # Проверяем среди спикеров сессии (best match, not first match)
-        with self._session_lock:
-            best_label = None
-            best_similarity = -1.0
-            for emb_key, label in self.session_speakers.items():
-                db_emb = np.frombuffer(emb_key, dtype=np.float32)
-                similarity = SpeakerDatabase.cosine_similarity(embedding, db_emb)
-                if similarity >= SPEAKER_SIMILARITY_THRESHOLD and similarity > best_similarity:
-                    best_similarity = similarity
-                    best_label = label
-
-            if best_label is not None:
-                return best_label
-
-            # Новый спикер
-            self.speaker_counter += 1
-            label = f"speaker_{self.speaker_counter}"
-            self.session_speakers[embedding.astype(np.float32).tobytes()] = label
-            return label
-
-    def _resolve_speaker_embedding(self, chunk: np.ndarray) -> str:
-        """Get embedding for *chunk* and identify speaker (runs in executor thread)."""
-        emb = self._get_embedding(chunk)
-        return self._identify_speaker(emb)
 
     def _ktalk_speaker_callback(self, speaker_name: Optional[str], is_speaking: bool):
         """Callback для обновления текущего спикера из KTalk."""
@@ -894,10 +807,10 @@ class LiveTranscriber:
             # extension reconnect could deliver pcm_chunk frames to a None
             # callback (dropped silently at ktalk_bridge.py:1521).
         except ImportError:
-            print("Warning: ktalk_bridge module not found, falling back to embedding-based", file=sys.stderr)
+            print("Warning: ktalk_bridge module not found, speaker identification unavailable", file=sys.stderr)
             self.use_ktalk = False
         except Exception as e:
-            print(f"Warning: KTalk bridge error: {e}, falling back to embedding-based", file=sys.stderr)
+            print(f"Warning: KTalk bridge error: {e}, speaker identification unavailable", file=sys.stderr)
             self.use_ktalk = False
 
     def _setup_per_speaker_ingest(self):
@@ -1536,13 +1449,12 @@ class LiveTranscriber:
         if self.system_capture:
             self.system_capture.start()
 
-    def _teardown_session(self, executor, force_exit: bool):
+    def _teardown_session(self, force_exit: bool):
         """Stop captures, finalize audio, close meeting, write transcript."""
         print("\n" + "-" * 60)
         print("Остановлено.")
 
         self.running = False
-        executor.shutdown(wait=False, cancel_futures=True)
 
         if self.mic_capture:
             self.mic_capture.stop()
@@ -1598,66 +1510,6 @@ class LiveTranscriber:
         if force_exit:
             import os
             os._exit(0)
-
-    def _process_pending(self, state, is_mic=False):
-        """Process all pending embedding updates for a source."""
-        with self._state_lock:
-            if not state.pending_updates:
-                return
-
-            still_pending = []
-            for i, pending in enumerate(state.pending_updates):
-                line_idx, ts, txt, future, chunk_time, pending_audio_offset, pending_gen = pending
-                if not future.done():
-                    # Stop at first incomplete future to preserve commit order
-                    still_pending = state.pending_updates[i:]
-                    break
-
-                try:
-                    speaker = future.result(timeout=0)
-                except Exception:
-                    speaker = "???"
-
-                # Skip if meeting changed since this chunk was captured
-                if self._meeting_generation != pending_gen:
-                    continue
-
-                time_gap = chunk_time - state.last_speech_time
-                segment_duration = chunk_time - state.segment_start_time
-                is_continuation = (speaker == state.last_speaker
-                                   and time_gap < SPEAKER_TURN_GAP
-                                   and segment_duration < MAX_SEGMENT_DURATION)
-
-                if speaker not in ("???", "speaker"):
-                    state.last_speaker = speaker
-                state.last_speech_time = chunk_time
-                if not is_continuation:
-                    state.segment_start_time = chunk_time
-
-                # Markdown формат: **Speaker** *[HH:MM:SS]*: text
-                final_line = f"\n**{speaker}** *[{ts}]*: {txt}\n"
-
-                if line_idx < len(self.transcript_lines):
-                    self.transcript_lines[line_idx] = final_line
-                    # Rewrite line on terminal if it's the last one
-                    if line_idx == len(self.transcript_lines) - 1:
-                        sys.stdout.write(f"\r\033[K{final_line}")
-                        sys.stdout.flush()
-
-                if self._meeting_storage:
-                    uncertain = speaker == "???"
-                    self._meeting_storage.append_segment(
-                        speaker=speaker,
-                        speaker_id=speaker,
-                        text=txt,
-                        is_local=is_mic,
-                        is_continuation=is_continuation,
-                        uncertain=uncertain,
-                        uncertain_reason="embedding_error" if uncertain else "",
-                        audio_offset_ms=pending_audio_offset
-                    )
-
-            state.pending_updates = still_pending
 
     def _check_silence_split(self, state, current_time, chunk=None, is_mic=False):
         """Check silence duration and split meeting session if threshold exceeded."""
@@ -1903,54 +1755,38 @@ class LiveTranscriber:
                     correction_snapshot=correction_snapshot,
                 )
 
-    def _handle_embedding_chunk(self, text, timestamp, chunk_time, chunk_gen, state,
-                                chunk, executor, is_mic=False):
-        """Handle transcribed chunk via no-diarization or async embedding."""
-        if self.no_diarization:
-            time_gap = chunk_time - state.last_speech_time
-            segment_duration = chunk_time - state.segment_start_time
-            is_continuation = (state.last_speaker == "speaker"
-                               and time_gap < SPEAKER_TURN_GAP
-                               and segment_duration < MAX_SEGMENT_DURATION)
+    def _handle_unattributed_chunk(self, text, timestamp, chunk_time, chunk_gen, state):
+        """Record system speech when conference identity is unavailable."""
+        time_gap = chunk_time - state.last_speech_time
+        segment_duration = chunk_time - state.segment_start_time
+        is_continuation = (state.last_speaker == "speaker"
+                           and time_gap < SPEAKER_TURN_GAP
+                           and segment_duration < MAX_SEGMENT_DURATION)
 
-            state.last_speaker = "speaker"
-            state.last_speech_time = chunk_time
-            if not is_continuation:
-                state.segment_start_time = chunk_time
+        state.last_speaker = "speaker"
+        state.last_speech_time = chunk_time
+        if not is_continuation:
+            state.segment_start_time = chunk_time
 
-            # Markdown формат: **Speaker** *[HH:MM:SS]*: text
-            line = f"\n**speaker** *[{timestamp}]*: {text}\n"
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            self.transcript_lines.append(line)
+        # Markdown формат: **Speaker** *[HH:MM:SS]*: text
+        line = f"\n**speaker** *[{timestamp}]*: {text}\n"
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        self.transcript_lines.append(line)
 
-            if self._meeting_storage and self._meeting_generation == chunk_gen:
-                self._meeting_storage.append_segment(
-                    speaker="speaker",
-                    speaker_id="speaker",
-                    text=text,
-                    is_local=is_mic,
-                    is_continuation=is_continuation,
-                    uncertain=True,
-                    uncertain_reason="no_diarization",
-                    audio_offset_ms=state.audio_offset
-                )
-        else:
-            # Placeholder для async diarization
-            draft = f"\n**...** *[{timestamp}]*: {text}\n"
-            sys.stdout.write(draft)
-            sys.stdout.flush()
-            self.transcript_lines.append(draft)
+        if self._meeting_storage and self._meeting_generation == chunk_gen:
+            self._meeting_storage.append_segment(
+                speaker="speaker",
+                speaker_id="speaker",
+                text=text,
+                is_local=False,
+                is_continuation=is_continuation,
+                uncertain=True,
+                uncertain_reason="no_conference_identity",
+                audio_offset_ms=state.audio_offset
+            )
 
-            chunk_copy = chunk.copy()
-
-            future = executor.submit(self._resolve_speaker_embedding, chunk_copy)
-            with self._state_lock:
-                state.pending_updates.append(
-                    (len(self.transcript_lines) - 1, timestamp, text, future,
-                     chunk_time, state.audio_offset, chunk_gen))
-
-    def _process_chunk(self, capture, state, executor, is_mic=False):
+    def _process_chunk(self, capture, state, is_mic=False):
         """Read audio chunk, run ASR, and dispatch to appropriate handler."""
         # ASR availability gate (дизайн §2): пока FallbackASR не может обслужить
         # запрос (remote упал, локаль грузится в фоне) — НЕ вычитываем буфер.
@@ -2147,15 +1983,12 @@ class LiveTranscriber:
                 chunk_time, chunk_gen, state,
                 fallback_mixed=fallback_mixed)
         else:
-            self._handle_embedding_chunk(
-                text, timestamp, chunk_time, chunk_gen, state,
-                chunk, executor, is_mic=is_mic)
+            self._handle_unattributed_chunk(
+                text, timestamp, chunk_time, chunk_gen, state)
 
 
     def run(self, force_exit: bool = False):
         """Основной цикл live транскрипции."""
-        import concurrent.futures
-
         print("=" * 60)
         print(" LIVE TRANSCRIPTION")
         system_display = self.system_audio_label()
@@ -2169,10 +2002,8 @@ class LiveTranscriber:
 
         if self.use_ktalk:
             print(" Speaker detection: KTalk (via Chrome extension)")
-        elif self.no_diarization:
-            print(" Speaker detection: disabled")
         else:
-            print(" Speaker detection: embedding-based")
+            print(" Speaker detection: unavailable without conference data")
 
         print("=" * 60)
         print()
@@ -2188,8 +2019,6 @@ class LiveTranscriber:
         self._start_ktalk_bridge()
 
         self.running = True
-
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         self._mic_state = SourceState()
         self._sys_state = SourceState()
@@ -2219,15 +2048,10 @@ class LiveTranscriber:
                             print(f"Warning: audio cleanup failed: {e}", file=sys.stderr)
 
                 if self.mic_capture:
-                    self._process_pending(self._mic_state, is_mic=True)
-                if self.system_capture:
-                    self._process_pending(self._sys_state, is_mic=False)
-
-                if self.mic_capture:
-                    self._process_chunk(self.mic_capture, self._mic_state, executor, is_mic=True)
+                    self._process_chunk(self.mic_capture, self._mic_state, is_mic=True)
                 if self.system_capture:
                     self._check_system_capture_alive()
-                    self._process_chunk(self.system_capture, self._sys_state, executor, is_mic=False)
+                    self._process_chunk(self.system_capture, self._sys_state, is_mic=False)
 
         except KeyboardInterrupt:
             pass
@@ -2237,7 +2061,7 @@ class LiveTranscriber:
             traceback.print_exc()
 
         finally:
-            self._teardown_session(executor, force_exit)
+            self._teardown_session(force_exit)
 
 
     def _invalidate_pending_chunks(self):
@@ -2245,7 +2069,7 @@ class LiveTranscriber:
 
         Called from KTalk bridge thread via pre_meeting_switch callback,
         BEFORE MeetingStorage changes current_meeting_path.
-        This ensures process_pending and direct paths discard in-flight chunks
+        This ensures transcription paths discard in-flight chunks
         that were captured for the old meeting.
 
         Also clears capture buffers so that stale audio accumulated since the
@@ -2256,12 +2080,9 @@ class LiveTranscriber:
             self._recent_system_segments.clear()
             if self._mic_state is not None:
                 for state in (self._mic_state, self._sys_state):
-                    for pending in state.pending_updates:
-                        pending[3].cancel()  # pending[3] is the Future
                     state.last_speaker = None
                     state.last_words = []
                     state.segment_start_time = 0
-                    state.pending_updates = []
             # Reset PCM per-pid state so continuation/dedup don't carry
             # across meetings.  Watchdog transition flag also resets because
             # a fresh meeting should start assuming PCM healthy.
@@ -2373,10 +2194,8 @@ class LiveTranscriber:
 def live_pipeline(
     mic_device=None,
     system_audio=None,
-    speaker_db_path=None,
     chunk_duration=5.0,
     output_file=None,
-    no_diarization=False,
     list_devices=False,
     use_ktalk=False,
     mic_speaker_name=None,
@@ -2417,10 +2236,8 @@ def live_pipeline(
     transcriber = LiveTranscriber(
         mic_device=mic_device,
         system_audio=system_audio,
-        speaker_db_path=speaker_db_path,
         chunk_duration=chunk_duration,
         output_file=output_file,
-        no_diarization=no_diarization,
         use_ktalk=use_ktalk,
         mic_speaker_name=mic_speaker_name,
         save_audio=save_audio,

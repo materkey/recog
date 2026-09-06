@@ -542,29 +542,41 @@ class MeetingStorage:
         # Generate title for orphan sessions without title
         if meta.get("source") == "orphan" and not meta.get("title"):
             if meta["stats"]["segment_count"] > 0:
-                title = self._generate_title_for_meeting()
-                if title:
-                    meta["title"] = title
-                    meta["title_source"] = "codex"
+                title_result = self._generate_title_for_meeting()
+                if title_result:
+                    meta.update(title_result)
 
         self._save_meta(meta)
         self._update_index(meta)
 
         return self.current_meeting_id
 
-    def _generate_title_for_meeting(self) -> Optional[str]:
-        """Generate title using Codex for current meeting."""
+    def _generate_title_for_meeting(self) -> Optional[dict]:
+        """Generate a title and its provider/settings provenance for this meeting."""
         try:
+            from recog.ai_settings import AiSettingsStore
             from recog.title_generator import generate_title
 
             transcript_text = self._get_transcript_as_text()
             if not transcript_text:
                 return None
 
-            title = generate_title(transcript_text)
+            settings = AiSettingsStore(self.base_path.parent).resolve_task("title")
+            meta = self._load_meta()
+            participants = meta.get("participants", {})
+            variables = {
+                "user_name": ", ".join(info.get("name", pid) for pid, info in participants.items() if info.get("is_local")),
+                "participants": ", ".join(info.get("name", pid) for pid, info in participants.items()),
+                "meeting_title": meta.get("title") or "",
+            }
+            title = generate_title(transcript_text, settings=settings, variables=variables)
             if title:
                 print(f"Generated title: {title}")
-            return title
+                provider = settings["providers"][0]
+                return {"title": title, "title_source": provider,
+                        "title_model": settings["models"][provider],
+                        "title_settings_revision": settings["revision"]}
+            return None
         except ImportError:
             print("Warning: title_generator not available")
             return None
@@ -694,7 +706,6 @@ class MeetingStorage:
                 )
                 if existing_local:
                     # Уже есть локальный участник — пропускаем добавление нового
-                    # (KTalk имя обычно точнее чем speaker_db)
                     if speaker and meta["participants"][existing_local]["name"] != speaker:
                         meta["participants"][existing_local]["name"] = speaker
                 else:

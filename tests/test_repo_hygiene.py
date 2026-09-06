@@ -1,8 +1,8 @@
 """Drift guard: personal files and generated artifacts stay out of the index.
 
-A colleague clones this repo, so voice embeddings, the compiled Swift helper
-and the machine-specific launchd plists must not be tracked — they are seeded
-from `.example` files or rendered from `deploy/` templates by `setup.sh`. A
+A colleague clones this repo, so personal data, the compiled Swift helper
+and the machine-specific launchd plists must not be tracked — generated files
+are built or rendered from `deploy/` templates by `setup.sh`. A
 `.gitignore` rule alone does not untrack a file that was committed before the
 rule existed (which is exactly how the four root plists survived step 8), so
 the assertion is on `git ls-files`, not on the ignore rules.
@@ -17,6 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # (glob matched against tracked paths, exceptions that are meant to be tracked)
 UNTRACKED_PATTERNS = [
     ("speakers*.json", set()),
+    ("ai-settings.json", set()),
+    ("ai-settings.lock", set()),
     ("sck_audio_capture", set()),
     ("com.recog.*.plist", set()),
 ]
@@ -63,14 +65,6 @@ def test_gitignore_covers_the_pattern(pattern, _allowed):
     assert f"/{pattern}" in rules, f"/{pattern} missing from .gitignore"
 
 
-def test_seed_example_when_loading_then_valid_empty_database():
-    import json
-
-    example = "deploy/examples/speakers_ecapa.json.example"
-    assert example in _git("ls-files", "--", example).splitlines()
-    assert json.loads((REPO_ROOT / example).read_text()) == {}
-
-
 # ---------------------------------------------------------------------------
 # `scripts/deps.sh` reads the ASR config with the *host* interpreter, before
 # the venv exists (setup.sh step 3 runs before step 4 creates it). That only
@@ -80,7 +74,10 @@ def test_seed_example_when_loading_then_valid_empty_database():
 # stayed green.
 # ---------------------------------------------------------------------------
 
-BARE_IMPORT_FILES = ("recog/__init__.py", "recog/config.py")
+BARE_IMPORT_FILES = (
+    "recog/__init__.py", "recog/config.py", "recog/ai_settings.py",
+    "recog/ai_defaults.py", "recog/prompt_registry.py",
+)
 
 
 def _module_level_imports(path):

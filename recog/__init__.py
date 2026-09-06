@@ -9,7 +9,6 @@ from .config import (
     DEFAULT_MODEL,
     DEFAULT_CHUNK_DURATION,
     DEFAULT_OVERLAP,
-    SPEAKER_SIMILARITY_THRESHOLD,
     MIC_SPEAKER_NAME,
     load_dotenv,
 )
@@ -19,20 +18,15 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_CHUNK_DURATION",
     "DEFAULT_OVERLAP",
-    "SPEAKER_SIMILARITY_THRESHOLD",
     "MIC_SPEAKER_NAME",
     "load_dotenv",
     # Models
     "Segment",
-    "EmbeddingSample",
-    "SpeakerInfo",
     # ASR
     "ASRModule",
     "build_asr",
     "RemoteASRClient",
     "FallbackASR",
-    # Speaker DB
-    "SpeakerDatabase",
     # Output
     "format_time",
     "generate_markdown",
@@ -45,15 +39,11 @@ __all__ = [
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # Models
     "Segment": ("recog.models", "Segment"),
-    "EmbeddingSample": ("recog.models", "EmbeddingSample"),
-    "SpeakerInfo": ("recog.models", "SpeakerInfo"),
     # ASR
     "ASRModule": ("recog.asr", "ASRModule"),
     "build_asr": ("recog.remote_asr", "build_asr"),
     "RemoteASRClient": ("recog.remote_asr", "RemoteASRClient"),
     "FallbackASR": ("recog.remote_asr", "FallbackASR"),
-    # Speaker DB
-    "SpeakerDatabase": ("recog.speaker_db", "SpeakerDatabase"),
     # Output
     "format_time": ("recog.output", "format_time"),
     "generate_markdown": ("recog.output", "generate_markdown"),

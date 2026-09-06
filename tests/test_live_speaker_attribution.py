@@ -544,7 +544,7 @@ def test_pcm_healthy_skips_system_audio_ktalk_dispatch(monkeypatch):
     t._handle_ktalk_chunk = Mock()
     t._emit_pcm_transition_marker = Mock()
 
-    LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+    LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
 
     t._transcribe_direct.assert_not_called()
     t._handle_ktalk_chunk.assert_not_called()
@@ -582,7 +582,7 @@ def test_pcm_pre_first_chunk_falls_through_to_mixed_path():
     t._handle_ktalk_chunk = Mock()
     t._emit_pcm_transition_marker = Mock()
 
-    LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+    LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
 
     # Mixed-path dispatched — not PCM-gated out.
     t._handle_ktalk_chunk.assert_called_once()
@@ -619,7 +619,7 @@ def test_pcm_degraded_dispatches_mixed_path_with_fallback_flag():
     t._handle_mic_chunk = Mock()
     t._emit_pcm_transition_marker = Mock()
 
-    LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+    LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
 
     t._handle_ktalk_chunk.assert_called_once()
     call_kwargs = t._handle_ktalk_chunk.call_args.kwargs
@@ -825,7 +825,7 @@ def test_pcm_transition_emits_marker():
     capture = Mock()
     capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1000.0)
 
-    LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+    LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
 
     t._emit_pcm_transition_marker.assert_called_once_with(True, 3)
 
@@ -941,7 +941,6 @@ def test_use_pcm_transport_off_without_ktalk():
     transcriber = LiveTranscriber(
         mic_device=None,
         system_device=None,
-        no_diarization=True,
         use_ktalk=False,
     )
     assert transcriber.use_pcm_transport is False
@@ -957,7 +956,6 @@ def test_use_pcm_transport_on_with_ktalk():
     transcriber = LiveTranscriber(
         mic_device=None,
         system_device=None,
-        no_diarization=True,
         use_ktalk=True,
     )
     assert transcriber.use_pcm_transport is True

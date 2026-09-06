@@ -30,7 +30,8 @@ from datetime import datetime
 from typing import Optional, Dict, List, Callable, TYPE_CHECKING
 import sys
 from pathlib import Path
-from recog.config import load_dotenv, MIC_SPEAKER_NAME
+from recog.config import load_dotenv, MIC_SPEAKER_NAME, get_data_dir
+from recog.ai_settings import AiSettingsStore
 from recog.log_utils import log_rate_limited
 from recog.ws_origin import origin_allowed
 from recog.meeting_storage import is_conference_source
@@ -133,7 +134,7 @@ class KTalkBridge:
     # Максимальная длительность сегмента (сек) - если спикер говорит дольше, разбиваем на части
     MAX_SEGMENT_DURATION = 20.0
 
-    def __init__(self, host: str = "localhost", port: int = 8766):
+    def __init__(self, host: str = "localhost", port: int = 8766, *, ai_settings_store=None):
         self.host = host
         self.port = port
         self._current_speaker: Optional[str] = None
@@ -153,6 +154,9 @@ class KTalkBridge:
         self._read_user_identity = None
         self._apply_mic_identity = None
         self._user_profile_refresh_lock = asyncio.Lock()
+        self._ai_settings_refresh_lock = asyncio.Lock()
+        self._ai_settings_store = ai_settings_store or AiSettingsStore(get_data_dir())
+        self._copilot_policy = self._read_copilot_policy()
         self._server = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -738,6 +742,46 @@ class KTalkBridge:
         with self._lock:
             return {**self._user_identity, "local_user_aliases": list(self._user_identity["local_user_aliases"])}
 
+    def _read_copilot_policy(self) -> dict:
+        task = self._ai_settings_store.resolve_task("copilot")
+        return {
+            "copilot_instructions": task["prompt"],
+            "copilot_policy_revision": task["revision"],
+        }
+
+    def copilot_policy_snapshot(self) -> dict:
+        with self._lock:
+            return dict(self._copilot_policy)
+
+    async def _refresh_ai_settings(self, websocket) -> None:
+        with self._lock:
+            allowed = websocket is not None and websocket in self._subscriber_clients
+        if not allowed:
+            return
+        async with self._ai_settings_refresh_lock:
+            try:
+                # The refresh frame is a hint, never a source of instructions.
+                policy = await asyncio.to_thread(self._read_copilot_policy)
+                with self._lock:
+                    changed = policy != self._copilot_policy
+                    self._copilot_policy = policy
+            except Exception:
+                await self._send_bounded(websocket, json.dumps({
+                    "type": "ai_settings_error",
+                    "message": "Could not apply the saved AI settings",
+                }))
+                return
+            if changed:
+                await self._broadcast_to_channel_clients({
+                    "type": "copilot_policy_updated",
+                    **self.user_identity_snapshot(), **policy,
+                })
+            await self._send_bounded(websocket, json.dumps({
+                "type": "ai_settings_applied",
+                "revision": policy["copilot_policy_revision"],
+                "model_application": "next_session",
+            }, ensure_ascii=False))
+
     async def _refresh_user_profile(self, websocket) -> None:
         with self._lock:
             allowed = websocket is not None and websocket in self._subscriber_clients
@@ -773,7 +817,7 @@ class KTalkBridge:
     async def _send_identity_tick(self, client, frame: dict) -> None:
         # The audio thread may have queued this before a refresh. Snapshot on
         # the WS loop so an old tick cannot restore aliases after the update.
-        frame = {**frame, **self.user_identity_snapshot()}
+        frame = {**frame, **self.user_identity_snapshot(), **self.copilot_policy_snapshot()}
         await self._send_bounded(client, json.dumps(frame, ensure_ascii=False))
 
     def _maybe_emit_transcript_tick(self) -> None:
@@ -1156,7 +1200,7 @@ class KTalkBridge:
         transcription path.
         """
         if frame.get("type") == "meeting_started":
-            frame = {**frame, **self.user_identity_snapshot()}
+            frame = {**frame, **self.user_identity_snapshot(), **self.copilot_policy_snapshot()}
         await self._broadcast_to_channel_clients(frame)
         await self._broadcast_message(frame)
         with self._lock:
@@ -1786,7 +1830,10 @@ class KTalkBridge:
         """
         msg_type = data.get("type")
 
-        if msg_type == "user_profile_refresh":
+        if msg_type == "ai_settings_refresh":
+            await self._refresh_ai_settings(websocket)
+
+        elif msg_type == "user_profile_refresh":
             await self._refresh_user_profile(websocket)
 
         elif msg_type == "speaker_update":
@@ -2418,6 +2465,10 @@ class KTalkBridge:
                 f"[KTalk Bridge] Copilot channel client registered from {getattr(websocket, 'remote_address', 'unknown')}",
                 file=sys.stderr,
             )
+            await self._send_bounded(websocket, json.dumps({
+                "type": "copilot_policy_updated",
+                **self.user_identity_snapshot(), **self.copilot_policy_snapshot(),
+            }, ensure_ascii=False))
             # Race recovery: between this socket's WS-open and
             # hello-processing, it sat in `_connected_clients`. If an
             # extension client disconnected in that window, its
@@ -2516,7 +2567,7 @@ class KTalkBridge:
             outbound = json.dumps(
                 {
                     "type": "copilot_user_message",
-                    **self.user_identity_snapshot(),
+                    **self.user_identity_snapshot(), **self.copilot_policy_snapshot(),
                     "request_id": request_id,
                     "text": text,
                     "meeting_id": meeting_id,
@@ -2781,7 +2832,7 @@ class KTalkBridge:
 
             response = {
                 "type": "get_recent_transcript_response",
-                **self.user_identity_snapshot(),
+                **self.user_identity_snapshot(), **self.copilot_policy_snapshot(),
                 "request_id": request_id,
                 "segments": segments,
             }
@@ -3030,6 +3081,7 @@ class KTalkBridge:
         asyncio.set_event_loop(self._loop)
         self._manual_copilot_request_lock = asyncio.Lock()
         self._user_profile_refresh_lock = asyncio.Lock()
+        self._ai_settings_refresh_lock = asyncio.Lock()
 
         try:
             self._loop.run_until_complete(self._run_server())
