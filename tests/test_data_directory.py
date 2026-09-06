@@ -41,7 +41,7 @@ def test_relative_override_when_resolving_then_rejected(roots, monkeypatch):
         config.get_data_dir(roots[0])
 
 
-@pytest.mark.parametrize("entry", ["meetings", "logs", "speakers_custom.json", "user-profile.json"])
+@pytest.mark.parametrize("entry", ["meetings", "logs", "speakers_custom.json", "user-profile.json", "ai-settings.json"])
 def test_legacy_data_when_resolving_then_whole_root_stays_with_warning(roots, capsys, entry):
     repo, target = roots
     (repo / entry).touch()
@@ -57,6 +57,21 @@ def test_two_populated_roots_when_resolving_then_conflict_is_visible(roots):
     (target / "logs").mkdir()
     with pytest.raises(RuntimeError, match="both"):
         config.get_data_dir(repo)
+
+
+def test_ai_settings_in_both_roots_when_resolving_then_conflict_is_visible(roots):
+    repo, target = roots
+    (repo / "ai-settings.json").write_text("{}")
+    target.mkdir()
+    (target / "ai-settings.json").write_text("{}")
+    with pytest.raises(RuntimeError, match="both"):
+        config.get_data_dir(repo)
+
+
+def test_leftover_settings_lock_when_resolving_then_not_mistaken_for_legacy_data(roots):
+    repo, target = roots
+    (repo / "ai-settings.lock").touch()
+    assert config.get_data_dir(repo) == target
 
 
 def test_explicit_storage_when_constructing_then_override_is_preserved(roots):
@@ -110,7 +125,6 @@ from pathlib import Path
 from recog.web import server
 expected = Path(sys.argv[1])
 assert server.MEETINGS_DIR == expected / 'meetings'
-assert server.SPEAKER_DB_PATH == expected / 'speakers_ecapa.json'
 assert server.get_storage().base_path == expected / 'meetings'
 """, str(data)],
         cwd=root, env={**os.environ, "RECOG_DATA_DIR": str(data)},

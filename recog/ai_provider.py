@@ -14,9 +14,10 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from recog.node_env import get_node_env, version_key
+from recog.ai_defaults import DEFAULT_MODELS
 
 CCS_AUTOMATION_MARKER_PREFIX = "<!-- ccs-automation:recog"
-DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
+DEFAULT_CODEX_MODEL = DEFAULT_MODELS["codex"]
 
 
 def _sanitize_ccs_task(task: str) -> str:
@@ -128,9 +129,9 @@ class AIProvider(ABC):
 class CodexCliProvider(AIProvider):
     """Isolated automation via Codex CLI with existing subscription auth."""
 
-    def __init__(self, task: str = "analysis"):
-        self.model = os.getenv("CODEX_MODEL", DEFAULT_CODEX_MODEL)
-        self.reasoning_effort = os.getenv("CODEX_REASONING_EFFORT", "xhigh")
+    def __init__(self, task: str = "analysis", *, model: str | None = None, reasoning_effort: str | None = None):
+        self.model = model if model is not None else os.getenv("CODEX_MODEL", DEFAULT_CODEX_MODEL)
+        self.reasoning_effort = reasoning_effort if reasoning_effort is not None else os.getenv("CODEX_REASONING_EFFORT", "xhigh")
         self.task = task
         self._cli = resolve_cli("codex")
 
@@ -235,3 +236,111 @@ class CodexCliProvider(AIProvider):
                 yield full_text, True
         except Exception as e:
             raise Exception(f"Codex streaming error: {str(e)}") from e
+
+
+class ClaudeCliProvider(AIProvider):
+    """Claude CLI - keeps subscription auth while isolating analysis context."""
+
+    def __init__(self, task: str = "analysis", *, model: str | None = None,
+                 reasoning_effort: str | None = None):
+        self.model = model if model is not None else os.getenv("CLAUDE_MODEL", DEFAULT_MODELS["claude"])
+        self.reasoning_effort = reasoning_effort
+        self.task = task
+        self._cli = resolve_cli("claude")
+
+    @property
+    def key(self) -> str:
+        return "claude"
+
+    @property
+    def name(self) -> str:
+        effort = f" {self.reasoning_effort}" if self.reasoning_effort else ""
+        return f"Claude ({self.model}{effort})"
+
+    async def complete(self, prompt: str) -> str:
+        marked_prompt = mark_ccs_automation(prompt, self.task)
+        proc = await asyncio.create_subprocess_exec(
+            self._cli, "-p", marked_prompt,
+            "--safe-mode", "--disable-slash-commands",
+            "--model", self.model,
+            *(["--effort", self.reasoning_effort] if self.reasoning_effort else []),
+            "--output-format", "text",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=get_node_env()
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            error_msg = stderr.decode().strip() if stderr else "Unknown error"
+            raise Exception(f"Claude CLI error: {error_msg}")
+
+        return stdout.decode().strip()
+
+    async def stream(self, prompt: str):
+        """Stream Claude CLI response."""
+        import json as json_module
+
+        marked_prompt = mark_ccs_automation(prompt, self.task)
+        proc = await asyncio.create_subprocess_exec(
+            self._cli, "-p", marked_prompt,
+            "--safe-mode", "--disable-slash-commands",
+            "--model", self.model,
+            *(["--effort", self.reasoning_effort] if self.reasoning_effort else []),
+            "--output-format", "stream-json",
+            "--verbose",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=get_node_env()
+        )
+
+        full_text = ""
+        try:
+            async for line in proc.stdout:
+                line = line.decode().strip()
+                if not line:
+                    continue
+                try:
+                    event = json_module.loads(line)
+                    if event.get("type") == "assistant":
+                        msg = event.get("message", {})
+                        content = msg.get("content", [])
+                        for block in content:
+                            if block.get("type") == "text":
+                                text = block.get("text", "")
+                                if text:
+                                    full_text = text  # Claude sends full text each time
+                                    yield text, False
+                    elif event.get("type") == "result":
+                        result = event.get("result", full_text)
+                        yield result, True
+                        return
+                except json_module.JSONDecodeError:
+                    continue
+
+            await proc.wait()
+            if proc.returncode != 0:
+                stderr = await proc.stderr.read()
+                raise Exception(f"Claude CLI error: {stderr.decode().strip()}")
+
+            # If we didn't get a result event, yield what we have
+            if full_text:
+                yield full_text, True
+        except Exception as e:
+            raise Exception(f"Claude streaming error: {str(e)}")
+
+
+def create_provider(provider: str, *, task: str = "analysis", model: str | None = None,
+                    reasoning_effort: str | None = None) -> AIProvider:
+    """Create the explicitly selected backend without changing authentication."""
+    if provider == "claude":
+        return ClaudeCliProvider(task=task, model=model, reasoning_effort=reasoning_effort)
+    if provider == "codex":
+        return CodexCliProvider(task=task, model=model, reasoning_effort=reasoning_effort)
+    raise ValueError(f"Unknown AI provider: {provider}")
+
+
+def provider_for_settings(settings: dict, *, task: str, provider: str | None = None) -> AIProvider:
+    key = provider or settings["providers"][0]
+    return create_provider(key, task=task, model=settings["models"][key],
+                           reasoning_effort=settings.get("claude_effort" if key == "claude" else "reasoning_effort"))

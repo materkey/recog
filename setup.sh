@@ -346,37 +346,6 @@ copy_example "$REPO_DIR/.env" "$REPO_DIR/.env.example"
 copy_example "$REPO_DIR/recog/web/.env" "$REPO_DIR/recog/web/.env.example"
 DATA_DIR="$(DEPS_PYTHON="$VENV_PY" bash "$REPO_DIR/scripts/data-dir.sh")"
 mkdir -p "$DATA_DIR"
-copy_example "$DATA_DIR/speakers_ecapa.json" "$REPO_DIR/deploy/examples/speakers_ecapa.json.example"
-
-# A pull that crossed the untracking of speakers_ecapa.json deletes the working
-# copy along with it (.gitignore has no power over an already-tracked file), and
-# copy_example above then seeds `{}` in its place — speaker identification stops
-# working without a word. Say it, and name the commit the embeddings come back
-# from.
-#
-# The trigger is ORIG_HEAD, not "the DB is empty": an empty database is the
-# normal state for anyone who has not enrolled anyone yet, and telling *them* to
-# restore it from history would hand them somebody else's voice embeddings —
-# exactly what untracking the file was for. ORIG_HEAD still carrying the file
-# means this working copy itself held it before its last pull.
-speaker_db="$DATA_DIR/speakers_ecapa.json"
-if [ -f "$speaker_db" ] && [ "$(tr -d '[:space:]' < "$speaker_db")" = "{}" ] \
-   && deps_have git; then
-    orig_head="$(git -C "$REPO_DIR" rev-parse --verify --quiet ORIG_HEAD || true)"
-    if [ -n "$orig_head" ] \
-       && git -C "$REPO_DIR" cat-file -e "$orig_head:speakers_ecapa.json" 2>/dev/null; then
-        # Whose embeddings that blob holds cannot be decided here: a clone made
-        # before the database was untracked carries the author's own copy, byte
-        # for byte, so the two cases are indistinguishable from this side. Name
-        # both rather than asserting the speakers are local.
-        warn "speakers_ecapa.json is empty — the pull untracked it and removed your copy"
-        echo "       Speakers enrolled on this machine are still in the pre-pull commit:"
-        printf '         git show %s:speakers_ecapa.json > %q\n' "$orig_head" "$speaker_db"
-        echo "       If you cloned this repo before the database was untracked, that blob"
-        echo "       holds someone else's voice embeddings — enroll your own instead:"
-        echo "         ./venv-gigaam/bin/python scripts/add_speaker_live.py \"Name\""
-    fi
-fi
 
 # ---------------------------------------------------------------------------
 # 9. Chrome extension

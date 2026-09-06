@@ -9,7 +9,8 @@ import pytest
 
 
 @pytest.mark.parametrize("has_profile", [False, True])
-def test_isolated_installation_when_backed_up_then_profile_private_and_environment_unchanged(tmp_path, has_profile):
+@pytest.mark.parametrize("has_ai_settings", [False, True])
+def test_isolated_installation_when_backed_up_then_profile_private_and_environment_unchanged(tmp_path, has_profile, has_ai_settings):
     repo = tmp_path / "checkout"
     scripts = repo / "scripts"
     scripts.mkdir(parents=True)
@@ -22,6 +23,11 @@ def test_isolated_installation_when_backed_up_then_profile_private_and_environme
     if has_profile:
         profile.write_text('{"version": 1, "name": "Александр", "aliases": []}')
         profile.chmod(0o644)  # Even an older incorrectly public source is backed up privately.
+    ai_settings = data / "ai-settings.json"
+    if has_ai_settings:
+        ai_settings.write_text('{"version": 1, "models": {}, "tasks": {}}')
+        ai_settings.chmod(0o644)
+    (data / "ai-settings.lock").touch()
     (repo / ".env").write_text("TEST_ONLY=fixture\n")
     frontend = repo / "recog/web"
     frontend.mkdir(parents=True)
@@ -37,6 +43,12 @@ def test_isolated_installation_when_backed_up_then_profile_private_and_environme
     if has_profile:
         assert backed_profile.read_bytes() == profile.read_bytes()
         assert backed_profile.stat().st_mode & 0o777 == 0o600
+    backed_ai_settings = dest / "ai-settings.json"
+    assert backed_ai_settings.exists() is has_ai_settings
+    if has_ai_settings:
+        assert backed_ai_settings.read_bytes() == ai_settings.read_bytes()
+        assert backed_ai_settings.stat().st_mode & 0o777 == 0o600
+    assert not (dest / "ai-settings.lock").exists()
     assert (dest / "speakers_test.json").read_bytes() == (data / "speakers_test.json").read_bytes()
     for source, filename in ((repo / ".env", "env.backup"), (frontend / ".env", "frontend-env.backup")):
         assert (dest / filename).read_bytes() == source.read_bytes()

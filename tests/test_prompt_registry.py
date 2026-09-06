@@ -292,7 +292,7 @@ def test_default_my_increment_prompt_loads():
 
     assert config is not None
     assert config.id == "my-increment"
-    assert config.name == "My increment"
+    assert config.name == "Инкремент"
     assert config.filter is None
     assert "{user_name}" in config.template
     assert "{transcript}" in config.template

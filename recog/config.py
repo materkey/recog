@@ -33,8 +33,8 @@ load_dotenv()
 
 
 def data_entries(root: Path) -> list[Path]:
-    """Переносимые данные, без .env и примера базы спикеров."""
-    candidates = [root / "meetings", root / "logs", root / "user-profile.json",
+    """Переносимые данные, включая старые базы спикеров, без .env."""
+    candidates = [root / "meetings", root / "logs", root / "user-profile.json", root / "ai-settings.json",
                   *sorted(root.glob("speakers*.json"))]
     return [path for path in candidates if path.exists() or path.is_symlink()]
 
@@ -76,8 +76,6 @@ def get_data_dir(repo_dir: Path = None) -> Path:
 DEFAULT_MODEL = "v3_e2e_rnnt"
 DEFAULT_CHUNK_DURATION = 20.0
 DEFAULT_OVERLAP = 1.0
-# Порог косинусного сходства для идентификации спикеров
-SPEAKER_SIMILARITY_THRESHOLD = 0.50
 
 # VAD (Voice Activity Detection) - порог RMS для определения тишины
 # Аудио с RMS ниже этого порога считается тишиной и не отправляется на inference

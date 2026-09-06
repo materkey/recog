@@ -19,8 +19,8 @@ and a web UI. Runs on macOS and Linux.
 - **ASR**: GigaAM (`v3_e2e_rnnt`) for Russian speech recognition, on CUDA, MPS,
   CPU, or offloaded to a remote gateway.
 - **Speaker identification**: the bundled Chrome extension names speakers from
-  the conference itself (KTalk, Jitsi, Element Call); SpeechBrain ECAPA-TDNN
-  embeddings cover enrollment from the microphone.
+  the conference itself (KTalk, Jitsi, Element Call). The microphone uses your
+  configured profile name.
 - **Live mode**: real-time transcription of the microphone and the system audio
   (what you hear), stored per meeting and streamed to the web UI.
 - **Copilot** (optional): a headless Claude Code session attached to the live
@@ -102,14 +102,12 @@ python -m recog live --ktalk --system-audio auto
 # System audio only
 python -m recog live --ktalk --system-audio auto --mic-device none
 
-# Microphone only, speakers from the embedding database
-python -m recog live --speaker-db ~/.recog/speakers_ecapa.json
+# Microphone only, labelled with your profile name
+python -m recog live --system-audio none
 
 # What audio devices do I have?
 python -m recog live --list-devices
 
-# Enroll a speaker (records 5 seconds from the mic; 10 with a trailing "10")
-python scripts/add_speaker_live.py "Speaker Name"
 
 # Browse stored meetings
 python -m recog meetings
@@ -273,8 +271,37 @@ comment per variable. The ones you are most likely to touch:
 - `RECOG_ASR_BACKEND`, `RECOG_ASR_REMOTE_URL` — see [Remote ASR](#remote-asr).
 - `RECOG_COPILOT_AUTOSPAWN`, `RECOG_COPILOT_GRACE_S`, `RECOG_COPILOT_MCP_URL` —
   see [Copilot](#copilot).
-- `CODEX_MODEL` / `AI_PROVIDER` (also in `recog/web/.env`) — model used for
-  transcript analysis, auto-increments, anchors and titles.
+- `CLAUDE_MODEL` and `CODEX_MODEL` — legacy
+  defaults when no corresponding AI settings override has been saved.
+
+Open **Settings → Промпты и модели** to configure every LLM scenario: AI
+Analysis, meeting titles, saved summary templates and live Copilot.
+Set common model defaults, then override the prompt, provider and model for
+individual scenarios. Claude defaults to `claude-fable-5-1`, Codex to
+`gpt-6-astra`; existing environment defaults remain effective until overridden
+in Settings. Claude and Codex continue to use their CLI subscription login.
+
+The **Инкремент** scenario configures both new analysis and saved increments.
+New analysis compares the selected providers; a saved version uses Codex when
+selected, otherwise the first selected provider. Existing saved versions keep
+their history under the same prompt ID.
+
+Claude and Codex have separate reasoning effort controls. Claude supports
+`low`, `medium`, `high`, `xhigh`, `max`. Both providers offer Auto, which lets
+their CLI choose the reasoning effort.
+Copilot applies effort changes, like model changes, at the next session start.
+
+Changes apply to the next request; an in-flight generation keeps its original
+settings. Copilot receives edited instructions on its next event, while its
+model changes on the next session start. Saving does not restart a live session.
+Templates support `{transcript}`, `{user_name}`, `{participants}` and
+`{meeting_title}`; the editor lists required fields. Copilot instructions are
+literal text. Reset restores the selected scenario's shipped defaults.
+
+Overrides live in private `ai-settings.json` under the data directory, alongside
+the user profile, and are included in data backups. They survive updates without
+changing `.env` or the shipped prompt files. Saving checks the revision to avoid
+overwriting changes made in another tab. ASR retains its existing configuration.
 
 The per-speaker ASR path (per-participant PCM streams from the extension) and
 the tier-2 refine pass are always on for conference meetings — no flags. See
@@ -322,11 +349,11 @@ conference host is not one of the built-in ones, add its exact HTTPS origin to
 ## Personal data outside the checkout
 
 New installs store meetings in `~/.recog/meetings`, service logs in
-`~/.recog/logs`, and speaker databases in `~/.recog/speakers*.json`.
+`~/.recog/logs`, and profile/AI settings in the same data directory.
 `RECOG_DATA_DIR` overrides that root; use an absolute path (or `~/…`), since
 data paths must not depend on the caller's working directory. `.env` and
-`recog/web/.env` stay in the checkout. An explicit `--speaker-db PATH` still
-uses exactly the path you pass.
+`recog/web/.env` stay in the checkout. Historical speaker database files are
+preserved by data migration and backup.
 
 Existing installs continue using their entire old data root and print a
 migration hint. If both the checkout and `~/.recog` contain data, startup
@@ -374,14 +401,6 @@ The macOS dependency and data safeguards below still apply.
 3. `./recog-service.sh install && ./recog-service.sh restart` if you skipped
    services during setup — the units must be re-rendered from the templates
    (the committed `.plist` files are gone).
-4. **Check the speaker database after the pull.** `speakers_ecapa.json` used to be tracked, so
-   untracking it deletes your working copy (`.gitignore` has no power over an
-   already-tracked file) and setup seeds an empty `{}` in its place — speaker
-   identification then silently does nothing. Setup says so when it happens;
-   the embeddings stay in git history, so restore them from the last commit
-   that still carries the file, using the destination printed by setup (normally
-   `git show <sha>:speakers_ecapa.json > ~/.recog/speakers_ecapa.json`). A copy you had
-   modified since its last commit stops the pull instead of being deleted.
 
 Memory behaviour is meant to be unchanged, but that is verified by a separate
 before/after comparison, not promised by setup.

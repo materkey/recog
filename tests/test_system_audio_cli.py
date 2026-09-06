@@ -238,8 +238,7 @@ def test_missing_pactl_does_not_break_the_listing(fake_sd, capsys):
 
 
 def test_device_spec_creates_a_portaudio_system_capture():
-    transcriber = LiveTranscriber(mic_device="none", system_audio="device:4",
-                                  no_diarization=True)
+    transcriber = LiveTranscriber(mic_device="none", system_audio="device:4")
 
     assert transcriber.mic_capture is None
     assert transcriber.system_capture.device == 4
@@ -247,7 +246,7 @@ def test_device_spec_creates_a_portaudio_system_capture():
 
 
 def test_legacy_system_device_still_reaches_the_same_capture():
-    transcriber = LiveTranscriber(mic_device=1, system_device=4, no_diarization=True)
+    transcriber = LiveTranscriber(mic_device=1, system_device=4)
 
     assert transcriber.system_audio == "device:4"
     assert transcriber.system_capture.device == 4
@@ -263,8 +262,7 @@ def _pretend_linux(monkeypatch):
 def test_pulse_backend_builds_a_parec_capture(monkeypatch):
     _pretend_linux(monkeypatch)
 
-    transcriber = LiveTranscriber(mic_device="none", system_audio="pulse",
-                                  no_diarization=True)
+    transcriber = LiveTranscriber(mic_device="none", system_audio="pulse")
 
     assert transcriber.system_capture.argv[0] == "parec"
     assert transcriber.system_device is None
@@ -273,13 +271,12 @@ def test_pulse_backend_builds_a_parec_capture(monkeypatch):
 
 def test_disabling_both_sources_is_rejected():
     with pytest.raises(ValueError, match="нечего захватывать"):
-        LiveTranscriber(mic_device="none", system_audio="none", no_diarization=True)
+        LiveTranscriber(mic_device="none", system_audio="none")
 
 
 def test_meta_reports_screencapture_only_for_screencapture(monkeypatch):
     _pretend_linux(monkeypatch)
-    transcriber = LiveTranscriber(mic_device="none", system_audio="pulse",
-                                  no_diarization=True)
+    transcriber = LiveTranscriber(mic_device="none", system_audio="pulse")
 
     storage = Mock()
     transcriber._meeting_storage = None

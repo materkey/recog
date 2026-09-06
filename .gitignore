@@ -38,6 +38,8 @@ meetings/
 # Personal data / locally built artifacts (see docs: setup.sh rebuilds these)
 /speakers*.json
 /user-profile.json
+/ai-settings.json
+/ai-settings.lock
 /sck_audio_capture
 /example_1_named.md
 /com.recog.*.plist

@@ -35,13 +35,6 @@ tqdm==4.67.1
 soundfile==0.13.1
 sounddevice==0.5.3
 cffi==2.0.0
-scipy==1.16.3
-
-# --- speaker embeddings ----------------------------------------------------
-speechbrain==1.0.3
-scikit-learn==1.7.2
-huggingface-hub==0.36.0
-hyperpyyaml==1.2.2
 
 # --- bridge, copilot channel, frontend -------------------------------------
 websockets==15.0.1

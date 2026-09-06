@@ -15,7 +15,7 @@ import shutil
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Literal, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from recog.web.ai_provider import get_provider, get_all_providers, build_prompt
+from recog.web.ai_provider import get_provider, get_all_providers, build_prompt, get_task_settings
 from dotenv import load_dotenv
 
 # Load .env from project root
@@ -36,6 +36,8 @@ from recog.log_utils import log_rate_limited
 from recog.config import get_data_dir, MIC_SPEAKER_NAME
 from recog.user_profile import UserProfileStore
 from recog.web.user_profile import ProfileCoordinator
+from recog.ai_settings import AiSettingsStore, SettingsConflictError, SettingsReadError
+from recog.web.ai_settings import AiSettingsCoordinator
 from recog.ws_origin import origin_allowed
 from recog.web.bridge_subscriber import BridgeSubscriber
 from recog.web.live_watcher import LiveWatcher
@@ -56,7 +58,7 @@ def get_storage() -> MeetingStorage:
     return MeetingStorage(MEETINGS_DIR, external_paths=get_external_paths())
 
 
-# --- Helpers (WDIM / Cognitive Anchor) ---
+# --- Transcript Helpers ---
 
 def _parse_iso_ts(value: Optional[str]) -> Optional[datetime]:
     if not value:
@@ -117,7 +119,7 @@ def _load_recent_segments(transcript_path: Path, max_lines: int) -> list[dict]:
     return segments
 
 
-def _select_anchor_segments(meeting_id: str, window_seconds: int, max_segments: int) -> list[dict]:
+def _select_recent_segments(meeting_id: str, window_seconds: int, max_segments: int) -> list[dict]:
     transcript_path = MEETINGS_DIR / meeting_id / "transcript.jsonl"
     if not transcript_path.exists():
         return []
@@ -144,13 +146,6 @@ def _select_anchor_segments(meeting_id: str, window_seconds: int, max_segments: 
     return segments
 
 
-def _truncate_text(text: str, max_len: int) -> str:
-    clean = " ".join(text.split())
-    if len(clean) <= max_len:
-        return clean
-    return clean[: max_len - 3].rstrip() + "..."
-
-
 def _segments_to_transcript(segments: list[dict]) -> str:
     lines = []
     for seg in segments:
@@ -166,155 +161,12 @@ def _segments_to_transcript(segments: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _build_anchor_transcript(segments: list[dict], max_chars: int = 12000) -> str:
-    transcript = _segments_to_transcript(segments)
-    if len(transcript) > max_chars:
-        transcript = transcript[-max_chars:]
-        transcript = "...(начало обрезано)...\n" + transcript
-    return transcript
-
-
 def _build_ai_transcript(segments: list[dict], max_chars: int) -> str:
     transcript = _segments_to_transcript(segments)
     if len(transcript) > max_chars:
         transcript = transcript[-max_chars:]
         transcript = "...(truncated)...\n" + transcript
     return transcript
-
-
-def _detect_user_mention(segments: list[dict], local_names: list[str]) -> tuple[bool, str, str]:
-    names = [name.strip().lower() for name in local_names if name and name.strip()]
-    if not names:
-        return False, "", ""
-
-    for seg in reversed(segments):
-        text = seg.get("text", "")
-        text_lower = text.lower()
-        for name in names:
-            if name and name in text_lower:
-                return True, _truncate_text(text, 160), seg.get("ts_display", "")
-
-    return False, "", ""
-
-
-def _fallback_bullets(segments: list[dict]) -> list[dict]:
-    bullets = []
-    for seg in segments[-3:]:
-        text = seg.get("text") or ""
-        if not text:
-            continue
-        bullets.append({
-            "text": _truncate_text(text, 120),
-            "ts_display": seg.get("ts_display", "")
-        })
-    return bullets
-
-
-def _fallback_anchor_payload(segments: list[dict], local_names: list[str]) -> dict:
-    current_text = segments[-1].get("text", "") if segments else ""
-    current_topic = _truncate_text(current_text, 140) if current_text else "No recent transcript."
-    bullets = _fallback_bullets(segments)
-    mentioned, mention_context, mention_ts = _detect_user_mention(segments, local_names)
-
-    return {
-        "current_topic": current_topic,
-        "topic_tone": "neutral",
-        "summary_bullets": bullets if bullets else [{"text": "No recent transcript.", "ts_display": ""}],
-        "user_mentioned": mentioned,
-        "mention_context": mention_context if mentioned else "",
-        "mention_ts_display": mention_ts if mentioned else ""
-    }
-
-
-def _extract_json_payload(text: str) -> Optional[dict]:
-    if not text:
-        return None
-    cleaned = text.strip()
-
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        cleaned = cleaned[start:end + 1]
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        return None
-
-
-def _normalize_anchor_payload(
-    payload: dict,
-    segments: list[dict],
-    local_names: list[str]
-) -> tuple[dict, bool]:
-    approximate = False
-    if not isinstance(payload, dict):
-        return _fallback_anchor_payload(segments, local_names), True
-
-    current_topic = str(payload.get("current_topic") or "").strip()
-    if not current_topic:
-        approximate = True
-        current_topic = _fallback_anchor_payload(segments, local_names)["current_topic"]
-
-    topic_tone = str(payload.get("topic_tone") or "").strip().lower()
-    if topic_tone not in {"neutral", "calm", "heated"}:
-        topic_tone = "neutral"
-        approximate = True
-
-    raw_bullets = payload.get("summary_bullets") or []
-    normalized_bullets = []
-    for item in raw_bullets:
-        if isinstance(item, dict):
-            text = str(item.get("text") or "").strip()
-            ts_display = str(item.get("ts_display") or "").strip()
-        else:
-            text = str(item).strip()
-            ts_display = ""
-        if text:
-            normalized_bullets.append({"text": text, "ts_display": ts_display})
-
-    if not normalized_bullets:
-        approximate = True
-        normalized_bullets = _fallback_bullets(segments)
-
-    if len(normalized_bullets) > 3:
-        normalized_bullets = normalized_bullets[:3]
-
-    user_mentioned = payload.get("user_mentioned")
-    mention_context = str(payload.get("mention_context") or "").strip()
-    mention_ts_display = str(payload.get("mention_ts_display") or "").strip()
-
-    if not isinstance(user_mentioned, bool):
-        approximate = True
-        user_mentioned, mention_context, mention_ts_display = _detect_user_mention(
-            segments, local_names
-        )
-    elif user_mentioned and not mention_context:
-        approximate = True
-        _, fallback_context, fallback_ts = _detect_user_mention(segments, local_names)
-        mention_context = mention_context or fallback_context
-        mention_ts_display = mention_ts_display or fallback_ts
-
-    if not user_mentioned:
-        mention_context = ""
-        mention_ts_display = ""
-
-    return {
-        "current_topic": current_topic,
-        "topic_tone": topic_tone,
-        "summary_bullets": normalized_bullets,
-        "user_mentioned": user_mentioned,
-        "mention_context": mention_context,
-        "mention_ts_display": mention_ts_display
-    }, approximate
 
 
 # --- Debug AI Context ---
@@ -449,6 +301,14 @@ def _resolve_ai_context(
     return segments, local_participant, meeting_id
 
 
+def _analysis_prompt_metadata(storage, meeting_id):
+    meeting = storage.get_meeting(meeting_id) if meeting_id else None
+    meta = (meeting or {}).get("meta", {})
+    participants = meta.get("participants", {})
+    return {"meeting_title": meta.get("title") or "",
+            "participants": ", ".join(info.get("name") or key for key, info in participants.items())}
+
+
 # Global watchers
 transcript_watcher = TranscriptWatcher()
 live_watcher = LiveWatcher()
@@ -464,6 +324,23 @@ async def _forward_bridge_message(raw: str) -> None:
 
 profile_coordinator = ProfileCoordinator(UserProfileStore(DATA_DIR), MIC_SPEAKER_NAME,
                                          _forward_bridge_message)
+ai_settings_coordinator = AiSettingsCoordinator(AiSettingsStore(DATA_DIR), _forward_bridge_message)
+
+
+async def _bridge_settings_connected(send):
+    for coordinator in (profile_coordinator, ai_settings_coordinator):
+        try:
+            await coordinator.connected(send)
+        except (OSError, ValueError) as error:
+            print(f"[settings] reconnect reconciliation failed: {error}", file=sys.stderr)
+
+
+async def _bridge_settings_disconnected():
+    for coordinator in (profile_coordinator, ai_settings_coordinator):
+        try:
+            await coordinator.disconnected()
+        except (OSError, ValueError) as error:
+            print(f"[settings] disconnect state unavailable: {error}", file=sys.stderr)
 
 
 # --- Copilot proxy (CAP-5) ---
@@ -503,6 +380,9 @@ async def _on_bridge_frame(raw: str) -> None:
         frame = None
     if isinstance(frame, dict) and frame.get("type") in {"user_profile_applied", "user_profile_error"}:
         await profile_coordinator.handle_frame(frame)
+        return
+    if isinstance(frame, dict) and frame.get("type") in {"ai_settings_applied", "ai_settings_error"}:
+        await ai_settings_coordinator.handle_frame(frame)
         return
     _cache_agent_state_frame(raw)
     await _forward_bridge_message(raw)
@@ -614,8 +494,8 @@ async def lifespan(app: FastAPI):
         bridge_subscriber = BridgeSubscriber(
             bridge_url=BRIDGE_WS_URL,
             forward_callback=_on_bridge_frame,
-            connected_callback=profile_coordinator.connected,
-            disconnected_callback=profile_coordinator.disconnected,
+            connected_callback=_bridge_settings_connected,
+            disconnected_callback=_bridge_settings_disconnected,
         )
         await bridge_subscriber.start()
 
@@ -633,6 +513,64 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Recog Transcripts", lifespan=lifespan)
+
+
+class AiModelsRequest(BaseModel):
+    models: dict[str, str]
+    revision: str
+
+    model_config = {"extra": "forbid"}
+
+
+class AiTaskRequest(BaseModel):
+    prompt: str
+    providers: list[str]
+    models: dict[str, str] = Field(default_factory=dict)
+    reasoning_effort: Optional[str] = None
+    claude_effort: Optional[str] = None
+    revision: str
+
+    model_config = {"extra": "forbid"}
+
+
+async def _write_ai_settings(operation, *args, revision):
+    try:
+        return await ai_settings_coordinator.write(operation, *args, expected_revision=revision)
+    except SettingsConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SettingsReadError as error:
+        raise HTTPException(status_code=500, detail="Не удалось прочитать настройки AI.") from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="Не удалось сохранить настройки AI.") from error
+
+
+@app.get("/api/ai-settings")
+async def get_ai_settings():
+    try:
+        return await ai_settings_coordinator.view()
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=500, detail="Не удалось прочитать настройки AI.") from error
+
+
+@app.put("/api/ai-settings/models")
+async def save_ai_models(request: AiModelsRequest):
+    return await _write_ai_settings(ai_settings_coordinator.store.write_models,
+                                    request.models, revision=request.revision)
+
+
+@app.put("/api/ai-settings/tasks/{task_id}")
+async def save_ai_task(task_id: str, request: AiTaskRequest):
+    values = request.model_dump(exclude={"revision"}, exclude_none=True)
+    return await _write_ai_settings(ai_settings_coordinator.store.write_task,
+                                    task_id, values, revision=request.revision)
+
+
+@app.delete("/api/ai-settings/tasks/{task_id}")
+async def reset_ai_task(task_id: str, revision: str):
+    return await _write_ai_settings(ai_settings_coordinator.store.reset_task,
+                                    task_id, revision=revision)
 
 
 class UserProfileRequest(BaseModel):
@@ -965,7 +903,12 @@ async def generate_meeting_title(meeting_id: str):
             raise HTTPException(status_code=400, detail="Meeting has no transcript text")
 
         # Generate title
-        title = await generate_title_async(transcript)
+        settings = get_task_settings("title")
+        title = await generate_title_async(transcript, settings=settings, variables={
+            **_analysis_prompt_metadata(storage, meeting_id),
+            "user_name": ", ".join(_local_participant_names(meeting.get("meta", {}))) or "User",
+        })
+        title_provider = settings["providers"][0]
         if not title:
             raise HTTPException(status_code=500, detail="Failed to generate title")
 
@@ -974,7 +917,9 @@ async def generate_meeting_title(meeting_id: str):
         if meta_path.exists():
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             meta["title"] = title
-            meta["title_source"] = "codex"
+            meta["title_source"] = title_provider
+            meta["title_model"] = settings["models"][title_provider]
+            meta["title_settings_revision"] = settings["revision"]
             meta["updated_at"] = datetime.now().isoformat()
             meta_path.write_text(
                 json.dumps(meta, ensure_ascii=False, indent=2),
@@ -1000,7 +945,7 @@ async def generate_meeting_title(meeting_id: str):
         return JSONResponse(content={
             "meeting_id": meeting_id,
             "title": title,
-            "title_source": "codex"
+            "title_source": title_provider
         })
 
     except HTTPException:
@@ -1197,7 +1142,7 @@ async def set_debug_ai_context(request: DebugAiContextRequest):
                 max_segments
             )
         else:
-            segments = _select_anchor_segments(meeting_id, window_seconds, max_segments)
+            segments = _select_recent_segments(meeting_id, window_seconds, max_segments)
 
     if not segments:
         raise HTTPException(status_code=400, detail="No segments selected for debug context")
@@ -1237,121 +1182,9 @@ async def clear_debug_ai_context():
 
 # --- AI Analysis ---
 
-class AnchorRequest(BaseModel):
-    window_seconds: int = 240
-    max_segments: int = 35
-    meeting_id: Optional[str] = None
-    debug: bool = False
-
-
-class AnchorBullet(BaseModel):
-    text: str
-    ts_display: str = ""
-
-
-class AnchorData(BaseModel):
-    current_topic: str
-    topic_tone: str
-    summary_bullets: list[AnchorBullet]
-    user_mentioned: bool
-    mention_context: str = ""
-    mention_ts_display: str = ""
-
-
-class AnchorResponse(BaseModel):
-    meeting_id: str
-    provider: str
-    approximate: bool
-    data: AnchorData
-
-
-@app.post("/api/live/anchor")
-async def live_anchor(request: AnchorRequest):
-    """Return a short WDIM context snapshot for the active meeting."""
-    try:
-        storage = get_storage()
-        meeting_id = request.meeting_id
-        segments: list[dict] = []
-        local_names: list[str] = []
-        local_participant: Optional[str] = None
-
-        if request.debug:
-            debug_segments = _get_debug_segments()
-            if debug_segments:
-                segments = debug_segments
-                meeting_id = debug_ai_context.get("meeting_id") or meeting_id
-                debug_user_name = debug_ai_context.get("user_name")
-                if isinstance(debug_user_name, str) and debug_user_name.strip():
-                    local_participant = debug_user_name.strip()
-                    local_names = [name.strip() for name in debug_user_name.split(",") if name.strip()]
-
-        if not segments:
-            if not meeting_id:
-                active = await asyncio.to_thread(storage.list_active_meetings)
-                meeting_id = active[0]["id"] if active else None
-
-            if not meeting_id:
-                raise HTTPException(status_code=404, detail="No active meeting")
-
-            meeting = storage.get_meeting(meeting_id)
-            if not meeting:
-                raise HTTPException(status_code=404, detail="Meeting not found")
-
-            local_names = _local_participant_names(meeting.get("meta", {}))
-            local_participant = ", ".join(local_names) if local_names else "User"
-
-            window_seconds = max(30, min(request.window_seconds, 600))
-            max_segments = max(10, min(request.max_segments, 120))
-
-            segments = _select_anchor_segments(meeting_id, window_seconds, max_segments)
-            if not segments:
-                raise HTTPException(status_code=400, detail="Meeting has no transcript")
-
-        if not local_participant:
-            local_participant = "User"
-
-        transcript = _build_anchor_transcript(segments)
-        prompt = build_prompt(
-            question="anchor",
-            transcript=transcript,
-            user_name=local_participant,
-            custom_prompt=None
-        )
-
-        provider = get_provider(task="anchor")
-        approximate = False
-
-        try:
-            answer = await provider.complete(prompt)
-            payload = _extract_json_payload(answer)
-            if payload is None:
-                approximate = True
-                payload = _fallback_anchor_payload(segments, local_names)
-
-            normalized, normalized_approx = _normalize_anchor_payload(
-                payload, segments, local_names
-            )
-            approximate = approximate or normalized_approx
-        except Exception:
-            normalized = _fallback_anchor_payload(segments, local_names)
-            approximate = True
-
-        return AnchorResponse(
-            meeting_id=meeting_id or "debug",
-            provider=provider.name,
-            approximate=approximate,
-            data=normalized
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 class AnalyzeRequest(BaseModel):
-    question: str = "increment"  # "increment" | "summary" | "custom"
-    custom_prompt: Optional[str] = None
+    question: Literal["increment", "summary"] = "increment"
+    model_config = {"extra": "forbid"}
     debug: bool = False
 
 
@@ -1376,17 +1209,19 @@ async def analyze_meeting(meeting_id: str, request: AnalyzeRequest):
 
         # 2. Build transcript text
         transcript = _build_ai_transcript(segments, max_chars=100000)
+        settings = get_task_settings(request.question)
 
         # 4. Build prompt
         prompt = build_prompt(
             question=request.question,
             transcript=transcript,
             user_name=local_participant,
-            custom_prompt=request.custom_prompt
+            settings=settings,
+            **_analysis_prompt_metadata(storage, meeting_id)
         )
 
         # 5. Call AI provider
-        provider = get_provider(task=request.question)
+        provider = get_provider(task=request.question, settings=settings)
         answer = await provider.complete(prompt)
 
         return AnalyzeResponse(answer=answer, provider=provider.name)
@@ -1409,17 +1244,19 @@ async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
 
         # 2. Build transcript text
         transcript = _build_ai_transcript(segments, max_chars=100000)
+        settings = get_task_settings(request.question)
 
         # 4. Build prompt
         prompt = build_prompt(
             question=request.question,
             transcript=transcript,
             user_name=local_participant,
-            custom_prompt=request.custom_prompt
+            settings=settings,
+            **_analysis_prompt_metadata(storage, meeting_id)
         )
 
         # 5. Call all providers in parallel
-        providers = get_all_providers(task=request.question)
+        providers = get_all_providers(task=request.question, settings=settings)
 
         async def call_provider(provider):
             try:
@@ -1442,7 +1279,7 @@ async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
 @app.get("/api/meetings/{meeting_id}/analyze-stream")
 async def analyze_meeting_stream(
     meeting_id: str,
-    question: str = "increment",
+    question: Literal["increment", "summary"] = "increment",
     debug: bool = False
 ):
     """Stream AI analysis from multiple providers using SSE."""
@@ -1461,17 +1298,19 @@ async def analyze_meeting_stream(
 
             # 2. Build transcript text
             transcript = _build_ai_transcript(segments, max_chars=100000)
+            settings = get_task_settings(question)
 
             # 4. Build prompt
             prompt = build_prompt(
                 question=question,
                 transcript=transcript,
                 user_name=local_participant,
-                custom_prompt=None
+                settings=settings,
+                **_analysis_prompt_metadata(storage, meeting_id),
             )
 
             # 5. Stream from all providers in parallel
-            providers = get_all_providers(task=question)
+            providers = get_all_providers(task=question, settings=settings)
 
             # Send provider info
             for provider in providers:
@@ -1625,61 +1464,6 @@ async def live_stream(websocket: WebSocket):
         live_watcher.unregister(websocket)
 
 
-# --- Speaker Database Management ---
-
-SPEAKER_DB_PATH = DATA_DIR / "speakers_ecapa.json"
-
-
-def get_speaker_db():
-    """Get SpeakerDatabase instance."""
-    from recog.speaker_db import SpeakerDatabase
-    return SpeakerDatabase(str(SPEAKER_DB_PATH))
-
-
-@app.get("/api/speakers")
-async def list_speakers():
-    """Get list of all speakers in the database."""
-    try:
-        speaker_db = get_speaker_db()
-        return JSONResponse(content=speaker_db.get_all_speakers())
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class RenameSpeakerRequest(BaseModel):
-    display_name: str
-
-
-@app.put("/api/speakers/{speaker_id}")
-async def rename_speaker(speaker_id: str, request: RenameSpeakerRequest):
-    """Rename a speaker."""
-    try:
-        speaker_db = get_speaker_db()
-        if not speaker_db.rename_speaker(speaker_id, request.display_name):
-            raise HTTPException(status_code=404, detail="Speaker not found")
-        speaker_db.save()
-        return JSONResponse(content={"success": True})
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/speakers/{speaker_id}")
-async def delete_speaker(speaker_id: str):
-    """Delete a speaker entirely."""
-    try:
-        speaker_db = get_speaker_db()
-        if not speaker_db.delete_speaker(speaker_id):
-            raise HTTPException(status_code=404, detail="Speaker not found")
-        speaker_db.save()
-        return JSONResponse(content={"success": True})
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 def compute_segment_duration_ms(segments: list, segment_index: int) -> int:
     """
     Slice duration for a transcript segment inside its track's WAV.
@@ -1831,217 +1615,6 @@ async def get_segment_audio(
         )
     finally:
         Path(tmp_path).unlink(missing_ok=True)
-
-
-@app.delete("/api/speakers/{speaker_id}/embeddings/{index}")
-async def delete_embedding(speaker_id: str, index: int):
-    """Delete a single embedding from a speaker."""
-    try:
-        speaker_db = get_speaker_db()
-        if not speaker_db.delete_embedding(speaker_id, index):
-            raise HTTPException(status_code=404, detail="Speaker or embedding not found")
-
-        # If no embeddings left, delete the speaker entirely
-        speaker = speaker_db.get_speaker(speaker_id)
-        if speaker and len(speaker.embeddings) == 0:
-            speaker_db.delete_speaker(speaker_id)
-
-        speaker_db.save()
-        return JSONResponse(content={"success": True})
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class EnrollFromSegmentsRequest(BaseModel):
-    meeting_id: str
-    segment_indices: list[int]  # Indices of segments in transcript
-    speaker_id: Optional[str] = None  # Existing speaker to add to, or None for new
-    display_name: Optional[str] = None  # Required for new speakers, optional for existing
-    track: str = "system"  # "mic" or "system"
-
-
-@app.post("/api/speakers/enroll-from-segments")
-async def enroll_from_segments(request: EnrollFromSegmentsRequest):
-    """
-    Extract embedding from selected segments and add to speaker database.
-
-    Process:
-    1. Get meeting and validate audio exists
-    2. Load transcript to get segment time offsets
-    3. Extract audio slices for each segment using audio_offset_ms
-    4. Call embedding_worker.py to extract embeddings
-    5. Average embeddings if multiple segments
-    6. Add to speaker database
-    """
-    import subprocess
-    import tempfile
-    import numpy as np
-
-    try:
-        storage = get_storage()
-        meeting = storage.get_meeting(request.meeting_id)
-        if not meeting:
-            raise HTTPException(status_code=404, detail="Meeting not found")
-
-        meta = meeting.get("meta", {})
-        segments = meeting.get("segments", [])
-
-        # Determine audio path based on track
-        if request.track == "mic":
-            audio_path = meta.get("audio_mic_path")
-        else:
-            audio_path = meta.get("audio_system_path")
-
-        if not audio_path:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No {request.track} audio file available for this meeting"
-            )
-
-        audio_path = Path(audio_path)
-        if not audio_path.exists():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Audio file not found: {audio_path}"
-            )
-
-        # Validate segment indices
-        if not request.segment_indices:
-            raise HTTPException(status_code=400, detail="No segments selected")
-
-        # Validate: either existing speaker_id or new display_name required
-        if not request.speaker_id and not request.display_name:
-            raise HTTPException(
-                status_code=400,
-                detail="Either speaker_id (for existing) or display_name (for new) is required"
-            )
-
-        selected_segments = []
-        for idx in request.segment_indices:
-            if idx < 0 or idx >= len(segments):
-                raise HTTPException(status_code=400, detail=f"Invalid segment index: {idx}")
-            seg = segments[idx]
-            if "audio_offset_ms" not in seg:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Segment {idx} has no audio_offset_ms (recorded before audio feature)"
-                )
-            selected_segments.append(seg)
-
-        # Extract embeddings for each segment
-        embeddings = []
-        venv_python = Path(__file__).resolve().parents[2] / "venv-gigaam" / "bin" / "python"
-        worker_path = Path(__file__).resolve().parents[2] / "scripts/embedding_worker.py"
-
-        # Assume ~3 second segments (chunk_duration from live.py)
-        segment_duration_ms = 3000
-
-        for seg in selected_segments:
-            start_ms = seg["audio_offset_ms"]
-            end_ms = start_ms + segment_duration_ms
-
-            # Extract audio slice with ffmpeg
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tmp_path = tmp.name
-
-            try:
-                ffmpeg_result = subprocess.run([
-                    FFMPEG, "-y",
-                    "-i", str(audio_path),
-                    "-ss", str(start_ms / 1000),
-                    "-t", str(segment_duration_ms / 1000),
-                    "-ar", "16000",
-                    "-ac", "1",
-                    tmp_path
-                ], capture_output=True)
-
-                if ffmpeg_result.returncode != 0:
-                    print(f"ffmpeg error: {ffmpeg_result.stderr.decode()}", file=sys.stderr)
-                    continue
-
-                # Call embedding worker
-                result = subprocess.run(
-                    [str(venv_python), str(worker_path)],
-                    input=json.dumps({"audio_path": tmp_path}),
-                    capture_output=True,
-                    text=True
-                )
-
-                if result.returncode != 0:
-                    print(f"embedding_worker error: {result.stderr}", file=sys.stderr)
-                    continue
-
-                data = json.loads(result.stdout)
-                if "error" in data:
-                    print(f"embedding_worker error: {data['error']}", file=sys.stderr)
-                    continue
-
-                embeddings.append(np.array(data["embedding"]))
-
-            finally:
-                Path(tmp_path).unlink(missing_ok=True)
-
-        if not embeddings:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to extract any embeddings from selected segments"
-            )
-
-        # Average embeddings
-        avg_embedding = np.mean(embeddings, axis=0)
-
-        # Add to speaker database
-        speaker_db = get_speaker_db()
-
-        # Generate speaker_id if not provided
-        speaker_id = request.speaker_id
-        display_name = request.display_name
-
-        if speaker_id:
-            # Adding to existing speaker - get display_name from database
-            if speaker_id not in speaker_db.speakers:
-                raise HTTPException(status_code=404, detail=f"Speaker not found: {speaker_id}")
-            display_name = speaker_db.speakers[speaker_id].display_name
-        else:
-            # Create new speaker - generate ID from display_name
-            speaker_id = display_name.lower().replace(" ", "_")
-            # Ensure uniqueness
-            base_id = speaker_id
-            counter = 1
-            while speaker_id in speaker_db.speakers:
-                speaker_id = f"{base_id}_{counter}"
-                counter += 1
-
-        # Build transcript from selected segments
-        transcript = " ".join(seg.get("text", "") for seg in selected_segments)[:200]
-
-        speaker_db.add_speaker(
-            speaker_id=speaker_id,
-            display_name=display_name,
-            embedding=avg_embedding,
-            source_file=f"meeting_{request.meeting_id}",
-            start_time=selected_segments[0]["audio_offset_ms"] / 1000,
-            end_time=(selected_segments[-1]["audio_offset_ms"] + segment_duration_ms) / 1000,
-            transcript=transcript
-        )
-        speaker_db.save()
-
-        return JSONResponse(content={
-            "success": True,
-            "speaker_id": speaker_id,
-            "display_name": display_name,
-            "embeddings_extracted": len(embeddings),
-            "segments_used": len(selected_segments)
-        })
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Static Files ---

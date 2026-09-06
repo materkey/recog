@@ -6,7 +6,6 @@ from pathlib import Path
 from collections import deque
 from unittest.mock import Mock, patch
 
-import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -254,39 +253,6 @@ class TestCheckSilenceSplit:
 
         LiveTranscriber._check_silence_split(transcriber, state, current_time)
         # No exception raised
-
-
-# ---------------------------------------------------------------------------
-# _resolve_speaker_embedding
-# ---------------------------------------------------------------------------
-
-class TestResolveSpeakerEmbedding:
-
-    def test_delegates_to_get_embedding_and_identify(self):
-        """given: audio chunk - when: _resolve_speaker_embedding - then: calls _get_embedding then _identify_speaker"""
-        transcriber = Mock(spec=LiveTranscriber)
-        fake_embedding = np.random.randn(192).astype(np.float32)
-        transcriber._get_embedding.return_value = fake_embedding
-        transcriber._identify_speaker.return_value = "Alice"
-
-        result = LiveTranscriber._resolve_speaker_embedding(
-            transcriber, np.zeros(16000, dtype=np.float32))
-
-        transcriber._get_embedding.assert_called_once()
-        transcriber._identify_speaker.assert_called_once_with(fake_embedding)
-        assert result == "Alice"
-
-    def test_returns_speaker_when_embedding_is_none(self):
-        """given: _get_embedding returns None - when: _resolve_speaker_embedding - then: _identify_speaker("speaker")"""
-        transcriber = Mock(spec=LiveTranscriber)
-        transcriber._get_embedding.return_value = None
-        transcriber._identify_speaker.return_value = "speaker"
-
-        result = LiveTranscriber._resolve_speaker_embedding(
-            transcriber, np.zeros(16000, dtype=np.float32))
-
-        transcriber._identify_speaker.assert_called_once_with(None)
-        assert result == "speaker"
 
 
 # ---------------------------------------------------------------------------

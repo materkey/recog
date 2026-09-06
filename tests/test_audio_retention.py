@@ -294,7 +294,7 @@ class TestWavSilenceSkip:
         silent = np.zeros(3 * SR, dtype=np.float32)
 
         LiveTranscriber._process_chunk(
-            t, _capture_returning(silent), SourceState(), Mock(), is_mic=True
+            t, _capture_returning(silent), SourceState(), is_mic=True
         )
 
         t._wav_writer_mic.write_chunk.assert_not_called()
@@ -310,7 +310,7 @@ class TestWavSilenceSkip:
         speech = np.ones(3 * SR, dtype=np.float32) * 0.1
 
         LiveTranscriber._process_chunk(
-            t, _capture_returning(speech), SourceState(), Mock(), is_mic=True
+            t, _capture_returning(speech), SourceState(), is_mic=True
         )
 
         t._wav_writer_mic.write_chunk.assert_called_once()
@@ -332,7 +332,7 @@ class TestWavSilenceSkip:
         silent = np.zeros(3 * SR, dtype=np.float32)
 
         LiveTranscriber._process_chunk(
-            t, _capture_returning(silent), SourceState(), Mock(), is_mic=False
+            t, _capture_returning(silent), SourceState(), is_mic=False
         )
 
         t._wav_writer_system.write_chunk.assert_called_once()
@@ -370,7 +370,7 @@ class TestSystemWavAnchor:
         )
 
         LiveTranscriber._process_chunk(
-            t, capture, SourceState(), Mock(), is_mic=False
+            t, capture, SourceState(), is_mic=False
         )
 
         assert t._system_wav_anchor == (1000.0 * 1000.0, 0)
@@ -387,8 +387,8 @@ class TestSystemWavAnchor:
         chunk = np.ones(3 * SR, dtype=np.float32) * 0.1
         capture.get_chunk.side_effect = [(chunk, 1000.0), (chunk, 1003.0)]
 
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
 
         expected_wall = (1003.0 + overlap / SR) * 1000.0
         expected_offset = int((3 * SR) / SR * 1000)  # первый чанк целиком
@@ -406,7 +406,7 @@ class TestSystemWavAnchor:
             np.ones(3 * SR, dtype=np.float32) * 0.1, 5000.0, 0
         )
 
-        LiveTranscriber._process_chunk(t, Mock(), state, Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, Mock(), state, is_mic=False)
 
         assert t._system_wav_anchor == sentinel
 
@@ -423,7 +423,7 @@ class TestSystemWavAnchor:
         silent = np.zeros(3 * SR, dtype=np.float32)
 
         LiveTranscriber._process_chunk(
-            t, _capture_returning(silent), SourceState(), Mock(), is_mic=False
+            t, _capture_returning(silent), SourceState(), is_mic=False
         )
 
         assert t._system_wav_anchor == sentinel
@@ -455,9 +455,9 @@ class TestSystemWavAnchor:
                 return chunk, 1000.0 + 3.0 * self._calls
 
         capture = _SwitchingCapture()
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
         after_first = t._wav_writer_system._samples_written
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
 
         assert t._wav_writer_system._samples_written == after_first + len(chunk)
 
@@ -473,10 +473,10 @@ class TestSystemWavAnchor:
         chunk = np.ones(3 * SR, dtype=np.float32) * 0.1
         capture.get_chunk.side_effect = [(chunk, 1000.0), (chunk, 1003.0)]
 
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
         after_first = t._wav_writer_system._samples_written
         capture.chunk_epoch = 1
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
 
         assert t._wav_writer_system._samples_written == after_first + len(chunk)
 
@@ -491,9 +491,9 @@ class TestSystemWavAnchor:
         chunk = np.ones(3 * SR, dtype=np.float32) * 0.1
         capture.get_chunk.side_effect = [(chunk, 1000.0), (chunk, 1003.0)]
 
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
         after_first = t._wav_writer_system._samples_written
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=False)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=False)
 
         assert t._wav_writer_system._samples_written == after_first + len(chunk) - overlap
 
@@ -511,7 +511,7 @@ class TestSystemWavAnchor:
         speech = np.ones(3 * SR, dtype=np.float32) * 0.1
 
         LiveTranscriber._process_chunk(
-            t, _capture_returning(speech), SourceState(), Mock(), is_mic=True
+            t, _capture_returning(speech), SourceState(), is_mic=True
         )
 
         assert t._system_wav_anchor == sentinel

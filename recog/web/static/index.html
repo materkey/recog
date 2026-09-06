@@ -19,7 +19,10 @@
             </div>
             <details class="profile-settings" id="profile-settings">
                 <summary>Настройки</summary>
-                <button type="button" id="profile-open">Мой профиль</button>
+                <div class="profile-settings-menu">
+                    <button type="button" id="profile-open">Мой профиль</button>
+                    <button type="button" id="ai-settings-open">Промпты и модели</button>
+                </div>
             </details>
         </nav>
         <div id="profile-notice" class="profile-notice" role="status" hidden></div>
@@ -88,7 +91,6 @@
             <div id="view-live" class="view" style="display: none;">
                 <div class="view-header">
                     <h1>Live Transcription</h1>
-                    <button class="btn btn-anchor" id="anchor-btn" onclick="openAnchor()" title="Alt+J">Context</button>
                     <button class="btn btn-follow active" id="follow-btn" onclick="toggleFollowMode()" title="Auto-scroll to new messages">Follow</button>
                     <button class="btn" id="copy-live-btn" onclick="copyLiveToClipboard()" title="Copy transcript as Markdown">Copy MD</button>
                     <button class="btn" id="download-live-btn" onclick="downloadLiveMarkdown()" title="Download transcript as Markdown file">↓ MD</button>
@@ -135,6 +137,70 @@
         </form>
     </dialog>
 
+    <dialog id="ai-settings-dialog" class="profile-dialog ai-settings-dialog" aria-labelledby="ai-settings-title">
+        <div class="modal-header">
+            <h2 id="ai-settings-title">Промпты и модели</h2>
+            <button type="button" class="modal-close" id="ai-settings-close" aria-label="Закрыть">&times;</button>
+        </div>
+        <div class="ai-settings-body">
+            <p class="profile-hint">Общие настройки Recog для всех браузеров. Пустое поле модели сценария — использовать общую модель.</p>
+            <p id="ai-settings-error" class="profile-error" role="alert" hidden></p>
+            <div id="ai-settings-conflict" class="ai-settings-conflict" role="alert" hidden>
+                <p>Настройки изменились в другом окне. Ваш черновик сохранён здесь. Скопируйте нужный текст перед загрузкой новой версии.</p>
+                <button type="button" class="btn" id="ai-settings-reload">Загрузить актуальные настройки</button>
+            </div>
+            <p id="ai-settings-status" class="profile-hint" role="status"></p>
+            <section class="ai-settings-section" aria-labelledby="ai-settings-models-title">
+                <h3 id="ai-settings-models-title">Общие модели</h3>
+                <p class="profile-hint">Укажите модель или оставьте поле пустым и сохраните — Recog будет использовать модель по умолчанию.</p>
+                <div id="ai-settings-global-models" class="ai-settings-model-grid"></div>
+                <button type="button" class="btn" id="ai-settings-save-models">Сохранить общие модели</button>
+            </section>
+            <section class="ai-settings-section" aria-labelledby="ai-settings-task-title">
+                <h3 id="ai-settings-task-title">Настройки сценария</h3>
+                <label for="ai-settings-task">Сценарий</label>
+                <select id="ai-settings-task"></select>
+                <p id="ai-settings-provenance" class="profile-hint"></p>
+                <label for="ai-settings-prompt">Промпт</label>
+                <textarea id="ai-settings-prompt" rows="12" maxlength="32000" spellcheck="false" aria-describedby="ai-settings-placeholders ai-settings-contract"></textarea>
+                <p id="ai-settings-placeholders" class="profile-hint"></p>
+                <fieldset class="ai-settings-providers">
+                    <legend>Провайдеры</legend>
+                    <div id="ai-settings-providers"></div>
+                </fieldset>
+                <p class="profile-hint">Модели сценария. Пустое поле — использовать общую модель.</p>
+                <div id="ai-settings-task-models" class="ai-settings-model-grid"></div>
+                <div id="ai-settings-claude-effort-row">
+                    <label for="ai-settings-claude-effort">Глубина рассуждений Claude</label>
+                    <select id="ai-settings-claude-effort">
+                        <option value="">Авто (выбор Claude)</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                        <option value="xhigh">xhigh</option>
+                        <option value="max">max</option>
+                    </select>
+                </div>
+                <div id="ai-settings-reasoning-row">
+                    <label for="ai-settings-reasoning">Глубина рассуждений Codex</label>
+                    <select id="ai-settings-reasoning">
+                        <option value="">Авто (выбор Codex)</option>
+                        <option value="minimal">minimal</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                        <option value="xhigh">xhigh</option>
+                    </select>
+                </div>
+                <p id="ai-settings-timing" class="profile-hint"></p>
+                <div class="ai-settings-actions">
+                    <button type="button" class="btn btn-danger" id="ai-settings-reset">Сбросить сценарий</button>
+                    <button type="button" class="btn profile-save" id="ai-settings-save-task">Сохранить сценарий</button>
+                </div>
+            </section>
+        </div>
+    </dialog>
+
     <!-- AI Analysis Modal -->
     <div id="ai-modal" class="modal" style="display: none;">
         <div class="modal-content">
@@ -167,28 +233,6 @@
         </div>
     </div>
 
-    <!-- Anchor / WDIM Overlay -->
-    <div id="anchor-overlay" class="anchor-overlay" style="display: none;">
-        <div class="anchor-card" role="dialog" aria-modal="true" aria-labelledby="anchor-title">
-            <div class="anchor-header">
-                <div class="anchor-title" id="anchor-title">Right now</div>
-                <button class="anchor-close" onclick="closeAnchor()">&times;</button>
-            </div>
-            <div class="anchor-topic">
-                <span class="anchor-tone tone-neutral" id="anchor-tone">neutral</span>
-                <div class="anchor-topic-text" id="anchor-topic-text">Loading...</div>
-            </div>
-            <div class="anchor-section">
-                <div class="anchor-section-title">Last minutes</div>
-                <ul id="anchor-bullets" class="anchor-bullets"></ul>
-            </div>
-            <div class="anchor-footer">
-                <div id="anchor-mention" class="anchor-mention"></div>
-                <div id="anchor-note" class="anchor-note"></div>
-            </div>
-        </div>
-    </div>
-
     <!-- Copilot Chat Panel -->
     <div id="copilot-panel" class="copilot-panel" style="display: none;">
         <div class="copilot-panel-header">
@@ -210,6 +254,7 @@
 
     <script src="/static/datepicker.js"></script>
     <script src="/static/user-profile.js"></script>
+    <script src="/static/ai-settings.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

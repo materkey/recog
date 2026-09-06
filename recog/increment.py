@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Callable
 
-from recog.ai_provider import CodexCliProvider
+from recog.ai_provider import provider_for_settings
+from recog.ai_settings import AiSettingsStore, render_prompt
 from recog.prompt_registry import PromptConfig, PromptRegistry
 
 STALE_GENERATING_TIMEOUT_SECONDS = 600  # 10 minutes
@@ -379,6 +380,7 @@ class IncrementGenerator:
             inc_dir = self._increments_dir(meeting_id, prompt_id)
 
             t0 = time.monotonic()
+            generation_meta = {}
             try:
                 # Build transcript text (filters out event_type segments and empty text)
                 transcript_text = _segments_to_transcript(delta_segments)
@@ -393,32 +395,42 @@ class IncrementGenerator:
                     for pid, info in meta.get("participants", {}).items()
                 ]
 
-                # Build prompt from template (use replace instead of str.format
-                # to avoid KeyError on literal curly braces in transcript text)
-                rendered_prompt = (
-                    prompt.template
-                    .replace("{user_name}", user_name)
-                    .replace("{transcript}", transcript_text)
-                    .replace("{participants}", ", ".join(participants))
-                    # `title` is stored as null for untitled meetings, so the
-                    # get-default ("") does not apply — guard the None explicitly.
-                    .replace("{meeting_title}", meta.get("title") or "")
+                store = AiSettingsStore(self._meetings_base.parent, self._prompts_dir)
+                snapshot = store.read()
+                task_id = f"saved:{prompt_id}"
+                settings = store.resolve_task(
+                    task_id, snapshot=snapshot,
+                    fallback_prompt=prompt.template, fallback_label=prompt.name,
                 )
+                # A caller can supply a generated PromptConfig with an existing
+                # registry ID. Only an explicit UI override replaces its text.
+                template = snapshot["tasks"].get(task_id, {}).get("prompt", prompt.template)
+                if prompt_id == "my-increment":
+                    template = snapshot["tasks"].get("analysis.increment", {}).get("prompt", template)
+                rendered_prompt = render_prompt(template, {
+                    "user_name": user_name, "transcript": transcript_text,
+                    "participants": ", ".join(participants),
+                    "meeting_title": meta.get("title") or "",
+                })
 
                 # Ensure increments directory exists
                 inc_dir.mkdir(parents=True, exist_ok=True)
 
                 # Generate
-                provider = CodexCliProvider(task="increment")
+                provider = provider_for_settings(settings, task="increment")
+                generation_meta = {
+                    "provider": provider.key,
+                    "model": provider.model,
+                    "reasoning_effort": getattr(provider, "reasoning_effort", None),
+                    "settings_revision": settings["revision"],
+                }
                 version_meta = {
                     "version": version,
                     "prompt_id": prompt_id,
                     "prompt_name": prompt.name,
                     "participant_id": participant_id,
                     "participant_name": user_name,
-                    "provider": provider.key,
-                    "model": provider.model,
-                    "reasoning_effort": provider.reasoning_effort,
+                    **generation_meta,
                     "segment_range": [seg_start, seg_end],
                     "segment_count": len(delta_segments),
                 }
@@ -473,6 +485,7 @@ class IncrementGenerator:
                 # Write failed meta, no .md
                 inc_dir.mkdir(parents=True, exist_ok=True)
                 version_meta = {
+                    **generation_meta,
                     "version": version,
                     "prompt_id": prompt_id,
                     "prompt_name": prompt.name,
@@ -493,6 +506,7 @@ class IncrementGenerator:
                 duration = time.monotonic() - t0
                 inc_dir.mkdir(parents=True, exist_ok=True)
                 version_meta = {
+                    **generation_meta,
                     "version": version,
                     "prompt_id": prompt_id,
                     "prompt_name": prompt.name,

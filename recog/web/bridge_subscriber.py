@@ -41,7 +41,8 @@ class BridgeSubscriber:
     """
 
     FORWARD_TYPES = frozenset({"transcript_refine", "copilot_reply", "copilot_status",
-                               "user_profile_applied", "user_profile_error"})
+                               "user_profile_applied", "user_profile_error",
+                               "ai_settings_applied", "ai_settings_error"})
 
     INITIAL_BACKOFF_S = 1.0
     MAX_BACKOFF_S = 30.0

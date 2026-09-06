@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from recog.ktalk_bridge import KTalkBridge, Participant
 from recog.live import (LiveTranscriber, SourceState, RecentSegment,
                         RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS)
-import numpy as np
 from recog.meeting_storage import MeetingStorage
 
 
@@ -223,52 +222,46 @@ def test_retroactive_correction_end_to_end(tmp_path):
 def test_orphan_meeting_no_sole_unmuted_check():
     """
     given: non-KTalk mode (orphan meeting, no extension)
-    when: embedding handler processes system audio
-    then: sole_unmuted fallback is not used; speaker determined by embedding only
+    when: system audio is transcribed
+    then: speech is saved immediately with a generic speaker and its audio offset
     """
     transcriber = Mock()
-    transcriber.no_diarization = False
-    transcriber._meeting_storage = None
+    transcriber._meeting_storage = Mock()
     transcriber._meeting_generation = 0
     transcriber._state_lock = threading.Lock()
     transcriber.transcript_lines = []
 
-    state = SourceState()
-    executor = Mock()
-    chunk = np.ones(16000, dtype=np.float32)
+    state = SourceState(audio_offset=1250)
     now = time.time()
 
-    LiveTranscriber._handle_embedding_chunk(
-        transcriber, "hello", "12:00:00", now, 0, state,
-        chunk, executor, is_mic=False)
+    LiveTranscriber._handle_unattributed_chunk(
+        transcriber, "hello", "12:00:00", now, 0, state)
 
-    # Embedding path submits to executor for async speaker identification
-    executor.submit.assert_called_once()
-    # Transcript shows draft placeholder (not a ktalk speaker name)
-    assert "**...**" in transcriber.transcript_lines[0]
+    assert "**speaker**" in transcriber.transcript_lines[0]
+    transcriber._meeting_storage.append_segment.assert_called_once_with(
+        speaker="speaker", speaker_id="speaker", text="hello",
+        is_local=False, is_continuation=False, uncertain=True,
+        uncertain_reason="no_conference_identity", audio_offset_ms=1250,
+    )
 
 
 def test_orphan_meeting_no_retroactive_correction():
     """
     given: non-KTalk mode (orphan meeting)
-    when: embedding handler processes audio
+    when: unattributed system speech is saved
     then: retroactive correction is not triggered (only available in KTalk handler)
     """
     transcriber = Mock()
-    transcriber.no_diarization = False
     transcriber._meeting_storage = None
     transcriber._meeting_generation = 0
     transcriber._state_lock = threading.Lock()
     transcriber.transcript_lines = []
 
     state = SourceState()
-    executor = Mock()
-    chunk = np.ones(16000, dtype=np.float32)
     now = time.time()
 
-    LiveTranscriber._handle_embedding_chunk(
-        transcriber, "hello", "12:00:00", now, 0, state,
-        chunk, executor, is_mic=False)
+    LiveTranscriber._handle_unattributed_chunk(
+        transcriber, "hello", "12:00:00", now, 0, state)
 
     # Retroactive correction is NOT called (only in _handle_ktalk_chunk)
     transcriber._retroactive_correct_unknown_run.assert_not_called()

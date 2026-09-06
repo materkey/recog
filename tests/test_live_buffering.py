@@ -159,7 +159,7 @@ class TestAsrAvailabilityGate:
         then: get_chunk НЕ вызывается — аудио остаётся в буфере"""
         t = _make_transcriber_stub(asr_available=False)
         capture = Mock()
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=True)
         capture.get_chunk.assert_not_called()
 
     def test_unavailable_exception_holds_chunk_in_pending_slot(self):
@@ -173,7 +173,7 @@ class TestAsrAvailabilityGate:
         t._transcribe_direct = Mock(side_effect=ASRTemporarilyUnavailable("loading"))
         state = SourceState()
 
-        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, is_mic=True)
 
         assert state.pending_chunk is not None
         pend_chunk, pend_ts, pend_gen = state.pending_chunk
@@ -199,13 +199,13 @@ class TestAsrAvailabilityGate:
 
         # Попытка 1: WAV записан, ASR упал -> pending_chunk
         t._transcribe_direct = Mock(side_effect=ASRTemporarilyUnavailable("loading"))
-        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, is_mic=True)
         assert wav_writer.write_chunk.call_count == 1
         assert state.pending_chunk is not None
 
         # Попытка 2: ASR ожил — ретрай из слота, без повторного чтения/записи
         t._transcribe_direct = Mock(return_value="привет мир")
-        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, is_mic=True)
 
         capture.get_chunk.assert_called_once()  # только попытка 1
         assert wav_writer.write_chunk.call_count == 1  # не вырос
@@ -226,7 +226,7 @@ class TestAsrAvailabilityGate:
         state.pending_chunk = (np.ones(48000, dtype=np.float32), 1000.0, 0)
         t._meeting_generation = 1  # встреча сменилась
 
-        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, is_mic=True)
 
         assert state.pending_chunk is None
         capture.get_chunk.assert_called_once()
@@ -244,7 +244,7 @@ class TestAsrAvailabilityGate:
         t._check_silence_split = Mock()
         t._handle_mic_chunk = Mock()
 
-        LiveTranscriber._process_chunk(t, capture, SourceState(), Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, SourceState(), is_mic=True)
 
         t._handle_mic_chunk.assert_called_once()
         # сигнатура: (text, timestamp, chunk_time, chunk_gen, state)
@@ -267,12 +267,12 @@ class TestDedupWindow:
 
         # Чанк 1: captured at 1000.0, конец 1003.0
         capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1000.0)
-        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, is_mic=True)
         assert t._handle_mic_chunk.call_count == 1
 
         # Чанк 2: captured at 1002.5 (через overlap) — тот же текст -> dedup
         capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1002.5)
-        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, is_mic=True)
         assert t._handle_mic_chunk.call_count == 1  # не вырос
 
     def test_repeated_phrase_after_gap_not_deduplicated(self):
@@ -290,12 +290,12 @@ class TestDedupWindow:
         t._handle_mic_chunk = Mock()
 
         capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1000.0)
-        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, is_mic=True)
         assert t._handle_mic_chunk.call_count == 1
 
         # Та же фраза через 30 секунд тишины
         capture.get_chunk.return_value = (np.ones(48000, dtype=np.float32) * 0.1, 1033.0)
-        LiveTranscriber._process_chunk(t, capture, state, Mock(), is_mic=True)
+        LiveTranscriber._process_chunk(t, capture, state, is_mic=True)
         assert t._handle_mic_chunk.call_count == 2  # записан!
 
 

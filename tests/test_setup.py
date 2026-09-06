@@ -20,6 +20,32 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.mark.parametrize("payload,ready", [
+    (None, True),
+    ('{"version":1,"revision":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","models":{},"tasks":{}}', True),
+    ("broken JSON", False),
+    ('{"version":1,"revision":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","models":{"api_key":"secret"},"tasks":{}}', False),
+])
+def test_ai_settings_when_checking_readiness_then_invalid_settings_block_activation(tmp_path, payload, ready):
+    root = Path(__file__).resolve().parent.parent
+    settings = tmp_path / "ai-settings.json"
+    if payload is not None:
+        settings.write_text(payload)
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; deps_asr_config_check', "--", str(root / "scripts/deps.sh")],
+        env={**os.environ, "DEPS_PYTHON": sys.executable, "RECOG_DATA_DIR": str(tmp_path),
+             "RECOG_ASR_BACKEND": "local"}, capture_output=True, text=True,
+    )
+    assert (result.returncode == 0) is ready, result.stdout + result.stderr
+    if not ready:
+        assert "Invalid AI settings" in result.stdout
+    if payload is None:
+        assert not settings.exists()
+    else:
+        assert settings.read_text() == payload
+    assert not (tmp_path / "ai-settings.lock").exists()
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
@@ -343,8 +369,7 @@ def test_creates_config_files_from_the_examples(repo, stubs):
 
     assert (repo / ".env").read_text() == (repo / ".env.example").read_text()
     assert (repo / "recog/web/.env").is_file()
-    assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text() == \
-        (repo / "deploy/examples/speakers_ecapa.json.example").read_text()
+    assert not (repo.parent / "home/.recog/speakers_ecapa.json").exists()
 
 
 def test_existing_config_files_are_never_overwritten(repo, stubs):
@@ -353,120 +378,6 @@ def test_existing_config_files_are_never_overwritten(repo, stubs):
     run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert (repo / ".env").read_text() == "RECOG_ASR_BACKEND=remote\nMINE=1\n"
-
-
-def _preexisting_venv(repo, stubs, tmp_path):
-    """venv-gigaam на месте: для setup.sh это обновление, а не первый запуск."""
-    real_venv = tmp_path / "existing-venv"
-    (real_venv / "bin").mkdir(parents=True)
-    shutil.copy2(stubs[0] / "python3.12", real_venv / "bin/python")
-    shutil.copy2(stubs[0] / "pip", real_venv / "bin/pip")
-    (repo / "venv-gigaam").symlink_to(real_venv)
-
-
-def _git(repo, *args):
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
-
-
-def _repo_pulled_across_the_untracking(repo, db_was_tracked: bool) -> str:
-    """git-репозиторий в состоянии «только что сделали pull».
-
-    db_was_tracked=True  — эта рабочая копия держала базу под git до pull
-                           (машина автора: pull снёс файл с диска);
-    db_was_tracked=False — коллега, склонировавший репозиторий уже без базы.
-    Возвращает sha, на который указывает ORIG_HEAD.
-    """
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "test")
-    if db_was_tracked:
-        (repo / "speakers_ecapa.json").write_text('{"кто-то": [0.1, 0.2]}')
-        _git(repo, "add", "speakers_ecapa.json")
-    (repo / "setup.sh.marker").write_text("x\n")
-    _git(repo, "add", "setup.sh.marker")
-    _git(repo, "commit", "-qm", "before the pull")
-    orig_head = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=True).stdout.strip()
-    (repo / ".git" / "ORIG_HEAD").write_text(orig_head + "\n")
-    if db_was_tracked:
-        # Тот самый pull: файл снят с учёта и удалён из рабочей копии.
-        _git(repo, "rm", "-q", "--cached", "speakers_ecapa.json")
-        (repo / "speakers_ecapa.json").unlink()
-        _git(repo, "commit", "-qm", "untrack the speaker database")
-    return orig_head
-
-
-def test_pull_that_removed_a_tracked_speaker_database_is_reported(repo, stubs, tmp_path):
-    """
-    given: рабочая копия держала speakers_ecapa.json под git, pull снял его с
-           учёта и удалил файл
-    when:  setup.sh засевает на его место пустой `{}` из .example
-    then:  об этом сказано вслух, с командой восстановления из ORIG_HEAD —
-           того самого состояния, что было на этой машине до pull. Молчаливый
-           посев выключал распознавание говорящих без единого сообщения.
-    """
-    _preexisting_venv(repo, stubs, tmp_path)
-    orig_head = _repo_pulled_across_the_untracking(repo, db_was_tracked=True)
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text().strip() == "{}"
-    assert "speakers_ecapa.json is empty" in result.stdout
-    assert f"git show {orig_head}:speakers_ecapa.json" in result.stdout
-
-
-def test_the_restore_hint_never_claims_the_embeddings_are_the_user_own(repo, stubs, tmp_path):
-    """
-    given: клон, сделанный ДО снятия базы с учёта — в его ORIG_HEAD лежит ровно
-           авторский блоб, байт в байт, и отличить его от копии автора отсюда
-           нечем
-    when:  setup.sh печатает подсказку по восстановлению
-    then:  она не утверждает, что голоса свои, и называет альтернативу —
-           записать собственных спикеров. Иначе коллега одной командой
-           разворачивает у себя чужие голосовые эмбеддинги, ради удаления
-           которых базу из git и убирали.
-    """
-    _preexisting_venv(repo, stubs, tmp_path)
-    _repo_pulled_across_the_untracking(repo, db_was_tracked=True)
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "someone else's voice embeddings" in result.stdout
-    assert "scripts/add_speaker_live.py" in result.stdout
-
-
-def test_a_colleague_is_never_told_to_restore_the_database_from_history(repo, stubs, tmp_path):
-    """
-    given: коллега склонировал репозиторий уже без базы и никого не записывал,
-           пустая база у него — норма; повторный ./setup.sh после git pull
-    when:  проверка пустой базы срабатывает
-    then:  ни предупреждения, ни команды восстановления. Команда достала бы из
-           истории чужие голосовые эмбеддинги — ровно то, ради чего файл и
-           убирали из git.
-    """
-    # Второй запуск: venv с первого раза уже лежит — «не первый запуск» само
-    # по себе не означает, что на машине были записанные голоса.
-    _preexisting_venv(repo, stubs, tmp_path)
-    _repo_pulled_across_the_untracking(repo, db_was_tracked=False)
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text().strip() == "{}"
-    assert "speakers_ecapa.json is empty" not in result.stdout
-    assert "git show" not in result.stdout
-
-
-def test_fresh_clone_does_not_warn_about_the_empty_speaker_database(repo, stubs):
-    """Свежий клон без единого pull: ORIG_HEAD нет, предупреждать не о чем."""
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo.parent / "home/.recog/speakers_ecapa.json").read_text().strip() == "{}"
-    assert "speakers_ecapa.json is empty" not in result.stdout
 
 
 def test_migrated_database_when_setup_runs_then_preserved_outside_checkout(repo, stubs):
@@ -482,18 +393,6 @@ def test_migrated_database_when_setup_runs_then_preserved_outside_checkout(repo,
     assert result.returncode == 0, result.stdout + result.stderr
     assert (database.read_bytes(), database.stat().st_ino) == before
     assert not (repo / "speakers_ecapa.json").exists()
-
-
-def test_a_populated_speaker_database_is_not_flagged(repo, stubs, tmp_path):
-    """База на месте — обычное обновление, предупреждения нет."""
-    _preexisting_venv(repo, stubs, tmp_path)
-    _repo_pulled_across_the_untracking(repo, db_was_tracked=True)
-    (repo / "speakers_ecapa.json").write_text('{"Someone": [0.1, 0.2]}')
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "speakers_ecapa.json is empty" not in result.stdout
 
 
 # ---------------------------------------------------------------------------
