@@ -67,3 +67,6 @@ _bmad/
 /kontur-diarize/
 .DS_Store
 /.local/
+
+# BMAD skills are installed by the BMAD tooling, not tracked
+/.agents/skills/bmad-*/
