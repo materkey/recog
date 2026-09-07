@@ -410,7 +410,16 @@ cmd_claude() {
     # (recog/copilot_supervisor.py:build_claude_command) — built-ins + copilot
     # only, no user MCP servers. URL overridable via RECOG_COPILOT_MCP_URL.
     local copilot_launch copilot_model copilot_effort
-    copilot_launch="$("$(svc_python)" -c 'from recog.ai_settings import AiSettingsStore; from recog.config import get_data_dir; task = AiSettingsStore(get_data_dir()).resolve_task("copilot"); print(task["models"]["claude"]); print(task["claude_effort"] or "auto")' )" || return 1
+    copilot_launch="$("$(svc_python)" -c '
+import sys
+from recog.ai_settings import AiSettingsStore
+from recog.config import get_data_dir
+task = AiSettingsStore(get_data_dir()).resolve_task("copilot")
+if not task["enabled"]:
+    sys.exit("Copilot выключен в настройках.")
+print(task["models"]["claude"])
+print(task["claude_effort"] or "auto")
+')" || return 1
     copilot_model="${copilot_launch%%$'\n'*}"
     copilot_effort="${copilot_launch##*$'\n'}"
     local effort_args=()

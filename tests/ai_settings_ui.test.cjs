@@ -133,6 +133,27 @@ test('Codex effort - choose Auto and save - empty override reaches API', async (
     assert.equal(JSON.parse(h.calls[1][1].body).reasoning_effort, '');
 });
 
+test('Copilot switch - disable and save - persists without changing other scenarios', async () => {
+    const current = payload();
+    const h = harness(async (_url, options) => {
+        if (options.method) current.tasks.at(-1).enabled = JSON.parse(options.body).enabled;
+        return response(current);
+    });
+    await h.boot(); await h.click('open');
+    assert.equal(h.get('enabled-row').hidden, true);
+    await h.select('task', 'copilot');
+    assert.equal(h.get('enabled-row').hidden, false);
+    assert.equal(h.get('enabled').checked, true);
+    h.get('enabled').checked = false;
+    h.get('enabled').listeners.change();
+    await h.click('save-task');
+    assert.equal(JSON.parse(h.calls.at(-1)[1].body).enabled, false);
+    assert.equal(h.get('enabled').checked, false);
+    await h.select('task', 'title');
+    await h.click('save-task');
+    assert.equal(Object.hasOwn(JSON.parse(h.calls.at(-1)[1].body), 'enabled'), false);
+});
+
 test('task draft - saving global defaults - task text survives and inherited model hint updates', async () => {
     const updated = payload('r2');
     updated.models.codex = 'gpt-6-astra'; updated.model_overrides.codex = 'gpt-6-astra';

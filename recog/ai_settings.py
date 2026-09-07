@@ -117,8 +117,12 @@ def _valid_task_id(task_id):
 
 def _task_values(task_id, values):
     _valid_task_id(task_id)
-    _known_fields(values, ("prompt", "providers", "models", "reasoning_effort", "claude_effort"), "task")
+    _known_fields(values, ("prompt", "providers", "models", "reasoning_effort", "claude_effort", "enabled"), "task")
     normalized = {}
+    if "enabled" in values:
+        if task_id != "copilot" or type(values["enabled"]) is not bool:
+            raise ValueError("Enabled must be a boolean for Copilot")
+        normalized["enabled"] = values["enabled"]
     if "prompt" in values:
         prompt = values["prompt"]
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS or "\x00" in prompt:
@@ -279,6 +283,7 @@ class AiSettingsStore:
             providers = ["codex" if "codex" in providers else providers[0]]
         return {
             "id": task_id, "label": definition["label"],
+            **({"enabled": override.get("enabled", True)} if task_id == "copilot" else {}),
             "prompt": override.get("prompt", definition["prompt"]),
             "default_prompt": definition["prompt"],
             "providers": providers,
@@ -366,6 +371,10 @@ class AiSettingsStore:
         normalized = _task_values(task_id, values)
 
         def update(snapshot):
+            if task_id == "copilot" and "enabled" not in normalized:
+                previous = snapshot["tasks"].get(task_id, {})
+                if "enabled" in previous:
+                    normalized["enabled"] = previous["enabled"]
             if task_id == _INCREMENT_TASK:
                 snapshot["tasks"].pop(_SAVED_INCREMENT_TASK, None)
             if normalized:
@@ -380,7 +389,9 @@ class AiSettingsStore:
             task_id = _INCREMENT_TASK
         self._definition(task_id)
         def update(snapshot):
-            snapshot["tasks"].pop(task_id, None)
+            previous = snapshot["tasks"].pop(task_id, {})
+            if task_id == "copilot" and "enabled" in previous:
+                snapshot["tasks"][task_id] = {"enabled": previous["enabled"]}
             if task_id == _INCREMENT_TASK:
                 snapshot["tasks"].pop(_SAVED_INCREMENT_TASK, None)
         return self._mutate(update, expected_revision)

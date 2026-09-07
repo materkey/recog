@@ -161,6 +161,10 @@
                 <label for="ai-settings-task">Сценарий</label>
                 <select id="ai-settings-task"></select>
                 <p id="ai-settings-provenance" class="profile-hint"></p>
+                <div id="ai-settings-enabled-row" hidden>
+                    <label><input type="checkbox" id="ai-settings-enabled" role="switch"> Copilot включён</label>
+                    <p class="profile-hint">Выключите и сохраните, чтобы остановить Copilot и запретить его запуск. Транскрибация продолжит работать.</p>
+                </div>
                 <label for="ai-settings-prompt">Промпт</label>
                 <textarea id="ai-settings-prompt" rows="12" maxlength="32000" spellcheck="false" aria-describedby="ai-settings-placeholders ai-settings-contract"></textarea>
                 <p id="ai-settings-placeholders" class="profile-hint"></p>

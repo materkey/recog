@@ -371,6 +371,8 @@ class TmuxRunner:
         )
         settings = self._ai_settings_store or AiSettingsStore(get_data_dir())
         task = settings.resolve_task("copilot")
+        if not task["enabled"]:
+            raise RuntimeError("Copilot выключен в настройках.")
         model = task["models"]["claude"]
         return shlex.join(
             [
@@ -735,11 +737,17 @@ class Supervisor:
         runner=None,
         grace_s: Optional[float] = None,
         autospawn: Optional[bool] = None,
+        ai_settings_store=None,
         session_alive_probe: Optional[Callable[[], bool]] = None,
         log_prefix: str = LOG_PREFIX,
     ) -> None:
         self.bridge_url = bridge_url
         self.runner = runner
+        self._ai_settings_store = ai_settings_store or AiSettingsStore(get_data_dir())
+        self.enabled = True
+        self._settings_task = None
+        self._settings_error_logged = False
+        self._latest_meeting_state = None
         self.lifecycle = SessionLifecycle()
         self.grace_s = (
             grace_s
@@ -807,6 +815,18 @@ class Supervisor:
         if not isinstance(data, dict):
             return
         ftype = data.get("type")
+        if ftype in ("meeting_state", "meeting_started", "meeting_ended"):
+            self._latest_meeting_state = {
+                "type": "meeting_state", "meeting_id": data.get("meeting_id"),
+                "active": data.get("active", ftype == "meeting_started"),
+            }
+        if ftype == "copilot_settings_changed":
+            await self._refresh_enabled()
+            return
+        if not self._read_enabled():
+            await self._refresh_enabled()
+            return
+        self.enabled = True
         if ftype == "meeting_state":
             if not self.autospawn:
                 return
@@ -858,6 +878,40 @@ class Supervisor:
         except Exception as exc:
             print(f"{self._log_prefix} session probe failed: {exc!r}", file=sys.stderr)
             return False
+
+    def _read_enabled(self) -> bool:
+        try:
+            task = self._ai_settings_store.resolve_task("copilot")
+            self._settings_error_logged = False
+            return task["enabled"]
+        except (OSError, ValueError) as exc:
+            if not self._settings_error_logged:
+                print(f"{self._log_prefix} cannot read Copilot switch: {exc}", file=sys.stderr)
+                self._settings_error_logged = True
+            return False
+
+    async def _refresh_enabled(self) -> bool:
+        if self.enabled and self._read_enabled():
+            return True
+        async with self._execute_lock:
+            was_enabled = self.enabled
+            self.enabled = self._read_enabled()
+            if not self.enabled:
+                self._reset_respawn_backoff()
+                commands = self.lifecycle.stop_now(self.lifecycle.meeting_id)
+                self._sync_grace_timer()
+                if commands or await self._probe_session_alive():
+                    await self._execute_locked((Kill(),))
+                await self._send_agent_status(AgentState.OFFLINE)
+        if (self.enabled and not was_enabled and self._latest_meeting_state
+                and self._latest_meeting_state.get("meeting_id") != MANUAL_MEETING_ID):
+            await self.handle_frame(self._latest_meeting_state)
+        return self.enabled
+
+    async def _watch_settings(self):
+        while True:
+            await self._refresh_enabled()
+            await asyncio.sleep(2)
 
     async def _startup_manual_readoption(self) -> None:
         """Re-adopt a surviving manual copilot session at supervisor startup (DW-9).
@@ -987,6 +1041,9 @@ class Supervisor:
                     if self.runner is not None:
                         await self.runner.kill()
                 elif isinstance(command, Spawn):
+                    if not self._read_enabled():
+                        self.lifecycle.stop_now(self.lifecycle.meeting_id)
+                        continue
                     if self.runner is not None:
                         await self.runner.spawn(command.meeting_id)
             except Exception as exc:
@@ -1114,6 +1171,10 @@ class Supervisor:
         self._task = asyncio.create_task(self.run())
 
     async def stop(self) -> None:
+        if self._settings_task is not None:
+            self._settings_task.cancel()
+            await asyncio.gather(self._settings_task, return_exceptions=True)
+            self._settings_task = None
         if self._stop_event is not None:
             self._stop_event.set()
         if self._grace_task is not None:
@@ -1142,6 +1203,8 @@ class Supervisor:
         # before the watchdog starts and before the first connect, so the
         # hello below already reports it via `_live_meeting_id()`.
         await self._startup_manual_readoption()
+        await self._refresh_enabled()
+        self._settings_task = asyncio.create_task(self._watch_settings())
         # The watchdog polls tmux for the supervisor's whole lifetime; it
         # sends status only while `self._ws` is connected and drops silently
         # otherwise (bridge merge reads silence as offline).
@@ -1192,6 +1255,10 @@ class Supervisor:
                 delay = min(delay * 2, self.MAX_BACKOFF_S)
         finally:
             self._stop_watchdog()
+            if self._settings_task is not None:
+                self._settings_task.cancel()
+                await asyncio.gather(self._settings_task, return_exceptions=True)
+                self._settings_task = None
 
     def _start_watchdog(self) -> None:
         if self.watchdog is None:

@@ -48,6 +48,7 @@ def test_saved_policy_given_initial_bridge_when_loaded_then_literal_policy_is_bo
     bridge = KTalkBridge(ai_settings_store=store)
     assert bridge.copilot_policy_snapshot() == {
         'copilot_instructions': prompt, 'copilot_policy_revision': saved['revision'],
+        'copilot_enabled': True,
     }
 
 
@@ -75,7 +76,7 @@ async def test_manual_session_given_saved_policy_when_refreshed_then_applied_bef
     }]
     assert channel.frames[-1]['type'] == 'copilot_policy_updated'
     assert bridge._manual_copilot_active is True
-    assert supervisor.frames == []
+    assert supervisor.frames == [{'type': 'copilot_settings_changed'}]
     await bridge._process_message({
         'type': 'copilot_chat_message', 'request_id': 'manual-1', 'text': 'Hi',
     }, subscriber)

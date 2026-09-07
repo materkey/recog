@@ -747,6 +747,7 @@ class KTalkBridge:
         return {
             "copilot_instructions": task["prompt"],
             "copilot_policy_revision": task["revision"],
+            "copilot_enabled": task["enabled"],
         }
 
     def copilot_policy_snapshot(self) -> dict:
@@ -772,6 +773,15 @@ class KTalkBridge:
                 }))
                 return
             if changed:
+                if not policy["copilot_enabled"]:
+                    self._set_manual_copilot_active(False)
+                    for request_id in list(self._copilot_pending_requests):
+                        await self._broadcast_copilot_frame({
+                            "type": "copilot_status", "status": "error",
+                            "request_id": request_id, "message": "Copilot выключен в настройках.",
+                        })
+                    self._copilot_pending_requests.clear()
+                await self._relay_to_supervisors({"type": "copilot_settings_changed"})
                 await self._broadcast_to_channel_clients({
                     "type": "copilot_policy_updated",
                     **self.user_identity_snapshot(), **policy,
@@ -836,6 +846,8 @@ class KTalkBridge:
         """
         with self._lock:
             tick_state = self._copilot_tick_state
+            if not self._copilot_policy["copilot_enabled"]:
+                return
             if tick_state is None:
                 return
             if not self._copilot_channel_clients:
@@ -1201,7 +1213,8 @@ class KTalkBridge:
         """
         if frame.get("type") == "meeting_started":
             frame = {**frame, **self.user_identity_snapshot(), **self.copilot_policy_snapshot()}
-        await self._broadcast_to_channel_clients(frame)
+        if self.copilot_policy_snapshot()["copilot_enabled"]:
+            await self._broadcast_to_channel_clients(frame)
         await self._broadcast_message(frame)
         with self._lock:
             supervisors = list(self._supervisor_clients)
@@ -1829,6 +1842,16 @@ class KTalkBridge:
         broadcast or operate on shared state and ignore it.
         """
         msg_type = data.get("type")
+
+        if (msg_type in ("copilot_spawn_request", "copilot_chat_message")
+                and not self.copilot_policy_snapshot()["copilot_enabled"]):
+            request_id = data.get("request_id")
+            if isinstance(request_id, str) and request_id:
+                await self._reply_copilot_status(websocket, request_id, "error", "Copilot выключен в настройках.")
+            return
+        if (msg_type in ("copilot_channel_reply", "copilot_channel_status")
+                and not self.copilot_policy_snapshot()["copilot_enabled"]):
+            return
 
         if msg_type == "ai_settings_refresh":
             await self._refresh_ai_settings(websocket)
