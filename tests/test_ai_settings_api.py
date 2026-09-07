@@ -87,6 +87,16 @@ async def test_removed_features_given_request_when_routed_then_unavailable(ai_ap
     assert (await client.get('/api/meetings/test/analyze-stream?question=custom')).status_code == 422
 
 
+async def test_copilot_switch_given_api_save_when_reloaded_then_boolean_is_persisted(ai_api):
+    api = ai_api
+    saved = await api.client.put('/api/ai-settings/tasks/copilot', json=task_payload(api, enabled=False))
+    assert saved.status_code == 200
+    assert task_view(saved.json())['enabled'] is False
+    assert task_view((await api.client.get('/api/ai-settings')).json())['enabled'] is False
+    invalid = await api.client.put('/api/ai-settings/tasks/copilot', json=task_payload(api, enabled='false'))
+    assert invalid.status_code == 422
+
+
 async def test_absent_settings_given_get_when_resolved_then_defaults_without_persistence(ai_api):
     api = ai_api
     async with api.client:

@@ -291,6 +291,12 @@ Claude and Codex have separate reasoning effort controls. Claude supports
 their CLI choose the reasoning effort.
 Copilot applies effort changes, like model changes, at the next session start.
 
+The Copilot scenario also has an **Copilot включён** switch. Save it off to stop
+the active agent and block manual starts, conference starts and crash retries.
+Transcription continues. The supervisor checks the saved switch on startup and
+every two seconds even while disconnected from the bridge; enabling it permits
+manual starts and the existing conference autostart policy again.
+
 Changes apply to the next request; an in-flight generation keeps its original
 settings. Copilot receives edited instructions on its next event, while its
 model changes on the next session start. Saving does not restart a live session.

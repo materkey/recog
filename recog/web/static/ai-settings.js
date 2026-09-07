@@ -60,6 +60,7 @@
         el('task').disabled = unavailable;
         el('prompt').disabled = unavailable;
         el('reasoning').disabled = unavailable;
+        el('enabled').disabled = unavailable;
         el('claude-effort').disabled = unavailable;
         el('reload').disabled = busy;
         el('close').disabled = busy;
@@ -87,6 +88,7 @@
     function timing(task) {
         if (task?.id === 'analysis.increment') return 'Общие настройки нового анализа и сохранённых инкрементов. Изменения применяются со следующего запроса. Для сохранённого результата используется Codex, если он выбран; иначе первый выбранный провайдер.';
         if (task?.id !== 'copilot') return 'Изменения применяются со следующего запроса. Уже запущенный анализ продолжит работу со своими настройками.';
+        if (task.enabled === false) return 'Выключение останавливает сессию и блокирует новые запуски. Сохранённые промпт и модель будут использованы после включения Copilot.';
         const pending = (snapshot?.copilot_application || snapshot?.copilot)?.state === 'pending';
         return 'Инструкции Copilot применятся на следующем обрабатываемом событии; текущий ответ не прерывается. Модель изменится при запуске новой сессии.'
             + ' Глубина рассуждений также применяется при новой сессии.'
@@ -105,6 +107,8 @@
         modelInputs.clear();
         providerInputs.clear();
         el('prompt').value = task?.prompt || '';
+        el('enabled-row').hidden = task?.id !== 'copilot';
+        el('enabled').checked = task?.enabled !== false;
         el('provenance').textContent = task?.customized ? 'Сценарий настроен вручную.' : 'Сценарий использует настройки по умолчанию.';
         el('placeholders').textContent = task?.placeholders?.length
             ? 'Подстановки: ' + task.placeholders.map((name) => '{' + name + '}').join(', ')
@@ -299,6 +303,7 @@
                     models: Object.fromEntries([...modelInputs].map(([key, input]) => [key, input.value.trim()])),
                     revision: snapshot.revision,
                 };
+                if (selectedId === 'copilot') body.enabled = el('enabled').checked;
                 if (selectedTask().allowed_providers.includes('codex')) {
                     body.reasoning_effort = el('reasoning').value;
                 }
@@ -338,6 +343,7 @@
         el('dialog').addEventListener('cancel', (event) => { event.preventDefault(); close(); });
         el('prompt').addEventListener('input', () => markDirty('task'));
         el('reasoning').addEventListener('change', () => markDirty('task'));
+        el('enabled').addEventListener('change', () => markDirty('task'));
         el('claude-effort').addEventListener('change', () => markDirty('task'));
         el('task').addEventListener('change', () => {
             if (taskDirty && !window.confirm('Переключить сценарий и потерять его несохранённые изменения?')) {

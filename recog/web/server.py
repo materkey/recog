@@ -523,6 +523,7 @@ class AiModelsRequest(BaseModel):
 
 
 class AiTaskRequest(BaseModel):
+    enabled: Optional[bool] = Field(default=None, strict=True)
     prompt: str
     providers: list[str]
     models: dict[str, str] = Field(default_factory=dict)
