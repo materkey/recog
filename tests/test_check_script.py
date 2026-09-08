@@ -245,8 +245,10 @@ def test_e2e_collection_survives_a_missing_playwright(tmp_path):
     import playwright at module level on a checkout without it."""
     shadow = tmp_path / "shadow"
     (shadow / "playwright").mkdir(parents=True)
+    # A missing package raises ModuleNotFoundError, and since pytest 9.1 that
+    # is the only exception `importorskip` turns into a skip by default.
     (shadow / "playwright/__init__.py").write_text(
-        'raise ImportError("simulated: playwright is not installed")\n'
+        'raise ModuleNotFoundError("simulated: playwright is not installed")\n'
     )
     env = dict(os.environ, PYTHONPATH=str(shadow))
 
