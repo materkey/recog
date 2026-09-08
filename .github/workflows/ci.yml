@@ -45,6 +45,16 @@ jobs:
             echo "PIP_ARGS=" >> "$GITHUB_ENV"
           fi
 
+      # The Linux sounddevice wheel does not bundle PortAudio; scripts/deps.sh
+      # requires it (`import sounddevice` probe) and setup.sh refuses to start
+      # the services without it, so CI installs the same package.
+      - name: Install PortAudio (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2
+
       - name: Install torch (CPU wheels)
         shell: bash
         run: |
