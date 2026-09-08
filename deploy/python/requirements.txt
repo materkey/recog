@@ -18,8 +18,10 @@ tqdm>=4.65
 # KTalk integration
 websockets>=14.0
 
-# MCP Streamable HTTP server (Copilot channel)
-mcp>=1.2.0
+# MCP Streamable HTTP server (Copilot channel). recog/copilot_channel.py uses
+# the v1 API (mcp.server.fastmcp.FastMCP, mcp.server.streamable_http
+# internals); mcp 2.x renamed FastMCP to MCPServer and dropped that module.
+mcp>=1.2.0,<2
 
 # .env loading for the web app (recog/web/server.py) and HTTP client for the
 # remote ASR backend (recog/remote_asr.py). recog/config.py deliberately does
