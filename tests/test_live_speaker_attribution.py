@@ -1025,3 +1025,38 @@ def test_transcribe_direct_signals_refine_live_pending_around_transcribe_chunk()
     refine_worker.clear_live_pending.assert_called_once_with()
     assert observed["set_called_before"] is True, "set_live_pending must fire before transcribe_chunk"
     assert observed["clear_called_during"] is False, "clear must not fire until transcribe_chunk returns"
+
+
+def test_delayed_pcm_when_emitted_then_storage_and_ui_use_speech_time():
+    from datetime import datetime
+    import numpy as np
+    t = _fresh_transcriber_mock()
+    t.asr.transcribe_batch.return_value = ["hotfix"]
+    t._meeting_storage = Mock()
+    t._meeting_storage.append_segment.return_value = 1
+    spoken_at = time.time() - 220
+    batch = [("pid-1", "Alice", False, np.zeros(48000, dtype=np.int16),
+              (spoken_at - 3) * 1000, spoken_at * 1000, 0.0, 3000.0)]
+    LiveTranscriber._on_pcm_batch(t, batch)
+    assert t._meeting_storage.append_segment.call_args.kwargs["captured_at"] == spoken_at
+    assert t._ktalk_bridge.send_transcript.call_args.args[2] == datetime.fromtimestamp(spoken_at).strftime("%H:%M:%S")
+
+
+def test_delayed_mixed_when_emitted_then_storage_uses_speech_time():
+    t = _fresh_transcriber_mock()
+    t._ktalk_bridge.get_dominant_speaker_for_period.return_value = "Alice"
+    t._ktalk_bridge.are_all_mics_muted.return_value = False
+    t._meeting_storage = Mock()
+    t._meeting_storage.append_segment.return_value = 1
+    spoken_at = time.time() - 220
+    LiveTranscriber._handle_ktalk_chunk(t, "hotfix", "12:00:00", spoken_at - 3,
+                                      spoken_at, spoken_at, 0, SourceState())
+    assert t._meeting_storage.append_segment.call_args.kwargs["captured_at"] == spoken_at
+
+
+def test_delayed_unattributed_when_emitted_then_storage_uses_speech_time():
+    t = _fresh_transcriber_mock()
+    t._meeting_storage = Mock()
+    spoken_at = time.time() - 220
+    LiveTranscriber._handle_unattributed_chunk(t, "hotfix", "12:00:00", spoken_at, 0, SourceState())
+    assert t._meeting_storage.append_segment.call_args.kwargs["captured_at"] == spoken_at

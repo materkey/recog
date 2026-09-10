@@ -27,8 +27,8 @@ from .config import (VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
 from .asr import ASRModule, _mps_autoreleasepool
 from .audio_capture import BufferedAudioCapture
 from .log_utils import log_rate_limited
-from .remote_asr import ASRTemporarilyUnavailable, build_asr
-from .refine import RefineResult, RefineWorker, make_abortable_decode
+from .remote_asr import ASRTemporarilyUnavailable, FallbackASR, build_asr
+from .refine import RefineAborted, RefineResult, RefineWorker, make_abortable_decode
 from .config import get_data_dir
 from .user_profile import UserProfileStore, resolve_identity
 
@@ -867,8 +867,8 @@ class LiveTranscriber:
               `set_live_pending()`.
             * `transcribe_fn = self._refine_transcribe_fn` — installs the
               abortable decoder monkey-patch in cooperative mode, then runs
-              `asr.transcribe_with_timestamps`. Restores the decoder on
-              the way out.
+              the selected ASR path. Owns the lock only around local decode
+              and restores the decoder before releasing it.
             * `apply_fn = self._apply_refine` — executed OUTSIDE the model
               lock; takes its own locks for JSONL rewrite (`MeetingStorage._
               segment_lock`) and live state (`self._state_lock`).
@@ -883,6 +883,7 @@ class LiveTranscriber:
             transcribe_fn=self._refine_transcribe_fn,
             apply_fn=self._apply_refine,
             abort_mode="cooperative",
+            transcribe_manages_lock=True,
         )
         self._refine_worker.start()
         self._per_speaker_ingest.set_refine_submit_callback(
@@ -891,50 +892,33 @@ class LiveTranscriber:
         print("RefineWorker started")
 
     def _refine_transcribe_fn(self, pcm_samples, *, should_abort=None):
-        """Bridge between `RefineWorker` and `ASRModule.transcribe_with_
-        timestamps`.
+        """Run remote refine without reserving the local model.
 
-        In cooperative mode (`should_abort` is a callable) install the
-        abortable decoder monkey-patch for the duration of one transcribe,
-        then restore. Coarse mode (`should_abort is None`) is a direct
-        pass-through — no monkey-patch, no restoration.
-
-        The monkey-patch mutates `model.decoding.decode`. It is safe because
-        `RefineWorker._process_task` holds `asr._model_lock` across this
-        call, so no other caller can observe the replaced decoder.
+        Local decode (including a fallback after an HTTP failure) owns the
+        model lock for the whole abort-hook lifetime, so live never observes
+        a patched decoder. Check pending live again after acquiring the lock.
         """
-        # Coarse mode: no abort hook by contract.
-        if should_abort is None:
-            return self.asr.transcribe_with_timestamps(pcm_samples)
+        def transcribe_local(asr):
+            with asr._model_lock:
+                if should_abort is None:
+                    return asr.transcribe_with_timestamps(pcm_samples)
+                if should_abort():
+                    raise RefineAborted()
+                model = getattr(asr, "model", None)
+                if model is None:
+                    model = asr.load_model(quiet=True)
+                original_decode = model.decoding.decode
+                abortable = make_abortable_decode(model.decoding, should_abort)
+                try:
+                    model.decoding.decode = abortable
+                    return asr.transcribe_with_timestamps(pcm_samples)
+                finally:
+                    model.decoding.decode = original_decode
 
-        # Install the abort hook whenever a LOCAL model is (or will be) the one
-        # decoding — independent of the advisory `using_remote` read. In remote
-        # mode the gateway decode is a plain HTTP call with nothing to patch,
-        # but `FallbackASR` can flip to a local decode between this guard and the
-        # call (`using_remote` and `_decide()` are intentionally separate), so a
-        # full local refine could otherwise run uninterruptible while
-        # RefineWorker holds `_model_lock`. Patching the local decoder up front
-        # keeps that fallback decode cooperatively abortable.
-        #
-        # `self.asr.model` is the local GigaAM model (None until loaded) for both
-        # ASRModule and FallbackASR (the latter delegates `.model` to its local
-        # module). Only load eagerly in pure-local mode; in remote mode a
-        # not-yet-loaded model means the gateway will serve this call, so leave
-        # weights unloaded (preserves remote-mode's zero local cost).
-        model = getattr(self.asr, "model", None)
-        if model is None and not getattr(self.asr, "using_remote", False):
-            model = self.asr.load_model(quiet=True)
-        if model is None:
-            # Remote path, no local weights resident: nothing to patch.
-            return self.asr.transcribe_with_timestamps(pcm_samples)
-
-        original_decode = model.decoding.decode
-        abortable = make_abortable_decode(model.decoding, should_abort)
-        try:
-            model.decoding.decode = abortable
-            return self.asr.transcribe_with_timestamps(pcm_samples)
-        finally:
-            model.decoding.decode = original_decode
+        if isinstance(self.asr, FallbackASR):
+            return self.asr.transcribe_with_timestamps(
+                pcm_samples, local_transcribe=transcribe_local)
+        return transcribe_local(self.asr)
 
     def _start_ktalk_bridge(self):
         """Start the KTalk bridge WS server after all callbacks are wired.
@@ -1066,7 +1050,7 @@ class LiveTranscriber:
                 if not is_continuation:
                     pid_state["segment_start_time"] = current_time
 
-                timestamp = datetime.now().strftime("%H:%M:%S")
+                timestamp = datetime.fromtimestamp(_end_ms / 1000.0).strftime("%H:%M:%S")
 
                 # Convert the chunk's wall-clock start (already carries the
                 # bridge's clock_offset) to an offset inside audio_system.wav.
@@ -1110,6 +1094,7 @@ class LiveTranscriber:
                         uncertain=False,
                         uncertain_reason="",
                         audio_offset_ms=audio_offset_ms,
+                        captured_at=_end_ms / 1000.0,
                     )
                     # Stamp the live segment with its pid-frame bounds so the
                     # refine contour (Task 9) can align refined word timestamps
@@ -1577,7 +1562,8 @@ class LiveTranscriber:
                 is_continuation=is_continuation,
                 uncertain=False,
                 uncertain_reason="",
-                audio_offset_ms=state.audio_offset
+                audio_offset_ms=state.audio_offset,
+                captured_at=chunk_time,
             )
 
         # Отправляем транскрипт микрофона в Chrome extension (is_local=True)
@@ -1703,7 +1689,8 @@ class LiveTranscriber:
                     is_continuation=is_continuation,
                     uncertain=uncertain,
                     uncertain_reason=persisted_reason,
-                    audio_offset_ms=state.audio_offset
+                    audio_offset_ms=state.audio_offset,
+                    captured_at=chunk_time,
                 )
 
             self._ktalk_bridge.send_transcript(
@@ -1783,7 +1770,8 @@ class LiveTranscriber:
                 is_continuation=is_continuation,
                 uncertain=True,
                 uncertain_reason="no_conference_identity",
-                audio_offset_ms=state.audio_offset
+                audio_offset_ms=state.audio_offset,
+                captured_at=chunk_time,
             )
 
     def _process_chunk(self, capture, state, is_mic=False):

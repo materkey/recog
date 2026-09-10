@@ -139,6 +139,7 @@ class TestHandleMicChunk:
             transcriber, "hello", "12:00:00", now, 0, state)
 
         call_kwargs = transcriber._meeting_storage.append_segment.call_args[1]
+        assert call_kwargs['captured_at'] == now
         assert call_kwargs['is_local'] is True
         assert call_kwargs['speaker'] == MIC_SPEAKER_NAME
         assert call_kwargs['speaker_id'] == "local"

@@ -8,6 +8,8 @@ Threading model (design.md D11):
     - The worker owns a daemon thread that pops `RefineTask`s from an
       internal queue, acquires a shared `model_lock` (serialises with the
       live batched-forward path), and runs `transcribe_fn`.
+      With `transcribe_manages_lock`, the callback instead owns locking around
+      local decode only; remote requests do not reserve the local model.
     - In `cooperative` mode the worker passes a `should_abort=` closure
       (reading `_live_pending`) into `transcribe_fn`; the upstream decoder
       monkey-patch (see `docs/experiments/2026-04-24-refine-abort-spike.md`)
@@ -26,6 +28,7 @@ import sys
 import threading
 import time
 import traceback
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable, List, Literal, Optional, Union
 
@@ -238,6 +241,8 @@ class RefineWorker:
         abort_mode: `"cooperative"` polls `should_abort` per decoder step
             (default — see `docs/experiments/2026-04-24-refine-abort-spike.md`);
             `"coarse"` always runs to completion.
+        transcribe_manages_lock: Callback owns the model lock for local decode
+            and abort-hook mutation; the worker does not lock remote I/O.
     """
 
     # queue.get poll interval — small enough to notice `_stopped` promptly,
@@ -262,12 +267,14 @@ class RefineWorker:
         transcribe_fn: TranscribeFn,
         apply_fn: ApplyFn,
         abort_mode: AbortMode = "cooperative",
+        *, transcribe_manages_lock: bool = False,
     ):
         if abort_mode not in ("cooperative", "coarse"):
             raise ValueError(
                 f"abort_mode must be 'cooperative' or 'coarse', got {abort_mode!r}"
             )
         self._model_lock = model_lock
+        self._transcribe_manages_lock = transcribe_manages_lock
         self._transcribe_fn = transcribe_fn
         self._apply_fn = apply_fn
         self._abort_mode: AbortMode = abort_mode
@@ -441,17 +448,12 @@ class RefineWorker:
         if self._abort_mode == "cooperative":
             self._wait_for_live_released()
 
-        # NOTE (ADR-0020 remote offload): in remote mode `_transcribe_fn` is a
-        # synchronous gateway HTTP call, not a local decode. We still take
-        # `_model_lock` here, but the cooperative-abort / `_live_pending`
-        # machinery is INERT by design in that mode — there is no local decode
-        # loop polling `should_abort`, and the live `transcribe_batch` also goes
-        # remote, so it never contends on this lock. Holding it across the
-        # (≤ timeout_s) remote refine is harmless: no live waiter to starve.
-        # If a future caller reintroduces a LOCAL forward that contends on
-        # `_model_lock` while a remote refine is in flight, revisit — the remote
-        # branch would then need to drop the lock around the HTTP call.
-        with self._model_lock:
+        # A route-aware callback locks only local decoding. Holding the model
+        # lock across its remote HTTP call would block local live fallback.
+        guard = nullcontext() if self._transcribe_manages_lock else self._model_lock
+        # With callback-owned locking, it repeats the live-pending check
+        # after acquiring the real model lock for local fallback.
+        with guard:
             if self._stopped.is_set():
                 return
             # Post-lock re-check narrows the TOCTOU window between

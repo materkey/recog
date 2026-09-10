@@ -756,3 +756,16 @@ def test_save_json_existing_target_stat_error_propagates(tmp_path, monkeypatch):
 
     assert json.loads(target.read_text(encoding="utf-8")) == old
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_delayed_audio_when_saved_then_preserve_capture_time_and_fresh_metadata(tmp_path):
+    from datetime import datetime, UTC
+    storage = MeetingStorage(base_path=tmp_path)
+    captured_at = time.time() - 220
+    storage.append_segment(speaker="Me", speaker_id="local", text="hotfix",
+                           is_local=True, captured_at=captured_at)
+    row = _read_segments(storage)[0]
+    expected = datetime.fromtimestamp(captured_at, UTC)
+    assert row["ts"] == expected.isoformat()
+    assert row["ts_display"] == expected.astimezone().strftime("%H:%M:%S")
+    assert datetime.fromisoformat(_read_meta(storage)["updated_at"]).timestamp() > captured_at + 200
