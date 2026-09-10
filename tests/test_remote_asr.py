@@ -357,12 +357,12 @@ def test_remote_failure_falls_back_to_local_and_logs_mode_switch(capsys):
     )
 
 
-def test_remote_failure_then_recovery_resets_circuit_and_returns_to_remote():
+def test_remote_failure_when_success_follows_then_return_remote_and_keep_recent_failure():
     """
     given: remote fails once (below fail_threshold) then recovers
     when: a failing transcribe_chunk (unavailable) is followed by another call
     then: the failing call raises ASRTemporarilyUnavailable (nothing served),
-          the next call is served by remote again, failure counter reset
+          the next call is served by remote again, recent failure retained
     """
     remote = FakeRemote()
     remote.fail_next = 1
@@ -380,11 +380,11 @@ def test_remote_failure_then_recovery_resets_circuit_and_returns_to_remote():
     assert second == "REMOTE_CHUNK"
     assert remote.calls["transcribe_chunk"] == 2
     assert fb.using_remote is True
-    assert fb._failures == 0
+    assert fb._live_circuit._failures == 1
 
 
 # =============================================================================
-# (c) circuit opens after fail_threshold consecutive failures and routes
+# (c) circuit opens after fail_threshold recent failures and routes
 #     straight to local while open
 # =============================================================================
 
@@ -1024,3 +1024,233 @@ def test_build_asr_local_does_not_need_url(monkeypatch):
 
     assert build_asr() == "LOCAL"
     assert built == [1]
+
+
+def test_intermittent_failures_within_window_when_successes_interleave_then_use_local(monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(remote_asr_mod.time, "monotonic", lambda: clock["t"])
+    fb, remote, _ = _make_fallback()
+    fb._local_ready = True
+    audio = np.zeros(48000, dtype=np.int16)
+    for _ in range(3):
+        remote.fail_next = 1
+        assert fb.transcribe_chunk(audio) == "LOCAL_CHUNK"
+        clock["t"] += 5
+        fb.transcribe_chunk(audio)
+    assert not fb.using_remote
+    calls = remote.calls["transcribe_chunk"]
+    assert fb.transcribe_chunk(audio) == "LOCAL_CHUNK"
+    assert remote.calls["transcribe_chunk"] == calls
+
+
+def test_sparse_failures_when_window_expires_then_keep_remote(monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(remote_asr_mod.time, "monotonic", lambda: clock["t"])
+    fb, remote, _ = _make_fallback()
+    fb._local_ready = True
+    for _ in range(4):
+        remote.fail_next = 1
+        fb.transcribe_chunk(np.zeros(48000, dtype=np.int16))
+        assert fb.using_remote
+        clock["t"] += 61
+    assert fb.using_remote
+
+
+def test_stale_failure_when_probe_recovered_then_does_not_poison_new_window(monkeypatch):
+    fb, _, _ = _make_fallback(fail_threshold=1)
+    old_epoch = fb._live_circuit._epoch
+    fb._live_circuit._record_failure(old_epoch)
+    fb._live_circuit._record_success(fb._live_circuit._epoch)
+    fb._live_circuit._record_failure(old_epoch)
+    assert fb.using_remote
+
+
+def test_live_audio_when_remote_flaps_for_minutes_then_backlog_stays_bounded(monkeypatch):
+    clock = {"t": 1000.0, "calls": 0}
+    monkeypatch.setattr(remote_asr_mod.time, "monotonic", lambda: clock["t"])
+    fb, remote, local = _make_fallback()
+    fb._local_ready = True
+
+    def remote_chunk(*args):
+        clock["calls"] += 1
+        if clock["calls"] % 2:
+            clock["t"] += 5.0
+            raise RemoteASRError("read timed out")
+        clock["t"] += 1.0
+        return "REMOTE_CHUNK"
+
+    def local_chunk(*args):
+        clock["t"] += 0.2
+        return "LOCAL_CHUNK"
+
+    remote.transcribe_chunk = remote_chunk
+    local.transcribe_chunk = local_chunk
+    lags = []
+    audio = np.zeros(48000, dtype=np.int16)
+    for i in range(180):
+        ready_at = 1000.0 + i * 2.5  # 3 s audio with 0.5 s overlap
+        clock["t"] = max(clock["t"], ready_at)
+        assert fb.transcribe_chunk(audio) in {"REMOTE_CHUNK", "LOCAL_CHUNK"}
+        lags.append(clock["t"] - ready_at)
+    assert max(lags) < 15
+    assert lags[-1] < 10
+
+
+@pytest.mark.parametrize("background", ["transcribe_with_timestamps", "transcribe_simple"])
+@pytest.mark.parametrize("live", ["transcribe_chunk", "transcribe_batch"])
+def test_background_failures_when_live_succeeds_then_keep_live_remote(background, live):
+    fb, remote, _ = _make_fallback()
+    fb._local_ready = True
+    audio = np.zeros(48000, dtype=np.int16)
+    background_input = "unused.wav" if background == "transcribe_simple" else audio
+    live_input = [audio] if live == "transcribe_batch" else audio
+    for _ in range(3):
+        remote.fail_next = 1
+        getattr(fb, background)(background_input)
+        result = getattr(fb, live)(live_input)
+        assert result == (["REMOTE_0"] if live == "transcribe_batch" else "REMOTE_CHUNK")
+    assert fb.using_remote
+    background_calls = remote.calls[background]
+    getattr(fb, background)(background_input)
+    assert remote.calls[background] == background_calls
+
+
+def test_live_failures_when_background_succeeds_then_keep_background_remote():
+    fb, remote, _ = _make_fallback()
+    fb._local_ready = True
+    audio = np.zeros(48000, dtype=np.int16)
+    for _ in range(3):
+        remote.fail_next = 1
+        fb.transcribe_chunk(audio)
+        assert fb.transcribe_with_timestamps(audio).text == "REMOTE_TS"
+    assert not fb.using_remote
+    assert fb.transcribe_simple("unused.wav")[0].text == "REMOTE_SIMPLE"
+
+
+def test_background_loading_local_when_live_is_healthy_then_live_stays_available():
+    fb, remote, local = _make_fallback()
+    started, release = _gate_local_load(local)
+    audio = np.zeros(48000, dtype=np.int16)
+    try:
+        for _ in range(3):
+            remote.fail_next = 1
+            with pytest.raises(ASRTemporarilyUnavailable):
+                fb.transcribe_with_timestamps(audio)
+            assert fb.available
+            assert fb.transcribe_chunk(audio) == "REMOTE_CHUNK"
+    finally:
+        release.set()
+        fb.wait_local_ready(timeout=2)
+
+
+def test_background_probe_recovers_when_live_is_open_then_keep_live_cooldown(monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(remote_asr_mod.time, "monotonic", lambda: clock["t"])
+    fb, remote, _ = _make_fallback()
+    fb._local_ready = True
+    audio = np.zeros(48000, dtype=np.int16)
+    remote.fail_next = 3
+    for _ in range(3):
+        fb.transcribe_with_timestamps(audio)
+    clock["t"] += 30
+    remote.fail_next = 3
+    for _ in range(3):
+        fb.transcribe_chunk(audio)
+    clock["t"] += 31
+    assert fb.transcribe_with_timestamps(audio).text == "REMOTE_TS"
+    assert not fb.using_remote
+    assert fb.transcribe_chunk(audio) == "LOCAL_CHUNK"
+
+
+@pytest.mark.parametrize("remote_fails", [False, True])
+def test_remote_refine_waiting_when_local_live_runs_then_does_not_hold_model_lock(monkeypatch, remote_fails):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from recog.live import LiveTranscriber
+    from recog.refine import RefineTask
+    import recog.live as live_mod
+
+    fb, remote, local = _make_fallback(fail_threshold=1)
+    fb._local_ready = True
+    fb._live_circuit._record_failure(fb._live_circuit._epoch)
+    original_decode = lambda: None
+    patched_decode = lambda: None
+    local.model = SimpleNamespace(decoding=SimpleNamespace(decode=original_decode))
+    monkeypatch.setattr(live_mod, "make_abortable_decode", lambda *args: patched_decode)
+    entered, release, live_done, applied = (threading.Event() for _ in range(4))
+
+    def remote_refine(*args):
+        entered.set()
+        assert release.wait(3)
+        if remote_fails:
+            raise RemoteASRError("read timed out")
+        return TranscriptionResult(text="remote", words=[])
+
+    def local_refine(*args):
+        assert local._model_lock._is_owned()
+        assert local.model.decoding.decode is patched_decode
+        return TranscriptionResult(text="local", words=[])
+
+    def live_batch():
+        with local._model_lock:
+            assert local.model.decoding.decode is original_decode
+            live_done.set()
+        return ["live"]
+
+    remote.transcribe_with_timestamps = remote_refine
+    local.transcribe_with_timestamps = local_refine
+    local.transcribe_batch = lambda *args: live_batch()
+    t = LiveTranscriber.__new__(LiveTranscriber)
+    t.asr = fb
+    t._per_speaker_ingest = Mock()
+    t._apply_refine = lambda result: applied.set()
+    t._setup_refine_worker()
+    task = RefineTask(pid="p", pcm_samples=np.zeros(48000, dtype=np.int16),
+                      offset_base_ms=0, submitted_at=0)
+    live_thread = threading.Thread(target=lambda: fb.transcribe_batch([task.pcm_samples]))
+    try:
+        t._refine_worker.submit(task)
+        assert entered.wait(2)
+        live_thread.start()
+        assert live_done.wait(1), "local live is blocked by the remote refine HTTP request"
+        release.set()
+        assert applied.wait(2)
+        assert local.model.decoding.decode is original_decode
+    finally:
+        release.set()
+        t._refine_worker.stop(timeout=3)
+        if live_thread.ident is not None:
+            live_thread.join(3)
+
+
+@pytest.mark.parametrize("abort_before_decode", [False, True])
+def test_remote_refine_falls_back_when_live_aborts_then_preserve_decoder_and_priority(monkeypatch, abort_before_decode):
+    from types import SimpleNamespace
+    from recog.live import LiveTranscriber
+    from recog.refine import RefineAborted
+    import recog.live as live_mod
+
+    fb, remote, local = _make_fallback()
+    fb._local_ready = True
+    remote.fail_next = 1
+    original_decode = lambda: None
+    patched_decode = lambda: None
+    local.model = SimpleNamespace(decoding=SimpleNamespace(decode=original_decode))
+    monkeypatch.setattr(live_mod, "make_abortable_decode", lambda *args: patched_decode)
+    decoded = []
+
+    def local_refine(*args):
+        decoded.append(True)
+        assert local._model_lock._is_owned()
+        assert local.model.decoding.decode is patched_decode
+        raise RefineAborted()
+
+    local.transcribe_with_timestamps = local_refine
+    t = LiveTranscriber.__new__(LiveTranscriber)
+    t.asr = fb
+    with pytest.raises(RefineAborted):
+        t._refine_transcribe_fn(np.zeros(48000, dtype=np.int16),
+                               should_abort=lambda: abort_before_decode)
+    assert bool(decoded) is not abort_before_decode
+    assert local.model.decoding.decode is original_decode
+    assert not local._model_lock._is_owned()

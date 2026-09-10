@@ -640,7 +640,8 @@ class MeetingStorage:
         is_continuation: bool = False,
         uncertain: bool = False,
         uncertain_reason: str = "",
-        audio_offset_ms: int = 0
+        audio_offset_ms: int = 0,
+        captured_at: Optional[float] = None,
     ) -> int:
         """
         Добавить сегмент в текущую встречу.
@@ -654,6 +655,7 @@ class MeetingStorage:
             uncertain: True если неуверены в спикере
             uncertain_reason: Причина неуверенности ("local", "mics_off")
             audio_offset_ms: Offset from audio recording start in milliseconds
+            captured_at: Speech time as Unix seconds; omitted for events emitted now
 
         Returns:
             Segment ID of the appended segment
@@ -671,11 +673,12 @@ class MeetingStorage:
             segment_id = self._segment_counter
 
             now = datetime.now(UTC)
+            spoken_at = datetime.fromtimestamp(captured_at, UTC) if captured_at is not None else now
 
             segment = TranscriptSegment(
                 id=segment_id,
-                ts=now.isoformat(),
-                ts_display=now.astimezone().strftime("%H:%M:%S"),
+                ts=spoken_at.isoformat(),
+                ts_display=spoken_at.astimezone().strftime("%H:%M:%S"),
                 speaker=speaker,
                 speaker_id=speaker_id,
                 text=text,

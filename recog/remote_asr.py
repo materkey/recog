@@ -19,8 +19,10 @@ CLI (``mp4_notes.py`` — только ``live``/``meetings``).
    ``ASRTemporarilyUnavailable`` и caller буферизует данные у себя —
    ничего не блокируется и не теряется.
 
-2. **Circuit breaker.** Каждый сбой удалёнки накапливается; после
-   ``fail_threshold`` подряд circuit «открывается» на ``open_seconds`` —
+2. **Circuit breaker.** Live (chunk/batch) и фоновые (refine/offline) запросы
+   имеют независимые состояния: ошибка refine не отключает live. Каждый сбой
+   удалёнки накапливается в своём состоянии; после
+   ``fail_threshold`` за последние 60 секунд circuit «открывается» на ``open_seconds`` —
    запросы идут сразу в локаль, минуя таймауты сети. По истечении окна
    разрешается один probe (half-open): успех закрывает circuit, ещё один
    сбой открывает заново. Состояние под ``threading.Lock`` + монотонными
@@ -36,6 +38,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, List, Optional, Union
 
@@ -267,6 +270,81 @@ class RemoteASRClient:
         return TranscriptionResult(text=payload.get("text", ""), words=words)
 
 
+class _CircuitBreaker:
+    """Independent failure window and recovery probe for one request class."""
+
+    FAILURE_WINDOW_S = 60.0
+
+    def __init__(self, fail_threshold: int, open_seconds: float, scope: str):
+        self.fail_threshold = fail_threshold
+        self.open_seconds = open_seconds
+        self.scope = scope
+        self._cb_lock = threading.Lock()
+        self._failures = 0
+        self._failure_times = deque()
+        self._opened_until = 0.0
+        self._epoch = 0
+
+    @property
+    def using_remote(self) -> bool:
+        with self._cb_lock:
+            return self._opened_until == 0.0 or time.monotonic() >= self._opened_until
+
+    def _decide(self) -> tuple[bool, int]:
+        """Решает remote-vs-local И резервирует единственный half-open probe.
+
+        Возвращает ``(try_remote, epoch)``. Когда окно истекло, первый
+        поток под lock'ом продлевает окно (резервируя единственный probe) и
+        получает ``try_remote=True``; конкурентные потоки видят продлённое
+        окно и идут в локаль (без thundering herd по только что
+        восстановившемуся шлюзу). ``epoch`` фиксирует поколение open, чтобы
+        запоздавший success не сбросил circuit, который позже переоткрыл сбой.
+        """
+        with self._cb_lock:
+            now = time.monotonic()
+            if self._opened_until == 0.0:
+                return True, self._epoch
+            if now >= self._opened_until:
+                self._opened_until = now + self.open_seconds  # reserve the lone probe
+                return True, self._epoch
+            return False, self._epoch
+
+    def _record_success(self, epoch: int) -> None:
+        was_open = False
+        with self._cb_lock:
+            if epoch != self._epoch:
+                return  # stale: circuit re-opened after we started — не отменяем
+            was_open = self._opened_until != 0.0
+            # Isolated successes must not hide a flapping connection. Only a
+            # successful recovery probe starts a fresh observation window.
+            if was_open:
+                self._failure_times.clear()
+                self._failures = 0
+            self._opened_until = 0.0
+        if was_open:
+            print(f"[FallbackASR] {self.scope} remote recovered — circuit CLOSED", file=sys.stderr)
+
+    def _record_failure(self, epoch: int) -> None:
+        with self._cb_lock:
+            if epoch != self._epoch:
+                return  # A late failure must not poison a recovered circuit.
+            now = time.monotonic()
+            while self._failure_times and self._failure_times[0] <= now - self.FAILURE_WINDOW_S:
+                self._failure_times.popleft()
+            self._failure_times.append(now)
+            self._failures = len(self._failure_times)
+            # Переход closed->open. Если окно уже выставлено (open или
+            # зарезервированный probe) — сбой просто копится, окно держится.
+            if self._failures >= self.fail_threshold and self._opened_until == 0.0:
+                self._opened_until = time.monotonic() + self.open_seconds
+                self._epoch += 1
+                print(
+                    f"[FallbackASR] {self.scope} remote circuit OPEN for {self.open_seconds}s "
+                    f"after {self._failures} fail(s) in {self.FAILURE_WINDOW_S}s",
+                    file=sys.stderr,
+                )
+
+
 class FallbackASR:
     """Маршрутизатор remote→local с thread-safe circuit breaker'ом.
 
@@ -297,10 +375,8 @@ class FallbackASR:
         self._local = local_factory()
         self.fail_threshold = fail_threshold
         self.open_seconds = open_seconds
-        self._cb_lock = threading.Lock()
-        self._failures = 0
-        self._opened_until = 0.0  # monotonic deadline; 0 => circuit closed
-        self._epoch = 0  # bumped on each closed->open transition; guards stale-success reset
+        self._live_circuit = _CircuitBreaker(fail_threshold, open_seconds, "live")
+        self._background_circuit = _CircuitBreaker(fail_threshold, open_seconds, "background")
         self._announced_fallback = False
         # --- Фоновая загрузка локальной модели (non-blocking fallback) ------
         # Дизайн: docs/plans/2026-06-02-asr-fallback-buffering-design.md §1.
@@ -333,13 +409,8 @@ class FallbackASR:
     # ------------------------------------------------------------------ #
     @property
     def using_remote(self) -> bool:
-        """Advisory read: True, когда circuit закрыт или окно истекло.
-
-        НЕ резервирует probe (в отличие от ``_decide``) — для guard'ов
-        (``load_model``, refine-путь в live.py), которым нужен дешёвый намёк.
-        """
-        with self._cb_lock:
-            return self._opened_until == 0.0 or time.monotonic() >= self._opened_until
+        """Advisory state of live chunk/batch requests; does not reserve a probe."""
+        return self._live_circuit.using_remote
 
     @property
     def available(self) -> bool:
@@ -358,51 +429,6 @@ class FallbackASR:
         if t is not None:
             t.join(timeout)
         return self._local_ready
-
-    def _decide(self) -> tuple[bool, int]:
-        """Решает remote-vs-local И резервирует единственный half-open probe.
-
-        Возвращает ``(try_remote, epoch)``. Когда окно истекло, первый
-        поток под lock'ом продлевает окно (резервируя единственный probe) и
-        получает ``try_remote=True``; конкурентные потоки видят продлённое
-        окно и идут в локаль (без thundering herd по только что
-        восстановившемуся шлюзу). ``epoch`` фиксирует поколение open, чтобы
-        запоздавший success не сбросил circuit, который позже переоткрыл сбой.
-        """
-        with self._cb_lock:
-            now = time.monotonic()
-            if self._opened_until == 0.0:
-                return True, self._epoch
-            if now >= self._opened_until:
-                self._opened_until = now + self.open_seconds  # reserve the lone probe
-                return True, self._epoch
-            return False, self._epoch
-
-    def _record_success(self, epoch: int) -> None:
-        was_open = False
-        with self._cb_lock:
-            if epoch != self._epoch:
-                return  # stale: circuit re-opened after we started — не отменяем
-            was_open = self._opened_until != 0.0
-            self._failures = 0
-            self._opened_until = 0.0
-            self._announced_fallback = False
-        if was_open:
-            print("[FallbackASR] remote recovered — circuit CLOSED", file=sys.stderr)
-
-    def _record_failure(self, epoch: int) -> None:
-        with self._cb_lock:
-            self._failures += 1
-            # Переход closed->open. Если окно уже выставлено (open или
-            # зарезервированный probe) — сбой просто копится, окно держится.
-            if self._failures >= self.fail_threshold and self._opened_until == 0.0:
-                self._opened_until = time.monotonic() + self.open_seconds
-                self._epoch += 1
-                print(
-                    f"[FallbackASR] remote circuit OPEN for {self.open_seconds}s "
-                    f"after {self._failures} fail(s)",
-                    file=sys.stderr,
-                )
 
     def _start_local_load(self) -> None:
         """Идемпотентно запускает фоновую загрузку локальных весов.
@@ -470,7 +496,8 @@ class FallbackASR:
     # ------------------------------------------------------------------ #
     # Dispatch: remote с circuit breaker'ом, локаль как резерв.
     # ------------------------------------------------------------------ #
-    def _run(self, remote_call: Callable[[], Any], local_call: Callable[[], Any]) -> Any:
+    def _run(self, remote_call: Callable[[], Any], local_call: Callable[[], Any],
+             *, background: bool = False) -> Any:
         """Общий dispatch: remote под breaker'ом; локаль — только если уже загружена.
 
         Решение remote-vs-local и запись success/failure epoch-защищены (см.
@@ -481,17 +508,18 @@ class FallbackASR:
         поднимает ``ASRTemporarilyUnavailable``. Caller обязан сохранить данные
         и повторить позже; ни один путь больше не блокируется на load_model.
         """
-        try_remote, epoch = self._decide()
+        circuit = self._background_circuit if background else self._live_circuit
+        try_remote, epoch = circuit._decide()
         if try_remote:
             try:
                 out = remote_call()
-                self._record_success(epoch)
+                circuit._record_success(epoch)
                 return out
             except (RemoteASRError, httpx.HTTPError) as exc:
-                self._record_failure(epoch)
+                circuit._record_failure(epoch)
                 log_rate_limited(
-                    "fallback-remote-fail",
-                    f"[FallbackASR] remote call failed: {type(exc).__name__}: {exc}",
+                    f"fallback-remote-fail-{circuit.scope}",
+                    f"[FallbackASR] {circuit.scope} remote call failed: {type(exc).__name__}: {exc}",
                 )
                 self._start_local_load()
                 if self._local_ready:
@@ -523,15 +551,19 @@ class FallbackASR:
         return self._run(
             lambda: self.remote.transcribe_simple(audio_path, **kwargs),
             lambda: self._local.transcribe_simple(audio_path, **kwargs),
+            background=True,
         )
 
     def transcribe_with_timestamps(
-        self, audio: Union[np.ndarray, Any, str], sample_rate: int = 16000
+        self, audio: Union[np.ndarray, Any, str], sample_rate: int = 16000,
+        *, local_transcribe: Optional[Callable[[ASRModule], Any]] = None,
     ) -> Any:
         """Refine. Если локаль тоже падает — пере-поднимает её исключение."""
         return self._run(
             lambda: self.remote.transcribe_with_timestamps(audio, sample_rate),
-            lambda: self._local.transcribe_with_timestamps(audio, sample_rate),
+            lambda: (local_transcribe(self._local) if local_transcribe is not None
+                     else self._local.transcribe_with_timestamps(audio, sample_rate)),
+            background=True,
         )
 
 
