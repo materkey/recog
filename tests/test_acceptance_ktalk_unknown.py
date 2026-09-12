@@ -242,6 +242,7 @@ def test_orphan_meeting_no_sole_unmuted_check():
         speaker="speaker", speaker_id="speaker", text="hello",
         is_local=False, is_continuation=False, uncertain=True,
         uncertain_reason="no_conference_identity", audio_offset_ms=1250,
+        captured_at=now,
     )
 
 
