@@ -3,7 +3,7 @@ import { updateWsIndicatorPlatform, handleTranscript, handleTranscriptHistory, h
 import { handleMeetingJoinRejected } from './meeting.js';
 import { getActiveSpeaker, sendParticipantsUpdate, sendFilteredSpeakerUpdate } from './speaker.js';
 import { sendWsMessage } from './ws_api.js';
-import { sendMeetingJoin, startMeetingCheck } from './meeting.js';
+import { isInMeeting, sendMeetingJoin, startMeetingCheck } from './meeting.js';
 import { getPlatformAdapter } from './platforms/index.js';
 
 /**
@@ -44,19 +44,15 @@ export function connectWebSocket() {
       // Send participants for both KTalk and vas3k
       const adapter = getPlatformAdapter();
       if (adapter) {
-        // Gate on isConferenceAvailable(), not a merely-truthy getConference():
-        // for matrix getConference() returns rtcSession even before roomId
-        // resolves, so sendMeetingJoin() would fall back to the EC iframe's
-        // index.html URL and store live_id="index.html" — the exact collapse
-        // isConferenceAvailable() guards against. Mirrors isInMeeting().
-        const conf = adapter.isConferenceAvailable() ? adapter.getConference() : null;
+        // Use the same membership predicate as the periodic join/leave check.
+        const conf = isInMeeting() ? adapter.getConference() : null;
         if (conf) {
           sendParticipantsUpdate(conf);
           const activeSpeaker = getActiveSpeaker(conf);
           sendFilteredSpeakerUpdate(activeSpeaker);
           sendMeetingJoin();
         }
-      } else if (window.$conf) {
+      } else if (isInMeeting()) {
         sendParticipantsUpdate(window.$conf);
         const activeSpeaker = getActiveSpeaker(window.$conf);
         sendFilteredSpeakerUpdate(activeSpeaker);
@@ -134,7 +130,8 @@ export function connectWebSocket() {
             appendCopilotSystemMessage('Встреча закончилась');
           }
         } else if (data.type === 'meeting_join_rejected') {
-          handleMeetingJoinRejected(data);
+          const notice = handleMeetingJoinRejected(data);
+          if (notice) appendCopilotSystemMessage(notice);
         }
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);

@@ -255,6 +255,7 @@ def _make_transcriber_stub() -> Mock:
     """Минимальный LiveTranscriber-образный объект для _process_chunk
     (паттерн из tests/test_live_buffering.py)."""
     t = Mock()
+    t.ktalk_only = False
     t._meeting_generation = 0
     t._wav_lock = threading.Lock()
     t._state_lock = threading.Lock()
@@ -556,6 +557,7 @@ class TestSilenceSplitWavRotation:
         t._on_meeting_change = (
             lambda *a, **k: LiveTranscriber._on_meeting_change(t, *a, **k)
         )
+        t._close_audio_writers = lambda: LiveTranscriber._close_audio_writers(t)
         return t, storage, old_id
 
     def test_split_rotates_writer_and_rewrites_chunk(self, tmp_path):

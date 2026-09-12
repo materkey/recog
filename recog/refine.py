@@ -243,6 +243,8 @@ class RefineWorker:
             `"coarse"` always runs to completion.
         transcribe_manages_lock: Callback owns the model lock for local decode
             and abort-hook mutation; the worker does not lock remote I/O.
+        generation_getter: Optional current meeting generation. Old tasks are
+            rejected before inference and cannot be resubmitted after a switch.
     """
 
     # queue.get poll interval — small enough to notice `_stopped` promptly,
@@ -268,6 +270,7 @@ class RefineWorker:
         apply_fn: ApplyFn,
         abort_mode: AbortMode = "cooperative",
         *, transcribe_manages_lock: bool = False,
+        generation_getter: Optional[Callable[[], int]] = None,
     ):
         if abort_mode not in ("cooperative", "coarse"):
             raise ValueError(
@@ -275,6 +278,7 @@ class RefineWorker:
             )
         self._model_lock = model_lock
         self._transcribe_manages_lock = transcribe_manages_lock
+        self._generation_getter = generation_getter
         self._transcribe_fn = transcribe_fn
         self._apply_fn = apply_fn
         self._abort_mode: AbortMode = abort_mode
@@ -312,9 +316,20 @@ class RefineWorker:
         if self._stopped.is_set():
             return
         with self._paused_lock:
-            if self._paused:
+            if self._paused or not self._generation_matches(task):
                 return
             self._queue.put(task)
+
+    def _generation_matches(self, task: RefineTask) -> bool:
+        return (
+            self._generation_getter is None or task.meeting_generation == self._generation_getter()
+        )
+
+    def _task_is_current(self, task: RefineTask) -> bool:
+        with self._paused_lock:
+            return (
+                not self._stopped.is_set() and not self._paused and self._generation_matches(task)
+            )
 
     def pause(self) -> None:
         """Pause processing and drop any tasks already queued.
@@ -423,11 +438,8 @@ class RefineWorker:
                 )
                 traceback.print_exc()
 
-    def _process_task(self, task: RefineTask) -> None:
-        aborted = False
-        unavailable = False
-        result: Optional[TranscriptionResult] = None
-
+    def _transcribe_task(self, task: RefineTask) -> Optional[TranscriptionResult]:
+        """Run inference with live priority and recheck eligibility under its lock."""
         # Cooperative pre-lock gate: if live has already signalled intent to
         # acquire `_model_lock`, wait for it to clear before contending. The
         # decoder monkey-patch polls `_live_pending` inside the time-step
@@ -454,7 +466,7 @@ class RefineWorker:
         # With callback-owned locking, it repeats the live-pending check
         # after acquiring the real model lock for local fallback.
         with guard:
-            if self._stopped.is_set():
+            if not self._task_is_current(task):
                 return
             # Post-lock re-check narrows the TOCTOU window between
             # `_wait_for_live_released()` returning and `_model_lock`
@@ -470,34 +482,34 @@ class RefineWorker:
                 self._abort_mode == "cooperative"
                 and self._live_pending.is_set()
             ):
-                aborted = True
-            else:
-                try:
-                    if self._abort_mode == "cooperative":
-                        result = self._transcribe_fn(
-                            task.pcm_samples,
-                            should_abort=self._live_pending.is_set,
-                        )
-                    else:
-                        result = self._transcribe_fn(task.pcm_samples)
-                except RefineAborted:
-                    aborted = True
-                except ASRTemporarilyUnavailable:
-                    unavailable = True
+                raise RefineAborted()
+            if self._abort_mode == "cooperative":
+                return self._transcribe_fn(
+                    task.pcm_samples,
+                    should_abort=lambda: (
+                        self._live_pending.is_set() or not self._task_is_current(task)
+                    ),
+                )
+            return self._transcribe_fn(task.pcm_samples)
 
-        if unavailable:
+    def _process_task(self, task: RefineTask) -> None:
+        if not self._task_is_current(task):
+            return
+        try:
+            result = self._transcribe_task(task)
+        except ASRTemporarilyUnavailable:
             # ASR (remote + локаль) сейчас не может обслужить refine. Это
             # tier-2 контур — просто вернуть задачу в очередь после паузы
             # (без паузы worker крутится в busy-loop); live-путь тем временем
             # буферизует своё аудио независимо.
-            time.sleep(self._UNAVAILABLE_RETRY_DELAY_S)
-            self._queue.put(task)
+            if self._task_is_current(task):
+                time.sleep(self._UNAVAILABLE_RETRY_DELAY_S)
+            self.submit(task)
             return
-
-        if aborted:
+        except RefineAborted:
             # Re-enqueue; the pre-lock gate on the next iteration will wait
             # for live to release `_model_lock` before contending again.
-            self._queue.put(task)
+            self.submit(task)
             return
 
         if result is None:
@@ -509,9 +521,8 @@ class RefineWorker:
         # in-flight task that completes afterward must drop its result to
         # satisfy spec "existing tier-1 rows stay tier-1 (no spurious
         # promotions)" (specs/per-speaker-transcription/spec.md:158).
-        with self._paused_lock:
-            if self._paused:
-                return
+        if not self._task_is_current(task):
+            return
 
         text = getattr(result, "text", "") or ""
         words_attr = getattr(result, "words", None)

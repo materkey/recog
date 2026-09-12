@@ -398,9 +398,10 @@ class PerSpeakerIngest:
 
     def drain(self) -> None:
         """Clear all per-pid buffers.  Called from `_invalidate_pending_chunks`
-        on meeting boundary before `_meeting_generation` is bumped."""
+        on meeting boundary after `_meeting_generation` is bumped."""
         with self._lock:
             self._buffers.clear()
+            self._pending_retry_batch = None
             self._stats.clear()
             # Leave watchdog state untouched — a new meeting has a fresh
             # `_last_chunk_ts` on the first enqueue.
@@ -438,6 +439,7 @@ class PerSpeakerIngest:
         if now is None:
             now = self._time_fn()
         batch: List[BatchedChunk] = []
+        batch_generation = None
         active_pids: List[str] = []
         with self._lock:
             self._check_watchdog_locked(now)
@@ -447,6 +449,7 @@ class PerSpeakerIngest:
                     self._pending_retry_batch = None
                 else:
                     batch = self._drain_batch_locked()
+                batch_generation = self._last_drain_generation
             # else: ASR недоступен — гейт закрыт, PCM остаётся в буферах
             # (drain деструктивен, выгребать без работающего ASR нельзя).
             # Advance per-pid silence counter for pids that did not see a new
@@ -467,6 +470,8 @@ class PerSpeakerIngest:
                 # remote упал во время transcribe. Батч уже выгребен из буферов
                 # (drain деструктивен) — держим его для повторного диспатча.
                 with self._lock:
+                    if batch_generation != self._generation_getter():
+                        return []
                     self._pending_retry_batch = batch
                 print(
                     "[PerSpeakerIngest] ASR unavailable — holding batch for retry",

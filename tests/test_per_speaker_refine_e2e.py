@@ -109,6 +109,7 @@ def _build_pipeline(
     )
 
     t = LiveTranscriber.__new__(LiveTranscriber)
+    t.ktalk_only = False
     t.sample_rate = SAMPLE_RATE
     t._state_lock = threading.Lock()
     t._meeting_generation = 0

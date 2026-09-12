@@ -100,6 +100,9 @@ source venv-gigaam/bin/activate
 # The mic is on by default (--mic-device auto); --mic-device none turns it off.
 python -m recog live --ktalk --system-audio auto
 
+# Capture only while joined to a KTalk meeting (implies --ktalk)
+python -m recog live --ktalk-only --system-audio auto
+
 # System audio only
 python -m recog live --ktalk --system-audio auto --mic-device none
 
@@ -122,6 +125,52 @@ input device, `device:auto` looks for BlackHole), or `none` (default).
 The startup banner prints which sources are live, naming the resolved mic
 device and the backend in full, e.g.
 `Mode: DUAL (Mic: 3 + System: PulseAudio/PipeWire (parec))`.
+
+`--ktalk` alone records continuously, including between conferences.
+Use `--ktalk-only` to keep both microphone and system capture closed until
+an accepted KTalk `meeting_join` arrives from the Chrome extension. Leaving
+the call, closing its tab, losing the owner WebSocket, or stopping the bridge
+closes capture and discards buffered audio and pending recognition results.
+An idle KTalk tab, Jitsi/Element meeting, or manual Copilot session cannot
+start recording in this mode. The extension must be installed and enabled;
+the native KTalk application does not supply these browser events.
+Rebuild and reload the extension together with the backend: KTalk membership
+is checked through Jitsi's `isJoined()` API, including after a WebSocket
+reconnect. A missing or failing membership API keeps recording off.
+If a capture device cannot start, the join is rejected, the live status stays
+inactive, and the extension retries while the user remains in the call.
+
+The policy follows call membership, not working hours or calendar titles.
+While joined, the selected microphone and system output are still captured,
+including unrelated sounds; muting in KTalk suppresses mic transcription but
+does not close the local microphone or exclude its audio from the saved WAV.
+Leave the call to stop capture. An undetected disconnect stops capture when
+the WebSocket keepalive times out; the bridge cannot react before it learns
+that the call ended. Call membership is polled every two seconds (browser
+timer throttling can delay this). The last partial chunk is discarded at the
+boundary, together with queued live/refine work. Already running remote ASR
+requests cannot be recalled; their results and retries are discarded.
+
+Manual acceptance requires the updated backend and extension in a real KTalk
+browser call: check idle/prejoin, join, leave without closing the tab, and
+rejoin after a bridge reconnect. `/api/live/status` must be inactive outside
+the call, the backend's microphone/system capture must be closed, and WAVs
+must stop growing after leave. Use a test call and an isolated data directory;
+automated lifecycle tests replace the audio devices and ASR.
+
+For an installed service, add `--ktalk-only` to its live command. On Linux,
+use a `systemctl --user edit recog-live.service` override (replace the paths):
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/absolute/path/recog/venv-gigaam/bin/python -m recog live --ktalk-only --system-audio auto
+```
+
+Then run `systemctl --user daemon-reload` and
+`systemctl --user restart recog-live.service`. On macOS, add a
+`<string>--ktalk-only</string>` item to the live plist's `ProgramArguments`
+and reload the service. Re-rendering that plist replaces manual edits.
 
 ### Output format
 
