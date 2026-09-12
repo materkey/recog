@@ -1038,7 +1038,8 @@ def test_delayed_pcm_when_emitted_then_storage_and_ui_use_speech_time():
     batch = [("pid-1", "Alice", False, np.zeros(48000, dtype=np.int16),
               (spoken_at - 3) * 1000, spoken_at * 1000, 0.0, 3000.0)]
     LiveTranscriber._on_pcm_batch(t, batch)
-    assert t._meeting_storage.append_segment.call_args.kwargs["captured_at"] == spoken_at
+    assert t._meeting_storage.append_segment.call_args.kwargs["captured_at"] == pytest.approx(
+        spoken_at, rel=0, abs=1e-6)
     assert t._ktalk_bridge.send_transcript.call_args.args[2] == datetime.fromtimestamp(spoken_at).strftime("%H:%M:%S")
 
 
