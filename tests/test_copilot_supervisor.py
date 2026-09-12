@@ -1860,6 +1860,9 @@ def test_terminal_service_command_reaps_both_copilot_session_names(tmp_path, com
         "HOME": str(tmp_path / "home"),
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "TMUX_LOG": str(tmux_log),
+        # These tests supply launchctl shims, even when the host is Linux.
+        "RECOG_SERVICE_OS": "Darwin",
+        "SVC_UNIT_DIR": str(tmp_path / "units"),
     }
 
     subprocess.run(
@@ -1901,6 +1904,9 @@ def test_terminal_service_command_surfaces_persistent_tmux_cleanup_failure(tmp_p
         "HOME": str(tmp_path / "home"),
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "TMUX_LOG": str(tmux_log),
+        # These tests supply launchctl shims, even when the host is Linux.
+        "RECOG_SERVICE_OS": "Darwin",
+        "SVC_UNIT_DIR": str(tmp_path / "units"),
         "TMUX_STAYS_ALIVE": "1",
     }
 
