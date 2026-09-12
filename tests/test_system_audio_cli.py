@@ -297,6 +297,7 @@ def test_meta_reports_screencapture_only_for_screencapture(monkeypatch):
 
 def _transcriber_with_dead_capture(dead: bool, meeting: str = "meeting-A"):
     transcriber = Mock(spec=LiveTranscriber)
+    transcriber.ktalk_only = False
     transcriber.system_capture = Mock(dead=dead)
     transcriber._system_capture_lost = False
     transcriber._system_capture_lost_meeting = None

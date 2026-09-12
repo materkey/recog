@@ -1201,6 +1201,8 @@ def test_remote_refine_waiting_when_local_live_runs_then_does_not_hold_model_loc
     local.transcribe_with_timestamps = local_refine
     local.transcribe_batch = lambda *args: live_batch()
     t = LiveTranscriber.__new__(LiveTranscriber)
+    t.ktalk_only = False
+    t._meeting_generation = 0
     t.asr = fb
     t._per_speaker_ingest = Mock()
     t._apply_refine = lambda result: applied.set()

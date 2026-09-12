@@ -89,7 +89,10 @@ def test_human_status_when_reason_present_then_renders_it(tmp_path, monkeypatch,
     assert capsys.readouterr().out.strip() == ("waiting: cleanup_failed" if reason else "waiting")
 
 
-def test_existing_live_command_when_dispatched_then_forwards_audio_and_meeting_options(monkeypatch):
+@pytest.mark.parametrize("ktalk_only", [False, True])
+def test_existing_live_command_when_dispatched_then_forwards_audio_and_meeting_options(
+    monkeypatch, ktalk_only
+):
     from recog import live
 
     calls = []
@@ -113,6 +116,7 @@ def test_existing_live_command_when_dispatched_then_forwards_audio_and_meeting_o
             "Speaker",
             "--no-save-audio",
             "--list-devices",
+            *(["--ktalk-only"] if ktalk_only else []),
         ],
     )
 
@@ -126,6 +130,7 @@ def test_existing_live_command_when_dispatched_then_forwards_audio_and_meeting_o
             "output_file": "transcript.txt",
             "list_devices": True,
             "use_ktalk": True,
+            "ktalk_only": ktalk_only,
             "mic_speaker_name": "Speaker",
             "save_audio": False,
         }

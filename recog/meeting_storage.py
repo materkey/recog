@@ -129,7 +129,8 @@ class MeetingStorage:
         ktalk: bool = False,
         screencapture: bool = False,
         system_audio_backend: str = "none",
-        chunk_duration_ms: int = 3000
+        chunk_duration_ms: int = 3000,
+        ktalk_only: bool = False,
     ) -> str:
         """
         Начать сессию записи. Создаёт первую встречу.
@@ -152,6 +153,8 @@ class MeetingStorage:
             "screencapture": screencapture,
             "system_audio_backend": system_audio_backend
         }
+        if ktalk_only:
+            self._mode["ktalk_only"] = True
         self._chunk_duration_ms = chunk_duration_ms
 
         # Определяем начальный source
@@ -1073,6 +1076,13 @@ class MeetingStorage:
                 if meta.get("ended_at") is not None:
                     continue
 
+                # Live owns the capture state; a joined room alone does not
+                # mean its devices started successfully.
+                if meta.get("mode", {}).get("ktalk_only") and not meta.get(
+                    "recording_active", False
+                ):
+                    continue
+
                 # Формат как в index.json
                 active.append({
                     "id": meta["id"],
@@ -1254,6 +1264,17 @@ class MeetingStorage:
         self._save_json(index_path, index)
 
     # ========== Audio & Diarization Methods ==========
+
+    def set_recording_active(self, active: bool) -> None:
+        """Persist the capture owner's result for status readers in other processes."""
+        with self._segment_lock:
+            if self.current_meeting_path is None:
+                return
+            meta = self._load_meta()
+            # A same-day meeting may have been created with another policy.
+            meta["mode"] = dict(self._mode)
+            meta["recording_active"] = active
+            self._save_meta(meta)
 
     def set_audio_paths(
         self,
