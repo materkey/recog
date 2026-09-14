@@ -65,6 +65,7 @@
     cursor: pointer;
 }
 .profile-settings-menu > button:hover { background: var(--bg-hover); }
+.desktop-status { margin: 0; padding: 10px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); }
 .profile-notice {
     padding: 10px 24px;
     background: var(--bg-secondary);

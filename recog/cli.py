@@ -138,12 +138,22 @@ def build_parser():
         help="Пересканировать внешние директории (обновить кэш)"
     )
 
+    from recog.desktop.cli import configure_parser
+
+    configure_parser(subparsers)
+
     return parser
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.command == "desktop":
+        from recog.config import get_data_dir
+        from recog.desktop.cli import main as desktop_main
+
+        sys.exit(desktop_main(args, get_data_dir()))
 
     if args.command == "live":
         from recog.live import live_pipeline

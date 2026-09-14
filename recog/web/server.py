@@ -27,6 +27,7 @@ from watchdog.events import FileSystemEventHandler
 
 from recog.web.ai_provider import get_provider, get_all_providers, build_prompt, get_task_settings
 from dotenv import load_dotenv
+from recog.desktop.service import DesktopIntegration, status as desktop_status
 
 # Load .env from project root
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -474,6 +475,7 @@ async def lifespan(app: FastAPI):
     meeting_catalog = MeetingCatalog(MEETINGS_DIR, get_external_paths())
     observer.schedule(meeting_catalog, str(MEETINGS_DIR), recursive=True)
     observer_started = False
+    desktop = DesktopIntegration(DATA_DIR / "desktop")
 
     try:
         observer.start()
@@ -499,10 +501,13 @@ async def lifespan(app: FastAPI):
         )
         await bridge_subscriber.start()
 
+        await desktop.start()
+
         print(f"Server started at http://{HOST}:{PORT}")
 
         yield
     finally:
+        await desktop.stop()
         if bridge_subscriber:
             await bridge_subscriber.stop()
         observer.stop()
@@ -513,6 +518,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Recog Transcripts", lifespan=lifespan)
+
+
+@app.get("/api/desktop/status")
+async def get_desktop_status():
+    return await asyncio.to_thread(desktop_status, DATA_DIR / "desktop")
 
 
 class AiModelsRequest(BaseModel):

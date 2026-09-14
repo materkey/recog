@@ -5,6 +5,7 @@ import webpack from 'webpack';
 import { createManifest, loadConferenceHosts } from './scripts/conference-hosts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const packageVersion = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version;
 const hosts = loadConferenceHosts();
 const manifest = createManifest(JSON.parse(fs.readFileSync(path.join(__dirname, 'manifest.json'), 'utf8')), hosts);
 const assets = ['content.js', 'popup.html', 'popup.js', 'src/audio-worklet/downsampler.js',
@@ -19,7 +20,7 @@ export default {
     filename: 'injected.js'
   },
   plugins: [
-    new webpack.DefinePlugin({ __RECOG_CONFERENCE_HOSTS__: JSON.stringify(hosts) }),
+    new webpack.DefinePlugin({ __RECOG_CONFERENCE_HOSTS__: JSON.stringify(hosts), __RECOG_RUNTIME_VERSION__: JSON.stringify(packageVersion) }),
     {
       apply(compiler) {
         compiler.hooks.thisCompilation.tap('ExtensionAssets', compilation => {
