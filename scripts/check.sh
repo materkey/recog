@@ -64,7 +64,13 @@ trap 'rm -rf "$RENDER_DIR"' EXIT
 ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
 echo "  rendered $(find "$RENDER_DIR" -type f | wc -l | tr -d ' ') $(uname -s) units"
 
-step "pytest"
-"$PYTHON" -m pytest -q -m "not e2e"
+if [ -n "${RECOG_QUALITY_BASE:-}" ]; then
+    step "quality gates (baseline and current pytest with branch coverage)"
+    "$PYTHON" scripts/quality.py --base "$RECOG_QUALITY_BASE" \
+        --output "${RECOG_QUALITY_OUTPUT:-.local/quality}"
+else
+    step "pytest"
+    "$PYTHON" -m pytest -q -m "not e2e"
+fi
 
 printf '\ncheck: OK\n'

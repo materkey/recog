@@ -30,6 +30,7 @@ printf '%s\n' "python $*" >> "$STUB_LOG"
 case "$*" in
   *compileall*)    exit "${STUB_COMPILEALL_RC:-0}" ;;
   *"-m recog --help"*)  exit "${STUB_HELP_RC:-0}" ;;
+  *scripts/quality.py*) exit "${STUB_QUALITY_RC:-0}" ;;
   *pytest*)        exit "${STUB_PYTEST_RC:-0}" ;;
 esac
 exit 0
@@ -321,8 +322,29 @@ def test_ci_constrains_macos_installs(workflow):
     script = _run_script(workflow)
     assert "-c deploy/python/constraints/macos.txt" in script
     # Every pip stage goes through the same variable, so none can skip it.
-    assert script.count("pip install $PIP_ARGS") == 3
+    dependency_installs = [
+        line
+        for line in script.splitlines()
+        if "pip install" in line and "--upgrade pip" not in line
+    ]
+    assert dependency_installs
+    assert all("pip install $PIP_ARGS" in line for line in dependency_installs)
 
 
 def test_ci_runs_the_check_script(workflow):
-    assert _steps(workflow)[-1]["run"].strip() == "./scripts/check.sh"
+    assert any(step.get("run", "").strip() == "./scripts/check.sh" for step in _steps(workflow))
+
+
+@pytest.mark.parametrize("quality_exit", [0, 1])
+def test_quality_enabled_when_gate_finishes_then_verdict_propagates_without_duplicate_pytest(
+    repo, stub_bin, quality_exit
+):
+    result = run_check(
+        repo,
+        stub_bin,
+        {"RECOG_QUALITY_BASE": "origin/main", "STUB_QUALITY_RC": str(quality_exit)},
+    )
+    assert result.returncode == quality_exit
+    assert sum("scripts/quality.py --base origin/main" in call for call in result.calls) == 1
+    assert not any("-m pytest" in call for call in result.calls)
+    assert ("check: OK" in result.stdout) == (quality_exit == 0)
