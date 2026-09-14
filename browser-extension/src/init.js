@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { injectStyles, addAiTab, createTranscriptContent, createCopilotContent, watchTabChanges, initPlatformUI } from './ui.js';
+import { injectStyles, addAiTab, getKtalkChatTabs, removeKtalkUi, createTranscriptContent, createCopilotContent, watchTabChanges, initPlatformUI } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
 import { sendMeetingLeave } from './meeting.js';
@@ -135,14 +135,19 @@ function tryAttachConference() {
 }
 
 function ktalkUiMissing() {
-  // No tabset means the chat panel is closed - there is nowhere to inject yet.
-  if (!document.querySelector('.tl-tabset__content')) return false;
-  return !document.querySelector('.ktalk-ai-tab')
+  const tabs = getKtalkChatTabs();
+  if (!tabs) return !!document.querySelector('.ktalk-ai-tab-wrapper, .ktalk-ai-panel');
+  return !tabs.querySelector('.ktalk-ai-tab')
     || AI_CONTENT_RECOVERY.some(({ selector }) => !document.querySelector(selector));
 }
 
 function recoverKtalkUi() {
-  if (!document.querySelector('.ktalk-ai-tab')) {
+  const tabs = getKtalkChatTabs();
+  if (!tabs) {
+    removeKtalkUi();
+    return;
+  }
+  if (!tabs.querySelector('.ktalk-ai-tab')) {
     setupUI();
   }
   for (const { selector, stateKey, create } of AI_CONTENT_RECOVERY) {
@@ -363,15 +368,15 @@ export function init() {
     updateDebugPanel();
   }, 2000);
 
-  // KTalk renders the tabset only while the chat panel is open, so the 2 s
+  // KTalk renders the chat tabset only while the chat panel is open, so the 2 s
   // interval alone shows the Recog tab with a visible lag after the panel
   // opens (and after every KTalk re-render). React to DOM changes instead;
   // the interval stays as a fallback.
   if (!adapter || adapter.supportsTabInjection()) {
     // Synchronous on purpose: rAF never fires and setTimeout is clamped to
     // ~1 s in hidden/unfocused tabs, while observer callbacks are microtasks
-    // and run everywhere. ktalkUiMissing() keeps the common case to a single
-    // querySelector, and our own insertions can't loop the observer - the
+    // and run everywhere. ktalkUiMissing() limits recovery to meeting UI;
+    // our own insertions can't loop the observer - the
     // re-entered callback sees the UI present and returns.
     const uiObserver = new MutationObserver(() => {
       if (ktalkUiMissing()) recoverKtalkUi();
