@@ -470,7 +470,7 @@ export class KTalkAdapter {
    * Get UI tab container selector (KTalk uses custom tab system)
    */
   getTabContainerSelector() {
-    return '.tl-tabset__content';
+    return '.slide-menu-wrapper .tl-tabset__content';
   }
 
   /**

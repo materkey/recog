@@ -682,15 +682,27 @@ export function injectStyles() {
   document.head.appendChild(styles);
 }
 
-export function addAiTab() {
-  if (document.querySelector('.ktalk-ai-tab')) {
-    return true;
-  }
+export function getKtalkChatTabs() {
+  if (!window.$conf?.jitsiConf) return null;
+  const chat = document.querySelector('.slide-menu-wrapper');
+  if (!chat?.querySelector('.content')) return null;
+  return chat.querySelector('.tl-tabset__content');
+}
 
-  const tabsContainer = document.querySelector('.tl-tabset__content');
+export function removeKtalkUi() {
+  deactivateCustomTabs();
+  document.querySelectorAll('.ktalk-ai-tab-wrapper, .ktalk-ai-panel').forEach(el => el.remove());
+  state.transcriptContentElement = null;
+  state.copilotContentElement = null;
+  state.originalChatContent = null;
+}
+
+export function addAiTab() {
+  const tabsContainer = getKtalkChatTabs();
   if (!tabsContainer) {
     return false;
   }
+  if (tabsContainer.querySelector('.ktalk-ai-tab')) return true;
 
   console.log('[KTalk Transcript] Adding AI tab to tabset');
 
@@ -1616,7 +1628,7 @@ function activateVas3kView(view) {
 }
 
 export function watchTabChanges() {
-  const tabsContainer = document.querySelector('.tl-tabset__content');
+  const tabsContainer = getKtalkChatTabs();
   if (!tabsContainer) return;
 
   tabsContainer.addEventListener('click', (e) => {
