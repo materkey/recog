@@ -11,15 +11,26 @@ async function attachDesktop(directory, digest, statusPath, target) {
     return {app_version: electron.app.getVersion(), bundle: globalThis[key].bundle};
   }
   const record = globalThis[key] = {state: 'initializing', bundle: digest};
+  function writeRuntime(state, reason) {
+    const temporary = statusPath + '.' + process.pid + '.tmp';
+    fs.writeFileSync(temporary, JSON.stringify({state, reason, target,
+      app_version: electron.app.getVersion(), updated_at: Date.now() / 1000}), {mode: 0o600});
+    fs.renameSync(temporary, statusPath);
+  }
   function reportFailure() {
     record.lastError = 'page_initialization_failed';
     try {
-      const temporary = statusPath + '.' + process.pid + '.tmp';
-      fs.writeFileSync(temporary, JSON.stringify({state: 'incompatible',
-        reason: record.lastError, target, app_version: electron.app.getVersion(),
-        updated_at: Date.now() / 1000}), {mode: 0o600});
-      fs.renameSync(temporary, statusPath);
+      writeRuntime('incompatible', record.lastError);
     } catch { /* observer still retains the initial attachment result */ }
+  }
+  // A reload is the page's retry boundary: once a page initializes again, the
+  // persisted failure is stale and the observer restores the attachment.
+  function reportRecovery(injected) {
+    if (!injected || !record.lastError) return;
+    try {
+      writeRuntime('ready', null);
+      record.lastError = null;
+    } catch { /* retried after the next successful page */ }
   }
   try {
     await electron.app.whenReady();
@@ -42,9 +53,9 @@ async function attachDesktop(directory, digest, statusPath, target) {
       } catch { return false; }
     };
     async function inject(contents) {
-      if (contents.isDestroyed() || !eligible(contents.getURL())) return;
+      if (contents.isDestroyed() || !eligible(contents.getURL())) return false;
       const extension = await load(contents.session);
-      if (contents.isDestroyed()) return;
+      if (contents.isDestroyed()) return false;
       const url = 'chrome-extension://' + extension.id + '/src/audio-worklet/downsampler.js';
       const result = await contents.executeJavaScript(`(() => {
         const u = new URL(location.href);
@@ -55,12 +66,13 @@ async function attachDesktop(directory, digest, statusPath, target) {
         return window.__recogDesktopRuntime?.state;
       })()`, true);
       if (result === 'failed' || !result) throw new Error('Recog page initialization failed');
+      return true;
     }
     // Native content scripts cover new documents. This also handles a new
     // persistent session and the narrow race while loadExtension is pending.
     const watch = (_event, contents) => {
       contents.on('dom-ready', () => {
-        inject(contents).catch(reportFailure);
+        inject(contents).then(reportRecovery, reportFailure);
       });
     };
     record.watch = watch;

@@ -10,6 +10,7 @@ records are grouped separately, making it clear where a new file belongs.
 | `recog/__main__.py`, `recog/cli.py` | `python -m recog` command entry point and argument handling |
 | `recog/` | Live capture, ASR, speakers, meeting storage, conference bridge and Copilot |
 | `recog/web/` | FastAPI server, live watchers and static SPA; `python -m recog.web.server` |
+| `recog/desktop/` | Optional KTalk desktop attachment: observer, inspector worker, bootstrap script and `python -m recog desktop` |
 | `recog/asr_server/` | Optional gateway and GigaAM server, launched independently of the client services |
 | `recog/prompts/` | Shared AI summary templates |
 | `recog/native/macos/` | ScreenCaptureKit Swift helper source |

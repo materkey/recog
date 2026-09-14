@@ -23,6 +23,7 @@
         cleanup_failed: 'после звонка перезапустите Толк',
         multiple_processes: 'найдено несколько процессов Толк',
         web_server_not_running: 'сервер Recog недоступен',
+        observer_failed: 'ошибка наблюдателя, подробности в логе web-сервера',
     };
     let timer = null;
     let request = null;

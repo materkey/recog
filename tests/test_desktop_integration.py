@@ -397,6 +397,107 @@ async def test_busy_recovery_lock_does_not_consume_token(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "previous,runtime_target,expected",
+    [
+        ("page_initialization_failed", "same", "attached"),
+        ("page_initialization_failed", "other", "incompatible"),
+        ("unsupported_version", "same", "incompatible"),
+    ],
+)
+async def test_runtime_recovery_when_page_reinjects_then_restores_only_page_failure(
+    tmp_path, monkeypatch, previous, runtime_target, expected
+):
+    root = tmp_path / "desktop"
+    target = processes.Target(42, 12.0, "/ktalk")
+    other = processes.Target(43, 13.0, "/ktalk")
+    storage.write_json(root / "config.json", {"enabled": True, "app": "/ktalk"})
+    storage.write_json(
+        root / "status.json",
+        {
+            "state": "incompatible",
+            "reason": previous,
+            "target": target.to_dict(),
+            "inspector_closed": True,
+            "bundle": "digest",
+        },
+    )
+    storage.write_json(
+        root / "runtime.json",
+        {
+            "state": "ready",
+            "reason": None,
+            "target": (target if runtime_target == "same" else other).to_dict(),
+        },
+    )
+    monkeypatch.setattr(service, "application_path", lambda raw: Path(raw))
+    monkeypatch.setattr(service, "find_targets", lambda app: [target])
+    monkeypatch.setattr(
+        service.DesktopIntegration, "_notify", lambda self, result: asyncio.sleep(0)
+    )
+    observer = service.DesktopIntegration(root)
+    try:
+        await observer._tick()
+        await observer._tick()
+        result = storage.read_json(root / "status.json")
+        assert result["state"] == expected
+        assert result["reason"] == (None if expected == "attached" else previous)
+        assert result["inspector_closed"] is True
+        assert result["bundle"] == "digest"
+    finally:
+        os.close(observer._lock_fd)
+
+
+@pytest.mark.asyncio
+async def test_observer_failure_when_repeated_then_logs_cause_rate_limited(tmp_path, monkeypatch):
+    root = tmp_path / "desktop"
+    storage.write_json(root / "config.json", {"enabled": True, "app": "/missing"})
+    observer = service.DesktopIntegration(root)
+    ticks = []
+    logged = []
+
+    async def tick():
+        ticks.append(True)
+        if len(ticks) == 3:
+            observer._stop.set()
+        raise FileNotFoundError("/missing/ktalk.AppImage")
+
+    monkeypatch.setattr(observer, "_tick", tick)
+    monkeypatch.setattr(observer, "_claim", lambda: True)
+    monkeypatch.setattr(service, "POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        service, "log_rate_limited", lambda key, msg, **kw: logged.append((key, msg, kw))
+    )
+    monkeypatch.setattr(
+        service.DesktopIntegration, "_notify", lambda self, result: asyncio.sleep(0)
+    )
+    observer._lock_fd = os.open(root / "observer.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    await observer._run()
+    assert len(logged) == 3
+    key, message, kwargs = logged[0]
+    assert key == "desktop-observer:FileNotFoundError"
+    assert "FileNotFoundError: /missing/ktalk.AppImage" in message
+    assert kwargs["interval_s"] >= service.POLL_SECONDS
+    assert storage.read_json(root / "status.json")["reason"] == "observer_failed"
+
+
+def test_inspector_connect_when_listener_redirects_then_refuses():
+    from websockets.datastructures import Headers
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response
+
+    redirect = InvalidStatus(
+        Response(302, "Found", Headers({"Location": "ws://127.0.0.1:9229/other"}))
+    )
+    connection = worker.connect_without_redirects("ws://127.0.0.1:9229/x", open_timeout=1)
+    assert isinstance(connection, worker.websockets.connect)
+    assert worker.websockets.connect.process_redirect(connection, redirect) == (
+        "ws://127.0.0.1:9229/other"
+    )
+    assert connection.process_redirect(redirect) is redirect
+
+
+@pytest.mark.asyncio
 async def test_late_runtime_incompatibility_overrides_same_target_attachment(tmp_path, monkeypatch):
     root = tmp_path / "desktop"
     target = processes.Target(42, 12.0, "/ktalk")
@@ -970,9 +1071,16 @@ async def test_inspector_rpc_when_events_or_errors_arrive_then_filters_and_redac
         async def recv(self):
             return next(messages)
 
-    def connect(url, **kwargs):
-        assert ("proxy" in kwargs) == version.startswith("15")
-        return Socket()
+    class connect:
+        def __init__(self, url, **kwargs):
+            assert ("proxy" in kwargs) == version.startswith("15")
+            self.socket = Socket()
+
+        async def __aenter__(self):
+            return self.socket
+
+        async def __aexit__(self, *args):
+            pass
 
     monkeypatch.setattr(worker.websockets, "__version__", version)
     monkeypatch.setattr(worker.websockets, "connect", connect)
