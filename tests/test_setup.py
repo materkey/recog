@@ -372,6 +372,14 @@ def test_creates_config_files_from_the_examples(repo, stubs):
     assert not (repo.parent / "home/.recog/speakers_ecapa.json").exists()
 
 
+def test_no_env_when_config_files_are_absent_then_neither_is_created(repo, stubs):
+    result = run_setup(repo, stubs, *offline_args("--no-services", "--no-env"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (repo / ".env").exists()
+    assert not (repo / "recog/web/.env").exists()
+
+
 def test_existing_config_files_are_never_overwritten(repo, stubs):
     (repo / ".env").write_text("RECOG_ASR_BACKEND=remote\nMINE=1\n")
 

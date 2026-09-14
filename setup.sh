@@ -14,6 +14,7 @@
 #   --no-services    prepare everything, do not touch launchd / systemd
 #   --no-prefetch    skip the GigaAM weight-cache preparation
 #   --no-extension   skip the Chrome extension build
+#   --no-env         do not create environment files from examples
 #
 # Environment (read from the calling shell, NOT from .env — .env is created by
 # this script, later than these are needed):
@@ -50,6 +51,7 @@ HOST_OS="$(deps_host_os)"
 DO_SERVICES=1
 DO_PREFETCH=1
 DO_EXTENSION=1
+DO_ENV=1
 
 # Collected as we go, reported in the summary.
 MISSING_REQUIRED=()
@@ -75,6 +77,7 @@ while [ $# -gt 0 ]; do
         --no-services)  DO_SERVICES=0 ;;
         --no-prefetch)  DO_PREFETCH=0 ;;
         --no-extension) DO_EXTENSION=0 ;;
+        --no-env)       DO_ENV=0 ;;
         -h|--help)      usage; exit 0 ;;
         *)              echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -342,8 +345,12 @@ copy_example() {
     fi
 }
 
-copy_example "$REPO_DIR/.env" "$REPO_DIR/.env.example"
-copy_example "$REPO_DIR/recog/web/.env" "$REPO_DIR/recog/web/.env.example"
+if [ "$DO_ENV" -eq 1 ]; then
+    copy_example "$REPO_DIR/.env" "$REPO_DIR/.env.example"
+    copy_example "$REPO_DIR/recog/web/.env" "$REPO_DIR/recog/web/.env.example"
+else
+    echo "Skipped environment files (--no-env)"
+fi
 DATA_DIR="$(DEPS_PYTHON="$VENV_PY" bash "$REPO_DIR/scripts/data-dir.sh")"
 mkdir -p "$DATA_DIR"
 

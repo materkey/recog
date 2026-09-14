@@ -2,3 +2,6 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 watchdog>=3.0.0
 httpx>=0.25.0
+
+# Local desktop-process discovery (observer runs inside the web server).
+psutil>=6.0

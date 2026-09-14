@@ -72,6 +72,10 @@ export class KTalkAdapter {
     return this.conf;
   }
 
+  getMeetingUrl() {
+    return window.location.origin + window.location.pathname;
+  }
+
   /**
    * Get the underlying Jitsi conference
    */
