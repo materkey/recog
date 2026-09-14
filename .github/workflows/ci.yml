@@ -31,6 +31,8 @@ jobs:
       GIGAAM_REF: 6e4b027
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -75,6 +77,60 @@ jobs:
           fi
           pip install $PIP_ARGS "${reqs[@]}"
 
+      - name: Install quality tools
+        shell: bash
+        run: pip install $PIP_ARGS -r deploy/python/requirements-quality.txt
+
+      - name: Select quality baseline
+        if: runner.os == 'Linux'
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        shell: bash
+        run: |
+          base="${PR_BASE:-origin/main}"
+          if [ "$GITHUB_REF" = refs/heads/main ] && [ -n "$PUSH_BEFORE" ] && [[ ! "$PUSH_BEFORE" =~ ^0+$ ]]; then
+            base="$PUSH_BEFORE"
+          fi
+          echo "RECOG_QUALITY_BASE=$base" >> "$GITHUB_ENV"
+
       - name: Run checks
         shell: bash
         run: ./scripts/check.sh
+
+      - name: Summarize quality delta
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          for report in .local/quality/run-*/report.md; do
+            [ -f "$report" ] || continue
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Publish quality reports
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-reports
+          path: |
+            .local/quality/run-*/*.json
+            .local/quality/run-*/*.md
+            .local/quality/run-*/*.log
+          include-hidden-files: true
+          if-no-files-found: error
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: browser-extension/package-lock.json
+      - run: npm ci
+        working-directory: browser-extension
+      - run: npm test -- --runInBand
+        working-directory: browser-extension
+      - run: npm run build
+        working-directory: browser-extension

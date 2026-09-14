@@ -1,0 +1,1 @@
+exclude = ["**/*.js", "**/*.ts", "**/*.swift", "**/native/**", "**/__pycache__/**"]
