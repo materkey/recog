@@ -8,7 +8,7 @@ export function injectDebugStyles() {
       .ktalk-debug-toggle {
         position: fixed;
         right: 12px;
-        bottom: 12px;
+        bottom: 76px;
         z-index: 9999;
         padding: 6px 10px;
         background: rgba(0, 0, 0, 0.6);
@@ -21,7 +21,7 @@ export function injectDebugStyles() {
       .ktalk-debug-panel {
         position: fixed;
         right: 12px;
-        bottom: 48px;
+        bottom: 112px;
         width: 360px;
         max-height: 50vh;
         overflow: auto;
