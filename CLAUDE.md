@@ -32,6 +32,24 @@ tools expect them. `AGENTS.md` is a symlink to this file.
 
 ## Commands
 
+### Preparing a revmux review
+
+The caller preparing each review round must generate quality measurements before
+launching revmux; read-only reviewers consume the reports and do not run the gate.
+Read `docs/quality.md` for dependencies and policy, fetch the review's target ref,
+then run from the repository root (replace `origin/main` with that target):
+
+```bash
+venv-gigaam/bin/python scripts/quality.py --base origin/main --output .local/quality
+```
+
+Copy `report.md` and `report.json` from the exact `run-*` directory printed by this
+invocation into the round's `input/context/`, and identify them in the review context.
+Regenerate after changes; never substitute an older successful report for a failed
+measurement. Resolve gate failures before review. If measurement cannot complete,
+record the error and explicitly report metrics as unverified instead of claiming
+the quality check passed. See `.revmux/profile.md` for reviewer interpretation.
+
 ### Setup
 ```bash
 # Full setup on macOS and Linux (venv, deps, GigaAM from a git pin, config

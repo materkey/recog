@@ -90,3 +90,21 @@ test that would need a microphone, a GPU or a network call is written against a 
 A missing test is worth reporting only when the change it covers is the kind above — silent loss,
 meeting identity, personal data, or a shipped script's arithmetic. Coverage as an end in itself is not
 a finding here.
+
+## Quality measurements
+
+Read `docs/quality.md` and the current round's `report.md` and `report.json` in the
+supplied context. The caller generates these before review; do not run tests or
+recalculate metrics yourself. If reports are missing, stale or show a measurement
+error, state that metrics are unverified; never infer coverage or numeric scores.
+
+For changed functions, use increases in CRAP, SCB erosion and cognitive erosion
+to focus inspection on uncovered branches, more complicated state transitions,
+additional synchronization and mixed responsibilities. Trace aggregate structural
+changes to the changed code before attributing them to a function. Reports cover
+Python under `recog/`; do not extrapolate their results to JavaScript or native code.
+
+Follow the thresholds in `docs/quality.md`; do not duplicate quality-gate failures.
+Erosion metrics are informational, and a numeric increase alone is not a defect.
+Each finding must cite concrete code and explain its consequences for this project's
+contracts. Do not demand coverage or refactoring solely to improve a score.
