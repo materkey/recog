@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+from recog.log_utils import log_rate_limited
+
 from .processes import (
     Target,
     application_path,
@@ -280,6 +282,15 @@ class DesktopIntegration:
             await self._save(result)
             await self._notify(result)
             self._attempted.add(target.key)
+        elif (
+            runtime.get("target") == target.to_dict()
+            and runtime.get("state") == "ready"
+            and previous.get("target") == target.to_dict()
+            and previous.get("state") == "incompatible"
+            and previous.get("reason") == "page_initialization_failed"
+        ):
+            # A later page initialized fine, so the persisted page failure is stale.
+            await self._save({**previous, "state": "attached", "reason": None})
         if target.key in self._attempted:
             return
         if not await asyncio.to_thread(ready, target):
@@ -326,8 +337,13 @@ class DesktopIntegration:
             while not self._stop.is_set():
                 try:
                     await self._tick()
-                except Exception:
-                    log.warning("Desktop observer iteration failed", exc_info=False)
+                except Exception as exc:
+                    # A persistent cause (a renamed AppImage, say) fails every 2 s tick.
+                    log_rate_limited(
+                        f"desktop-observer:{type(exc).__name__}",
+                        f"Desktop observer iteration failed: {type(exc).__name__}: {exc}",
+                        interval_s=60.0,
+                    )
                     if self._lock_fd is not None:
                         result = {
                             "state": "error",

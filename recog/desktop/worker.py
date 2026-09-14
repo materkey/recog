@@ -91,12 +91,22 @@ async def endpoint(target: Target, expected: str | None = None) -> str:
     return url
 
 
+def connect_without_redirects(url: str, **options):
+    # websockets follows up to WEBSOCKETS_MAX_REDIRECTS 3xx replies by default; the
+    # validated inspector URL must not be traded for one the listener chooses.
+    class Connect(websockets.connect):
+        def process_redirect(self, exc):
+            return exc
+
+    return Connect(url, **options)
+
+
 async def evaluate(url: str, expression: str):
     # Node inspector is local. Never use an HTTP proxy or follow redirections.
     options = dict(open_timeout=1, close_timeout=1, max_size=131072)
     if int(websockets.__version__.split(".")[0]) >= 15:
         options["proxy"] = None
-    async with websockets.connect(url, **options) as ws:
+    async with connect_without_redirects(url, **options) as ws:
         await ws.send(
             json.dumps(
                 {

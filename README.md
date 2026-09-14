@@ -70,7 +70,8 @@ activate anything** and exits non-zero (previously running services are left
 running). Install what it lists and run `./setup.sh` again.
 
 Flags: `--no-services` (prepare only, do not touch launchd/systemd),
-`--no-prefetch` (skip the weight-cache preparation), `--no-extension`.
+`--no-prefetch` (skip the weight-cache preparation), `--no-extension`,
+`--no-env` (keep existing environment files, do not create them from the examples).
 
 ### Install-time environment variables
 

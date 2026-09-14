@@ -57,7 +57,8 @@ the quality check passed. See `.revmux/profile.md` for reviewer interpretation.
 # also how you update after a git pull.
 ./setup.sh
 
-# Flags: --no-services | --no-prefetch | --no-extension
+# Flags: --no-services | --no-prefetch | --no-extension | --no-env (keep
+# existing environment files, do not create them from the examples)
 # Call-shell env (NOT .env): RECOG_TORCH_INDEX_URL, RECOG_GIGAAM_URL/REF,
 # RECOG_GIGAAM_EDITABLE (local checkout installed with pip install -e)
 RECOG_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 ./setup.sh
@@ -305,7 +306,8 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
   - `copilot_supervisor.py` - Auto-spawn Copilot supervisor: asyncio daemon (`SessionLifecycle` state machine + `TmuxRunner` + `Watchdog`) that spawns a headless Claude session per conference meeting (`is_conference_source`: ktalk/vas3k/jitsi/matrix) via `tmux -L recog-copilot`, drives lifecycle from bridge `meeting_started/ended`, and reports `copilot_agent_status` to the bridge
   - `copilot_channel.py` - copilot MCP daemon (channel push); `SessionCountReporter` polls `session_manager._server_instances` and reports `claude_sessions {count}` to the bridge for the status merge
   - `ws_origin.py` - Shared WS Origin allowlist (`origin_allowed`): conference hosts mirroring the extension `manifest.json` (`*.ktalk.ru` wildcard via hostname parse, exact Jitsi/Element hosts) + webapp origin (9080); no-Origin clients (Python daemons) pass, `Origin: null` and everything else is rejected. Used by `recog/ktalk_bridge.py` and `recog/web/server.py`
-- `recog/cli.py` - CLI implementation (commands: live, meetings), launched by `recog/__main__.py` through `python -m recog`
+- `recog/cli.py` - CLI implementation (commands: live, meetings, desktop), launched by `recog/__main__.py` through `python -m recog`
+- `recog/desktop/` - Optional attachment to the official KTalk desktop app (Electron): `DesktopIntegration` (`service.py`) is an observer task started from the web-server lifespan and exposed as `GET /api/desktop/status`; `worker.py` is the short-lived inspector worker, `bootstrap.js` the code it evaluates inside the app, `cli.py` the `python -m recog desktop {enable,disable,attach,status}` subcommands. State lives under `<data dir>/desktop/`; needs `psutil` (`deploy/python/requirements-web.txt`). See `docs/desktop-ktalk.md`
 - `recog/meeting_storage.py` - Meeting metadata, transcript segments and recorded audio storage
 - `recog/asr_server/` - Optional, independently launched gateway and GigaAM HTTP backend (`python -m recog.asr_server.gateway` / `python -m recog.asr_server.gigaam_backend`)
 - `recog/ktalk_bridge.py` - WebSocket server receiving speaker signals from Chrome extension; merges `copilot_agent_status` (supervisor) + `claude_sessions` (daemon) into the effective agent status broadcast to extension and subscriber clients; fans out `copilot_reply` and broadcast `copilot_status` frames to `_subscriber_clients` while keeping per-request rejection echoes originator-only, relays webapp `copilot_spawn_request`/`copilot_stop_request` to the supervisor, and owns `_manual_copilot_active` (conference precedence, `supervisor_hello.current_meeting_id` re-arm). WS connections are gated at accept-time by the Origin allowlist (`recog/ws_origin.py`): browser pages must come from a conference host or the webapp, no-Origin Python clients pass. A meeting ends (`_end_meeting_on_extension_gone`) when the extension WS that sent `meeting_join` drops — `_meeting_owner_ws` — not only when the last extension client is gone: the content script runs on every conference host, so an idle `example.ktalk.ru` tab holds a WS with no call and would otherwise pin the meeting LIVE forever
@@ -358,6 +360,8 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 - `RECOG_PYTHON` - the interpreter baked into the rendered units (`scripts/service/common.sh`). Deliberately **not** `DEPS_PYTHON`, which only selects the interpreter `scripts/deps.sh` uses for its library probes.
 - `RECOG_HOST_OS` - overrides `uname -s` for the `scripts/deps.sh` probes (lets a Mac exercise the Linux ones).
 - `RECOG_CHECK_PYTHON` - interpreter override for `scripts/check.sh`.
+- `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs `scripts/quality.py --base $RECOG_QUALITY_BASE` (baseline + head pytest with branch coverage, the merge-base quality gate from `docs/quality.md`) instead of plain pytest. Linux CI sets it; unset locally, `check.sh` runs only pytest.
+- `RECOG_QUALITY_OUTPUT` - output root for those quality runs (default `.local/quality`).
 - `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL` / `RECOG_GIGAAM_REF` / `RECOG_GIGAAM_EDITABLE` - see Setup above.
 
 ## Data Files
@@ -369,7 +373,8 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 ## Testing
 
 ```bash
-./scripts/check.sh                        # everything below; exactly what CI runs (macOS + Linux)
+./scripts/check.sh                        # everything below; what CI runs on macOS
+RECOG_QUALITY_BASE=origin/main ./scripts/check.sh   # what Linux CI runs: the quality gate replaces plain pytest
 
 python -m pytest tests/ -q -m "not e2e"   # unit tests (e2e needs playwright + a real conference)
 python -m compileall recog                # syntax check
