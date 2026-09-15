@@ -10,7 +10,7 @@ Environment="HOME=@HOME@"
 Environment="RECOG_DATA_DIR=@DATA_DIR@"
 # TERM is pinned so Ink does not emit kitty-only DCS queries in the spawned TUI.
 Environment=TERM=xterm-256color
-Environment="PATH=@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+Environment="PATH=@CLI_PATH_PREFIX@@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 ExecStart="@PYTHON@" -m recog.copilot_supervisor
 Restart=always
 RestartSec=5

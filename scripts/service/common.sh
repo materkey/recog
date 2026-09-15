@@ -67,6 +67,19 @@ svc_extra_path() {
     echo "/opt/homebrew/bin:$HOME/.local/bin"
 }
 
+svc_cli_path_prefix() {
+    local cli executable extra=""
+    # Preserve CLI locations discovered in the installer's shell: systemd
+    # and launchd do not inherit npm-prefix or other custom PATH entries.
+    for cli in claude tmux; do
+        executable="$(type -P "$cli")" || executable=""
+        case "$executable" in
+            /*) extra="$extra$(dirname "$executable"):" ;;
+        esac
+    done
+    printf '%s' "$extra"
+}
+
 # --- template rendering ----------------------------------------------------
 
 # Escape a value for the unit-file *format*. Backends override it; the default
@@ -107,6 +120,7 @@ svc_render_template() {
         -e "s|@PYTHON@|$(_svc_value "$(svc_python)")|g" \
         -e "s|@LOG_DIR@|$(_svc_value "$SVC_LOG_DIR")|g" \
         -e "s|@NODE_BIN@|$(_svc_value "$(svc_node_bin)")|g" \
+        -e "s|@CLI_PATH_PREFIX@|$(_svc_value "$(svc_cli_path_prefix)")|g" \
         -e "s|@EXTRA_PATH@|$(_svc_value "$(svc_extra_path)")|g" \
         "$src" > "$tmp" || { rm -f "$tmp"; return 1; }
 

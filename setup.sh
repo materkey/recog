@@ -27,6 +27,7 @@
 #   RECOG_HOST_OS           override the detected OS (tests)
 #   RECOG_HOST_ARCH         override the detected CPU architecture (tests)
 #   RECOG_SERVICE_OS        override the service backend (tests)
+#   RECOG_SKIP_COPILOT_CHECK=1 skip tmux/claude checks when Copilot is not needed
 
 # No `set -u`: empty-array expansions ("${PIP_CONSTRAINTS[@]}") are an
 # unbound-variable error under bash 3.2, which is what /bin/bash still is on
@@ -178,6 +179,12 @@ check_cmd() {
 }
 
 check_cmd ffmpeg required "refine timestamps + segment playback"
+if [ "${RECOG_SKIP_COPILOT_CHECK:-0}" = "1" ]; then
+    info "Copilot CLI checks skipped (RECOG_SKIP_COPILOT_CHECK=1)"
+else
+    check_cmd tmux required "Copilot sessions"
+    check_cmd claude required "Copilot sessions (sign in with claude before first use)"
+fi
 if [ "$HOST_OS" = "linux" ]; then
     check_cmd parec required "system audio capture"
     check_cmd pactl required "default-sink discovery"
@@ -535,8 +542,10 @@ if [ "$HOST_OS" = "darwin" ]; then
 else
     echo "  Keep the user services alive after logout: loginctl enable-linger ${USER:-\$USER}"
 fi
-echo "  Copilot:   off by default. To enable, set RECOG_COPILOT_AUTOSPAWN=1 in .env"
-echo "             (needs tmux and claude in PATH), then ./recog-service.sh restart-supervisor"
+echo "  Copilot:   sign in by running claude interactively as this user; setup does not verify authentication."
+echo "             Start it with the Copilot button in the web UI."
+echo "             Meeting auto-start is off by default: set RECOG_COPILOT_AUTOSPAWN=1 in .env,"
+echo "             then ./recog-service.sh restart-supervisor."
 
 if [ ${#WARNINGS[@]} -gt 0 ]; then
     echo ""
