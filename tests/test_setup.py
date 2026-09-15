@@ -438,7 +438,9 @@ def test_missing_copilot_cli_when_setup_runs_then_activation_is_blocked(repo, st
 
 
 @pytest.mark.parametrize("missing_audio", [False, True])
-def test_missing_copilot_when_checks_skipped_then_audio_still_gates_activation(repo, stubs, missing_audio):
+def test_missing_copilot_when_checks_skipped_then_audio_still_gates_activation(
+    repo, stubs, missing_audio
+):
     for name in ("claude", "tmux"):
         (stubs[0] / name).unlink()
     if missing_audio:
