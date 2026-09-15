@@ -50,6 +50,30 @@ def render(target_os, out_dir):
 
 
 @pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
+def test_custom_cli_directories_when_rendering_then_service_path_can_run_copilot(target_os, tmp_path):
+    cli_dirs = [tmp_path / "npm prefix & tools/bin", tmp_path / "tmux/bin"]
+    for name, directory in zip(("claude", "tmux"), cli_dirs):
+        directory.mkdir(parents=True)
+        cli = directory / name
+        cli.write_text(f"#!/bin/sh\necho {name}-ready\n")
+        cli.chmod(0o755)
+    out = tmp_path / "units"
+    run_service_sh("render", "--dry-run", str(out), env_extra={
+        "RECOG_SERVICE_OS": target_os,
+        "PATH": os.pathsep.join(map(str, cli_dirs)) + os.pathsep + os.environ["PATH"],
+    })
+    if target_os == "Darwin":
+        unit = plistlib.loads((out / "com.recog.copilot-supervisor.plist").read_bytes())
+        service_path = unit["EnvironmentVariables"]["PATH"]
+    else:
+        text = (out / "recog-copilot-supervisor.service").read_text()
+        service_path = re.search(r'^Environment="PATH=(.*)"$', text, re.M).group(1)
+    for name in ("claude", "tmux"):
+        result = subprocess.run([name], env={"PATH": service_path}, capture_output=True, text=True, check=True)
+        assert result.stdout.strip() == f"{name}-ready"
+
+
+@pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
 def test_custom_data_root_when_rendering_then_env_and_logs_share_it(target_os, tmp_path):
     """Сервис не должен читать один архив, пока CLI и логи используют другой."""
     data = tmp_path / "My data & archive"

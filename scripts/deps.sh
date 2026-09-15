@@ -179,6 +179,10 @@ deps_readiness_problems() {
     # ffmpeg: refine with word timestamps (including the local fallback of the
     # remote backend) and segment playback both shell out to it.
     deps_have ffmpeg || echo "ffmpeg not found — $(deps_hint ffmpeg)"
+    if [ "${RECOG_SKIP_COPILOT_CHECK:-0}" != "1" ]; then
+        deps_have tmux || echo "tmux not found (Copilot) — $(deps_hint tmux); if Copilot is not needed: RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh"
+        deps_have claude || echo "claude not found (Copilot) — $(deps_hint claude); run claude interactively to sign in, then rerun ./setup.sh; if Copilot is not needed: RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh"
+    fi
 
     if [ "$os" = "linux" ]; then
         deps_have parec || echo "parec not found — $(deps_hint parec)"
@@ -201,7 +205,5 @@ deps_optional_list() {
     printf '%s\t%s\n' \
         "npm"    "Chrome extension build (npm ci && npm run build)" \
         "node"   "AI providers and title generation (recog/node_env.py)" \
-        "tmux"   "Copilot sessions (recog/copilot_supervisor.py)" \
-        "claude" "Copilot sessions (Claude Code CLI)" \
         "jq"     "pretty-printed ./recog-service.sh debug"
 }

@@ -425,6 +425,38 @@ def test_remote_asr_without_a_url_stops_before_pip(repo, stubs):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("missing", ["claude", "tmux"])
+def test_missing_copilot_cli_when_setup_runs_then_activation_is_blocked(repo, stubs, missing):
+    (stubs[0] / missing).unlink()
+
+    result = run_setup(repo, stubs, *offline_args())
+
+    assert result.returncode != 0
+    assert f"{missing} not found (Copilot)" in result.stderr
+    assert "RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh" in result.stderr
+    assert not [c for c in result.calls if "enable --now" in c or " restart " in c]
+
+
+@pytest.mark.parametrize("missing_audio", [False, True])
+def test_missing_copilot_when_checks_skipped_then_audio_still_gates_activation(repo, stubs, missing_audio):
+    for name in ("claude", "tmux"):
+        (stubs[0] / name).unlink()
+    if missing_audio:
+        (stubs[0] / "ffmpeg").unlink()
+
+    result = run_setup(repo, stubs, *offline_args(), env_extra={"RECOG_SKIP_COPILOT_CHECK": "1"})
+
+    assert "not found (Copilot)" not in result.stderr
+    enables = [c for c in result.calls if "enable --now" in c]
+    if missing_audio:
+        assert result.returncode != 0
+        assert "ffmpeg not found" in result.stderr
+        assert not enables
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(enables) == 4
+
+
 def test_no_services_flag_leaves_the_service_manager_alone(repo, stubs):
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
