@@ -5940,3 +5940,45 @@ async def test_given_blocking_preemption_notice_when_join_runs_then_lifecycle_ar
     finally:
         subscriber.release_notice.set()
         await asyncio.wait_for(join_task, timeout=1.0)
+
+
+async def test_online_without_mcp_when_zero_persists_then_requests_throttled_recovery():
+    """given a live TUI without MCP - when startup grace elapses - then recover."""
+    from unittest.mock import AsyncMock
+
+    bridge, _ = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = "online"
+    bridge._set_claude_sessions(0)
+    bridge._relay_to_supervisors = AsyncMock(return_value=True)
+    for now in (100.0, 111.0, 159.0):
+        bridge._supervisor_status_ts = now
+        await bridge._recompute_agent_state(now=now)
+    bridge._relay_to_supervisors.assert_not_awaited()
+    bridge._supervisor_status_ts = 161.0
+    await bridge._recompute_agent_state(now=161.0)
+    bridge._relay_to_supervisors.assert_awaited_once_with(
+        {
+            "type": "copilot_channel_unavailable",
+            "meeting_id": bridge._meeting_storage.current_meeting_id,
+        }
+    )
+    bridge._supervisor_status_ts = 165.0
+    await bridge._recompute_agent_state(now=165.0)
+    assert bridge._relay_to_supervisors.await_count == 1
+
+
+@pytest.mark.parametrize(
+    "count,status", [(None, "online"), (1, "online"), (0, "spawning"), (0, "blocked")]
+)
+async def test_healthy_or_starting_agent_when_polled_then_does_not_recover(count, status):
+    """given no proven lost MCP client - when polled - then preserve the agent."""
+    from unittest.mock import AsyncMock
+
+    bridge, _ = _bridge_with_active_ktalk()
+    bridge._supervisor_agent_status = status
+    bridge._set_claude_sessions(count)
+    bridge._relay_to_supervisors = AsyncMock(return_value=True)
+    for now in (100.0, 161.0, 222.0):
+        bridge._supervisor_status_ts = now
+        await bridge._recompute_agent_state(now=now)
+    bridge._relay_to_supervisors.assert_not_awaited()

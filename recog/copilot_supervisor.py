@@ -846,6 +846,8 @@ class Supervisor:
             if not self.autospawn:
                 return
             await self._apply(self.lifecycle.meeting_ended(data.get("meeting_id")))
+        elif ftype == "copilot_channel_unavailable":
+            await self._recover_channel_session(data.get("meeting_id"))
         elif ftype == "copilot_spawn_request":
             # An explicit click is fresh user intent, not a flap: reset the
             # respawn budget here. A session that burned all its attempts parks
@@ -868,6 +870,26 @@ class Supervisor:
                     file=sys.stderr,
                 )
             await self._apply(commands)
+
+    async def _recover_channel_session(self, meeting_id: Optional[str]) -> None:
+        """Replace a disconnected MCP client using the existing respawn budget."""
+        async with self._execute_lock:
+            if (
+                self.lifecycle.state is not State.RUNNING
+                or meeting_id != self.lifecycle.meeting_id
+                or self._spawn_in_flight
+                or (self._respawn_task is not None and not self._respawn_task.done())
+                or self._respawn_attempts >= len(self.RESPAWN_BACKOFF_S)
+            ):
+                return
+            print(
+                f"{self._log_prefix} MCP session lost for {meeting_id!r} — restarting agent",
+                file=sys.stderr,
+            )
+            await self._execute_locked((Kill(),))
+            # A new meeting or Stop may arrive while the runner is stopping.
+            if self.lifecycle.meeting_id == meeting_id and self.lifecycle.state is State.RUNNING:
+                await self.on_session_died()
 
     async def _probe_session_alive(self) -> bool:
         try:

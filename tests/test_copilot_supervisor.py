@@ -2910,3 +2910,32 @@ async def test_macos_path_never_touches_systemd():
     await runner.spawn("A")
 
     assert set(fake.programs()) == {"tmux"}
+
+
+async def test_live_session_when_channel_lost_then_replaces_with_bounded_retry():
+    """given a live TUI without MCP - when recovery arrives - then respawn."""
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner, autospawn=False)
+    sup.RESPAWN_BACKOFF_S = (0.01,)
+    sup.lifecycle.adopt("meeting-1")
+    frame = {"type": "copilot_channel_unavailable", "meeting_id": "meeting-1"}
+    try:
+        await sup.handle_frame(frame)
+        await sup.handle_frame(frame)
+        await asyncio.sleep(0.03)
+        assert runner.kills == 1
+        assert runner.spawned == ["meeting-1"]
+        sup.lifecycle.session_ready()
+        await sup.handle_frame(frame)
+        assert runner.kills == 1  # exhausted budget must not kill again
+    finally:
+        await sup.stop()
+
+
+async def test_new_meeting_when_old_channel_recovery_arrives_then_preserves_session():
+    """given another active meeting - when a stale recovery arrives - then ignore."""
+    runner = FakeRunner()
+    sup = Supervisor(runner=runner)
+    sup.lifecycle.adopt("new-meeting")
+    await sup.handle_frame({"type": "copilot_channel_unavailable", "meeting_id": "old-meeting"})
+    assert runner.kills == 0

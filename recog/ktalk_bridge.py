@@ -62,6 +62,7 @@ AGENT_SILENCE_THRESHOLD_S = 10.0
 # never connected". Debounced so a supervisor leaving `spawning` before the
 # daemon's first `claude_sessions` poll (5 s) cannot flap the chip to offline.
 AGENT_SESSIONS_ZERO_DEBOUNCE_S = 10.0
+AGENT_CHANNEL_RECOVERY_S = 60.0
 
 # Synthetic lifecycle id for a manually spawned copilot session (webapp
 # "Recog Copilot" button). A constant — not a per-click uuid — so a flap or a
@@ -222,6 +223,7 @@ class KTalkBridge:
         # private attr missing) — merge must not treat it as a confident 0.
         self._supervisor_agent_status: Optional[str] = None
         self._supervisor_status_ts: float = 0.0  # time.monotonic of last report
+        self._channel_recovery_sent_at: Optional[float] = None
         self._claude_sessions_count: Optional[int] = None
         self._sessions_zero_since: Optional[float] = None  # when count first hit 0
         # Last effective status broadcast to extensions. Seeded to "offline"
@@ -1515,6 +1517,29 @@ class KTalkBridge:
             return "offline"
         return status
 
+    async def _recover_missing_channel_session(self, now: float):
+        """Ask the supervisor to replace a TUI that has lost its MCP transport."""
+        if (
+            self._sessions_zero_since is None
+            or now - self._sessions_zero_since < AGENT_CHANNEL_RECOVERY_S
+            or self._supervisor_agent_status not in ("online", "working")
+            or now - self._supervisor_status_ts > AGENT_SILENCE_THRESHOLD_S
+        ):
+            return
+        if (
+            self._channel_recovery_sent_at is not None
+            and now - self._channel_recovery_sent_at < AGENT_CHANNEL_RECOVERY_S
+        ):
+            return
+        # Throttle attempts even when delivery fails; the next heartbeat retries.
+        self._channel_recovery_sent_at = now
+        await self._relay_to_supervisors(
+            {
+                "type": "copilot_channel_unavailable",
+                "meeting_id": self._compute_meeting_state()["meeting_id"],
+            }
+        )
+
     async def _recompute_agent_state(self, now: Optional[float] = None):
         """Recompute the effective chip status and broadcast on change only.
 
@@ -1527,6 +1552,7 @@ class KTalkBridge:
             now = time.monotonic()
         self._update_sessions_zero_anchor(now)
         effective = self._effective_agent_state(now)
+        await self._recover_missing_channel_session(now)
         if effective == self._last_effective_agent_state:
             return
         self._last_effective_agent_state = effective
@@ -1712,6 +1738,7 @@ class KTalkBridge:
             # the existing handler. Other channel clients still present can
             # still answer, so we only fire on the 1→0 transition.
             if was_copilot_channel and no_channel_clients_left:
+                self._set_claude_sessions(None)
                 stranded = 0
                 for req_id, mid in list(self._copilot_pending_requests.items()):
                     if isinstance(mid, str) and mid.startswith("stale:"):
