@@ -335,6 +335,72 @@ def test_ci_runs_the_check_script(workflow):
     assert any(step.get("run", "").strip() == "./scripts/check.sh" for step in _steps(workflow))
 
 
+@pytest.mark.parametrize(
+    "forced,missing", [(True, True), (True, False), (False, True), (False, False)]
+)
+def test_push_baseline_when_previous_commit_missing_then_only_forced_push_uses_parent(
+    workflow, repo, tmp_path, forced, missing
+):
+    for message in ("base", "middle", "head"):
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                message,
+            ],
+            cwd=repo,
+            check=True,
+        )
+    previous = (
+        "f" * 40
+        if missing
+        else subprocess.check_output(
+            ["git", "rev-parse", "HEAD~2"],
+            cwd=repo,
+            text=True,
+        ).strip()
+    )
+    expected = (
+        subprocess.check_output(
+            ["git", "rev-parse", "HEAD^"],
+            cwd=repo,
+            text=True,
+        ).strip()
+        if forced and missing
+        else previous
+    )
+    output = tmp_path / "github-env"
+    step = next(
+        s for s in _steps(workflow) if s.get("name") == "Select quality baseline"
+    )
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+        cwd=repo,
+        env={
+            **os.environ,
+            "PR_BASE": "",
+            "PUSH_BEFORE": previous,
+            "PUSH_FORCED": str(forced).lower(),
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_ENV": str(output),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == f"RECOG_QUALITY_BASE={expected}\n"
+    assert ("::warning::" in result.stdout) == (forced and missing)
+
+
 @pytest.mark.parametrize("quality_exit", [0, 1])
 def test_quality_enabled_when_gate_finishes_then_verdict_propagates_without_duplicate_pytest(
     repo, stub_bin, quality_exit

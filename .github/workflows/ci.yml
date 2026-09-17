@@ -86,11 +86,16 @@ jobs:
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_FORCED: ${{ github.event.forced }}
         shell: bash
         run: |
           base="${PR_BASE:-origin/main}"
           if [ "$GITHUB_REF" = refs/heads/main ] && [ -n "$PUSH_BEFORE" ] && [[ ! "$PUSH_BEFORE" =~ ^0+$ ]]; then
             base="$PUSH_BEFORE"
+            if [ "$PUSH_FORCED" = true ] && ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+              base="$(git rev-parse HEAD^)"
+              echo "::warning::Pre-push commit is absent after a force-push; comparing against $base"
+            fi
           fi
           echo "RECOG_QUALITY_BASE=$base" >> "$GITHUB_ENV"
 
