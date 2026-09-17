@@ -3,6 +3,7 @@ import { sendWsMessage } from './ws_api.js';
 import { getPlatformAdapter, getPlatform } from './platforms/index.js';
 
 let titleSentForUrl = null;
+let lastJoinRejectionReason = null;
 // Per-join generation token: bumped on every `sendMeetingJoin()` so a pending
 // title-retry chain from a previous join (same OR different url) invalidates
 // itself instead of leaking its near-exhausted `attempt` count into the fresh
@@ -79,6 +80,7 @@ function sendDelayedTitle(attempt = 0, scheduledUrl = state.currentMeetingUrl, g
 }
 
 export function sendMeetingJoin() {
+  if (!isInMeeting()) return;
   const url = getMeetingUrl();
   const platform = getPlatform();
   // Send meeting_join for both KTalk and vas3k platforms
@@ -101,17 +103,16 @@ export function sendMeetingJoin() {
 }
 
 export function handleMeetingJoinRejected(data) {
-  // Bridge сообщает, что активная встреча уже занята другим табом.
-  // Очищаем local-кеш `currentMeetingUrl`, чтобы startMeetingCheck() через
-  // ~2 с повторил sendMeetingJoin (когда owner-tab может уже закрыться),
-  // и не сетим `state.currentMeetingId` — handleTranscript filter тогда
-  // дропнет броадкасты соседнего таба и не загрязнит нашу UI стеной.
-  const activeId = data && data.active_meeting_id ? data.active_meeting_id : 'unknown';
-  console.log(
-    `[KTalk Transcript] meeting_join rejected by bridge — another tab owns meeting ${activeId}. Will retry on next poll.`
-  );
+  // Release the cached join so the next membership poll can retry after
+  // another tab leaves or an unavailable capture device recovers.
+  const reason = data?.reason || 'another_tab_active';
+  console.log(`[KTalk Transcript] meeting_join rejected: ${reason}. Will retry on next poll.`);
   state.currentMeetingUrl = null;
+  state.currentMeetingId = null;
   titleSentForUrl = null;
+  const showNotice = reason === 'capture_unavailable' && lastJoinRejectionReason !== reason;
+  lastJoinRejectionReason = reason;
+  return showNotice ? 'Не удалось включить запись. Повторяем запуск автоматически.' : null;
 }
 
 export function sendMeetingLeave(reason = 'user_left') {
@@ -124,17 +125,20 @@ export function sendMeetingLeave(reason = 'user_left') {
     state.currentMeetingUrl = null;
     titleSentForUrl = null;
   }
+  lastJoinRejectionReason = null;
 }
 
-function isInMeeting() {
+export function isInMeeting() {
   const adapter = getPlatformAdapter();
   if (adapter) {
+    if (typeof adapter.isInMeeting === 'function') return adapter.isInMeeting();
     return adapter.isConferenceAvailable();
   }
-  // Legacy fallback for KTalk
-  if (!window.$conf) return false;
-  const participantsMap = window.$conf._participantsMap;
-  return participantsMap && participantsMap.size > 0;
+  try {
+    return window.$conf?.jitsiConf?.isJoined?.() === true;
+  } catch (_) {
+    return false;
+  }
 }
 
 export function startMeetingCheck() {
@@ -151,7 +155,7 @@ export function startMeetingCheck() {
         sendMeetingLeave('changed_meeting');
       }
       sendMeetingJoin();
-    } else if (!inMeeting && state.currentMeetingUrl) {
+    } else if (!inMeeting) {
       sendMeetingLeave('user_left');
     }
   }, 2000);

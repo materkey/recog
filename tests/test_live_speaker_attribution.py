@@ -186,6 +186,7 @@ def _fresh_transcriber_mock():
     """Shared baseline for Task 4 wiring tests: bare-minimum Mock with the
     attributes the instance methods under test read from `self`."""
     t = Mock(spec=LiveTranscriber)
+    t.ktalk_only = False
     t._ktalk_bridge = Mock()
     t._meeting_storage = None
     t._state_lock = threading.Lock()
@@ -838,6 +839,7 @@ def test_invalidate_pending_chunks_drains_per_speaker_ingest():
            per-pid pcm state buckets are reset
     """
     t = Mock(spec=LiveTranscriber)
+    t.ktalk_only = False
     t._state_lock = threading.Lock()
     t._meeting_generation = 7
     t._recent_system_segments = deque()
@@ -882,6 +884,7 @@ def test_invalidate_pending_chunks_resumes_paused_refine_worker():
            the rest of the process lifetime.
     """
     t = Mock(spec=LiveTranscriber)
+    t.ktalk_only = False
     t._state_lock = threading.Lock()
     t._meeting_generation = 3
     t._recent_system_segments = deque()
@@ -911,6 +914,7 @@ def test_invalidate_pending_chunks_safe_when_refine_worker_none():
     then:  no AttributeError; resume is guarded by a None check
     """
     t = Mock(spec=LiveTranscriber)
+    t.ktalk_only = False
     t._state_lock = threading.Lock()
     t._meeting_generation = 0
     t._recent_system_segments = deque()

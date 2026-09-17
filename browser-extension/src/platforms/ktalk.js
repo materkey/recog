@@ -62,6 +62,17 @@ export class KTalkAdapter {
     return !!(window.$conf && window.$conf.jitsiConf && window.$conf._dominantSpeakerId$);
   }
 
+  /** Call membership, independent of the lifetime of KTalk's wrapper. */
+  isInMeeting() {
+    if (!this.isConferenceAvailable()) return false;
+    try {
+      return window.$conf.jitsiConf.isJoined?.() === true;
+    } catch (_) {
+      // A disposed or unsupported conference cannot authorize recording.
+      return false;
+    }
+  }
+
   /**
    * Get the conference object
    */

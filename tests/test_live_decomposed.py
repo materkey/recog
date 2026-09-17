@@ -109,6 +109,7 @@ class TestHandleMicChunk:
 
     def _make_transcriber_mock(self):
         transcriber = Mock(spec=LiveTranscriber)
+        transcriber.ktalk_only = False
         transcriber.mic_speaker_name = MIC_SPEAKER_NAME
         transcriber._ktalk_bridge = None
         transcriber._meeting_storage = None
@@ -199,6 +200,7 @@ class TestCheckSilenceSplit:
     def test_splits_on_long_silence(self):
         """given: silence > SILENCE_SPLIT_TIMEOUT - when: _check_silence_split - then: split_on_silence_timeout called"""
         transcriber = Mock(spec=LiveTranscriber)
+        transcriber.ktalk_only = False
         transcriber._meeting_storage = Mock()
         # Сплит теперь ротирует WAV-writer'ы: возвращённый new_id склеивается
         # с base_path и уходит в _on_meeting_change (замокан spec'ом)
@@ -220,6 +222,7 @@ class TestCheckSilenceSplit:
     def test_no_split_on_short_silence(self):
         """given: silence < SILENCE_SPLIT_TIMEOUT - when: _check_silence_split - then: no split"""
         transcriber = Mock(spec=LiveTranscriber)
+        transcriber.ktalk_only = False
         transcriber._meeting_storage = Mock()
 
         state = SourceState()
@@ -233,6 +236,7 @@ class TestCheckSilenceSplit:
     def test_updates_last_text_time(self):
         """given: any silence - when: _check_silence_split - then: last_text_time updated"""
         transcriber = Mock(spec=LiveTranscriber)
+        transcriber.ktalk_only = False
         transcriber._meeting_storage = Mock()
 
         state = SourceState()
@@ -246,6 +250,7 @@ class TestCheckSilenceSplit:
     def test_no_storage_does_nothing(self):
         """given: no meeting storage - when: _check_silence_split - then: no error"""
         transcriber = Mock(spec=LiveTranscriber)
+        transcriber.ktalk_only = False
         transcriber._meeting_storage = None
 
         state = SourceState()
@@ -264,6 +269,7 @@ class TestSetupMeetingStorage:
 
     def _make_transcriber_mock(self):
         transcriber = Mock(spec=LiveTranscriber)
+        transcriber.ktalk_only = False
         transcriber.mic_capture = None
         transcriber.system_capture = None
         transcriber.use_ktalk = True

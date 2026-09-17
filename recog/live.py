@@ -277,15 +277,23 @@ class SingleDeviceCapture(BufferedAudioCapture):
             samplerate=self.sample_rate,
             callback=self._callback
         )
-        self.stream.start()
+        try:
+            self.stream.start()
+        except Exception:
+            self.stream.close()
+            raise
         self.running = True
         self._channels = channels
 
     def stop(self):
         if self.running:
-            self.stream.stop()
-            self.stream.close()
-            self.running = False
+            try:
+                self.stream.stop()
+            finally:
+                try:
+                    self.stream.close()
+                finally:
+                    self.running = False
 
     @staticmethod
     def list_devices(platform: str = "", run=subprocess.run):
@@ -441,9 +449,16 @@ class LiveTranscriber:
         mic_speaker_name=None,
         system_device=None,  # legacy-алиас: device:<id>
         use_screencapture=False,  # legacy-алиас: screencapture
+        ktalk_only=False,
     ):
         from recog.system_audio import (create_system_capture,
                                         resolve_system_audio_backend)
+
+        self.ktalk_only = ktalk_only
+        use_ktalk = use_ktalk or ktalk_only
+        self._capture_lock = threading.RLock()
+        self._captures_ready = False
+        self._recording_allowed = not ktalk_only
 
         # `auto` разрешается в конкретный бэкенд здесь, чтобы прямые вызовы
         # (тесты, e2e) вели себя так же, как CLI.
@@ -741,12 +756,13 @@ class LiveTranscriber:
                 ktalk=self.use_ktalk,
                 screencapture=self.system_audio == "screencapture",
                 system_audio_backend=self.system_audio,
-                chunk_duration_ms=int(self.chunk_duration * 1000)
+                chunk_duration_ms=int(self.chunk_duration * 1000),
+                ktalk_only=self.ktalk_only,
             )
             print(f"Meeting started: {meeting_id}")
 
             # Initialize audio recording if enabled
-            if self.save_audio:
+            if self.save_audio and not self.ktalk_only:
                 meeting_path = self._meeting_storage.base_path / meeting_id
                 if self.mic_capture:
                     mic_audio_path = meeting_path / "audio_mic.wav"
@@ -776,7 +792,13 @@ class LiveTranscriber:
             return
         try:
             from recog.ktalk_bridge import KTalkBridge
-            self._ktalk_bridge = KTalkBridge()
+
+            self._ktalk_bridge = KTalkBridge(ktalk_only=self.ktalk_only)
+            if self.ktalk_only:
+                self._ktalk_bridge.set_meeting_capture_callback(
+                    self._set_conference_capture,
+                    active_getter=self.is_recording_active,
+                )
             self._ktalk_bridge.configure_user_profile(
                 self._user_identity, self._read_user_identity, self._apply_user_identity,
             )
@@ -798,7 +820,7 @@ class LiveTranscriber:
                 self._ktalk_bridge.set_increment_generator(self._increment_generator)
             # Register callbacks for meeting changes:
             # pre-switch invalidates in-flight chunks after path changes
-            self._ktalk_bridge.set_pre_meeting_switch_callback(self._invalidate_pending_chunks)
+            self._ktalk_bridge.set_pre_meeting_switch_callback(self._before_meeting_switch)
             # post-switch reinitializes audio recording at new path
             self._ktalk_bridge.set_meeting_change_callback(self._on_meeting_change)
             # NOTE: bridge.start() is deferred to _start_ktalk_bridge() so that
@@ -807,9 +829,13 @@ class LiveTranscriber:
             # extension reconnect could deliver pcm_chunk frames to a None
             # callback (dropped silently at ktalk_bridge.py:1521).
         except ImportError:
+            if self.ktalk_only:
+                raise
             print("Warning: ktalk_bridge module not found, speaker identification unavailable", file=sys.stderr)
             self.use_ktalk = False
         except Exception as e:
+            if self.ktalk_only:
+                raise
             print(f"Warning: KTalk bridge error: {e}, speaker identification unavailable", file=sys.stderr)
             self.use_ktalk = False
 
@@ -884,7 +910,10 @@ class LiveTranscriber:
             apply_fn=self._apply_refine,
             abort_mode="cooperative",
             transcribe_manages_lock=True,
+            generation_getter=lambda: self._meeting_generation,
         )
+        if not self.is_recording_active():
+            self._refine_worker.pause()
         self._refine_worker.start()
         self._per_speaker_ingest.set_refine_submit_callback(
             self._refine_worker.submit
@@ -954,6 +983,8 @@ class LiveTranscriber:
         ingest = self._per_speaker_ingest
         drain_gen = ingest.last_drain_generation if ingest is not None else None
         chunk_gen = drain_gen if drain_gen is not None else self._meeting_generation
+        if not self._is_current_recording(chunk_gen):
+            return
 
         pcm_list = [item[3] for item in batch]
         # Priority-signal to the refine worker: live is about to wait on
@@ -1371,6 +1402,8 @@ class LiveTranscriber:
         враньём. Refine здесь не трогаем по той же причине — per-pid PCM на
         месте, тир-2 остаётся рабочим.
         """
+        if not self.is_recording_active():
+            return
         capture = self.system_capture
         if capture is None:
             return
@@ -1427,12 +1460,80 @@ class LiveTranscriber:
                     audio_offset_ms=0,
                 )
 
+    def _before_meeting_switch(self):
+        if self.ktalk_only:
+            self._set_conference_capture(False)
+        else:
+            self._invalidate_pending_chunks()
+
+    def is_recording_active(self):
+        """Whether the recording policy currently allows audio processing."""
+        return not self.ktalk_only or self._recording_allowed
+
+    def _is_current_recording(self, generation):
+        """Only audio from the currently allowed meeting can run or be retried."""
+        return self._meeting_generation == generation and self.is_recording_active()
+
+    def _set_conference_capture(self, active: bool):
+        """Serialize bridge transitions with startup/shutdown; idle owns no devices."""
+        with self._capture_lock:
+            if active:
+                if not self._captures_ready:
+                    raise RuntimeError("Audio capture is not ready")
+                try:
+                    self._open_audio_captures()
+                    self._meeting_storage.set_recording_active(True)
+                    self._recording_allowed = True
+                    if self._refine_worker is not None:
+                        self._refine_worker.resume()
+                except Exception:
+                    self._set_conference_capture(False)
+                    raise
+            else:
+                self._recording_allowed = False
+                # Also invalidates results already in ASR when the bridge fails
+                # before it can finish a storage transition.
+                self._invalidate_pending_chunks()
+                errors = []
+                for capture in (self.mic_capture, self.system_capture):
+                    if capture is not None:
+                        try:
+                            capture.stop()
+                        except Exception as exc:
+                            errors.append(exc)
+                        finally:
+                            capture.clear_buffer()
+                try:
+                    self._close_audio_writers()
+                except Exception as exc:
+                    errors.append(exc)
+                if self._meeting_storage is not None:
+                    try:
+                        self._meeting_storage.set_recording_active(False)
+                    except Exception as exc:
+                        print(
+                            f"Warning: recording status could not be saved: {exc}", file=sys.stderr
+                        )
+                if errors:
+                    raise errors[0]
+            print(
+                "KTalk recording active"
+                if active
+                else "Waiting for a KTalk meeting (audio capture off)"
+            )
+
     def _start_audio_captures(self):
-        """Start mic and system audio capture devices."""
-        if self.mic_capture:
-            self.mic_capture.start()
-        if self.system_capture:
-            self.system_capture.start()
+        """Start devices only after initialization and an allowed meeting join."""
+        with self._capture_lock:
+            self._captures_ready = True
+            if self.ktalk_only:
+                return
+            self._open_audio_captures()
+
+    def _open_audio_captures(self):
+        for capture in (self.mic_capture, self.system_capture):
+            if capture is not None and not capture.running:
+                capture.start()
 
     def _teardown_session(self, force_exit: bool):
         """Stop captures, finalize audio, close meeting, write transcript."""
@@ -1440,6 +1541,10 @@ class LiveTranscriber:
         print("Остановлено.")
 
         self.running = False
+        if self.ktalk_only:
+            with self._capture_lock:
+                self._captures_ready = False
+                self._set_conference_capture(False)
 
         if self.mic_capture:
             self.mic_capture.stop()
@@ -1782,6 +1887,9 @@ class LiveTranscriber:
         if not self._asr_available():
             return
 
+        if not self.is_recording_active():
+            return
+
         # Snapshot meeting generation BEFORE reading buffer so that audio
         # captured before a meeting switch is tagged with the old generation
         # and discarded by the generation check downstream.
@@ -1845,7 +1953,7 @@ class LiveTranscriber:
         # _on_meeting_change swaps writers under this same lock, so by the time we
         # acquire _wav_lock after a swap, the generation will already differ.
         with self._wav_lock:
-            if self._meeting_generation != chunk_gen:
+            if not self._is_current_recording(chunk_gen):
                 return
             if retry_pending is not None or skip_wav_write:
                 # retry: чанк уже записан первой попыткой; state.audio_offset
@@ -1924,13 +2032,18 @@ class LiveTranscriber:
         if rms < VAD_RMS_THRESHOLD:
             return
 
+        if not self.is_recording_active():
+            return
+
         try:
             text = self._transcribe_direct(chunk)
         except ASRTemporarilyUnavailable:
             # ASR отвалился между гейтом и вызовом (первый сбой remote).
             # Чанк не теряем — кладём в retry-слот, он будет обработан после
             # восстановления (фоновая загрузка локали / probe remote).
-            state.pending_chunk = (chunk, capture_start_ts, chunk_gen)
+            with self._state_lock:
+                if self._is_current_recording(chunk_gen):
+                    state.pending_chunk = (chunk, capture_start_ts, chunk_gen)
             return
         if not text:
             return
@@ -1948,7 +2061,7 @@ class LiveTranscriber:
         # Bail out if meeting changed during ASR -- prevents stale
         # state updates (last_words/last_speaker) and transcript sends
         # from leaking across meeting boundaries
-        if self._meeting_generation != chunk_gen:
+        if not self._is_current_recording(chunk_gen):
             return
 
         state.last_words = text.split()[-5:]
@@ -1998,6 +2111,9 @@ class LiveTranscriber:
         print("Press Ctrl+C to stop")
         print("-" * 60)
         print()
+
+        if self.ktalk_only:
+            print("Recording policy: KTalk meetings only; idle audio capture is off")
 
         self._setup_meeting_storage()
         self._setup_ktalk_bridge()
@@ -2071,6 +2187,7 @@ class LiveTranscriber:
                     state.last_speaker = None
                     state.last_words = []
                     state.segment_start_time = 0
+                    state.pending_chunk = None
             # Reset PCM per-pid state so continuation/dedup don't carry
             # across meetings.  Watchdog transition flag also resets because
             # a fresh meeting should start assuming PCM healthy.
@@ -2085,17 +2202,12 @@ class LiveTranscriber:
             # segment_ids in the new meeting's pid frame.
             self._pcm_segment_texts.clear()
             self._last_pcm_degraded = False
-            # If a degraded-trip in the old meeting paused the refine
-            # worker, the pause state outlives the meeting switch. The
-            # watchdog compare-and-set above is now reset
-            # (_last_pcm_degraded=False, ingest._degraded=False after
-            # drain()), so the healthy→degraded→healthy edge that calls
-            # resume() via _emit_pcm_transition_marker will never fire in
-            # the new meeting. Resume eagerly so refine is active from the
-            # first PCM frame of meeting B; the watchdog can re-pause if
-            # PCM goes silent there.
+            # A meeting boundary discards queued refine work as well as live
+            # audio. Only the capture owner can resume it in KTalk-only mode.
             if self._refine_worker is not None:
-                self._refine_worker.resume()
+                self._refine_worker.pause()
+                if self.is_recording_active():
+                    self._refine_worker.resume()
         # Clear per-speaker ingest buffers (bumped generation would drop
         # them at drain time anyway, but clearing eagerly avoids a 200 ms
         # window where stale-gen chunks occupy capacity).
@@ -2109,18 +2221,8 @@ class LiveTranscriber:
         if self.system_capture:
             self.system_capture.clear_buffer()
 
-    def _on_meeting_change(self, meeting_id: str, meeting_path: Path, continuation: bool = False):
-        """Called after meeting switch to reinitialize audio recording.
-
-        Args:
-            continuation: True when audio capture keeps running across the
-                switch WITHOUT a buffer clear (silence split) — the next
-                chunk still carries the 0.5s overlap already written to the
-                previous meeting's WAV, so the writer must skip it.
-        """
-        if not self.save_audio:
-            return
-
+    def _close_audio_writers(self):
+        """Close files independently of whether storage can finish a transition."""
         with self._wav_lock:
             # Finalize current wav writers and persist audio paths for outgoing meeting
             mic_audio_path_old = None
@@ -2157,6 +2259,15 @@ class LiveTranscriber:
                     meeting_path=old_meeting_path,
                 )
 
+    def _on_meeting_change(self, meeting_id: str, meeting_path: Path, continuation: bool = False):
+        """Rotate files; continuation means the next chunk still has overlap."""
+        if not self.save_audio:
+            return
+        self._close_audio_writers()
+        if self.ktalk_only and self._meeting_storage._load_meta().get("source") != "ktalk":
+            return
+
+        with self._wav_lock:
             # Open new wav writers for new meeting.
             # Bridge path (continuation=False): _invalidate_pending_chunks()
             # already cleared the capture buffers, so there is no overlap from
@@ -2186,6 +2297,7 @@ def live_pipeline(
     save_audio=True,
     system_device=None,  # legacy-алиас: device:<id>
     use_screencapture=False,  # legacy-алиас: screencapture
+    ktalk_only=False,
 ):
     """Пайплайн live транскрипции."""
     if list_devices:
@@ -2223,6 +2335,7 @@ def live_pipeline(
         chunk_duration=chunk_duration,
         output_file=output_file,
         use_ktalk=use_ktalk,
+        ktalk_only=ktalk_only,
         mic_speaker_name=mic_speaker_name,
         save_audio=save_audio,
     )

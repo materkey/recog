@@ -101,10 +101,11 @@ def build_parser():
         help="Использовать KTalk Chrome extension для определения спикеров"
     )
     live_parser.add_argument(
-        "--screencapture",
+        "--ktalk-only",
         action="store_true",
-        help=argparse.SUPPRESS
+        help="Захватывать звук только во время встречи KTalk (включает --ktalk)",
     )
+    live_parser.add_argument("--screencapture", action="store_true", help=argparse.SUPPRESS)
     live_parser.add_argument(
         "--mic-speaker-name",
         default=None,
@@ -165,6 +166,7 @@ def main():
             output_file=args.output,
             list_devices=args.list_devices,
             use_ktalk=args.ktalk,
+            ktalk_only=args.ktalk_only,
             mic_speaker_name=args.mic_speaker_name,
             save_audio=not args.no_save_audio
         )

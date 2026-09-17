@@ -135,7 +135,9 @@ class KTalkBridge:
     # Максимальная длительность сегмента (сек) - если спикер говорит дольше, разбиваем на части
     MAX_SEGMENT_DURATION = 20.0
 
-    def __init__(self, host: str = "localhost", port: int = 8766, *, ai_settings_store=None):
+    def __init__(
+        self, host: str = "localhost", port: int = 8766, *, ai_settings_store=None, ktalk_only=False
+    ):
         self.host = host
         self.port = port
         self._current_speaker: Optional[str] = None
@@ -274,6 +276,9 @@ class KTalkBridge:
         # Callbacks для уведомления о событиях
         self._on_speaker_change: Optional[Callable[[Optional[str], bool], None]] = None
         self._on_segment_complete: Optional[Callable[[SpeakerSegment], None]] = None
+        self.ktalk_only = ktalk_only
+        self._on_meeting_capture: Optional[Callable[[bool], None]] = None
+        self._recording_active_getter: Optional[Callable[[], bool]] = None
         self._on_meeting_change: Optional[Callable[[str, Path], None]] = None
         self._on_pre_meeting_switch: Optional[Callable[[], None]] = None
         self._on_pcm_chunk: Optional[Callable[[PcmChunk], None]] = None
@@ -357,6 +362,25 @@ class KTalkBridge:
             callback: функция (meeting_id: str, meeting_path: Path)
         """
         self._on_meeting_change = callback
+
+    def set_meeting_capture_callback(
+        self, callback: Callable[[bool], None], *, active_getter: Callable[[], bool]
+    ):
+        """Notify live capture only after an accepted join, and before any leave."""
+        self._on_meeting_capture = callback
+        self._recording_active_getter = active_getter
+
+    def is_recording_active(self) -> bool:
+        """Read the capture owner's state without maintaining a bridge mirror."""
+        if self._recording_active_getter is not None:
+            return self._recording_active_getter()
+        return not self.ktalk_only
+
+    def _set_meeting_capture(self, active: bool):
+        if self._on_meeting_capture is not None:
+            self._on_meeting_capture(active)
+        elif active and self.ktalk_only:
+            raise RuntimeError("No capture controller registered")
 
     def set_pre_meeting_switch_callback(self, callback: Callable[[], None]):
         """
@@ -621,6 +645,10 @@ class KTalkBridge:
                     },
                     "meeting": {
                         "id": self._meeting_storage.get_current_meeting_id() if self._meeting_storage else None
+                    },
+                    "recording": {
+                        "policy": "ktalk_only" if self.ktalk_only else "continuous",
+                        "active": self.is_recording_active(),
                     },
                     "pcm": {},
                     "pcm_transport": dict(self._pcm_transport_stats),
@@ -1793,6 +1821,7 @@ class KTalkBridge:
         leak tick state, transcript-buffer entries, or in-flight
         `copilot_chat_message` request bookkeeping into the next meeting.
         """
+        self._set_meeting_capture(False)
         # Clear stale participant state BEFORE bumping the generation
         # (same order as meeting_leave) so that the live thread's next
         # chunk cannot read old-meeting speaker data through
@@ -2061,6 +2090,9 @@ class KTalkBridge:
             # Статус подключения к конференции
             connected = data.get("connected", False)
             if not connected:
+                if self.ktalk_only and websocket is self._meeting_owner_ws:
+                    await self._end_meeting_on_extension_gone()
+                    self._meeting_owner_ws = None
                 self._clear_speaker_state()
                 print("[KTalk Bridge] Conference disconnected", file=sys.stderr)
             else:
@@ -2071,6 +2103,17 @@ class KTalkBridge:
             url = data.get("url")
             title = data.get("title")
             platform = data.get("platform", "ktalk")
+            if self.ktalk_only and platform != "ktalk":
+                if websocket is not None:
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": "meeting_join_rejected",
+                                "reason": "ktalk_only",
+                            }
+                        )
+                    )
+                return
             # Single-meeting-at-a-time enforcement: if another extension WS
             # already owns the active meeting and that WS is still alive,
             # reject this join instead of silently flipping current_meeting_id.
@@ -2102,6 +2145,7 @@ class KTalkBridge:
                         pass
                 return
             if self._meeting_storage and url:
+                was_recording = self.is_recording_active()
                 old_meeting_path = self._meeting_storage.current_meeting_path
                 prev_meeting_id = self._meeting_storage.current_meeting_id
                 # Capture the pre-join meta source: an empty orphan reused in
@@ -2143,9 +2187,42 @@ class KTalkBridge:
                 # but must NOT rotate audio writers (they already point at
                 # this meeting's directory since the leave).
                 path_changed = self._meeting_storage.current_meeting_path != old_meeting_path
-                became_active = not path_changed and prev_source == "orphan"
+                became_active = not path_changed and (
+                    prev_source == "orphan" or (self.ktalk_only and not was_recording)
+                )
+                if self.ktalk_only:
+                    # Empty orphan reuse and same-room reconnect also need writers
+                    # because capture was stopped and its buffers were cleared.
+                    try:
+                        if self._on_meeting_change:
+                            self._on_meeting_change(
+                                meeting_id, self._meeting_storage.current_meeting_path
+                            )
+                        self._set_meeting_capture(True)
+                    except Exception as exc:
+                        self._meeting_owner_ws = None
+                        try:
+                            self._set_meeting_capture(False)
+                        except Exception as cleanup_exc:
+                            print(
+                                f"[KTalk Bridge] Capture cleanup failed: {cleanup_exc}",
+                                file=sys.stderr,
+                            )
+                        print(f"[KTalk Bridge] Capture start failed: {exc}", file=sys.stderr)
+                        if websocket is not None:
+                            await self._send_bounded(
+                                websocket,
+                                json.dumps(
+                                    {
+                                        "type": "meeting_join_rejected",
+                                        "reason": "capture_unavailable",
+                                    }
+                                ),
+                            )
+                        return
+                    self._meeting_owner_ws = websocket
                 if path_changed or became_active:
-                    if path_changed and self._on_meeting_change:
+                    if path_changed and self._on_meeting_change and not self.ktalk_only:
                         meeting_path = self._meeting_storage.current_meeting_path
                         self._on_meeting_change(meeting_id, meeting_path)
                     # Mark every in-flight `copilot_chat_message` request
@@ -2245,6 +2322,9 @@ class KTalkBridge:
                 await self._send_transcript_history(websocket=websocket)
 
         elif msg_type == "meeting_leave":
+            if self.ktalk_only and websocket is not self._meeting_owner_ws:
+                return
+            self._set_meeting_capture(False)
             # Extension сообщает о выходе из встречи
             reason = data.get("reason", "user_left")
             # Release meeting ownership on explicit leave so the next
@@ -2361,6 +2441,10 @@ class KTalkBridge:
                 print(f"[KTalk Bridge] Clock sync: offset={self._clock_offset:.3f}s", file=sys.stderr)
 
         elif msg_type == "pcm_chunk":
+            if self.ktalk_only and (
+                not self.is_recording_active() or websocket is not self._meeting_owner_ws
+            ):
+                return
             # Per-speaker PCM-чанк от extension worklet'а. На этом этапе
             # (Task 1) — только парсинг + dispatch в callback. Актуальная
             # обработка (batching + GigaAM.forward) появится в Task 3-4.
@@ -3106,6 +3190,7 @@ class KTalkBridge:
         except Exception as e:
             print(f"[KTalk Bridge] Server error: {e}", file=sys.stderr)
         finally:
+            self._set_meeting_capture(False)
             # Drain background tasks (e.g. in-flight increment generation)
             # so they are not silently cancelled when the loop closes.
             await self._drain_background_tasks()
@@ -3153,6 +3238,7 @@ class KTalkBridge:
     def stop(self):
         """Останавливает сервер."""
         self._running = False
+        self._set_meeting_capture(False)
 
         if self._thread is not None:
             # Must wait at least as long as _drain_background_tasks timeout (30s)
