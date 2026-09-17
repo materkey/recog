@@ -378,9 +378,7 @@ def test_push_baseline_when_previous_commit_missing_then_only_forced_push_uses_p
         else previous
     )
     output = tmp_path / "github-env"
-    step = next(
-        s for s in _steps(workflow) if s.get("name") == "Select quality baseline"
-    )
+    step = next(s for s in _steps(workflow) if s.get("name") == "Select quality baseline")
     result = subprocess.run(
         ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
         cwd=repo,
