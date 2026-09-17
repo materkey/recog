@@ -84,6 +84,8 @@ export function sendMeetingJoin() {
   // Send meeting_join for both KTalk and vas3k platforms
   if (url && platform) {
     state.currentMeetingUrl = url;
+    // Reconnect may attach to a new backend recording for the same URL.
+    titleSentForUrl = null;
     sendWsMessage({
       type: 'meeting_join',
       url: url,

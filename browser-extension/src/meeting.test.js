@@ -107,6 +107,34 @@ describe('no-flap invariant', () => {
   });
 });
 
+describe('title delivery after reconnect', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  test('given a delivered title - when reconnecting to the same meeting - then resends the title once', () => {
+    document.title = 'Speed Android Sync';
+    mockAdapter = ktalkAdapter;
+
+    sendMeetingJoin();
+    jest.advanceTimersByTime(2000);
+    expect(mockSendWsMessage).toHaveBeenCalledWith({
+      type: 'meeting_title_update', title: 'Speed Android Sync',
+    });
+    mockSendWsMessage.mockClear();
+
+    // WebSocket reconnect repeats join without a meeting_leave frame.
+    sendMeetingJoin();
+    jest.advanceTimersByTime(6000);
+
+    const titles = mockSendWsMessage.mock.calls
+      .map((call) => call[0])
+      .filter((message) => message.type === 'meeting_title_update');
+    expect(titles).toEqual([
+      { type: 'meeting_title_update', title: 'Speed Android Sync' },
+    ]);
+  });
+});
+
 describe('sendDelayedTitle prefers the adapter title', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
