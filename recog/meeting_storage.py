@@ -25,6 +25,7 @@ import stat
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from recog.config import get_data_dir
 from recog.conference_hosts import canonical_source
@@ -119,7 +120,8 @@ class MeetingStorage:
         self.current_meeting_id: Optional[str] = None
         self.current_meeting_path: Optional[Path] = None
         self._segment_counter = 0
-        self._segment_lock = threading.Lock()
+        self._segment_lock = threading.RLock()
+        self._title_executor = None
         self._mode: dict = {}
 
     def start_session(
@@ -385,87 +387,93 @@ class MeetingStorage:
         Returns:
             meeting_id текущей встречи
         """
-        parsed = urlparse(url)
-        # Извлекаем ID: /abcd1234wxyz или /history/ExampleHistoryId0001
-        path_parts = parsed.path.strip("/").split("/")
-        live_id = path_parts[-1] if path_parts else None
+        with self._segment_lock:
+            parsed = urlparse(url)
+            # Извлекаем ID: /abcd1234wxyz или /history/ExampleHistoryId0001
+            path_parts = parsed.path.strip("/").split("/")
+            live_id = path_parts[-1] if path_parts else None
 
-        # Fallback для платформ, где id комнаты живёт во фрагменте URL, а не в
-        # пути (Element Call: https://element.example.org/#/room/<roomId>).
-        # Там путь пустой, поэтому вытаскиваем id из полной строки url.
-        # Используем именно full `url`, а не parsed.fragment: urlparse срезает
-        # ведущий '#', ломая alias-форму #/room/#recog-spike:...
-        if not live_id:
-            match = re.search(r"#/room/([^/?]+)", url)
-            if match:
-                live_id = match.group(1)
+            # Fallback для платформ, где id комнаты живёт во фрагменте URL, а не в
+            # пути (Element Call: https://element.example.org/#/room/<roomId>).
+            # Там путь пустой, поэтому вытаскиваем id из полной строки url.
+            # Используем именно full `url`, а не parsed.fragment: urlparse срезает
+            # ведущий '#', ломая alias-форму #/room/#recog-spike:...
+            if not live_id:
+                match = re.search(r"#/room/([^/?]+)", url)
+                if match:
+                    live_id = match.group(1)
 
-        # Проверяем, нужно ли создать/переоткрыть встречу
-        need_new_or_reopen = False
-        if not self.current_meeting_path:
-            need_new_or_reopen = True
-        else:
-            meta = self._load_meta()
-            current_live_id = meta.get("conference", {}).get("live_id")
-
-            conference = meta.get("conference", {})
-            current_host = conference.get("host") or urlparse(conference.get("live_url") or "").netloc
-
-            # Случай 1: другая комната, сервер или платформа
-            if current_live_id and (
-                current_live_id != live_id or current_host != parsed.netloc
-                or canonical_source(meta.get("source")) != canonical_source(platform)
-            ):
-                self._end_current_meeting(end_reason="changed_meeting")
+            # Проверяем, нужно ли создать/переоткрыть встречу
+            need_new_or_reopen = False
+            if not self.current_meeting_path:
                 need_new_or_reopen = True
+            else:
+                meta = self._load_meta()
+                current_live_id = meta.get("conference", {}).get("live_id")
 
-            # Случай 2: orphan с сегментами -> новая встреча
-            # Не склеивать orphan-сегменты с conference встречей
-            elif meta["source"] == "orphan" and meta["stats"]["segment_count"] > 0:
-                self._end_current_meeting(end_reason="meeting_join")
-                need_new_or_reopen = True
+                conference = meta.get("conference", {})
+                current_host = (
+                    conference.get("host") or urlparse(conference.get("live_url") or "").netloc
+                )
 
-            # Случай 3: пустой orphan -> ищем существующую или обновляем source
-            elif meta["source"] == "orphan" and meta["stats"]["segment_count"] == 0:
-                # Сначала проверим, есть ли существующая встреча за сегодня
+                # Случай 1: другая комната, сервер или платформа
+                if current_live_id and (
+                    current_live_id != live_id
+                    or current_host != parsed.netloc
+                    or canonical_source(meta.get("source")) != canonical_source(platform)
+                ):
+                    self._end_current_meeting(end_reason="changed_meeting")
+                    need_new_or_reopen = True
+
+                # Случай 2: orphan с сегментами -> новая встреча
+                # Не склеивать orphan-сегменты с conference встречей
+                elif meta["source"] == "orphan" and meta["stats"]["segment_count"] > 0:
+                    self._end_current_meeting(end_reason="meeting_join")
+                    need_new_or_reopen = True
+
+                # Случай 3: пустой orphan -> ищем существующую или обновляем source
+                elif meta["source"] == "orphan" and meta["stats"]["segment_count"] == 0:
+                    # Сначала проверим, есть ли существующая встреча за сегодня
+                    existing_meeting_id = self._find_same_day_meeting(
+                        live_id, platform, parsed.netloc
+                    )
+                    if existing_meeting_id:
+                        # Удалить пустой orphan и переоткрыть существующую
+                        orphan_path = self.current_meeting_path
+                        self._reopen_meeting(existing_meeting_id)
+                        # Удалить пустой orphan
+                        if orphan_path and orphan_path.exists():
+                            shutil.rmtree(orphan_path, ignore_errors=True)
+                        print(f"Reopened same-day meeting: {existing_meeting_id}")
+                    else:
+                        meta["source"] = canonical_source(platform)
+                        self._save_meta(meta)
+
+            if need_new_or_reopen:
+                # Попробовать найти существующую встречу с тем же live_id за сегодня
                 existing_meeting_id = self._find_same_day_meeting(live_id, platform, parsed.netloc)
                 if existing_meeting_id:
-                    # Удалить пустой orphan и переоткрыть существующую
-                    orphan_path = self.current_meeting_path
+                    # Переоткрыть существующую встречу (группировка)
                     self._reopen_meeting(existing_meeting_id)
-                    # Удалить пустой orphan
-                    if orphan_path and orphan_path.exists():
-                        shutil.rmtree(orphan_path, ignore_errors=True)
                     print(f"Reopened same-day meeting: {existing_meeting_id}")
                 else:
-                    meta["source"] = canonical_source(platform)
-                    self._save_meta(meta)
+                    self._create_meeting(source=platform)
 
-        if need_new_or_reopen:
-            # Попробовать найти существующую встречу с тем же live_id за сегодня
-            existing_meeting_id = self._find_same_day_meeting(live_id, platform, parsed.netloc)
-            if existing_meeting_id:
-                # Переоткрыть существующую встречу (группировка)
-                self._reopen_meeting(existing_meeting_id)
-                print(f"Reopened same-day meeting: {existing_meeting_id}")
-            else:
-                self._create_meeting(source=platform)
+            meta = self._load_meta()
 
-        meta = self._load_meta()
+            meta["conference"]["live_url"] = url
+            meta["conference"]["live_id"] = live_id
+            meta["conference"]["host"] = parsed.netloc
 
-        meta["conference"]["live_url"] = url
-        meta["conference"]["live_id"] = live_id
-        meta["conference"]["host"] = parsed.netloc
+            # Не перезаписывать title если уже есть (при reopen)
+            if title and not meta.get("title"):
+                meta["title"] = title
+                meta["title_source"] = platform
 
-        # Не перезаписывать title если уже есть (при reopen)
-        if title and not meta.get("title"):
-            meta["title"] = title
-            meta["title_source"] = platform
+            meta["updated_at"] = datetime.now(UTC).isoformat()
+            self._save_meta(meta)
 
-        meta["updated_at"] = datetime.now(UTC).isoformat()
-        self._save_meta(meta)
-
-        return self.current_meeting_id
+            return self.current_meeting_id
 
     # Backward compatibility alias
     def on_ktalk_join(self, url: str, title: Optional[str] = None) -> str:
@@ -483,16 +491,17 @@ class MeetingStorage:
         Returns:
             meeting_id новой встречи
         """
-        if not self.current_meeting_path:
-            return self._create_meeting(source="orphan")
+        with self._segment_lock:
+            if not self.current_meeting_path:
+                return self._create_meeting(source="orphan")
 
-        # Завершить текущую встречу
-        prev_id = self._end_current_meeting(end_reason=reason)
+            # Завершить текущую встречу
+            prev_id = self._end_current_meeting(end_reason=reason)
 
-        # Создать новую (orphan пока не зайдём в следующую)
-        new_id = self._create_meeting(source="orphan", prev_meeting_id=prev_id)
+            # Создать новую (orphan пока не зайдём в следующую)
+            new_id = self._create_meeting(source="orphan", prev_meeting_id=prev_id)
 
-        return new_id
+            return new_id
 
     def split_on_silence_timeout(self) -> Optional[str]:
         """
@@ -502,23 +511,24 @@ class MeetingStorage:
         Returns:
             meeting_id новой встречи или None если split не нужен
         """
-        if not self.current_meeting_path:
-            return None
+        with self._segment_lock:
+            if not self.current_meeting_path:
+                return None
 
-        meta = self._load_meta()
+            meta = self._load_meta()
 
-        # Только для orphan-встреч
-        if meta["source"] != "orphan":
-            return None
+            # Только для orphan-встреч
+            if meta["source"] != "orphan":
+                return None
 
-        # Только если есть сегменты (не пустой orphan)
-        if meta["stats"]["segment_count"] == 0:
-            return None
+            # Только если есть сегменты (не пустой orphan)
+            if meta["stats"]["segment_count"] == 0:
+                return None
 
-        prev_id = self._end_current_meeting(end_reason="silence_timeout")
-        new_id = self._create_meeting(source="orphan", prev_meeting_id=prev_id)
+            prev_id = self._end_current_meeting(end_reason="silence_timeout")
+            new_id = self._create_meeting(source="orphan", prev_meeting_id=prev_id)
 
-        return new_id
+            return new_id
 
     def _end_current_meeting(self, end_reason: str) -> Optional[str]:
         """Завершить текущую встречу без создания новой."""
@@ -539,30 +549,53 @@ class MeetingStorage:
         created = datetime.fromisoformat(meta["created_at"])
         meta["stats"]["duration_seconds"] = int((now - created).total_seconds())
 
-        # Generate title for orphan sessions without title
-        if meta.get("source") == "orphan" and not meta.get("title"):
-            if meta["stats"]["segment_count"] > 0:
-                title_result = self._generate_title_for_meeting()
-                if title_result:
-                    meta.update(title_result)
-
         self._save_meta(meta)
         self._update_index(meta)
 
+        # AI work must not delay a lifecycle transition or the bridge event loop.
+        # Pin the closed recording: current_meeting_path can change immediately.
+        if (
+            meta.get("source") == "orphan"
+            and not meta.get("title")
+            and meta["stats"]["segment_count"] > 0
+        ):
+            if self._title_executor is None:
+                self._title_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="recog-title"
+                )
+            self._title_executor.submit(self._finish_meeting_title, self.current_meeting_path)
+
         return self.current_meeting_id
 
-    def _generate_title_for_meeting(self) -> Optional[dict]:
+    def _finish_meeting_title(self, meeting_path: Path):
+        """Enrich only the closed recording, preserving newer metadata edits."""
+        try:
+            title_result = self._generate_title_for_meeting(meeting_path)
+            if not title_result:
+                return
+            with self._segment_lock:
+                meta_path = meeting_path / "meta.json"
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if not meta.get("ended_at") or meta.get("title"):
+                    return
+                meta.update(title_result)
+                self._save_json(meta_path, meta)
+                self._update_index(meta)
+        except Exception as e:
+            print(f"Warning: Title persistence failed: {e}", file=sys.stderr)
+
+    def _generate_title_for_meeting(self, meeting_path: Path) -> Optional[dict]:
         """Generate a title and its provider/settings provenance for this meeting."""
         try:
             from recog.ai_settings import AiSettingsStore
             from recog.title_generator import generate_title
 
-            transcript_text = self._get_transcript_as_text()
+            transcript_text = self._get_transcript_as_text(meeting_path)
             if not transcript_text:
                 return None
 
             settings = AiSettingsStore(self.base_path.parent).resolve_task("title")
-            meta = self._load_meta()
+            meta = json.loads((meeting_path / "meta.json").read_text(encoding="utf-8"))
             participants = meta.get("participants", {})
             variables = {
                 "user_name": ", ".join(info.get("name", pid) for pid, info in participants.items() if info.get("is_local")),
@@ -584,12 +617,9 @@ class MeetingStorage:
             print(f"Warning: Title generation failed: {e}")
             return None
 
-    def _get_transcript_as_text(self) -> str:
+    def _get_transcript_as_text(self, meeting_path: Path) -> str:
         """Get current meeting transcript as plain text."""
-        if not self.current_meeting_path:
-            return ""
-
-        transcript_path = self.current_meeting_path / "transcript.jsonl"
+        transcript_path = meeting_path / "transcript.jsonl"
         if not transcript_path.exists():
             return ""
 
@@ -622,13 +652,20 @@ class MeetingStorage:
         Returns:
             meeting_id завершённой встречи или None
         """
-        meeting_id = None
-        if self.current_meeting_path:
-            meeting_id = self._end_current_meeting(end_reason="session_end")
+        with self._segment_lock:
+            meeting_id = None
+            if self.current_meeting_path:
+                meeting_id = self._end_current_meeting(end_reason="session_end")
 
-        self.current_meeting_id = None
-        self.current_meeting_path = None
+            self.current_meeting_id = None
+            self.current_meeting_path = None
 
+            title_executor = self._title_executor
+            self._title_executor = None
+
+        # Drain title jobs on orderly shutdown, outside the metadata lock.
+        if title_executor is not None:
+            title_executor.shutdown(wait=True)
         return meeting_id
 
     def append_segment(
@@ -660,14 +697,13 @@ class MeetingStorage:
         Returns:
             Segment ID of the appended segment
         """
-        if not self.current_meeting_path:
-            # Нет активной встречи - создать orphan
-            self._create_meeting(source="orphan")
-
         # Hold _segment_lock for the entire read-modify-write cycle (counter,
         # JSONL append, meta.json update) so concurrent mic/system threads don't
         # overwrite each other's words_count or segment_count increments.
         with self._segment_lock:
+            if not self.current_meeting_path:
+                # Нет активной встречи - создать orphan
+                self._create_meeting(source="orphan")
             meeting_path = self.current_meeting_path
             self._segment_counter += 1
             segment_id = self._segment_counter
@@ -868,18 +904,19 @@ class MeetingStorage:
         Args:
             title: Новый заголовок встречи
         """
-        if not self.current_meeting_path or not title:
-            return
+        with self._segment_lock:
+            if not self.current_meeting_path or not title:
+                return
 
-        meta = self._load_meta()
+            meta = self._load_meta()
 
-        # Обновляем title только если он ещё не установлен или начинается с "Joining"
-        current_title = meta.get("title") or ""
-        if not current_title or current_title.startswith("Joining"):
-            meta["title"] = title
-            meta["title_source"] = "ktalk"
-            meta["updated_at"] = datetime.now(UTC).isoformat()
-            self._save_meta(meta)
+            # Обновляем title только если он ещё не установлен или начинается с "Joining"
+            current_title = meta.get("title") or ""
+            if not current_title or current_title.startswith("Joining"):
+                meta["title"] = title
+                meta["title_source"] = "ktalk"
+                meta["updated_at"] = datetime.now(UTC).isoformat()
+                self._save_meta(meta)
 
     def update_participants(self, participants: dict):
         """
@@ -888,42 +925,43 @@ class MeetingStorage:
         Args:
             participants: dict вида {id: {"name": str, "is_local": bool, ...}}
         """
-        if not self.current_meeting_path:
-            return
+        with self._segment_lock:
+            if not self.current_meeting_path:
+                return
 
-        meta = self._load_meta()
-        now = datetime.now(UTC).isoformat()
+            meta = self._load_meta()
+            now = datetime.now(UTC).isoformat()
 
-        for pid, pinfo in participants.items():
-            is_local = pinfo.get("is_local", False)
+            for pid, pinfo in participants.items():
+                is_local = pinfo.get("is_local", False)
 
-            if pid not in meta["participants"]:
-                # Для локальных: проверяем нет ли уже другого локального
-                if is_local:
-                    existing_local_id = next(
-                        (p_id for p_id, p in meta["participants"].items() if p.get("is_local")),
-                        None
-                    )
-                    if existing_local_id and existing_local_id != pid:
-                        # Уже есть локальный с другим ID — обновляем его имя (KTalk имя точнее)
-                        new_name = pinfo.get("name")
-                        if new_name:
-                            meta["participants"][existing_local_id]["name"] = new_name
-                        continue
+                if pid not in meta["participants"]:
+                    # Для локальных: проверяем нет ли уже другого локального
+                    if is_local:
+                        existing_local_id = next(
+                            (p_id for p_id, p in meta["participants"].items() if p.get("is_local")),
+                            None,
+                        )
+                        if existing_local_id and existing_local_id != pid:
+                            # Уже есть локальный с другим ID — обновляем его имя (KTalk имя точнее)
+                            new_name = pinfo.get("name")
+                            if new_name:
+                                meta["participants"][existing_local_id]["name"] = new_name
+                            continue
 
-                meta["participants"][pid] = {
-                    "name": pinfo.get("name", f"Participant_{pid}"),
-                    "is_local": is_local,
-                    "first_seen": now
-                }
-            else:
-                # Обновить имя если изменилось
-                new_name = pinfo.get("name")
-                if new_name and new_name != meta["participants"][pid]["name"]:
-                    meta["participants"][pid]["name"] = new_name
+                    meta["participants"][pid] = {
+                        "name": pinfo.get("name", f"Participant_{pid}"),
+                        "is_local": is_local,
+                        "first_seen": now,
+                    }
+                else:
+                    # Обновить имя если изменилось
+                    new_name = pinfo.get("name")
+                    if new_name and new_name != meta["participants"][pid]["name"]:
+                        meta["participants"][pid]["name"] = new_name
 
-        meta["updated_at"] = now
-        self._save_meta(meta)
+            meta["updated_at"] = now
+            self._save_meta(meta)
 
     def get_current_transcript(self) -> list[dict]:
         """
@@ -1258,7 +1296,9 @@ class MeetingStorage:
     def set_audio_paths(
         self,
         mic_path: Optional[str] = None,
-        system_path: Optional[str] = None
+        system_path: Optional[str] = None,
+        *,
+        meeting_path: Optional[Path] = None,
     ):
         """
         Store audio file paths in meeting meta.
@@ -1266,17 +1306,23 @@ class MeetingStorage:
         Args:
             mic_path: Path to mic audio WAV file
             system_path: Path to system audio WAV file
+            meeting_path: Explicit recording to update after a meeting switch
         """
-        if not self.current_meeting_path:
-            return
+        with self._segment_lock:
+            meeting_path = meeting_path or self.current_meeting_path
+            if not meeting_path:
+                return
 
-        meta = self._load_meta()
-        if mic_path:
-            meta["audio_mic_path"] = mic_path
-        if system_path:
-            meta["audio_system_path"] = system_path
-        meta["updated_at"] = datetime.now(UTC).isoformat()
-        self._save_meta(meta)
+            meta_path = meeting_path / "meta.json"
+            if not meta_path.exists():
+                return
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if mic_path:
+                meta["audio_mic_path"] = mic_path
+            if system_path:
+                meta["audio_system_path"] = system_path
+            meta["updated_at"] = datetime.now(UTC).isoformat()
+            self._save_json(meta_path, meta)
 
     def get_audio_paths(self, meeting_id: str) -> tuple[Optional[Path], Optional[Path]]:
         """

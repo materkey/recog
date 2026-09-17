@@ -2151,15 +2151,11 @@ class LiveTranscriber:
             elif system_audio_path_old:
                 old_meeting_path = Path(system_audio_path_old).parent
             if old_meeting_path:
-                import json
-                meta_path = old_meeting_path / "meta.json"
-                if meta_path.exists():
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    if mic_audio_path_old:
-                        meta["audio_mic_path"] = mic_audio_path_old
-                    if system_audio_path_old:
-                        meta["audio_system_path"] = system_audio_path_old
-                    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                self._meeting_storage.set_audio_paths(
+                    mic_path=mic_audio_path_old,
+                    system_path=system_audio_path_old,
+                    meeting_path=old_meeting_path,
+                )
 
             # Open new wav writers for new meeting.
             # Bridge path (continuation=False): _invalidate_pending_chunks()
