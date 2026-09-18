@@ -682,10 +682,16 @@ export function injectStyles() {
   document.head.appendChild(styles);
 }
 
+// The Members sidebar reuses .slide-menu-wrapper with its own tabset and
+// .content (one of them in the header), so only chat-widget identifies the chat.
+function getKtalkChatContentArea() {
+  return document.querySelector('.slide-menu-wrapper chat-widget')?.parentElement ?? null;
+}
+
 export function getKtalkChatTabs() {
   if (!window.$conf?.jitsiConf) return null;
   const chat = document.querySelector('.slide-menu-wrapper');
-  if (!chat?.querySelector('.content')) return null;
+  if (!chat?.querySelector('chat-widget')) return null;
   return chat.querySelector('.tl-tabset__content');
 }
 
@@ -773,7 +779,7 @@ export function createTranscriptContent() {
     return document.querySelector('.ktalk-transcript-content');
   }
 
-  const contentArea = document.querySelector('.slide-menu-wrapper .content');
+  const contentArea = getKtalkChatContentArea();
   if (!contentArea) {
     console.log('[KTalk Transcript] Content area not found');
     return null;
@@ -909,7 +915,7 @@ export function createCopilotContent() {
     setVas3kCopilotActivateHandler(activateVas3kView);
     panelBody = ensureVas3kCopilotHost();
   } else {
-    const contentArea = document.querySelector('.slide-menu-wrapper .content');
+    const contentArea = getKtalkChatContentArea();
     if (!contentArea) {
       console.log('[KTalk Transcript] Content area not found for copilot');
       return null;

@@ -116,7 +116,7 @@ describe('KTalk platform (supportsTabInjection() === true)', () => {
     // which must already exist for `ensureAiPanelBody` to attach the panel.
     document.body.innerHTML = `
       <div class="slide-menu-wrapper">
-        <div class="content"><div class="native-chat"></div></div>
+        <div class="content"><chat-widget class="native-chat"></chat-widget></div>
       </div>
     `;
   });

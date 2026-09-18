@@ -41,7 +41,7 @@ beforeAll(async () => {
 function buildHostDom() {
   document.body.innerHTML = `
     <div class="slide-menu-wrapper">
-      <div class="content"><div class="native-chat"></div></div>
+      <div class="content"><chat-widget class="native-chat"></chat-widget></div>
     </div>
   `;
 }

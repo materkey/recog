@@ -15,7 +15,8 @@ await jest.unstable_mockModule('./platforms/index.js', () => ({
 const { state } = await import('./state.js');
 const { addAiTab, getKtalkChatTabs, removeKtalkUi } = await import('./ui.js');
 const { init } = await import('./init.js');
-const chat = '<div class="slide-menu-wrapper"><div class="tl-tabset__content"><div class="tl-tab">General</div></div><div class="content"><div class="native-chat">Messages</div></div></div>';
+const chat = '<div class="slide-menu-wrapper"><div class="tl-tabset__content"><div class="tl-tab">General</div></div><div class="content"><chat-widget class="native-chat">Messages</chat-widget></div></div>';
+const members = '<div class="slide-menu-wrapper"><div class="tl-tabset__content"><div class="tl-tab">Members</div><div class="tl-tab">Moderators</div></div><div class="content"><conference-members-modal>People</conference-members-modal></div></div>';
 let observers;
 
 beforeEach(() => {
@@ -65,6 +66,33 @@ test('conference without chat content - tab injection - does not create an empty
   window.$conf = { jitsiConf: {} };
   document.body.innerHTML = '<div class="slide-menu-wrapper"><div class="tl-tabset__content"></div></div>';
   expect(addAiTab()).toBe(false);
+});
+
+test('members sidebar in a conference - periodic recovery - never adds Recog', async () => {
+  window.$conf = { jitsiConf: {} };
+  document.body.innerHTML = members;
+  init();
+  jest.advanceTimersByTime(4000);
+  await Promise.resolve();
+  expect(getKtalkChatTabs()).toBeNull();
+  expect(document.querySelector('.ktalk-ai-tab')).toBeNull();
+  expect(document.querySelector('.ktalk-ai-panel')).toBeNull();
+});
+
+test('chat replaced by members - recovery - removes Recog tab and panel', async () => {
+  window.$conf = { jitsiConf: {} };
+  document.body.innerHTML = chat;
+  init();
+  jest.advanceTimersByTime(2000);
+  await Promise.resolve();
+  expect(document.querySelector('.ktalk-ai-tab')).not.toBeNull();
+  const wrapper = document.querySelector('.slide-menu-wrapper');
+  wrapper.querySelector('.tl-tab:not(.ktalk-ai-tab-wrapper)').textContent = 'Members';
+  wrapper.querySelector('chat-widget').replaceWith(document.createElement('conference-members-modal'));
+  jest.advanceTimersByTime(2000);
+  await Promise.resolve();
+  expect(document.querySelector('.ktalk-ai-tab')).toBeNull();
+  expect(document.querySelector('.ktalk-ai-panel')).toBeNull();
 });
 
 test('meeting chat alongside artifact tabs - recovery and click - opens content only inside chat', async () => {
