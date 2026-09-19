@@ -11,6 +11,7 @@
 # services are explicitly restarted so they pick up new code and units.
 #
 # Flags:
+#   --dry-run        show the installation plan without changing anything
 #   --no-services    prepare everything, do not touch launchd / systemd
 #   --no-prefetch    skip the GigaAM weight-cache preparation
 #   --no-extension   skip the Chrome extension build
@@ -53,6 +54,7 @@ DO_SERVICES=1
 DO_PREFETCH=1
 DO_EXTENSION=1
 DO_ENV=1
+DRY_RUN=0
 
 # Collected as we go, reported in the summary.
 MISSING_REQUIRED=()
@@ -70,11 +72,12 @@ warn() { echo -e "${YELLOW}[warn]${NC} $1"; WARNINGS+=("$1"); }
 fail() { echo -e "${RED}[error]${NC} $1" >&2; exit 1; }
 
 usage() {
-    sed -n '2,28p' "$REPO_DIR/setup.sh" | sed 's/^#\{0,1\} \{0,1\}//'
+    sed -n '2,29p' "$REPO_DIR/setup.sh" | sed 's/^#\{0,1\} \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --dry-run)      DRY_RUN=1 ;;
         --no-services)  DO_SERVICES=0 ;;
         --no-prefetch)  DO_PREFETCH=0 ;;
         --no-extension) DO_EXTENSION=0 ;;
@@ -108,6 +111,60 @@ if [ -z "${RECOG_SERVICE_OS:-}" ]; then
 fi
 
 echo "=== recog setup ($HOST_OS) ==="
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo "Dry run — installation plan only; dependencies and readiness are not verified."
+    echo "Would check Python >= 3.12, system dependencies and ASR configuration."
+    if [ -x "$VENV_DIR/bin/python" ]; then
+        echo "Would reuse venv: $VENV_DIR"
+    elif [ -e "$VENV_DIR" ]; then
+        fail "$VENV_DIR exists but has no bin/python — remove it and rerun ./setup.sh"
+    else
+        echo "Would create venv: $VENV_DIR"
+    fi
+    torch_index="${RECOG_TORCH_INDEX_URL:-default PyPI index}"
+    if [ "${RECOG_TORCH_INDEX_URL+set}" != "set" ] && [ "$HOST_OS" = "linux" ] && ! deps_have nvidia-smi; then
+        torch_index="$CPU_TORCH_INDEX"
+    fi
+    echo "Would install torch / torchaudio from $torch_index"
+    echo "Would install GigaAM from ${RECOG_GIGAAM_EDITABLE:-${GIGAAM_URL}@${GIGAAM_REF}}"
+    echo "Would install deploy/python/requirements.txt and deploy/python/requirements-web.txt"
+    if [ "$HOST_OS" = "darwin" ]; then
+        echo "Would also install deploy/python/requirements-macos.txt; all pip steps use deploy/python/constraints/macos.txt"
+    fi
+    if [ "$DO_ENV" -eq 1 ]; then
+        for config in "$REPO_DIR/.env" "$REPO_DIR/recog/web/.env"; do
+            if [ -f "$config" ]; then
+                echo "Would keep existing $config"
+            else
+                echo "Would copy $config.example to $config if the example exists"
+            fi
+        done
+    else
+        echo "Skipped environment files (--no-env)"
+    fi
+    echo "Would resolve the data directory and create it if missing (existing data is not migrated)."
+    if [ "$DO_EXTENSION" -eq 1 ]; then
+        echo "Would install npm dependencies and build browser-extension/dist if npm and the extension directory are available."
+    else
+        echo "Skipped Chrome extension (--no-extension)"
+    fi
+    if [ "$HOST_OS" = "darwin" ]; then
+        echo "Would build sck_audio_capture with swiftc, or reuse the existing helper."
+    fi
+    if [ "$DO_PREFETCH" -eq 1 ]; then
+        echo "Would prepare the GigaAM weight cache, downloading missing or corrupt files."
+    else
+        echo "Skipped GigaAM weights (--no-prefetch)"
+    fi
+    if [ "$DO_SERVICES" -eq 1 ]; then
+        echo "Would install $RECOG_SERVICE_OS service units, check readiness, then restart running services and start the others."
+    else
+        echo "Skipped services (--no-services)"
+    fi
+    echo "Dry run complete — nothing installed, written, downloaded or restarted."
+    exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Python interpreter

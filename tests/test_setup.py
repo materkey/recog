@@ -207,6 +207,51 @@ def test_shell_scripts_parse(script):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_fresh_or_existing_install_when_dry_run_then_no_commands_or_files_change(repo, stubs, host_os, existing):
+    if existing:
+        venv_bin = repo / "venv-gigaam/bin"
+        venv_bin.mkdir(parents=True)
+        shutil.copy2(stubs[0] / "python3.12", venv_bin / "python")
+    home = repo.parent / "home"
+    home.mkdir()
+
+    def snapshot():
+        return {
+            str(path.relative_to(repo.parent)): path.read_bytes() if path.is_file() else None
+            for root in (repo, home) for path in root.rglob("*")
+        }
+
+    before = snapshot()
+    result = run_setup(repo, stubs, "--dry-run", host_os=host_os)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.calls == []
+    assert snapshot() == before
+    assert ("Would reuse venv" if existing else "Would create venv") in result.stdout
+    assert "Would install GigaAM" in result.stdout
+    assert "Would install " + host_os + " service units" in result.stdout
+    assert "readiness are not verified" in result.stdout
+    assert ("Would build sck_audio_capture" in result.stdout) is (host_os == "Darwin")
+
+
+def test_skip_flags_and_overrides_when_dry_run_then_plan_reflects_them(repo, stubs):
+    result = run_setup(
+        repo, stubs, "--dry-run", "--no-services", "--no-env", "--no-prefetch", "--no-extension",
+        env_extra={"RECOG_TORCH_INDEX_URL": "https://example.test/torch", "RECOG_GIGAAM_REF": "test-pin"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.calls == []
+    for flag in ("--no-services", "--no-env", "--no-prefetch", "--no-extension"):
+        assert f"({flag})" in result.stdout
+    assert "https://example.test/torch" in result.stdout
+    assert "@test-pin" in result.stdout
+    assert "Would install Linux service units" not in result.stdout
+    assert "Would copy" not in result.stdout
+
+
 def test_creates_the_venv_and_installs_the_pinned_gigaam(repo, stubs):
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
