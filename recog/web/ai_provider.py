@@ -5,15 +5,14 @@ from recog.ai_provider import (
     provider_for_settings,
 )
 from recog.ai_defaults import (
-    INCREMENT_PROMPT, SUMMARY_PROMPT,
+    INCREMENT_PROMPT,
 )
 from recog.ai_settings import AiSettingsStore, render_prompt
 from recog.config import get_data_dir
 
 
 def get_task_settings(task: str = "analysis") -> dict:
-    task_id = {"analysis": "analysis.increment", "increment": "analysis.increment",
-               "summary": "analysis.summary"}.get(task, task)
+    task_id = {"analysis": "analysis.increment", "increment": "analysis.increment"}.get(task, task)
     return AiSettingsStore(get_data_dir()).resolve_task(task_id)
 
 

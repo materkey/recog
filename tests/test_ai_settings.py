@@ -28,7 +28,7 @@ def test_missing_settings_when_read_then_defaults_without_creating_data(store):
     view = store.view()
     assert view["models"] == DEFAULT_MODELS
     assert {task["id"] for task in view["tasks"]} == {
-        "analysis.increment", "analysis.summary", "title", "copilot",
+        "analysis.increment", "title", "copilot",
     }
     assert not store.path.parent.exists()
 
@@ -70,6 +70,7 @@ def test_retired_features_given_legacy_file_when_loaded_then_active_settings_rem
     store.path.parent.mkdir()
     raw = {"version": 1, "revision": str(uuid.uuid4()), "models": {"openrouter": "old", "codex": "kept"}, "tasks": {
         "anchor": {"prompt": "Removed {transcript}"}, "analysis.custom": {"prompt": "Removed {transcript}"},
+        "analysis.summary": {"prompt": "Retired summary {transcript}"},
         "title": {"providers": ["openrouter"], "models": {"openrouter": "old"}, "prompt": "Keep {transcript}"},
     }}
     store.path.write_text(json.dumps(raw))
@@ -77,7 +78,7 @@ def test_retired_features_given_legacy_file_when_loaded_then_active_settings_rem
     view = store.view()
     assert set(view["models"]) == {"claude", "codex"}
     assert view["models"]["codex"] == "kept"
-    assert {task["id"] for task in view["tasks"]} == {"analysis.increment", "analysis.summary", "title", "copilot"}
+    assert {task["id"] for task in view["tasks"]} == {"analysis.increment", "title", "copilot"}
     assert store.resolve_task("title")["providers"] == ["codex"]
     assert store.resolve_task("title")["prompt"] == "Keep {transcript}"
     assert store.path.read_bytes() == original
@@ -85,6 +86,10 @@ def test_retired_features_given_legacy_file_when_loaded_then_active_settings_rem
         store.write_models({"openrouter": "removed"})
     with pytest.raises(ValueError):
         store.write_task("anchor", {"prompt": "Removed {transcript}"})
+    with pytest.raises(ValueError):
+        store.resolve_task("analysis.summary")
+    with pytest.raises(ValueError):
+        store.write_task("analysis.summary", {"prompt": "Retired {transcript}"})
 
 
 def test_codex_auto_given_scenario_when_saved_then_empty_effort_roundtrips(store):
@@ -100,7 +105,7 @@ def test_global_and_task_overrides_when_resolved_then_precedence_and_blank_inher
     first = store.write_models({"claude": "global-claude", "codex": "global-codex"}, "defaults")
     store.write_task("title", {"models": {"codex": "title-model"}}, first["revision"])
     assert store.resolve_task("title")["models"]["codex"] == "title-model"
-    assert store.resolve_task("analysis.summary")["models"]["codex"] == "global-codex"
+    assert store.resolve_task("analysis.increment")["models"]["codex"] == "global-codex"
     store.write_task("title", {"models": {"codex": " "}})
     assert store.resolve_task("title")["models"]["codex"] == "global-codex"
     store.write_models({"codex": ""})
@@ -117,7 +122,7 @@ def test_saved_models_when_legacy_value_is_invalid_then_saved_value_wins(store, 
 def test_task_override_when_replaced_and_reset_then_only_selected_task_changes(store):
     store.write_models({"codex": "global"})
     store.write_task("title", {"prompt": "Title {transcript}", "providers": ["claude"], "reasoning_effort": "low"})
-    store.write_task("analysis.summary", {"prompt": "Anchor {transcript}"})
+    store.write_task("analysis.increment", {"prompt": "Anchor {transcript}"})
     view = store.write_task("title", {"providers": ["codex"]})
     title = store.resolve_task("title")
     assert title["prompt"] == title["default_prompt"]
@@ -125,7 +130,7 @@ def test_task_override_when_replaced_and_reset_then_only_selected_task_changes(s
     reset = store.reset_task("title", view["revision"])
     assert reset["revision"] != view["revision"]
     assert not store.resolve_task("title")["customized"]
-    assert store.resolve_task("analysis.summary")["prompt"] == "Anchor {transcript}"
+    assert store.resolve_task("analysis.increment")["prompt"] == "Anchor {transcript}"
     assert reset["models"]["codex"] == "global"
 
 
@@ -133,7 +138,7 @@ def test_legacy_providers_and_effort_when_resolved_then_defaults_retained(store,
     monkeypatch.setenv("AI_PROVIDER", "openrouter")
     monkeypatch.setenv("CODEX_REASONING_EFFORT", "high")
     assert store.resolve_task("title")["reasoning_effort"] == "high"
-    assert store.resolve_task("analysis.summary")["providers"] == ["claude", "codex"]
+    assert store.resolve_task("analysis.increment")["providers"] == ["claude", "codex"]
     assert store.resolve_task("copilot")["allowed_providers"] == ["claude"]
 
 
@@ -179,7 +184,7 @@ def test_saved_registry_when_edited_then_defaults_refresh_without_writing_regist
 ])
 def test_invalid_task_input_when_saved_then_no_settings_file(store, values):
     with pytest.raises(ValueError) as error:
-        store.write_task("analysis.summary", values)
+        store.write_task("analysis.increment", values)
     assert not isinstance(error.value, SettingsReadError)
     assert not store.path.exists()
 

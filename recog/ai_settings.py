@@ -187,6 +187,7 @@ class AiSettingsStore:
                 if isinstance(raw.get("tasks"), dict):
                     raw["tasks"].pop("anchor", None)
                     raw["tasks"].pop("analysis.custom", None)
+                    raw["tasks"].pop("analysis.summary", None)
                     for values in raw["tasks"].values():
                         if not isinstance(values, dict):
                             continue

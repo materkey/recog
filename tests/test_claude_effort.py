@@ -10,7 +10,7 @@ from recog.ai_settings import AiSettingsStore
 from recog.copilot_supervisor import TmuxRunner
 
 
-@pytest.mark.parametrize('task_id', ['analysis.increment', 'analysis.summary', 'title', 'saved:my-increment', 'copilot'])
+@pytest.mark.parametrize('task_id', ['analysis.increment', 'title', 'saved:my-increment', 'copilot'])
 @pytest.mark.parametrize('effort', ['', 'low', 'medium', 'high', 'xhigh', 'max'])
 def test_scenario_given_claude_effort_when_saved_and_reset_then_roundtrips_independently(tmp_path, task_id, effort):
     store = AiSettingsStore(tmp_path)

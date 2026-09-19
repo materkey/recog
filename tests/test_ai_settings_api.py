@@ -87,6 +87,21 @@ async def test_removed_features_given_request_when_routed_then_unavailable(ai_ap
     assert (await client.get('/api/meetings/test/analyze-stream?question=custom')).status_code == 422
 
 
+async def test_retired_summary_when_requested_then_no_setting_or_generation_is_available(ai_api):
+    client = ai_api.client
+    settings = (await client.get('/api/ai-settings')).json()
+    assert 'analysis.summary' not in {task['id'] for task in settings['tasks']}
+    for endpoint in ('analyze', 'analyze-multi'):
+        response = await client.post(f'/api/meetings/test/{endpoint}', json={'question': 'summary'})
+        assert response.status_code == 422
+    assert (await client.get('/api/meetings/test/analyze-stream?question=summary')).status_code == 422
+    response = await client.put('/api/ai-settings/tasks/analysis.summary', json={
+        'revision': 'defaults', 'prompt': '{transcript}', 'providers': ['claude'],
+    })
+    assert response.status_code == 422
+    assert not ai_api.store.path.exists()
+
+
 async def test_copilot_switch_given_api_save_when_reloaded_then_boolean_is_persisted(ai_api):
     api = ai_api
     saved = await api.client.put('/api/ai-settings/tasks/copilot', json=task_payload(api, enabled=False))
@@ -196,7 +211,7 @@ async def test_invalid_task_given_put_when_validated_then_422_and_no_mutation(ai
 
 
 @pytest.mark.parametrize('route,payload', [
-    ('analysis.summary', {'prompt': 'Missing transcript', 'providers': ['claude']}),
+    ('analysis.increment', {'prompt': 'Missing transcript', 'providers': ['claude']}),
     ('title', {'prompt': '{transcript} {unknown}', 'providers': ['codex']}),
     ('title', {'prompt': '{transcript}', 'providers': ['codex'], 'reasoning_effort': 'invalid'}),
     ('unknown', {'prompt': '{transcript}', 'providers': ['claude']}),

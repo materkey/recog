@@ -35,17 +35,6 @@ INCREMENT_PROMPT = """Проанализируй транскрипт рабоч
 {transcript}
 """
 
-SUMMARY_PROMPT = """Проанализируй транскрипт рабочей встречи.
-
-Дай краткое summary (5-7 предложений):
-- Основные темы обсуждения
-- Ключевые решения
-- Action items с ответственными
-
-Транскрипт:
-{transcript}
-"""
-
 TITLE_PROMPT = """Придумай короткое название (3-7 слов) для этого разговора.
 
 Требования:
@@ -83,7 +72,6 @@ COPILOT_PROMPT = """Ты — помощник пользователя на вс
 
 DEFAULT_TASKS = {
     "analysis.increment": {"label": "Инкремент", "prompt": INCREMENT_PROMPT, "multiple": True},
-    "analysis.summary": {"label": "Краткое содержание", "prompt": SUMMARY_PROMPT, "multiple": True},
     "title": {"label": "Название встречи", "prompt": TITLE_PROMPT, "multiple": False},
     "copilot": {"label": "Copilot", "prompt": COPILOT_PROMPT, "multiple": False},
 }

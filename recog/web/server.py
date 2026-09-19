@@ -1220,7 +1220,7 @@ async def clear_debug_ai_context():
 # --- AI Analysis ---
 
 class AnalyzeRequest(BaseModel):
-    question: Literal["increment", "summary"] = "increment"
+    question: Literal["increment"] = "increment"
     model_config = {"extra": "forbid"}
     debug: bool = False
 
@@ -1316,7 +1316,7 @@ async def analyze_meeting_multi(meeting_id: str, request: AnalyzeRequest):
 @app.get("/api/meetings/{meeting_id}/analyze-stream")
 async def analyze_meeting_stream(
     meeting_id: str,
-    question: Literal["increment", "summary"] = "increment",
+    question: Literal["increment"] = "increment",
     debug: bool = False
 ):
     """Stream AI analysis from multiple providers using SSE."""
