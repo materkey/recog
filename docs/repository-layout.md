@@ -36,7 +36,7 @@ root to preserve installed paths. Existing `.env` and `recog/web/.env` files
 remain local configuration. Meetings, logs and speaker databases belong in the
 data root resolved by `recog.config.get_data_dir()` (normally `~/.recog`, or
 `RECOG_DATA_DIR`). Moving code does not migrate that data; the separate
-[data migration procedure](../README.md#personal-data-outside-the-checkout)
+[data migration procedure](usage.md#personal-data-outside-the-checkout)
 handles legacy installations.
 
 ## Updating an existing checkout

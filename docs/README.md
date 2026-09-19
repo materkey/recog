@@ -7,6 +7,7 @@ the current implementation contracts and commands used by coding agents.
 
 | Location | What belongs here |
 | --- | --- |
+| [Usage reference](usage.md) | Detailed installation, CLI, services, configuration and troubleshooting |
 | [Architecture decisions](adr/) | Why a design was chosen, its constraints and superseding decisions; check each ADR's status |
 | [Implementation plans](plans/) | Proposed work and its execution steps; [completed plans](plans/completed/) are historical records |
 | [Experiments](experiments/) | Measurements, benchmark reports and supporting reference data; runnable benchmark scripts live in [`scripts/benchmarks/`](../scripts/benchmarks/) |
