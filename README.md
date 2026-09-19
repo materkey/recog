@@ -11,7 +11,7 @@ git clone <repo-url> recog && cd recog
 ./setup.sh
 ```
 
-Requires **Python 3.12+**, **ffmpeg**, and either **macOS 13+ on Apple Silicon**
+Requires **Python 3.12+ (3.12 recommended)**, **ffmpeg**, and either **macOS 13+ on Apple Silicon**
 or **Linux**. macOS needs `swiftc` to build the audio helper; Linux needs
 PulseAudio or PipeWire with `pipewire-pulse`, `parec`, `pactl` and PortAudio.
 Install **Node.js + npm** to build the Chrome extension. Copilot additionally
@@ -37,6 +37,31 @@ If you do not need Copilot, use `RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh`.
 **Recording:** the default live service captures microphone and system audio,
 including between conferences. For browser KTalk calls only, configure
 [`--ktalk-only`](docs/usage.md#usage); this mode requires the extension.
+
+### Python on Linux
+
+Use **Python 3.12**, the version used in CI. Setup tries `python3.12`,
+`python3.13`, then `python3`; it rejects versions below 3.12 and warns above
+3.13. Acceptance by the installer is not a dependency compatibility guarantee.
+
+On Ubuntu 22.04, the stock Python is 3.10 and the default repositories do not
+provide `python3.12` / `python3.12-venv`. If the required Python is unavailable,
+install it for your user with [uv](https://docs.astral.sh/uv/guides/install-python/)
+and rerun setup from the repository root (Bash):
+
+```bash
+# Requires curl and CA certificates; skip the first line if uv is installed.
+curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="$HOME/.local/bin" sh
+export PATH="$HOME/.local/bin:$PATH"
+uv python install 3.12
+python3.12 --version
+./setup.sh
+```
+
+The `PATH` line makes both uv and `python3.12` visible in the current shell;
+repeat it in a new shell if `~/.local/bin` is not already on your PATH.
+This leaves the system `python3` unchanged. Setup creates its own virtualenv
+with pip; you do not need to create one with `uv venv` first.
 
 ## How it works
 
