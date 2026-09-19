@@ -44,6 +44,10 @@ Use **Python 3.12**, the version used in CI. Setup tries `python3.12`,
 `python3.13`, then `python3`; it rejects versions below 3.12 and warns above
 3.13. Acceptance by the installer is not a dependency compatibility guarantee.
 
+**Arch Linux:** the tested stock Python 3.14.7 fails during GigaAM installation
+with `No matching distribution found for onnxruntime==1.23.*`. Use Python 3.12
+via uv below; upgrading the system `python` package does not solve this pin.
+
 On Ubuntu 22.04, the stock Python is 3.10 and the default repositories do not
 provide `python3.12` / `python3.12-venv`. If the required Python is unavailable,
 install it for your user with [uv](https://docs.astral.sh/uv/guides/install-python/)
@@ -62,6 +66,19 @@ The `PATH` line makes both uv and `python3.12` visible in the current shell;
 repeat it in a new shell if `~/.local/bin` is not already on your PATH.
 This leaves the system `python3` unchanged. Setup creates its own virtualenv
 with pip; you do not need to create one with `uv venv` first.
+
+If a failed attempt already created `venv-gigaam` with another Python version,
+setup will reuse it. With services and manual Recog processes stopped, preserve
+that environment and let setup create a new one (choose an unused backup name):
+
+```bash
+mv venv-gigaam venv-gigaam.previous
+./setup.sh
+```
+
+The Python 3.12.14 dependency installation, `pip check`, CLI and ASR/web/MCP
+imports passed in clean Ubuntu 22.04 and Arch containers; audio capture and
+service activation were not part of these checks.
 
 ## How it works
 
