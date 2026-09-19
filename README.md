@@ -63,6 +63,15 @@ The web UI shows live and saved transcripts, audio playback and AI analysis.
 Start Copilot from the web UI; automatic meeting startup is off on fresh
 installs. New installations keep meetings, logs and settings in `~/.recog`.
 
+The bundled [`recog-meetings` skill](.claude/skills/recog-meetings/SKILL.md)
+lets Claude Code search saved transcripts by speaker, keyword and date, find
+quotes with context, and list meetings and participants. Ask, for example,
+“Find what we discussed about the release last week.” You can also run its search directly:
+
+```bash
+uv run .claude/skills/recog-meetings/search_meetings.py --text "релиз" --context 2
+```
+
 ## Everyday commands
 
 ```bash
