@@ -36,6 +36,7 @@ from recog.meeting_storage import MeetingStorage, get_external_paths
 from recog.log_utils import log_rate_limited
 from recog.config import get_data_dir, MIC_SPEAKER_NAME
 from recog.user_profile import UserProfileStore
+from recog.privacy import PrivacyStore
 from recog.web.user_profile import ProfileCoordinator
 from recog.ai_settings import AiSettingsStore, SettingsConflictError, SettingsReadError
 from recog.web.ai_settings import AiSettingsCoordinator
@@ -326,6 +327,7 @@ async def _forward_bridge_message(raw: str) -> None:
 profile_coordinator = ProfileCoordinator(UserProfileStore(DATA_DIR), MIC_SPEAKER_NAME,
                                          _forward_bridge_message)
 ai_settings_coordinator = AiSettingsCoordinator(AiSettingsStore(DATA_DIR), _forward_bridge_message)
+privacy_store = PrivacyStore(DATA_DIR)
 
 
 async def _bridge_settings_connected(send):
@@ -582,6 +584,30 @@ async def save_ai_task(task_id: str, request: AiTaskRequest):
 async def reset_ai_task(task_id: str, revision: str):
     return await _write_ai_settings(ai_settings_coordinator.store.reset_task,
                                     task_id, revision=revision)
+
+
+class PrivacyRequest(BaseModel):
+    enabled: bool = Field(strict=True)
+
+    model_config = {"extra": "forbid"}
+
+
+@app.get("/api/privacy")
+async def get_privacy():
+    try:
+        return privacy_store.read()
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=500, detail="Не удалось прочитать настройку Privacy.") from error
+
+
+@app.put("/api/privacy")
+async def save_privacy(request: PrivacyRequest):
+    try:
+        state = privacy_store.write(request.enabled)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=500, detail="Не удалось сохранить настройку Privacy.") from error
+    await _forward_bridge_message(json.dumps({"type": "privacy_updated", **state}))
+    return state
 
 
 class UserProfileRequest(BaseModel):

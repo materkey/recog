@@ -927,6 +927,7 @@ class KTalkBridge:
             "meeting_title": meeting_title,
             "new_segments": new_segments_payload,
             "recent_context": recent_context,
+            "recent_segments": recent_payload,
         }
         for client in recipients:
             try:

@@ -221,6 +221,15 @@ After editing backend code (`recog/web/server.py`, `recog/*.py`) run
 
 ## Copilot
 
+The **Privacy** toggle in the live and meeting views replaces speaker names with
+`speaker_N` in Copy/Export and in Copilot MCP transcript snapshots, queued events
+and push notifications. MCP receives a masked user profile with no real-name
+aliases. The setting is shared across browsers and persisted in `privacy.json`
+under the data directory; a running MCP channel reads it before each delivery.
+Transcript text, meeting titles and custom instructions stay unchanged, including
+names written or spoken inside them. Saved recordings retain their original
+labels, and enabling Privacy cannot retract context already sent to an agent.
+
 All four units — including the copilot supervisor — are installed everywhere;
 there is no separate flag. What is off by default is the *automatic* spawn per
 meeting: `.env.example` ships `RECOG_COPILOT_AUTOSPAWN=0`, so a fresh install
@@ -464,4 +473,3 @@ python -m pytest tests/ -v -m "not e2e"  # unit tests
 python -m compileall recog               # syntax check
 python -m recog --help                   # CLI smoke test
 ```
-

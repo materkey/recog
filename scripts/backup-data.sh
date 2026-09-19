@@ -54,6 +54,10 @@ if [ -f "$DATA_DIR/ai-settings.json" ]; then
     (umask 077; cp "$DATA_DIR/ai-settings.json" "$DEST/ai-settings.json")
     chmod 600 "$DEST/ai-settings.json"
 fi
+if [ -f "$DATA_DIR/privacy.json" ]; then
+    (umask 077; cp "$DATA_DIR/privacy.json" "$DEST/privacy.json")
+    chmod 600 "$DEST/privacy.json"
+fi
 # .env копируется под другим именем: иначе случайный `cp -r` обратно в репо
 # перезапишет рабочий .env, а его правит только человек.
 [ -f .env ] && { cp -p .env "$DEST/env.backup"; chmod 600 "$DEST/env.backup"; }

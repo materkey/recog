@@ -40,6 +40,14 @@ def test_dry_run_when_planning_then_no_files_change(migration, data):
     assert (repo / "meetings/transcript.jsonl").is_file()
 
 
+def test_privacy_preference_when_migrating_then_preserved(migration, data):
+    repo, target = data
+    (repo / "privacy.json").write_text('{"enabled": true}')
+    migration.migrate(repo, target, apply=True)
+    assert (target / "privacy.json").read_text() == '{"enabled": true}'
+    assert not (repo / "privacy.json").exists()
+
+
 def test_data_when_migrating_then_bytes_and_inodes_survive_and_config_stays(migration, data):
     repo, target = data
     before = {p.relative_to(repo): (p.read_bytes(), p.stat().st_ino)

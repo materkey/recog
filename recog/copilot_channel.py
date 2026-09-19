@@ -49,6 +49,7 @@ import websockets
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
+from recog.privacy import CopilotPrivacy
 
 try:
     from mcp.server.streamable_http import GET_STREAM_KEY
@@ -146,6 +147,7 @@ class BridgeLink:
         # up. On overflow we drop the oldest event so the freshest meeting
         # state is preserved.
         self.event_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=50)
+        self.privacy = CopilotPrivacy()
 
     def set_socket(self, ws: Optional[Any]) -> None:
         self._ws = ws
@@ -454,6 +456,9 @@ _COPILOT_POLICY_FIELDS = ("copilot_instructions", "copilot_policy_revision")
 def build_copilot_context(snapshot: dict) -> str:
     """Render identity data and editable instructions as separate literal blocks."""
     blocks = []
+    if snapshot.get("privacy_mode"):
+        blocks.append("Privacy mode: use speaker_N labels instead of real names. "
+                      "The user profile is masked; transcript text is unchanged.")
     profile = {label: snapshot[key] for key, label in _USER_CONTEXT_FIELDS.items()
                if snapshot.get(key) is not None}
     if profile:
@@ -521,7 +526,7 @@ def _format_channel_event(event: dict) -> tuple[str, dict[str, str]]:
     # rendered context was introduced; new instructions use the context block.
     for key in (
         "request_id", "meeting_id", "meeting_title", *_USER_CONTEXT_FIELDS,
-        "copilot_policy_revision",
+        "copilot_policy_revision", "privacy_mode",
     ):
         value = event.get(key)
         if value is None:
@@ -719,10 +724,11 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
                 return {"ok": False, "error": "timeout waiting for transcript snapshot"}
             except ConnectionError as exc:
                 return {"ok": False, "error": str(exc)}
+            response = link.privacy.apply(response)
             context = build_copilot_context(response)
             return {
                 "ok": True, "segments": response.get("segments", []),
-                **{key: response[key] for key in (*_USER_CONTEXT_FIELDS, *_COPILOT_POLICY_FIELDS) if key in response},
+                **{key: response[key] for key in (*_USER_CONTEXT_FIELDS, *_COPILOT_POLICY_FIELDS, "privacy_mode") if key in response},
                 **({"user_context": context} if context else {}),
             }
         finally:
@@ -760,6 +766,7 @@ def _build_mcp(link: BridgeLink, host: str, port: int) -> FastMCP:
                 link.event_queue.get(),
                 timeout=timeout_seconds,
             )
+            event = link.privacy.apply(event)
             context = build_copilot_context(event)
             return {"ok": True, "event": event,
                     **({"user_context": context} if context else {})}
@@ -938,8 +945,8 @@ async def _handle_inbound(
         # immediately. If no session is open the broadcast is a no-op and
         # Claude can still drain the queue via `await_copilot_event`.
         if mcp is not None:
-            content, meta = _format_channel_event(data)
             try:
+                content, meta = _format_channel_event(link.privacy.apply(data))
                 sent = await _broadcast_channel_notification(mcp, content, meta)
                 print(
                     f"{LOG_PREFIX} channel push {msg_type!r} → {sent} session(s)",

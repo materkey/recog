@@ -740,6 +740,9 @@ const views = {
             const transcriptEl = document.getElementById('live-transcript');
 
             switch (msg.type) {
+                case 'privacy_updated':
+                    applyPrivacyState(msg);
+                    break;
                 case 'init':
                     this.currentMeeting = msg.meeting;
                     this.segments = msg.segments || [];
@@ -1815,20 +1818,71 @@ function highlightSearch(text, term) {
 // generic label rather than leaking the real speaker name.
 const PRIVACY_ALIAS_FALLBACK = 'speaker_?';
 
-// Privacy is a single shared state across the meeting and live views, persisted
-// in localStorage. Sync every privacy button currently in the DOM.
+// The server owns the shared preference used by Copy/Export and Copilot MCP.
+// localStorage is a display cache and a migration source for older installs.
+let privacyReady = false;
+let privacySaving = false;
+let privacyGeneration = 0;
+
 function syncPrivacyButtons() {
     const on = views.meeting.privacyMode;
     for (const id of ['privacy-mode-btn', 'live-privacy-btn']) {
         const btn = document.getElementById(id);
-        if (btn) btn.classList.toggle('active', on);
+        if (btn) {
+            btn.classList.toggle('active', on);
+            btn.disabled = !privacyReady || privacySaving;
+        }
     }
 }
 
-function togglePrivacy() {
-    views.meeting.privacyMode = !views.meeting.privacyMode;
-    localStorage.setItem('meetingPrivacyMode', views.meeting.privacyMode);
+function applyPrivacyState(state) {
+    privacyGeneration++;
+    views.meeting.privacyMode = state.enabled;
+    localStorage.setItem('meetingPrivacyMode', state.enabled);
+    privacyReady = true;
     syncPrivacyButtons();
+}
+
+async function privacyRequest(enabled) {
+    const options = enabled === undefined ? {} : {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+    };
+    const response = await fetch('/api/privacy', options);
+    if (!response.ok) throw new Error('Не удалось синхронизировать Privacy с Copilot MCP.');
+    return response.json();
+}
+
+async function loadPrivacy() {
+    if (privacySaving) return;
+    const generation = ++privacyGeneration;
+    try {
+        let state = await privacyRequest();
+        if (generation !== privacyGeneration) return;
+        if (!state.configured && views.meeting.privacyMode) state = await privacyRequest(true);
+        if (generation !== privacyGeneration) return;
+        applyPrivacyState(state);
+    } catch (error) {
+        if (generation !== privacyGeneration) return;
+        privacyReady = false;
+        syncPrivacyButtons();
+        console.error(error);
+    }
+}
+
+async function togglePrivacy() {
+    if (!privacyReady || privacySaving) return;
+    privacySaving = true;
+    privacyGeneration++;
+    syncPrivacyButtons();
+    try {
+        applyPrivacyState(await privacyRequest(!views.meeting.privacyMode));
+    } catch (error) {
+        alert(error.message);
+    } finally {
+        privacySaving = false;
+        syncPrivacyButtons();
+    }
 }
 
 // Build speaker -> speaker_N aliases in order of first appearance. System event
@@ -2710,4 +2764,8 @@ function formatTime(seconds) {
 document.addEventListener('DOMContentLoaded', () => {
     router.init();
     initCopilotPanel();
+    loadPrivacy();
+});
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadPrivacy();
 });

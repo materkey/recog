@@ -28,6 +28,7 @@ def test_isolated_installation_when_backed_up_then_profile_private_and_environme
         ai_settings.write_text('{"version": 1, "models": {}, "tasks": {}}')
         ai_settings.chmod(0o644)
     (data / "ai-settings.lock").touch()
+    (data / "privacy.json").write_text('{"enabled": true}')
     (repo / ".env").write_text("TEST_ONLY=fixture\n")
     frontend = repo / "recog/web"
     frontend.mkdir(parents=True)
@@ -49,6 +50,8 @@ def test_isolated_installation_when_backed_up_then_profile_private_and_environme
         assert backed_ai_settings.read_bytes() == ai_settings.read_bytes()
         assert backed_ai_settings.stat().st_mode & 0o777 == 0o600
     assert not (dest / "ai-settings.lock").exists()
+    assert (dest / "privacy.json").read_bytes() == (data / "privacy.json").read_bytes()
+    assert (dest / "privacy.json").stat().st_mode & 0o777 == 0o600
     assert (dest / "speakers_test.json").read_bytes() == (data / "speakers_test.json").read_bytes()
     for source, filename in ((repo / ".env", "env.backup"), (frontend / ".env", "frontend-env.backup")):
         assert (dest / filename).read_bytes() == source.read_bytes()

@@ -40,6 +40,7 @@ meetings/
 /user-profile.json
 /ai-settings.json
 /ai-settings.lock
+/privacy.json
 /sck_audio_capture
 /example_1_named.md
 /com.recog.*.plist

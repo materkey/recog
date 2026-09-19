@@ -15,7 +15,14 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import recog.config as recog_config
+import recog.privacy as recog_privacy
 from recog.models import Segment
+
+
+@pytest.fixture(autouse=True)
+def isolated_privacy_settings(tmp_path, monkeypatch):
+    """MCP tests must never read the installed user's privacy preference."""
+    monkeypatch.setattr(recog_privacy, "get_data_dir", lambda: tmp_path / "privacy-data")
 
 
 @pytest.fixture(autouse=True)
