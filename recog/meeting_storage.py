@@ -34,6 +34,11 @@ from recog.conference_hosts import canonical_source
 UTC = timezone.utc
 EXTERNAL_INDEX_CACHE_DIR = Path.home() / ".cache" / "recog" / "external_indexes"
 
+# Rejoining a room reopens its ended meeting only within this window: it covers
+# reconnects and conference flaps, while a permanent room (e.g. /team-room)
+# hosts unrelated meetings on the same day that must stay separate.
+SAME_ROOM_REOPEN_WINDOW = timedelta(minutes=10)
+
 # Sources that represent an extension-driven conference meeting. All four share
 # the same lifecycle — copilot auto-spawn, end-on-last-extension-gone, and
 # increment generation — so the bridge gates them through a single predicate
@@ -271,9 +276,10 @@ class MeetingStorage:
 
     def _find_same_day_meeting(self, live_id: str, platform: str, host: str) -> Optional[str]:
         """
-        Найти завершённую встречу с тем же live_id и platform за сегодня.
+        Найти встречу с тем же live_id и platform, завершённую за последние
+        SAME_ROOM_REOPEN_WINDOW сегодня.
 
-        Используется для группировки встреч одной комнаты в один день.
+        Используется для склейки переподключений к одной комнате.
 
         Args:
             live_id: ID комнаты (например, abcd1234wxyz)
@@ -311,6 +317,11 @@ class MeetingStorage:
                 conference = meta.get("conference", {})
                 stored_host = conference.get("host") or urlparse(conference.get("live_url") or "").netloc
                 if stored_host != host:
+                    continue
+
+                # Выход был недавно: позже в той же комнате — уже другая встреча
+                ended_at = datetime.fromisoformat(meta["ended_at"])
+                if datetime.now(UTC) - ended_at > SAME_ROOM_REOPEN_WINDOW:
                     continue
 
                 # Тот же день (по локальному времени)

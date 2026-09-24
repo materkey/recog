@@ -5,6 +5,7 @@ import stat
 import sys
 import time
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -406,6 +407,38 @@ def test_on_meeting_join_no_path_or_fragment_id_leaves_live_id_empty(tmp_path):
 
     meta = _read_meta(storage)
     assert not meta["conference"]["live_id"]
+
+
+def _join_room_then_leave_minutes_ago(storage: MeetingStorage, minutes: int) -> str:
+    storage.start_session(ktalk=True)
+    first = storage.on_meeting_join("https://example.ktalk.ru/team-room", platform="ktalk")
+    storage.append_segment("Tester", "test", "hello")
+    storage.on_ktalk_leave()
+    meta_path = storage.base_path / first / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    ended_at = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    meta["ended_at"] = ended_at.isoformat()
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    return first
+
+
+def test_permanent_room_left_49_minutes_ago_rejoining_should_start_new_meeting(tmp_path):
+    storage = MeetingStorage(base_path=tmp_path)
+    first = _join_room_then_leave_minutes_ago(storage, minutes=49)
+
+    second = storage.on_meeting_join("https://example.ktalk.ru/team-room", platform="ktalk")
+
+    assert second != first
+    assert storage.get_meeting(first)["meta"]["ended_at"] is not None
+
+
+def test_room_left_2_minutes_ago_rejoining_should_reopen_same_meeting(tmp_path):
+    storage = MeetingStorage(base_path=tmp_path)
+    first = _join_room_then_leave_minutes_ago(storage, minutes=2)
+
+    second = storage.on_meeting_join("https://example.ktalk.ru/team-room", platform="ktalk")
+
+    assert second == first
 
 
 # --- DW-7: _save_json atomicity (temp file + os.replace) ---
