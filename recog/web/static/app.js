@@ -168,6 +168,21 @@ const meetingListCache = {
     }
 };
 
+// Display names for known meeting sources; any other source value found in the
+// data (e.g. an EXTERNAL_MEETINGS_PATHS directory name) is shown as is.
+const SOURCE_LABELS = {
+    ktalk: 'KTalk',
+    vas3k: 'vas3k',
+    jitsi: 'Jitsi',
+    matrix: 'Matrix',
+    orphan: 'Orphan',
+    local: 'Local',
+    diarized: 'Diarized',
+    limitless: 'Limitless',
+    'ktalk-export': 'KTalk Export',
+    'zoom-export': 'Zoom Export',
+};
+
 const views = {
     meetings: {
         meetings: [],
@@ -209,6 +224,7 @@ const views = {
 
             if (saved !== null) {
                 this.meetings = saved;
+                this.renderSourceOptions();
                 this.render();
             } else {
                 container.innerHTML = '<div class="loading">Loading meetings...</div>';
@@ -247,6 +263,7 @@ const views = {
                 if (loadId !== this._loadId) return;
                 this.meetings = meetings;
                 this._hasLoaded = true;
+                this.renderSourceOptions();
                 this.render();
                 status.textContent = '';
                 meetingListCache.write(meetings);
@@ -315,6 +332,30 @@ const views = {
             `).join('');
         },
 
+        // Source options come from the meetings actually stored, most frequent
+        // first. The saved selection stays listed even when no meeting has it,
+        // so the select never silently shows a different filter than applied.
+        renderSourceOptions() {
+            const counts = new Map();
+            for (const m of this.meetings) {
+                const source = m.source || 'unknown';
+                counts.set(source, (counts.get(source) || 0) + 1);
+            }
+            if (this.filterSource && this.filterSource !== 'active' && !counts.has(this.filterSource)) {
+                counts.set(this.filterSource, 0);
+            }
+            const sources = [...counts.keys()].sort((a, b) =>
+                counts.get(b) - counts.get(a) || a.localeCompare(b));
+            const select = document.getElementById('filter-source');
+            select.innerHTML = [
+                '<option value="">All sources</option>',
+                '<option value="active">Active (LIVE)</option>',
+                ...sources.map(source =>
+                    `<option value="${escapeHtml(source)}">${escapeHtml(SOURCE_LABELS[source] || source)}</option>`),
+            ].join('');
+            select.value = this.filterSource;
+        },
+
         render() {
             const container = document.getElementById('meetings-list');
             let filtered = this.meetings;
@@ -335,7 +376,7 @@ const views = {
                     if (this.filterSource === 'active') {
                         filtered = filtered.filter(m => m.is_active);
                     } else {
-                        filtered = filtered.filter(m => m.source === this.filterSource);
+                        filtered = filtered.filter(m => (m.source || 'unknown') === this.filterSource);
                     }
                 }
             }

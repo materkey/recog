@@ -104,6 +104,21 @@ test('saved list - changing source during refresh - filter is already usable', a
     assert.match(h.list(), /No meetings found/);
 });
 
+test('stored sources - load - dropdown lists only sources present plus the saved selection', async () => {
+    const rows = [
+        { id: 'a', title: 'A', source: 'orphan', created_at: '2026-09-01T10:00:00Z' },
+        { id: 'b', title: 'B', source: 'orphan', created_at: '2026-09-01T11:00:00Z' },
+        { id: 'c', title: 'C', source: 'jitsi', created_at: '2026-09-01T12:00:00Z' },
+        { id: 'd', title: 'D', source: 'zoom-export', created_at: '2026-09-01T13:00:00Z' },
+    ];
+    const h = harness(async () => response(rows));
+    await h.view.load();
+    const values = [...h.element('filter-source').innerHTML.matchAll(/value="([^"]*)"/g)].map(m => m[1]);
+    assert.deepEqual(values, ['', 'active', 'orphan', 'jitsi', 'zoom-export', 'ktalk']);
+    assert.match(h.element('filter-source').innerHTML, />Zoom Export</);
+    assert.equal(h.element('filter-source').value, 'ktalk');
+});
+
 test('unavailable browser storage - load - fetched cards still render', async () => {
     const h = harness(async () => response([row('Fresh')]), null, true);
     await h.view.load();
