@@ -76,13 +76,15 @@ def fingerprint(root):
     return digest.hexdigest()
 
 
-def versions():
+def versions(packages=None):
     pins = ROOT / "deploy/python/requirements-quality.txt"
     result = {}
     for line in pins.read_text().splitlines():
         if not line or line.startswith("#"):
             continue
         package, version = line.split("==")
+        if packages is not None and package not in packages:
+            continue
         actual = importlib.metadata.version(package)
         if actual != version:
             raise ValueError(f"{package}: expected {version}, installed {actual}")
@@ -232,6 +234,42 @@ def style(baseline, head):
     return failures
 
 
+def describe(failure):
+    if failure["kind"] == "format":
+        return f"{failure['path']}:{failure['line']}: differs from ruff format"
+    location = failure["location"]
+    return f"{failure['path']}:{location['row']}: {failure['code']} {failure['message']}"
+
+
+def style_only(base, output):
+    """Only the Ruff checks of changed lines: seconds, no test suites and no report."""
+    output.mkdir(parents=True, exist_ok=True)
+    baseline = Path(tempfile.mkdtemp(prefix="style-", dir=output.resolve())) / "baseline-tree"
+    try:
+        versions({"ruff"})
+        merge_base = git(ROOT, "merge-base", "HEAD", base).strip()
+        git(ROOT, "worktree", "add", "--detach", str(baseline), merge_base)
+        failures = style(baseline, ROOT)
+    except Exception as error:
+        print(f"quality: style check could not run: {type(error).__name__}: {error}")
+        return 2
+    finally:
+        if baseline.exists():
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", str(baseline)],
+                cwd=ROOT,
+                capture_output=True,
+            )
+        shutil.rmtree(baseline.parent, ignore_errors=True)
+    for failure in failures:
+        print(f"quality: {describe(failure)}")
+    if failures:
+        print("quality: style fail; see ruff format --diff --config scripts/quality-ruff.toml")
+        return 1
+    print("quality: style pass")
+    return 0
+
+
 def report(output, data):
     (output / "report.json").write_text(json.dumps(data, indent=2) + "\n")
     lines = [
@@ -312,7 +350,14 @@ def main(argv=None):
         "--base", required=True, help="Target ref; compare its merge base with HEAD"
     )
     parser.add_argument("--output", default=".local/quality-work", type=Path)
+    parser.add_argument(
+        "--style-only",
+        action="store_true",
+        help="Only check Ruff lint and formatting of changed lines",
+    )
     args = parser.parse_args(argv)
+    if args.style_only:
+        return style_only(args.base, args.output)
     args.output.mkdir(parents=True, exist_ok=True)
     output = Path(tempfile.mkdtemp(prefix="run-", dir=args.output.resolve()))
     data = {"status": "measurement-error", "failures": [], "python": sys.version}

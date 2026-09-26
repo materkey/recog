@@ -424,24 +424,45 @@ def _commit_with_origin_main(repo):
     subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo, check=True)
 
 
-def test_no_quality_base_when_origin_main_exists_then_gate_compares_with_it(repo, stub_bin):
+def test_no_quality_base_when_origin_main_exists_then_ruff_check_precedes_one_pytest(
+    repo, stub_bin
+):
     _commit_with_origin_main(repo)
 
     result = run_check(repo, stub_bin)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert sum("scripts/quality.py --base origin/main" in call for call in result.calls) == 1
+    quality_calls = [c for c in result.calls if "scripts/quality.py" in c]
+    assert len(quality_calls) == 1
+    assert "--style-only --base origin/main" in quality_calls[0]
+    pytest_calls = [c for c in result.calls if "-m pytest" in c]
+    assert len(pytest_calls) == 1
+    assert result.calls.index(quality_calls[0]) < result.calls.index(pytest_calls[0])
+
+
+def test_ruff_check_when_it_fails_then_pytest_does_not_run(repo, stub_bin):
+    _commit_with_origin_main(repo)
+
+    result = run_check(repo, stub_bin, {"STUB_QUALITY_RC": "1"})
+
+    assert result.returncode != 0
+    assert "check: OK" not in result.stdout
     assert not any("-m pytest" in call for call in result.calls)
 
 
-def test_explicit_quality_base_when_origin_main_exists_then_explicit_base_wins(repo, stub_bin):
+def test_explicit_quality_base_when_origin_main_exists_then_full_gate_replaces_pytest(
+    repo, stub_bin
+):
     _commit_with_origin_main(repo)
 
     result = run_check(repo, stub_bin, {"RECOG_QUALITY_BASE": "HEAD"})
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert any("scripts/quality.py --base HEAD" in call for call in result.calls)
-    assert not any("--base origin/main" in call for call in result.calls)
+    quality_calls = [c for c in result.calls if "scripts/quality.py" in c]
+    assert len(quality_calls) == 1
+    assert "--base HEAD" in quality_calls[0]
+    assert "--style-only" not in quality_calls[0]
+    assert not any("-m pytest" in call for call in result.calls)
 
 
 def test_no_quality_base_when_origin_main_is_absent_then_plain_pytest_runs(repo, stub_bin):

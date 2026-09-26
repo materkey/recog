@@ -173,6 +173,40 @@ def test_real_baseline_when_head_has_new_uncovered_function_then_gate_fails(
     assert len(result["head"]["functions"]) == 2
 
 
+@pytest.mark.skipif(importlib.util.find_spec("ruff") is None, reason="Needs ruff")
+@pytest.mark.parametrize(
+    ("line", "code"),
+    [
+        ("\n\ndef added():\n    return 1\n", 0),
+        ("\n\ndef added():\n    return [1,2]\n", 1),
+    ],
+)
+def test_style_only_when_changed_line_is_checked_then_only_ruff_decides(
+    repository, tmp_path, monkeypatch, capsys, line, code
+):
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda packages=None: {})
+    monkeypatch.setattr(quality, "coverage", lambda *args: pytest.fail("tests must not run"))
+    with (repository / "recog/example.py").open("a") as stream:
+        stream.write(line)
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "HEAD", "--style-only", "--output", str(output)]) == code
+    printed = capsys.readouterr().out
+    assert ("recog/example.py:6: differs from ruff format" in printed) == bool(code)
+    assert not list(output.glob("*/report.json"))
+    assert not list(output.iterdir())
+
+
+def test_style_only_when_base_is_missing_then_it_reports_that_it_could_not_run(
+    repository, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda packages=None: {})
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "no-such-ref", "--style-only", "--output", str(output)]) == 2
+    assert "could not run" in capsys.readouterr().out
+
+
 def test_missing_base_when_runner_starts_then_report_explains_failure(
     repository, tmp_path, monkeypatch
 ):

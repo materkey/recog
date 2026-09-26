@@ -64,19 +64,20 @@ trap 'rm -rf "$RENDER_DIR"' EXIT
 ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
 echo "  rendered $(find "$RENDER_DIR" -type f | wc -l | tr -d ' ') $(uname -s) units"
 
-# The quality gate compares with the merge base of RECOG_QUALITY_BASE, by
-# default the local origin/main as last fetched: a stale ref only widens the
-# compared range. Without that ref (no git, no remote) only pytest runs.
-QUALITY_BASE="${RECOG_QUALITY_BASE:-}"
-if [ -z "$QUALITY_BASE" ] && git rev-parse -q --verify 'origin/main^{commit}' > /dev/null 2>&1; then
-    QUALITY_BASE=origin/main
-fi
-
-if [ -n "$QUALITY_BASE" ]; then
+# RECOG_QUALITY_BASE runs the full quality gate (docs/quality.md), which
+# replaces plain pytest; CI sets it. Otherwise only the gate's fast Ruff check
+# of changed lines runs, against the local origin/main as last fetched (a stale
+# ref only widens the compared range), and is skipped without that ref.
+if [ -n "${RECOG_QUALITY_BASE:-}" ]; then
     step "quality gates (baseline and current pytest with branch coverage)"
-    "$PYTHON" scripts/quality.py --base "$QUALITY_BASE" \
+    "$PYTHON" scripts/quality.py --base "$RECOG_QUALITY_BASE" \
         --output "${RECOG_QUALITY_OUTPUT:-.local/quality}"
 else
+    if git rev-parse -q --verify 'origin/main^{commit}' > /dev/null 2>&1; then
+        step "ruff on changed lines"
+        "$PYTHON" scripts/quality.py --style-only --base origin/main \
+            --output "${RECOG_QUALITY_OUTPUT:-.local/quality}"
+    fi
     step "pytest"
     "$PYTHON" -m pytest -q -m "not e2e"
 fi
