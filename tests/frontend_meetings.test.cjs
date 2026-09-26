@@ -104,6 +104,14 @@ test('saved list - changing source during refresh - filter is already usable', a
     assert.match(h.list(), /No meetings found/);
 });
 
+test('first visit - list still loading - saved source is already a dropdown option', async () => {
+    const h = harness(() => new Promise(() => {}));
+    h.view.load();
+    assert.match(h.element('filter-source').innerHTML, /value="ktalk">KTalk</);
+    assert.equal(h.element('filter-source').value, 'ktalk');
+    assert.match(h.list(), /Loading meetings/);
+});
+
 test('stored sources - load - dropdown lists only sources present plus the saved selection', async () => {
     const rows = [
         { id: 'a', title: 'A', source: 'orphan', created_at: '2026-09-01T10:00:00Z' },

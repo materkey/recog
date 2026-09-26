@@ -215,7 +215,7 @@ const views = {
             const sourceSelect = document.getElementById('filter-source');
             const titleInput = document.getElementById('filter-title');
             const searchModeSelect = document.getElementById('search-mode');
-            sourceSelect.value = this.filterSource;
+            this.renderSourceOptions();
             titleInput.value = this.filterTitle;
             searchModeSelect.value = this.searchMode;
 
