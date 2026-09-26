@@ -9,6 +9,7 @@ This folder contains the Chrome extension that injects the transcript UI and sen
 - **KTalk** (`ktalk.js`) — injects into the KTalk tab; per-speaker PCM transport (ADR-0018) supported.
 - **Jitsi** (`vas3k.js`) — built-in `meet.vas3k.cloud` and configured Jitsi deployments; floating panel (transcript + copilot chat).
 - **Matrix / Element Call** (`matrix.js`) — see below; floating panel, mixed-audio path.
+- **Google Meet** (`gmeet.js`) — built-in `meet.google.com`; see below; floating panel, mixed-audio path.
 
 ### Element Call (matrix)
 
@@ -23,6 +24,18 @@ Element Call is bundled inside Element Web as a **same-origin iframe** at `<conf
 
 Per-participant PCM + refine (Tier 2) is out of scope; the mixed-audio path + `speaker_update` signals provide attribution, same as the Jitsi platforms. After any element-web server upgrade, re-run the console probe in the plan's Post-Completion section to confirm globals + fiber props survived. See `docs/plans/completed/20260709-element-call-matrix-platform.md`.
 
+### Google Meet (gmeet)
+
+Meet exposes no conference object to the page, so `GoogleMeetAdapter` reads everything from the DOM; all selectors live in `GMEET_SELECTORS`:
+
+- Participant tiles `[data-participant-id]` (stable per-device id); the display name is the tile's first non-empty text line.
+- Speaking indicator `[jsname="QgSmzd"]` inside a tile. Speaking is positive evidence only: one of the volume-level classes in `speakingClasses`; the silent class or an unknown class counts as silent.
+- Document Picture-in-Picture: with the tab hidden Meet moves the tiles into `documentPictureInPicture.window.document`, so the adapter scans and observes both documents. `isInMeeting()` stays true for ~6 s without tiles on the same room path to absorb the handover without a `meeting_leave`.
+- `isRoomPage()` (optional adapter hook) is false on `/`, `/home` and `/landing`: no waiting panel there, and the 2 s attach loop picks up the conference once Meet navigates into a room without a reload.
+- `getDiagnostic()` (optional adapter hook) returns a short text when the selectors stop matching during a call (no tiles, no indicator, unknown indicator class, everyone "speaking"); the floating panel shows it in its status line and speaker attribution is suspended.
+
+Meet enforces Trusted Types (`require-trusted-types-for 'script'`), so every HTML assignment in the floating panel goes through `toTrustedHtml()` (`src/utils.js`). Per-participant PCM is out of scope: Meet forwards a few "loudest speaker" streams, not one per participant. Obfuscated class names change with Meet releases — see `docs/plans/2026-09-26-google-meet-platform.md` for the live-verification checklist.
+
 ## Build (required after edits)
 
 ```bash
@@ -34,7 +47,7 @@ This creates the complete unpacked extension in `dist/`: the injected bundle,
 manifest, popup, icons and audio worklet. The tracked `manifest.json` is a generic
 template; personal origins appear only in ignored build output.
 
-KTalk and `meet.vas3k.cloud` work without configuration. For another Jitsi or
+KTalk, `meet.vas3k.cloud` and `meet.google.com` work without configuration. For another Jitsi or
 Element deployment, create `.local/conference-hosts.json` at the repository root:
 
 ```json
@@ -50,7 +63,8 @@ origins with lowercase ASCII DNS labels and no trailing slash, path, query, frag
 explicit port. Origins must be unique across platforms and must not repeat the
 built-in hosts. A missing file means no custom hosts; malformed configuration
 fails the build. Optional `source_aliases` maps old stored source IDs to `jitsi`
-or `matrix` for the backend and is not included in the browser bundle.
+or `matrix` for the backend and is not included in the browser bundle; platform
+identifiers (`ktalk`, `vas3k`, `jitsi`, `matrix`, `gmeet`) cannot be alias names.
 
 The same file configures the Python bridge's allowed conference origins. Rebuild
 and reload the extension and restart Recog after changing it.
@@ -65,7 +79,7 @@ and reload the extension and restart Recog after changing it.
 ## Source layout
 
 - `src/` — editable sources (modules)
-- `src/platforms/` — per-platform adapters (`ktalk.js`, `vas3k.js`, `matrix.js`) + `index.js` (`detectPlatform`)
+- `src/platforms/` — per-platform adapters (`ktalk.js`, `vas3k.js`, `matrix.js`, `gmeet.js`) + `index.js` (`detectPlatform`)
 - `dist/` — complete generated extension; `dist/injected.js` is the built bundle
 - `content.js` — injects `injected.js` into the conference page (KTalk top frame or the scoped Element Call iframe)
 

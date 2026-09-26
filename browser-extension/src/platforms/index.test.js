@@ -57,6 +57,18 @@ describe('detectPlatform', () => {
     expect(detectPlatform(loc('meet.example.org'), { jitsi: [], matrix: [] })).toBeNull();
   });
 
+  test('Google Meet room path - detecting platform - resolves to gmeet', () => {
+    expect(detectPlatform(loc('meet.google.com', '/qrs-tuvw-xyz'))).toBe('gmeet');
+  });
+
+  test('Google Meet landing page - detecting platform - still resolves to gmeet (host-wide)', () => {
+    expect(detectPlatform(loc('meet.google.com', '/landing'))).toBe('gmeet');
+  });
+
+  test('Google Meet lookalike host - detecting platform - rejects it', () => {
+    expect(detectPlatform(loc('meet.google.com.evil.test', '/qrs-tuvw-xyz'))).toBeNull();
+  });
+
   test('unknown host resolves to null', () => {
     expect(detectPlatform(loc('example.com', '/'))).toBeNull();
   });
@@ -73,5 +85,18 @@ describe('isJitsiPlatform / display name for matrix', () => {
 
   test('matrix has its own display name', () => {
     expect(getPlatformDisplayName()).toBe('Element Call');
+  });
+});
+
+describe('isJitsiPlatform / display name per platform', () => {
+  test.each([
+    ['gmeet', true], ['matrix', true], ['vas3k', true], ['jitsi', true],
+    ['ktalk', false], [null, false],
+  ])('platform %s - checking floating-panel predicate - returns %s', (platform, expected) => {
+    expect(isJitsiPlatform(platform)).toBe(expected);
+  });
+
+  test('gmeet platform - getting display name - returns Google Meet', () => {
+    expect(getPlatformDisplayName('gmeet')).toBe('Google Meet');
   });
 });

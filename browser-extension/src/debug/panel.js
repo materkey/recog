@@ -1,5 +1,5 @@
 import { state } from '../state.js';
-import { escapeHtml } from '../utils.js';
+import { escapeHtml, toTrustedHtml } from '../utils.js';
 import { injectDebugStyles } from './styles.js';
 import { pcmGetDiagnostics } from '../pcm_transport.js';
 
@@ -20,7 +20,7 @@ export function ensureDebugPanel() {
 
   const panel = document.createElement('div');
   panel.className = 'ktalk-debug-panel';
-  panel.innerHTML = '<div class="ktalk-debug-title">KTalk Debug</div>';
+  panel.innerHTML = toTrustedHtml('<div class="ktalk-debug-title">KTalk Debug</div>');
 
   document.body.appendChild(toggle);
   document.body.appendChild(panel);
@@ -77,7 +77,7 @@ export function updateDebugPanel() {
     pcmTransport: pcm
   };
 
-  state.debugPanelElement.innerHTML = `<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${escapeHtml(JSON.stringify(payload, null, 2))}</div><div class="ktalk-debug-actions"><button class="ktalk-debug-copy-btn">Copy</button></div>`;
+  state.debugPanelElement.innerHTML = toTrustedHtml(`<div class="ktalk-debug-title">KTalk Debug</div>${rowsHtml}<div class="ktalk-debug-json">${escapeHtml(JSON.stringify(payload, null, 2))}</div><div class="ktalk-debug-actions"><button class="ktalk-debug-copy-btn">Copy</button></div>`);
   const copyBtn = state.debugPanelElement.querySelector('.ktalk-debug-copy-btn');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => copyDebug(payload, copyBtn));

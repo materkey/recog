@@ -104,8 +104,8 @@ Use `--ktalk-only` to keep both microphone and system capture closed until
 an accepted KTalk `meeting_join` arrives from the Chrome extension. Leaving
 the call, closing its tab, losing the owner WebSocket, or stopping the bridge
 closes capture and discards buffered audio and pending recognition results.
-An idle KTalk tab, Jitsi/Element meeting, or manual Copilot session cannot
-start recording in this mode. The extension must be installed and enabled;
+An idle KTalk tab, a Jitsi/Element/Google Meet meeting, or a manual Copilot
+session cannot start recording in this mode. The extension must be installed and enabled;
 the native KTalk application does not supply these browser events.
 Rebuild and reload the extension together with the backend: KTalk membership
 is checked through Jitsi's `isJoined()` API, including after a WebSocket

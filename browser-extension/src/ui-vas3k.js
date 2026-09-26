@@ -6,7 +6,7 @@
  */
 
 import { state } from './state.js';
-import { getUncertainSuffix, escapeHtml } from './utils.js';
+import { getUncertainSuffix, escapeHtml, toTrustedHtml } from './utils.js';
 import { sendWsMessage } from './ws_api.js';
 
 let panelVisible = true;
@@ -343,7 +343,7 @@ export function createFloatingPanel() {
 
   const panel = document.createElement('div');
   panel.className = 'jitsi-transcript-panel';
-  panel.innerHTML = `
+  panel.innerHTML = toTrustedHtml(`
     <div class="jitsi-transcript-header">
       <h3>
         <span class="jitsi-ws-indicator"></span>
@@ -372,7 +372,7 @@ export function createFloatingPanel() {
       </div>
     </div>
     <div class="jitsi-copilot-host"></div>
-  `;
+  `);
 
   document.body.appendChild(panel);
 
@@ -380,11 +380,11 @@ export function createFloatingPanel() {
   const toggleBtn = document.createElement('button');
   toggleBtn.className = 'jitsi-transcript-toggle';
   toggleBtn.style.display = 'none';
-  toggleBtn.innerHTML = `
+  toggleBtn.innerHTML = toTrustedHtml(`
     <svg viewBox="0 0 24 24" fill="currentColor">
       <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
     </svg>
-  `;
+  `);
   toggleBtn.title = 'Показать транскрипт';
   document.body.appendChild(toggleBtn);
 
@@ -578,12 +578,12 @@ export function showVas3kPrejoinState() {
 }
 
 /**
- * Show waiting for conference message
+ * Show waiting for conference message (or an adapter diagnostic)
  */
-export function showVas3kWaitingState() {
+export function showVas3kWaitingState(text = 'Ожидание подключения...') {
   const nameEl = document.querySelector('.jitsi-speaker-name');
   if (nameEl) {
-    nameEl.textContent = 'Ожидание подключения...';
+    nameEl.textContent = text;
   }
 }
 
@@ -614,7 +614,7 @@ export function addVas3kTranscriptLine(line) {
 
   const uncertainSuffix = getUncertainSuffix(line);
 
-  lineEl.innerHTML = `
+  lineEl.innerHTML = toTrustedHtml(`
     <div class="jitsi-transcript-line-header">
       <span class="jitsi-transcript-speaker">${escapeHtml(line.speaker || 'Unknown')}</span>
       <span class="jitsi-transcript-time">${line.time || ''}</span>
@@ -622,7 +622,7 @@ export function addVas3kTranscriptLine(line) {
     <div class="jitsi-transcript-text ${line.uncertain ? 'jitsi-transcript-uncertain' : ''}">
       ${escapeHtml(line.text || '')}${uncertainSuffix}
     </div>
-  `;
+  `);
 
   content.appendChild(lineEl);
 
@@ -707,11 +707,11 @@ export function clearVas3kTranscript() {
   const content = document.querySelector('.jitsi-transcript-content');
   if (!content) return;
 
-  content.innerHTML = `
+  content.innerHTML = toTrustedHtml(`
     <div class="jitsi-transcript-empty">
       Транскрипт появится здесь, когда начнётся речь
     </div>
-  `;
+  `);
 }
 
 /**

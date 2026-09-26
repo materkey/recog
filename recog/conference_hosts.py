@@ -8,7 +8,7 @@ import re
 from urllib.parse import urlsplit
 
 
-PLATFORMS = frozenset({"ktalk", "vas3k", "jitsi", "matrix"})
+PLATFORMS = frozenset({"ktalk", "vas3k", "jitsi", "matrix", "gmeet"})
 
 
 def load_conference_hosts(path: Path | None = None) -> dict:
@@ -34,13 +34,21 @@ def load_conference_hosts(path: Path | None = None) -> dict:
                 raise ValueError("Conference origins must be strings")
             parsed = urlsplit(origin)
             hostname = parsed.hostname or ""
-            if (not hostname or len(hostname) > 253
-                    or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-                           for label in hostname.split("."))
-                    or origin != f"https://{hostname}"
-                    or hostname == "ktalk.ru" or hostname.endswith(".ktalk.ru")
-                    or hostname == "meet.vas3k.cloud"):
-                raise ValueError("Use canonical HTTPS origins without ports, paths or built-in hosts")
+            if (
+                not hostname
+                or len(hostname) > 253
+                or any(
+                    not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                    for label in hostname.split(".")
+                )
+                or origin != f"https://{hostname}"
+                or hostname == "ktalk.ru"
+                or hostname.endswith(".ktalk.ru")
+                or hostname in ("meet.vas3k.cloud", "meet.google.com")
+            ):
+                raise ValueError(
+                    "Use canonical HTTPS origins without ports, paths or built-in hosts"
+                )
             if origin in seen:
                 raise ValueError("Conference origins must be unique across platforms")
             # Browser URL parsing treats numeric last labels as IPv4. Require

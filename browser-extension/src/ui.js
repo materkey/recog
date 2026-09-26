@@ -1,8 +1,8 @@
 import { state, constants } from './state.js';
 import { formatBioReadText, normalizeBioReadSettings, BIOREAD_LIMITS, BIOREAD_SETTINGS_KEY } from './bioread.js';
-import { getUncertainSuffix, renderMarkdown, escapeHtml } from './utils.js';
+import { getUncertainSuffix, renderMarkdown, escapeHtml, toTrustedHtml } from './utils.js';
 import { sendWsMessage, sendCopilotChatMessage } from './ws_api.js';
-import { getPlatform, isJitsiPlatform } from './platforms/index.js';
+import { getPlatform, getPlatformAdapter, isJitsiPlatform } from './platforms/index.js';
 import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine, clearVas3kTranscript, ensureVas3kCopilotHost, setVas3kCopilotActivateHandler } from './ui-vas3k.js';
 
 let meetingTitle = document.title || '';
@@ -714,14 +714,14 @@ export function addAiTab() {
 
   const tab = document.createElement('div');
   tab.className = 'tl-tab _switchable ktalk-ai-tab-wrapper';
-  tab.innerHTML = `
+  tab.innerHTML = toTrustedHtml(`
       <button type="button" class="ktalk-ai-tab link">
         <span class="tab-content">
           <span class="title">Recog</span>
           <span class="ktalk-ai-unread" hidden></span>
         </span>
       </button>
-    `;
+    `);
 
   tab.querySelector('.ktalk-ai-unread').hidden = !state.copilotUnread;
   tabsContainer.appendChild(tab);
@@ -758,13 +758,13 @@ function ensureAiPanelBody(contentArea) {
   if (!panel) {
     panel = document.createElement('div');
     panel.className = 'ktalk-ai-panel';
-    panel.innerHTML = `
+    panel.innerHTML = toTrustedHtml(`
         <div class="ktalk-ai-subnav">
           <button type="button" class="ktalk-ai-subtab" data-view="transcript">Transcript</button>
           <button type="button" class="ktalk-ai-subtab" data-view="copilot">Copilot<span class="ktalk-ai-unread" hidden></span></button>
         </div>
         <div class="ktalk-ai-panel-body"></div>
-      `;
+      `);
     panel.querySelectorAll('.ktalk-ai-subtab').forEach((btn) => {
       btn.addEventListener('click', () => activateSubView(btn.dataset.view));
     });
@@ -791,7 +791,7 @@ export function createTranscriptContent() {
   state.transcriptContentElement = document.createElement('div');
   state.transcriptContentElement.className = 'ktalk-transcript-content';
   loadBioReadSettings();
-  state.transcriptContentElement.innerHTML = `
+  state.transcriptContentElement.innerHTML = toTrustedHtml(`
       <div class="ktalk-transcript-speaker-bar">
         <div class="ktalk-speaker-dot"></div>
         <span class="ktalk-speaker-name">No one speaking</span>
@@ -846,7 +846,7 @@ export function createTranscriptContent() {
           </div>
         </div>
       </div>
-    `;
+    `);
 
   state.transcriptContentElement.querySelector('.ktalk-transcript-copy-btn').addEventListener('click', copyAllTranscript);
   const privacyBtn = state.transcriptContentElement.querySelector('.ktalk-transcript-privacy-btn');
@@ -902,6 +902,12 @@ export function createCopilotContent() {
 
   let panelBody;
   if (isJitsiPlatform()) {
+    // Off a room path (Meet /, /home, /landing) an early bridge frame must not
+    // side-create the floating panel; the content is built once a room is open.
+    if (!document.querySelector('.jitsi-transcript-panel') &&
+        getPlatformAdapter()?.isRoomPage?.() === false) {
+      return null;
+    }
     // Floating-panel platforms (vas3k / matrix): mount the copilot chat inside
     // the panel's copilot host instead of the KTalk slide-menu tab. The shared
     // copilot message/chip styles live in ui.js injectStyles().
@@ -926,7 +932,7 @@ export function createCopilotContent() {
 
   state.copilotContentElement = document.createElement('div');
   state.copilotContentElement.className = 'ktalk-copilot-content';
-  state.copilotContentElement.innerHTML = `
+  state.copilotContentElement.innerHTML = toTrustedHtml(`
       <div class="ktalk-copilot-header">
         <span class="ktalk-copilot-title">Copilot</span>
         <span class="ktalk-copilot-status">…</span>
@@ -944,7 +950,7 @@ export function createCopilotContent() {
           <button type="button" class="ktalk-copilot-send-btn">Send</button>
         </div>
       </div>
-    `;
+    `);
 
   const muteBtn = state.copilotContentElement.querySelector('.ktalk-copilot-mute-btn');
   muteBtn.addEventListener('click', () => toggleCopilotProactiveMute());
@@ -1129,7 +1135,7 @@ export function renderCopilotMessage(msg) {
       `;
   }
 
-  wrapper.innerHTML = headerHtml + textHtml + actionsHtml;
+  wrapper.innerHTML = toTrustedHtml(headerHtml + textHtml + actionsHtml);
 
   const copyBtn = wrapper.querySelector('.copilot-msg-copy-btn');
   if (copyBtn) {
@@ -1222,10 +1228,10 @@ function updateCopilotMessageDom(id, updates) {
     if (!el.querySelector('.copilot-msg-actions')) {
       const actions = document.createElement('div');
       actions.className = 'copilot-msg-actions';
-      actions.innerHTML = `
+      actions.innerHTML = toTrustedHtml(`
           <button type="button" class="copilot-msg-action-btn copilot-msg-copy-btn" title="Copy">Copy</button>
           <button type="button" class="copilot-msg-action-btn copilot-msg-dismiss-btn" title="Dismiss">Dismiss</button>
-        `;
+        `);
       el.appendChild(actions);
       const copyBtn = actions.querySelector('.copilot-msg-copy-btn');
       copyBtn.addEventListener('click', () => {
@@ -1940,7 +1946,7 @@ export function handleTranscriptRefine(data) {
         if (!msgEl) continue;
         const textEl = msgEl.querySelector('.ktalk-msg-text');
         if (!textEl) continue;
-        textEl.innerHTML = formatTranscriptText(line.text);
+        textEl.innerHTML = toTrustedHtml(formatTranscriptText(line.text));
         textEl.classList.add('refine-fade');
         setTimeout(() => textEl.classList.remove('refine-fade'), 200);
       }
@@ -2023,7 +2029,7 @@ function updateTranscriptUI() {
   updateFollowButton();
 
   if (state.transcriptLines.length === 0) {
-    container.innerHTML = `
+    container.innerHTML = toTrustedHtml(`
         <div class="ktalk-transcript-empty">
           <div class="ktalk-transcript-empty-icon">📝</div>
           <div class="ktalk-transcript-empty-text">
@@ -2034,14 +2040,14 @@ function updateTranscriptUI() {
             ./recog-service.sh start
           </div>
         </div>
-      `;
+      `);
     return;
   }
 
   const anchor = captureScrollAnchor(container);
   const shouldAutoScroll = state.autoScrollEnabled && isNearBottom(container);
 
-  container.innerHTML = state.transcriptLines.map(line => {
+  container.innerHTML = toTrustedHtml(state.transcriptLines.map(line => {
     const classes = [
       'ktalk-msg',
       line.is_local ? 'local' : 'remote',
@@ -2064,7 +2070,7 @@ function updateTranscriptUI() {
         </div>
         <div class="ktalk-msg-text">${messageText}</div>
       </div>`;
-  }).join('');
+  }).join(''));
 
   if (shouldAutoScroll) {
     container.scrollTop = container.scrollHeight;

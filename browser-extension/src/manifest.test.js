@@ -110,7 +110,18 @@ describe('manifest Element Call scoping', () => {
 describe('manifest configuration boundaries', () => {
   test('empty config - building manifest - retains built-ins only', () => {
     expect(createManifest(template, { jitsi: [], matrix: [] })).toEqual(template);
-    expect(template.host_permissions).toEqual(['https://*.ktalk.ru/*', 'https://meet.vas3k.cloud/*']);
+    expect(template.host_permissions).toEqual([
+      'https://*.ktalk.ru/*', 'https://meet.vas3k.cloud/*', 'https://meet.google.com/*',
+    ]);
+  });
+
+  test('built-in manifest - matching Google Meet URLs - covers rooms and landing, not lookalikes', () => {
+    const patterns = template.content_scripts.flatMap(entry => entry.matches);
+    const covered = url => patterns.some(pattern => matchPatternMatches(pattern, url));
+    expect(covered('https://meet.google.com/qrs-tuvw-xyz')).toBe(true);
+    expect(covered('https://meet.google.com/landing')).toBe(true);
+    expect(covered('https://meet.google.com.evil.test/qrs-tuvw-xyz')).toBe(false);
+    expect(template.web_accessible_resources[0].matches).toContain('https://meet.google.com/*');
   });
 
   test('custom Jitsi config - building manifest - allows only the exact host', () => {

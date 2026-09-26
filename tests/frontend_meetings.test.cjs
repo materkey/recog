@@ -127,6 +127,12 @@ test('stored sources - load - dropdown lists only sources present plus the saved
     assert.equal(h.element('filter-source').value, 'ktalk');
 });
 
+test('stored gmeet meeting - load - dropdown shows Google Meet label', async () => {
+    const h = harness(async () => response([{ id: 'g', title: 'G', source: 'gmeet', created_at: '2026-09-01T10:00:00Z' }]));
+    await h.view.load();
+    assert.match(h.element('filter-source').innerHTML, /value="gmeet">Google Meet</);
+});
+
 test('unavailable browser storage - load - fetched cards still render', async () => {
     const h = harness(async () => response([row('Fresh')]), null, true);
     await h.view.load();

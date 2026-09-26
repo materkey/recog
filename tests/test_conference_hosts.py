@@ -17,24 +17,32 @@ def test_missing_config_when_loading_then_only_builtin_hosts_remain(tmp_path):
     }
 
 
-@pytest.mark.parametrize("value", [
-    [], {"other": []}, {"jitsi": "https://meet.example.org"},
-    {"jitsi": [False]}, {"jitsi": ["http://meet.example.org"]},
-    {"matrix": ["https://element.example.org/"]},
-    {"matrix": ["https://element.example.org:443"]},
-    {"matrix": ["https://element.example.org/path"]},
-    {"matrix": ["https://element.example.org?query"]},
-    {"matrix": ["https://user@element.example.org"]},
-    {"matrix": ["https://*.example.org"]},
-    {"matrix": ["https://127.1"]},
-    {"matrix": ["https://123"]},
-    {"matrix": ["https://foo.123"]},
-    {"matrix": ["https://ktalk.ru"]},
-    {"jitsi": ["https://meet.vas3k.cloud"]},
-    {"jitsi": ["https://same.example.org"], "matrix": ["https://same.example.org"]},
-    {"source_aliases": {"old": "unknown"}},
-    {"source_aliases": {"ktalk": "matrix"}},
-])
+@pytest.mark.parametrize(
+    "value",
+    [
+        [],
+        {"other": []},
+        {"jitsi": "https://meet.example.org"},
+        {"jitsi": [False]},
+        {"jitsi": ["http://meet.example.org"]},
+        {"matrix": ["https://element.example.org/"]},
+        {"matrix": ["https://element.example.org:443"]},
+        {"matrix": ["https://element.example.org/path"]},
+        {"matrix": ["https://element.example.org?query"]},
+        {"matrix": ["https://user@element.example.org"]},
+        {"matrix": ["https://*.example.org"]},
+        {"matrix": ["https://127.1"]},
+        {"matrix": ["https://123"]},
+        {"matrix": ["https://foo.123"]},
+        {"matrix": ["https://ktalk.ru"]},
+        {"jitsi": ["https://meet.vas3k.cloud"]},
+        {"jitsi": ["https://meet.google.com"]},
+        {"jitsi": ["https://same.example.org"], "matrix": ["https://same.example.org"]},
+        {"source_aliases": {"old": "unknown"}},
+        {"source_aliases": {"ktalk": "matrix"}},
+        {"source_aliases": {"gmeet": "jitsi"}},
+    ],
+)
 def test_invalid_config_when_loading_then_rejected(tmp_path, value):
     path = tmp_path / "hosts.json"
     path.write_text(json.dumps(value))

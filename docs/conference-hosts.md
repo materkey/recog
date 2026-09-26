@@ -1,6 +1,7 @@
 # Conference hosts
 
-KTalk and `meet.vas3k.cloud` are built in. Other Jitsi and Element Call servers
+KTalk, `meet.vas3k.cloud` and Google Meet (`meet.google.com`) are built in.
+Other Jitsi and Element Call servers
 are installation settings, stored in the gitignored `.local/conference-hosts.json`
 at the repository root:
 
@@ -43,6 +44,9 @@ Jitsi runs on its configured hosts. Element Call injects only into the bundled
 URL uses that iframe's origin and the Matrix room ID. Backend WebSocket checks
 allow the same exact configured origins. `RECOG_EXTRA_WS_ORIGINS` remains
 available for backend-only integrations; it does not change extension injection.
+Google Meet needs no configuration: the extension runs on every
+`meet.google.com` page and joins a meeting only on a room path
+(`/abc-defg-hij`).
 
 ## Existing recordings
 
@@ -57,7 +61,9 @@ previously used a custom source label, add a local alias:
 }
 ```
 
-Aliases map nonstandard labels to `jitsi` or `matrix`. They preserve conference
+Aliases map nonstandard labels to `jitsi` or `matrix`. Platform identifiers
+(`ktalk`, `vas3k`, `jitsi`, `matrix`, `gmeet`) are reserved and cannot be alias
+names. Aliases preserve conference
 lifecycle checks and same-day reconnect matching, and present canonical source
 names in the web UI. Reading old recordings does not rewrite their metadata.
 Aliases are not compiled into the extension. Keep this file local; share only

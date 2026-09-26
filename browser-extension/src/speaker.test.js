@@ -26,6 +26,7 @@ jest.unstable_mockModule('./utils.js', () => ({
 
 jest.unstable_mockModule('./ui-vas3k.js', () => ({
   updateVas3kSpeakerStatus: jest.fn(),
+  showVas3kWaitingState: jest.fn(),
 }));
 
 const mockIsSpeech = jest.fn(() => ({ speech: true, reason: 'speech' }));

@@ -44,6 +44,11 @@ function waitForConference(callback, maxAttempts = 100) {
       })
       .catch(() => {
         console.log(`[${platformName} Transcript] Conference not found after ${maxAttempts} attempts`);
+        // Outside a room (Meet /landing) there is nothing to wait for: the 2 s
+        // tryAttachConference() picks the conference up once a room is entered.
+        if (adapter.isRoomPage?.() === false) {
+          return;
+        }
         // For Jitsi platforms: keep retrying until conference is found
         if (isJitsiPlatform()) {
           if (adapter.isInPrejoin?.()) {
@@ -355,8 +360,10 @@ export function init() {
 
   setInterval(() => {
     if (adapter && !adapter.supportsTabInjection()) {
-      // For vas3k.cloud: check floating panel exists
-      if (!floatingUiInitialized || !document.querySelector('.jitsi-transcript-panel')) {
+      // For vas3k.cloud: check floating panel exists. No panel outside a
+      // room page (Meet /, /home, /landing).
+      if (adapter.isRoomPage?.() !== false &&
+          (!floatingUiInitialized || !document.querySelector('.jitsi-transcript-panel'))) {
         setupUI();
         floatingUiInitialized = true;
       }
@@ -365,6 +372,10 @@ export function init() {
       recoverKtalkUi();
     }
     tryAttachConference();
+    const diagnostic = adapter?.getDiagnostic?.();
+    if (diagnostic) {
+      showVas3kWaitingState(diagnostic);
+    }
     updateDebugPanel();
   }, 2000);
 

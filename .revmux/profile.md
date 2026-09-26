@@ -6,8 +6,8 @@ Read this before the diff. Where it disagrees with general taste, it wins.
 
 A Russian speech-recognition pipeline for live meetings, running on the author's Mac and on
 colleagues' Linux boxes as user services (launchd / `systemd --user`). GigaAM (`v3_e2e_rnnt`) for ASR,
-SpeechBrain ECAPA-TDNN for speaker embeddings, a Chrome extension that supplies per-participant PCM and
-speaker names from KTalk / Jitsi / Element Call, a FastAPI + vanilla-JS web app on `127.0.0.1:9080`, and
+SpeechBrain ECAPA-TDNN for speaker embeddings, a Chrome extension that supplies per-participant PCM (KTalk) and
+speaker names from KTalk / Jitsi / Element Call / Google Meet, a FastAPI + vanilla-JS web app on `127.0.0.1:9080`, and
 a headless Claude "copilot" session spawned per meeting.
 
 It is not a service with users. One person per machine, everything on localhost or a tailnet, no

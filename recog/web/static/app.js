@@ -175,6 +175,7 @@ const SOURCE_LABELS = {
     vas3k: 'vas3k',
     jitsi: 'Jitsi',
     matrix: 'Matrix',
+    gmeet: 'Google Meet',
     orphan: 'Orphan',
     local: 'Local',
     diarized: 'Diarized',
@@ -1067,7 +1068,7 @@ const COPILOT_AGENT_CHIP = {
     offline: { icon: '⚫', label: 'offline', cls: 'offline' }
 };
 
-const COPILOT_CONFERENCE_SOURCES = new Set(['ktalk', 'vas3k', 'jitsi', 'matrix']);
+const COPILOT_CONFERENCE_SOURCES = new Set(['ktalk', 'vas3k', 'jitsi', 'matrix', 'gmeet']);
 
 const copilotState = {
     messages: [],           // {id, kind, text, request_id, status, time}

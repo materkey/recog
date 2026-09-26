@@ -96,8 +96,8 @@ flowchart TD
 ```
 
 KTalk supplies per-participant audio through the Chrome extension; a second
-recognition pass refines the live text. Jitsi and Element Call use system audio
-with conference speaker signals. Microphone speech uses your saved profile.
+recognition pass refines the live text. Jitsi, Element Call and Google Meet use
+system audio with conference speaker signals. Microphone speech uses your saved profile.
 GigaAM runs locally on CUDA, MPS or CPU, or through an optional
 [remote ASR gateway](docs/asr-server.md) with local fallback.
 

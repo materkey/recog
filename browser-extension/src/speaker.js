@@ -2,7 +2,7 @@ import { state, constants } from './state.js';
 import { sendUpdate } from './utils.js';
 import { sendWsSpeakerUpdate, sendWsParticipants } from './ws_api.js';
 import { getPlatformAdapter, getPlatform, isJitsiPlatform } from './platforms/index.js';
-import { updateVas3kSpeakerStatus } from './ui-vas3k.js';
+import { updateVas3kSpeakerStatus, showVas3kWaitingState } from './ui-vas3k.js';
 import { isSpeech, getFlatness } from './audio-analyzer.js';
 
 export function getActiveSpeaker(conf) {
@@ -266,6 +266,10 @@ export function updateSpeakerStatus(conf) {
   // Update platform-specific UI
   if (isJitsiPlatform()) {
     updateVas3kSpeakerStatus(activeSpeaker, hasMicsOn);
+    // Selector drift (Meet) outranks the speaker text: otherwise every
+    // indicator change would overwrite the diagnostic within ~100 ms.
+    const diagnostic = getPlatformAdapter()?.getDiagnostic?.();
+    if (diagnostic) showVas3kWaitingState(diagnostic);
   }
 
   // KTalk UI elements

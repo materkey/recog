@@ -39,18 +39,18 @@ EXTERNAL_INDEX_CACHE_DIR = Path.home() / ".cache" / "recog" / "external_indexes"
 # hosts unrelated meetings on the same day that must stay separate.
 SAME_ROOM_REOPEN_WINDOW = timedelta(minutes=10)
 
-# Sources that represent an extension-driven conference meeting. All four share
+# Sources that represent an extension-driven conference meeting. All of them share
 # the same lifecycle — copilot auto-spawn, end-on-last-extension-gone, and
 # increment generation — so the bridge gates them through a single predicate
 # instead of a hardcoded `source == "ktalk"`. "orphan"/"local" are plain
 # recordings, not conferences.
-CONFERENCE_SOURCES = frozenset({"ktalk", "vas3k", "jitsi", "matrix"})
+CONFERENCE_SOURCES = frozenset({"ktalk", "vas3k", "jitsi", "matrix", "gmeet"})
 
 
 def is_conference_source(source: Optional[str]) -> bool:
     """True when `source` is an extension-driven conference platform.
 
-    Groups ktalk + the Jitsi platforms (vas3k/jitsi) + matrix so copilot
+    Groups ktalk + the Jitsi platforms (vas3k/jitsi) + matrix + gmeet so copilot
     lifecycle, end-on-last-extension-gone, and increment generation treat them
     identically. orphan/local meetings are not conferences.
     """
@@ -283,7 +283,7 @@ class MeetingStorage:
 
         Args:
             live_id: ID комнаты (например, abcd1234wxyz)
-            platform: Платформа встречи (ktalk, vas3k, jitsi)
+            platform: Платформа встречи (ktalk, vas3k, jitsi, matrix, gmeet)
             host: Сервер конференции; одинаковые комнаты на разных серверах независимы
 
         Returns:
@@ -396,7 +396,7 @@ class MeetingStorage:
         Args:
             url: URL встречи (https://example.ktalk.ru/abcd1234wxyz)
             title: Заголовок страницы (опционально)
-            platform: Платформа встречи (ktalk, vas3k, jitsi)
+            platform: Платформа встречи (ktalk, vas3k, jitsi, matrix, gmeet)
 
         Returns:
             meeting_id текущей встречи

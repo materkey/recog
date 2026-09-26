@@ -25,13 +25,16 @@ from urllib.parse import urlsplit
 from .config import RECOG_EXTRA_WS_ORIGINS
 from .conference_hosts import CONFERENCE_HOSTS
 
-# Exact-match origins: Jitsi/Element conference hosts used by the extension
+# Exact-match origins: Jitsi/Google Meet/Element conference hosts used by the extension
 # (https only) plus the webapp's own origin on port 9080.
-ALLOWED_ORIGINS = frozenset({
-    "https://meet.vas3k.cloud",
-    "http://127.0.0.1:9080",
-    "http://localhost:9080",
-})
+ALLOWED_ORIGINS = frozenset(
+    {
+        "https://meet.vas3k.cloud",
+        "https://meet.google.com",
+        "http://127.0.0.1:9080",
+        "http://localhost:9080",
+    }
+)
 
 # Wildcard rule: https://ktalk.ru and any https://*.ktalk.ru subdomain.
 KTALK_WILDCARD_DOMAIN = "ktalk.ru"

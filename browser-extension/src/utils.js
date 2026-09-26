@@ -74,3 +74,23 @@ export function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
+
+// Google Meet sends `require-trusted-types-for 'script'`: assigning a plain
+// string to innerHTML throws there. Panel markup is built from escapeHtml()-ed
+// values, so a pass-through policy is enough. The policy is created lazily,
+// once; without TT (or if creation fails) the raw string is returned, which
+// is what every other platform accepts.
+let trustedHtmlPolicyInitialized = false;
+let trustedHtmlPolicy = null;
+
+export function toTrustedHtml(html) {
+  if (!trustedHtmlPolicyInitialized) {
+    trustedHtmlPolicyInitialized = true;
+    try {
+      trustedHtmlPolicy = globalThis.trustedTypes?.createPolicy('recog', { createHTML: (s) => s }) || null;
+    } catch (err) {
+      console.warn('[recog] Trusted Types policy unavailable:', err);
+    }
+  }
+  return trustedHtmlPolicy ? trustedHtmlPolicy.createHTML(html) : html;
+}

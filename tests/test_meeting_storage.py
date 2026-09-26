@@ -394,6 +394,31 @@ def test_on_meeting_join_ktalk_path_id_unchanged(tmp_path):
     assert meta["conference"]["live_id"] == "abcd1234wxyz"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://meet.google.com/qrs-tuvw-xyz",
+        "https://meet.google.com/qrs-tuvw-xyz?authuser=0",
+    ],
+)
+def test_on_meeting_join_google_meet_url_uses_meeting_code(tmp_path, url):
+    """
+    given: a Google Meet room URL, with or without the ?authuser query
+    when: on_meeting_join is called with platform="gmeet"
+    then: live_id is the meeting code, host is meet.google.com and the meeting
+          source is gmeet
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    storage.start_session(ktalk=True)
+
+    storage.on_meeting_join(url, platform="gmeet")
+
+    meta = _read_meta(storage)
+    assert meta["conference"]["live_id"] == "qrs-tuvw-xyz"
+    assert meta["conference"]["host"] == "meet.google.com"
+    assert meta["source"] == "gmeet"
+
+
 def test_on_meeting_join_no_path_or_fragment_id_leaves_live_id_empty(tmp_path):
     """
     given: a URL with neither a path id nor a #/room/ fragment
