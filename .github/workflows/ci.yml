@@ -82,7 +82,6 @@ jobs:
         run: pip install $PIP_ARGS -r deploy/python/requirements-quality.txt
 
       - name: Select quality baseline
-        if: runner.os == 'Linux'
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
@@ -104,7 +103,7 @@ jobs:
         run: ./scripts/check.sh
 
       - name: Summarize quality delta
-        if: always() && runner.os == 'Linux'
+        if: always()
         shell: bash
         run: |
           for report in .local/quality/run-*/report.md; do
@@ -113,10 +112,10 @@ jobs:
           done
 
       - name: Publish quality reports
-        if: always() && runner.os == 'Linux'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: quality-reports
+          name: quality-reports-${{ runner.os }}
           path: |
             .local/quality/run-*/*.json
             .local/quality/run-*/*.md

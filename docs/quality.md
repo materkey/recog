@@ -17,11 +17,13 @@ venv-gigaam/bin/python -m pip install -c deploy/python/constraints/macos.txt \
   -r deploy/python/requirements-quality.txt
 # Linux: omit the macOS constraint file.
 venv-gigaam/bin/python scripts/quality.py --base origin/main --output .local/quality
-# The same gate as part of the regular checks:
-RECOG_QUALITY_BASE=origin/main ./scripts/check.sh
+# The same gate as part of the regular checks (base defaults to the local
+# origin/main; RECOG_QUALITY_BASE overrides it):
+./scripts/check.sh
 ```
 
-Fetch the target ref and sufficient history before running. A missing ref,
+The target ref is used as last fetched; a stale ref only widens the compared
+range. A missing ref,
 failed baseline or head test suite, missing tool/version mismatch, invalid JSON,
 missing function coverage, nonfinite metrics, or a changing working tree fails
 the run. Results go into a new `run-*` directory under the selected output root:

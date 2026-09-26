@@ -64,9 +64,17 @@ trap 'rm -rf "$RENDER_DIR"' EXIT
 ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
 echo "  rendered $(find "$RENDER_DIR" -type f | wc -l | tr -d ' ') $(uname -s) units"
 
-if [ -n "${RECOG_QUALITY_BASE:-}" ]; then
+# The quality gate compares with the merge base of RECOG_QUALITY_BASE, by
+# default the local origin/main as last fetched: a stale ref only widens the
+# compared range. Without that ref (no git, no remote) only pytest runs.
+QUALITY_BASE="${RECOG_QUALITY_BASE:-}"
+if [ -z "$QUALITY_BASE" ] && git rev-parse -q --verify 'origin/main^{commit}' > /dev/null 2>&1; then
+    QUALITY_BASE=origin/main
+fi
+
+if [ -n "$QUALITY_BASE" ]; then
     step "quality gates (baseline and current pytest with branch coverage)"
-    "$PYTHON" scripts/quality.py --base "$RECOG_QUALITY_BASE" \
+    "$PYTHON" scripts/quality.py --base "$QUALITY_BASE" \
         --output "${RECOG_QUALITY_OUTPUT:-.local/quality}"
 else
     step "pytest"

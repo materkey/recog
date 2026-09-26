@@ -412,3 +412,47 @@ def test_quality_enabled_when_gate_finishes_then_verdict_propagates_without_dupl
     assert sum("scripts/quality.py --base origin/main" in call for call in result.calls) == 1
     assert not any("-m pytest" in call for call in result.calls)
     assert ("check: OK" in result.stdout) == (quality_exit == 0)
+
+
+def _commit_with_origin_main(repo):
+    config = ["-c", "user.name=Test", "-c", "user.email=test@example.com"]
+    subprocess.run(
+        ["git", *config, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "base"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo, check=True)
+
+
+def test_no_quality_base_when_origin_main_exists_then_gate_compares_with_it(repo, stub_bin):
+    _commit_with_origin_main(repo)
+
+    result = run_check(repo, stub_bin)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sum("scripts/quality.py --base origin/main" in call for call in result.calls) == 1
+    assert not any("-m pytest" in call for call in result.calls)
+
+
+def test_explicit_quality_base_when_origin_main_exists_then_explicit_base_wins(repo, stub_bin):
+    _commit_with_origin_main(repo)
+
+    result = run_check(repo, stub_bin, {"RECOG_QUALITY_BASE": "HEAD"})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert any("scripts/quality.py --base HEAD" in call for call in result.calls)
+    assert not any("--base origin/main" in call for call in result.calls)
+
+
+def test_no_quality_base_when_origin_main_is_absent_then_plain_pytest_runs(repo, stub_bin):
+    result = run_check(repo, stub_bin)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any("scripts/quality.py" in call for call in result.calls)
+    assert any("-m pytest" in call for call in result.calls)
+
+
+def test_ci_quality_steps_when_matrix_has_two_hosts_then_both_hosts_run_the_gate(workflow):
+    for name in ("Select quality baseline", "Summarize quality delta", "Publish quality reports"):
+        step = next(s for s in _steps(workflow) if s.get("name") == name)
+        assert "runner.os" not in str(step.get("if", "")), name

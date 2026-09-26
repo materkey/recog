@@ -360,7 +360,7 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 - `RECOG_PYTHON` - the interpreter baked into the rendered units (`scripts/service/common.sh`). Deliberately **not** `DEPS_PYTHON`, which only selects the interpreter `scripts/deps.sh` uses for its library probes.
 - `RECOG_HOST_OS` - overrides `uname -s` for the `scripts/deps.sh` probes (lets a Mac exercise the Linux ones).
 - `RECOG_CHECK_PYTHON` - interpreter override for `scripts/check.sh`.
-- `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs `scripts/quality.py --base $RECOG_QUALITY_BASE` (baseline + head pytest with branch coverage, the merge-base quality gate from `docs/quality.md`) instead of plain pytest. Linux CI sets it; unset locally, `check.sh` runs only pytest.
+- `RECOG_QUALITY_BASE` - target ref for the merge-base quality gate (`docs/quality.md`) that `scripts/check.sh` runs via `scripts/quality.py` (baseline + head pytest with branch coverage) instead of plain pytest. Unset, it defaults to the local `origin/main` without fetching; only when that ref is absent does `check.sh` fall back to plain pytest. CI sets it to the PR base or the pre-push commit.
 - `RECOG_QUALITY_OUTPUT` - output root for those quality runs (default `.local/quality`).
 - `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL` / `RECOG_GIGAAM_REF` / `RECOG_GIGAAM_EDITABLE` - see Setup above.
 
@@ -373,8 +373,7 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 ## Testing
 
 ```bash
-./scripts/check.sh                        # everything below; what CI runs on macOS
-RECOG_QUALITY_BASE=origin/main ./scripts/check.sh   # what Linux CI runs: the quality gate replaces plain pytest
+./scripts/check.sh                        # everything below; what CI runs: the quality gate against the local origin/main replaces plain pytest
 
 python -m pytest tests/ -q -m "not e2e"   # unit tests (e2e needs playwright + a real conference)
 python -m compileall recog                # syntax check
