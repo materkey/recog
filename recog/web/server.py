@@ -1671,12 +1671,16 @@ class RevalidatedStaticFiles(StaticFiles):
 
 @app.get("/")
 async def root():
-    return FileResponse(Path(__file__).parent / "static" / "index.html",
-                        headers={"Cache-Control": STATIC_CACHE_CONTROL})
+    return FileResponse(
+        Path(__file__).parent / "static" / "index.html",
+        headers={"Cache-Control": STATIC_CACHE_CONTROL},
+    )
 
 
 # Mount static files
-app.mount("/static", RevalidatedStaticFiles(directory=Path(__file__).parent / "static"), name="static")
+app.mount(
+    "/static", RevalidatedStaticFiles(directory=Path(__file__).parent / "static"), name="static"
+)
 
 
 if __name__ == "__main__":
