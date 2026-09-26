@@ -1656,13 +1656,27 @@ async def get_segment_audio(
 
 # --- Static Files ---
 
+# Without an explicit policy browsers cache the page and its scripts
+# heuristically, so after an update a fresh index.html can run a stale app.js.
+# no-cache keeps the cache but revalidates by ETag (a 304 when unchanged).
+STATIC_CACHE_CONTROL = "no-cache"
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = STATIC_CACHE_CONTROL
+        return response
+
+
 @app.get("/")
 async def root():
-    return FileResponse(Path(__file__).parent / "static" / "index.html")
+    return FileResponse(Path(__file__).parent / "static" / "index.html",
+                        headers={"Cache-Control": STATIC_CACHE_CONTROL})
 
 
 # Mount static files
-app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+app.mount("/static", RevalidatedStaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
 if __name__ == "__main__":
