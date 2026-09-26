@@ -34,7 +34,7 @@ Meet exposes no conference object to the page, so `GoogleMeetAdapter` reads ever
 - `isRoomPage()` (optional adapter hook) is false on `/`, `/home` and `/landing`: no waiting panel there, and the 2 s attach loop picks up the conference once Meet navigates into a room without a reload.
 - `getDiagnostic()` (optional adapter hook) returns a short text when the selectors stop matching during a call (no tiles, no indicator, unknown indicator class, everyone "speaking"); the floating panel shows it in its status line and speaker attribution is suspended.
 
-Meet enforces Trusted Types (`require-trusted-types-for 'script'`), so every HTML assignment in the floating panel goes through `toTrustedHtml()` (`src/utils.js`). Per-participant PCM is out of scope: Meet forwards a few "loudest speaker" streams, not one per participant. Obfuscated class names change with Meet releases — see `docs/plans/2026-09-26-google-meet-platform.md` for the live-verification checklist.
+Meet enforces Trusted Types (`require-trusted-types-for 'script'`), so every HTML assignment in the floating panel goes through `toTrustedHtml()` (`src/utils.js`). Per-participant PCM is out of scope: Meet forwards a few "loudest speaker" streams, not one per participant. Obfuscated class names change with Meet releases — see `docs/plans/completed/2026-09-26-google-meet-platform.md` for the live-verification checklist.
 
 ## Build (required after edits)
 
