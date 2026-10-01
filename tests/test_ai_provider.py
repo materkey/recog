@@ -244,12 +244,12 @@ def test_codex_auto_given_command_when_built_then_no_reasoning_override():
 
 class TestFrontendClaudeProvider:
 
-    def test_no_model_override_when_creating_claude_provider_then_fable_5_1_is_used(self):
+    def test_no_model_override_when_creating_claude_provider_then_opus_5_5_is_used(self):
         from recog.web.ai_provider import ClaudeCliProvider
 
         with patch("recog.ai_provider.resolve_cli", return_value="/mock/claude"), \
              patch.dict(os.environ, {}, clear=True):
-            assert ClaudeCliProvider().model == "claude-fable-5-1"
+            assert ClaudeCliProvider().model == "claude-opus-5-5"
 
     @pytest.mark.asyncio
     async def test_complete_marks_prompt_for_claude_cli(self):

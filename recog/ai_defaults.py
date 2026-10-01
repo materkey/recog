@@ -1,7 +1,7 @@
 """Canonical editable AI prompts and task defaults; no runtime provider imports."""
 
 DEFAULT_MODELS = {
-    "claude": "claude-fable-5-1",
+    "claude": "claude-opus-5-5",
     "codex": "gpt-6-astra",
 }
 

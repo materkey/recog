@@ -320,7 +320,7 @@ comment per variable. The ones you are most likely to touch:
 Open **Settings → Промпты и модели** to configure every LLM scenario: AI
 Analysis, meeting titles, saved summary templates and live Copilot.
 Set common model defaults, then override the prompt, provider and model for
-individual scenarios. Claude defaults to `claude-fable-5-1`, Codex to
+individual scenarios. Claude defaults to `claude-opus-5-5`, Codex to
 `gpt-6-astra`; existing environment defaults remain effective until overridden
 in Settings. Claude and Codex continue to use their CLI subscription login.
 
