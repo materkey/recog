@@ -17,6 +17,10 @@
 #   --no-extension   skip the Chrome extension build
 #   --no-env         do not create environment files from examples
 #
+# Environment files are created only on a first install. Once the service
+# units exist, a missing .env is left missing: the examples are not neutral
+# (they switch meeting auto-start off and set models).
+#
 # Environment (read from the calling shell, NOT from .env — .env is created by
 # this script, later than these are needed):
 #   RECOG_TORCH_INDEX_URL   pip index for torch/torchaudio. Unset on Linux
@@ -72,7 +76,7 @@ warn() { echo -e "${YELLOW}[warn]${NC} $1"; WARNINGS+=("$1"); }
 fail() { echo -e "${RED}[error]${NC} $1" >&2; exit 1; }
 
 usage() {
-    sed -n '2,29p' "$REPO_DIR/setup.sh" | sed 's/^#\{0,1\} \{0,1\}//'
+    sed -n '2,33p' "$REPO_DIR/setup.sh" | sed 's/^#\{0,1\} \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -110,6 +114,23 @@ if [ -z "${RECOG_SERVICE_OS:-}" ]; then
     esac
 fi
 
+# Service units already on disk mean this run updates a working installation.
+# A missing environment file is then part of its configuration (settings may
+# live in unit drop-ins), so the examples must not be copied in.
+services_already_installed() {
+    (
+        SVC_REPO_DIR="$REPO_DIR"
+        SVC_DATA_DIR="$REPO_DIR" # only unit paths are read here
+        source "$REPO_DIR/scripts/service/common.sh"
+        case "$RECOG_SERVICE_OS" in
+            Darwin) source "$REPO_DIR/scripts/service/launchd.sh" ;;
+            Linux)  source "$REPO_DIR/scripts/service/systemd.sh" ;;
+            *)      exit 1 ;;
+        esac
+        [ -n "$(svc_installed_services)" ]
+    )
+}
+
 echo "=== recog setup ($HOST_OS) ==="
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -136,6 +157,8 @@ if [ "$DRY_RUN" -eq 1 ]; then
         for config in "$REPO_DIR/.env" "$REPO_DIR/recog/web/.env"; do
             if [ -f "$config" ]; then
                 echo "Would keep existing $config"
+            elif services_already_installed; then
+                echo "Would leave $config absent — services are already installed"
             else
                 echo "Would copy $config.example to $config if the example exists"
             fi
@@ -401,6 +424,8 @@ copy_example() {
     local dst="$1" src="$2"
     if [ -f "$dst" ]; then
         info "$dst exists — left untouched"
+    elif services_already_installed; then
+        info "$dst absent — not created, services are already installed (copy $(basename "$src") yourself if you want it)"
     elif [ -f "$src" ]; then
         cp "$src" "$dst"
         info "Created $dst from $(basename "$src")"

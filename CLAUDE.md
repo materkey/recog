@@ -59,6 +59,8 @@ the quality check passed. See `.revmux/profile.md` for reviewer interpretation.
 
 # Flags: --no-services | --no-prefetch | --no-extension | --no-env (keep
 # existing environment files, do not create them from the examples)
+# Environment files are created on a first install only: once the service
+# units exist, a missing .env stays missing (the examples are not neutral).
 # Call-shell env (NOT .env): RECOG_TORCH_INDEX_URL, RECOG_GIGAAM_URL/REF,
 # RECOG_GIGAAM_EDITABLE (local checkout installed with pip install -e)
 RECOG_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 ./setup.sh

@@ -425,6 +425,34 @@ def test_no_env_when_config_files_are_absent_then_neither_is_created(repo, stubs
     assert not (repo / "recog/web/.env").exists()
 
 
+def install_unit(repo, name="recog-live.service"):
+    unit_dir = repo.parent / "home/.config/systemd/user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    (unit_dir / name).write_text("[Service]\n")
+
+
+def test_installed_services_when_config_files_are_absent_then_neither_is_created(repo, stubs):
+    """An installation that runs without environment files keeps running without them."""
+    install_unit(repo)
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (repo / ".env").exists()
+    assert not (repo / "recog/web/.env").exists()
+    assert "services are already installed" in result.stdout
+
+
+def test_installed_services_when_dry_run_then_plan_keeps_config_files_absent(repo, stubs):
+    install_unit(repo)
+
+    result = run_setup(repo, stubs, "--dry-run")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Would copy" not in result.stdout
+    assert "services are already installed" in result.stdout
+
+
 def test_existing_config_files_are_never_overwritten(repo, stubs):
     (repo / ".env").write_text("RECOG_ASR_BACKEND=remote\nMINE=1\n")
 
