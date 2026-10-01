@@ -29,6 +29,7 @@ from recog.copilot_supervisor import (
     TmuxRunner,
     Watchdog,
     classify_screen,
+    trust_dialog_keys,
 )
 
 
@@ -2281,6 +2282,26 @@ async def test_watchdog_confirms_numbered_trust_dialog_in_place():
     await watchdog.tick()
 
     assert runner.sent_keys == [("Enter",)]
+
+
+def test_trust_dialog_keys_moves_up_when_cursor_is_below_accept_option():
+    """given: a trust dialog whose accept option is listed above the cursor
+    when: the dismissal keys are computed
+    then: the cursor is moved up to the accept option before confirming
+    """
+    screen = "   Yes, I trust this folder\n ❯ No, exit\n Enter to confirm\n"
+
+    assert trust_dialog_keys(screen) == ("Up", "Enter")
+
+
+def test_trust_dialog_keys_falls_back_to_option_one_on_unknown_layout():
+    """given: a trust dialog without a recognisable accept option
+    when: the dismissal keys are computed
+    then: the previous fixed answer is kept
+    """
+    screen = " Do you trust the files in this folder?\n ❯ 1. Proceed\n   2. Exit\n"
+
+    assert trust_dialog_keys(screen) == ("1",)
 
 
 async def test_watchdog_retries_dismissal_while_dialog_stays_up():

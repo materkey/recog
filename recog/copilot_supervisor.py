@@ -575,6 +575,10 @@ TRUST_ACCEPT_OPTION = "yes, i trust"
 PROMPT_TAIL_LINES = 15
 
 
+def _line_index(lines: list, needle: str) -> Optional[int]:
+    return next((i for i, line in enumerate(lines) if needle in line), None)
+
+
 def trust_dialog_keys(text: str) -> tuple:
     """Keys that move the selection cursor onto the accept option and confirm.
 
@@ -583,15 +587,11 @@ def trust_dialog_keys(text: str) -> tuple:
     so `1` does nothing there. Falls back to `1` when the layout is not
     recognised.
     """
-    lines = text.splitlines()
-    accept = next(
-        (i for i, line in enumerate(lines) if TRUST_ACCEPT_OPTION in line.lower()),
-        None,
-    )
-    cursors = [i for i, line in enumerate(lines) if PROMPT_CHAR in line]
-    if accept is None or not cursors:
+    lines = text.lower().splitlines()
+    accept = _line_index(lines, TRUST_ACCEPT_OPTION)
+    cursor = _line_index(lines, PROMPT_CHAR)
+    if accept is None or cursor is None:
         return ("1",)
-    cursor = min(cursors, key=lambda i: abs(i - accept))
     step = "Down" if accept > cursor else "Up"
     return (step,) * abs(accept - cursor) + ("Enter",)
 
@@ -721,23 +721,24 @@ class Watchdog:
             lowered = text.lower()
             marker = next((m for m in AUTO_DISMISS_MARKERS if m in lowered), None)
             if marker is not None:
-                # Latch per dialog kind, not globally: startup dialogs can
-                # appear back-to-back (trust → dev-channels), each needs its
-                # own keypress — and the same dialog is answered again only
-                # when it is still up after DISMISS_RETRY_S (a dropped or
-                # ineffective keypress would otherwise wedge the session).
-                now = self._clock()
-                if (
-                    self._dismissed_dialog != marker
-                    or now - self._dismissed_at >= self.DISMISS_RETRY_S
-                ):
-                    self._dismissed_dialog = marker
-                    self._dismissed_at = now
-                    keys = trust_dialog_keys(text) if marker in TRUST_DIALOG_MARKERS else ("1",)
-                    await self.runner.send_keys(*keys)
+                await self._dismiss(marker, text)
                 return AgentState.SPAWNING
         self._dismissed_dialog = None
         return state
+
+    async def _dismiss(self, marker: str, text: str) -> None:
+        # Latch per dialog kind, not globally: startup dialogs can appear
+        # back-to-back (trust → dev-channels), each needs its own keypress —
+        # and the same dialog is answered again only when it is still up after
+        # DISMISS_RETRY_S (a dropped or ineffective keypress would otherwise
+        # wedge the session).
+        now = self._clock()
+        if self._dismissed_dialog == marker and now - self._dismissed_at < self.DISMISS_RETRY_S:
+            return
+        self._dismissed_dialog = marker
+        self._dismissed_at = now
+        keys = trust_dialog_keys(text) if marker in TRUST_DIALOG_MARKERS else ("1",)
+        await self.runner.send_keys(*keys)
 
     async def _report(self, state: AgentState, now: float) -> None:
         self._last_reported = state
