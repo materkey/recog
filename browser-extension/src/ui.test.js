@@ -1217,3 +1217,36 @@ describe('handleTranscriptHistory privacy identity', () => {
     expect(state.transcriptLines[0].text).toBe('hello world');
   });
 });
+
+describe('transcript panel keeps the whole meeting', () => {
+  // A real 35-minute grooming produced ~500 panel lines; the panel showed only
+  // the last 100, so the transcript appeared to start at minute 30.
+  const MEETING_LINES = 500;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    state.transcriptLines = [];
+    state.currentMeetingId = null;
+  });
+
+  test('history of 500 segments - reloading the panel - should keep the first segment', () => {
+    const segments = Array.from({ length: MEETING_LINES }, (_, i) => ({
+      id: i + 1, speaker: `S${i % 2}`, speaker_id: `pid-${i % 2}`, text: `t${i + 1}`, ts_display: '12:00:00',
+    }));
+
+    handleTranscriptHistory({ meeting_id: 'm1', segments });
+
+    expect(state.transcriptLines).toHaveLength(MEETING_LINES);
+    expect(state.transcriptLines[0].segment_id).toBe(1);
+  });
+
+  test('500 live lines - arriving one by one - should keep the first line', () => {
+    state.currentMeetingId = 'm1';
+    for (let i = 0; i < MEETING_LINES; i++) {
+      handleTranscript({ speaker: `S${i % 2}`, text: `t${i + 1}`, segment_id: i + 1, meeting_id: 'm1' });
+    }
+
+    expect(state.transcriptLines).toHaveLength(MEETING_LINES);
+    expect(state.transcriptLines[0].segment_id).toBe(1);
+  });
+});

@@ -1,7 +1,9 @@
 export const constants = {
   MAX_HISTORY: 100,
   SPEAKING_THRESHOLD_MS: 500,
-  MAX_TRANSCRIPT_LINES: 100,
+  // Memory guard only: a meeting yields ~14 lines/min, so this is ~6 hours.
+  // A cap a real meeting can reach makes the transcript look cut at the start.
+  MAX_TRANSCRIPT_LINES: 5000,
   WS_URL: 'ws://localhost:8766',
   FLATNESS_THRESHOLD: 0.15,
   AUDIO_FILTER_ENABLED: true,
