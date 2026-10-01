@@ -517,10 +517,9 @@ class TmuxRunner:
             )
         )
         if rc != 0:
-            # A dropped keystroke is how the dev-channels dialog stays up: the
-            # watchdog dismisses it once per appearance, so a silent failure
-            # wedges the session. Rate-limited — the watchdog retries on every
-            # tick while the dialog is visible.
+            # A dropped keystroke is how a startup dialog stays up. Rate-limited
+            # — the watchdog resends every DISMISS_RETRY_S while the dialog is
+            # visible.
             log_rate_limited(
                 "copilot-supervisor.send-keys",
                 f"{LOG_PREFIX} tmux send-keys failed (rc={rc}): {out.strip()}",
@@ -568,11 +567,33 @@ DEV_CHANNELS_MARKER = "local development"
 # pre-approved permissions in .claude/settings.local.json); both current and
 # older claude phrasings.
 TRUST_DIALOG_MARKERS = ("trust this folder", "trust the files in this folder")
-# Dialogs safe to auto-answer with option 1: dev-channels ("Yes, load them")
-# and workspace trust ("Yes, I trust this folder" — the same repo the
-# supervisor itself spawned the session into).
+# Dialogs safe to auto-answer: dev-channels (option 1, "Yes, load them") and
+# workspace trust ("Yes, I trust this folder" — the same repo the supervisor
+# itself spawned the session into).
 AUTO_DISMISS_MARKERS = (DEV_CHANNELS_MARKER,) + TRUST_DIALOG_MARKERS
+TRUST_ACCEPT_OPTION = "yes, i trust"
 PROMPT_TAIL_LINES = 15
+
+
+def trust_dialog_keys(text: str) -> tuple:
+    """Keys that move the selection cursor onto the accept option and confirm.
+
+    Driven by the rendered option lines rather than a fixed key: claude
+    2.1.270 dropped the option numbers and starts the cursor on "No, exit",
+    so `1` does nothing there. Falls back to `1` when the layout is not
+    recognised.
+    """
+    lines = text.splitlines()
+    accept = next(
+        (i for i, line in enumerate(lines) if TRUST_ACCEPT_OPTION in line.lower()),
+        None,
+    )
+    cursors = [i for i, line in enumerate(lines) if PROMPT_CHAR in line]
+    if accept is None or not cursors:
+        return ("1",)
+    cursor = min(cursors, key=lambda i: abs(i - accept))
+    step = "Down" if accept > cursor else "Up"
+    return (step,) * abs(accept - cursor) + ("Enter",)
 
 
 def classify_screen(text: Optional[str]) -> AgentState:
@@ -600,9 +621,10 @@ class Watchdog:
     """Polls the copilot tmux screen while a session is expected to live.
 
     Each tick: classify the pane (`offline` when the session is gone),
-    auto-dismiss the known startup dialogs — dev-channels and workspace
-    trust — (`send-keys 1`, once per dialog occurrence, reported as
-    `spawning` — not `blocked`), report
+    auto-dismiss the known startup dialogs — dev-channels (`send-keys 1`)
+    and workspace trust (cursor to the accept option + Enter) — once per
+    dialog occurrence, resent every DISMISS_RETRY_S while the dialog stays
+    up, reported as `spawning` — not `blocked`, report
     `copilot_agent_status` to the bridge on every state change plus an
     idempotent heartbeat every ~HEARTBEAT_S (the bridge merge measures
     freshness by it), and feed `session_ready` / `session_died` back into
@@ -613,6 +635,7 @@ class Watchdog:
     POLL_INTERVAL_S = 2.0
     HEARTBEAT_S = 5.0
     SPAWN_DEADLINE_S = 60.0
+    DISMISS_RETRY_S = 10.0
 
     def __init__(
         self,
@@ -633,6 +656,7 @@ class Watchdog:
         self._last_reported: Optional[AgentState] = None
         self._last_report_ts: float = 0.0
         self._dismissed_dialog: Optional[str] = None
+        self._dismissed_at: float = 0.0
         self._spawning_since: Optional[float] = None
 
     async def run(self) -> None:
@@ -699,10 +723,18 @@ class Watchdog:
             if marker is not None:
                 # Latch per dialog kind, not globally: startup dialogs can
                 # appear back-to-back (trust → dev-channels), each needs its
-                # own keypress — but the same dialog is answered only once.
-                if self._dismissed_dialog != marker:
+                # own keypress — and the same dialog is answered again only
+                # when it is still up after DISMISS_RETRY_S (a dropped or
+                # ineffective keypress would otherwise wedge the session).
+                now = self._clock()
+                if (
+                    self._dismissed_dialog != marker
+                    or now - self._dismissed_at >= self.DISMISS_RETRY_S
+                ):
                     self._dismissed_dialog = marker
-                    await self.runner.send_keys("1")
+                    self._dismissed_at = now
+                    keys = trust_dialog_keys(text) if marker in TRUST_DIALOG_MARKERS else ("1",)
+                    await self.runner.send_keys(*keys)
                 return AgentState.SPAWNING
         self._dismissed_dialog = None
         return state

@@ -2100,10 +2100,30 @@ SPINNER_SCREEN = (
     "╰──────────────────────────────────────────────╯\n"
 )
 STARTUP_SCREEN = "\n\n  Starting up…\n"
+# Workspace-trust dialog captured live on claude 2.1.270 (2026-10-01): the
+# options carry no numbers and the cursor starts on "No, exit".
+TRUST_DIALOG_SCREEN = (
+    " Accessing workspace:\n"
+    "\n"
+    " /Users/user/projects/recog\n"
+    "\n"
+    " Quick safety check: Is this a project you created or one you trust? (Like your\n"
+    " own code, a well-known open source project, or work from your team). If not,\n"
+    " take a moment to review what's in this folder first.\n"
+    "\n"
+    " Claude Code'll be able to read, edit, and execute files here.\n"
+    "\n"
+    " Security guide\n"
+    "\n"
+    " ❯ No, exit\n"
+    "   Yes, I trust this folder\n"
+    "\n"
+    " Enter to confirm · Esc to cancel\n"
+)
 # Workspace-trust dialog captured live on claude 2.1.197+ (2026-08-14): shown
 # on fresh spawns when the project carries pre-approved permissions in
 # .claude/settings.local.json.
-TRUST_DIALOG_SCREEN = (
+TRUST_DIALOG_NUMBERED_SCREEN = (
     " Accessing workspace:\n"
     "\n"
     " /Users/user/projects/recog\n"
@@ -2127,6 +2147,7 @@ TRUST_DIALOG_SCREEN = (
     [
         (DEV_CHANNELS_SCREEN, AgentState.BLOCKED),   # known dev-channels dialog
         (TRUST_DIALOG_SCREEN, AgentState.BLOCKED),   # known workspace-trust dialog
+        (TRUST_DIALOG_NUMBERED_SCREEN, AgentState.BLOCKED),  # older numbered layout
         (MODEL_DIALOG_SCREEN, AgentState.BLOCKED),   # unknown selection dialog
         (SPINNER_SCREEN, AgentState.WORKING),        # spinner beats the prompt line
         (REPL_PROMPT_SCREEN, AgentState.ONLINE),     # idle prompt
@@ -2230,9 +2251,11 @@ async def test_watchdog_redismisses_when_dialog_reappears():
 
 
 async def test_watchdog_auto_dismisses_trust_dialog_once():
-    """given: the copilot pane shows the workspace-trust dialog
+    """given: the copilot pane shows the workspace-trust dialog with the
+           cursor on "No, exit"
     when: the watchdog ticks twice on the same dialog
-    then: it sends "1" exactly once and reports spawning (never blocked)
+    then: it moves the cursor to the accept option and confirms exactly once,
+          reporting spawning (never blocked)
     """
     clock = FakeClock()
     runner = WatchdogRunner(screen=TRUST_DIALOG_SCREEN)
@@ -2241,9 +2264,42 @@ async def test_watchdog_auto_dismisses_trust_dialog_once():
     await watchdog.tick()
     await watchdog.tick()
 
-    assert runner.sent_keys == [("1",)]
+    assert runner.sent_keys == [("Down", "Enter")]
     assert AgentState.BLOCKED not in statuses
     assert statuses == [AgentState.SPAWNING]
+
+
+async def test_watchdog_confirms_numbered_trust_dialog_in_place():
+    """given: the older trust dialog whose cursor already sits on the accept
+           option
+    when: the watchdog ticks
+    then: it confirms without moving the cursor
+    """
+    runner = WatchdogRunner(screen=TRUST_DIALOG_NUMBERED_SCREEN)
+    watchdog, _lifecycle, _statuses, _died = _make_watchdog(runner)
+
+    await watchdog.tick()
+
+    assert runner.sent_keys == [("Enter",)]
+
+
+async def test_watchdog_retries_dismissal_while_dialog_stays_up():
+    """given: a dismissal keypress that did not close the dialog
+    when: the dialog is still visible after the retry interval
+    then: the keys are sent again instead of leaving the session wedged
+    """
+    clock = FakeClock()
+    runner = WatchdogRunner(screen=TRUST_DIALOG_SCREEN)
+    watchdog, _lifecycle, statuses, _died = _make_watchdog(runner, clock=clock)
+
+    await watchdog.tick()
+    clock.advance(Watchdog.DISMISS_RETRY_S - 1)
+    await watchdog.tick()  # below the retry interval → no resend
+    clock.advance(1)
+    await watchdog.tick()  # interval elapsed → resend
+
+    assert runner.sent_keys == [("Down", "Enter"), ("Down", "Enter")]
+    assert AgentState.BLOCKED not in statuses
 
 
 async def test_watchdog_dismisses_trust_then_dev_channels_dialogs():
@@ -2256,11 +2312,11 @@ async def test_watchdog_dismisses_trust_then_dev_channels_dialogs():
     runner = WatchdogRunner(screen=TRUST_DIALOG_SCREEN)
     watchdog, _lifecycle, statuses, _died = _make_watchdog(runner, clock=clock)
 
-    await watchdog.tick()                 # trust dialog → send "1"
+    await watchdog.tick()  # trust dialog → accept it
     runner.screen = DEV_CHANNELS_SCREEN
-    await watchdog.tick()                 # dev-channels dialog → send "1" again
+    await watchdog.tick()  # dev-channels dialog → send "1"
 
-    assert runner.sent_keys == [("1",), ("1",)]
+    assert runner.sent_keys == [("Down", "Enter"), ("1",)]
     assert AgentState.BLOCKED not in statuses
 
 
