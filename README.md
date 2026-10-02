@@ -1,15 +1,22 @@
 # recog
 
 Live transcription of Russian-language meetings on your own machine, with
-speaker names, saved meetings and a web UI. Runs on macOS and Linux. Speaker
-names come from conference participant signals and your profile, not from
-voice recognition.
+speaker names, saved meetings and a web UI. Speaker names come from conference
+participant signals and your profile, not from voice recognition. Supported
+conferences: KTalk (Kontur Talk, `*.ktalk.ru`), Jitsi, Element Call and
+Google Meet.
+
+Runs on macOS and Linux. Linux is covered by the automated tests on Ubuntu and
+by the [installation checks below](#python-on-linux); live audio capture and
+service activation there have no recorded end-to-end run.
 
 ## Installation
 
 **Recording:** setup starts the services, and the default live service then
 captures microphone and system audio, including between conferences. Meeting
-audio is deleted after 24 hours; transcripts stay until you remove them. For
+audio is deleted after 24 hours; transcripts stay until you remove them. The
+recording includes other participants' speech: tell them, and make sure you
+are allowed to record. For
 browser KTalk calls only, configure [`--ktalk-only`](docs/usage.md#usage);
 this mode requires the extension.
 
@@ -145,4 +152,4 @@ After rebuilding the extension, reload it in `chrome://extensions`.
 
 ## License
 
-MIT
+[MIT](LICENSE)
