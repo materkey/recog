@@ -3,8 +3,7 @@
 Live transcription of Russian-language meetings on your own machine, with
 speaker names, saved meetings and a web UI. Speaker names come from conference
 participant signals and your profile, not from voice recognition. Supported
-conferences: KTalk (Kontur Talk, `*.ktalk.ru`), Jitsi, Element Call and
-Google Meet.
+conferences: KTalk (Kontur Talk, `*.ktalk.ru`), Jitsi and Google Meet.
 
 Runs on macOS and Linux. Linux is covered by the automated tests on Ubuntu and
 by the [installation checks below](#python-on-linux); live audio capture and
@@ -108,7 +107,7 @@ flowchart TD
 ```
 
 KTalk supplies per-participant audio through the Chrome extension; a second
-recognition pass refines the live text. Jitsi, Element Call and Google Meet use
+recognition pass refines the live text. Jitsi and Google Meet use
 system audio with conference speaker signals. Microphone speech uses your saved profile.
 System audio outside a recognized conference has no speaker identity and is
 marked `Unknown`.
