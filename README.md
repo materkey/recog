@@ -1,9 +1,17 @@
 # recog
 
-Russian speech recognition with live speaker identification, saved meetings
-and a web UI. Runs on macOS and Linux.
+Live transcription of Russian-language meetings on your own machine, with
+speaker names, saved meetings and a web UI. Runs on macOS and Linux. Speaker
+names come from conference participant signals and your profile, not from
+voice recognition.
 
 ## Installation
+
+**Recording:** setup starts the services, and the default live service then
+captures microphone and system audio, including between conferences. Meeting
+audio is deleted after 24 hours; transcripts stay until you remove them. For
+browser KTalk calls only, configure [`--ktalk-only`](docs/usage.md#usage);
+this mode requires the extension.
 
 ```bash
 git clone <repo-url> recog && cd recog
@@ -14,13 +22,14 @@ git clone <repo-url> recog && cd recog
 Requires **Python 3.12+ (3.12 recommended)**, **ffmpeg**, and either **macOS 13+ on Apple Silicon**
 or **Linux**. macOS needs `swiftc` to build the audio helper; Linux needs
 PulseAudio or PipeWire with `pipewire-pulse`, `parec`, `pactl` and PortAudio.
-Install **Node.js + npm** to build the Chrome extension. Copilot additionally
+Install **Node.js + npm** to build the Chrome extension. Copilot, an optional
+Claude Code session that follows the meeting and answers in a chat, additionally
 needs **tmux + Claude Code**; run `claude` once to sign in.
 Allow roughly **4 GB for models**. See [requirements and install options](docs/usage.md#requirements).
 
 Setup reports missing dependencies with installation hints. It creates or
-reuses the virtualenv, installs Python packages, creates missing configuration
-files, builds the extension, prepares model weights and installs and starts
+reuses the virtualenv, installs Python packages, creates configuration files
+on a first install, builds the extension, prepares model weights and installs and starts
 services. Existing environment files are preserved. If readiness checks fail,
 services are not activated and previously running services are left running.
 
@@ -34,17 +43,13 @@ controlling services; it does **not** verify dependencies or readiness.
 Other setup flags: `--no-services`, `--no-prefetch`, `--no-extension`, `--no-env`.
 If you do not need Copilot, use `RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh`.
 
-**Recording:** the default live service captures microphone and system audio,
-including between conferences. For browser KTalk calls only, configure
-[`--ktalk-only`](docs/usage.md#usage); this mode requires the extension.
-
 ### Python on Linux
 
 Use **Python 3.12**, the version used in CI. Setup tries `python3.12`,
 `python3.13`, then `python3`; it rejects versions below 3.12 and warns above
 3.13. Acceptance by the installer is not a dependency compatibility guarantee.
 
-**Arch Linux:** the tested stock Python 3.14.7 fails during GigaAM installation
+**Arch Linux:** the stock Python 3.14.7, tested on 2026-09-19, fails during GigaAM installation
 with `No matching distribution found for onnxruntime==1.23.*`. Use Python 3.12
 via uv below; upgrading the system `python` package does not solve this pin.
 
@@ -77,8 +82,8 @@ mv venv-gigaam venv-gigaam.previous
 ```
 
 The Python 3.12.14 dependency installation, `pip check`, CLI and ASR/web/MCP
-imports passed in clean Ubuntu 22.04 and Arch containers; audio capture and
-service activation were not part of these checks.
+imports passed in clean Ubuntu 22.04 and Arch containers on 2026-09-19; audio
+capture and service activation were not part of these checks.
 
 ## How it works
 
@@ -98,6 +103,8 @@ flowchart TD
 KTalk supplies per-participant audio through the Chrome extension; a second
 recognition pass refines the live text. Jitsi, Element Call and Google Meet use
 system audio with conference speaker signals. Microphone speech uses your saved profile.
+System audio outside a recognized conference has no speaker identity and is
+marked `Unknown`.
 GigaAM runs locally on CUDA, MPS or CPU, or through an optional
 [remote ASR gateway](docs/asr-server.md) with local fallback.
 
