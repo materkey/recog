@@ -133,7 +133,7 @@ async def test_same_room_join_reopens_writers_and_capture(transcriber):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("platform", ["jitsi", "vas3k", "matrix", "gmeet"])
+@pytest.mark.parametrize("platform", ["jitsi", "vas3k", "matrix", "gmeet", "zoom"])
 async def test_other_platform_does_not_start_recording(transcriber, platform):
     t = transcriber
     ws = await join(t, platform=platform)

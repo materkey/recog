@@ -8,7 +8,19 @@ import re
 from urllib.parse import urlsplit
 
 
-PLATFORMS = frozenset({"ktalk", "vas3k", "jitsi", "matrix", "gmeet"})
+PLATFORMS = frozenset({"ktalk", "vas3k", "jitsi", "matrix", "gmeet", "zoom"})
+
+# Hosts the extension manifest already covers; configuring one again would
+# register a second platform for the same pages.
+_BUILTIN_HOSTS = frozenset({"meet.vas3k.cloud", "meet.google.com"})
+_BUILTIN_WILDCARD_DOMAINS = ("ktalk.ru", "zoom.us")
+
+
+def _is_builtin_host(hostname: str) -> bool:
+    return hostname in _BUILTIN_HOSTS or any(
+        hostname == domain or hostname.endswith("." + domain)
+        for domain in _BUILTIN_WILDCARD_DOMAINS
+    )
 
 
 def load_conference_hosts(path: Path | None = None) -> dict:
@@ -42,9 +54,7 @@ def load_conference_hosts(path: Path | None = None) -> dict:
                     for label in hostname.split(".")
                 )
                 or origin != f"https://{hostname}"
-                or hostname == "ktalk.ru"
-                or hostname.endswith(".ktalk.ru")
-                or hostname in ("meet.vas3k.cloud", "meet.google.com")
+                or _is_builtin_host(hostname)
             ):
                 raise ValueError(
                     "Use canonical HTTPS origins without ports, paths or built-in hosts"

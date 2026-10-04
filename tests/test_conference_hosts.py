@@ -37,10 +37,13 @@ def test_missing_config_when_loading_then_only_builtin_hosts_remain(tmp_path):
         {"matrix": ["https://ktalk.ru"]},
         {"jitsi": ["https://meet.vas3k.cloud"]},
         {"jitsi": ["https://meet.google.com"]},
+        {"jitsi": ["https://zoom.us"]},
+        {"jitsi": ["https://app.zoom.us"]},
         {"jitsi": ["https://same.example.org"], "matrix": ["https://same.example.org"]},
         {"source_aliases": {"old": "unknown"}},
         {"source_aliases": {"ktalk": "matrix"}},
         {"source_aliases": {"gmeet": "jitsi"}},
+        {"source_aliases": {"zoom": "jitsi"}},
     ],
 )
 def test_invalid_config_when_loading_then_rejected(tmp_path, value):
@@ -48,6 +51,13 @@ def test_invalid_config_when_loading_then_rejected(tmp_path, value):
     path.write_text(json.dumps(value))
     with pytest.raises(ValueError):
         load_conference_hosts(path)
+
+
+@pytest.mark.parametrize("origin", ["https://evilzoom.us", "https://evilktalk.ru"])
+def test_lookalike_of_builtin_wildcard_host_when_loading_then_accepted(tmp_path, origin):
+    path = tmp_path / "hosts.json"
+    path.write_text(json.dumps({"jitsi": [origin]}))
+    assert load_conference_hosts(path)["jitsi"] == [origin]
 
 
 def test_configured_origins_when_process_starts_then_only_exact_hosts_are_allowed(tmp_path):

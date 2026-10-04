@@ -419,6 +419,50 @@ def test_on_meeting_join_google_meet_url_uses_meeting_code(tmp_path, url):
     assert meta["source"] == "gmeet"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://zoom.us/j/12345678901",
+        "https://zoom.us/j/12345678901?pwd=secret",
+    ],
+)
+def test_on_meeting_join_zoom_canonical_url_uses_meeting_number(tmp_path, url):
+    """
+    given: the canonical Zoom URL every Zoom source synthesizes, with or
+           without the ?pwd query
+    when: on_meeting_join is called with platform="zoom"
+    then: live_id is the meeting number, host is zoom.us regardless of the
+          subdomain the client ran on, and the meeting source is zoom
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    storage.start_session(ktalk=True)
+
+    storage.on_meeting_join(url, platform="zoom")
+
+    meta = _read_meta(storage)
+    assert meta["conference"]["live_id"] == "12345678901"
+    assert meta["conference"]["host"] == "zoom.us"
+    assert meta["source"] == "zoom"
+
+
+def test_zoom_meeting_just_left_rejoined_with_canonical_url_should_reopen_same_meeting(tmp_path):
+    """
+    given: a Zoom meeting joined through the canonical URL, with a segment, then left
+    when: the same meeting number is joined again moments later (another Zoom
+          source, or the same one after a reconnect)
+    then: the ended meeting is reopened instead of a second one being created
+    """
+    storage = MeetingStorage(base_path=tmp_path)
+    storage.start_session(ktalk=True)
+    first = storage.on_meeting_join("https://zoom.us/j/12345678901?pwd=secret", platform="zoom")
+    storage.append_segment("Tester", "test", "hello")
+    storage.on_ktalk_leave()
+
+    second = storage.on_meeting_join("https://zoom.us/j/12345678901", platform="zoom")
+
+    assert second == first
+
+
 def test_on_meeting_join_no_path_or_fragment_id_leaves_live_id_empty(tmp_path):
     """
     given: a URL with neither a path id nor a #/room/ fragment

@@ -44,13 +44,13 @@ SAME_ROOM_REOPEN_WINDOW = timedelta(minutes=10)
 # increment generation — so the bridge gates them through a single predicate
 # instead of a hardcoded `source == "ktalk"`. "orphan"/"local" are plain
 # recordings, not conferences.
-CONFERENCE_SOURCES = frozenset({"ktalk", "vas3k", "jitsi", "matrix", "gmeet"})
+CONFERENCE_SOURCES = frozenset({"ktalk", "vas3k", "jitsi", "matrix", "gmeet", "zoom"})
 
 
 def is_conference_source(source: Optional[str]) -> bool:
     """True when `source` is an extension-driven conference platform.
 
-    Groups ktalk + the Jitsi platforms (vas3k/jitsi) + matrix + gmeet so copilot
+    Groups ktalk + the Jitsi platforms (vas3k/jitsi) + matrix + gmeet + zoom so copilot
     lifecycle, end-on-last-extension-gone, and increment generation treat them
     identically. orphan/local meetings are not conferences.
     """
@@ -283,7 +283,7 @@ class MeetingStorage:
 
         Args:
             live_id: ID комнаты (например, abcd1234wxyz)
-            platform: Платформа встречи (ktalk, vas3k, jitsi, matrix, gmeet)
+            platform: Платформа встречи (ktalk, vas3k, jitsi, matrix, gmeet, zoom)
             host: Сервер конференции; одинаковые комнаты на разных серверах независимы
 
         Returns:
@@ -396,7 +396,7 @@ class MeetingStorage:
         Args:
             url: URL встречи (https://example.ktalk.ru/abcd1234wxyz)
             title: Заголовок страницы (опционально)
-            platform: Платформа встречи (ktalk, vas3k, jitsi, matrix, gmeet)
+            platform: Платформа встречи (ktalk, vas3k, jitsi, matrix, gmeet, zoom)
 
         Returns:
             meeting_id текущей встречи
