@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Jitsi Speaker Detector",
   "version": "1.4.3",
-  "description": "Detects speakers and displays transcripts in KTalk, Jitsi, Google Meet, and configured Element Call conferences",
+  "description": "Detects speakers and displays transcripts in KTalk, Jitsi, Google Meet, Zoom, and configured Element Call conferences",
   "permissions": [
     "activeTab",
     "storage"
@@ -10,14 +10,16 @@
   "host_permissions": [
     "https://*.ktalk.ru/*",
     "https://meet.vas3k.cloud/*",
-    "https://meet.google.com/*"
+    "https://meet.google.com/*",
+    "https://*.zoom.us/wc/*"
   ],
   "content_scripts": [
     {
       "matches": [
         "https://*.ktalk.ru/*",
         "https://meet.vas3k.cloud/*",
-        "https://meet.google.com/*"
+        "https://meet.google.com/*",
+        "https://*.zoom.us/wc/*"
       ],
       "js": [
         "content.js"
@@ -47,7 +49,8 @@
       "matches": [
         "https://*.ktalk.ru/*",
         "https://meet.vas3k.cloud/*",
-        "https://meet.google.com/*"
+        "https://meet.google.com/*",
+        "https://*.zoom.us/*"
       ]
     }
   ]

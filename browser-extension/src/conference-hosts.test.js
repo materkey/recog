@@ -31,7 +31,8 @@ test.each(['http://meet.example.org', 'https://meet.example.org/', 'https://meet
   'https://meet..example.org', 'https://meet.example.org.', 'https://MEET.example.org',
   'https://[::1]', 'https://mеet.example.org',
   `https://${'a'.repeat(64)}.example.org`, `https://${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}`,
-  'https://ktalk.ru', 'https://sub.ktalk.ru', 'https://meet.vas3k.cloud', 'https://meet.google.com', 42, null])(
+  'https://ktalk.ru', 'https://sub.ktalk.ru', 'https://meet.vas3k.cloud', 'https://meet.google.com',
+  'https://zoom.us', 'https://app.zoom.us', 42, null])(
   'invalid origin %s - validating config - fails', origin => {
     expect(() => validateConferenceHosts({ jitsi: [origin] })).toThrow();
   });
@@ -41,7 +42,7 @@ test.each([null, [], { jitsi: null }, { jitsi: 'https://meet.example.org' }, { t
   { source_aliases: { old: 'unknown' } }, { source_aliases: { old: 'ktalk' } },
   { source_aliases: { ktalk: 'jitsi' } }, { source_aliases: { vas3k: 'jitsi' } },
   { source_aliases: { jitsi: 'matrix' } }, { source_aliases: { matrix: 'jitsi' } },
-  { source_aliases: { gmeet: 'jitsi' } }])('invalid config %j - validating config - fails', value => {
+  { source_aliases: { gmeet: 'jitsi' } }, { source_aliases: { zoom: 'jitsi' } }])('invalid config %j - validating config - fails', value => {
   expect(() => validateConferenceHosts(value)).toThrow();
 });
 

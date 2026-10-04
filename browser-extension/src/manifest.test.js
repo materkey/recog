@@ -112,7 +112,23 @@ describe('manifest configuration boundaries', () => {
     expect(createManifest(template, { jitsi: [], matrix: [] })).toEqual(template);
     expect(template.host_permissions).toEqual([
       'https://*.ktalk.ru/*', 'https://meet.vas3k.cloud/*', 'https://meet.google.com/*',
+      'https://*.zoom.us/wc/*',
     ]);
+  });
+
+  test('built-in manifest - matching Zoom URLs - covers the web client on any subdomain, not the launcher or lookalikes', () => {
+    const patterns = template.content_scripts.flatMap(entry => entry.matches);
+    const covered = url => patterns.some(pattern => matchPatternMatches(pattern, url));
+    expect(covered('https://app.zoom.us/wc/12345678901/join')).toBe(true);
+    expect(covered('https://us05web.zoom.us/wc/join/12345678901')).toBe(true);
+    expect(covered('https://zoom.us/wc/12345678901/start')).toBe(true);
+    expect(covered('https://zoom.us/j/12345678901')).toBe(false);
+    expect(covered('https://zoom.us/profile')).toBe(false);
+    expect(covered('https://evilzoom.us/wc/12345678901/join')).toBe(false);
+    expect(covered('https://zoom.us.evil.test/wc/12345678901/join')).toBe(false);
+    // Chrome accepts only origin-wide patterns in web_accessible_resources.
+    expect(template.web_accessible_resources[0].matches).toContain('https://*.zoom.us/*');
+    expect(template.content_scripts.every(entry => !entry.all_frames)).toBe(true);
   });
 
   test('built-in manifest - matching Google Meet URLs - covers rooms and landing, not lookalikes', () => {

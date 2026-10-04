@@ -69,6 +69,30 @@ describe('detectPlatform', () => {
     expect(detectPlatform(loc('meet.google.com.evil.test', '/qrs-tuvw-xyz'))).toBeNull();
   });
 
+  test.each([
+    ['app.zoom.us', '/wc/12345678901/join'],
+    ['us05web.zoom.us', '/wc/join/12345678901'],
+    ['zoom.us', '/wc/12345678901/start'],
+    ['app.zoom.us', '/wc/home'],
+  ])('Zoom web client path on %s%s - detecting platform - resolves to zoom', (host, path) => {
+    expect(detectPlatform(loc(host, path))).toBe('zoom');
+  });
+
+  test.each([
+    ['zoom.us', '/j/12345678901'],
+    ['zoom.us', '/profile'],
+    ['app.zoom.us', '/wc'],
+  ])('Zoom page outside the web client %s%s - detecting platform - rejects it', (host, path) => {
+    expect(detectPlatform(loc(host, path))).toBeNull();
+  });
+
+  test.each(['evilzoom.us', 'zoom.us.evil.test', 'app-zoom.us'])(
+    'Zoom lookalike host %s - detecting platform - rejects it',
+    (host) => {
+      expect(detectPlatform(loc(host, '/wc/12345678901/join'))).toBeNull();
+    },
+  );
+
   test('unknown host resolves to null', () => {
     expect(detectPlatform(loc('example.com', '/'))).toBeNull();
   });
@@ -90,7 +114,7 @@ describe('isJitsiPlatform / display name for matrix', () => {
 
 describe('isJitsiPlatform / display name per platform', () => {
   test.each([
-    ['gmeet', true], ['matrix', true], ['vas3k', true], ['jitsi', true],
+    ['gmeet', true], ['zoom', true], ['matrix', true], ['vas3k', true], ['jitsi', true],
     ['ktalk', false], [null, false],
   ])('platform %s - checking floating-panel predicate - returns %s', (platform, expected) => {
     expect(isJitsiPlatform(platform)).toBe(expected);
@@ -98,5 +122,9 @@ describe('isJitsiPlatform / display name per platform', () => {
 
   test('gmeet platform - getting display name - returns Google Meet', () => {
     expect(getPlatformDisplayName('gmeet')).toBe('Google Meet');
+  });
+
+  test('zoom platform - getting display name - returns Zoom', () => {
+    expect(getPlatformDisplayName('zoom')).toBe('Zoom');
   });
 });

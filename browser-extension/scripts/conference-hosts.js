@@ -13,7 +13,7 @@ export function validateConferenceHosts(value) {
   if (value.source_aliases !== undefined && (!value.source_aliases ||
       typeof value.source_aliases !== 'object' || Array.isArray(value.source_aliases) ||
       Object.entries(value.source_aliases).some(([source, target]) =>
-        !source || ['ktalk', 'vas3k', 'jitsi', 'matrix', 'gmeet'].includes(source) ||
+        !source || ['ktalk', 'vas3k', 'jitsi', 'matrix', 'gmeet', 'zoom'].includes(source) ||
         !['jitsi', 'matrix'].includes(target)))) {
     throw new Error('source_aliases must map source names to jitsi or matrix');
   }
@@ -32,6 +32,7 @@ export function validateConferenceHosts(value) {
         throw new Error(`Invalid ${platform} origin: expected https://host with no path, credentials or port`);
       }
       if (url.hostname === 'ktalk.ru' || url.hostname.endsWith('.ktalk.ru') ||
+          url.hostname === 'zoom.us' || url.hostname.endsWith('.zoom.us') ||
           url.hostname === 'meet.vas3k.cloud' || url.hostname === 'meet.google.com') {
         throw new Error('Built-in conference hosts must not be configured again');
       }

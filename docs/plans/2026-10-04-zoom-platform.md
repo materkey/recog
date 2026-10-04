@@ -222,15 +222,15 @@ Mac double the captured audio, and a two-party meeting may go peer-to-peer).
       `ZOOM_SELECTORS`
 
 ### Task 5: Wire `*.zoom.us/wc/*` (one commit with the allowlist)
-- [ ] `browser-extension/manifest.json`: `host_permissions`,
+- [x] `browser-extension/manifest.json`: `host_permissions`,
       `content_scripts[0].matches`, origin-wide `web_accessible_resources`,
       description
-- [ ] `recog/ws_origin.py`: `zoom.us` in `WILDCARD_DOMAINS`
-- [ ] `browser-extension/scripts/conference-hosts.js`: reserved name and
+- [x] `recog/ws_origin.py`: `zoom.us` in `WILDCARD_DOMAINS`
+- [x] `browser-extension/scripts/conference-hosts.js`: reserved name and
       built-in host rejection
-- [ ] `browser-extension/src/platforms/index.js`: `detectPlatform`,
+- [x] `browser-extension/src/platforms/index.js`: `detectPlatform`,
       `getPlatformAdapter`, `getPlatformDisplayName`
-- [ ] tests: `platforms/index.test.js`, `manifest.test.js`,
+- [x] tests: `platforms/index.test.js`, `manifest.test.js`,
       `conference-hosts.test.js`, `tests/test_ws_origin.py` lookalikes
 
 ### Task 6: Live verification

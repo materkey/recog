@@ -32,6 +32,42 @@ def test_given_ktalk_https_origin_when_checked_then_allowed(origin):
     assert origin_allowed(origin) is True
 
 
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://app.zoom.us",
+        "https://zoom.us",
+        "https://us05web.zoom.us",
+    ],
+)
+def test_given_zoom_https_origin_when_checked_then_allowed(origin):
+    """given: an https origin on zoom.us or one of its subdomains — the web
+    client runs on app.zoom.us and on regional hosts
+    when: origin_allowed is evaluated
+    then: the connection is allowed
+    """
+    assert origin_allowed(origin) is True
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://evil-zoom.us",
+        "https://evilzoom.us",
+        "https://zoom.us.evil.example",
+        "http://app.zoom.us",
+        "https://app.zoom.us:8443",
+    ],
+)
+def test_given_zoom_lookalike_or_insecure_origin_when_checked_then_rejected(origin):
+    """given: a host that only resembles zoom.us, or zoom.us over http or on
+    a non-default port
+    when: origin_allowed is evaluated
+    then: the connection is rejected
+    """
+    assert origin_allowed(origin) is False
+
+
 @pytest.mark.parametrize("origin", [
     "https://meet.vas3k.cloud",
 ])

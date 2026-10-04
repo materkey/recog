@@ -38,7 +38,7 @@ ALLOWED_ORIGINS = frozenset(
 
 # Wildcard rule: each domain admits https://<domain> and any https://*.<domain>
 # subdomain.
-WILDCARD_DOMAINS = frozenset({"ktalk.ru"})
+WILDCARD_DOMAINS = frozenset({"ktalk.ru", "zoom.us"})
 
 
 def _in_wildcard_domain(hostname: str) -> bool:

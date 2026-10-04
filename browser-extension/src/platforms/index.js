@@ -6,6 +6,7 @@
  * - vas3k.cloud - uses standard Jitsi Meet APP object
  * - Configured Jitsi hosts - uses standard Jitsi Meet APP object
  * - Google Meet (meet.google.com) - DOM speaking indicators on participant tiles
+ * - Zoom web client (*.zoom.us/wc/*) - DOM active-tile class on participant tiles
  * - Configured Element Call / Matrix hosts - bundled EC iframe at
  *   /widgets/element-call/*; sources data from matrix-js-sdk + livekit
  */
@@ -14,6 +15,7 @@ import { KTalkAdapter } from './ktalk.js';
 import { Vas3kAdapter } from './vas3k.js';
 import { ElementCallAdapter } from './matrix.js';
 import { GoogleMeetAdapter } from './gmeet.js';
+import { ZoomAdapter } from './zoom.js';
 
 const conferenceHosts = typeof __RECOG_CONFERENCE_HOSTS__ === 'undefined'
   ? { jitsi: [], matrix: [] }
@@ -42,6 +44,11 @@ export function detectPlatform(loc = window.location, hosts = conferenceHosts) {
   // so the adapter itself decides whether the current path is a room.
   if (hostname === 'meet.google.com') {
     return 'gmeet';
+  }
+  // Only the web client: the rest of zoom.us (launcher, account pages) has no
+  // meeting. Within /wc/ the adapter decides whether the path is a meeting.
+  if (hostname === 'zoom.us' || hostname.endsWith('.zoom.us')) {
+    return pathname.startsWith('/wc/') ? 'zoom' : null;
   }
   // Only the bundled call iframe gets an adapter; the Element top frame
   // must not open a second WebSocket that outlives the call.
@@ -87,6 +94,9 @@ export function getPlatformAdapter() {
       case 'gmeet':
         currentAdapter = new GoogleMeetAdapter();
         break;
+      case 'zoom':
+        currentAdapter = new ZoomAdapter();
+        break;
       default:
         console.warn('[Platform] Unknown platform:', platform);
         return null;
@@ -121,6 +131,8 @@ export function getPlatformDisplayName(platform = getPlatform()) {
       return 'Element Call';
     case 'gmeet':
       return 'Google Meet';
+    case 'zoom':
+      return 'Zoom';
     default:
       return 'Unknown';
   }
