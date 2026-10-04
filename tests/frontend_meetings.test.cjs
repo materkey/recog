@@ -133,6 +133,16 @@ test('stored gmeet meeting - load - dropdown shows Google Meet label', async () 
     assert.match(h.element('filter-source').innerHTML, /value="gmeet">Google Meet</);
 });
 
+test('stored zoom and zoom-export meetings - load - dropdown shows Zoom and Zoom Export labels', async () => {
+    const h = harness(async () => response([
+        { id: 'z', title: 'Z', source: 'zoom', created_at: '2026-09-01T10:00:00Z' },
+        { id: 'e', title: 'E', source: 'zoom-export', created_at: '2026-09-01T09:00:00Z' },
+    ]));
+    await h.view.load();
+    assert.match(h.element('filter-source').innerHTML, /value="zoom">Zoom</);
+    assert.match(h.element('filter-source').innerHTML, /value="zoom-export">Zoom Export</);
+});
+
 test('unavailable browser storage - load - fetched cards still render', async () => {
     const h = harness(async () => response([row('Fresh')]), null, true);
     await h.view.load();

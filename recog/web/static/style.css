@@ -26,6 +26,7 @@
     --source-diarized: #a78bfa;
     --source-matrix: #0dbd8b;
     --source-gmeet: #34a853;
+    --source-zoom: #2d8cff;
 
     --border: #2d2d4a;
     --shadow: rgba(0, 0, 0, 0.3);
@@ -527,6 +528,11 @@ a:hover {
 .source-gmeet {
     background: rgba(52, 168, 83, 0.2);
     color: var(--source-gmeet);
+}
+
+.source-zoom {
+    background: rgba(45, 140, 255, 0.2);
+    color: var(--source-zoom);
 }
 
 .source-unknown {
