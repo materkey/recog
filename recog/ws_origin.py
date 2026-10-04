@@ -36,8 +36,13 @@ ALLOWED_ORIGINS = frozenset(
     }
 )
 
-# Wildcard rule: https://ktalk.ru and any https://*.ktalk.ru subdomain.
-KTALK_WILDCARD_DOMAIN = "ktalk.ru"
+# Wildcard rule: each domain admits https://<domain> and any https://*.<domain>
+# subdomain.
+WILDCARD_DOMAINS = frozenset({"ktalk.ru"})
+
+
+def _in_wildcard_domain(hostname: str) -> bool:
+    return any(hostname == domain or hostname.endswith("." + domain) for domain in WILDCARD_DOMAINS)
 
 
 def parse_extra_origins(raw: str | None) -> frozenset[str]:
@@ -58,8 +63,8 @@ def origin_allowed(
 ) -> bool:
     """Return True if a WS connection with this Origin header may proceed.
 
-    ``extra`` — additional exact-match origins; they never widen the ktalk.ru
-    wildcard rule. Omitted means the configured ``EXTRA_ORIGINS``: threading
+    ``extra`` — additional exact-match origins; they never widen the wildcard
+    rule. Omitted means the configured ``EXTRA_ORIGINS``: threading
     the module's own constant through every call site made forgetting the
     argument silently drop the operator's configured hosts. Pass an explicit
     (possibly empty) iterable to override.
@@ -74,7 +79,7 @@ def origin_allowed(
         return True
     if any(char.isspace() for char in origin):
         return False
-    # ktalk.ru wildcard: parse the hostname — a raw suffix check on the
+    # Wildcard domains: parse the hostname — a raw suffix check on the
     # origin string would admit https://evil-ktalk.ru.
     try:
         parts = urlsplit(origin)
@@ -106,7 +111,4 @@ def origin_allowed(
         for label in labels
     ):
         return False
-    return (
-        hostname == KTALK_WILDCARD_DOMAIN
-        or hostname.endswith("." + KTALK_WILDCARD_DOMAIN)
-    )
+    return _in_wildcard_domain(hostname)

@@ -12,7 +12,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from recog import ws_origin
 from recog.ws_origin import (
     ALLOWED_ORIGINS,
-    KTALK_WILDCARD_DOMAIN,
+    WILDCARD_DOMAINS,
     origin_allowed,
     parse_extra_origins,
 )
@@ -153,7 +153,7 @@ def test_given_extension_manifest_when_compared_then_allowlist_matches_both_ways
         "http://127.0.0.1:9080",
         "http://localhost:9080",
     }
-    assert wildcard_hosts == {f"*.{KTALK_WILDCARD_DOMAIN}"}
+    assert wildcard_hosts == {f"*.{domain}" for domain in WILDCARD_DOMAINS}
     assert ALLOWED_ORIGINS == exact_origins | webapp_origins
 
 
