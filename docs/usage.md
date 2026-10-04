@@ -8,7 +8,7 @@ Commands below run from the repository root.
 | | macOS | Linux |
 |---|---|---|
 | OS | 13+, Apple Silicon (Intel is not supported: no macOS x86_64 torch wheels past 2.2.2) | any distro with systemd (Ubuntu/Debian, Arch/Manjaro tested) |
-| Python | 3.12+ | 3.12+ |
+| Python | 3.12 | 3.12 — see [Python on Linux](#python-on-linux) |
 | System audio | ScreenCaptureKit — built in, needs `swiftc` (`xcode-select --install`) to build the helper | PulseAudio **or** PipeWire with `pipewire-pulse`, plus `parec`/`pactl` (`pulseaudio-utils` / `libpulse`) |
 | Microphone | built in (PortAudio ships with the wheel) | PortAudio (`libportaudio2` / `portaudio`) |
 | Required | `ffmpeg`, `tmux`+`claude` (Copilot) | same |
@@ -21,10 +21,50 @@ command for your package manager (apt / pacman / brew), so you do not have to
 pre-install anything by hand — run it first and let it tell you what is
 missing.
 
+### Python on Linux
+
+Use **Python 3.12**, the version used in CI. Setup tries `python3.12`,
+`python3.13`, then `python3`; it rejects versions below 3.12 and warns above
+3.13. Acceptance by the installer is not a dependency compatibility guarantee.
+
+**Arch Linux:** the stock Python 3.14.7, tested on 2026-09-19, fails during GigaAM installation
+with `No matching distribution found for onnxruntime==1.23.*`. Use Python 3.12
+via uv below; upgrading the system `python` package does not solve this pin.
+
+On Ubuntu 22.04, the stock Python is 3.10 and the default repositories do not
+provide `python3.12` / `python3.12-venv`. If the required Python is unavailable,
+install it for your user with [uv](https://docs.astral.sh/uv/guides/install-python/)
+and rerun setup from the repository root (Bash):
+
+```bash
+# Requires curl and CA certificates; skip the first line if uv is installed.
+curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="$HOME/.local/bin" sh
+export PATH="$HOME/.local/bin:$PATH"
+uv python install 3.12
+python3.12 --version
+./setup.sh
+```
+
+Repeat the `PATH` line in a new shell if `~/.local/bin` is not already on your
+PATH. The system `python3` stays unchanged.
+
+If a failed attempt already created `venv-gigaam` with another Python version,
+setup will reuse it. With services and manual Recog processes stopped, preserve
+that environment and let setup create a new one (choose an unused backup name):
+
+```bash
+mv venv-gigaam venv-gigaam.previous
+./setup.sh
+```
+
+The Python 3.12.14 dependency installation, `pip check`, CLI and ASR/web/MCP
+imports passed in clean Ubuntu 22.04 and Arch containers on 2026-09-19; audio
+capture and service activation were not part of these checks.
+
 ## Quick start
 
 ```bash
-git clone <repo-url> recog && cd recog
+git clone https://github.com/materkey/recog.git && cd recog
 ./setup.sh
 # → chrome://extensions → Developer mode → Load unpacked →
 #   browser-extension/dist
@@ -35,7 +75,7 @@ git clone <repo-url> recog && cd recog
 a pinned git commit — no sibling checkout needed), copies `.env.example` →
 `.env`, builds the Chrome extension, prepares the GigaAM weight cache, renders
 the service units and starts them. It is idempotent: re-running it is how you
-update after a `git pull`.
+update after a `git pull`. Existing environment files are preserved.
 
 If something required is missing, setup renders the units but **does not
 activate anything** and exits non-zero (previously running services are left
@@ -98,6 +138,8 @@ input device, `device:auto` looks for BlackHole), or `none` (default).
 The startup banner prints which sources are live, naming the resolved mic
 device and the backend in full, e.g.
 `Mode: DUAL (Mic: 3 + System: PulseAudio/PipeWire (parec))`.
+
+### Recording only during KTalk calls
 
 `--ktalk` alone records continuously, including between conferences.
 Use `--ktalk-only` to keep both microphone and system capture closed until
@@ -213,7 +255,8 @@ verify dependencies before starting a pipeline that cannot work. `start`,
 activate an incomplete install rather than take a working one down.
 
 On Linux, add `loginctl enable-linger $USER` so the user services survive
-logout — `status` prints the reminder.
+logout — `status` prints the reminder. After rebuilding the extension, reload
+it in `chrome://extensions`.
 
 After editing backend code (`recog/web/server.py`, `recog/*.py`) run
 `./recog-service.sh restart`; for `recog/copilot_supervisor.py` alone,
