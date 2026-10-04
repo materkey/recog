@@ -208,15 +208,17 @@ Mac double the captured audio, and a two-party meeting may go peer-to-peer).
 - [x] test in `tests/frontend_meetings.test.cjs`
 
 ### Task 4: `ZoomAdapter`, not wired
-- [ ] `browser-extension/src/platforms/zoom.js` after `gmeet.js`:
+- [x] `browser-extension/src/platforms/zoom.js` after `gmeet.js`:
       `ZOOM_SELECTORS` as the only place with selectors (ordered
-      `activeTile[]`, explicit `--active` classes only); pure helpers
+      `activeTile[]`: explicit `--active` classes first, the structural main
+      tile last); pure helpers
       `meetingIdFromPath`, `buildMeetingUrl`, `tileName`; `isRoomPage()`;
       `isInMeeting()` on `#wc-footer` with the 6 s window; throttle, signature
       dedup, 1 s grace on the active tile vanishing; mute by positive evidence
-      only; name as participant id (no stable id exists); drift diagnostics;
-      stable conference object and state-preserving `dispose()`
-- [ ] `browser-extension/src/platforms/zoom.test.js` with fixtures built from
+      only; name as participant id (no stable id exists); the local name
+      remembered from the prejoin field; drift diagnostics; stable conference
+      object and state-preserving `dispose()`
+- [x] `browser-extension/src/platforms/zoom.test.js` with fixtures built from
       `ZOOM_SELECTORS`
 
 ### Task 5: Wire `*.zoom.us/wc/*` (one commit with the allowlist)
