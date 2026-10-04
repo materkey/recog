@@ -13,7 +13,8 @@ off, active speaker``. It does not expose the meeting number, so every
 application meeting is reported under one URL; the topic is readable only
 while the toolbar is shown.
 
-Run: ``python -m recog.zoom_app``. The process that runs it needs the
+Run: ``python -m recog.zoom_app``, or inside the live process with
+``live --zoom-app`` / ``RECOG_ZOOM_APP=1``. The process that runs it needs the
 Accessibility permission.
 """
 
@@ -24,6 +25,7 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -302,6 +304,25 @@ def main() -> None:
         asyncio.run(run())
     except KeyboardInterrupt:
         pass
+
+
+def _run_until_failure() -> None:
+    try:
+        asyncio.run(run())
+    except Exception as exc:  # a dead source must not take live down with it
+        print(f"[zoom-app] stopped: {exc}", file=sys.stderr)
+
+
+def start_in_background() -> threading.Thread | None:
+    """Run the source in a daemon thread of the calling process; None off macOS."""
+    if sys.platform != "darwin":
+        print(
+            "[zoom-app] the native Zoom source supports macOS only — not started", file=sys.stderr
+        )
+        return None
+    thread = threading.Thread(target=_run_until_failure, name="zoom-app", daemon=True)
+    thread.start()
+    return thread
 
 
 if __name__ == "__main__":

@@ -105,6 +105,11 @@ def build_parser():
         action="store_true",
         help="Захватывать звук только во время встречи KTalk (включает --ktalk)",
     )
+    live_parser.add_argument(
+        "--zoom-app",
+        action="store_true",
+        help="Определять спикеров в нативном приложении Zoom (macOS, нужен доступ Accessibility)",
+    )
     live_parser.add_argument("--screencapture", action="store_true", help=argparse.SUPPRESS)
     live_parser.add_argument(
         "--mic-speaker-name",
@@ -146,6 +151,16 @@ def build_parser():
     return parser
 
 
+def start_zoom_app_if_requested(args) -> None:
+    """Источник сигналов приложения Zoom: флаг `--zoom-app` или `RECOG_ZOOM_APP=1`."""
+    from recog.config import RECOG_ZOOM_APP
+
+    if (args.zoom_app or RECOG_ZOOM_APP) and not args.list_devices:
+        from recog import zoom_app
+
+        zoom_app.start_in_background()
+
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
@@ -159,6 +174,7 @@ def main():
     if args.command == "live":
         from recog.live import live_pipeline
 
+        start_zoom_app_if_requested(args)
         live_pipeline(
             mic_device=parse_device(args.mic_device),
             system_audio=system_audio_spec(args),

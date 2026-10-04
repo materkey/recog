@@ -253,3 +253,7 @@ CAPTURE_RESYNC_MAX_S = 6.0
 # здесь не дублируются — эта ручка для чужой установки, где конференция живёт
 # на своём домене (его же надо добавить в manifest.json и пересобрать расширение).
 RECOG_EXTRA_WS_ORIGINS = os.environ.get("RECOG_EXTRA_WS_ORIGINS", "")
+
+# Источник сигналов нативного приложения Zoom (macOS, Accessibility) внутри
+# live-процесса: то же, что флаг `live --zoom-app`. См. docs/zoom-app.md.
+RECOG_ZOOM_APP = os.environ.get("RECOG_ZOOM_APP", "0") == "1"

@@ -413,3 +413,150 @@ def test_given_helper_state_changes_when_logged_then_one_line_per_change(capsys)
     lines = capsys.readouterr().err.strip().splitlines()
     assert len(lines) == 4
     assert "Accessibility" in lines[0] and "unknown helper state: weird" in lines[3]
+
+
+# --- running inside the live process -----------------------------------------
+
+
+def test_given_macos_when_started_in_background_then_a_daemon_thread_runs_the_source(monkeypatch):
+    started = asyncio.Event()
+
+    async def fake_run():
+        started.set()
+
+    monkeypatch.setattr(zoom_app.sys, "platform", "darwin")
+    monkeypatch.setattr(zoom_app, "run", fake_run)
+
+    thread = zoom_app.start_in_background()
+    thread.join(timeout=5)
+
+    assert thread.daemon is True and thread.name == "zoom-app"
+    assert started.is_set()
+
+
+def test_given_other_os_when_started_in_background_then_nothing_starts_and_it_says_why(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(zoom_app.sys, "platform", "linux")
+
+    assert zoom_app.start_in_background() is None
+    assert "macOS only" in capsys.readouterr().err
+
+
+def test_given_source_fails_when_running_in_background_then_the_failure_is_logged_not_raised(
+    monkeypatch, capsys
+):
+    async def failing_run():
+        raise RuntimeError("zoom_ax_probe exited")
+
+    monkeypatch.setattr(zoom_app.sys, "platform", "darwin")
+    monkeypatch.setattr(zoom_app, "run", failing_run)
+
+    zoom_app.start_in_background().join(timeout=5)
+
+    assert "stopped: zoom_ax_probe exited" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argv", "env_enabled", "expected"),
+    [
+        (["live", "--zoom-app"], False, True),
+        (["live"], True, True),
+        (["live"], False, False),
+        (["live", "--zoom-app", "--list-devices"], False, False),
+    ],
+)
+def test_given_live_command_when_run_then_zoom_source_starts_only_when_asked(
+    monkeypatch, argv, env_enabled, expected
+):
+    import recog.config
+    import recog.live
+    from recog import cli
+
+    started = []
+    monkeypatch.setattr(cli.sys, "argv", ["recog", *argv])
+    monkeypatch.setattr(recog.config, "RECOG_ZOOM_APP", env_enabled)
+    monkeypatch.setattr(recog.live, "live_pipeline", lambda **kwargs: None)
+    monkeypatch.setattr(zoom_app, "start_in_background", lambda: started.append(True))
+
+    cli.main()
+
+    assert bool(started) is expected
+
+
+# --- run: helper process and bridge link -------------------------------------
+
+
+class FakeHelper:
+    def __init__(self):
+        self.returncode = None
+        self.stdout = object()
+        self.terminated = False
+
+    def terminate(self):
+        self.terminated = True
+
+
+class FakeConnection:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _patch_run(monkeypatch, helper, connect, pump):
+    async def fake_exec(*args, **kwargs):
+        return helper
+
+    monkeypatch.setattr(zoom_app, "find_or_build_probe", lambda: "/tmp/zoom_ax_probe")
+    monkeypatch.setattr(zoom_app.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(zoom_app, "RECONNECT_S", 0)
+    monkeypatch.setattr("websockets.connect", connect)
+    monkeypatch.setattr(zoom_app, "_pump", pump)
+
+
+@pytest.mark.asyncio
+async def test_given_bridge_down_then_up_when_running_then_it_reconnects_and_stops_with_the_helper(
+    monkeypatch, capsys
+):
+    helper = FakeHelper()
+    attempts = []
+    sessions = []
+
+    def connect(url):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise OSError("connection refused")
+        return FakeConnection()
+
+    async def pump(websocket, lines, session, log):
+        sessions.append(session)
+        session.joined = True
+        helper.returncode = 0  # the helper exits: the loop must end
+
+    _patch_run(monkeypatch, helper, connect, pump)
+
+    await zoom_app.run("ws://bridge.test")
+
+    assert attempts == ["ws://bridge.test", "ws://bridge.test"]
+    assert "bridge link lost: connection refused" in capsys.readouterr().err
+    assert sessions[0].joined is False  # on_disconnect ran after the link closed
+    assert helper.terminated is False
+
+
+@pytest.mark.asyncio
+async def test_given_helper_dies_mid_pump_when_running_then_the_error_surfaces_and_the_helper_is_terminated(
+    monkeypatch,
+):
+    helper = FakeHelper()
+
+    async def pump(websocket, lines, session, log):
+        raise RuntimeError("zoom_ax_probe exited")
+
+    _patch_run(monkeypatch, helper, lambda url: FakeConnection(), pump)
+
+    with pytest.raises(RuntimeError, match="zoom_ax_probe exited"):
+        await zoom_app.run("ws://bridge.test")
+
+    assert helper.terminated is True
