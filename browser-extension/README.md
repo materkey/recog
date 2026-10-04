@@ -10,6 +10,7 @@ This folder contains the Chrome extension that injects the transcript UI and sen
 - **Jitsi** (`vas3k.js`) — built-in `meet.vas3k.cloud` and configured Jitsi deployments; floating panel (transcript + copilot chat).
 - **Matrix / Element Call** (`matrix.js`) — see below; floating panel, mixed-audio path.
 - **Google Meet** (`gmeet.js`) — built-in `meet.google.com`; see below; floating panel, mixed-audio path.
+- **Zoom web client** (`zoom.js`) — built-in `*.zoom.us/wc/*`; see below; floating panel, mixed-audio path.
 
 ### Element Call (matrix)
 
@@ -36,6 +37,19 @@ Meet exposes no conference object to the page, so `GoogleMeetAdapter` reads ever
 
 Meet enforces Trusted Types (`require-trusted-types-for 'script'`), so every HTML assignment in the floating panel goes through `toTrustedHtml()` (`src/utils.js`). Per-participant PCM is out of scope: Meet forwards a few "loudest speaker" streams, not one per participant. Obfuscated class names change with Meet releases — see `docs/plans/completed/2026-09-26-google-meet-platform.md` for the live-verification checklist.
 
+### Zoom web client (zoom)
+
+The content script runs in the top frame of `https://*.zoom.us/wc/*` (the client has no iframe; every entry URL lands on `app.zoom.us/wc/<id>/join`). Zoom exposes no conference object, so `ZoomAdapter` reads the DOM; all selectors live in `ZOOM_SELECTORS`:
+
+- Participant tiles of the speaker-view strip, the main tile and the gallery. Tiles carry no participant id, so the display name (`.video-avatar__avatar-footer span`) is the id and namesakes merge into one participant.
+- The speaker is the tile with an explicit `--active` class. Zoom keeps it on the last speaker during silence and never puts it on the local participant. The structural main tile is only the last resort: under pin it shows the pinned participant.
+- The path stays `/wc/<id>/join` from prejoin through the waiting room into the meeting with no document load. The meeting is entered when the `#wc-footer` toolbar and a participant tile are both present: Zoom mounts the toolbar alone for a second or two right after "Join", before the waiting room. Once entered, the toolbar alone keeps the meeting (tiles can vanish), and `isInMeeting()` stays true for ~6 s after it disappears.
+- The local display name is remembered from the prejoin name field while that screen is up; when prejoin is skipped nobody is marked local.
+- `getMeetingUrl()` synthesizes `https://zoom.us/j/<id>`, so the backend gets the meeting number as `live_id` and one host for every Zoom subdomain; any other Zoom source must report the same form.
+- `getDiagnostic()` reports selector drift: no tiles for 30 s, an active tile without a name, or no active tile for 2 minutes with two or more participants.
+
+Chrome gates a page's connection to localhost behind a per-origin permission. The first time, accept the prompt for `app.zoom.us`; until then the panel shows the speaker but the bridge receives nothing. Per-participant PCM is out of scope. Not exercised on a live meeting: screen share, pin / spotlight, breakout rooms. See `docs/plans/2026-10-04-zoom-platform.md`.
+
 ## Build (required after edits)
 
 ```bash
@@ -47,7 +61,7 @@ This creates the complete unpacked extension in `dist/`: the injected bundle,
 manifest, popup, icons and audio worklet. The tracked `manifest.json` is a generic
 template; personal origins appear only in ignored build output.
 
-KTalk, `meet.vas3k.cloud` and `meet.google.com` work without configuration. For another Jitsi or
+KTalk, `meet.vas3k.cloud`, `meet.google.com` and the Zoom web client work without configuration. For another Jitsi or
 Element deployment, create `.local/conference-hosts.json` at the repository root:
 
 ```json
@@ -64,7 +78,7 @@ explicit port. Origins must be unique across platforms and must not repeat the
 built-in hosts. A missing file means no custom hosts; malformed configuration
 fails the build. Optional `source_aliases` maps old stored source IDs to `jitsi`
 or `matrix` for the backend and is not included in the browser bundle; platform
-identifiers (`ktalk`, `vas3k`, `jitsi`, `matrix`, `gmeet`) cannot be alias names.
+identifiers (`ktalk`, `vas3k`, `jitsi`, `matrix`, `gmeet`, `zoom`) cannot be alias names.
 
 The same file configures the Python bridge's allowed conference origins. Rebuild
 and reload the extension and restart Recog after changing it.
@@ -79,7 +93,7 @@ and reload the extension and restart Recog after changing it.
 ## Source layout
 
 - `src/` — editable sources (modules)
-- `src/platforms/` — per-platform adapters (`ktalk.js`, `vas3k.js`, `matrix.js`, `gmeet.js`) + `index.js` (`detectPlatform`)
+- `src/platforms/` — per-platform adapters (`ktalk.js`, `vas3k.js`, `matrix.js`, `gmeet.js`, `zoom.js`) + `index.js` (`detectPlatform`)
 - `dist/` — complete generated extension; `dist/injected.js` is the built bundle
 - `content.js` — injects `injected.js` into the conference page (KTalk top frame or the scoped Element Call iframe)
 

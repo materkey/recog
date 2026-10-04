@@ -3,7 +3,8 @@
 Live transcription of Russian-language meetings on your own machine, with
 speaker names, saved meetings and a web UI. Speaker names come from conference
 participant signals and your profile, not from voice recognition. Supported
-conferences: KTalk (Kontur Talk, `*.ktalk.ru`), Jitsi and Google Meet.
+conferences: KTalk (Kontur Talk, `*.ktalk.ru`), Jitsi, Google Meet and Zoom
+(the web client; the macOS application is [opt-in](docs/zoom-app.md)).
 
 Runs on macOS and Linux. Linux is covered by the automated tests on Ubuntu and
 by the [installation checks](docs/usage.md#python-on-linux); live audio capture and
@@ -93,7 +94,8 @@ lets Claude Code search saved transcripts by speaker, keyword and date.
 
 - [Usage, configuration and troubleshooting](docs/usage.md), including
   [updating an install](docs/usage.md#updating-an-existing-install)
-- [Conference hosts](docs/conference-hosts.md) and [desktop KTalk](docs/desktop-ktalk.md)
+- [Conference hosts](docs/conference-hosts.md), [desktop KTalk](docs/desktop-ktalk.md)
+  and the [Zoom application](docs/zoom-app.md)
 - [Documentation index](docs/README.md): repository layout, architecture
   decisions, development checks
 

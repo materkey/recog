@@ -17,6 +17,7 @@ the current implementation contracts and commands used by coding agents.
 | [ASR server guide](asr-server.md) | Optional gateway/backend installation, configuration and transcription checks |
 | [Conference hosts](conference-hosts.md) | Local Jitsi/Element addresses, extension build and existing-recording aliases |
 | [Desktop KTalk](desktop-ktalk.md) | Enable, inspect and disable integration with the official desktop app |
+| [Zoom application](zoom-app.md) | Enable speaker detection for the native Zoom application on macOS; permission and limits |
 | [Quality gates](quality.md) | Run merge-base regression checks and interpret CRAP, duplication and structural reports |
 
 Completed plans and experiment reports describe the implementation and paths

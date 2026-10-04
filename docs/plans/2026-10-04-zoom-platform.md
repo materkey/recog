@@ -71,7 +71,9 @@ Web client (version 7.2.0.1):
 - State markers: prejoin `.preview-root` with `#input-for-name` and
   `.preview-join-button`; waiting room `.waiting-room-container`; in the
   meeting `#wc-footer` (kept in the DOM while auto-hidden; absent on prejoin,
-  in the waiting room and after leave). Leave control:
+  in the waiting room and after leave). Right after "Join" Zoom mounts
+  `#wc-footer` for about 1.5 s with no tiles and then shows the waiting room;
+  after admission the footer returns and tiles follow about 1.7 s later. Leave control:
   `.footer__leave-btn-container button` (its `aria-label` is localized).
 - Tiles: `.speaker-bar-container__video-frame` (strip) and
   `.speaker-active-container__video-frame` (main tile) in speaker view,
@@ -234,14 +236,29 @@ Mac double the captured audio, and a two-party meeting may go peer-to-peer).
       `conference-hosts.test.js`, `tests/test_ws_origin.py` lookalikes
 
 ### Task 6: Live verification
-- [ ] checklist under "Post-Completion"; selector fixes are separate commits
-      with their own tests
+- [x] the wired build on a live meeting (2026-10-04): the extension loads on
+      `app.zoom.us` under the page CSP, shows the prejoin hint, and its status
+      line follows two alternating speakers in a hidden tab; the restarted
+      bridge accepts a socket from origin `https://app.zoom.us`
+- [x] the extension's own socket in the user's Chrome, once the loopback
+      permission was granted: `meta.json` got `source=zoom`, the meeting number
+      as `live_id`, `host=zoom.us`, the topic as title and no `pwd` in
+      `live_url`; 39 of 40 speech segments were attributed to the two scripted
+      speakers; a tab reload and a rejoin reopened the same recording
+- [x] found there and fixed: the toolbar flash before the waiting room was
+      taken for the meeting (a join, then a leave after six seconds of
+      waiting). Entering now needs the toolbar and a tile. The waiting-room
+      path was re-measured in a headless participant and unit-tested; it could
+      not be replayed with the extension, because Zoom lets a returning
+      browser session straight back in
+- [ ] remaining items under "Post-Completion": screen share, pin, hidden-tab
+      behaviour over a long meeting, Copilot auto-spawn, `--ktalk-only`
 
 ### Task 7: Documentation (after live verification)
-- [ ] `README.md`, `docs/usage.md`, `docs/conference-hosts.md`, `CLAUDE.md`
+- [x] `README.md`, `docs/usage.md`, `docs/conference-hosts.md`, `CLAUDE.md`
       (Zoom paragraph with the canonical URL contract and the loopback
       permission), `browser-extension/README.md`, `browser-extension/AGENTS.md`,
-      `.revmux/profile.md`
+      `.revmux/profile.md`, `docs/zoom-app.md`
 
 ## Stage 2 — native application: experiments and decision
 
@@ -268,19 +285,34 @@ Decision rule the experiments were measured against:
 - Reachable with any roster: `source=zoom`, title, lifecycle, Copilot and
   increments; speech attributed when exactly one remote participant is unmuted.
 
-## Stage 3 — native application: implementation (skeleton independent of the decision)
-- Swift helper under `recog/native/macos/`, built on demand and run as a child
-  process like `sck_audio_capture`; JSON lines on stdout. Plugin SDK frameworks
-  are never committed; the SDK path is supplied at install time.
-- `recog/zoom_app.py`: reads helper lines and drives a no-Origin bridge client.
-  Opt-in, macOS only, off by default.
-- One source at a time: while a meeting has an owner, speaker and participant
-  frames from another client are ignored; the helper stays silent while another
-  source owns the meeting.
-- Visible status for a missing permission, Zoom not running or a refused
-  handshake.
-- Linux: the client is Qt with no verified path — out of scope; the web client
-  is the recommended route there.
+## Stage 3 — native application: implementation
+
+- [x] Swift helper `recog/native/macos/zoom_ax_probe.swift`, built on demand to
+      `zoom_ax_probe` at the repository root; JSON snapshots on stdout
+- [x] `recog/zoom_app.py`: `ZoomAppSession` (pure) turns snapshots into bridge
+      frames; a no-Origin socket client with reconnect; `python -m recog.zoom_app`
+- [x] started inside live by `--zoom-app` or `RECOG_ZOOM_APP=1`, off by default
+- [x] live check (2026-10-04): the bridge logged `Joined zoom meeting:
+      https://zoom.us/app`; `meta.json` got `source=zoom`, `live_id=app`,
+      `host=zoom.us`; a scripted participant's phrase was attributed to that
+      participant (it was `Unknown` before the source ran); leaving produced an
+      increment
+- [x] `docs/zoom-app.md`
+
+Departures from the Stage 3 outline:
+- The meeting URL is the constant `https://zoom.us/app`, not
+  `https://zoom.us/j/<id>`: the application exposes no meeting number. Web and
+  application recordings of one meeting are therefore separate.
+- The bridge was not changed. A source that the bridge rejects stays silent
+  instead of the bridge filtering frames by owner.
+- Status is a log line per state change, not a web UI element.
+
+Open:
+- Accessibility permission for the process that runs live as a service: not
+  granted or checked; only a terminal run was exercised.
+- Zoom UI languages other than English, speaker view, screen share, meetings
+  with several pages of tiles.
+- Linux: the client is Qt with no verified path; the web client is the route.
 
 ## Post-Completion (manual, live meeting)
 - Console shows `Using adapter: zoom`; the bridge log shows `Client connected`

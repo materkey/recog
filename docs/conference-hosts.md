@@ -1,6 +1,7 @@
 # Conference hosts
 
-KTalk, `meet.vas3k.cloud` and Google Meet (`meet.google.com`) are built in.
+KTalk, `meet.vas3k.cloud`, Google Meet (`meet.google.com`) and the Zoom web
+client (`*.zoom.us/wc/`) are built in.
 Other Jitsi and Element Call servers
 are installation settings, stored in the gitignored `.local/conference-hosts.json`
 at the repository root:
@@ -47,6 +48,12 @@ available for backend-only integrations; it does not change extension injection.
 Google Meet needs no configuration: the extension runs on every
 `meet.google.com` page and joins a meeting only on a room path
 (`/abc-defg-hij`).
+The Zoom web client needs no configuration either: the extension runs on
+`/wc/` paths of `zoom.us` and its subdomains and joins a meeting once you are
+past prejoin and the waiting room. The first time, Chrome asks whether
+`app.zoom.us` may connect to devices and services on this computer; accept
+it, otherwise the transcript panel stays disconnected. The recording stores
+the meeting as `https://zoom.us/j/<meeting number>` without the password.
 
 ## Existing recordings
 
@@ -62,8 +69,8 @@ previously used a custom source label, add a local alias:
 ```
 
 Aliases map nonstandard labels to `jitsi` or `matrix`. Platform identifiers
-(`ktalk`, `vas3k`, `jitsi`, `matrix`, `gmeet`) are reserved and cannot be alias
-names. Aliases preserve conference
+(`ktalk`, `vas3k`, `jitsi`, `matrix`, `gmeet`, `zoom`) are reserved and cannot
+be alias names. Aliases preserve conference
 lifecycle checks and same-day reconnect matching, and present canonical source
 names in the web UI. Reading old recordings does not rewrite their metadata.
 Aliases are not compiled into the extension. Keep this file local; share only
