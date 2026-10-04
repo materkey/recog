@@ -13,7 +13,7 @@
 - A missing name or speaking signal yields `Unknown`; audio and text are never
   dropped and a speaker is never guessed.
 
-## Context (from research; nothing below was observed in a live meeting yet)
+## Context (from research; superseded where "Live findings" below disagree)
 
 ### Zoom web client
 - URLs: `zoom.us/wc/join/<id>` redirects to `/wc/<id>/join`; the same on
@@ -60,6 +60,59 @@
 - Accessibility: tile descriptions carry name and mute state per third-party
   code; whether an active-speaker marker exists is disputed between sources.
 
+### Live findings (2026-10-04, test meeting: native host, one tab in the user's Chrome, three headless Chrome participants with a WAV-fed fake microphone)
+
+Web client (version 7.2.0.1):
+- Every entry URL ends on `https://app.zoom.us/wc/<id>/join`: a regional
+  `us05web.zoom.us/wc/join/<id>` redirects there. The meeting client runs in
+  the top frame; there is no `iframe#webclient`. Prejoin → waiting room →
+  meeting happen without a document load and without a path change. Leaving
+  navigates to `https://app.zoom.us/wc`.
+- State markers: prejoin `.preview-root` with `#input-for-name` and
+  `.preview-join-button`; waiting room `.waiting-room-container`; in the
+  meeting `#wc-footer` (kept in the DOM while auto-hidden; absent on prejoin,
+  in the waiting room and after leave). Leave control:
+  `.footer__leave-btn-container button` (its `aria-label` is localized).
+- Tiles: `.speaker-bar-container__video-frame` (strip) and
+  `.speaker-active-container__video-frame` (main tile) in speaker view,
+  `.gallery-video-container__video-frame` in gallery view. No attribute carries
+  a participant id. Name: `.video-avatar__avatar-footer span`.
+- Active speaker: `.speaker-bar-container__video-frame--active` and
+  `.gallery-video-container__video-frame--active` toggle between two
+  alternating speakers within about a millisecond of the main tile changing its
+  name. The marker stays on the last speaker during silence and never lands on
+  the local participant.
+- Mute: `i.video-avatar__avatar-footer--view-mute-computer` inside the footer
+  of a muted participant; an unmuted participant and one without audio have no
+  such element.
+- A hidden tab (`visibilityState: hidden`) that joined without audio receives
+  the same toggles at the same timestamps as a visible one.
+- `document.title` is the meeting topic in the meeting and
+  "Zoom meeting on web" on prejoin.
+- `upgrade-insecure-requests` does not touch `ws://localhost:8766`: with the
+  loopback permission check disabled the socket opens and the bridge rejects
+  it by origin `https://app.zoom.us`. The only gate is the Chrome loopback
+  permission.
+- Not exercised: screen share, pin / spotlight, breakout rooms, video on.
+
+Native application (experiment E1):
+- The meeting window is `AXIdentifier=zm.meeting.window.main`. Each participant
+  is an `AXTabGroup` with `AXRoleDescription=Video render`, an `AXStaticText`
+  child holding the name, and an `AXDescription` such as
+  `Speaker B, Computer audio unmuted, Video off, active speaker`.
+- The `active speaker` suffix moves between two alternating remote speakers in
+  step with the web client (same second). It disappears when the speaker is
+  muted.
+- The tiles are present with the participants panel closed and with the window
+  on another Space. In minimal view the meeting window is replaced by an
+  `AXSystemDialog` window with a single `Video render` tile — the current
+  speaker, without the suffix.
+- The toolbar (and with it `MeetingTopBarInfoButton`, `leave`) leaves the tree
+  while the pointer is away from the window; menu bar items stay reachable.
+- The meeting number is not in the tree, the menu or the process arguments.
+- Description strings are in the UI language (English here); only gallery view
+  was exercised, with video off and five participants.
+
 ### Code facts
 - `recog/meeting_storage.py` `on_meeting_join` takes `live_id` from the last
   path segment and `host` from the netloc, so `/wc/<id>/join` would give every
@@ -90,10 +143,8 @@
 
 ## Decisions
 1. Canonical meeting URL `https://zoom.us/j/<meetingId>` from every source.
-2. Content script in the top frame only, `matches: https://*.zoom.us/wc/*`;
-   the adapter scans its own document plus `iframe#webclient.contentDocument`.
-   Fallback for a cross-origin iframe: a separate `content_scripts` entry with
-   `all_frames: true`, as for Element Call.
+2. Content script in the top frame only, `matches: https://*.zoom.us/wc/*`.
+   The live client has no iframe, so the adapter reads its own document only.
 3. The single `ktalk.ru` origin wildcard becomes a set of wildcard domains with
    the same strict hostname parsing.
 4. The native helper is a plain bridge client sending `meeting_join`
@@ -131,42 +182,40 @@ Mac double the captured audio, and a two-party meeting may go peer-to-peer).
 | Tab hidden for 60 s | background operation | documented limitation |
 | `document.title`, meeting topic element | `getMeetingTitle()` | `Zoom <id>` |
 
-- [ ] web checks recorded under "Context"
-- [ ] accessibility dump of the native meeting window (experiment E1) recorded
+- [x] web checks recorded under "Context"
+- [x] accessibility dump of the native meeting window (experiment E1) recorded
 
 ## Stage 1 — Zoom web client
 
 ### Task 1: Backend accepts source `zoom`
-- [ ] `recog/meeting_storage.py`: `zoom` in `CONFERENCE_SOURCES` and docstrings
-- [ ] `recog/conference_hosts.py`: `zoom` in `PLATFORMS`; built-in host
+- [x] `recog/meeting_storage.py`: `zoom` in `CONFERENCE_SOURCES` and docstrings
+- [x] `recog/conference_hosts.py`: `zoom` in `PLATFORMS`; built-in host
       rejection moved into `_is_builtin_host()` and extended with `zoom.us` /
       `*.zoom.us`
-- [ ] tests: canonical URL → `live_id`, `host`, `source`; rejoin inside the
+- [x] tests: canonical URL → `live_id`, `host`, `source`; rejoin inside the
       window reopens the meeting; config rejections; platform lists in
       `tests/test_ktalk_bridge.py` and `tests/test_ktalk_only.py`
 
 ### Task 2: Origin wildcard rule as a set of domains (no behavior change)
-- [ ] `recog/ws_origin.py`: `WILDCARD_DOMAINS`, helper `_in_wildcard_domain()`,
+- [x] `recog/ws_origin.py`: `WILDCARD_DOMAINS`, helper `_in_wildcard_domain()`,
       `origin_allowed` signature unchanged
-- [ ] `tests/test_ws_origin.py`: import and the manifest mirror assertion
+- [x] `tests/test_ws_origin.py`: import and the manifest mirror assertion
 
 ### Task 3: Web UI shows the Zoom source
-- [ ] `recog/web/static/app.js`: `SOURCE_LABELS.zoom`,
+- [x] `recog/web/static/app.js`: `SOURCE_LABELS.zoom`,
       `COPILOT_CONFERENCE_SOURCES` (the `zoom-export` key stays)
-- [ ] `recog/web/static/style.css`: `--source-zoom`, `.source-zoom`
-- [ ] test in `tests/frontend_meetings.test.cjs`
+- [x] `recog/web/static/style.css`: `--source-zoom`, `.source-zoom`
+- [x] test in `tests/frontend_meetings.test.cjs`
 
 ### Task 4: `ZoomAdapter`, not wired
 - [ ] `browser-extension/src/platforms/zoom.js` after `gmeet.js`:
       `ZOOM_SELECTORS` as the only place with selectors (ordered
-      `activeTile[]`, explicit `--active` before the structural main tile,
-      unverified entries `null`); pure helpers `meetingIdFromPath`,
-      `buildMeetingUrl`, `tileName`; `_docs()` reconciled by identity inside
-      `_refresh()`; `isRoomPage()`; `isInMeeting()` on the in-call marker with
-      the 6 s window; throttle, signature dedup, 1 s grace on the active tile
-      vanishing; mute by positive evidence only; name as participant id unless
-      discovery finds a stable one; drift diagnostics; stable conference object
-      and state-preserving `dispose()`
+      `activeTile[]`, explicit `--active` classes only); pure helpers
+      `meetingIdFromPath`, `buildMeetingUrl`, `tileName`; `isRoomPage()`;
+      `isInMeeting()` on `#wc-footer` with the 6 s window; throttle, signature
+      dedup, 1 s grace on the active tile vanishing; mute by positive evidence
+      only; name as participant id (no stable id exists); drift diagnostics;
+      stable conference object and state-preserving `dispose()`
 - [ ] `browser-extension/src/platforms/zoom.test.js` with fixtures built from
       `ZOOM_SELECTORS`
 
@@ -202,8 +251,13 @@ Throwaway code under `.local/`, nothing committed.
 | E2 | Zoom Plugin SDK | a speaking event in the SDK headers; ad-hoc signature accepted; attaches to a hand-joined meeting; roster for an ordinary participant; a notice shown to others | General app in the Zoom Marketplace, SDK download, sample build |
 | E3 | Packet headers on UDP 8801 | payload type 112 / 99 still mean speech / silence; audio `SSRC >> 10` equals the Plugin SDK user id `>> 10`; a phone participant is distinguishable | one `sudo tcpdump` run by the owner; a three-party meeting |
 
-Decision after the experiments (reported before any application code; the
-detailed Stage 3 task list is then written here):
+Outcome: E1 passed — Accessibility supplies the roster, the mute state and the
+active speaker, with no account setup, no elevated privileges and nothing
+visible to the organizer. E2 and E3 were not run; they stay as alternatives if
+Accessibility proves insufficient (other UI languages, speaker view, large
+meetings).
+
+Decision rule the experiments were measured against:
 - Roster: Plugin SDK if E2 passes → Accessibility if E1 confirms tiles → none.
 - Speaker: a Plugin SDK event if the headers have one → packet headers if E3
   confirms both mappings (needs standing BPF access) → an Accessibility marker
