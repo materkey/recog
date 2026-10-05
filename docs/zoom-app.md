@@ -45,18 +45,24 @@ The log lines `[zoom-app] …` in `live.stderr.log` name the current state: no
 permission, Zoom not running, no meeting, meeting detected.
 
 **When the permission has to be granted again.** macOS recognizes the helper by
-its code signature. By default the helper is signed ad hoc, and that signature
-changes whenever the helper is rebuilt — which happens only when its Swift
-source changes, not on a Python upgrade, a new virtual environment or a
-checkout that leaves the file's content alone. After such a rebuild remove the
+its code signature. By default the helper is signed ad hoc, which makes the
+signature a hash of the helper itself. It stays the same across a Python
+upgrade, a new virtual environment, a checkout, and a rebuild from unchanged
+code — two builds of the same source were checked to carry the same signature.
+It changes when the helper's code changes (an update of recog that touches
+`zoom_ax_probe.swift` beyond comments, or a new Xcode that compiles it
+differently). Then the log reports the missing permission again: remove the
 old "Recog Zoom Helper" entry in the Accessibility list and switch on the new
 one.
 
-To keep the grant across rebuilds, sign the helper with a certificate of your
-own: set `RECOG_CODESIGN_IDENTITY` in `.env` to a code-signing identity from
-your keychain (`security find-identity -v -p codesigning`), for example
-`Developer ID Application: …`. This has not been exercised: no such identity
-was available where the helper was developed.
+A signature that survives code changes needs a certificate macOS trusts for
+code signing: set `RECOG_CODESIGN_IDENTITY` in `.env` to its name
+(`security find-identity -v -p codesigning` lists what you have), for example
+`Developer ID Application: …` from an Apple Developer account. A self-signed
+certificate works only after you mark it trusted for code signing in Keychain
+Access; without that `codesign` rejects it ("no identity found"). recog does
+not create such a certificate for you: its key would let any program running
+as you sign a look-alike helper and inherit the Accessibility permission.
 
 ## What to expect
 

@@ -455,6 +455,9 @@ def test_given_no_helper_when_located_then_a_signed_bundle_with_a_stable_identif
     assert info["CFBundleName"] == "Recog Zoom Helper"
     assert info["LSBackgroundOnly"] is True
     assert [command[0] for command in calls] == ["swiftc", "codesign"]
+    # The stamp sits beside the bundle: inside, the signature would seal it.
+    assert (repo / "RecogZoomHelper.source-sha256").exists()
+    assert not (app / "Contents/Resources").exists()
     sign = calls[1]
     assert sign[sign.index("--sign") + 1] == "-"
     assert sign[sign.index("--identifier") + 1] == "com.recog.zoom-helper"
@@ -510,6 +513,23 @@ def test_given_stale_helper_and_no_compiler_when_located_then_the_stale_helper_i
     monkeypatch.setattr(zoom_app.shutil, "which", lambda name: None)
 
     assert find_or_build_helper(repo) == app
+
+
+def test_given_working_helper_when_a_rebuild_fails_then_the_working_helper_is_still_there(
+    tmp_path, monkeypatch
+):
+    repo = _repo(tmp_path)
+    _fake_toolchain(monkeypatch)
+    app = find_or_build_helper(repo)
+    binary = app / "Contents/MacOS/zoom_ax_probe"
+    binary.write_text("working build")
+    (repo / zoom_app.HELPER_SOURCE).write_text("// changed")
+    _fake_toolchain(monkeypatch, fail="codesign")
+
+    with pytest.raises(RuntimeError, match="codesign"):
+        find_or_build_helper(repo)
+
+    assert binary.read_text() == "working build"
 
 
 def test_given_no_helper_and_no_compiler_when_located_then_error_names_the_fix(

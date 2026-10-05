@@ -62,6 +62,11 @@ HELPER_APP = "RecogZoomHelper.app"
 HELPER_BUNDLE_ID = "com.recog.zoom-helper"
 HELPER_NAME = "Recog Zoom Helper"
 HELPER_SOURCE = "recog/native/macos/zoom_ax_probe.swift"
+# Hash of the source the bundle was built from. Kept next to the bundle, not in
+# it: everything inside is sealed by the signature, so a stamp there would make
+# any edit of the source, even a comment, change the signature and lose the
+# permission, although the same code compiles to the same binary.
+HELPER_STAMP = "RecogZoomHelper.source-sha256"
 
 # The speaker mark is a literal in the Zoom binary with no entry in its
 # localization files, so it reads the same in every interface language.
@@ -276,21 +281,22 @@ def _helper_info() -> dict:
     }
 
 
-def _build_helper(app: Path, source: Path, digest: str) -> None:
-    contents = app / "Contents"
-    (contents / "MacOS").mkdir(parents=True, exist_ok=True)
-    (contents / "Resources").mkdir(exist_ok=True)
+def _build_helper(app: Path, source: Path) -> None:
+    # Built aside and swapped in on success: a failed build must not take a
+    # working helper away.
+    staging = app.with_name(app.name + ".build")
+    shutil.rmtree(staging, ignore_errors=True)
+    contents = staging / "Contents"
+    (contents / "MacOS").mkdir(parents=True)
     print(f"[zoom-app] Building {app.name} from {source}...", file=sys.stderr)
     compile_command = ["swiftc", "-O", "-o", str(contents / "MacOS/zoom_ax_probe"), str(source)]
     compile_command += ["-framework", "ApplicationServices", "-framework", "AppKit"]
     with (contents / "Info.plist").open("wb") as handle:
         plistlib.dump(_helper_info(), handle)
-    # Sealed by the signature below, so it is written before signing.
-    stamp = contents / "Resources/source.sha256"
-    stamp.write_text(digest)
     # macOS recognizes the permission holder by its signature. "-" is an ad-hoc
-    # signature: it changes with every build, and the permission must then be
-    # granted again. A real identity keeps the grant across builds.
+    # signature, which is the hash of the bundle: it stays the same while the
+    # code does, and the permission must be granted again once the code
+    # changes. A real identity keeps the grant across such changes too.
     identity = os.environ.get("RECOG_CODESIGN_IDENTITY") or "-"
     sign_command = [
         "codesign",
@@ -299,15 +305,16 @@ def _build_helper(app: Path, source: Path, digest: str) -> None:
         identity,
         "--identifier",
         HELPER_BUNDLE_ID,
-        str(app),
+        str(staging),
     ]
     for command in (compile_command, sign_command):
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
-            stamp.unlink(missing_ok=True)  # not fresh: the next start builds again
             raise RuntimeError(
                 f"Failed to build {app.name} ({command[0]}): {result.stderr.strip()}"
             )
+    shutil.rmtree(app, ignore_errors=True)
+    staging.rename(app)
     print(
         f'[zoom-app] Built {app.name}: allow "{HELPER_NAME}" in System Settings → '
         "Privacy & Security → Accessibility",
@@ -318,14 +325,14 @@ def _build_helper(app: Path, source: Path, digest: str) -> None:
 def find_or_build_helper(repo_root: Path = REPO_ROOT) -> Path:
     """The helper application; built when missing or when its source changed.
 
-    Freshness is the source's content hash, not its mtime: a rebuild changes an
-    ad-hoc signature and with it loses the granted permission, so a checkout
-    that merely touches the file must not trigger one.
+    Freshness is the source's content hash, not its mtime, so a checkout that
+    merely touches the file does not rebuild. The stamp is written last: a
+    build that failed half-way is repeated on the next start.
     """
     app = repo_root / HELPER_APP
     source = repo_root / HELPER_SOURCE
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    stamp = app / "Contents/Resources/source.sha256"
+    stamp = repo_root / HELPER_STAMP
     built = (app / "Contents/_CodeSignature/CodeResources").exists()
     if built and stamp.exists() and stamp.read_text().strip() == digest:
         return app
@@ -333,7 +340,8 @@ def find_or_build_helper(repo_root: Path = REPO_ROOT) -> Path:
         if built:
             return app  # a stale helper is better than none
         raise RuntimeError(f"swiftc not found — cannot build {HELPER_APP} (xcode-select --install)")
-    _build_helper(app, source, digest)
+    _build_helper(app, source)
+    stamp.write_text(digest)
     return app
 
 

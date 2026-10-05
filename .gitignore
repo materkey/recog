@@ -43,6 +43,8 @@ meetings/
 /privacy.json
 /sck_audio_capture
 /RecogZoomHelper.app/
+/RecogZoomHelper.app.build/
+/RecogZoomHelper.source-sha256
 /example_1_named.md
 /com.recog.*.plist
 
