@@ -2,7 +2,7 @@
 
 The Zoom application is not a web page, so the Chrome extension cannot see it.
 A Swift helper (`recog/native/macos/zoom_ax_probe.swift`) reads its
-Accessibility tree and prints one JSON snapshot per line; this module turns
+Accessibility tree and writes one JSON snapshot per line; this module turns
 the snapshots into the frames the extension sends to the bridge
 (`meeting_join`, `participants_update`, `speaker_update`, `meeting_leave`), so
 the bridge, attribution, Copilot and increments need no Zoom-specific code.
@@ -13,18 +13,26 @@ off, active speaker``. It does not expose the meeting number, so every
 application meeting is reported under one URL; the topic is readable only
 while the toolbar is shown.
 
+The helper runs as its own application bundle, started through LaunchServices,
+so the Accessibility permission belongs to "Recog Zoom Helper" and not to
+whichever Python interpreter or terminal started this module.
+
 Run: ``python -m recog.zoom_app``, or inside the live process with
-``live --zoom-app`` / ``RECOG_ZOOM_APP=1``. The process that runs it needs the
-Accessibility permission.
+``live --zoom-app`` / ``RECOG_ZOOM_APP=1``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import json
+import os
+import plistlib
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -43,6 +51,16 @@ LEAVE_DEBOUNCE_S = 6.0
 # silent this long before asking again.
 JOIN_RETRY_S = 30.0
 RECONNECT_S = 3.0
+# Background mode: wait this long before starting over after a failure.
+RESTART_S = 30.0
+HELPER_CONNECT_S = 15.0
+
+# The helper application: the owner of the Accessibility permission. Its bundle
+# identifier is what the permission is recorded under, so it must not change.
+HELPER_APP = "RecogZoomHelper.app"
+HELPER_BUNDLE_ID = "com.recog.zoom-helper"
+HELPER_NAME = "Recog Zoom Helper"
+HELPER_SOURCE = "recog/native/macos/zoom_ax_probe.swift"
 
 # Tile description vocabulary, English Zoom UI. Positive evidence only: an
 # unknown wording yields "not muted, not speaking", never a guess.
@@ -202,31 +220,126 @@ class ZoomAppSession:
         return None
 
 
-def find_or_build_probe(repo_root: Path = REPO_ROOT) -> str:
-    """Path to the zoom_ax_probe helper; compiles it when missing or stale."""
-    binary = repo_root / "zoom_ax_probe"
-    source = repo_root / "recog/native/macos/zoom_ax_probe.swift"
-    fresh = binary.exists() and binary.stat().st_mtime >= source.stat().st_mtime
-    if fresh:
-        return str(binary)
+def _helper_info() -> dict:
+    return {
+        "CFBundleIdentifier": HELPER_BUNDLE_ID,
+        "CFBundleName": HELPER_NAME,
+        "CFBundleDisplayName": HELPER_NAME,
+        "CFBundleExecutable": "zoom_ax_probe",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "1.0",
+        # No Dock icon, no menu bar: it only reads another application's tree.
+        "LSBackgroundOnly": True,
+    }
+
+
+def _build_helper(app: Path, source: Path, digest: str) -> None:
+    contents = app / "Contents"
+    (contents / "MacOS").mkdir(parents=True, exist_ok=True)
+    (contents / "Resources").mkdir(exist_ok=True)
+    print(f"[zoom-app] Building {app.name} from {source}...", file=sys.stderr)
+    compile_command = ["swiftc", "-O", "-o", str(contents / "MacOS/zoom_ax_probe"), str(source)]
+    compile_command += ["-framework", "ApplicationServices", "-framework", "AppKit"]
+    with (contents / "Info.plist").open("wb") as handle:
+        plistlib.dump(_helper_info(), handle)
+    # Sealed by the signature below, so it is written before signing.
+    stamp = contents / "Resources/source.sha256"
+    stamp.write_text(digest)
+    # macOS recognizes the permission holder by its signature. "-" is an ad-hoc
+    # signature: it changes with every build, and the permission must then be
+    # granted again. A real identity keeps the grant across builds.
+    identity = os.environ.get("RECOG_CODESIGN_IDENTITY") or "-"
+    sign_command = [
+        "codesign",
+        "--force",
+        "--sign",
+        identity,
+        "--identifier",
+        HELPER_BUNDLE_ID,
+        str(app),
+    ]
+    for command in (compile_command, sign_command):
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            stamp.unlink(missing_ok=True)  # not fresh: the next start builds again
+            raise RuntimeError(
+                f"Failed to build {app.name} ({command[0]}): {result.stderr.strip()}"
+            )
+    print(
+        f'[zoom-app] Built {app.name}: allow "{HELPER_NAME}" in System Settings → '
+        "Privacy & Security → Accessibility",
+        file=sys.stderr,
+    )
+
+
+def find_or_build_helper(repo_root: Path = REPO_ROOT) -> Path:
+    """The helper application; built when missing or when its source changed.
+
+    Freshness is the source's content hash, not its mtime: a rebuild changes an
+    ad-hoc signature and with it loses the granted permission, so a checkout
+    that merely touches the file must not trigger one.
+    """
+    app = repo_root / HELPER_APP
+    source = repo_root / HELPER_SOURCE
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    stamp = app / "Contents/Resources/source.sha256"
+    built = (app / "Contents/_CodeSignature/CodeResources").exists()
+    if built and stamp.exists() and stamp.read_text().strip() == digest:
+        return app
     if not shutil.which("swiftc"):
-        if binary.exists():
-            return str(binary)
-        raise RuntimeError("swiftc not found — cannot build zoom_ax_probe (xcode-select --install)")
-    print(f"[zoom-app] Compiling {source}...", file=sys.stderr)
-    command = ["swiftc", "-O", "-o", str(binary), str(source)]
-    command += ["-framework", "ApplicationServices", "-framework", "AppKit"]
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to compile zoom_ax_probe: {result.stderr}")
-    return str(binary)
+        if built:
+            return app  # a stale helper is better than none
+        raise RuntimeError(f"swiftc not found — cannot build {HELPER_APP} (xcode-select --install)")
+    _build_helper(app, source, digest)
+    return app
+
+
+@contextlib.asynccontextmanager
+async def helper_lines(app: Path):
+    """Start the helper application and yield the stream of its snapshots.
+
+    The helper is launched by LaunchServices and therefore shares no pipe with
+    this process; it connects back to a Unix socket in a private temporary
+    directory and exits when that socket goes away.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="recog-zoom-"))
+    socket_path = directory / "probe.sock"
+    connected: asyncio.Future = asyncio.get_running_loop().create_future()
+
+    def on_connect(reader, writer) -> None:
+        if connected.done():
+            writer.close()
+        else:
+            connected.set_result((reader, writer))
+
+    server = await asyncio.start_unix_server(on_connect, path=str(socket_path))
+    try:
+        # -n: a fresh instance bound to this socket; -g: never comes to the front.
+        launch = ["open", "-g", "-n", "-a", str(app), "--args", "--socket", str(socket_path)]
+        result = subprocess.run(launch, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"cannot launch {app.name}: {result.stderr.strip()}")
+        try:
+            reader, writer = await asyncio.wait_for(connected, HELPER_CONNECT_S)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"{app.name} did not connect within {HELPER_CONNECT_S:.0f} s"
+            ) from None
+        try:
+            yield reader
+        finally:
+            writer.close()
+    finally:
+        server.close()
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 class _StatusLog:
     """One stderr line per change of the helper state."""
 
     MESSAGES = {
-        "not_trusted": "no Accessibility permission for this process — Zoom meetings are not detected",
+        "not_trusted": f'"{HELPER_NAME}" has no Accessibility permission — Zoom meetings are not '
+        "detected (System Settings → Privacy & Security → Accessibility)",
         "zoom_not_running": "Zoom is not running",
         "idle": "Zoom is running, no meeting",
         "meeting": "Zoom meeting detected",
@@ -263,7 +376,7 @@ async def _pump(
             if next_line.done():
                 raw = next_line.result()
                 if not raw:
-                    raise RuntimeError("zoom_ax_probe exited")
+                    raise RuntimeError("the Zoom helper disconnected")
                 snapshot = json.loads(raw)
                 log.note(snapshot.get("state"))
                 for frame in session.frames(snapshot, time.time()):
@@ -277,24 +390,18 @@ async def _pump(
 async def run(bridge_url: str = BRIDGE_URL) -> None:
     import websockets
 
-    helper = await asyncio.create_subprocess_exec(
-        find_or_build_probe(), stdout=asyncio.subprocess.PIPE
-    )
     session = ZoomAppSession()
     log = _StatusLog()
-    try:
-        while helper.returncode is None:
+    async with helper_lines(find_or_build_helper()) as lines:
+        while True:
             try:
                 # No Origin header: the bridge treats this as a local client.
                 async with websockets.connect(bridge_url) as websocket:
-                    await _pump(websocket, helper.stdout, session, log)
+                    await _pump(websocket, lines, session, log)
             except (OSError, websockets.WebSocketException) as exc:
                 print(f"[zoom-app] bridge link lost: {exc}", file=sys.stderr)
             session.on_disconnect()
             await asyncio.sleep(RECONNECT_S)
-    finally:
-        if helper.returncode is None:
-            helper.terminate()
 
 
 def main() -> None:
@@ -306,11 +413,14 @@ def main() -> None:
         pass
 
 
-def _run_until_failure() -> None:
-    try:
-        asyncio.run(run())
-    except Exception as exc:  # a dead source must not take live down with it
-        print(f"[zoom-app] stopped: {exc}", file=sys.stderr)
+def _supervise(stop: threading.Event) -> None:
+    """Keep the source running; a failure must not take live down with it."""
+    while not stop.is_set():
+        try:
+            asyncio.run(run())
+        except Exception as exc:
+            print(f"[zoom-app] stopped: {exc}; starting over in {RESTART_S:.0f} s", file=sys.stderr)
+        stop.wait(RESTART_S)
 
 
 def start_in_background() -> threading.Thread | None:
@@ -320,7 +430,9 @@ def start_in_background() -> threading.Thread | None:
             "[zoom-app] the native Zoom source supports macOS only — not started", file=sys.stderr
         )
         return None
-    thread = threading.Thread(target=_run_until_failure, name="zoom-app", daemon=True)
+    thread = threading.Thread(
+        target=_supervise, args=(threading.Event(),), name="zoom-app", daemon=True
+    )
     thread.start()
     return thread
 

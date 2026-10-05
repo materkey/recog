@@ -24,8 +24,17 @@
 // - the account button of the main window is described as
 //   "Zoom, <display name>, <status>, <plan>".
 //
-// A line is printed when the state changes and at least every 2 seconds, so the
+// A line is written when the state changes and at least every 2 seconds, so the
 // reader can tell a silent meeting from a stalled helper.
+//
+// The helper is built into an application bundle and started through
+// LaunchServices (`open -a … --args --socket <path>`), not as a child process:
+// macOS grants Accessibility to the "responsible" process, which for a child
+// is its parent — a Python interpreter whose path changes with every upgrade.
+// Launched on its own, the bundle is the one the permission belongs to, under
+// its own name and identifier. It then has no parent to inherit a pipe from,
+// so it connects to a Unix socket the caller listens on, and exits as soon as
+// that socket is gone. Without `--socket` it writes to stdout, for debugging.
 
 import AppKit
 import ApplicationServices
@@ -150,18 +159,72 @@ func currentSnapshot() -> [String: Any] {
     return snapshot(app: app)
 }
 
+func connectSocket(_ path: String) -> Int32? {
+    let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { return nil }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let capacity = MemoryLayout.size(ofValue: address.sun_path)
+    guard path.utf8.count < capacity else {
+        close(descriptor)
+        return nil
+    }
+    withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+        pointer.withMemoryRebound(to: CChar.self, capacity: capacity) { _ = strncpy($0, path, capacity - 1) }
+    }
+    let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+    let status = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(descriptor, $0, size) }
+    }
+    guard status == 0 else {
+        close(descriptor)
+        return nil
+    }
+    return descriptor
+}
+
+/// Write one line; false once the reader is gone.
+func send(_ line: String, to descriptor: Int32) -> Bool {
+    let bytes = Array((line + "\n").utf8)
+    var offset = 0
+    while offset < bytes.count {
+        let written = bytes[offset...].withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
+        if written <= 0 { return false }
+        offset += written
+    }
+    return true
+}
+
+// A closed reader must end the loop through send(), not kill the process mid-write.
+signal(SIGPIPE, SIG_IGN)
+
+var output = STDOUT_FILENO
+let arguments = CommandLine.arguments
+if let flag = arguments.firstIndex(of: "--socket"), flag + 1 < arguments.count {
+    guard let descriptor = connectSocket(arguments[flag + 1]) else {
+        FileHandle.standardError.write("zoom_ax_probe: cannot connect to \(arguments[flag + 1])\n".data(using: .utf8)!)
+        exit(1)
+    }
+    output = descriptor
+}
+
+// Ask once: the system dialog offers to open the Accessibility pane, where this
+// application is then already listed.
+if !AXIsProcessTrusted() {
+    let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+    _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+}
+
 var lastLine = ""
 var lastEmit = Date.distantPast
 
 while true {
-    // The parent died and the helper was reparented: nobody reads the output.
-    if getppid() == 1 { exit(0) }
     let current = currentSnapshot()
     if let data = try? JSONSerialization.data(withJSONObject: current, options: [.sortedKeys]),
        let line = String(data: data, encoding: .utf8) {
         if line != lastLine || Date().timeIntervalSince(lastEmit) >= heartbeatInterval {
-            print(line)
-            fflush(stdout)
+            // The heartbeat doubles as the liveness check of the reader.
+            if !send(line, to: output) { exit(0) }
             lastLine = line
             lastEmit = Date()
         }

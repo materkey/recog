@@ -1,7 +1,12 @@
 """Tests for recog/zoom_app.py — the native Zoom application signal source."""
 
 import asyncio
+import contextlib
 import json
+import os
+import plistlib
+import threading
+from pathlib import Path
 
 import pytest
 
@@ -13,7 +18,7 @@ from recog.zoom_app import (
     Tile,
     ZoomAppSession,
     account_name,
-    find_or_build_probe,
+    find_or_build_helper,
     parse_tile,
 )
 
@@ -278,74 +283,197 @@ def test_given_topic_seen_while_the_toolbar_is_shown_when_processed_then_title_i
     assert second == [] and third == []
 
 
-# --- helper binary -----------------------------------------------------------
+# --- helper application ------------------------------------------------------
 
 
-def _repo(tmp_path, *, binary_age=None):
-    source = tmp_path / "recog/native/macos/zoom_ax_probe.swift"
-    source.parent.mkdir(parents=True)
-    source.write_text("// source")
-    if binary_age is not None:
-        binary = tmp_path / "zoom_ax_probe"
-        binary.write_text("binary")
-        stamp = source.stat().st_mtime + binary_age
-        import os
-
-        os.utime(binary, (stamp, stamp))
+def _repo(tmp_path, source="// source"):
+    path = tmp_path / zoom_app.HELPER_SOURCE
+    path.parent.mkdir(parents=True)
+    path.write_text(source)
     return tmp_path
 
 
-def test_given_fresh_binary_when_located_then_returned_without_compiling(tmp_path, monkeypatch):
-    repo = _repo(tmp_path, binary_age=10)
-    monkeypatch.setattr(zoom_app.subprocess, "run", lambda *a, **k: pytest.fail("must not compile"))
+def _fake_toolchain(monkeypatch, *, fail=None):
+    """swiftc and codesign that write what the real ones would; returns the calls."""
+    calls = []
 
-    assert find_or_build_probe(repo) == str(repo / "zoom_ax_probe")
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[0] == fail:
+            return type("Result", (), {"returncode": 1, "stderr": "boom"})()
+        if command[0] == "swiftc":
+            Path(command[command.index("-o") + 1]).write_text("binary")
+        if command[0] == "codesign":
+            signature = Path(command[-1]) / "Contents/_CodeSignature"
+            signature.mkdir(exist_ok=True)
+            (signature / "CodeResources").write_text("seal")
+        return type("Result", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr(zoom_app.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(zoom_app.subprocess, "run", fake_run)
+    return calls
 
 
-def test_given_stale_binary_and_no_compiler_when_located_then_the_stale_binary_is_used(
+def test_given_no_helper_when_located_then_a_signed_bundle_with_a_stable_identifier_is_built(
     tmp_path, monkeypatch
 ):
-    repo = _repo(tmp_path, binary_age=-10)
+    repo = _repo(tmp_path)
+    monkeypatch.delenv("RECOG_CODESIGN_IDENTITY", raising=False)
+    calls = _fake_toolchain(monkeypatch)
+
+    app = find_or_build_helper(repo)
+
+    assert app == repo / "RecogZoomHelper.app"
+    info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+    assert info["CFBundleIdentifier"] == "com.recog.zoom-helper"
+    assert info["CFBundleName"] == "Recog Zoom Helper"
+    assert info["LSBackgroundOnly"] is True
+    assert [command[0] for command in calls] == ["swiftc", "codesign"]
+    sign = calls[1]
+    assert sign[sign.index("--sign") + 1] == "-"
+    assert sign[sign.index("--identifier") + 1] == "com.recog.zoom-helper"
+
+
+def test_given_signing_identity_configured_when_built_then_the_bundle_is_signed_with_it(
+    tmp_path, monkeypatch
+):
+    repo = _repo(tmp_path)
+    monkeypatch.setenv("RECOG_CODESIGN_IDENTITY", "Developer ID Application: Example")
+    calls = _fake_toolchain(monkeypatch)
+
+    find_or_build_helper(repo)
+
+    assert calls[1][calls[1].index("--sign") + 1] == "Developer ID Application: Example"
+
+
+def test_given_built_helper_when_the_source_is_only_touched_then_it_is_not_rebuilt(
+    tmp_path, monkeypatch
+):
+    repo = _repo(tmp_path)
+    calls = _fake_toolchain(monkeypatch)
+    find_or_build_helper(repo)
+    source = repo / zoom_app.HELPER_SOURCE
+    later = source.stat().st_mtime + 3600
+
+    os.utime(source, (later, later))  # what a checkout does; the content is the same
+    find_or_build_helper(repo)
+
+    assert len(calls) == 2  # a rebuild would lose the granted permission
+
+
+def test_given_built_helper_when_the_source_content_changes_then_it_is_rebuilt(
+    tmp_path, monkeypatch
+):
+    repo = _repo(tmp_path)
+    calls = _fake_toolchain(monkeypatch)
+    find_or_build_helper(repo)
+
+    (repo / zoom_app.HELPER_SOURCE).write_text("// changed")
+    find_or_build_helper(repo)
+
+    assert [command[0] for command in calls] == ["swiftc", "codesign", "swiftc", "codesign"]
+
+
+def test_given_stale_helper_and_no_compiler_when_located_then_the_stale_helper_is_used(
+    tmp_path, monkeypatch
+):
+    repo = _repo(tmp_path)
+    _fake_toolchain(monkeypatch)
+    app = find_or_build_helper(repo)
+    (repo / zoom_app.HELPER_SOURCE).write_text("// changed")
     monkeypatch.setattr(zoom_app.shutil, "which", lambda name: None)
 
-    assert find_or_build_probe(repo) == str(repo / "zoom_ax_probe")
+    assert find_or_build_helper(repo) == app
 
 
-def test_given_no_binary_and_no_compiler_when_located_then_error_names_the_fix(
+def test_given_no_helper_and_no_compiler_when_located_then_error_names_the_fix(
     tmp_path, monkeypatch
 ):
     repo = _repo(tmp_path)
     monkeypatch.setattr(zoom_app.shutil, "which", lambda name: None)
 
     with pytest.raises(RuntimeError, match="xcode-select --install"):
-        find_or_build_probe(repo)
+        find_or_build_helper(repo)
 
 
-def test_given_no_binary_when_compiler_succeeds_then_swiftc_builds_it(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failing", ["swiftc", "codesign"])
+def test_given_a_build_step_fails_when_building_then_the_error_names_it_and_the_next_call_rebuilds(
+    tmp_path, monkeypatch, failing
+):
     repo = _repo(tmp_path)
-    calls = []
+    _fake_toolchain(monkeypatch, fail=failing)
+
+    with pytest.raises(RuntimeError, match=rf"\({failing}\): boom"):
+        find_or_build_helper(repo)
+
+    calls = _fake_toolchain(monkeypatch)
+    find_or_build_helper(repo)
+    assert [command[0] for command in calls] == ["swiftc", "codesign"]
+
+
+# --- helper link -------------------------------------------------------------
+
+
+def _launching(monkeypatch, behave):
+    """`open` that starts `behave(socket_path)` as the helper would be started."""
+    launched = []
 
     def fake_run(command, **kwargs):
-        calls.append(command)
+        launched.append(command)
+        task = behave(command[command.index("--socket") + 1])
+        if task is not None:
+            asyncio.ensure_future(task)
         return type("Result", (), {"returncode": 0, "stderr": ""})()
 
-    monkeypatch.setattr(zoom_app.shutil, "which", lambda name: "/usr/bin/swiftc")
     monkeypatch.setattr(zoom_app.subprocess, "run", fake_run)
-
-    assert find_or_build_probe(repo) == str(repo / "zoom_ax_probe")
-    assert (
-        calls[0][0] == "swiftc" and str(repo / "recog/native/macos/zoom_ax_probe.swift") in calls[0]
-    )
+    return launched
 
 
-def test_given_compiler_fails_when_building_then_error_carries_its_output(tmp_path, monkeypatch):
-    repo = _repo(tmp_path)
-    failure = type("Result", (), {"returncode": 1, "stderr": "boom"})()
-    monkeypatch.setattr(zoom_app.shutil, "which", lambda name: "/usr/bin/swiftc")
+@pytest.mark.asyncio
+async def test_given_helper_application_when_started_then_it_is_launched_by_launchservices_and_its_lines_arrive(
+    monkeypatch, tmp_path
+):
+    async def helper(socket_path):
+        _, writer = await asyncio.open_unix_connection(socket_path)
+        writer.write(b'{"state": "idle"}\n')
+        await writer.drain()
+        writer.close()
+
+    launched = _launching(monkeypatch, helper)
+    app = tmp_path / "RecogZoomHelper.app"
+
+    async with zoom_app.helper_lines(app) as lines:
+        first = await lines.readline()
+        rest = await lines.readline()
+
+    assert json.loads(first) == {"state": "idle"}
+    assert rest == b""  # the helper went away: the reader sees EOF
+    command = launched[0]
+    assert command[:5] == ["open", "-g", "-n", "-a", str(app)]
+    socket_path = Path(command[command.index("--socket") + 1])
+    assert not socket_path.parent.exists()  # the private directory is removed
+
+
+@pytest.mark.asyncio
+async def test_given_helper_never_connects_when_started_then_error_says_so(monkeypatch, tmp_path):
+    _launching(monkeypatch, lambda socket_path: None)
+    monkeypatch.setattr(zoom_app, "HELPER_CONNECT_S", 0.05)
+
+    with pytest.raises(RuntimeError, match="did not connect"):
+        async with zoom_app.helper_lines(tmp_path / "RecogZoomHelper.app"):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_given_launch_fails_when_started_then_error_carries_the_reason(monkeypatch, tmp_path):
+    failure = type("Result", (), {"returncode": 1, "stderr": "Unable to find application"})()
     monkeypatch.setattr(zoom_app.subprocess, "run", lambda *a, **k: failure)
 
-    with pytest.raises(RuntimeError, match="boom"):
-        find_or_build_probe(repo)
+    with pytest.raises(
+        RuntimeError, match="cannot launch RecogZoomHelper.app: Unable to find application"
+    ):
+        async with zoom_app.helper_lines(tmp_path / "RecogZoomHelper.app"):
+            pass
 
 
 # --- pump --------------------------------------------------------------------
@@ -376,7 +504,7 @@ async def test_given_helper_snapshots_when_pumped_then_frames_reach_the_bridge_a
     socket = FakeSocket()
     reader = _reader(meeting(), meeting(tile("Bob", "active speaker")))
 
-    with pytest.raises(RuntimeError, match="zoom_ax_probe exited"):
+    with pytest.raises(RuntimeError, match="the Zoom helper disconnected"):
         await zoom_app._pump(socket, reader, ZoomAppSession(), zoom_app._StatusLog())
 
     assert types(socket.sent) == ["meeting_join", "participants_update", "speaker_update"]
@@ -418,20 +546,20 @@ def test_given_helper_state_changes_when_logged_then_one_line_per_change(capsys)
 # --- running inside the live process -----------------------------------------
 
 
-def test_given_macos_when_started_in_background_then_a_daemon_thread_runs_the_source(monkeypatch):
-    started = asyncio.Event()
-
-    async def fake_run():
-        started.set()
-
+def test_given_macos_when_started_in_background_then_a_daemon_thread_supervises_the_source(
+    monkeypatch,
+):
+    supervised = threading.Event()
     monkeypatch.setattr(zoom_app.sys, "platform", "darwin")
-    monkeypatch.setattr(zoom_app, "run", fake_run)
+    # The supervisor loops for the life of the process; a stand-in keeps the
+    # thread from outliving the test and reaching the real helper.
+    monkeypatch.setattr(zoom_app, "_supervise", lambda stop: supervised.set())
 
     thread = zoom_app.start_in_background()
     thread.join(timeout=5)
 
     assert thread.daemon is True and thread.name == "zoom-app"
-    assert started.is_set()
+    assert supervised.is_set() and not thread.is_alive()
 
 
 def test_given_other_os_when_started_in_background_then_nothing_starts_and_it_says_why(
@@ -443,18 +571,23 @@ def test_given_other_os_when_started_in_background_then_nothing_starts_and_it_sa
     assert "macOS only" in capsys.readouterr().err
 
 
-def test_given_source_fails_when_running_in_background_then_the_failure_is_logged_not_raised(
-    monkeypatch, capsys
-):
-    async def failing_run():
-        raise RuntimeError("zoom_ax_probe exited")
+def test_given_source_fails_when_supervised_then_it_is_logged_and_started_over(monkeypatch, capsys):
+    stop = threading.Event()
+    attempts = []
 
-    monkeypatch.setattr(zoom_app.sys, "platform", "darwin")
-    monkeypatch.setattr(zoom_app, "run", failing_run)
+    async def flaky_run():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("the Zoom helper disconnected")
+        stop.set()
 
-    zoom_app.start_in_background().join(timeout=5)
+    monkeypatch.setattr(zoom_app, "RESTART_S", 0)
+    monkeypatch.setattr(zoom_app, "run", flaky_run)
 
-    assert "stopped: zoom_ax_probe exited" in capsys.readouterr().err
+    zoom_app._supervise(stop)
+
+    assert len(attempts) == 2
+    assert "stopped: the Zoom helper disconnected; starting over" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -484,17 +617,7 @@ def test_given_live_command_when_run_then_zoom_source_starts_only_when_asked(
     assert bool(started) is expected
 
 
-# --- run: helper process and bridge link -------------------------------------
-
-
-class FakeHelper:
-    def __init__(self):
-        self.returncode = None
-        self.stdout = object()
-        self.terminated = False
-
-    def terminate(self):
-        self.terminated = True
+# --- run: helper and bridge link ---------------------------------------------
 
 
 class FakeConnection:
@@ -505,22 +628,29 @@ class FakeConnection:
         return False
 
 
-def _patch_run(monkeypatch, helper, connect, pump):
-    async def fake_exec(*args, **kwargs):
-        return helper
+def _patch_run(monkeypatch, connect, pump):
+    state = {"helper_open": False, "closed": False}
 
-    monkeypatch.setattr(zoom_app, "find_or_build_probe", lambda: "/tmp/zoom_ax_probe")
-    monkeypatch.setattr(zoom_app.asyncio, "create_subprocess_exec", fake_exec)
+    @contextlib.asynccontextmanager
+    async def fake_helper_lines(app):
+        state["helper_open"] = True
+        try:
+            yield object()
+        finally:
+            state["closed"] = True
+
+    monkeypatch.setattr(zoom_app, "find_or_build_helper", lambda: Path("/tmp/RecogZoomHelper.app"))
+    monkeypatch.setattr(zoom_app, "helper_lines", fake_helper_lines)
     monkeypatch.setattr(zoom_app, "RECONNECT_S", 0)
     monkeypatch.setattr("websockets.connect", connect)
     monkeypatch.setattr(zoom_app, "_pump", pump)
+    return state
 
 
 @pytest.mark.asyncio
-async def test_given_bridge_down_then_up_when_running_then_it_reconnects_and_stops_with_the_helper(
+async def test_given_bridge_down_then_up_when_running_then_it_reconnects_with_the_same_helper(
     monkeypatch, capsys
 ):
-    helper = FakeHelper()
     attempts = []
     sessions = []
 
@@ -532,31 +662,19 @@ async def test_given_bridge_down_then_up_when_running_then_it_reconnects_and_sto
 
     async def pump(websocket, lines, session, log):
         sessions.append(session)
-        session.joined = True
-        helper.returncode = 0  # the helper exits: the loop must end
+        if len(sessions) == 1:
+            session.joined = True
+            return  # the bridge closed the link
+        raise RuntimeError("the Zoom helper disconnected")
 
-    _patch_run(monkeypatch, helper, connect, pump)
+    state = _patch_run(monkeypatch, connect, pump)
 
-    await zoom_app.run("ws://bridge.test")
-
-    assert attempts == ["ws://bridge.test", "ws://bridge.test"]
-    assert "bridge link lost: connection refused" in capsys.readouterr().err
-    assert sessions[0].joined is False  # on_disconnect ran after the link closed
-    assert helper.terminated is False
-
-
-@pytest.mark.asyncio
-async def test_given_helper_dies_mid_pump_when_running_then_the_error_surfaces_and_the_helper_is_terminated(
-    monkeypatch,
-):
-    helper = FakeHelper()
-
-    async def pump(websocket, lines, session, log):
-        raise RuntimeError("zoom_ax_probe exited")
-
-    _patch_run(monkeypatch, helper, lambda url: FakeConnection(), pump)
-
-    with pytest.raises(RuntimeError, match="zoom_ax_probe exited"):
+    with pytest.raises(RuntimeError, match="the Zoom helper disconnected"):
         await zoom_app.run("ws://bridge.test")
 
-    assert helper.terminated is True
+    assert attempts == ["ws://bridge.test"] * 3
+    assert "bridge link lost: connection refused" in capsys.readouterr().err
+    assert (
+        sessions[0] is sessions[1] and sessions[1].joined is False
+    )  # on_disconnect ran in between
+    assert state == {"helper_open": True, "closed": True}

@@ -24,22 +24,39 @@ RECOG_ZOOM_APP=1
 `live --zoom-app` does the same for a manual run. For a check without the live
 pipeline, run `python -m recog.zoom_app` while the live service is up.
 
-The process that runs it needs the **Accessibility** permission (System
-Settings → Privacy & Security → Accessibility). Without it the log says so and
-no meeting is detected:
+### Accessibility permission
+
+The Accessibility tree is read by a small helper application, **Recog Zoom
+Helper** (`RecogZoomHelper.app` in the checkout, built on first use from
+`recog/native/macos/zoom_ax_probe.swift`; needs `swiftc`). The permission
+belongs to that application, not to Python or the terminal, so it is granted
+once and is the same for the service and for a manual run.
+
+On first start macOS shows "Recog Zoom Helper would like to control this
+computer using accessibility features". Choose **Open System Settings** and
+switch on **Recog Zoom Helper** under Privacy & Security → Accessibility.
+The helper notices the grant without a restart. Until then the log says:
 
 ```
-[zoom-app] no Accessibility permission for this process — Zoom meetings are not detected
+[zoom-app] "Recog Zoom Helper" has no Accessibility permission — Zoom meetings are not detected (System Settings → Privacy & Security → Accessibility)
 ```
 
 The log lines `[zoom-app] …` in `live.stderr.log` name the current state: no
-permission, Zoom not running, no meeting, meeting detected. Which binary macOS
-asks the permission for when live runs as a service has not been checked; the
-manual run from a terminal uses the terminal's permission.
+permission, Zoom not running, no meeting, meeting detected.
 
-The helper `zoom_ax_probe` is compiled on first use from
-`recog/native/macos/zoom_ax_probe.swift` (needs `swiftc`, as the system-audio
-helper does).
+**When the permission has to be granted again.** macOS recognizes the helper by
+its code signature. By default the helper is signed ad hoc, and that signature
+changes whenever the helper is rebuilt — which happens only when its Swift
+source changes, not on a Python upgrade, a new virtual environment or a
+checkout that leaves the file's content alone. After such a rebuild remove the
+old "Recog Zoom Helper" entry in the Accessibility list and switch on the new
+one.
+
+To keep the grant across rebuilds, sign the helper with a certificate of your
+own: set `RECOG_CODESIGN_IDENTITY` in `.env` to a code-signing identity from
+your keychain (`security find-identity -v -p codesigning`), for example
+`Developer ID Application: …`. This has not been exercised: no such identity
+was available where the helper was developed.
 
 ## What to expect
 

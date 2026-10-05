@@ -287,8 +287,9 @@ Decision rule the experiments were measured against:
 
 ## Stage 3 — native application: implementation
 
-- [x] Swift helper `recog/native/macos/zoom_ax_probe.swift`, built on demand to
-      `zoom_ax_probe` at the repository root; JSON snapshots on stdout
+- [x] Swift helper `recog/native/macos/zoom_ax_probe.swift`, built on demand
+      into `RecogZoomHelper.app` at the repository root and started through
+      LaunchServices; JSON snapshots over a Unix socket
 - [x] `recog/zoom_app.py`: `ZoomAppSession` (pure) turns snapshots into bridge
       frames; a no-Origin socket client with reconnect; `python -m recog.zoom_app`
 - [x] started inside live by `--zoom-app` or `RECOG_ZOOM_APP=1`, off by default
@@ -306,10 +307,17 @@ Departures from the Stage 3 outline:
 - The bridge was not changed. A source that the bridge rejects stays silent
   instead of the bridge filtering frames by owner.
 - Status is a log line per state change, not a web UI element.
+- The helper is an application bundle with its own Accessibility identity, not
+  a child process like `sck_audio_capture`: a child's permission belongs to
+  its parent, here a Python interpreter whose path changes with upgrades.
 
 Open:
-- Accessibility permission for the process that runs live as a service: not
-  granted or checked; only a terminal run was exercised.
+- The helper as its own application was started and reported "no permission"
+  as intended (the terminal that launched it has the permission, so the two
+  are separate subjects), and it exited with its reader. A meeting through it
+  was not observed: the permission for "Recog Zoom Helper" was not yet
+  granted.
+- A real signing identity (`RECOG_CODESIGN_IDENTITY`) was not exercised.
 - Zoom UI languages other than English, speaker view, screen share, meetings
   with several pages of tiles.
 - Linux: the client is Qt with no verified path; the web client is the route.
