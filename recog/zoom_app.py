@@ -228,10 +228,6 @@ class ZoomAppSession:
         # listed, which is a smaller error than dropping everyone off-screen.
         self._roster.update(tiles)
 
-        # The helper also reports a "topic" (the description of the toolbar's
-        # info button). It is ignored: on a live meeting that description read
-        # "Meeting  40-minutes" — the free-plan timer — instead of the topic, and
-        # a wrong title is worse than none.
         frames: list[dict] = []
         participants = [
             {

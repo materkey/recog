@@ -409,15 +409,6 @@ def test_given_tile_without_a_name_when_processed_then_skipped():
     assert [p["name"] for p in frames[0]["participants"]] == ["Bob"]
 
 
-def test_given_helper_reports_a_topic_when_processed_then_no_title_is_sent():
-    # Observed live: the "topic" read "Meeting  40-minutes", the free-plan timer.
-    session = joined_session()
-
-    frames = session.frames(meeting(tile("Bob"), topic="Meeting  40-minutes"), 101.0)
-
-    assert "meeting_title_update" not in types(frames)
-
-
 # --- helper application ------------------------------------------------------
 
 

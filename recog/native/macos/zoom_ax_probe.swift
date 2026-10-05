@@ -6,7 +6,7 @@
 //   {"state": "zoom_not_running"}
 //   {"state": "idle"}               Zoom is running, no meeting window
 //   {"state": "meeting", "view": "window" | "minimal", "tiles": [...],
-//    "topic": "...", "account": "..."}
+//    "account": "..."}
 //
 // A tile is {"name": ..., "description": ...}: the participant's display name and
 // the tile's description, e.g. "Alice, Computer audio unmuted, Video off, active
@@ -19,8 +19,6 @@
 //   speaker;
 // - a tile is an AXTabGroup whose AXButton child is described by the display
 //   name (a tile showing a profile picture has no AXStaticText with the name);
-// - the topic is the description of MeetingTopBarInfoButton, which is in the
-//   tree only while the toolbar is shown;
 // - the account button of the main window is described as
 //   "Zoom, <display name>, <status>, <plan>".
 //
@@ -42,7 +40,6 @@ import Foundation
 
 let zoomBundleId = "us.zoom.xos"
 let meetingWindowId = "zm.meeting.window.main"
-let topicButtonId = "MeetingTopBarInfoButton"
 let pollInterval: TimeInterval = 0.5
 let heartbeatInterval: TimeInterval = 2.0
 let maxDepth = 6
@@ -79,23 +76,18 @@ func tile(_ element: AXUIElement) -> [String: String]? {
     return nil
 }
 
-struct Scan {
-    var tiles: [[String: String]] = []
-    var topic: String?
-}
-
-func scan(_ element: AXUIElement, depth: Int, into result: inout Scan) {
+/// Collect the participant tiles under `element`. The toolbar's info button,
+/// which looks like the meeting topic, is deliberately not read: on a live
+/// meeting it carried the free-plan timer ("Meeting  40-minutes") instead.
+func scan(_ element: AXUIElement, depth: Int, into tiles: inout [[String: String]]) {
     if let found = tile(element) {
-        result.tiles.append(found)
+        tiles.append(found)
         return
-    }
-    if text(element, "AXIdentifier") == topicButtonId {
-        result.topic = text(element, kAXDescriptionAttribute as String)
     }
     // The participants panel repeats the names without the speaker state.
     guard depth > 0, role(element) != "AXScrollArea" else { return }
     for child in children(element) {
-        scan(child, depth: depth - 1, into: &result)
+        scan(child, depth: depth - 1, into: &tiles)
     }
 }
 
@@ -125,26 +117,25 @@ func accountDescription(_ windows: [AXUIElement]) -> String? {
 func snapshot(app: AXUIElement) -> [String: Any] {
     let all = windows(app)
     var view: String?
-    var result = Scan()
+    var tiles: [[String: String]] = []
 
     if let meeting = all.first(where: { text($0, "AXIdentifier") == meetingWindowId }) {
         view = "window"
-        scan(meeting, depth: maxDepth, into: &result)
+        scan(meeting, depth: maxDepth, into: &tiles)
     } else {
         for window in all where text(window, kAXSubroleAttribute as String) == "AXSystemDialog" {
-            var candidate = Scan()
+            var candidate: [[String: String]] = []
             scan(window, depth: maxDepth, into: &candidate)
-            if !candidate.tiles.isEmpty {
+            if !candidate.isEmpty {
                 view = "minimal"
-                result = candidate
+                tiles = candidate
                 break
             }
         }
     }
 
     guard let view else { return ["state": "idle"] }
-    var out: [String: Any] = ["state": "meeting", "view": view, "tiles": result.tiles]
-    if let topic = result.topic { out["topic"] = topic }
+    var out: [String: Any] = ["state": "meeting", "view": view, "tiles": tiles]
     if let account = accountDescription(all) { out["account"] = account }
     return out
 }
