@@ -395,12 +395,17 @@ Third round (2026-10-05, after the helper was rebuilt and granted again):
 - The account button is not always reachable during a meeting, so the helper
   reports it while idle as well.
 
+- After that change the permission was granted once more, with the service
+  left running: its log went from "no Accessibility permission" to "Zoom is
+  running, no meeting" on its own. A final meeting in the English interface,
+  started and ended through the menu and the Accessibility tree alone, was
+  recorded through the service with every speech segment attributed (27 of
+  27 across the two scripted speakers). Started within ten minutes of the
+  previous test meeting, it continued that recording, as documented for the
+  application's single URL; the recording carries a generated title.
+
 Open after this round:
 - A gallery with more than one page of participants.
-- The helper changed again (exit without the permission, account while
-  idle), so its signature did too: "Recog Zoom Helper" has to be switched on
-  once more. The pick-up of that grant without a restart is the check of the
-  change itself.
 
 ## Post-Completion (manual, live meeting)
 - Console shows `Using adapter: zoom`; the bridge log shows `Client connected`
