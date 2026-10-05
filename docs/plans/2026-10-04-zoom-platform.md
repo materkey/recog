@@ -251,8 +251,11 @@ Mac double the captured audio, and a two-party meeting may go peer-to-peer).
       path was re-measured in a headless participant and unit-tested; it could
       not be replayed with the extension, because Zoom lets a returning
       browser session straight back in
-- [ ] remaining items under "Post-Completion": screen share, pin, hidden-tab
-      behaviour over a long meeting, Copilot auto-spawn, `--ktalk-only`
+- [x] second round (2026-10-05), DOM observed in a headless participant:
+      pinned participant, screen share, one-to-one call — see "Second round"
+      below
+- [ ] not exercised: breakout rooms, a hidden tab over a long meeting,
+      Copilot auto-spawn on a Zoom meeting
 
 ### Task 7: Documentation (after live verification)
 - [x] `README.md`, `docs/usage.md`, `docs/conference-hosts.md`, `CLAUDE.md`
@@ -320,14 +323,71 @@ Departures from the Stage 3 outline:
       instead. The topic is no longer used; application recordings have no
       title
 
-Open:
-- The Swift helper still emits the unused `topic` field: changing its source
-  rebuilds it, and an ad-hoc signed rebuild loses the granted permission.
-  Remove it with the next real change to the helper.
+- [x] second round (2026-10-05) — see below
 - A real signing identity (`RECOG_CODESIGN_IDENTITY`) was not exercised.
 - Zoom UI languages other than English, speaker view, screen share, meetings
   with several pages of tiles.
 - Linux: the client is Qt with no verified path; the web client is the route.
+
+## Second round of live checks (2026-10-05)
+
+Scripted meetings again: the native application as host, headless Chrome
+participants with WAV-fed microphones, the source running inside the installed
+service (`RECOG_ZOOM_APP=1`).
+
+Web client, DOM read in a headless observer:
+- Pinned participant: the pinned tile leaves the strip and fills the main
+  tile. While someone else speaks, the strip carries `--active` on the real
+  speaker; while the pinned one speaks, no tile carries it and the main tile
+  is that speaker. Explicit mark first, main tile as the fallback is right in
+  both cases.
+- Screen share: `#wc-footer` and the strip with its `--active` mark stay; the
+  main tile is replaced by the shared content.
+- One-to-one call (the host left, two web participants remained): no
+  `--active` class appears at all; the strip holds only the local tile and the
+  main tile is the other participant. Without the main-tile fallback a
+  one-to-one call would have no speaker.
+
+Native application, through the helper:
+- Under the service the helper reported "Zoom is running, no meeting" right
+  after the restart: the permission granted to "Recog Zoom Helper" applies to
+  the service and to a terminal run alike.
+- Speaker view: the strip tile of the speaker carries `active speaker`; a
+  larger tile repeats the name without it. The mark moves between speakers.
+- Screen share by a participant: tiles and mark stay.
+- Window shrunk until tiles dropped out (speaker view, 2 of 4 participants
+  visible): only on-screen tiles are in the tree, and the speaker was always
+  among them. Hence the cumulative roster.
+- Nine participants in gallery view: all nine tiles present (Zoom raised its
+  minimum window size to fit them). A gallery with more than one page (over
+  25 participants) could not be staged: eight headless participants already
+  took about 12 GB.
+- The join preview is already `zm.meeting.window.main` with no tile; the
+  source reported a join there. A meeting now starts with the first tile.
+- Russian interface (`defaults write us.zoom.xos AppleLanguages`, restored
+  afterwards): the tile read "…, Звук компьютера выключен", the wording of
+  `LN_Plist_Accessibility_VoIP_Muted_*` in `ru.lproj`. The check was stopped
+  before a second participant spoke, so `active speaker` in Russian was not
+  seen; it is a literal in the Zoom binary with no localization entry.
+- The meeting is controllable without the pointer: the application menu
+  starts one, the window's close button opens `zm.meeting.window.leave` with
+  `zm.meeting.leavemeeting.{leaveMeetingButton,endMeetingButton}`.
+
+Signing:
+- Two builds of the same source, signed ad hoc, have the same designated
+  requirement (the same `cdhash`); a build with a changed constant has a
+  different one. A comment-only change compiles to the same binary.
+- `codesign` refuses a self-signed code-signing certificate that is not marked
+  trusted ("no identity found"); marking it trusted asks for the user's
+  password. A persistent identity therefore needs the owner: an Apple
+  Developer ID, or a certificate they trust themselves.
+
+Open after this round:
+- `active speaker` under a non-English interface, observed with a speaker.
+- A gallery with more than one page of participants.
+- The helper rebuilt after its source changed in this round (the unused
+  `topic` field removed) has a new signature: "Recog Zoom Helper" must be
+  switched on again in the Accessibility list before the next meeting.
 
 ## Post-Completion (manual, live meeting)
 - Console shows `Using adapter: zoom`; the bridge log shows `Client connected`

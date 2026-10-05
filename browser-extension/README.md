@@ -48,7 +48,7 @@ The content script runs in the top frame of `https://*.zoom.us/wc/*` (the client
 - `getMeetingUrl()` synthesizes `https://zoom.us/j/<id>`, so the backend gets the meeting number as `live_id` and one host for every Zoom subdomain; any other Zoom source must report the same form.
 - `getDiagnostic()` reports selector drift: no tiles for 30 s, an active tile without a name, or no active tile for 2 minutes with two or more participants.
 
-Chrome gates a page's connection to localhost behind a per-origin permission. The first time, accept the prompt for `app.zoom.us`; until then the panel shows the speaker but the bridge receives nothing. Per-participant PCM is out of scope. Not exercised on a live meeting: screen share, pin / spotlight, breakout rooms. See `docs/plans/2026-10-04-zoom-platform.md`.
+Chrome gates a page's connection to localhost behind a per-origin permission. The first time, accept the prompt for `app.zoom.us`; until then the panel shows the speaker but the bridge receives nothing. Per-participant PCM is out of scope. Exercised on live meetings besides plain speaker and gallery view: a pinned participant (the explicit mark still follows the real speaker; while the pinned one speaks there is no mark and the main tile shows them), a screen share (the toolbar and the strip with its mark stay, the main tile gives way to the shared content) and a one-to-one call (no explicit mark exists at all, the main tile is the other participant — the main-tile fallback is what attributes there). Not exercised: breakout rooms. See `docs/plans/2026-10-04-zoom-platform.md`.
 
 ## Build (required after edits)
 
