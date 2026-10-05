@@ -311,12 +311,19 @@ Departures from the Stage 3 outline:
   a child process like `sck_audio_capture`: a child's permission belongs to
   its parent, here a Python interpreter whose path changes with upgrades.
 
+- [x] live check through the helper application (2026-10-05), after "Recog
+      Zoom Helper" was granted Accessibility: one join, six of six speech
+      segments attributed to the two scripted speakers, no leave across a
+      switch to minimal view and back, the helper gone once its reader exited
+- [x] found there and fixed: the recording was titled "Meeting  40-minutes".
+      The toolbar's info button, read as the topic, carried the free-plan timer
+      instead. The topic is no longer used; application recordings have no
+      title
+
 Open:
-- The helper as its own application was started and reported "no permission"
-  as intended (the terminal that launched it has the permission, so the two
-  are separate subjects), and it exited with its reader. A meeting through it
-  was not observed: the permission for "Recog Zoom Helper" was not yet
-  granted.
+- The Swift helper still emits the unused `topic` field: changing its source
+  rebuilds it, and an ad-hoc signed rebuild loses the granted permission.
+  Remove it with the next real change to the helper.
 - A real signing identity (`RECOG_CODESIGN_IDENTITY`) was not exercised.
 - Zoom UI languages other than English, speaker view, screen share, meetings
   with several pages of tiles.

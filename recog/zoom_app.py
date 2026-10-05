@@ -10,8 +10,8 @@ the bridge, attribution, Copilot and increments need no Zoom-specific code.
 What the application exposes (Zoom Workplace 7.1.9): the participant tiles
 with a name and a description such as ``Alice, Computer audio unmuted, Video
 off, active speaker``. It does not expose the meeting number, so every
-application meeting is reported under one URL; the topic is readable only
-while the toolbar is shown.
+application meeting is reported under one URL, and no reliable topic, so the
+recording has no title.
 
 The helper runs as its own application bundle, started through LaunchServices,
 so the Accessibility permission belongs to "Recog Zoom Helper" and not to
@@ -127,7 +127,6 @@ class ZoomAppSession:
         self._self_name: str | None = None
         self._sent_participants: object = _UNSENT
         self._sent_speaker: object = _UNSENT
-        self._sent_title: str | None = None
 
     def on_rejected(self, now: float) -> None:
         """The bridge refused the join: another source owns the meeting."""
@@ -167,7 +166,6 @@ class ZoomAppSession:
         self._roster = {}
         self._sent_participants = _UNSENT
         self._sent_speaker = _UNSENT
-        self._sent_title = None
         return [{"type": "meeting_join", "url": MEETING_URL, "platform": PLATFORM, "title": ""}]
 
     def _state_frames(self, snapshot: dict, now: float) -> list[dict]:
@@ -180,12 +178,11 @@ class ZoomAppSession:
         else:
             self._roster = tiles
 
+        # The helper also reports a "topic" (the description of the toolbar's
+        # info button). It is ignored: on a live meeting that description read
+        # "Meeting  40-minutes" — the free-plan timer — instead of the topic, and
+        # a wrong title is worse than none.
         frames: list[dict] = []
-        topic = snapshot.get("topic")
-        if topic and topic != self._sent_title:
-            self._sent_title = topic
-            frames.append({"type": "meeting_title_update", "title": topic})
-
         participants = [
             {
                 "id": name,

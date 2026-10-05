@@ -80,8 +80,9 @@ Limits:
   ten minutes continues the same recording; two different meetings inside that
   window continue it too. A meeting joined through the web client is a separate
   recording.
-- **Title only if seen.** The topic is readable while the meeting toolbar is
-  shown; otherwise the recording has no title.
+- **No title.** The application offers no reliable topic: the one element
+  that carries it showed the free-plan timer ("Meeting  40-minutes") on a live
+  meeting. The recording is listed by its date.
 - **Namesakes merge** into one participant.
 - **One source at a time.** While a browser conference owns the recording, the
   application source stays silent and retries every 30 seconds.

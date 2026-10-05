@@ -272,15 +272,13 @@ def test_given_tile_without_a_name_when_processed_then_skipped():
     assert [p["name"] for p in frames[0]["participants"]] == ["Bob"]
 
 
-def test_given_topic_seen_while_the_toolbar_is_shown_when_processed_then_title_is_sent_once():
+def test_given_helper_reports_a_topic_when_processed_then_no_title_is_sent():
+    # Observed live: the "topic" read "Meeting  40-minutes", the free-plan timer.
     session = joined_session()
 
-    first = session.frames(meeting(tile("Bob"), topic="Weekly sync"), 101.0)
-    second = session.frames(meeting(tile("Bob"), topic="Weekly sync"), 102.0)
-    third = session.frames(meeting(tile("Bob")), 103.0)
+    frames = session.frames(meeting(tile("Bob"), topic="Meeting  40-minutes"), 101.0)
 
-    assert first[0] == {"type": "meeting_title_update", "title": "Weekly sync"}
-    assert second == [] and third == []
+    assert "meeting_title_update" not in types(frames)
 
 
 # --- helper application ------------------------------------------------------
