@@ -72,9 +72,12 @@ video off:
 
 Limits:
 
-- **English Zoom interface only.** Mute and speaker state are read from the
-  tile description in the interface language. Another language yields the
-  roster but no speaker; speech is then `Unknown`, never guessed.
+- **Interface language.** The tile description is worded in the Zoom interface
+  language. The mute wording is read from the installed Zoom's own
+  localization files, so every language it ships is covered; the speaker mark
+  is the literal `active speaker` in all of them. Checked live in English; in
+  Russian the mute wording was observed on a live meeting, the speaker mark
+  was not (it has no entry in Zoom's localization files).
 - **No meeting number.** The application does not expose it, so every
   application meeting is recorded under `https://zoom.us/app`. Rejoining within
   ten minutes continues the same recording; two different meetings inside that

@@ -12,6 +12,7 @@ import pytest
 
 from recog import zoom_app
 from recog.zoom_app import (
+    ENGLISH,
     JOIN_RETRY_S,
     LEAVE_DEBOUNCE_S,
     MEETING_URL,
@@ -19,6 +20,7 @@ from recog.zoom_app import (
     ZoomAppSession,
     account_name,
     find_or_build_helper,
+    load_vocabulary,
     parse_tile,
 )
 
@@ -59,6 +61,91 @@ def types(frames):
 )
 def test_given_tile_description_when_parsed_then_only_known_wording_counts(description, expected):
     assert parse_tile("Alice", description) == expected
+
+
+def _zoom_app(tmp_path, **languages):
+    """A stand-in Zoom bundle with one Localizable.strings per language."""
+    app = tmp_path / "zoom.us.app"
+    for language, entries in languages.items():
+        folder = app / f"Contents/Resources/{language}.lproj"
+        folder.mkdir(parents=True)
+        body = "".join(f'"{key}" = "{value}";\n' for key, value in entries.items())
+        (folder / "Localizable.strings").write_text(body, encoding="utf-16")
+    return app
+
+
+RUSSIAN = {
+    "LN_Plist_Accessibility_VoIP_Muted_20044": "Звук компьютера выключен",
+    "LN_Plist_Accessibility_VoIP_Unmuted_20044": "Звук компьютера включен",
+    "LN_Plist_Accessibility_Tele_Muted_20044": "Звук телефона выключен",
+    "LN_Audio_Unmuted_Accessibility_1152855": "Звук включен",
+    "LN_Plist_Accessibility_Video_Off_20044": "Видео выкл.",
+}
+
+
+def test_given_installed_zoom_when_vocabulary_is_loaded_then_it_has_its_mute_wording_and_english(
+    tmp_path,
+):
+    vocabulary = load_vocabulary((_zoom_app(tmp_path, ru=RUSSIAN),))
+
+    assert {
+        "звук компьютера выключен",
+        "звук телефона выключен",
+        "computer audio muted",
+    } <= vocabulary.muted
+    assert {
+        "звук компьютера включен",
+        "звук включен",
+        "computer audio unmuted",
+    } <= vocabulary.unmuted
+    assert "видео выкл." not in vocabulary.muted | vocabulary.unmuted
+
+
+def test_given_string_ids_of_another_zoom_version_when_loaded_then_keys_still_match(tmp_path):
+    renumbered = {"LN_Plist_Accessibility_VoIP_Muted_99999": "Ton aus"}
+
+    assert "ton aus" in load_vocabulary((_zoom_app(tmp_path, de=renumbered),)).muted
+
+
+def test_given_no_zoom_or_an_unreadable_file_when_loaded_then_english_wording_remains(tmp_path):
+    app = _zoom_app(tmp_path, ru=RUSSIAN)
+    (app / "Contents/Resources/ru.lproj/Localizable.strings").write_bytes(b"\xff\xfe\x00\xd8")
+
+    assert load_vocabulary((tmp_path / "absent.app", app)) == ENGLISH
+
+
+def test_given_russian_interface_when_a_tile_is_parsed_with_loaded_wording_then_mute_and_speaker_are_read(
+    tmp_path,
+):
+    vocabulary = load_vocabulary((_zoom_app(tmp_path, ru=RUSSIAN),))
+
+    muted = parse_tile(
+        "Иван", "Иван, Звук компьютера выключен, Видео выкл., active speaker", vocabulary
+    )
+    speaking = parse_tile(
+        "Иван", "Иван, Звук компьютера включен, Видео выкл., active speaker", vocabulary
+    )
+
+    assert muted == Tile("Иван", True, True)
+    assert speaking == Tile("Иван", False, True)
+
+
+def test_given_russian_interface_when_session_runs_with_loaded_wording_then_a_muted_speaker_is_not_reported(
+    tmp_path,
+):
+    session = ZoomAppSession(load_vocabulary((_zoom_app(tmp_path, ru=RUSSIAN),)))
+    session.frames(meeting(tile("Host")), 100.0)
+
+    frames = session.frames(
+        meeting(
+            tile("Иван", "Звук компьютера выключен", "active speaker"),
+            tile("Анна", "Звук компьютера включен"),
+        ),
+        101.0,
+    )
+
+    assert [p["micMuted"] for p in frames[0]["participants"]] == [True, False]
+    assert speaker_of(frames) is None
 
 
 def test_given_name_with_a_comma_when_parsed_then_the_name_is_not_read_as_state():

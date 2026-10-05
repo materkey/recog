@@ -9,7 +9,7 @@ the bridge, attribution, Copilot and increments need no Zoom-specific code.
 
 What the application exposes (Zoom Workplace 7.1.9): the participant tiles
 with a name and a description such as ``Alice, Computer audio unmuted, Video
-off, active speaker``. It does not expose the meeting number, so every
+off, active speaker``, worded in the Zoom interface language. It does not expose the meeting number, so every
 application meeting is reported under one URL, and no reliable topic, so the
 recording has no title.
 
@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -62,13 +63,54 @@ HELPER_BUNDLE_ID = "com.recog.zoom-helper"
 HELPER_NAME = "Recog Zoom Helper"
 HELPER_SOURCE = "recog/native/macos/zoom_ax_probe.swift"
 
-# Tile description vocabulary, English Zoom UI. Positive evidence only: an
-# unknown wording yields "not muted, not speaking", never a guess.
+# The speaker mark is a literal in the Zoom binary with no entry in its
+# localization files, so it reads the same in every interface language.
 _ACTIVE_TOKEN = "active speaker"
-_UNMUTED_SUFFIX = " unmuted"
-_MUTED_SUFFIX = " muted"
+
+ZOOM_APP_PATHS = (Path("/Applications/zoom.us.app"), Path.home() / "Applications/zoom.us.app")
+# Localizable.strings keys of the mute wording on a tile; the numeric suffix is
+# a string id that may differ between Zoom versions.
+_MUTE_ENTRY = re.compile(
+    r'"(?:LN_Plist_Accessibility_(?:VoIP|Tele)_(Muted|Unmuted)_\d+'
+    r'|LN_Audio_(Muted|Unmuted)_Accessibility_\d+)"\s*=\s*"((?:[^"\\]|\\.)*)"\s*;'
+)
 
 _UNSENT = object()
+
+
+@dataclass(frozen=True)
+class Vocabulary:
+    """Lower-cased tile wording for a muted and an unmuted microphone."""
+
+    muted: frozenset[str]
+    unmuted: frozenset[str]
+
+
+# What Zoom Workplace 7.1.9 says in English; used when the installed
+# application's own wording cannot be read.
+ENGLISH = Vocabulary(
+    muted=frozenset({"computer audio muted", "telephone muted", "audio muted"}),
+    unmuted=frozenset({"computer audio unmuted", "telephone unmuted", "audio unmuted"}),
+)
+
+
+def load_vocabulary(app_paths: tuple[Path, ...] = ZOOM_APP_PATHS) -> Vocabulary:
+    """Mute wording in every language the installed Zoom ships, plus English.
+
+    The tile description is in the Zoom interface language. Reading the wording
+    from the application's own localization files covers every language it
+    ships without a table kept here, and follows its updates.
+    """
+    muted, unmuted = set(ENGLISH.muted), set(ENGLISH.unmuted)
+    for app in app_paths:
+        for strings in sorted(app.glob("Contents/Resources/*.lproj/Localizable.strings")):
+            try:
+                text = strings.read_text(encoding="utf-16")
+            except (OSError, UnicodeError):
+                continue
+            for first, second, wording in _MUTE_ENTRY.findall(text):
+                (muted if (first or second) == "Muted" else unmuted).add(wording.strip().lower())
+    return Vocabulary(muted=frozenset(muted), unmuted=frozenset(unmuted))
 
 
 @dataclass(frozen=True)
@@ -78,16 +120,19 @@ class Tile:
     active: bool
 
 
-def parse_tile(name: str, description: str) -> Tile:
-    """Split ``<name>, <state>, <state>…`` into mute and speaker state."""
+def parse_tile(name: str, description: str, vocabulary: Vocabulary = ENGLISH) -> Tile:
+    """Split ``<name>, <state>, <state>…`` into mute and speaker state.
+
+    Positive evidence only: wording outside the vocabulary yields "mute
+    unknown, not speaking", never a guess.
+    """
     rest = description[len(name) :] if description.startswith(name) else ""
-    tokens = [token.strip().lower() for token in rest.split(",") if token.strip()]
+    tokens = {token.strip().lower() for token in rest.split(",") if token.strip()}
     muted = None
-    for token in tokens:
-        if token.endswith(_UNMUTED_SUFFIX):
-            muted = False
-        elif token.endswith(_MUTED_SUFFIX):
-            muted = True
+    if tokens & vocabulary.unmuted:
+        muted = False
+    elif tokens & vocabulary.muted:
+        muted = True
     return Tile(name=name, muted=muted, active=_ACTIVE_TOKEN in tokens)
 
 
@@ -105,13 +150,13 @@ def _merge(first: Tile, second: Tile) -> Tile:
     return Tile(name=first.name, muted=muted, active=first.active or second.active)
 
 
-def _tiles(snapshot: dict) -> dict[str, Tile]:
+def _tiles(snapshot: dict, vocabulary: Vocabulary) -> dict[str, Tile]:
     tiles: dict[str, Tile] = {}
     for raw in snapshot.get("tiles", []):
         name = raw.get("name")
         if not name:
             continue
-        tile = parse_tile(name, raw.get("description", ""))
+        tile = parse_tile(name, raw.get("description", ""), vocabulary)
         tiles[name] = _merge(tiles[name], tile) if name in tiles else tile
     return tiles
 
@@ -119,8 +164,9 @@ def _tiles(snapshot: dict) -> dict[str, Tile]:
 class ZoomAppSession:
     """Turns helper snapshots into bridge frames. Pure: no I/O; `now` is epoch seconds."""
 
-    def __init__(self) -> None:
+    def __init__(self, vocabulary: Vocabulary = ENGLISH) -> None:
         self.joined = False
+        self._vocabulary = vocabulary
         self._last_meeting_at: float | None = None
         self._rejected_at: float | None = None
         self._roster: dict[str, Tile] = {}
@@ -169,7 +215,7 @@ class ZoomAppSession:
         return [{"type": "meeting_join", "url": MEETING_URL, "platform": PLATFORM, "title": ""}]
 
     def _state_frames(self, snapshot: dict, now: float) -> list[dict]:
-        tiles = _tiles(snapshot)
+        tiles = _tiles(snapshot, self._vocabulary)
         minimal = snapshot.get("view") == "minimal"
         self._self_name = account_name(snapshot.get("account")) or self._self_name
         if minimal:
@@ -387,7 +433,7 @@ async def _pump(
 async def run(bridge_url: str = BRIDGE_URL) -> None:
     import websockets
 
-    session = ZoomAppSession()
+    session = ZoomAppSession(load_vocabulary())
     log = _StatusLog()
     async with helper_lines(find_or_build_helper()) as lines:
         while True:
