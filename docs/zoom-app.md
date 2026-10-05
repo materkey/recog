@@ -66,8 +66,14 @@ video off:
 - Remote speech is attributed to the participant Zoom marks as the active
   speaker. The mark stays on the last speaker during silence.
 - The meeting is detected with the window on another Space and with the
-  participants panel closed. In minimal view only the current speaker is
-  visible; the roster seen before is kept.
+  participants panel closed, in gallery view and in speaker view, and while
+  someone shares a screen.
+- The meeting starts with the first participant tile: the preview shown
+  before "Start" is not yet a meeting.
+- Only the tiles on screen are readable: one in minimal view, a page of them
+  in a small window or a large meeting. Zoom keeps the current speaker among
+  them, so the speaker is still found; the participant list is what has been
+  seen so far and is not trimmed when someone leaves.
 - Leaving is reported once the meeting window has been gone for six seconds.
 
 Limits:
@@ -90,6 +96,8 @@ Limits:
 - **Namesakes merge** into one participant.
 - **One source at a time.** While a browser conference owns the recording, the
   application source stays silent and retries every 30 seconds.
-- Not exercised: speaker view, screen share, large meetings with several pages
-  of tiles, breakout rooms.
+- Not exercised: gallery view with more participants than one page holds
+  (over 25): the speaker is found only while on the visible page. In speaker
+  view Zoom brings the speaker onto the screen, so prefer it in large
+  meetings. Breakout rooms were not exercised either.
 - macOS only. On Linux use the Zoom web client.

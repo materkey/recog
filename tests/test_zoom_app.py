@@ -37,7 +37,7 @@ def meeting(*tiles, view="window", **extra):
 
 def joined_session(now=100.0):
     session = ZoomAppSession()
-    assert [f["type"] for f in session.frames(meeting(), now)] == ["meeting_join"]
+    assert [f["type"] for f in session.frames(meeting(tile("Host")), now)] == ["meeting_join"]
     return session
 
 
@@ -188,6 +188,31 @@ def test_given_first_meeting_snapshot_when_processed_then_only_the_join_is_sent(
     assert frames == [{"type": "meeting_join", "url": MEETING_URL, "platform": "zoom", "title": ""}]
 
 
+def test_given_join_preview_without_tiles_when_processed_then_nothing_until_the_first_tile():
+    # The preview shown before "Start" is already the meeting window.
+    session = ZoomAppSession()
+
+    assert session.frames(meeting(), 100.0) == []
+    assert session.joined is False
+    assert types(session.frames(meeting(tile("Me")), 104.0)) == ["meeting_join"]
+
+
+def test_given_preview_cancelled_when_the_window_goes_away_then_no_leave_is_sent():
+    session = ZoomAppSession()
+    session.frames(meeting(), 100.0)
+
+    assert session.frames({"state": "idle"}, 100.0 + LEAVE_DEBOUNCE_S + 1) == []
+
+
+def test_given_joined_meeting_when_tiles_vanish_then_it_stays_joined():
+    session = joined_session()
+
+    frames = session.frames(meeting(), 101.0)
+
+    assert session.joined is True
+    assert "meeting_leave" not in types(frames)
+
+
 def test_given_joined_when_next_snapshot_arrives_then_participants_and_speaker_follow():
     session = joined_session()
     snapshot = meeting(
@@ -265,7 +290,7 @@ def test_given_rejected_then_meeting_ended_when_a_new_meeting_starts_then_join_i
     session.on_rejected(100.5)
     session.frames({"state": "idle"}, 101.0)
 
-    assert types(session.frames(meeting(), 102.0)) == ["meeting_join"]
+    assert types(session.frames(meeting(tile("Host")), 102.0)) == ["meeting_join"]
 
 
 def test_given_bridge_link_dropped_when_meeting_continues_then_join_is_sent_again():
@@ -337,6 +362,31 @@ def test_given_minimal_view_with_a_muted_tile_when_processed_then_speaker_is_nul
     frames = session.frames(meeting(tile("Bob", "Computer audio muted"), view="minimal"), 101.0)
 
     assert speaker_of(frames) is None
+
+
+def test_given_tiles_scroll_off_screen_when_processed_then_the_roster_keeps_everyone_seen():
+    # A small window or a large meeting shows a page of tiles; the speaker is
+    # always among them, the rest of the roster is not.
+    session = joined_session()
+    session.frames(meeting(tile("Alice", "active speaker"), tile("Bob"), tile("Carol")), 101.0)
+
+    frames = session.frames(meeting(tile("Bob", "active speaker")), 102.0)
+
+    assert types(frames) == ["speaker_update"]  # the roster did not shrink
+    assert speaker_of(frames)["name"] == "Bob"
+    later = session.frames(meeting(tile("Dave", "Computer audio muted")), 103.0)
+    assert [p["name"] for p in later[0]["participants"]] == ["Alice", "Bob", "Carol", "Dave"]
+
+
+def test_given_a_new_meeting_when_joined_then_the_roster_starts_empty():
+    session = joined_session(now=100.0)
+    session.frames(meeting(tile("Alice")), 101.0)
+    session.frames({"state": "idle"}, 200.0)
+    session.frames(meeting(tile("Host")), 300.0)
+
+    frames = session.frames(meeting(tile("Bob")), 301.0)
+
+    assert [p["name"] for p in frames[0]["participants"]] == ["Bob"]
 
 
 def test_given_namesakes_one_muted_when_processed_then_one_unmuted_participant():
@@ -587,7 +637,7 @@ def _reader(*snapshots):
 @pytest.mark.asyncio
 async def test_given_helper_snapshots_when_pumped_then_frames_reach_the_bridge_and_eof_is_an_error():
     socket = FakeSocket()
-    reader = _reader(meeting(), meeting(tile("Bob", "active speaker")))
+    reader = _reader(meeting(tile("Host")), meeting(tile("Bob", "active speaker")))
 
     with pytest.raises(RuntimeError, match="the Zoom helper disconnected"):
         await zoom_app._pump(socket, reader, ZoomAppSession(), zoom_app._StatusLog())
@@ -600,7 +650,7 @@ async def test_given_bridge_rejects_the_join_when_pumped_then_no_state_frames_fo
     socket = FakeSocket()
     session = ZoomAppSession()
     reader = asyncio.StreamReader()
-    reader.feed_data((json.dumps(meeting()) + "\n").encode())
+    reader.feed_data((json.dumps(meeting(tile("Host"))) + "\n").encode())
     pump = asyncio.ensure_future(zoom_app._pump(socket, reader, session, zoom_app._StatusLog()))
     await asyncio.sleep(0.01)
 

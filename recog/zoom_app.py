@@ -189,6 +189,10 @@ class ZoomAppSession:
             return self._leave_frames(now)
         self._last_meeting_at = now
         if not self.joined:
+            # The join preview is already the meeting window, with no tile in
+            # it yet. A meeting starts with the first participant tile.
+            if not snapshot.get("tiles"):
+                return []
             return self._join_frames(now)
         return self._state_frames(snapshot, now)
 
@@ -218,11 +222,11 @@ class ZoomAppSession:
         tiles = _tiles(snapshot, self._vocabulary)
         minimal = snapshot.get("view") == "minimal"
         self._self_name = account_name(snapshot.get("account")) or self._self_name
-        if minimal:
-            # Minimal view shows one tile; the roster seen before it still holds.
-            self._roster.update(tiles)
-        else:
-            self._roster = tiles
+        # The tree holds only the tiles on screen: one in minimal view, a page of
+        # them in a large meeting or a small window. The roster therefore grows
+        # over the meeting and is never trimmed — a participant who left stays
+        # listed, which is a smaller error than dropping everyone off-screen.
+        self._roster.update(tiles)
 
         # The helper also reports a "topic" (the description of the toolbar's
         # info button). It is ignored: on a live meeting that description read
