@@ -55,6 +55,9 @@ RECONNECT_S = 3.0
 # Background mode: wait this long before starting over after a failure.
 RESTART_S = 30.0
 HELPER_CONNECT_S = 15.0
+# How often a helper is started afresh while the permission is missing. A
+# running helper cannot notice the grant: macOS caches the answer per process.
+PERMISSION_RETRY_S = 15.0
 
 # The helper application: the owner of the Accessibility permission. Its bundle
 # identifier is what the permission is recorded under, so it must not change.
@@ -190,6 +193,9 @@ class ZoomAppSession:
         self._rejected_at = None
 
     def frames(self, snapshot: dict, now: float) -> list[dict]:
+        # Reported outside a meeting too; inside one the main window that
+        # carries it is not always reachable.
+        self._self_name = account_name(snapshot.get("account")) or self._self_name
         if snapshot.get("state") != "meeting":
             return self._leave_frames(now)
         self._last_meeting_at = now
@@ -226,7 +232,6 @@ class ZoomAppSession:
     def _state_frames(self, snapshot: dict, now: float) -> list[dict]:
         tiles = _tiles(snapshot, self._vocabulary)
         minimal = snapshot.get("view") == "minimal"
-        self._self_name = account_name(snapshot.get("account")) or self._self_name
         # The tree holds only the tiles on screen: one in minimal view, a page of
         # them in a large meeting or a small window. The roster therefore grows
         # over the meeting and is never trimmed — a participant who left stays
@@ -346,8 +351,11 @@ def find_or_build_helper(repo_root: Path = REPO_ROOT) -> Path:
 
 
 @contextlib.asynccontextmanager
-async def helper_lines(app: Path):
+async def helper_lines(app: Path, prompt: bool = True):
     """Start the helper application and yield the stream of its snapshots.
+
+    `prompt=False` keeps a helper without the Accessibility permission from
+    showing the system dialog again.
 
     The helper is launched by LaunchServices and therefore shares no pipe with
     this process; it connects back to a Unix socket in a private temporary
@@ -367,6 +375,8 @@ async def helper_lines(app: Path):
     try:
         # -n: a fresh instance bound to this socket; -g: never comes to the front.
         launch = ["open", "-g", "-n", "-a", str(app), "--args", "--socket", str(socket_path)]
+        if not prompt:
+            launch.append("--no-prompt")
         result = subprocess.run(launch, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"cannot launch {app.name}: {result.stderr.strip()}")
@@ -385,6 +395,10 @@ async def helper_lines(app: Path):
         shutil.rmtree(directory, ignore_errors=True)
 
 
+class HelperGone(RuntimeError):
+    """The helper closed its stream."""
+
+
 class _StatusLog:
     """One stderr line per change of the helper state."""
 
@@ -397,12 +411,12 @@ class _StatusLog:
     }
 
     def __init__(self) -> None:
-        self._state: str | None = None
+        self.state: str | None = None
 
     def note(self, state: str | None) -> None:
-        if state == self._state:
+        if state == self.state:
             return
-        self._state = state
+        self.state = state
         print(
             f"[zoom-app] {self.MESSAGES.get(state or '', f'unknown helper state: {state}')}",
             file=sys.stderr,
@@ -427,7 +441,7 @@ async def _pump(
             if next_line.done():
                 raw = next_line.result()
                 if not raw:
-                    raise RuntimeError("the Zoom helper disconnected")
+                    raise HelperGone("the Zoom helper disconnected")
                 snapshot = json.loads(raw)
                 log.note(snapshot.get("state"))
                 for frame in session.frames(snapshot, time.time()):
@@ -438,21 +452,37 @@ async def _pump(
         next_message.cancel()
 
 
-async def run(bridge_url: str = BRIDGE_URL) -> None:
+async def _serve(bridge_url: str, lines, session: ZoomAppSession, log: _StatusLog) -> None:
+    """Forward the helper's snapshots, reconnecting to the bridge, until the helper is gone."""
     import websockets
 
+    while True:
+        try:
+            # No Origin header: the bridge treats this as a local client.
+            async with websockets.connect(bridge_url) as websocket:
+                await _pump(websocket, lines, session, log)
+        except (OSError, websockets.WebSocketException) as exc:
+            print(f"[zoom-app] bridge link lost: {exc}", file=sys.stderr)
+        session.on_disconnect()
+        await asyncio.sleep(RECONNECT_S)
+
+
+async def run(bridge_url: str = BRIDGE_URL) -> None:
     session = ZoomAppSession(load_vocabulary())
     log = _StatusLog()
-    async with helper_lines(find_or_build_helper()) as lines:
-        while True:
-            try:
-                # No Origin header: the bridge treats this as a local client.
-                async with websockets.connect(bridge_url) as websocket:
-                    await _pump(websocket, lines, session, log)
-            except (OSError, websockets.WebSocketException) as exc:
-                print(f"[zoom-app] bridge link lost: {exc}", file=sys.stderr)
-            session.on_disconnect()
-            await asyncio.sleep(RECONNECT_S)
+    app = find_or_build_helper()
+    prompt = True
+    while True:
+        try:
+            async with helper_lines(app, prompt) as lines:
+                await _serve(bridge_url, lines, session, log)
+        except HelperGone:
+            # A helper without the permission exits after reporting it; anything
+            # else that ends the stream is a failure.
+            if log.state != "not_trusted":
+                raise
+        prompt = False
+        await asyncio.sleep(PERMISSION_RETRY_S)
 
 
 def main() -> None:

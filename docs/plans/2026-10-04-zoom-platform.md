@@ -382,12 +382,25 @@ Signing:
   password. A persistent identity therefore needs the owner: an Apple
   Developer ID, or a certificate they trust themselves.
 
+Third round (2026-10-05, after the helper was rebuilt and granted again):
+- Russian interface with two alternating speakers, through the service: the
+  tiles read "Speaker A, Звук компьютера включен, Video off, active speaker" —
+  the mute wording is localized, the speaker mark is the English literal. The
+  recording got 15 of 15 speech segments attributed. The join was sent after
+  the preview, on the first tile.
+- A helper that was running when the permission was granted kept reporting
+  "no permission" while a freshly started one saw it: `AXIsProcessTrusted()`
+  is cached per process. The helper now exits when it lacks the permission
+  and the source starts a fresh one every 15 seconds, prompting only once.
+- The account button is not always reachable during a meeting, so the helper
+  reports it while idle as well.
+
 Open after this round:
-- `active speaker` under a non-English interface, observed with a speaker.
 - A gallery with more than one page of participants.
-- The helper rebuilt after its source changed in this round (the unused
-  `topic` field removed) has a new signature: "Recog Zoom Helper" must be
-  switched on again in the Accessibility list before the next meeting.
+- The helper changed again (exit without the permission, account while
+  idle), so its signature did too: "Recog Zoom Helper" has to be switched on
+  once more. The pick-up of that grant without a restart is the check of the
+  change itself.
 
 ## Post-Completion (manual, live meeting)
 - Console shows `Using adapter: zoom`; the bridge log shows `Client connected`

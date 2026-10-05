@@ -2,9 +2,10 @@
 // JSON object per line describing the meeting it is in. Read-only: it performs
 // no Accessibility actions.
 //
-//   {"state": "not_trusted"}        this process lacks the Accessibility permission
+//   {"state": "not_trusted"}        this process lacks the Accessibility permission;
+//                                   the helper exits after saying so
 //   {"state": "zoom_not_running"}
-//   {"state": "idle"}               Zoom is running, no meeting window
+//   {"state": "idle", "account": "..."}   Zoom is running, no meeting window
 //   {"state": "meeting", "view": "window" | "minimal", "tiles": [...],
 //    "account": "..."}
 //
@@ -134,14 +135,15 @@ func snapshot(app: AXUIElement) -> [String: Any] {
         }
     }
 
-    guard let view else { return ["state": "idle"] }
-    var out: [String: Any] = ["state": "meeting", "view": view, "tiles": tiles]
+    // The account is reported outside a meeting too: the main window is not
+    // always reachable during one, and the name is needed from its first tile.
+    var out: [String: Any] = ["state": "idle"]
+    if let view { out = ["state": "meeting", "view": view, "tiles": tiles] }
     if let account = accountDescription(all) { out["account"] = account }
     return out
 }
 
 func currentSnapshot() -> [String: Any] {
-    guard AXIsProcessTrusted() else { return ["state": "not_trusted"] }
     guard let zoom = NSRunningApplication.runningApplications(withBundleIdentifier: zoomBundleId).first
     else { return ["state": "zoom_not_running"] }
     let app = AXUIElementCreateApplication(zoom.processIdentifier)
@@ -199,11 +201,19 @@ if let flag = arguments.firstIndex(of: "--socket"), flag + 1 < arguments.count {
     output = descriptor
 }
 
-// Ask once: the system dialog offers to open the Accessibility pane, where this
-// application is then already listed.
+// Without the permission, say so and exit. macOS answers AXIsProcessTrusted()
+// from a per-process cache: a helper that stays running never learns that the
+// permission was granted. The caller starts a fresh one every few seconds,
+// with --no-prompt so that only the first start shows the system dialog. That
+// dialog offers to open the Accessibility pane, where this application is then
+// already listed.
 if !AXIsProcessTrusted() {
-    let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-    _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+    if !arguments.contains("--no-prompt") {
+        let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+    }
+    _ = send("{\"state\":\"not_trusted\"}", to: output)
+    exit(2)
 }
 
 var lastLine = ""

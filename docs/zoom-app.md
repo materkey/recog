@@ -35,7 +35,11 @@ once and is the same for the service and for a manual run.
 On first start macOS shows "Recog Zoom Helper would like to control this
 computer using accessibility features". Choose **Open System Settings** and
 switch on **Recog Zoom Helper** under Privacy & Security → Accessibility.
-The helper notices the grant without a restart. Until then the log says:
+Nothing has to be restarted afterwards: the grant is picked up within about
+15 seconds. (A running helper cannot see it — macOS answers from a per-process
+cache — so, while the permission is missing, the helper exits and a fresh one
+is started every 15 seconds; only the first start shows the dialog.) Until
+then the log says:
 
 ```
 [zoom-app] "Recog Zoom Helper" has no Accessibility permission — Zoom meetings are not detected (System Settings → Privacy & Security → Accessibility)

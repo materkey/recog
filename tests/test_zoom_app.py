@@ -346,6 +346,19 @@ def test_given_own_tile_marked_when_processed_then_speaker_is_local():
     assert speaker_of(frames) == {"id": "Me", "name": "Me", "isLocal": True}
 
 
+def test_given_account_seen_before_the_meeting_when_own_tile_is_marked_then_speaker_is_local():
+    # During a meeting the main window that carries the account is not always
+    # reachable; the helper reports it while idle as well.
+    session = ZoomAppSession()
+    session.frames({"state": "idle", "account": ACCOUNT}, 90.0)
+    session.frames(meeting(tile("Me")), 100.0)
+
+    frames = session.frames(meeting(tile("Me", "active speaker"), tile("Bob")), 101.0)
+
+    assert speaker_of(frames) == {"id": "Me", "name": "Me", "isLocal": True}
+    assert [p["isLocal"] for p in frames[0]["participants"]] == [True, False]
+
+
 def test_given_minimal_view_when_processed_then_its_single_tile_is_the_speaker_and_roster_is_kept():
     session = joined_session()
     session.frames(meeting(tile("Alice", "active speaker"), tile("Bob")), 101.0)
@@ -601,6 +614,22 @@ async def test_given_helper_application_when_started_then_it_is_launched_by_laun
 
 
 @pytest.mark.asyncio
+async def test_given_restart_after_a_missing_permission_when_started_then_the_helper_is_told_not_to_prompt(
+    monkeypatch, tmp_path
+):
+    async def helper(socket_path):
+        _, writer = await asyncio.open_unix_connection(socket_path)
+        writer.close()
+
+    launched = _launching(monkeypatch, helper)
+
+    async with zoom_app.helper_lines(tmp_path / "RecogZoomHelper.app", prompt=False) as lines:
+        await lines.readline()
+
+    assert launched[0][-1] == "--no-prompt"
+
+
+@pytest.mark.asyncio
 async def test_given_helper_never_connects_when_started_then_error_says_so(monkeypatch, tmp_path):
     _launching(monkeypatch, lambda socket_path: None)
     monkeypatch.setattr(zoom_app, "HELPER_CONNECT_S", 0.05)
@@ -763,7 +792,7 @@ def test_given_live_command_when_run_then_zoom_source_starts_only_when_asked(
     assert bool(started) is expected
 
 
-# --- run: helper and bridge link ---------------------------------------------
+# --- serve and run: bridge link, helper restarts ------------------------------
 
 
 class FakeConnection:
@@ -774,31 +803,13 @@ class FakeConnection:
         return False
 
 
-def _patch_run(monkeypatch, connect, pump):
-    state = {"helper_open": False, "closed": False}
-
-    @contextlib.asynccontextmanager
-    async def fake_helper_lines(app):
-        state["helper_open"] = True
-        try:
-            yield object()
-        finally:
-            state["closed"] = True
-
-    monkeypatch.setattr(zoom_app, "find_or_build_helper", lambda: Path("/tmp/RecogZoomHelper.app"))
-    monkeypatch.setattr(zoom_app, "helper_lines", fake_helper_lines)
-    monkeypatch.setattr(zoom_app, "RECONNECT_S", 0)
-    monkeypatch.setattr("websockets.connect", connect)
-    monkeypatch.setattr(zoom_app, "_pump", pump)
-    return state
-
-
 @pytest.mark.asyncio
-async def test_given_bridge_down_then_up_when_running_then_it_reconnects_with_the_same_helper(
+async def test_given_bridge_down_then_up_when_serving_then_it_reconnects_until_the_helper_is_gone(
     monkeypatch, capsys
 ):
     attempts = []
-    sessions = []
+    session = ZoomAppSession()
+    pumped = []
 
     def connect(url):
         attempts.append(url)
@@ -807,20 +818,66 @@ async def test_given_bridge_down_then_up_when_running_then_it_reconnects_with_th
         return FakeConnection()
 
     async def pump(websocket, lines, session, log):
-        sessions.append(session)
-        if len(sessions) == 1:
+        pumped.append(session.joined)
+        if len(pumped) == 1:
             session.joined = True
             return  # the bridge closed the link
-        raise RuntimeError("the Zoom helper disconnected")
+        raise zoom_app.HelperGone("the Zoom helper disconnected")
 
-    state = _patch_run(monkeypatch, connect, pump)
+    monkeypatch.setattr(zoom_app, "RECONNECT_S", 0)
+    monkeypatch.setattr("websockets.connect", connect)
+    monkeypatch.setattr(zoom_app, "_pump", pump)
 
-    with pytest.raises(RuntimeError, match="the Zoom helper disconnected"):
-        await zoom_app.run("ws://bridge.test")
+    with pytest.raises(zoom_app.HelperGone):
+        await zoom_app._serve("ws://bridge.test", object(), session, zoom_app._StatusLog())
 
     assert attempts == ["ws://bridge.test"] * 3
     assert "bridge link lost: connection refused" in capsys.readouterr().err
-    assert (
-        sessions[0] is sessions[1] and sessions[1].joined is False
-    )  # on_disconnect ran in between
-    assert state == {"helper_open": True, "closed": True}
+    assert pumped == [False, False]  # on_disconnect ran between the two links
+
+
+def _patch_run(monkeypatch, states):
+    """`run` with a helper per entry of `states`: the state it reports before it exits."""
+    launches = []
+
+    @contextlib.asynccontextmanager
+    async def fake_helper_lines(app, prompt=True):
+        launches.append(prompt)
+        yield len(launches) - 1
+
+    async def fake_serve(bridge_url, lines, session, log):
+        log.note(states[lines])
+        raise zoom_app.HelperGone("the Zoom helper disconnected")
+
+    monkeypatch.setattr(zoom_app, "find_or_build_helper", lambda: Path("/tmp/RecogZoomHelper.app"))
+    monkeypatch.setattr(zoom_app, "load_vocabulary", lambda: ENGLISH)
+    monkeypatch.setattr(zoom_app, "helper_lines", fake_helper_lines)
+    monkeypatch.setattr(zoom_app, "_serve", fake_serve)
+    monkeypatch.setattr(zoom_app, "PERMISSION_RETRY_S", 0)
+    return launches
+
+
+@pytest.mark.asyncio
+async def test_given_permission_missing_then_granted_when_running_then_a_fresh_helper_is_started_quietly(
+    monkeypatch,
+):
+    # A running helper cannot see the grant (macOS caches the answer per
+    # process), so it exits and a new one is started; only the first may prompt.
+    launches = _patch_run(monkeypatch, ["not_trusted", "not_trusted", "idle"])
+
+    with pytest.raises(zoom_app.HelperGone):
+        await zoom_app.run("ws://bridge.test")
+
+    assert launches == [True, False, False]
+
+
+@pytest.mark.asyncio
+async def test_given_helper_with_permission_dies_when_running_then_the_failure_surfaces(
+    monkeypatch,
+):
+    launches = _patch_run(monkeypatch, ["meeting"])
+
+    with pytest.raises(zoom_app.HelperGone, match="the Zoom helper disconnected"):
+        await zoom_app.run("ws://bridge.test")
+
+    assert launches == [True]
