@@ -47,6 +47,18 @@ SAME_ROOM_REOPEN_WINDOW = timedelta(minutes=10)
 CONFERENCE_SOURCES = frozenset({"ktalk", "vas3k", "jitsi", "matrix", "gmeet", "zoom"})
 
 
+def _wants_generated_title(meta: dict) -> bool:
+    """An ended recording with speech that nobody titled.
+
+    Orphans never have a title. A conference normally brings one, but not
+    every source can: the Zoom application exposes no topic.
+    """
+    if meta.get("title") or meta["stats"]["segment_count"] <= 0:
+        return False
+    source = meta.get("source")
+    return source == "orphan" or is_conference_source(source)
+
+
 def is_conference_source(source: Optional[str]) -> bool:
     """True when `source` is an extension-driven conference platform.
 
@@ -568,11 +580,7 @@ class MeetingStorage:
 
         # AI work must not delay a lifecycle transition or the bridge event loop.
         # Pin the closed recording: current_meeting_path can change immediately.
-        if (
-            meta.get("source") == "orphan"
-            and not meta.get("title")
-            and meta["stats"]["segment_count"] > 0
-        ):
+        if _wants_generated_title(meta):
             if self._title_executor is None:
                 self._title_executor = ThreadPoolExecutor(
                     max_workers=1, thread_name_prefix="recog-title"

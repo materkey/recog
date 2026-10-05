@@ -463,6 +463,62 @@ def test_zoom_meeting_just_left_rejoined_with_canonical_url_should_reopen_same_m
     assert second == first
 
 
+def _left_meeting_meta(tmp_path, monkeypatch, *, platform, title) -> dict:
+    """Join, say something, leave; return the ended meeting's meta."""
+    storage = MeetingStorage(base_path=tmp_path)
+    monkeypatch.setattr(
+        storage,
+        "_generate_title_for_meeting",
+        lambda path: {"title": "Generated title", "title_source": "stub"},
+    )
+    storage.start_session(ktalk=True)
+    meeting_id = storage.on_meeting_join("https://zoom.us/app", title=title, platform=platform)
+    storage.append_segment("Bob", "bob", "hello")
+    storage.on_ktalk_leave()
+    storage.end_session()
+    return json.loads((storage.base_path / meeting_id / "meta.json").read_text(encoding="utf-8"))
+
+
+def test_conference_meeting_without_a_title_left_should_get_a_generated_title(
+    tmp_path, monkeypatch
+):
+    meta = _left_meeting_meta(tmp_path, monkeypatch, platform="zoom", title=None)
+
+    assert meta["title"] == "Generated title"
+    assert meta["title_source"] == "stub"
+
+
+def test_conference_meeting_with_a_title_left_should_keep_it(tmp_path, monkeypatch):
+    meta = _left_meeting_meta(tmp_path, monkeypatch, platform="zoom", title="Weekly sync")
+
+    assert meta["title"] == "Weekly sync"
+    assert meta["title_source"] == "zoom"
+
+
+@pytest.mark.parametrize(
+    ("source", "title", "segments", "expected"),
+    [
+        ("orphan", None, 3, True),
+        ("zoom", None, 3, True),
+        ("ktalk", "", 1, True),
+        ("zoom", "Weekly sync", 3, False),
+        ("zoom", None, 0, False),
+        ("orphan", None, 0, False),
+        ("local", None, 3, False),
+        ("diarized", None, 3, False),
+        (None, None, 3, False),
+    ],
+)
+def test_ended_recording_title_generation_is_for_untitled_orphans_and_conferences_with_speech(
+    source, title, segments, expected
+):
+    from recog.meeting_storage import _wants_generated_title
+
+    meta = {"source": source, "title": title, "stats": {"segment_count": segments}}
+
+    assert _wants_generated_title(meta) is expected
+
+
 def test_on_meeting_join_no_path_or_fragment_id_leaves_live_id_empty(tmp_path):
     """
     given: a URL with neither a path id nor a #/room/ fragment

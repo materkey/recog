@@ -18,10 +18,12 @@ def test_orphan_split_when_title_waits_and_conference_joins_then_join_stays_acti
     title_started = threading.Event()
     release_title = threading.Event()
 
-    def slow_title(*args, **kwargs):
+    def slow_title(transcript_text, *args, **kwargs):
         title_started.set()
         assert release_title.wait(5), "title was not released"
-        return "Previous recording"
+        # Each recording is titled from its own transcript, so a title written
+        # to the wrong recording is visible.
+        return "Previous recording" if "Previous" in transcript_text else "Current conference"
 
     monkeypatch.setattr("recog.title_generator.generate_title", slow_title)
     with ThreadPoolExecutor(max_workers=2) as workers:
@@ -49,7 +51,8 @@ def test_orphan_split_when_title_waits_and_conference_joins_then_join_stays_acti
     assert orphan_meta["end_reason"] == "silence_timeout"
     conference_meta = json.loads((tmp_path / "meetings" / joined_id / "meta.json").read_text())
     assert conference_meta["source"] == "ktalk"
-    assert conference_meta["title"] is None
+    # The page sent no title, so the ended conference gets its own, not the orphan's.
+    assert conference_meta["title"] == "Current conference"
 
 
 def test_orphan_when_joined_from_event_loop_then_title_finishes_for_old_recording(
