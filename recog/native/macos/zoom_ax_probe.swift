@@ -220,14 +220,19 @@ var lastLine = ""
 var lastEmit = Date.distantPast
 
 while true {
-    let current = currentSnapshot()
-    if let data = try? JSONSerialization.data(withJSONObject: current, options: [.sortedKeys]),
-       let line = String(data: data, encoding: .utf8) {
-        if line != lastLine || Date().timeIntervalSince(lastEmit) >= heartbeatInterval {
-            // The heartbeat doubles as the liveness check of the reader.
-            if !send(line, to: output) { exit(0) }
-            lastLine = line
-            lastEmit = Date()
+    // No run loop drains the main thread's autorelease pool here: without a
+    // pool of its own every poll leaves its Foundation and AppKit objects
+    // behind for the lifetime of the process.
+    autoreleasepool {
+        let current = currentSnapshot()
+        if let data = try? JSONSerialization.data(withJSONObject: current, options: [.sortedKeys]),
+           let line = String(data: data, encoding: .utf8) {
+            if line != lastLine || Date().timeIntervalSince(lastEmit) >= heartbeatInterval {
+                // The heartbeat doubles as the liveness check of the reader.
+                if !send(line, to: output) { exit(0) }
+                lastLine = line
+                lastEmit = Date()
+            }
         }
     }
     Thread.sleep(forTimeInterval: pollInterval)
