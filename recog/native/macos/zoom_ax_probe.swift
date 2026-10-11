@@ -19,7 +19,8 @@
 //   it is replaced by an AXSystemDialog window holding one tile, the current
 //   speaker;
 // - a tile is an AXTabGroup whose AXButton child is described by the display
-//   name (a tile showing a profile picture has no AXStaticText with the name);
+//   name or, in some meetings, by "View <name>'s profile" (a tile showing a
+//   profile picture has no AXStaticText with the name);
 // - the account button of the main window is described as
 //   "Zoom, <display name>, <status>, <plan>".
 //
@@ -64,17 +65,25 @@ func role(_ element: AXUIElement) -> String {
 }
 
 /// A participant tile: a tab group whose description starts with the name its
-/// button child is described by. The role description is localized, so it is
-/// not used.
+/// button child carries. The button is described by the bare name or by
+/// "View <name>'s profile", so the name is the longest comma-delimited prefix
+/// of the description found in a button (a name may contain commas itself).
+/// The role description and the wording around the name are localized, so
+/// they are not used.
 func tile(_ element: AXUIElement) -> [String: String]? {
     guard role(element) == "AXTabGroup", let description = text(element, kAXDescriptionAttribute as String)
     else { return nil }
-    for child in children(element) where role(child) == "AXButton" {
-        if let name = text(child, kAXDescriptionAttribute as String), description.hasPrefix(name) {
+    let labels = children(element).filter { role($0) == "AXButton" }
+        .compactMap { text($0, kAXDescriptionAttribute as String) }
+    var end = description.endIndex
+    while true {
+        let name = String(description[..<end])
+        if !name.isEmpty, labels.contains(where: { $0.contains(name) }) {
             return ["name": name, "description": description]
         }
+        guard let comma = description[..<end].lastIndex(of: ",") else { return nil }
+        end = comma
     }
-    return nil
 }
 
 /// Collect the participant tiles under `element`. The toolbar's info button,

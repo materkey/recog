@@ -86,6 +86,11 @@ video off:
   seen so far and is not trimmed when someone leaves.
 - Leaving is reported once the meeting window has been gone for six seconds.
 
+On a live meeting hosted on another account six of the seven tiles, the local
+one included, named their participant as "View <name>'s profile" instead of
+the bare name the test meetings showed. Both forms are read; what makes Zoom
+choose one was not established.
+
 Limits:
 
 - **Interface language.** The tile description is worded in the Zoom interface
