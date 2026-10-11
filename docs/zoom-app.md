@@ -57,7 +57,11 @@ It changes when the helper's code changes (an update of recog that touches
 `zoom_ax_probe.swift` beyond comments, or a new Xcode that compiles it
 differently). Then the log reports the missing permission again: remove the
 old "Recog Zoom Helper" entry in the Accessibility list and switch on the new
-one.
+one. To keep such changes rare the helper only reports what the tree says —
+the described tab groups with their children, the title of the meeting
+window, the account button; what any of it means is decided in
+`recog/zoom_app.py`, so a change in Zoom's wording is followed without
+touching the helper.
 
 A signature that survives code changes needs a certificate macOS trusts for
 code signing: set `RECOG_CODESIGN_IDENTITY` in `.env` to its name
@@ -86,10 +90,38 @@ video off:
   seen so far and is not trimmed when someone leaves.
 - Leaving is reported once the meeting window has been gone for six seconds.
 
-On a live meeting hosted on another account six of the seven tiles, the local
-one included, named their participant as "View <name>'s profile" instead of
-the bare name the test meetings showed. Both forms are read; what makes Zoom
-choose one was not established.
+## How the tree is read
+
+The rules follow the code that words the tree in Zoom Workplace 7.1.9
+(`zVideoUI.bundle`, disassembled with `otool`), not only what test meetings
+happened to show:
+
+- **Tile description** (`-[VideoUI accessibilityLabel]`): the display name,
+  then `, <audio>, <video>` for an ordinary participant, then `, active
+  speaker` while Zoom draws the speaker frame around the tile, then
+  optionally `, Local time <time>` and the text of up to two labels shown on
+  the tile. `<audio>` is localized: computer or telephone audio, muted or
+  unmuted, or "No audio connected". `Video on`, `Video off` and `active
+  speaker` are passed through Zoom's `unlocalized` and read the same in every
+  interface language.
+- **Name tag** (`ZMMTVRInfoTagView`): a button described by the display name,
+  or by `View <name>'s profile` when Zoom can show the participant's profile
+  card (`canShowVCard`); that wording is not localized either. A tab group is
+  a participant tile when its description starts with the name such a button
+  carries. On a live meeting hosted on another account six of the seven tiles,
+  the local one included, had the profile form; the scripted test meetings
+  had only the bare one.
+- A room that shows name tags for the people in it words its tile as
+  `<room>, <person>, active speaker`, without audio and video. Speech is then
+  attributed to the room. Known from the binary only, not exercised.
+
+A tab group that words a participant's state but whose buttons name nobody is
+a tile this version cannot name: it is left out, and the log says so once per
+meeting, with the tile as the helper reported it:
+
+```
+[zoom-app] 1 participant tile(s) ignored: Zoom names them in a way this version does not know, e.g. {…}
+```
 
 Limits:
 
@@ -98,7 +130,8 @@ Limits:
   localization files, so every language it ships is covered; the speaker mark
   is the literal `active speaker` in all of them. Checked live in English; in
   Russian the mute wording was observed on a live meeting, the speaker mark
-  was not (it has no entry in Zoom's localization files).
+  was not (the binary passes it through `unlocalized`, and it has no entry in
+  Zoom's localization files).
 - **No meeting number.** The application does not expose it, so every
   application meeting is recorded under `https://zoom.us/app`. Rejoining within
   ten minutes continues the same recording; two different meetings inside that
@@ -107,7 +140,10 @@ Limits:
 - **Generated title.** The application offers no reliable topic: the one
   element that carries it showed the free-plan timer ("Meeting  40-minutes")
   on a live meeting. When the meeting ends, the recording is titled from its
-  transcript, as recordings outside a conference are.
+  transcript, as recordings outside a conference are. The helper reports the
+  title of the meeting window, which is not used: it read "<host>'s Zoom
+  Meeting" on the preview of an instant meeting and plain "Zoom Meeting" once
+  the meeting ran; a scheduled meeting and a joined one were not looked at.
 - **Namesakes merge** into one participant.
 - **One source at a time.** While a browser conference owns the recording, the
   application source stays silent and retries every 30 seconds.

@@ -407,6 +407,38 @@ Third round (2026-10-05, after the helper was rebuilt and granted again):
 Open after this round:
 - A gallery with more than one page of participants.
 
+## Third round: a real meeting and the binary (2026-10-11)
+
+- A real meeting of seven, hosted on another account, was recorded with every
+  remote segment on the one unmuted guest (`sole_unmuted_fallback`): the
+  helper recognized a tile by a button described by exactly the display name,
+  and six of the seven tiles had the button described as "View <name>'s
+  profile". With that form read, the same meeting was attributed to the
+  active speaker without the uncertainty mark.
+- The wording was then taken from the code that produces it (`zVideoUI`
+  7.1.9, `otool` disassembly with the string and selector references
+  resolved by hand; no decompiler is installed): the description grammar, the
+  third audio state "No audio connected", the `canShowVCard` condition and
+  the `unlocalized` literals are in `docs/zoom-app.md`.
+- The helper no longer decides what a tile is. It reports every described tab
+  group with its children, the meeting window title and the account button;
+  naming, state and the minimal-view decision moved to `recog/zoom_app.py`,
+  where they are covered by tests and can follow Zoom without a rebuild.
+- Live check of that version, helper built from the final source and run
+  from a terminal that holds the permission, snapshots fed to
+  `ZoomAppSession`: a solo meeting started and ended through the menu gave
+  join on the first tile, the local participant, the minimal view with its
+  single tile as the speaker, and leave after the debounce. Zoom refused the
+  headless participants this time ("Automated bots aren't allowed to join
+  this meeting"), so a remote speaker was not staged again; the rule for the
+  profile form is the one the real meeting was attributed with, now in
+  Python.
+
+Open after this round:
+- The installed service with the rebuilt helper on a meeting with other
+  participants.
+- A gallery with more than one page of participants.
+
 ## Post-Completion (manual, live meeting)
 - Console shows `Using adapter: zoom`; the bridge log shows `Client connected`
   and no origin rejection.

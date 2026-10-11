@@ -7,20 +7,26 @@
 //   {"state": "zoom_not_running"}
 //   {"state": "idle", "account": "..."}   Zoom is running, no meeting window
 //   {"state": "meeting", "view": "window" | "minimal", "tiles": [...],
-//    "account": "..."}
+//    "title": "...", "account": "..."}
 //
-// A tile is {"name": ..., "description": ...}: the participant's display name and
-// the tile's description, e.g. "Alice, Computer audio unmuted, Video off, active
-// speaker". The description is in the Zoom UI language and is parsed by the
-// caller (recog/zoom_app.py), not here.
+// "title" is the title of the meeting window, absent in minimal view.
+//
+// A tile is {"description": ..., "children": [{"role": ..., "description": ...,
+// "value": ...}, ...]}: a described tab group, e.g. "Alice, Computer audio
+// unmuted, Video off, active speaker", and what its direct children say about
+// themselves. Every described tab group is reported. Which of them show a
+// participant, under what name and in what state is decided by the caller
+// (recog/zoom_app.py), not here: the wording belongs to Zoom and changes with
+// it, while a change of this file changes the helper's signature and costs the
+// user the permission.
 //
 // Observed on Zoom Workplace 7.1.9:
 // - the meeting window has AXIdentifier zm.meeting.window.main; in minimal view
 //   it is replaced by an AXSystemDialog window holding one tile, the current
 //   speaker;
-// - a tile is an AXTabGroup whose AXButton child is described by the display
-//   name or, in some meetings, by "View <name>'s profile" (a tile showing a
-//   profile picture has no AXStaticText with the name);
+// - a participant tile is an AXTabGroup with an AXButton child that names the
+//   participant (a tile showing a profile picture has no AXStaticText with
+//   the name);
 // - the account button of the main window is described as
 //   "Zoom, <display name>, <status>, <plan>".
 //
@@ -64,36 +70,25 @@ func role(_ element: AXUIElement) -> String {
     text(element, kAXRoleAttribute as String) ?? ""
 }
 
-/// A participant tile: a tab group whose description starts with the name its
-/// button child carries. The button is described by the bare name or by
-/// "View <name>'s profile", so the name is the longest comma-delimited prefix
-/// of the description found in a button (a name may contain commas itself).
-/// The role description and the wording around the name are localized, so
-/// they are not used.
-func tile(_ element: AXUIElement) -> [String: String]? {
+/// A described tab group with the role, description and text value of each of
+/// its direct children. A participant tile is one of these.
+func tile(_ element: AXUIElement) -> [String: Any]? {
     guard role(element) == "AXTabGroup", let description = text(element, kAXDescriptionAttribute as String)
     else { return nil }
-    let labels = children(element).filter { role($0) == "AXButton" }
-        .compactMap { text($0, kAXDescriptionAttribute as String) }
-    var end = description.endIndex
-    while true {
-        let name = String(description[..<end])
-        if !name.isEmpty, labels.contains(where: { $0.contains(name) }) {
-            return ["name": name, "description": description]
-        }
-        guard let comma = description[..<end].lastIndex(of: ",") else { return nil }
-        end = comma
+    let parts = children(element).map { child -> [String: String] in
+        var part = ["role": role(child)]
+        part["description"] = text(child, kAXDescriptionAttribute as String)
+        part["value"] = text(child, kAXValueAttribute as String)
+        return part
     }
+    return ["description": description, "children": parts]
 }
 
-/// Collect the participant tiles under `element`. The toolbar's info button,
+/// Collect the described tab groups under `element`. The toolbar's info button,
 /// which looks like the meeting topic, is deliberately not read: on a live
 /// meeting it carried the free-plan timer ("Meeting  40-minutes") instead.
-func scan(_ element: AXUIElement, depth: Int, into tiles: inout [[String: String]]) {
-    if let found = tile(element) {
-        tiles.append(found)
-        return
-    }
+func scan(_ element: AXUIElement, depth: Int, into tiles: inout [[String: Any]]) {
+    if let found = tile(element) { tiles.append(found) }
     // The participants panel repeats the names without the speaker state.
     guard depth > 0, role(element) != "AXScrollArea" else { return }
     for child in children(element) {
@@ -127,27 +122,27 @@ func accountDescription(_ windows: [AXUIElement]) -> String? {
 func snapshot(app: AXUIElement) -> [String: Any] {
     let all = windows(app)
     var view: String?
-    var tiles: [[String: String]] = []
+    var title: String?
+    var tiles: [[String: Any]] = []
 
     if let meeting = all.first(where: { text($0, "AXIdentifier") == meetingWindowId }) {
         view = "window"
+        title = text(meeting, kAXTitleAttribute as String)
         scan(meeting, depth: maxDepth, into: &tiles)
     } else {
+        // Whether one of these dialogs is the minimal view is the caller's
+        // call: it is, when a tab group in it turns out to show a participant.
         for window in all where text(window, kAXSubroleAttribute as String) == "AXSystemDialog" {
-            var candidate: [[String: String]] = []
-            scan(window, depth: maxDepth, into: &candidate)
-            if !candidate.isEmpty {
-                view = "minimal"
-                tiles = candidate
-                break
-            }
+            scan(window, depth: maxDepth, into: &tiles)
         }
+        if !tiles.isEmpty { view = "minimal" }
     }
 
     // The account is reported outside a meeting too: the main window is not
     // always reachable during one, and the name is needed from its first tile.
     var out: [String: Any] = ["state": "idle"]
     if let view { out = ["state": "meeting", "view": view, "tiles": tiles] }
+    if let title { out["title"] = title }
     if let account = accountDescription(all) { out["account"] = account }
     return out
 }

@@ -22,13 +22,20 @@ from recog.zoom_app import (
     find_or_build_helper,
     load_vocabulary,
     parse_tile,
+    tile_name,
 )
 
 ACCOUNT = "Zoom, Me, In a Zoom Meeting, Basic account"
 
 
+def group(description, *buttons):
+    """A described tab group as the helper reports it."""
+    children = [{"role": "AXImage"}, *({"role": "AXButton", "description": b} for b in buttons)]
+    return {"description": description, "children": children}
+
+
 def tile(name, *states):
-    return {"name": name, "description": ", ".join([name, *states])}
+    return group(", ".join([name, *states]), name)
 
 
 def meeting(*tiles, view="window", **extra):
@@ -56,11 +63,40 @@ def types(frames):
         ("Alice, Video off", Tile("Alice", None, False)),
         ("Alice", Tile("Alice", None, False)),
         ("Alice, Звук компьютера включён, активный докладчик", Tile("Alice", None, False)),
+        (
+            "Alice, Computer audio unmuted, Video on, active speaker, Local time 11:00, Host",
+            Tile("Alice", False, True),
+        ),
+        # A room with name tags for the people in it words only the speaking one.
+        ("Alice, Bob, active speaker", Tile("Alice", None, True)),
         ("Someone else, Computer audio muted, active speaker", Tile("Alice", None, False)),
     ],
 )
 def test_given_tile_description_when_parsed_then_only_known_wording_counts(description, expected):
     assert parse_tile("Alice", description) == expected
+
+
+@pytest.mark.parametrize(
+    ("description", "buttons", "expected"),
+    [
+        ("Alice, Computer audio muted, Video off", ["Alice"], "Alice"),
+        ("Alice, Computer audio muted, Video off", ["View Alice's profile"], "Alice"),
+        ("Alice", ["Alice"], "Alice"),
+        ("Doe, Jane, Computer audio muted", ["View Doe, Jane's profile"], "Doe, Jane"),
+        ("O'Neil, Video on", ["View O'Neil's profile"], "O'Neil"),
+        # A display name that reads like the wrapper is still a display name.
+        ("View Bob's profile, Video on", ["View Bob's profile"], "View Bob's profile"),
+        ("Alice, Video on", ["Pin", "View Alice's profile"], "Alice"),
+        ("Alice, Video on", ["View Bob's profile"], None),
+        ("Alice, Video on", ["Al"], None),
+        ("Alice, Video on", ["Open Alice's card"], None),
+        ("Alice, Video on", [], None),
+    ],
+)
+def test_given_tab_group_when_named_then_a_button_must_name_the_same_participant(
+    description, buttons, expected
+):
+    assert tile_name(description, buttons) == expected
 
 
 def _zoom_app(tmp_path, **languages):
@@ -422,6 +458,89 @@ def test_given_tile_without_a_name_when_processed_then_skipped():
     assert [p["name"] for p in frames[0]["participants"]] == ["Bob"]
 
 
+def test_given_profile_cards_shown_when_processed_then_every_tile_and_the_speaker_are_read():
+    # The shape of a live meeting: most name tags open a profile card, one
+    # participant is a guest, the speaker is among the former.
+    session = ZoomAppSession()
+    snapshot = meeting(
+        group("Me, Computer audio muted, Video off", "View Me's profile"),
+        tile("Guest", "Computer audio unmuted", "Video on"),
+        group("Carol, Computer audio muted, Video on", "View Carol's profile"),
+        group("Dana, Computer audio unmuted, Video on, active speaker", "View Dana's profile"),
+        account=ACCOUNT,
+    )
+    session.frames(snapshot, 100.0)
+
+    frames = session.frames(snapshot, 101.0)
+
+    assert [(p["name"], p["isLocal"], p["micMuted"]) for p in frames[0]["participants"]] == [
+        ("Me", True, True),
+        ("Guest", False, False),
+        ("Carol", False, True),
+        ("Dana", False, False),
+    ]
+    assert speaker_of(frames) == {"id": "Dana", "name": "Dana", "isLocal": False}
+
+
+def test_given_helper_built_before_raw_reporting_when_processed_then_its_tiles_are_still_read():
+    session = ZoomAppSession()
+    stale = {"name": "Bob", "description": "Bob, Computer audio unmuted, active speaker"}
+    session.frames(meeting(stale), 100.0)
+
+    frames = session.frames(meeting(stale), 101.0)
+
+    assert speaker_of(frames)["name"] == "Bob"
+
+
+def test_given_other_described_tab_group_when_processed_then_it_is_neither_a_tile_nor_reported():
+    session = joined_session()
+
+    frames = session.frames(meeting(group("Reactions", "Clap", "Like"), tile("Bob")), 101.0)
+
+    assert [p["name"] for p in frames[0]["participants"]] == ["Bob"]
+    assert session.unread == []
+
+
+def test_given_tile_named_in_an_unknown_way_when_processed_then_left_out_and_reported():
+    session = joined_session()
+    renamed = group("Alice, Computer audio unmuted, Video on, active speaker", "Open Alice's card")
+
+    frames = session.frames(meeting(renamed, tile("Bob")), 101.0)
+
+    assert [p["name"] for p in frames[0]["participants"]] == ["Bob"]
+    assert speaker_of(frames) is None
+    assert session.unread == [renamed]
+
+
+def test_given_only_unreadable_tiles_when_the_meeting_window_opens_then_no_join_but_reported():
+    session = ZoomAppSession()
+    renamed = group("Alice, Computer audio unmuted, Video on", "Open Alice's card")
+
+    assert session.frames(meeting(renamed), 100.0) == []
+    assert session.joined is False
+    assert session.unread == [renamed]
+
+
+def test_given_dialog_without_a_participant_when_no_meeting_window_then_it_is_not_a_meeting():
+    session = ZoomAppSession()
+
+    frames = session.frames(meeting(group("Reactions", "Clap"), view="minimal"), 100.0)
+
+    assert frames == []
+    assert session.state == "idle"
+    assert session.joined is False
+
+
+def test_given_joined_when_only_a_foreign_dialog_remains_then_the_meeting_ends_after_the_debounce():
+    session = joined_session(now=100.0)
+    foreign = meeting(group("Reactions", "Clap"), view="minimal")
+
+    assert session.frames(foreign, 101.0) == []
+    frames = session.frames(foreign, 100.0 + LEAVE_DEBOUNCE_S + 0.1)
+
+    assert types(frames) == ["meeting_leave"]
+
+
 # --- helper application ------------------------------------------------------
 
 
@@ -686,6 +805,24 @@ async def test_given_helper_snapshots_when_pumped_then_frames_reach_the_bridge_a
 
 
 @pytest.mark.asyncio
+async def test_given_dialog_and_unreadable_tile_when_pumped_then_the_log_says_what_was_understood(
+    capsys,
+):
+    reader = _reader(
+        meeting(group("Reactions", "Clap"), view="minimal"),
+        meeting(group("Alice, Video on", "Open Alice's card")),
+    )
+
+    with pytest.raises(RuntimeError):
+        await zoom_app._pump(FakeSocket(), reader, ZoomAppSession(), zoom_app._StatusLog())
+
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0] == "[zoom-app] Zoom is running, no meeting"
+    assert lines[1] == "[zoom-app] Zoom meeting detected"
+    assert lines[2].startswith("[zoom-app] 1 participant tile(s) ignored")
+
+
+@pytest.mark.asyncio
 async def test_given_bridge_rejects_the_join_when_pumped_then_no_state_frames_follow():
     socket = FakeSocket()
     session = ZoomAppSession()
@@ -716,6 +853,24 @@ def test_given_helper_state_changes_when_logged_then_one_line_per_change(capsys)
     lines = capsys.readouterr().err.strip().splitlines()
     assert len(lines) == 4
     assert "Accessibility" in lines[0] and "unknown helper state: weird" in lines[3]
+
+
+def test_given_unreadable_tiles_when_logged_then_one_line_per_meeting_with_a_sample(capsys):
+    log = zoom_app._StatusLog()
+    renamed = group("Alice, Video on", "Open Alice's card")
+
+    log.note("meeting")
+    log.note_unread([])
+    log.note_unread([renamed, renamed])
+    log.note_unread([renamed])
+    log.note("idle")
+    log.note("meeting")
+    log.note_unread([renamed])
+
+    lines = [line for line in capsys.readouterr().err.splitlines() if "ignored" in line]
+    assert len(lines) == 2
+    assert lines[0].startswith("[zoom-app] 2 participant tile(s) ignored")
+    assert "Open Alice's card" in lines[0]
 
 
 # --- running inside the live process -----------------------------------------

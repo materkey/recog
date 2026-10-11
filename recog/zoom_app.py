@@ -13,6 +13,11 @@ off, active speaker``, worded in the Zoom interface language. It does not expose
 application meeting is reported under one URL, and no reliable topic, so the
 recording has no title.
 
+The helper reports what the tree says and nothing more; what a described tab
+group means is decided here. The rules follow the code that words the tree in
+the ``zVideoUI`` binary of that version (``-[VideoUI accessibilityLabel]`` and
+the name tag of ``ZMMTVRInfoTagView``), see ``docs/zoom-app.md``.
+
 The helper runs as its own application bundle, started through LaunchServices,
 so the Accessibility permission belongs to "Recog Zoom Helper" and not to
 whichever Python interpreter or terminal started this module.
@@ -72,8 +77,13 @@ HELPER_SOURCE = "recog/native/macos/zoom_ax_probe.swift"
 HELPER_STAMP = "RecogZoomHelper.source-sha256"
 
 # The speaker mark is a literal in the Zoom binary with no entry in its
-# localization files, so it reads the same in every interface language.
+# localization files, so it reads the same in every interface language. So do
+# the video state and the wrapper around the name on a tile's name tag.
 _ACTIVE_TOKEN = "active speaker"
+_VIDEO_TOKENS = frozenset({"video on", "video off"})
+# The name tag is a button described by the display name, or by this when Zoom
+# can show the participant's profile card.
+_PROFILE_BUTTON = re.compile(r"View (.+)'s profile", re.DOTALL)
 
 ZOOM_APP_PATHS = (Path("/Applications/zoom.us.app"), Path.home() / "Applications/zoom.us.app")
 # Localizable.strings keys of the mute wording on a tile; the numeric suffix is
@@ -128,6 +138,25 @@ class Tile:
     active: bool
 
 
+def _tokens(text: str) -> set[str]:
+    return {token.strip().lower() for token in text.split(",") if token.strip()}
+
+
+def tile_name(description: str, buttons: list[str]) -> str | None:
+    """Display name of the participant a described tab group shows, else None.
+
+    The description starts with the name, and so a button must name the same
+    participant: bare, or as "View <name>'s profile". A name may contain a
+    comma, so it cannot be cut out of the description alone.
+    """
+    for label in buttons:
+        wrapped = _PROFILE_BUTTON.fullmatch(label)
+        for name in (wrapped.group(1), label) if wrapped else (label,):
+            if description == name or description.startswith(name + ","):
+                return name
+    return None
+
+
 def parse_tile(name: str, description: str, vocabulary: Vocabulary = ENGLISH) -> Tile:
     """Split ``<name>, <state>, <state>…`` into mute and speaker state.
 
@@ -135,7 +164,7 @@ def parse_tile(name: str, description: str, vocabulary: Vocabulary = ENGLISH) ->
     unknown, not speaking", never a guess.
     """
     rest = description[len(name) :] if description.startswith(name) else ""
-    tokens = {token.strip().lower() for token in rest.split(",") if token.strip()}
+    tokens = _tokens(rest)
     muted = None
     if tokens & vocabulary.unmuted:
         muted = False
@@ -158,15 +187,35 @@ def _merge(first: Tile, second: Tile) -> Tile:
     return Tile(name=first.name, muted=muted, active=first.active or second.active)
 
 
-def _tiles(snapshot: dict, vocabulary: Vocabulary) -> dict[str, Tile]:
+def _buttons(raw: dict) -> list[str]:
+    if "children" not in raw:
+        # A helper built before the tree was reported raw (kept when it cannot
+        # be rebuilt) names the tile itself.
+        return [raw["name"]] if raw.get("name") else []
+    return [
+        child["description"]
+        for child in raw["children"]
+        if child.get("role") == "AXButton" and child.get("description")
+    ]
+
+
+def _tiles(snapshot: dict, vocabulary: Vocabulary) -> tuple[dict[str, Tile], list[dict]]:
+    """Participant tiles by name, and the tab groups that look like one but name nobody."""
     tiles: dict[str, Tile] = {}
+    unread: list[dict] = []
+    states = vocabulary.muted | vocabulary.unmuted | _VIDEO_TOKENS | {_ACTIVE_TOKEN}
     for raw in snapshot.get("tiles", []):
-        name = raw.get("name")
+        description = raw.get("description", "")
+        name = tile_name(description, _buttons(raw))
         if not name:
+            # Any other described tab group is not a tile; one that words a
+            # participant's state is a tile Zoom now names differently.
+            if _tokens(description) & states:
+                unread.append(raw)
             continue
-        tile = parse_tile(name, raw.get("description", ""), vocabulary)
+        tile = parse_tile(name, description, vocabulary)
         tiles[name] = _merge(tiles[name], tile) if name in tiles else tile
-    return tiles
+    return tiles, unread
 
 
 class ZoomAppSession:
@@ -179,6 +228,10 @@ class ZoomAppSession:
         self._rejected_at: float | None = None
         self._roster: dict[str, Tile] = {}
         self._self_name: str | None = None
+        # Of the last snapshot: the helper state as understood here, and the
+        # tab groups that look like a participant tile but name nobody.
+        self.state: str | None = None
+        self.unread: list[dict] = []
         self._sent_participants: object = _UNSENT
         self._sent_speaker: object = _UNSENT
 
@@ -196,16 +249,26 @@ class ZoomAppSession:
         # Reported outside a meeting too; inside one the main window that
         # carries it is not always reachable.
         self._self_name = account_name(snapshot.get("account")) or self._self_name
-        if snapshot.get("state") != "meeting":
+        self.state = snapshot.get("state")
+        self.unread = []
+        if self.state != "meeting":
+            return self._leave_frames(now)
+        tiles, self.unread = _tiles(snapshot, self._vocabulary)
+        minimal = snapshot.get("view") == "minimal"
+        if minimal and not tiles:
+            # Without the meeting window the helper reports the tab groups of
+            # every dialog; they are the minimal view only when one of them
+            # shows a participant.
+            self.state = "idle"
             return self._leave_frames(now)
         self._last_meeting_at = now
         if not self.joined:
             # The join preview is already the meeting window, with no tile in
             # it yet. A meeting starts with the first participant tile.
-            if not snapshot.get("tiles"):
+            if not tiles:
                 return []
             return self._join_frames(now)
-        return self._state_frames(snapshot, now)
+        return self._state_frames(tiles, minimal, now)
 
     def _leave_frames(self, now: float) -> list[dict]:
         if not self.joined or self._last_meeting_at is None:
@@ -229,9 +292,7 @@ class ZoomAppSession:
         self._sent_speaker = _UNSENT
         return [{"type": "meeting_join", "url": MEETING_URL, "platform": PLATFORM, "title": ""}]
 
-    def _state_frames(self, snapshot: dict, now: float) -> list[dict]:
-        tiles = _tiles(snapshot, self._vocabulary)
-        minimal = snapshot.get("view") == "minimal"
+    def _state_frames(self, tiles: dict[str, Tile], minimal: bool, now: float) -> list[dict]:
         # The tree holds only the tiles on screen: one in minimal view, a page of
         # them in a large meeting or a small window. The roster therefore grows
         # over the meeting and is never trimmed — a participant who left stays
@@ -412,13 +473,26 @@ class _StatusLog:
 
     def __init__(self) -> None:
         self.state: str | None = None
+        self._unread_noted = False
 
     def note(self, state: str | None) -> None:
         if state == self.state:
             return
         self.state = state
+        self._unread_noted = False
         print(
             f"[zoom-app] {self.MESSAGES.get(state or '', f'unknown helper state: {state}')}",
+            file=sys.stderr,
+        )
+
+    def note_unread(self, unread: list[dict]) -> None:
+        """Once per meeting: tiles that are left out because their naming is not understood."""
+        if not unread or self._unread_noted:
+            return
+        self._unread_noted = True
+        print(
+            f"[zoom-app] {len(unread)} participant tile(s) ignored: Zoom names them in a way "
+            f"this version does not know, e.g. {json.dumps(unread[0], ensure_ascii=False)}",
             file=sys.stderr,
         )
 
@@ -442,9 +516,10 @@ async def _pump(
                 raw = next_line.result()
                 if not raw:
                     raise HelperGone("the Zoom helper disconnected")
-                snapshot = json.loads(raw)
-                log.note(snapshot.get("state"))
-                for frame in session.frames(snapshot, time.time()):
+                frames = session.frames(json.loads(raw), time.time())
+                log.note(session.state)
+                log.note_unread(session.unread)
+                for frame in frames:
                     await websocket.send(json.dumps(frame, ensure_ascii=False))
                 next_line = asyncio.ensure_future(lines.readline())
     finally:
