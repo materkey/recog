@@ -111,6 +111,8 @@ happened to show:
   carries. On a live meeting hosted on another account six of the seven tiles,
   the local one included, had the profile form; the scripted test meetings
   had only the bare one.
+- A participant with no audio connected is reported as unable to speak, like
+  a muted one.
 - A room that shows name tags for the people in it words its tile as
   `<room>, <person>, active speaker`, without audio and video. Speech is then
   attributed to the room. Known from the binary only, not exercised.

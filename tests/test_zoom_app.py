@@ -63,6 +63,7 @@ def types(frames):
         ("Alice, Video off", Tile("Alice", None, False)),
         ("Alice", Tile("Alice", None, False)),
         ("Alice, Звук компьютера включён, активный докладчик", Tile("Alice", None, False)),
+        ("Alice, No audio connected, Video off", Tile("Alice", True, False)),
         (
             "Alice, Computer audio unmuted, Video on, active speaker, Local time 11:00, Host",
             Tile("Alice", False, True),
@@ -116,6 +117,8 @@ RUSSIAN = {
     "LN_Plist_Accessibility_Tele_Muted_20044": "Звук телефона выключен",
     "LN_Audio_Unmuted_Accessibility_1152855": "Звук включен",
     "LN_Plist_Accessibility_Video_Off_20044": "Видео выкл.",
+    "LN_Plist_Accessibility_No_Audio_20044": "Звук не подключен",
+    "LN_Plist_Accessibility_No_Video_20044": "Видео не подключено",
 }
 
 
@@ -127,14 +130,16 @@ def test_given_installed_zoom_when_vocabulary_is_loaded_then_it_has_its_mute_wor
     assert {
         "звук компьютера выключен",
         "звук телефона выключен",
+        "звук не подключен",
         "computer audio muted",
+        "no audio connected",
     } <= vocabulary.muted
     assert {
         "звук компьютера включен",
         "звук включен",
         "computer audio unmuted",
     } <= vocabulary.unmuted
-    assert "видео выкл." not in vocabulary.muted | vocabulary.unmuted
+    assert not {"видео выкл.", "видео не подключено"} & (vocabulary.muted | vocabulary.unmuted)
 
 
 def test_given_string_ids_of_another_zoom_version_when_loaded_then_keys_still_match(tmp_path):
@@ -480,6 +485,17 @@ def test_given_profile_cards_shown_when_processed_then_every_tile_and_the_speake
         ("Dana", False, False),
     ]
     assert speaker_of(frames) == {"id": "Dana", "name": "Dana", "isLocal": False}
+
+
+def test_given_participant_without_audio_when_processed_then_reported_as_unable_to_speak():
+    session = joined_session()
+
+    frames = session.frames(
+        meeting(tile("Viewer", "No audio connected", "Video off", "active speaker")), 101.0
+    )
+
+    assert frames[0]["participants"][0]["micMuted"] is True
+    assert speaker_of(frames) is None
 
 
 def test_given_helper_built_before_raw_reporting_when_processed_then_its_tiles_are_still_read():

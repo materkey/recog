@@ -86,11 +86,13 @@ _VIDEO_TOKENS = frozenset({"video on", "video off"})
 _PROFILE_BUTTON = re.compile(r"View (.+)'s profile", re.DOTALL)
 
 ZOOM_APP_PATHS = (Path("/Applications/zoom.us.app"), Path.home() / "Applications/zoom.us.app")
-# Localizable.strings keys of the mute wording on a tile; the numeric suffix is
-# a string id that may differ between Zoom versions.
+# Localizable.strings keys of the audio wording on a tile; the numeric suffix
+# is a string id that may differ between Zoom versions. A participant with no
+# audio connected cannot be heard either.
 _MUTE_ENTRY = re.compile(
     r'"(?:LN_Plist_Accessibility_(?:VoIP|Tele)_(Muted|Unmuted)_\d+'
-    r'|LN_Audio_(Muted|Unmuted)_Accessibility_\d+)"\s*=\s*"((?:[^"\\]|\\.)*)"\s*;'
+    r"|LN_Audio_(Muted|Unmuted)_Accessibility_\d+"
+    r'|LN_Plist_Accessibility_(No_Audio)_\d+)"\s*=\s*"((?:[^"\\]|\\.)*)"\s*;'
 )
 
 _UNSENT = object()
@@ -98,7 +100,7 @@ _UNSENT = object()
 
 @dataclass(frozen=True)
 class Vocabulary:
-    """Lower-cased tile wording for a muted and an unmuted microphone."""
+    """Lower-cased tile wording for a participant who cannot be heard and one who can."""
 
     muted: frozenset[str]
     unmuted: frozenset[str]
@@ -107,7 +109,9 @@ class Vocabulary:
 # What Zoom Workplace 7.1.9 says in English; used when the installed
 # application's own wording cannot be read.
 ENGLISH = Vocabulary(
-    muted=frozenset({"computer audio muted", "telephone muted", "audio muted"}),
+    muted=frozenset(
+        {"computer audio muted", "telephone muted", "audio muted", "no audio connected"}
+    ),
     unmuted=frozenset({"computer audio unmuted", "telephone unmuted", "audio unmuted"}),
 )
 
@@ -126,8 +130,9 @@ def load_vocabulary(app_paths: tuple[Path, ...] = ZOOM_APP_PATHS) -> Vocabulary:
                 text = strings.read_text(encoding="utf-16")
             except (OSError, UnicodeError):
                 continue
-            for first, second, wording in _MUTE_ENTRY.findall(text):
-                (muted if (first or second) == "Muted" else unmuted).add(wording.strip().lower())
+            for first, second, third, wording in _MUTE_ENTRY.findall(text):
+                kind = first or second or third
+                (unmuted if kind == "Unmuted" else muted).add(wording.strip().lower())
     return Vocabulary(muted=frozenset(muted), unmuted=frozenset(unmuted))
 
 
