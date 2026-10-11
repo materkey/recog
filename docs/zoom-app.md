@@ -79,6 +79,10 @@ video off:
 
 - Remote speech is attributed to the participant Zoom marks as the active
   speaker. The mark stays on the last speaker during silence.
+- In a meeting of two Zoom marks nobody. The other participant's speech is
+  then attributed by the general rule for a single remote participant with
+  the microphone on, and those segments carry the uncertainty mark: the name
+  is right, but it rests on the participants seen so far, not on Zoom's word.
 - The meeting is detected with the window on another Space and with the
   participants panel closed, in gallery view and in speaker view, and while
   someone shares a screen.
@@ -104,6 +108,12 @@ Ghidra pseudocode), not only what test meetings happened to show:
   unmuted, or "No audio connected". `Video on`, `Video off` and `active
   speaker` are passed through Zoom's `unlocalized` and read the same in every
   interface language.
+- **Speaker frame** (`-[ZMMTCustomVideoRenderInfoView enableShowBorderView]`):
+  drawn when the tile is the active one, `canShowBorderView` holds and
+  `isAllAvailableVideoCountRelationTo:0 count:2 filter:1` does not, a check
+  of the number of available videos against two. A meeting of two showed no `active
+  speaker` during a minute of the other participant's speech; meetings of
+  three and more show it.
 - **Name tag** (`ZMMTVRInfoTagView`): a button described by the display name,
   or by `View <name>'s profile` when Zoom can show the participant's profile
   card (`canShowVCard`); that wording is not localized either. A tab group is

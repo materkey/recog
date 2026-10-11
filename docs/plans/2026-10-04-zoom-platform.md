@@ -435,10 +435,21 @@ Open after this round:
   this meeting"), so a remote speaker was not staged again; the rule for the
   profile form is the one the real meeting was attributed with, now in
   Python.
+- Live check through the installed service once the rebuilt helper had the
+  permission. A solo meeting: join on the first tile, the speaker in the
+  minimal view, leave after the debounce. Then a second participant from a
+  phone, a real client: it joined under the host's own name, and namesakes
+  merge, so the host renamed it. Its speech was recorded under its name
+  through `sole_unmuted_fallback`: Zoom showed no `active speaker` at all.
+  The binary says why — the speaker frame is not drawn when a check of the
+  number of available videos against two holds (`enableShowBorderView`,
+  `docs/zoom-app.md`) — and the scripted meetings that showed the mark had
+  three participants or more.
 
 Open after this round:
-- The installed service with the rebuilt helper on a meeting with other
-  participants.
+- The speaker mark through the installed service on a meeting of three or
+  more; the rule that reads it is the one the real meeting of seven was
+  attributed with.
 - A gallery with more than one page of participants.
 
 ## Post-Completion (manual, live meeting)
