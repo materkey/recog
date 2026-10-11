@@ -93,8 +93,8 @@ video off:
 ## How the tree is read
 
 The rules follow the code that words the tree in Zoom Workplace 7.1.9
-(`zVideoUI.bundle`, disassembled with `otool`), not only what test meetings
-happened to show:
+(`zVideoUI.bundle`, read from an `otool` disassembly and cross-checked with
+Ghidra pseudocode), not only what test meetings happened to show:
 
 - **Tile description** (`-[VideoUI accessibilityLabel]`): the display name,
   then `, <audio>, <video>` for an ordinary participant, then `, active

@@ -417,9 +417,11 @@ Open after this round:
   active speaker without the uncertainty mark.
 - The wording was then taken from the code that produces it (`zVideoUI`
   7.1.9, `otool` disassembly with the string and selector references
-  resolved by hand; no decompiler is installed): the description grammar, the
-  third audio state "No audio connected", the `canShowVCard` condition and
-  the `unlocalized` literals are in `docs/zoom-app.md`.
+  resolved by hand): the description grammar, the third audio state "No audio
+  connected", the `canShowVCard` condition and the `unlocalized` literals are
+  in `docs/zoom-app.md`. Ghidra 12.1.4 pseudocode of the two functions
+  (`0x14ff2c`, the tile description; `0x12b1ec`, the name tag) agrees with
+  that reading branch for branch.
 - The helper no longer decides what a tile is. It reports every described tab
   group with its children, the meeting window title and the account button;
   naming, state and the minimal-view decision moved to `recog/zoom_app.py`,
