@@ -450,6 +450,9 @@ Open after this round:
 - The speaker mark through the installed service on a meeting of three or
   more; the rule that reads it is the one the real meeting of seven was
   attributed with.
+- A meeting of three that one participant leaves with the microphone on: the
+  roster is never trimmed, so the two who remain get no speaker mark and no
+  single-unmuted attribution either (`docs/zoom-app.md`, Limits).
 - A gallery with more than one page of participants.
 
 ## Post-Completion (manual, live meeting)

@@ -157,6 +157,12 @@ Limits:
   Meeting" on the preview of an instant meeting and plain "Zoom Meeting" once
   the meeting ran; a scheduled meeting and a joined one were not looked at.
 - **Namesakes merge** into one participant.
+- **A meeting that shrinks to two.** A participant who left stays listed,
+  with the microphone state last seen. If the third participant leaves with
+  the microphone on, two remote participants count as unmuted, the rule for a
+  single one no longer applies, and Zoom marks nobody in a meeting of two:
+  the remaining participant's speech is then recorded as `Unknown`. Follows
+  from the code; not exercised on a live meeting.
 - **One source at a time.** While a browser conference owns the recording, the
   application source stays silent and retries every 30 seconds.
 - Not exercised: gallery view with more participants than one page holds
