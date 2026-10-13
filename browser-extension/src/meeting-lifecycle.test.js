@@ -13,7 +13,7 @@ jest.unstable_mockModule('./ws_api.js', () => ({
 }));
 
 const { KTalkAdapter } = await import('./platforms/ktalk.js');
-const { startMeetingCheck, sendMeetingJoin, sendMeetingLeave, handleMeetingJoinRejected } = await import('./meeting.js');
+const { startMeetingCheck, sendMeetingJoin, sendMeetingLeave, handleMeetingJoinRejected, getJoinRejectionStatus } = await import('./meeting.js');
 const { state } = await import('./state.js');
 
 let joined;
@@ -81,4 +81,44 @@ test('capture failure clears the accepted id and retries while joined, with one 
   joined = false;
   jest.advanceTimersByTime(4000);
   expect(send.mock.calls.filter(([frame]) => frame.type === 'meeting_join')).toHaveLength(2);
+});
+
+test('joined while another tab holds the recording - join refused on every retry - one notice and a status until the join is accepted', () => {
+  joined = true;
+  sendMeetingJoin();
+  expect(getJoinRejectionStatus()).toBeNull();
+
+  expect(handleMeetingJoinRejected({ reason: 'another_tab_active' })).toContain('другая вкладка');
+  expect(getJoinRejectionStatus()).toContain('другая вкладка');
+
+  startMeetingCheck();
+  jest.advanceTimersByTime(2000);
+  expect(send.mock.calls.filter(([frame]) => frame.type === 'meeting_join')).toHaveLength(2);
+  expect(handleMeetingJoinRejected({ reason: 'another_tab_active' })).toBeNull();
+  expect(getJoinRejectionStatus()).toContain('другая вкладка');
+
+  // The bridge answers an accepted join with `transcript_history`.
+  jest.advanceTimersByTime(2000);
+  state.currentMeetingId = 'accepted-meeting';
+  expect(getJoinRejectionStatus()).toBeNull();
+});
+
+test('join refused because another tab holds the recording - user leaves the call - status cleared', () => {
+  joined = true;
+  sendMeetingJoin();
+  handleMeetingJoinRejected({ reason: 'another_tab_active' });
+  startMeetingCheck();
+
+  joined = false;
+  jest.advanceTimersByTime(2000);
+
+  expect(getJoinRejectionStatus()).toBeNull();
+});
+
+test('capture unavailable - join refused - no status line text', () => {
+  joined = true;
+  sendMeetingJoin();
+  handleMeetingJoinRejected({ reason: 'capture_unavailable' });
+
+  expect(getJoinRejectionStatus()).toBeNull();
 });

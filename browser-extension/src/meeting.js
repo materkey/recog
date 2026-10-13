@@ -4,6 +4,16 @@ import { getPlatformAdapter, getPlatform } from './platforms/index.js';
 
 let titleSentForUrl = null;
 let lastJoinRejectionReason = null;
+
+// Copilot chat line, shown once per run of refusals for the same reason.
+const JOIN_REJECTION_NOTICES = {
+  capture_unavailable: 'Не удалось включить запись. Повторяем запуск автоматически.',
+  another_tab_active: 'Запись ведёт другая вкладка с конференцией. Выйдите из звонка в ней, и запись начнётся здесь.',
+};
+// Floating-panel status line, shown for as long as the bridge keeps refusing.
+const JOIN_REJECTION_STATUS = {
+  another_tab_active: 'Запись ведёт другая вкладка с конференцией',
+};
 // Per-join generation token: bumped on every `sendMeetingJoin()` so a pending
 // title-retry chain from a previous join (same OR different url) invalidates
 // itself instead of leaking its near-exhausted `attempt` count into the fresh
@@ -110,9 +120,18 @@ export function handleMeetingJoinRejected(data) {
   state.currentMeetingUrl = null;
   state.currentMeetingId = null;
   titleSentForUrl = null;
-  const showNotice = reason === 'capture_unavailable' && lastJoinRejectionReason !== reason;
+  const showNotice = lastJoinRejectionReason !== reason;
   lastJoinRejectionReason = reason;
-  return showNotice ? 'Не удалось включить запись. Повторяем запуск автоматически.' : null;
+  return showNotice ? JOIN_REJECTION_NOTICES[reason] || null : null;
+}
+
+/**
+ * Status-line text while the bridge refuses this tab's join, else null. An
+ * accepted join is answered with `transcript_history`, which sets the meeting id.
+ */
+export function getJoinRejectionStatus() {
+  if (state.currentMeetingId) return null;
+  return JOIN_REJECTION_STATUS[lastJoinRejectionReason] || null;
 }
 
 export function sendMeetingLeave(reason = 'user_left') {

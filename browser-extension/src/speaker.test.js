@@ -17,6 +17,7 @@ const mockSendWsParticipants = jest.fn();
 jest.unstable_mockModule('./ws_api.js', () => ({
   sendWsSpeakerUpdate: mockSendWsSpeakerUpdate,
   sendWsParticipants: mockSendWsParticipants,
+  sendWsMessage: jest.fn(),
 }));
 
 jest.unstable_mockModule('./utils.js', () => ({

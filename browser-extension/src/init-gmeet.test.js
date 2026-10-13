@@ -18,6 +18,9 @@ import { jest } from '@jest/globals';
 let init;
 let handleCopilotStatus;
 let updateSpeakerStatus;
+let handleMeetingJoinRejected;
+let sendMeetingLeave;
+let state;
 
 const conference = { platform: 'gmeet' };
 
@@ -63,6 +66,8 @@ beforeAll(async () => {
   ({ init } = await import('./init.js'));
   ({ handleCopilotStatus } = await import('./ui.js'));
   ({ updateSpeakerStatus } = await import('./speaker.js'));
+  ({ handleMeetingJoinRejected, sendMeetingLeave } = await import('./meeting.js'));
+  ({ state } = await import('./state.js'));
 });
 
 beforeEach(() => {
@@ -75,6 +80,8 @@ beforeEach(() => {
   fakeAdapter.subscribeToSpeakerChanges.mockClear();
   fakeAdapter.waitForConference.mockReset();
   fakeAdapter.waitForConference.mockImplementation(() => new Promise(() => {}));
+  sendMeetingLeave();
+  state.currentMeetingId = null;
 });
 
 afterEach(() => {
@@ -165,5 +172,25 @@ test('room page with selector drift - speaker status update - diagnostic kept un
 
   fakeAdapter.diagnostic = null;
   updateSpeakerStatus(conference);
+  expect(document.querySelector('.jitsi-speaker-name').textContent).toBe('Никто не говорит');
+});
+
+test('room page in a call - join refused because another tab holds the recording - status line says so until the join is accepted', () => {
+  fakeAdapter.roomPage = true;
+  fakeAdapter.inMeeting = true;
+  init();
+  jest.advanceTimersByTime(2000);
+
+  handleMeetingJoinRejected({ reason: 'another_tab_active' });
+  jest.advanceTimersByTime(2000);
+  expect(document.querySelector('.jitsi-speaker-name').textContent)
+    .toBe('Запись ведёт другая вкладка с конференцией');
+
+  updateSpeakerStatus(conference);
+  expect(document.querySelector('.jitsi-speaker-name').textContent)
+    .toBe('Запись ведёт другая вкладка с конференцией');
+
+  state.currentMeetingId = 'accepted-meeting';
+  jest.advanceTimersByTime(2000);
   expect(document.querySelector('.jitsi-speaker-name').textContent).toBe('Никто не говорит');
 });

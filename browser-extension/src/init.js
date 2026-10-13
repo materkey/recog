@@ -2,7 +2,7 @@ import { state } from './state.js';
 import { injectStyles, addAiTab, getKtalkChatTabs, removeKtalkUi, createTranscriptContent, createCopilotContent, watchTabChanges, initPlatformUI } from './ui.js';
 import { connectWebSocket } from './ws.js';
 import { updateSpeakerStatus, sendParticipantsUpdate, getParticipantsList } from './speaker.js';
-import { sendMeetingLeave } from './meeting.js';
+import { sendMeetingLeave, getJoinRejectionStatus } from './meeting.js';
 import { sendWsConnectionStatus } from './ws_api.js';
 import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
 import { getPlatformAdapter, getPlatform, getPlatformDisplayName, isJitsiPlatform } from './platforms/index.js';
@@ -357,6 +357,7 @@ export function init() {
   // interval ever fires, which used to skip setupUI()/initPlatformUI()
   // forever (unregistered Copilot activate handler, no debug panel).
   let floatingUiInitialized = false;
+  let joinRejectionShown = false;
 
   setInterval(() => {
     if (adapter && !adapter.supportsTabInjection()) {
@@ -372,10 +373,15 @@ export function init() {
       recoverKtalkUi();
     }
     tryAttachConference();
-    const diagnostic = adapter?.getDiagnostic?.();
+    const joinRejection = getJoinRejectionStatus();
+    const diagnostic = joinRejection || adapter?.getDiagnostic?.();
     if (diagnostic) {
       showVas3kWaitingState(diagnostic);
+    } else if (joinRejectionShown && state.activeConfRef) {
+      // The join went through with no speaker change to redraw the line.
+      updateSpeakerStatus(state.activeConfRef);
     }
+    joinRejectionShown = !!joinRejection;
     updateDebugPanel();
   }, 2000);
 
