@@ -29,7 +29,7 @@ Per-participant PCM + refine (Tier 2) is out of scope; the mixed-audio path + `s
 
 Meet exposes no conference object to the page, so `GoogleMeetAdapter` reads everything from the DOM; all selectors live in `GMEET_SELECTORS`:
 
-- Participant tiles `[data-participant-id]` (stable per-device id); the display name is the tile's first non-empty text line.
+- Participant tiles `[data-participant-id]` (stable per-device id); the display name is the text of the tile's name tag `span.notranslate` (a tile holds other text too: icon names of the hover controls, the paused-video notice).
 - Speaking indicator `[jsname="QgSmzd"]` inside a tile. Speaking is positive evidence only: one of the volume-level classes in `speakingClasses`; the silent class or an unknown class counts as silent.
 - Document Picture-in-Picture: with the tab hidden Meet moves the tiles into `documentPictureInPicture.window.document`, so the adapter scans and observes both documents. `isInMeeting()` stays true for ~6 s without tiles on the same room path to absorb the handover without a `meeting_leave`.
 - `isRoomPage()` (optional adapter hook) is false on `/`, `/home` and `/landing`: no waiting panel there, and the 2 s attach loop picks up the conference once Meet navigates into a room without a reload.

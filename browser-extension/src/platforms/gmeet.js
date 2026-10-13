@@ -5,7 +5,7 @@
  * from the DOM:
  *
  * - participant tiles `[data-participant-id="spaces/<space>/devices/<n>"]`
- *   (stable per-device id; display name = first non-empty text line);
+ *   (stable per-device id; display name = the tile's name tag);
  * - the speaking indicator `[jsname="QgSmzd"]` inside a tile: `silentClass`
  *   while quiet, one of `speakingClasses` (volume levels) while speaking.
  *   Speaking is positive evidence only — an indicator carrying none of the
@@ -27,6 +27,9 @@
 export const GMEET_SELECTORS = {
   tile: '[data-participant-id]',
   tileIdAttr: 'data-participant-id',
+  // Name tag. A tile holds other text as well: icon names of the controls
+  // shown on hover, "This video is paused…" over a frozen video.
+  name: 'span.notranslate',
   speaking: '[jsname="QgSmzd"]',
   silentClass: 'gjg47c',
   speakingClasses: ['wEsLMd', 'Oaajhc'],
@@ -67,11 +70,15 @@ export function buildMeetingUrl(location) {
 }
 
 /**
- * Display name = first non-empty line of the tile's `innerText` (rendering
- * aware: hidden text is excluded).
+ * Display name = text of the tile's name tag; empty for a tile without one
+ * (a presentation). Meet renders further empty `span.notranslate` icon holders.
  */
 export function tileDisplayName(tile) {
-  return (tile?.innerText || '').split('\n').map((s) => s.trim()).find(Boolean) || '';
+  for (const el of tile.querySelectorAll(GMEET_SELECTORS.name)) {
+    const text = el.textContent.trim();
+    if (text) return text;
+  }
+  return '';
 }
 
 /** `'speaking' | 'silent' | 'unknown'` for one speaking-indicator element. */

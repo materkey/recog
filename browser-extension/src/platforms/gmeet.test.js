@@ -29,11 +29,14 @@ const [SPEAKING, SPEAKING_LOUD] = GMEET_SELECTORS.speakingClasses;
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/** Create an element from a simple `tag[attr="value"]…` selector (first alternative). */
+/** Create an element from a simple `tag.class[attr="value"]…` selector (first alternative). */
 function fromSelector(doc, selector) {
   const first = selector.split(',')[0].trim();
   const tag = first.match(/^[a-z]+/i)?.[0] || 'div';
   const el = doc.createElement(tag);
+  for (const [, cls] of first.replace(/\[[^\]]*\]/g, '').matchAll(/\.([\w-]+)/g)) {
+    el.classList.add(cls);
+  }
   for (const [, attr, value] of first.matchAll(/\[([^=\]]+)="([^"]*)"\]/g)) {
     el.setAttribute(attr, value);
   }
@@ -43,10 +46,10 @@ function fromSelector(doc, selector) {
 function addTile(doc, pid, name, { state = GMEET_SELECTORS.silentClass, self = false, muted = false } = {}) {
   const tile = doc.createElement('div');
   tile.setAttribute(GMEET_SELECTORS.tileIdAttr, pid);
-  // Meet renders the name twice inside a tile.
-  for (let i = 0; i < 2; i++) {
-    const label = doc.createElement('div');
-    label.textContent = name;
+  // Meet puts an empty icon holder of the same selector next to the name tag.
+  for (const text of [name, '']) {
+    const label = fromSelector(doc, GMEET_SELECTORS.name);
+    label.textContent = text;
     tile.appendChild(label);
   }
   const indicator = fromSelector(doc, GMEET_SELECTORS.speaking);
@@ -110,24 +113,6 @@ async function flush(ms = CALLBACK_THROTTLE_MS) {
   jest.advanceTimersByTime(ms);
 }
 
-// jsdom has no innerText (layout-aware in Chrome); approximate it with one
-// line per text node, which is how the block-level tile labels render.
-beforeAll(() => {
-  Object.defineProperty(window.HTMLElement.prototype, 'innerText', {
-    configurable: true,
-    get() {
-      const walker = this.ownerDocument.createTreeWalker(this, NodeFilter.SHOW_TEXT);
-      const lines = [];
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) lines.push(node.nodeValue);
-      return lines.join('\n');
-    },
-  });
-});
-
-afterAll(() => {
-  delete window.HTMLElement.prototype.innerText;
-});
-
 beforeEach(() => {
   jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] });
   jest.setSystemTime(new Date('2026-09-26T12:00:00Z'));
@@ -156,20 +141,32 @@ describe('pure helpers', () => {
     },
   );
 
-  test('tile with a duplicated name - tileDisplayName - first non-empty line', () => {
+  test('tile with a padded name tag - tileDisplayName - trimmed name', () => {
+    const doc = newDoc();
+    const tile = addTile(doc, 'spaces/s/devices/1', '  Alice  ');
+    expect(tileDisplayName(tile)).toBe('Alice');
+  });
+
+  test('tile with hover controls and a paused-video notice before the name tag - tileDisplayName - name tag only', () => {
     const doc = newDoc();
     const tile = addTile(doc, 'spaces/s/devices/1', 'Alice');
-    tile.insertBefore(doc.createTextNode('   '), tile.firstChild);
+    const notice = doc.createElement('div');
+    notice.textContent = 'This video is paused due to problems with your network';
+    const icon = doc.createElement('i');
+    icon.className = 'google-symbols notranslate';
+    icon.textContent = 'keep_outline';
+    tile.prepend(notice, icon);
     expect(tileDisplayName(tile)).toBe('Alice');
   });
 
-  test('innerText with leading blank lines - tileDisplayName - first trimmed non-empty line', () => {
-    const tile = { innerText: '\n  \n  Alice  \nAlice\n' };
-    expect(tileDisplayName(tile)).toBe('Alice');
-  });
-
-  test('innerText all whitespace - tileDisplayName - empty string', () => {
-    expect(tileDisplayName({ innerText: ' \n\t\n' })).toBe('');
+  test('presentation tile with controls but no name tag - tileDisplayName - empty string', () => {
+    const doc = newDoc();
+    const tile = doc.createElement('div');
+    const icon = doc.createElement('i');
+    icon.className = 'google-symbols notranslate';
+    icon.textContent = 'zoom_in';
+    tile.appendChild(icon);
+    expect(tileDisplayName(tile)).toBe('');
   });
 
   test('indicator classes - indicatorState - speaking, silent or unknown', () => {
