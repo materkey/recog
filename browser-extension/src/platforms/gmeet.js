@@ -32,7 +32,8 @@ export const GMEET_SELECTORS = {
   name: 'span.notranslate',
   speaking: '[jsname="QgSmzd"]',
   silentClass: 'gjg47c',
-  speakingClasses: ['wEsLMd', 'Oaajhc'],
+  // One class per volume level, changing several times a second during speech.
+  speakingClasses: ['wEsLMd', 'Oaajhc', 'OgVli', 'HX2H7'],
   // Leave-call control: present only while actually in the call (not in the
   // lobby or on the post-call screen). Best-effort, verify on a live call.
   inCallMarker: 'button[jsname="CQylAd"], button[aria-label="Leave call"]',

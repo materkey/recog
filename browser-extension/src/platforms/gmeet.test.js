@@ -169,6 +169,15 @@ describe('pure helpers', () => {
     expect(tileDisplayName(tile)).toBe('');
   });
 
+  test.each(['wEsLMd', 'Oaajhc', 'OgVli', 'HX2H7'])(
+    'indicator at volume level %s - indicatorState - speaking',
+    (level) => {
+      const el = document.createElement('div');
+      el.className = `x ${level} y`;
+      expect(indicatorState(el)).toBe('speaking');
+    },
+  );
+
   test('indicator classes - indicatorState - speaking, silent or unknown', () => {
     const el = document.createElement('div');
     el.className = `x ${SPEAKING_LOUD}`;
