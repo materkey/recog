@@ -203,7 +203,13 @@ The ScreenCaptureKit helper never restarts its stream in place: on
 after 10 s without audio callbacks it **exits**, and the respawn above starts a
 fresh process. A stream restarted inside the same process after `-3805` either
 never started or reported itself running while delivering only silence, and
-only a new process captured again.
+only a new process captured again. Silence alone cannot tell a broken stream
+apart (ScreenCaptureKit delivers real silence as exact zeros too), so
+`LiveTranscriber._restart_silent_system_capture` asks for a planned restart
+(`request_restart`, no crash-retry budget spent) when the system capture has
+delivered only zeros for `DIGITAL_SILENCE_RESTART_S` (60 s) while a conference
+is active (`KTalkBridge.is_conference_active`); a restart during real silence
+loses nothing.
 
 ## Architecture
 

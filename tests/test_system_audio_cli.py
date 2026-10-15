@@ -550,3 +550,68 @@ def test_live_pipeline_list_devices_builds_no_transcriber(
     live_pipeline(list_devices=True)
 
     assert captured_transcriber == {}
+
+
+# =============================================================================
+# Перезапуск системного захвата, отдающего одни нули
+# =============================================================================
+
+
+def _transcriber_with_silent_capture(silent_for: float, conference: bool):
+    transcriber = Mock(spec=LiveTranscriber)
+    transcriber.ktalk_only = False
+    transcriber._next_silence_check_at = 0.0
+    transcriber.system_capture = Mock()
+    transcriber.system_capture.digital_silence_s.return_value = silent_for
+    transcriber._ktalk_bridge = Mock()
+    transcriber._ktalk_bridge.is_conference_active.return_value = conference
+    transcriber.is_recording_active = types.MethodType(
+        LiveTranscriber.is_recording_active, transcriber
+    )
+    return transcriber
+
+
+def test_minute_of_zeros_during_a_conference_restarts_the_capture():
+    transcriber = _transcriber_with_silent_capture(silent_for=61, conference=True)
+
+    LiveTranscriber._restart_silent_system_capture(transcriber)
+
+    transcriber.system_capture.request_restart.assert_called_once()
+
+
+def test_zeros_outside_a_conference_leave_the_capture_alone():
+    """Между встречами системный звук молчит часами — это норма."""
+    transcriber = _transcriber_with_silent_capture(silent_for=3600, conference=False)
+
+    LiveTranscriber._restart_silent_system_capture(transcriber)
+
+    transcriber.system_capture.request_restart.assert_not_called()
+
+
+def test_short_silence_during_a_conference_leaves_the_capture_alone():
+    transcriber = _transcriber_with_silent_capture(silent_for=30, conference=True)
+
+    LiveTranscriber._restart_silent_system_capture(transcriber)
+
+    transcriber.system_capture.request_restart.assert_not_called()
+    transcriber._ktalk_bridge.is_conference_active.assert_not_called()
+
+
+def test_silence_check_is_throttled_between_loop_iterations():
+    """Проверка конференции читает meta.json — не на каждой итерации в 100 мс."""
+    transcriber = _transcriber_with_silent_capture(silent_for=3600, conference=False)
+
+    LiveTranscriber._restart_silent_system_capture(transcriber)
+    LiveTranscriber._restart_silent_system_capture(transcriber)
+
+    assert transcriber._ktalk_bridge.is_conference_active.call_count == 1
+
+
+def test_capture_without_a_silence_clock_is_left_alone():
+    """sounddevice-захват (`device:<id>`) не умеет ни считать тишину, ни перезапускаться."""
+    transcriber = _transcriber_with_silent_capture(silent_for=0, conference=True)
+    transcriber.system_capture = Mock(spec=SingleDeviceCapture)
+
+    LiveTranscriber._restart_silent_system_capture(transcriber)
+
+    transcriber._ktalk_bridge.is_conference_active.assert_not_called()

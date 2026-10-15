@@ -1442,6 +1442,10 @@ class KTalkBridge:
         with self._lock:
             return bool(self._connected_clients)
 
+    def is_conference_active(self) -> bool:
+        """Whether a conference meeting is in progress (see `_is_meeting_active`)."""
+        return self._is_meeting_active()
+
     def _copilot_should_be_alive(self) -> bool:
         """A copilot session should exist: conference meeting OR manual session."""
         return self._is_meeting_active() or self._manual_copilot_active

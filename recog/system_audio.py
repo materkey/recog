@@ -61,6 +61,14 @@ READ_WAIT_TIMEOUT_S = 1.0
 # Сколько последних строк stderr ребёнка показывать в диагностике.
 STDERR_REPORT_LINES = 5
 
+# Сколько секунд одних нулей во время конференции терпеть, прежде чем
+# перезапустить ребёнка. ScreenCaptureKit отдаёт тишину ровными нулями — и
+# настоящую, и после обрыва `-3805`, когда стрим числится работающим, а звука
+# в нём нет; по содержимому их не различить. Во время конференции лишний
+# перезапуск на тишине ничего не теряет, а пропущенный стоил всей речи
+# собеседников до конца встречи.
+DIGITAL_SILENCE_RESTART_S = 60.0
+
 
 class MissingSwiftc(RuntimeError):
     """Хелпер надо пересобрать, но swiftc в PATH нет."""
@@ -179,10 +187,32 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         # Захват сдался: попытки respawn исчерпаны. Потребитель (live.py)
         # видит это и один раз отмечает потерю системного звука.
         self._dead = False
+        # Плановый перезапуск ребёнка, запрошенный потребителем.
+        self._restart_lock = threading.Lock()
+        self._restart_reason: Optional[str] = None
+        # Когда ребёнок последний раз отдал хоть один ненулевой сэмпл (или
+        # стартовал): база для digital_silence_s().
+        self._last_signal_at = time.monotonic()
 
     @property
     def dead(self) -> bool:
         return self._dead
+
+    def digital_silence_s(self) -> float:
+        """Сколько секунд ребёнок отдаёт одни нули (с последнего старта)."""
+        return time.monotonic() - self._last_signal_at
+
+    def request_restart(self, reason: str) -> None:
+        """Просит reader-поток перезапустить ребёнка на ближайшей итерации."""
+        with self._restart_lock:
+            self._restart_reason = reason
+
+    def _take_restart_request(self) -> Optional[str]:
+        """Возвращает запрошенный перезапуск один раз (None — запроса нет)."""
+        with self._restart_lock:
+            reason = self._restart_reason
+            self._restart_reason = None
+        return reason
 
     # -- планово запрошенная смена источника (реализует PulseAudioCapture) ---
 
@@ -291,6 +321,24 @@ class SubprocessPCMCapture(BufferedAudioCapture):
                     )
                 continue
 
+            restart_reason = self._take_restart_request()
+            if restart_reason is not None:
+                # Плановый перезапуск, как и смена источника, не расходует
+                # бюджет crash-retry.
+                print(
+                    f"[{self.name}] {restart_reason}, restarting the capture process",
+                    file=sys.stderr,
+                )
+                try:
+                    self._restart_process()
+                    restart_count = 0
+                except Exception as e:
+                    log_rate_limited(
+                        f"capture-restart-{self.name}",
+                        f"[{self.name}] Restart failed: {e}",
+                    )
+                continue
+
             # Check if process is alive
             if not self.process or self.process.poll() is not None:
                 if restart_count >= MAX_RESTARTS:
@@ -339,6 +387,8 @@ class SubprocessPCMCapture(BufferedAudioCapture):
                     samples = self._decode_pcm(data)
                     # Reset restart count on successful read
                     restart_count = 0
+                    if samples.any():
+                        self._last_signal_at = time.monotonic()
                     if samples.size:
                         captured_at = time.time() - len(samples) / self.sample_rate
                         with self._lock:
@@ -433,6 +483,7 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         # не с чем.
         self._pcm_tail = b""
         self.process = self._spawn()
+        self._last_signal_at = time.monotonic()
 
         # Wait for startup
         time.sleep(0.5)
@@ -451,6 +502,7 @@ class SubprocessPCMCapture(BufferedAudioCapture):
 
         self._pcm_tail = b""
         self.process = self._spawn()
+        self._last_signal_at = time.monotonic()
 
         self.running = True
         self._dead = False

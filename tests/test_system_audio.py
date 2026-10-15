@@ -13,6 +13,7 @@ import io
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -501,6 +502,77 @@ def test_child_that_starts_then_dies_is_throttled_by_the_backoff():
     ]
     assert cap._dead is True
     assert cap.running is False
+
+
+def test_zeros_do_not_count_as_signal_but_any_sample_does():
+    """given: ребёнок отдаёт сначала ровные нули, затем звук
+    when: reader-loop читает каждый блок
+    then: нули не сдвигают отметку сигнала, первый ненулевой блок сдвигает"""
+    cap = _make_capture()
+    cap._last_signal_at = 100.0
+    cap.running = True
+    cap.process = _FakeProcess(
+        _StopWhenDrained(np.zeros(SR // 10, dtype=np.float32).tobytes(), cap)
+    )
+
+    cap._reader_loop()
+
+    assert cap._last_signal_at == 100.0
+
+    cap.running = True
+    cap.process = _FakeProcess(
+        _StopWhenDrained(np.full(SR // 10, 0.01, dtype=np.float32).tobytes(), cap)
+    )
+
+    cap._reader_loop()
+
+    assert cap._last_signal_at > 100.0
+
+
+def test_requested_restart_respawns_the_child_once_without_spending_the_budget():
+    """given: захват уже потратил рестарты на падения ребёнка
+    when: потребитель просит перезапуск из-за тишины
+    then: ребёнок перезапускается ровно один раз, а бюджет снова полный"""
+    cap = _make_capture()
+    cap.running = True
+    cap.process = None
+
+    delays = []
+    cap._sleep_while_running = lambda delay: delays.append(delay)
+    restarts = []
+
+    def restart():
+        restarts.append(1)
+        if len(restarts) == 2:
+            cap.request_restart("silence")
+        if len(restarts) == 3:
+            return  # плановый перезапуск удался, ребёнок умер следом
+        raise RuntimeError("still dead")
+
+    cap._restart_process = restart
+
+    cap._reader_loop()
+
+    # Плановый перезапуск — один лишний вызов без backoff посреди падений,
+    # после него MAX_RESTARTS попыток с полным бюджетом.
+    assert len(delays) == 2 + MAX_RESTARTS
+    assert len(restarts) == 2 + 1 + MAX_RESTARTS
+    assert cap._dead is True
+
+
+def test_respawn_restarts_the_digital_silence_clock(monkeypatch):
+    """given: ребёнок давно отдаёт одни нули
+    when: его перезапускают
+    then: отсчёт тишины начинается заново — новый ребёнок получает свою минуту"""
+    cap = _make_capture()
+    cap._last_signal_at = time.monotonic() - 120
+    monkeypatch.setattr(cap, "_spawn", lambda: _FakeProcess(io.BytesIO()))
+    monkeypatch.setattr(system_audio.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(cap, "_start_stderr_drain_thread", lambda: None)
+
+    cap._restart_process()
+
+    assert cap.digital_silence_s() < 5
 
 
 # =============================================================================

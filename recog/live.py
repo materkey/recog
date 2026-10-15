@@ -29,6 +29,7 @@ from .audio_capture import BufferedAudioCapture
 from .log_utils import log_rate_limited
 from .remote_asr import ASRTemporarilyUnavailable, FallbackASR, build_asr
 from .refine import RefineAborted, RefineResult, RefineWorker, make_abortable_decode
+from .system_audio import DIGITAL_SILENCE_RESTART_S
 from .config import get_data_dir
 from .user_profile import UserProfileStore, resolve_identity
 
@@ -40,6 +41,10 @@ MAX_WAV_DATA_BYTES = 2**31
 # How often the live loop rotates old meeting audio (mtime-based 24h
 # retention in MeetingStorage.cleanup_old_audio — a stat-only scan).
 AUDIO_CLEANUP_INTERVAL_S = 3600
+
+# How often the live loop checks the system capture for digital silence during
+# a conference (the conference check reads meta.json).
+SILENCE_CHECK_INTERVAL_S = 5.0
 
 # `--mic-device none`: явный отказ от микрофона. Отличается от None, который
 # означает «устройство ввода по умолчанию» для sounddevice.
@@ -579,6 +584,9 @@ class LiveTranscriber:
         # мимо `_invalidate_pending_chunks`) получит собственный.
         self._system_capture_lost: bool = False
         self._system_capture_lost_meeting = None
+        # Следующая проверка системного захвата на одни нули (monotonic):
+        # проверка конференции читает meta.json, каждые 100 мс это лишнее.
+        self._next_silence_check_at = 0.0
 
     def _read_user_identity(self) -> dict:
         return resolve_identity(
@@ -1422,6 +1430,34 @@ class LiveTranscriber:
             marker_gen = self._meeting_generation
         self._emit_capture_loss_marker(marker_gen)
 
+    def _restart_silent_system_capture(self):
+        """Перезапускает системный захват, который в конференции отдаёт нули.
+
+        ScreenCaptureKit после обрыва соединения с replayd мог продолжать
+        «работать» и отдавать одну тишину: ребёнок жив, данные идут, поэтому
+        ни respawn, ни `_check_system_capture_alive` не срабатывали, и речь
+        собеседников пропадала до конца встречи. Во время конференции минута
+        ровных нулей — повод начать захват заново: на настоящей тишине это
+        ничего не теряет.
+        """
+        now = time.monotonic()
+        if now < self._next_silence_check_at:
+            return
+        self._next_silence_check_at = now + SILENCE_CHECK_INTERVAL_S
+        if not self.is_recording_active():
+            return
+        capture = self.system_capture
+        silence_s = getattr(capture, "digital_silence_s", None)
+        if silence_s is None:
+            return
+        silent_for = silence_s()
+        if silent_for < DIGITAL_SILENCE_RESTART_S:
+            return
+        bridge = self._ktalk_bridge
+        if bridge is None or not bridge.is_conference_active():
+            return
+        capture.request_restart(f"Only digital silence for {silent_for:.0f}s during a conference")
+
     def _current_meeting_key(self):
         """Текущая встреча как ключ per-meeting состояний watchdog'а.
 
@@ -2155,6 +2191,7 @@ class LiveTranscriber:
                     self._process_chunk(self.mic_capture, self._mic_state, is_mic=True)
                 if self.system_capture:
                     self._check_system_capture_alive()
+                    self._restart_silent_system_capture()
                     self._process_chunk(self.system_capture, self._sys_state, is_mic=False)
 
         except KeyboardInterrupt:
