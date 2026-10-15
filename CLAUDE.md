@@ -198,6 +198,13 @@ stderr lines appended). That marker is
 separate from `_emit_pcm_transition_marker` on purpose: a mixed-capture death
 must not claim a PCM→mixed transition or pause refine.
 
+The ScreenCaptureKit helper never restarts its stream in place: on
+`didStopWithError` (e.g. `-3805`, the connection to `replayd` interrupted) or
+after 10 s without audio callbacks it **exits**, and the respawn above starts a
+fresh process. A stream restarted inside the same process after `-3805` either
+never started or reported itself running while delivering only silence, and
+only a new process captured again.
+
 ## Architecture
 
 ### Data directory

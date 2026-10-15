@@ -184,7 +184,7 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
 
     private let stateQueue = DispatchQueue(label: "audio.capture.state", qos: .utility)
     private var lastAudioUptimeNanos: UInt64 = DispatchTime.now().uptimeNanoseconds
-    private var restartInFlight = false
+    private var captureRunning = false
     private var shouldStop = false
     private var watchdogTimer: DispatchSourceTimer?
 
@@ -226,67 +226,38 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
 
     private func checkHealth() {
         var shouldStop = false
+        var running = false
         var last: UInt64 = 0
         stateQueue.sync {
             shouldStop = self.shouldStop
+            running = self.captureRunning
             last = self.lastAudioUptimeNanos
         }
 
-        guard !shouldStop else { return }
+        // Before the first successful start the start retry loop owns the
+        // process: it waits there for a permission grant without ending it.
+        guard !shouldStop, running else { return }
 
         let now = DispatchTime.now().uptimeNanoseconds
         let delta = now > last ? now - last : 0
 
-        // If we haven't received any audio callbacks for a while, restart the stream.
-        // (If the system is truly silent, ScreenCaptureKit still delivers silent buffers.)
+        // If the system is truly silent, ScreenCaptureKit still delivers
+        // silent buffers, so a long gap means the stream is gone.
         if delta > 10_000_000_000 {
-            scheduleRestart(reason: "no audio callbacks for \(Double(delta) / 1_000_000_000)s")
+            exitForRespawn(reason: "no audio callbacks for \(Double(delta) / 1_000_000_000)s")
         }
     }
 
-    private func scheduleRestart(reason: String) {
-        var shouldSchedule = false
-        stateQueue.sync {
-            if !restartInFlight && !shouldStop {
-                restartInFlight = true
-                shouldSchedule = true
-            }
-        }
-        guard shouldSchedule else { return }
-
-        Task { [weak self] in
-            guard let self else { return }
-            await self.restartLoop(reason: reason)
-        }
-    }
-
-    private func restartLoop(reason: String) async {
-        fputs("Restarting ScreenCaptureKit stream (\(reason))...\n", stderr)
-
-        var shouldStop: Bool = false
-        var currentStream: SCStream?
-        stateQueue.sync {
-            shouldStop = self.shouldStop
-            currentStream = stream
-            stream = nil
-        }
-
-        if shouldStop {
-            stateQueue.sync {
-                restartInFlight = false
-            }
-            return
-        }
-
-        if let currentStream {
-            try? await currentStream.stopCapture()
-        }
-
-        await startWithRetry(reason: reason)
-
-        stateQueue.sync {
-            restartInFlight = false
-        }
+    /// Ends the process so the parent starts a fresh one.
+    ///
+    /// A stream restarted inside the same process after -3805 ("application
+    /// connection being interrupted") either never started again or
+    /// reported itself running and delivered nothing but silence, while a
+    /// new process captured normally; an in-process restart that never
+    /// returned also kept this watchdog from ever trying again.
+    private func exitForRespawn(reason: String) -> Never {
+        fputs("Exiting for a fresh capture process (\(reason))\n", stderr)
+        exit(1)
     }
 
     private func startWithRetry(reason: String) async {
@@ -302,6 +273,9 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
 
             do {
                 try await startOnce()
+                stateQueue.sync {
+                    captureRunning = true
+                }
                 fputs("Audio capture running. Output: PCM float32, \(targetSampleRate) Hz, mono.\n", stderr)
                 return
             } catch {
@@ -368,7 +342,7 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
         guard !shouldStop else { return }
 
         fputs("Stream stopped: \(error)\n", stderr)
-        scheduleRestart(reason: "stream stopped")
+        exitForRespawn(reason: "stream stopped")
     }
 
     // SCStreamOutput
