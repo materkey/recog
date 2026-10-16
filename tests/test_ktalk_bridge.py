@@ -5982,3 +5982,77 @@ async def test_healthy_or_starting_agent_when_polled_then_does_not_recover(count
         bridge._supervisor_status_ts = now
         await bridge._recompute_agent_state(now=now)
     bridge._relay_to_supervisors.assert_not_awaited()
+
+
+def _speaker_update(pid, name, since_s=None):
+    speaker = {"id": pid, "name": name, "isLocal": False}
+    if since_s is not None:
+        speaker["since"] = since_s * 1000
+    return {"type": "speaker_update", "speaker": speaker, "timestamp": time.time() * 1000}
+
+
+async def _history_with_alice_then_grace(bridge):
+    """Alice spoke from -3 s and was re-reported at -0.5 s (adapter grace)."""
+    now = time.time()
+    await bridge._process_message(_speaker_update("a", "Alice"))
+    bridge._speaker_history[-1].timestamp = now - 3.0
+    await bridge._process_message(_speaker_update("a", "Alice"))
+    bridge._speaker_history[-1].timestamp = now - 0.5
+    return now
+
+
+@pytest.mark.asyncio
+async def test_alice_reported_through_grace_when_bob_arrives_with_since_then_bob_holds_the_window_from_since():
+    """
+    given: Alice current, re-reported during the adapter's grace period
+    when:  Bob's switch arrives late with `since` = when he actually started (-1 s)
+    then:  history credits Bob from -1 s and the Alice re-report after it is dropped,
+           so a window over Bob's first words goes to Bob
+    """
+    bridge = KTalkBridge()
+    now = await _history_with_alice_then_grace(bridge)
+
+    await bridge._process_message(_speaker_update("b", "Bob", since_s=now - 1.0))
+
+    history = bridge.get_speaker_history()
+    assert [e.speaker_name for e in history] == ["Alice", "Bob"]
+    assert history[-1].timestamp == pytest.approx(now - 1.0, abs=0.05)
+    assert bridge.get_dominant_speaker_for_period(now - 1.5, now) == "Bob"
+
+
+@pytest.mark.asyncio
+async def test_alice_current_when_bob_since_is_far_in_the_past_then_backdating_is_capped():
+    """
+    given: Alice current
+    when:  Bob's switch carries a `since` a minute old
+    then:  Bob enters the history no earlier than SPEAKER_ONSET_MAX_BACKDATE_S ago
+    """
+    bridge = KTalkBridge()
+    now = await _history_with_alice_then_grace(bridge)
+
+    await bridge._process_message(_speaker_update("b", "Bob", since_s=now - 60.0))
+
+    history = bridge.get_speaker_history()
+    assert [e.speaker_name for e in history] == ["Alice", "Bob"]
+    assert history[-1].timestamp >= now - KTalkBridge.SPEAKER_ONSET_MAX_BACKDATE_S - 0.05
+
+
+@pytest.mark.asyncio
+async def test_nobody_speaking_when_bob_arrives_with_since_then_bob_is_recorded_at_arrival():
+    """
+    given: the last history event is silence
+    when:  Bob's update carries an earlier `since`
+    then:  the silence is kept and Bob is recorded at arrival time
+    """
+    bridge = KTalkBridge()
+    await bridge._process_message(_speaker_update("a", "Alice"))
+    await bridge._process_message(
+        {"type": "speaker_update", "speaker": None, "timestamp": time.time() * 1000}
+    )
+    now = time.time()
+
+    await bridge._process_message(_speaker_update("b", "Bob", since_s=now - 1.0))
+
+    history = bridge.get_speaker_history()
+    assert [e.speaker_name for e in history] == ["Alice", None, "Bob"]
+    assert history[-1].timestamp >= now

@@ -221,7 +221,7 @@ describe('participants and active speaker', () => {
     await flush();
 
     expect(cb).toHaveBeenCalledTimes(1);
-    expect(adapter.getActiveSpeaker()).toEqual({ id: 'spaces/s/devices/2', name: 'Bob', isLocal: false });
+    expect(adapter.getActiveSpeaker()).toEqual({ id: 'spaces/s/devices/2', name: 'Bob', isLocal: false, since: Date.now() });
   });
 
   test('no tiles - anyMicOn - unknown counts as on', () => {
@@ -300,6 +300,67 @@ describe('participants and active speaker', () => {
     jest.advanceTimersByTime(500);
     expect(cb).toHaveBeenCalledTimes(2);
     expect(cb.mock.results[1].value.id).toBe('b');
+  });
+
+  test('current speaker goes silent while another speaks - switch after grace - since is when the other started', () => {
+    const doc = newDoc();
+    const alice = addTile(doc, 'a', 'Alice', { state: SPEAKING });
+    const bob = addTile(doc, 'b', 'Bob');
+    const adapter = new GoogleMeetAdapter(makeWin(), doc);
+    expect(adapter.getActiveSpeaker().id).toBe('a');
+
+    jest.advanceTimersByTime(500);
+    setState(alice, GMEET_SELECTORS.silentClass);
+    adapter.getParticipants();
+    const aliceQuietAt = Date.now();
+    jest.advanceTimersByTime(300);
+    setState(bob, SPEAKING);
+    adapter.getParticipants();
+    const bobStartedAt = Date.now();
+
+    jest.advanceTimersByTime(SPEAKER_GRACE_MS);
+    const speaker = adapter.getActiveSpeaker();
+    expect(speaker.id).toBe('b');
+    expect(speaker.since).toBe(bobStartedAt);
+    expect(speaker.since).toBeGreaterThan(aliceQuietAt);
+  });
+
+  test('another starts before current goes silent - switch after grace - since is when the current went quiet', () => {
+    const doc = newDoc();
+    const alice = addTile(doc, 'a', 'Alice', { state: SPEAKING });
+    const bob = addTile(doc, 'b', 'Bob');
+    const adapter = new GoogleMeetAdapter(makeWin(), doc);
+    expect(adapter.getActiveSpeaker().id).toBe('a');
+
+    jest.advanceTimersByTime(500);
+    setState(bob, SPEAKING);
+    adapter.getParticipants();
+    jest.advanceTimersByTime(300);
+    setState(alice, GMEET_SELECTORS.silentClass);
+    adapter.getParticipants();
+    const aliceQuietAt = Date.now();
+
+    jest.advanceTimersByTime(SPEAKER_GRACE_MS);
+    const speaker = adapter.getActiveSpeaker();
+    expect(speaker.id).toBe('b');
+    expect(speaker.since).toBe(aliceQuietAt);
+  });
+
+  test('switched speaker - still speaking later - since unchanged', () => {
+    const doc = newDoc();
+    const alice = addTile(doc, 'a', 'Alice', { state: SPEAKING });
+    const bob = addTile(doc, 'b', 'Bob');
+    const adapter = new GoogleMeetAdapter(makeWin(), doc);
+    adapter.getActiveSpeaker();
+    setState(alice, GMEET_SELECTORS.silentClass);
+    setState(bob, SPEAKING);
+    adapter.getParticipants();
+    jest.advanceTimersByTime(SPEAKER_GRACE_MS + 1);
+    const { since } = adapter.getActiveSpeaker();
+    expect(since).toEqual(expect.any(Number));
+
+    jest.advanceTimersByTime(5000);
+    expect(adapter.getActiveSpeaker()).toEqual(expect.objectContaining({ id: 'b', since }));
   });
 
   test('current speaker goes silent and nobody else speaks - after grace - null', () => {

@@ -110,6 +110,7 @@ export class GoogleMeetAdapter {
     this._silentSince = new Map(); // pid → ts of the last speaking→silent transition
     this._absentSince = new Map(); // pid → ts it was first seen with no tile anywhere
     this._currentSpeakerId = null;
+    this._currentSince = null; // ts the current speaker is reported from
     this._snapshot = { present: new Map(), inCall: false, tileCount: 0 };
 
     // isInMeeting() debounce.
@@ -362,6 +363,7 @@ export class GoogleMeetAdapter {
       id: pid,
       name: this.getParticipantName(pid),
       isLocal: this._snapshot.present.get(pid)?.isLocal === true,
+      since: this._currentSince,
     };
   }
 
@@ -391,6 +393,13 @@ export class GoogleMeetAdapter {
       if (next === null || (this._speakingSince.get(pid) ?? 0) > (this._speakingSince.get(next) ?? 0)) {
         next = pid;
       }
+    }
+    // A switch away from a current speaker is reported only after the grace
+    // period, so date it back to when the new speaker started, but not before
+    // the previous one went quiet: the bridge credits that time to them.
+    if (next) {
+      const startedAt = this._speakingSince.get(next) ?? now;
+      this._currentSince = current ? Math.max(startedAt, this._quietSince(current)) : now;
     }
     this._currentSpeakerId = next;
     return next ? this._speakerInfo(next) : null;

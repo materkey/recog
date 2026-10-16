@@ -135,6 +135,9 @@ class KTalkBridge:
     # Максимальная длительность сегмента (сек) - если спикер говорит дольше, разбиваем на части
     MAX_SEGMENT_DURATION = 20.0
 
+    # Насколько (сек) смена спикера может быть отнесена в прошлое по `speaker.since`
+    SPEAKER_ONSET_MAX_BACKDATE_S = 3.0
+
     def __init__(
         self, host: str = "localhost", port: int = 8766, *, ai_settings_store=None, ktalk_only=False
     ):
@@ -525,6 +528,42 @@ class KTalkBridge:
 
             # Возвращаем спикера с наибольшим временем речи
             return max(speaker_durations, key=speaker_durations.get)
+
+    def _speaker_switch_time_locked(self, speaker: dict, now: float) -> float:
+        """Время, с которого спикер из speaker_update вносится в историю.
+
+        Адаптер может сообщить о смене спикера с опозданием: Google Meet держит
+        прежнего говорящего ещё SPEAKER_GRACE_MS после того, как его индикатор
+        погас, и повторяет его, пока новый уже говорит. Тогда в `since` (мс,
+        часы браузера) приходит момент, с которого говорит новый спикер, и смена
+        переносится туда, а повторы прежнего после этого момента снимаются. Без
+        этого начало реплики нового спикера в истории числится за прежним, и
+        короткая реплика проигрывает голосование по окну чанка.
+
+        Вызывается под self._lock.
+        """
+        since = speaker.get("since")
+        history = self._speaker_history
+        if (
+            not isinstance(since, (int, float))
+            or isinstance(since, bool)
+            or not history
+            or history[-1].speaker_name is None
+            or history[-1].speaker_id == (speaker.get("id") or "")
+        ):
+            return now
+        onset = since / 1000 + self._clock_offset
+        onset = min(now, max(onset, now - self.SPEAKER_ONSET_MAX_BACKDATE_S))
+        outgoing = history[-1].speaker_id
+        # Событие, с которого начался отрезок прежнего спикера, не снимается.
+        while (
+            len(history) >= 2
+            and history[-1].timestamp > onset
+            and history[-1].speaker_id == outgoing
+            and history[-2].speaker_id == outgoing
+        ):
+            history.pop()
+        return max(onset, history[-1].timestamp)
 
     def is_someone_speaking(self) -> bool:
         """Возвращает True если кто-то говорит."""
@@ -1995,7 +2034,7 @@ class KTalkBridge:
                     event = SpeakerEvent(
                         speaker_name=self._current_speaker,
                         speaker_id=self._current_speaker_id or "",
-                        timestamp=now,
+                        timestamp=self._speaker_switch_time_locked(speaker, now),
                         is_local=new_is_local
                     )
                     self._speaker_history.append(event)
