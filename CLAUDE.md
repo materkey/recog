@@ -211,6 +211,20 @@ delivered only zeros for `DIGITAL_SILENCE_RESTART_S` (60 s) while a conference
 is active (`KTalkBridge.is_conference_active`); a restart during real silence
 loses nothing.
 
+sounddevice captures (`SingleDeviceCapture`: the microphone and `device:<id>`)
+fail differently: a configuration change of the device (e.g. another process
+changing the built-in microphone's sample rate) makes CoreAudio fail a render
+call with `-10863`, and PortAudio stops the stream for good — finished
+callback, `stream.active` False, no further callbacks, no zeros. The capture
+passes a `finished_callback` (ignored for its own `stop()`) and
+`LiveTranscriber._reopen_stopped_device_captures` calls `reopen_if_broken()` on
+every loop iteration while recording is allowed: a stream that finished, went
+inactive, or has not called back for `CALLBACK_STALL_S` (10 s) is closed and
+reopened on the device found again **by name** (indices shift when headphones
+connect; the PortAudio device list is re-read with `_terminate()`/`_initialize()`
+unless another sounddevice stream is open, since that would close it). A failed
+reopen is retried with `RESTART_BACKOFF_S` and never raises into the loop.
+
 ## Architecture
 
 ### Data directory

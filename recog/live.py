@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import threading
+import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -29,7 +30,7 @@ from .audio_capture import BufferedAudioCapture
 from .log_utils import log_rate_limited
 from .remote_asr import ASRTemporarilyUnavailable, FallbackASR, build_asr
 from .refine import RefineAborted, RefineResult, RefineWorker, make_abortable_decode
-from .system_audio import DIGITAL_SILENCE_RESTART_S
+from .system_audio import DIGITAL_SILENCE_RESTART_S, RESTART_BACKOFF_S
 from .config import get_data_dir
 from .user_profile import UserProfileStore, resolve_identity
 
@@ -45,6 +46,11 @@ AUDIO_CLEANUP_INTERVAL_S = 3600
 # How often the live loop checks the system capture for digital silence during
 # a conference (the conference check reads meta.json).
 SILENCE_CHECK_INTERVAL_S = 5.0
+
+# How long an active sounddevice stream may go without an audio callback
+# before it is reopened. CoreAudio calls back every ~10 ms; a stop that never
+# reached the finished callback leaves the stream silent like this.
+CALLBACK_STALL_S = 10.0
 
 # `--mic-device none`: явный отказ от микрофона. Отличается от None, который
 # означает «устройство ввода по умолчанию» для sounddevice.
@@ -249,6 +255,10 @@ class IncrementalWavWriter:
 class SingleDeviceCapture(BufferedAudioCapture):
     """Захват аудио с одного устройства."""
 
+    # Captures of this process with an open PortAudio stream: re-reading the
+    # device list (Pa_Terminate + Pa_Initialize) closes every one of them.
+    _open_captures: "weakref.WeakSet[SingleDeviceCapture]" = weakref.WeakSet()
+
     def __init__(self, device, sample_rate=16000, name="device",
                  max_buffer_s: float = ASR_PENDING_BUFFER_CAP_S):
         import sounddevice as sd
@@ -256,10 +266,28 @@ class SingleDeviceCapture(BufferedAudioCapture):
         self.sd = sd
         self.device = device
         self.stream = None
+        # Kept to find the device again on a reopen: PortAudio indices shift
+        # when e.g. Bluetooth headphones connect or disconnect.
+        self.device_name: Optional[str] = None
+        # start/stop come from the live loop and the bridge thread.
+        self._lifecycle_lock = threading.RLock()
+        # Tells the finished callback of a stream we stop ourselves apart from
+        # one PortAudio stopped on its own: a render error (-10863 while macOS
+        # applies a configuration change of the device) stops it for good.
+        self._stopping = False
+        self._stream_generation = 0
+        self._stream_lost = False
+        # Last audio callback (reset on every start).
+        self._last_callback_at = time.monotonic()
+        # Reopens since the last audio callback, and when the next may start.
+        self._reopen_attempts = 0
+        self._next_reopen_at = 0.0
 
     def _callback(self, indata, frames, time_info, status):
         if status:
             print(f"Audio status ({self.name}): {status}", file=sys.stderr)
+        self._last_callback_at = time.monotonic()
+        self._reopen_attempts = 0
         captured_at = time.time() - frames / self.sample_rate
         with self._lock:
             dropped = self._append_locked(indata.copy(), captured_at)
@@ -271,34 +299,163 @@ class SingleDeviceCapture(BufferedAudioCapture):
             )
 
     def start(self):
-        # Определяем количество каналов устройства
-        device_info = self.sd.query_devices(self.device)
-        max_channels = device_info.get('max_input_channels', 1)
-        channels = min(max_channels, 2)  # Используем 1 или 2 канала
+        with self._lifecycle_lock:
+            # Определяем количество каналов устройства
+            device_info = self.sd.query_devices(self.device)
+            max_channels = device_info.get("max_input_channels", 1)
+            channels = min(max_channels, 2)  # Используем 1 или 2 канала
+            self.device_name = device_info.get("name", self.device_name)
 
-        self.stream = self.sd.InputStream(
-            device=self.device,
-            channels=channels,
-            samplerate=self.sample_rate,
-            callback=self._callback
-        )
-        try:
-            self.stream.start()
-        except Exception:
-            self.stream.close()
-            raise
-        self.running = True
-        self._channels = channels
+            self._stream_generation += 1
+            generation = self._stream_generation
+            self.stream = self.sd.InputStream(
+                device=self.device,
+                channels=channels,
+                samplerate=self.sample_rate,
+                callback=self._callback,
+                finished_callback=lambda: self._on_stream_finished(generation),
+            )
+            self._stopping = False
+            self._stream_lost = False
+            self._last_callback_at = time.monotonic()
+            try:
+                self.stream.start()
+            except Exception:
+                self._stopping = True
+                self.stream.close()
+                raise
+            self.running = True
+            self._channels = channels
+            SingleDeviceCapture._open_captures.add(self)
 
     def stop(self):
-        if self.running:
-            try:
-                self.stream.stop()
-            finally:
+        with self._lifecycle_lock:
+            # An explicit stop also cancels the reopen of a lost stream.
+            self._stream_lost = False
+            if self.running:
+                self._stopping = True
                 try:
-                    self.stream.close()
+                    self.stream.stop()
                 finally:
-                    self.running = False
+                    try:
+                        self.stream.close()
+                    finally:
+                        self.running = False
+                        SingleDeviceCapture._open_captures.discard(self)
+
+    def _on_stream_finished(self, generation: int):
+        """PortAudio finished callback (runs on a CoreAudio thread).
+
+        Only records the fact: the live loop reopens the stream, closing or
+        opening one from this thread is not allowed. Without this the stop is
+        silent — PortAudio prints the render error and never calls back again.
+        """
+        if self._stopping or generation != self._stream_generation:
+            return
+        self._stream_lost = True
+        print(
+            f"[{self.name}] The input stream of {self.device_name!r} was stopped "
+            f"by the audio system",
+            file=sys.stderr,
+        )
+
+    def stream_failure(self) -> Optional[str]:
+        """Why the stream must be reopened, or None while it captures."""
+        if self._stream_lost:
+            return f"The input stream of {self.device_name!r} was stopped by the audio system"
+        stream = self.stream
+        if not self.running or stream is None:
+            return None
+        # Safety nets for a stop that did not reach the finished callback.
+        if not stream.active:
+            return f"The input stream of {self.device_name!r} is no longer active"
+        gap = time.monotonic() - self._last_callback_at
+        if gap >= CALLBACK_STALL_S:
+            return f"No audio callbacks from {self.device_name!r} for {gap:.0f}s"
+        return None
+
+    def reopen_if_broken(self) -> bool:
+        """Reopens a stream that stopped capturing; returns whether it tried.
+
+        Called by the live loop on every iteration. The first reopen after a
+        failure is immediate; further ones, while no callback has arrived since
+        (the device is gone, or every new stream dies at once), wait
+        RESTART_BACKOFF_S. Never raises: a failed reopen leaves the capture
+        marked lost and is retried.
+        """
+        reason = self.stream_failure()
+        if reason is None:
+            return False
+        now = time.monotonic()
+        if now < self._next_reopen_at:
+            return False
+        attempt = self._reopen_attempts
+        self._reopen_attempts += 1
+        self._next_reopen_at = now + RESTART_BACKOFF_S[min(attempt, len(RESTART_BACKOFF_S) - 1)]
+        self._reopen(reason)
+        return True
+
+    def _reopen(self, reason: str) -> None:
+        """Closes the stream, finds the device again by its name, opens a new one."""
+        with self._lifecycle_lock:
+            if not self.running and not self._stream_lost:
+                return  # stopped on purpose in the meantime
+            log_rate_limited(
+                f"capture-reopen-{self.name}",
+                f"[{self.name}] {reason}, reopening the input stream",
+            )
+            try:
+                self.stop()
+            except Exception as e:
+                print(f"[{self.name}] Closing the old stream failed: {e}", file=sys.stderr)
+            try:
+                self._refresh_device_list()
+                self.device = self._find_device_by_name()
+                self.start()
+            except Exception as e:
+                self._stream_lost = True
+                log_rate_limited(
+                    f"capture-reopen-failed-{self.name}",
+                    f"[{self.name}] Reopening {self.device_name!r} failed: {e}",
+                )
+                return
+            print(
+                f"[{self.name}] Reopened {self.device_name!r} (device {self.device})",
+                file=sys.stderr,
+            )
+
+    def _refresh_device_list(self):
+        """Makes PortAudio enumerate the devices again.
+
+        PortAudio reads the device list once, in Pa_Initialize, so after
+        headphones connect or disconnect the cached indices point at other
+        devices. Re-reading it takes Pa_Terminate + Pa_Initialize, and
+        Pa_Terminate closes every open stream of the process: while another
+        sounddevice capture is open (`--system-audio device:<id>`) the cached
+        list is kept and the name is looked up in it.
+        """
+        if any(c is not self for c in list(SingleDeviceCapture._open_captures)):
+            print(
+                f"[{self.name}] Another input stream is open, keeping the cached device list",
+                file=sys.stderr,
+            )
+            return
+        sd = self.sd
+        if getattr(sd, "_initialized", 0):
+            sd._terminate()
+        # A failed terminate leaves PortAudio initialized; a failed initialize
+        # leaves the counter at 0 and is retried by the next reopen.
+        if not getattr(sd, "_initialized", 0):
+            sd._initialize()
+
+    def _find_device_by_name(self):
+        """Current index of the input device named `device_name`."""
+        if self.device_name is None:
+            return self.device
+        for index, dev in enumerate(self.sd.query_devices()):
+            if dev["name"] == self.device_name and dev["max_input_channels"] > 0:
+                return index
+        raise RuntimeError(f"input device {self.device_name!r} not found")
 
     @staticmethod
     def list_devices(platform: str = "", run=subprocess.run):
@@ -1458,6 +1615,23 @@ class LiveTranscriber:
             return
         capture.request_restart(f"Only digital silence for {silent_for:.0f}s during a conference")
 
+    def _reopen_stopped_device_captures(self):
+        """Reopens a sounddevice capture whose stream stopped capturing.
+
+        A configuration change of the device (e.g. another process changing
+        the built-in microphone's sample rate) makes CoreAudio fail a render
+        call with -10863; PortAudio then stops the stream for good and never
+        calls back again. On 2026-10-16 that cost a whole meeting of local
+        speech without a log line. `SingleDeviceCapture.reopen_if_broken` does
+        the work and the backoff; this only keeps it out of idle periods.
+        """
+        if not self.is_recording_active():
+            return
+        for capture in (self.mic_capture, self.system_capture):
+            reopen = getattr(capture, "reopen_if_broken", None)
+            if reopen is not None:
+                reopen()
+
     def _current_meeting_key(self):
         """Текущая встреча как ключ per-meeting состояний watchdog'а.
 
@@ -2187,6 +2361,7 @@ class LiveTranscriber:
                         except Exception as e:
                             print(f"Warning: audio cleanup failed: {e}", file=sys.stderr)
 
+                self._reopen_stopped_device_captures()
                 if self.mic_capture:
                     self._process_chunk(self.mic_capture, self._mic_state, is_mic=True)
                 if self.system_capture:
