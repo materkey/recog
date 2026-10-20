@@ -17,7 +17,17 @@
  *   meeting, but Zoom also mounts it for a second or two, with no tiles, right
  *   after "Join" and before the waiting room. Entering therefore needs the
  *   footer together with a participant tile; once entered, the footer alone
- *   keeps the meeting (tiles can vanish, e.g. under a screen share).
+ *   keeps the meeting (tiles can vanish, e.g. under a screen share);
+ * - the user's own microphone: the toolbar's audio button, kept in the DOM
+ *   while the toolbar is hidden. Its `aria-label` is an untranslated literal
+ *   of the client (`mute my microphone` while the microphone is open, `unmute
+ *   my microphone`, `join audio`, `audio settings`, ...), so it reads the same
+ *   in every interface language (client 7.2.0, main-client bundle). The labels
+ *   that carry no mute word (`audio settings`, `audio setting`, `audio`) are
+ *   the ones the client shows when the user cannot be heard: not allowed to
+ *   talk (a webinar attendee), or the microphone disabled by the system, the
+ *   host's controller or a failed capture. Reported to the bridge as
+ *   `localMicMuted`, see getLocalMicMuted().
  *
  * The meeting URL is synthesized as `https://zoom.us/j/<id>`: the backend takes
  * the last path segment as the room id, the client runs on several hosts, and
@@ -50,7 +60,24 @@ export const ZOOM_SELECTORS = {
   micMutedMarker: '.video-avatar__avatar-footer--view-mute-computer',
   // Prejoin name field: the only place the local display name is readable.
   selfNameInput: '#input-for-name',
+  // The toolbar's audio button; see OWN_MIC_LABELS.
+  audioButton: '.join-audio-container__btn',
 };
+
+// The audio button's labels by the state of the user's own microphone: true
+// for closed (without audio connected, or not allowed to talk, nobody hears the
+// user either), false for open. Any other label says nothing.
+export const OWN_MIC_LABELS = new Map([
+  ['mute my microphone', false],
+  ['mute my phone', false],
+  ['unmute my microphone', true],
+  ['unmute my phone', true],
+  ['join audio', true],
+  ['join audio disabled', true],
+  ['audio settings', true],
+  ['audio setting', true],
+  ['audio', true],
+]);
 
 const WC_PATH_RE = /^\/wc\/(?:join\/)?(\d{9,11})(?:\/|$)/;
 
@@ -85,6 +112,22 @@ export function tileName(tile) {
   return (tile?.querySelector(ZOOM_SELECTORS.tileName)?.textContent || '').trim();
 }
 
+/**
+ * Whether the user's own microphone is closed, from the toolbar's audio button:
+ * null without a button or with a label that says nothing known.
+ */
+export function ownMicMuted(doc) {
+  const label = doc.querySelector(ZOOM_SELECTORS.audioButton)?.getAttribute('aria-label');
+  return OWN_MIC_LABELS.get((label || '').trim().toLowerCase()) ?? null;
+}
+
+/** The audio button's label when it is one OWN_MIC_LABELS does not know, else null. */
+function unknownOwnMicLabel(doc) {
+  const label = doc.querySelector(ZOOM_SELECTORS.audioButton)?.getAttribute('aria-label');
+  const key = (label || '').trim().toLowerCase();
+  return key && !OWN_MIC_LABELS.has(key) ? key : null;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
@@ -102,7 +145,15 @@ export class ZoomAdapter {
     this._selfName = null;
     this._currentSpeaker = null; // name of the last reported speaker
     this._speakerLostAt = null; // ts the active tile vanished, null while present
-    this._snapshot = { present: new Map(), inCall: false, tileCount: 0, activeName: null };
+    this._snapshot = {
+      present: new Map(),
+      inCall: false,
+      tileCount: 0,
+      activeName: null,
+      ownMuted: null,
+      localMicMuted: null,
+      unknownMicLabel: null,
+    };
 
     // isInMeeting(): the meeting entered (footer + a tile seen) and its debounce.
     this._enteredId = null;
@@ -114,6 +165,7 @@ export class ZoomAdapter {
     this._noActiveSince = null;
     this._drift = null;
     this._driftWarned = new Set();
+    this._ownMicLabelWarned = false;
 
     // Live subscriptions (recreated by subscribeToSpeakerChanges).
     this._speakerCallback = null;
@@ -156,6 +208,7 @@ export class ZoomAdapter {
       if (entry) entry.micMuted = entry.micMuted && muted;
       else present.set(name, { micMuted: muted, isLocal: name === this._selfName });
     }
+    const ownMuted = ownMicMuted(doc);
 
     const footer = !!doc.querySelector(sel.inCallMarker);
     const meetingId = this._meetingId();
@@ -186,7 +239,23 @@ export class ZoomAdapter {
       this._speakerLostAt = now;
     }
 
-    this._snapshot = { present, inCall, tileCount, activeName };
+    // What getLocalMicMuted() reports, kept here so the change signature
+    // follows it, not only the toolbar's word.
+    const unknownMicLabel = unknownOwnMicLabel(doc);
+    let localMicMuted = ownMuted;
+    if (localMicMuted === null && inCall && !unknownMicLabel && this._selfName) {
+      localMicMuted = [...present.values()].some((entry) => entry.isLocal) ? null : true;
+    }
+
+    this._snapshot = {
+      present,
+      inCall,
+      tileCount,
+      activeName,
+      ownMuted,
+      localMicMuted,
+      unknownMicLabel,
+    };
     this._updateDrift(now, { present, inCall, tileCount, activeName, activeWithoutName });
     return this._snapshot;
   }
@@ -317,6 +386,23 @@ export class ZoomAdapter {
     }));
   }
 
+  /**
+   * Optional hook: the user's own microphone for the bridge (`localMicMuted`),
+   * null to leave it to their tile. The toolbar's word wins. Without it, a
+   * meeting that shows no tile of the user's own counts as closed: a webinar
+   * attendee has neither, nor a microphone anyone hears. That needs the user's
+   * name (their own tile cannot be told apart without it) and no audio button:
+   * a button whose wording is unknown leaves the microphone to the tiles.
+   */
+  getLocalMicMuted() {
+    const { localMicMuted, unknownMicLabel } = this._refresh();
+    if (unknownMicLabel && !this._ownMicLabelWarned) {
+      this._ownMicLabelWarned = true;
+      console.warn(`[recog][zoom] unknown audio button label: ${unknownMicLabel}`);
+    }
+    return localMicMuted;
+  }
+
   getParticipantName(participantId) {
     return participantId || 'Unknown';
   }
@@ -356,10 +442,11 @@ export class ZoomAdapter {
 
   _isRelevantMutation(record) {
     const sel = ZOOM_SELECTORS;
-    const watched = `${sel.tile}, ${sel.inCallMarker}`;
+    const watched = `${sel.tile}, ${sel.inCallMarker}, ${sel.audioButton}`;
     // A class flip on a tile, a renamed footer, a mute icon: all inside a tile.
     const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
     if (target?.closest?.(sel.tile)) return true;
+    if (target?.closest?.(sel.audioButton)) return true;
     if (record.type !== 'childList') return false;
     const touchesWatched = (node) =>
       node.nodeType === 1 && (node.matches(watched) || !!node.querySelector(watched));
@@ -380,9 +467,10 @@ export class ZoomAdapter {
   }
 
   /** Everything the speaker callback reports; unrelated tile mutations leave it unchanged. */
-  _changeSignature({ present, activeName }) {
+  _changeSignature({ present, activeName, localMicMuted }) {
     const rows = [...present].map(([name, e]) => `${name}\u0001${+e.isLocal}${+e.micMuted}`);
-    return `${this._drift || ''}\u0002${activeName || ''}\u0002${rows.join('\u0002')}`;
+    const head = `${this._drift || ''}\u0002${activeName || ''}\u0002${localMicMuted}`;
+    return `${head}\u0002${rows.join('\u0002')}`;
   }
 
   _handleChange() {
@@ -409,7 +497,7 @@ export class ZoomAdapter {
     this._observer = new Observer((records) => this._onMutations(records));
     this._observer.observe(this._doc.documentElement || this._doc, {
       attributes: true,
-      attributeFilter: ['class'],
+      attributeFilter: ['class', 'aria-label'],
       characterData: true,
       childList: true,
       subtree: true,

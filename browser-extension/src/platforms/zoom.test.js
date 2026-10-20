@@ -16,6 +16,7 @@ import {
   meetingIdFromPath,
   buildMeetingUrl,
   tileName,
+  ownMicMuted,
   SPEAKER_GRACE_MS,
   IN_MEETING_DEBOUNCE_MS,
   CALLBACK_THROTTLE_MS,
@@ -68,6 +69,25 @@ function addInCallMarker(doc) {
   marker.id = ZOOM_SELECTORS.inCallMarker.slice(1);
   doc.body.appendChild(marker);
   return marker;
+}
+
+/** The toolbar's audio button, labelled as the client labels it. */
+function addAudioButton(doc, label) {
+  const button = doc.createElement('button');
+  button.className = ZOOM_SELECTORS.audioButton.slice(1);
+  button.setAttribute('aria-label', label);
+  doc.body.appendChild(button);
+  return button;
+}
+
+/** An adapter in a meeting entered with the prejoin name `Me`. */
+function adapterKnowingMe(doc) {
+  const input = addPrejoinName(doc, 'Me');
+  const adapter = new ZoomAdapter(makeWin(), doc);
+  adapter.getParticipants();
+  input.remove();
+  addInCallMarker(doc);
+  return adapter;
 }
 
 function addPrejoinName(doc, name) {
@@ -134,6 +154,24 @@ describe('pure helpers', () => {
   test('meeting id - buildMeetingUrl - canonical zoom.us/j url; none without an id', () => {
     expect(buildMeetingUrl('12345678901')).toBe(CANONICAL);
     expect(buildMeetingUrl(null)).toBeNull();
+  });
+
+  test.each([
+    ['mute my microphone', false],
+    ['Mute my phone', false],
+    ['unmute my microphone', true],
+    ['unmute my phone', true],
+    ['join audio', true],
+    ['join audio disabled', true],
+    ['audio settings', true],
+    ['audio setting', true],
+    ['audio', true],
+    ['microphone', null],
+    [null, null],
+  ])('audio button labelled %p - ownMicMuted - %p', (label, expected) => {
+    const doc = meetingDoc();
+    if (label !== null) addAudioButton(doc, label);
+    expect(ownMicMuted(doc)).toBe(expected);
   });
 
   test('tile footer with surrounding whitespace - tileName - trimmed name; empty without a footer', () => {
@@ -398,6 +436,73 @@ describe('participants and active speaker', () => {
     ]);
   });
 
+  test('own tile unmuted, toolbar offers to unmute - getLocalMicMuted - true, the tile itself unchanged', () => {
+    const doc = newDoc();
+    const adapter = adapterKnowingMe(doc);
+    addTile(doc, 'Me', { kind: GALLERY });
+    addAudioButton(doc, 'unmute my microphone');
+
+    expect(adapter.getLocalMicMuted()).toBe(true);
+    expect(adapter.getParticipants()).toEqual([
+      { id: 'Me', name: 'Me', isLocal: true, isSpeaking: false, micMuted: false },
+    ]);
+  });
+
+  test('own tile muted, toolbar offers to mute - getLocalMicMuted - false', () => {
+    const doc = newDoc();
+    const adapter = adapterKnowingMe(doc);
+    addTile(doc, 'Me', { kind: GALLERY, muted: true });
+    addAudioButton(doc, 'mute my microphone');
+
+    expect(adapter.getLocalMicMuted()).toBe(false);
+  });
+
+  test('webinar attendee: no own tile, no audio button - getLocalMicMuted - true', () => {
+    const doc = newDoc();
+    const adapter = adapterKnowingMe(doc);
+    addTile(doc, 'Host', { kind: MAIN });
+
+    expect(adapter.getLocalMicMuted()).toBe(true);
+    expect(adapter.getParticipants().map((p) => p.name)).toEqual(['Host']);
+  });
+
+  test('own name never seen, no audio button - getLocalMicMuted - null, left to the tiles', () => {
+    const doc = meetingDoc();
+    addTile(doc, 'Me', { kind: GALLERY });
+    addTile(doc, 'Host', { kind: MAIN });
+
+    expect(new ZoomAdapter(makeWin(), doc).getLocalMicMuted()).toBeNull();
+  });
+
+  test('no own tile, unknown audio button label - getLocalMicMuted - null, one warning', () => {
+    const doc = newDoc();
+    const adapter = adapterKnowingMe(doc);
+    addTile(doc, 'Host', { kind: MAIN });
+    addAudioButton(doc, 'microphone');
+
+    expect(adapter.getLocalMicMuted()).toBeNull();
+    expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+
+  test('own tile, unknown audio button label - getLocalMicMuted - left to the tile, one warning', () => {
+    const doc = newDoc();
+    const adapter = adapterKnowingMe(doc);
+    addTile(doc, 'Me', { kind: GALLERY });
+    addAudioButton(doc, 'microphone');
+
+    expect(adapter.getLocalMicMuted()).toBeNull();
+    expect(adapter.getLocalMicMuted()).toBeNull();
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(console.warn.mock.calls[0][0]).toContain('microphone');
+  });
+
+  test('prejoin, no toolbar yet - getLocalMicMuted - null', () => {
+    const doc = newDoc();
+    addPrejoinName(doc, 'Me');
+
+    expect(new ZoomAdapter(makeWin(), doc).getLocalMicMuted()).toBeNull();
+  });
+
   test('prejoin skipped (name never seen) - getParticipants - nobody is local', () => {
     const doc = meetingDoc();
     addTile(doc, 'Me', { kind: GALLERY });
@@ -437,6 +542,64 @@ describe('subscriptions', () => {
 
     expect(cb).toHaveBeenCalledTimes(1);
     expect(adapter.getActiveSpeaker()?.name).toBe('Bob');
+  });
+
+  test('subscribed - audio button relabelled when the user unmutes - callback fires', async () => {
+    const doc = meetingDoc();
+    addTile(doc, 'Alice', { active: true });
+    const button = addAudioButton(doc, 'unmute my microphone');
+    const adapter = new ZoomAdapter(makeWin(), doc);
+    const cb = jest.fn();
+    adapter.subscribeToSpeakerChanges(cb);
+
+    button.setAttribute('aria-label', 'mute my microphone');
+    await flush();
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(adapter.getLocalMicMuted()).toBe(false);
+  });
+
+  test('webinar attendee not allowed to talk: "audio settings" button, no own tile, name unknown - getLocalMicMuted - true', () => {
+    const doc = meetingDoc();
+    addTile(doc, 'Host', { kind: MAIN });
+    addAudioButton(doc, 'audio settings');
+
+    expect(new ZoomAdapter(makeWin(), doc).getLocalMicMuted()).toBe(true);
+  });
+
+  test('subscribed, no own tile under a known name - a button of unknown wording mounts, then goes - callback each time', async () => {
+    const doc = newDoc();
+    const adapter = adapterKnowingMe(doc);
+    addTile(doc, 'Host', { kind: MAIN });
+    const cb = jest.fn();
+    adapter.subscribeToSpeakerChanges(cb);
+    expect(adapter.getLocalMicMuted()).toBe(true);
+
+    const button = addAudioButton(doc, 'microphone');
+    await flush();
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(adapter.getLocalMicMuted()).toBeNull();
+
+    button.remove();
+    await flush();
+    expect(cb).toHaveBeenCalledTimes(2);
+    expect(adapter.getLocalMicMuted()).toBe(true);
+  });
+
+  test('subscribed - audio button replaced by a new one - callback fires', async () => {
+    const doc = meetingDoc();
+    addTile(doc, 'Alice', { active: true });
+    const button = addAudioButton(doc, 'join audio');
+    const adapter = new ZoomAdapter(makeWin(), doc);
+    const cb = jest.fn();
+    adapter.subscribeToSpeakerChanges(cb);
+
+    button.remove();
+    addAudioButton(doc, 'mute my microphone');
+    await flush();
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(adapter.getLocalMicMuted()).toBe(false);
   });
 
   test('subscribed - main tile renamed in place - callback fires', async () => {
