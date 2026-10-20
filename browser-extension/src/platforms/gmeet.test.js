@@ -71,6 +71,15 @@ function addInCallMarker(doc) {
   return marker;
 }
 
+/** The toolbar's microphone button with its `data-is-muted` state. */
+function addMicButton(doc, muted) {
+  const button = doc.createElement('button');
+  button.setAttribute('jsname', 'hw0c9');
+  button.setAttribute('data-is-muted', String(muted));
+  doc.body.appendChild(button);
+  return button;
+}
+
 class FakePip extends EventTarget {
   constructor() {
     super();
@@ -234,6 +243,37 @@ describe('participants and active speaker', () => {
     addTile(doc, 'a', 'Alice', { muted: true });
     addTile(doc, 'b', 'Bob', { muted: true });
     expect(new GoogleMeetAdapter(makeWin(), doc).anyMicOn()).toBe(false);
+  });
+
+  test.each([
+    [true, true],
+    [false, false],
+  ])('in the call, microphone button data-is-muted=%p - getLocalMicMuted - %p', (muted, expected) => {
+    const doc = newDoc();
+    addInCallMarker(doc);
+    addTile(doc, 'a', 'Alice');
+    addMicButton(doc, muted);
+
+    expect(new GoogleMeetAdapter(makeWin(), doc).getLocalMicMuted()).toBe(expected);
+  });
+
+  test('in the call, no microphone button (only the camera one) - getLocalMicMuted - null', () => {
+    const doc = newDoc();
+    addInCallMarker(doc);
+    addTile(doc, 'a', 'Alice');
+    const camera = doc.createElement('button');
+    camera.setAttribute('jsname', 'psRWwc');
+    camera.setAttribute('data-is-muted', 'true');
+    doc.body.appendChild(camera);
+
+    expect(new GoogleMeetAdapter(makeWin(), doc).getLocalMicMuted()).toBeNull();
+  });
+
+  test('lobby: microphone button but no leave-call control - getLocalMicMuted - null', () => {
+    const doc = newDoc();
+    addMicButton(doc, true);
+
+    expect(new GoogleMeetAdapter(makeWin(), doc).getLocalMicMuted()).toBeNull();
   });
 
   test('current speaker tile removed - after grace - the other speaker takes over', () => {
@@ -484,6 +524,42 @@ describe('subscriptions', () => {
 
     jest.advanceTimersByTime(CALLBACK_THROTTLE_MS);
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  test('subscribed - user unmutes on the toolbar - callback fires and the own microphone is open', async () => {
+    const doc = newDoc();
+    addInCallMarker(doc);
+    addTile(doc, 'a', 'Alice');
+    const button = addMicButton(doc, true);
+    const adapter = new GoogleMeetAdapter(makeWin(), doc);
+    const cb = jest.fn();
+    adapter.subscribeToSpeakerChanges(cb);
+    await flush();
+    cb.mockClear();
+
+    button.setAttribute('data-is-muted', 'false');
+    await flush();
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(adapter.getLocalMicMuted()).toBe(false);
+  });
+
+  test('subscribed in the lobby, microphone off - leave-call control appears - callback fires with the microphone closed', async () => {
+    const doc = newDoc();
+    addTile(doc, 'a', 'Alice');
+    addMicButton(doc, true);
+    const adapter = new GoogleMeetAdapter(makeWin(), doc);
+    const cb = jest.fn();
+    adapter.subscribeToSpeakerChanges(cb);
+    await flush();
+    cb.mockClear();
+    expect(adapter.getLocalMicMuted()).toBeNull();
+
+    addInCallMarker(doc);
+    await flush();
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(adapter.getLocalMicMuted()).toBe(true);
   });
 
   test('subscribed speaker - indicator only switches volume level - no callback', async () => {

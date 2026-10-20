@@ -10,6 +10,13 @@
  *   while quiet, one of `speakingClasses` (volume levels) while speaking.
  *   Speaking is positive evidence only — an indicator carrying none of the
  *   known classes is "unknown" and counts as silent (and flags selector drift);
+ * - the user's own microphone: the toolbar's microphone button
+ *   `[jsname="hw0c9"]`, whose `data-is-muted` is "true" while the microphone is
+ *   off and "false" while it is on (also with a microphone problem). Not
+ *   localized, unlike its `aria-label` ("Turn on microphone" / "Turn off
+ *   microphone"). Read from the Meet bundle (MeetingsUi, 2026-10-20), where the
+ *   camera button carries the same attribute under `jsname="psRWwc"`.
+ *   Reported to the bridge as `localMicMuted`, see getLocalMicMuted();
  * - Document Picture-in-Picture: with the Meet tab hidden the tiles move into
  *   `documentPictureInPicture.window.document`, so both documents are scanned
  *   and observed, and the handover (a moment with no tiles anywhere) is
@@ -42,6 +49,8 @@ export const GMEET_SELECTORS = {
   selfTileMarker: 'button[aria-label="Reframe"]',
   // Muted-microphone marker inside a tile. Best-effort; unknown → not muted.
   micMutedMarker: '[data-is-muted="true"]',
+  // The toolbar's microphone button, the user's own microphone.
+  micButton: '[jsname="hw0c9"][data-is-muted]',
 };
 
 const ROOM_PATH_RE = /^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
@@ -111,7 +120,7 @@ export class GoogleMeetAdapter {
     this._absentSince = new Map(); // pid → ts it was first seen with no tile anywhere
     this._currentSpeakerId = null;
     this._currentSince = null; // ts the current speaker is reported from
-    this._snapshot = { present: new Map(), inCall: false, tileCount: 0 };
+    this._snapshot = { present: new Map(), inCall: false, tileCount: 0, localMicMuted: null };
 
     // isInMeeting() debounce.
     this._tilesLastSeenAt = null;
@@ -165,9 +174,14 @@ export class GoogleMeetAdapter {
     let indicatorCount = 0;
     let unknownIndicator = false;
     let inCall = false;
+    let ownMuted = null;
 
     for (const doc of this._docs()) {
       if (doc.querySelector(sel.inCallMarker)) inCall = true;
+      const micState = doc.querySelector(sel.micButton)?.getAttribute('data-is-muted');
+      if (ownMuted === null && (micState === 'true' || micState === 'false')) {
+        ownMuted = micState === 'true';
+      }
       for (const tile of doc.querySelectorAll(sel.tile)) {
         const pid = tile.getAttribute(sel.tileIdAttr);
         if (!pid) continue;
@@ -206,7 +220,9 @@ export class GoogleMeetAdapter {
       this._tilesLastSeenPath = path;
     }
 
-    this._snapshot = { present, inCall, tileCount };
+    // What getLocalMicMuted() reports, so the change signature follows it.
+    const localMicMuted = inCall ? ownMuted : null;
+    this._snapshot = { present, inCall, tileCount, localMicMuted };
     this._updateDrift(now, { present, inCall, tileCount, indicatorCount, unknownIndicator });
     return this._snapshot;
   }
@@ -418,7 +434,7 @@ export class GoogleMeetAdapter {
   _isRelevantMutation(record) {
     const sel = GMEET_SELECTORS;
     if (record.type === 'attributes') {
-      return record.target?.matches?.(sel.speaking) === true;
+      return record.target?.matches?.(`${sel.speaking}, ${sel.micButton}`) === true;
     }
     // An indicator re-rendered inside an existing tile (removed or replaced)
     // changes speaking state without touching the tile itself.
@@ -426,7 +442,11 @@ export class GoogleMeetAdapter {
       node.nodeType === 1 &&
       (node.matches(sel.tile) ||
         node.matches(sel.speaking) ||
-        !!node.querySelector(`${sel.tile}, ${sel.speaking}`));
+        node.matches(sel.micButton) ||
+        node.matches(sel.inCallMarker) ||
+        !!node.querySelector(
+          `${sel.tile}, ${sel.speaking}, ${sel.micButton}, ${sel.inCallMarker}`,
+        ));
     return [...record.addedNodes, ...record.removedNodes].some(touchesTileOrIndicator);
   }
 
@@ -448,18 +468,18 @@ export class GoogleMeetAdapter {
    * volume-level classes the whole time someone talks; those mutations leave
    * the signature unchanged and must not resend speaker/participant updates.
    */
-  _changeSignature(present) {
+  _changeSignature(present, localMicMuted) {
     const rows = [...present].map(
       ([pid, e]) => `${pid}\u0001${this._names.get(pid) || ''}\u0001${+e.speaking}${+e.isLocal}${+e.micMuted}`,
     );
-    return `${this._drift || ''}\u0002${rows.join('\u0002')}`;
+    return `${this._drift || ''}\u0002${localMicMuted}\u0002${rows.join('\u0002')}`;
   }
 
   _handleChange() {
-    const { present } = this._refresh();
+    const { present, localMicMuted } = this._refresh();
     const joined = [...present.keys()].filter((pid) => !this._announcedPids.has(pid));
     joined.forEach((pid) => this._announcedPids.add(pid));
-    const signature = this._changeSignature(present);
+    const signature = this._changeSignature(present, localMicMuted);
     if (signature === this._lastChangeSignature) return;
     this._lastChangeSignature = signature;
     this._speakerCallback?.();
@@ -473,7 +493,7 @@ export class GoogleMeetAdapter {
     const observer = new Observer((records) => this._onMutations(records));
     observer.observe(doc.documentElement || doc, {
       attributes: true,
-      attributeFilter: ['class'],
+      attributeFilter: ['class', 'data-is-muted'],
       childList: true,
       subtree: true,
     });
@@ -535,6 +555,15 @@ export class GoogleMeetAdapter {
 
   isMicMuted(participantId) {
     return this._refresh().present.get(participantId)?.micMuted === true;
+  }
+
+  /**
+   * Optional hook: the user's own microphone for the bridge (`localMicMuted`),
+   * null to leave it to their tile, which is found only by a control Meet
+   * draws on it and is not always on screen.
+   */
+  getLocalMicMuted() {
+    return this._refresh().localMicMuted;
   }
 
   anyMicOn() {
