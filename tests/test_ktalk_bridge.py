@@ -330,6 +330,76 @@ def test_sole_unmuted_remote_participant_local_excluded():
     assert bridge.get_sole_unmuted_remote_participant() is None
 
 
+# --- is_local_mic_muted: localMicMuted of participants_update ---
+
+
+async def _participants_update(bridge: KTalkBridge, participants, **extra):
+    await bridge._process_message(
+        {"type": "participants_update", "participants": participants, **extra}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_mic_muted", [True, False])
+async def test_given_local_mic_reported_without_local_participant_when_asked_then_report_wins(
+    local_mic_muted,
+):
+    """
+    given: participants_update with localMicMuted and no local participant (webinar attendee)
+    when: is_local_mic_muted called
+    then: the reported state
+    """
+    bridge = KTalkBridge()
+    remote = {"id": "h", "name": "Host", "isLocal": False, "micMuted": False}
+    await _participants_update(bridge, [remote], localMicMuted=local_mic_muted)
+
+    assert bridge.is_local_mic_muted() is local_mic_muted
+
+
+@pytest.mark.asyncio
+async def test_given_local_mic_reported_and_local_tile_disagrees_when_asked_then_report_wins():
+    """
+    given: own tile says unmuted, localMicMuted says muted
+    when: is_local_mic_muted called
+    then: True — the source's own-microphone signal outranks the tile
+    """
+    bridge = KTalkBridge()
+    me = {"id": "me", "name": "Me", "isLocal": True, "micMuted": False}
+    await _participants_update(bridge, [me], localMicMuted=True)
+
+    assert bridge.is_local_mic_muted() is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [{}, {"localMicMuted": None}, {"localMicMuted": "yes"}])
+async def test_given_no_local_mic_report_when_asked_then_local_participant_decides(extra):
+    """
+    given: participants_update without a boolean localMicMuted, after one that had it
+    when: is_local_mic_muted called
+    then: the local participant's micMuted, as before the field existed
+    """
+    bridge = KTalkBridge()
+    me = {"id": "me", "name": "Me", "isLocal": True, "micMuted": False}
+    await _participants_update(bridge, [me], localMicMuted=True)
+    await _participants_update(bridge, [me], **extra)
+
+    assert bridge.is_local_mic_muted() is False
+
+
+def test_given_local_mic_reported_when_speaker_state_cleared_then_it_is_forgotten():
+    """
+    given: localMicMuted=True from the previous meeting
+    when: speaker state is cleared (meeting ended)
+    then: no local participant and no report — not muted
+    """
+    bridge = KTalkBridge()
+    bridge._local_mic_muted = True
+
+    bridge._clear_speaker_state()
+
+    assert bridge.is_local_mic_muted() is False
+
+
 # --- PCM transport: pcm_chunk parsing + handshake ---
 
 

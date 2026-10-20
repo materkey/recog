@@ -18,11 +18,13 @@ export function sendWsSpeakerUpdate(speaker) {
   });
 }
 
-export function sendWsParticipants(participants) {
-  sendWsMessage({
+export function sendWsParticipants(participants, localMicMuted = null) {
+  const message = {
     type: 'participants_update',
     participants: participants
-  });
+  };
+  if (typeof localMicMuted === 'boolean') message.localMicMuted = localMicMuted;
+  sendWsMessage(message);
 }
 
 export function sendWsConnectionStatus(connected) {

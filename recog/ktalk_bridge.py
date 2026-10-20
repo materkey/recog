@@ -151,6 +151,10 @@ class KTalkBridge:
         self._last_speaker_time: float = 0  # Когда последний раз кто-то говорил
         self._last_is_local: bool = False  # Последний спикер был локальным?
         self._participants: Dict[str, Participant] = {}
+        # localMicMuted из participants_update: состояние собственного микрофона,
+        # которое источник знает и без локального участника в списке (слушатель
+        # вебинара Zoom своей плитки не имеет). None — источник его не сообщил.
+        self._local_mic_muted: Optional[bool] = None
         self._speaker_history: List[SpeakerEvent] = []
         self._lock = threading.Lock()
         self._user_identity = resolve_identity(
@@ -327,6 +331,7 @@ class KTalkBridge:
         """
         with self._lock:
             self._participants = {}
+            self._local_mic_muted = None
             self._is_speaking = False
             self._current_speaker = None
             self._current_speaker_id = None
@@ -597,8 +602,14 @@ class KTalkBridge:
             return all(p.mic_muted for p in self._participants.values())
 
     def is_local_mic_muted(self) -> bool:
-        """Возвращает True если микрофон локального пользователя замьючен в KTalk."""
+        """Возвращает True если микрофон пользователя замьючен в конференции.
+
+        Сначала localMicMuted источника из participants_update, затем
+        mic_muted локального участника; без того и другого — False.
+        """
         with self._lock:
+            if self._local_mic_muted is not None:
+                return self._local_mic_muted
             for p in self._participants.values():
                 if p.is_local:
                     return p.mic_muted
@@ -666,6 +677,7 @@ class KTalkBridge:
                     "conference": {
                         "participants": participants,
                         "participant_count": len(participants),
+                        "local_mic_muted": self._local_mic_muted,
                         "all_mics_muted": all(p.mic_muted for p in self._participants.values()) if self._participants else False
                     },
                     "speaker": {
@@ -2100,8 +2112,12 @@ class KTalkBridge:
         elif msg_type == "participants_update":
             # Обновление списка участников
             participants = data.get("participants", [])
+            local_mic_muted = data.get("localMicMuted")
 
             with self._lock:
+                self._local_mic_muted = (
+                    local_mic_muted if isinstance(local_mic_muted, bool) else None
+                )
                 self._participants = {}
                 for p in participants:
                     pid = p.get("id", "")

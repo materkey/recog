@@ -56,6 +56,7 @@ const {
   getActiveSpeaker,
   isMicMuted,
   anyMicOn,
+  sendParticipantsUpdate,
 } = await import('./speaker.js');
 
 const { state, constants } = await import('./state.js');
@@ -329,6 +330,29 @@ describe('getActiveSpeaker', () => {
 
     const result = getActiveSpeaker(conf);
     expect(result).toBeNull();
+  });
+});
+
+describe('sendParticipantsUpdate', () => {
+  beforeEach(() => {
+    mockSendWsParticipants.mockClear();
+  });
+
+  test('given adapter with getLocalMicMuted — sends its answer with the participants', () => {
+    const participants = [{ id: 'Host', name: 'Host', isLocal: false, micMuted: false }];
+    mockAdapter = { getParticipants: () => participants, getLocalMicMuted: () => true };
+
+    sendParticipantsUpdate({});
+
+    expect(mockSendWsParticipants).toHaveBeenCalledWith(participants, true);
+  });
+
+  test('given adapter without getLocalMicMuted — sends no own-microphone state', () => {
+    mockAdapter = { getParticipants: () => [] };
+
+    sendParticipantsUpdate({});
+
+    expect(mockSendWsParticipants).toHaveBeenCalledWith([], undefined);
   });
 });
 

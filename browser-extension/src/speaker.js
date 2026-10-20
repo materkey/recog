@@ -230,7 +230,10 @@ export function getParticipantsList(conf) {
 }
 
 export function sendParticipantsUpdate(conf) {
-  sendWsParticipants(getParticipantsList(conf));
+  // Optional adapter hook: the user's own microphone when the platform knows it
+  // apart from the participant list (Zoom: the toolbar's audio button).
+  const localMicMuted = getPlatformAdapter()?.getLocalMicMuted?.();
+  sendWsParticipants(getParticipantsList(conf), localMicMuted);
 }
 
 // Get participant name using adapter
