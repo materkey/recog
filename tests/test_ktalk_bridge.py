@@ -386,6 +386,54 @@ async def test_given_no_local_mic_report_when_asked_then_local_participant_decid
     assert bridge.is_local_mic_muted() is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sender", "accepted"), [("owner", True), ("other", False), (None, True)])
+async def test_given_meeting_owner_when_participants_arrive_from_a_socket_then_only_owner_counts(
+    sender, accepted
+):
+    """
+    given: a meeting owned by one tab, a second tab whose join was refused
+    when: participants_update arrives from the owner, the other tab, or no socket
+    then: only the owner (or an internal call) sets participants and localMicMuted
+    """
+    bridge = KTalkBridge()
+    owner, other = object(), object()
+    bridge._meeting_owner_ws = owner
+    me = {"id": "me", "name": "Me", "isLocal": True, "micMuted": False}
+    websocket = {"owner": owner, "other": other, None: None}[sender]
+
+    await bridge._process_message(
+        {"type": "participants_update", "participants": [me], "localMicMuted": True},
+        websocket=websocket,
+    )
+
+    assert bridge.is_local_mic_muted() is accepted
+    assert ("me" in bridge.get_participants()) is accepted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sender", "accepted"), [("owner", True), ("other", False)])
+async def test_given_meeting_owner_when_speaker_arrives_from_a_socket_then_only_owner_counts(
+    sender, accepted
+):
+    """
+    given: a meeting owned by one tab
+    when: speaker_update arrives from the owner or from a refused second tab
+    then: only the owner's frame changes the current speaker
+    """
+    bridge = KTalkBridge()
+    owner, other = object(), object()
+    bridge._meeting_owner_ws = owner
+    speaker = {"id": "a", "name": "Alice", "isLocal": False}
+
+    await bridge._process_message(
+        {"type": "speaker_update", "speaker": speaker, "timestamp": int(time.time() * 1000)},
+        websocket={"owner": owner, "other": other}[sender],
+    )
+
+    assert (bridge._current_speaker == "Alice") is accepted
+
+
 def test_given_local_mic_reported_when_speaker_state_cleared_then_it_is_forgotten():
     """
     given: localMicMuted=True from the previous meeting

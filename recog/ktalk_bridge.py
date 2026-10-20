@@ -601,6 +601,21 @@ class KTalkBridge:
                 return False
             return all(p.mic_muted for p in self._participants.values())
 
+    def _from_non_owner(self, websocket) -> bool:
+        """Кадр пришёл не от владельца идущей встречи.
+
+        Таб, чей meeting_join отклонён (вторая конференция в том же браузере),
+        продолжает слать participants_update и speaker_update своего звонка;
+        они не должны подменять участников, говорящего и localMicMuted
+        записываемой встречи. Без владельца (orphan) и для внутренних вызовов
+        без сокета кадры принимаются, как раньше.
+        """
+        return (
+            websocket is not None
+            and self._meeting_owner_ws is not None
+            and websocket is not self._meeting_owner_ws
+        )
+
     def is_local_mic_muted(self) -> bool:
         """Возвращает True если микрофон пользователя замьючен в конференции.
 
@@ -1972,6 +1987,8 @@ class KTalkBridge:
             await self._refresh_user_profile(websocket)
 
         elif msg_type == "speaker_update":
+            if self._from_non_owner(websocket):
+                return
             # Проверяем sequence number для обнаружения out-of-order сообщений
             seq = data.get("seq")
             if seq is not None:
@@ -2110,6 +2127,8 @@ class KTalkBridge:
                     self._on_segment_complete(segment)
 
         elif msg_type == "participants_update":
+            if self._from_non_owner(websocket):
+                return
             # Обновление списка участников
             participants = data.get("participants", [])
             local_mic_muted = data.get("localMicMuted")
