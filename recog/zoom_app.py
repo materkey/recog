@@ -94,16 +94,36 @@ _MUTE_ENTRY = re.compile(
     r"|LN_Audio_(Muted|Unmuted)_Accessibility_\d+"
     r'|LN_Plist_Accessibility_(No_Audio)_\d+)"\s*=\s*"((?:[^"\\]|\\.)*)"\s*;'
 )
+# The meeting menu's audio item: titled by the "Mute Audio" key while the
+# user's own microphone is open, "Unmute Audio" while it is muted (both seen
+# switching live with the menu closed, Zoom 7.1.9). With telephone audio the
+# keys are "Mute Telephone" / "Unmute Telephone", stored next to them in the
+# zVideoUI binary (not exercised live). "Join Audio" is counted as muted:
+# without audio connected nobody hears the user.
+_MIC_ITEM_ENTRY = re.compile(
+    r'"(Mute Audio|Unmute Audio|Mute Telephone|Unmute Telephone|Join Audio)"'
+    r'\s*=\s*"((?:[^"\\]|\\.)*)"\s*;'
+)
+_MIC_OPEN_KEYS = frozenset({"Mute Audio", "Mute Telephone"})
+# A menu item that names an account: "Ivan Petrov(ivan@example.org)" in the
+# "Switch account" and "Sign out" submenus of the application menu.
+_ACCOUNT_ITEM = re.compile(r"(.+?)\s*\(([^()\s]+@[^()\s]+)\)")
 
 _UNSENT = object()
 
 
 @dataclass(frozen=True)
 class Vocabulary:
-    """Lower-cased tile wording for a participant who cannot be heard and one who can."""
+    """Lower-cased tile wording for a participant who cannot be heard and one who can.
+
+    ``mic_open_item`` and ``mic_closed_item`` are the titles of the meeting
+    menu's audio item while the user's own microphone is open and closed.
+    """
 
     muted: frozenset[str]
     unmuted: frozenset[str]
+    mic_open_item: frozenset[str] = frozenset({"mute audio", "mute telephone"})
+    mic_closed_item: frozenset[str] = frozenset({"unmute audio", "unmute telephone", "join audio"})
 
 
 # What Zoom Workplace 7.1.9 says in English; used when the installed
@@ -124,6 +144,7 @@ def load_vocabulary(app_paths: tuple[Path, ...] = ZOOM_APP_PATHS) -> Vocabulary:
     ships without a table kept here, and follows its updates.
     """
     muted, unmuted = set(ENGLISH.muted), set(ENGLISH.unmuted)
+    mic_open, mic_closed = set(ENGLISH.mic_open_item), set(ENGLISH.mic_closed_item)
     for app in app_paths:
         for strings in sorted(app.glob("Contents/Resources/*.lproj/Localizable.strings")):
             try:
@@ -133,7 +154,14 @@ def load_vocabulary(app_paths: tuple[Path, ...] = ZOOM_APP_PATHS) -> Vocabulary:
             for first, second, third, wording in _MUTE_ENTRY.findall(text):
                 kind = first or second or third
                 (unmuted if kind == "Unmuted" else muted).add(wording.strip().lower())
-    return Vocabulary(muted=frozenset(muted), unmuted=frozenset(unmuted))
+            for key, wording in _MIC_ITEM_ENTRY.findall(text):
+                (mic_open if key in _MIC_OPEN_KEYS else mic_closed).add(wording.strip().lower())
+    return Vocabulary(
+        muted=frozenset(muted),
+        unmuted=frozenset(unmuted),
+        mic_open_item=frozenset(mic_open),
+        mic_closed_item=frozenset(mic_closed),
+    )
 
 
 @dataclass(frozen=True)
@@ -186,6 +214,36 @@ def account_name(description: str | None) -> str | None:
     return None
 
 
+def menu_account_name(menu: list[list[str]] | None) -> str | None:
+    """Display name from the account items of the menu bar, else None.
+
+    The menu bar is there when the main window, whose account button names the
+    user, is closed. Only items of a submenu count (menu > submenu > item). With
+    several accounts signed in it cannot tell which one is in the meeting, so it
+    names nobody.
+    """
+    names = {
+        match.group(1)
+        for path in menu or []
+        if len(path) == 3 and (match := _ACCOUNT_ITEM.fullmatch(path[2].strip()))
+    }
+    return names.pop() if len(names) == 1 else None
+
+
+def own_mic_muted(menu: list[list[str]] | None, vocabulary: Vocabulary) -> bool | None:
+    """Whether the user's own microphone is closed, from the meeting menu's audio item.
+
+    Positive evidence only, as for the tiles: None without a menu bar, as from a
+    helper built before it was reported, and when no item carries known wording.
+    """
+    titles = {path[1].strip().lower() for path in menu or [] if len(path) == 2}
+    if titles & vocabulary.mic_open_item:
+        return False
+    if titles & vocabulary.mic_closed_item:
+        return True
+    return None
+
+
 def _merge(first: Tile, second: Tile) -> Tile:
     """Namesakes share an entry: muted only when both are, speaking when either is."""
     muted = first.muted if first.muted == second.muted else (first.muted and second.muted)
@@ -233,10 +291,16 @@ class ZoomAppSession:
         self._rejected_at: float | None = None
         self._roster: dict[str, Tile] = {}
         self._self_name: str | None = None
-        # Of the last snapshot: the helper state as understood here, and the
-        # tab groups that look like a participant tile but name nobody.
+        # The meeting menu's word on the user's own microphone, kept while a
+        # snapshot comes without a menu bar.
+        self._own_mic_muted: bool | None = None
+        self._menu_seen = False
+        # Of the last snapshot: the helper state as understood here, the tab
+        # groups that look like a participant tile but name nobody, and whether
+        # a menu bar was read whose audio item carries no known wording.
         self.state: str | None = None
         self.unread: list[dict] = []
+        self.own_mic_unknown = False
         self._sent_participants: object = _UNSENT
         self._sent_speaker: object = _UNSENT
 
@@ -253,9 +317,16 @@ class ZoomAppSession:
     def frames(self, snapshot: dict, now: float) -> list[dict]:
         # Reported outside a meeting too; inside one the main window that
         # carries it is not always reachable.
-        self._self_name = account_name(snapshot.get("account")) or self._self_name
+        menu = snapshot.get("menu")
+        self._self_name = (
+            account_name(snapshot.get("account")) or menu_account_name(menu) or self._self_name
+        )
+        if menu is not None:
+            self._menu_seen = True
+            self._own_mic_muted = own_mic_muted(menu, self._vocabulary)
         self.state = snapshot.get("state")
         self.unread = []
+        self.own_mic_unknown = menu is not None and self._own_mic_muted is None
         if self.state != "meeting":
             return self._leave_frames(now)
         tiles, self.unread = _tiles(snapshot, self._vocabulary)
@@ -276,6 +347,11 @@ class ZoomAppSession:
         return self._state_frames(tiles, minimal, now)
 
     def _leave_frames(self, now: float) -> list[dict]:
+        if self._last_meeting_at is None or now - self._last_meeting_at >= LEAVE_DEBOUNCE_S:
+            # The meeting is over, joined or not: what its menu said about the
+            # user's microphone must not speak for the next one.
+            self._own_mic_muted = None
+            self._menu_seen = False
         if not self.joined or self._last_meeting_at is None:
             self._rejected_at = None
             return []
@@ -314,9 +390,13 @@ class ZoomAppSession:
             }
             for name, tile in self._roster.items()
         ]
-        if participants != self._sent_participants:
-            self._sent_participants = participants
-            frames.append({"type": "participants_update", "participants": participants})
+        update: dict = {"type": "participants_update", "participants": participants}
+        local_mic_muted = self._local_mic_muted()
+        if local_mic_muted is not None:
+            update["localMicMuted"] = local_mic_muted
+        if update != self._sent_participants:
+            self._sent_participants = update
+            frames.append(update)
 
         speaker = self._speaker(tiles, minimal)
         if speaker != self._sent_speaker:
@@ -325,6 +405,21 @@ class ZoomAppSession:
                 {"type": "speaker_update", "speaker": speaker, "timestamp": int(now * 1000)}
             )
         return frames
+
+    def _local_mic_muted(self) -> bool | None:
+        """The user's own microphone for the bridge, None to leave it to their tile.
+
+        The meeting menu's word wins. A menu whose audio item says nothing known
+        leaves it to the user's tile; with no tile of theirs, as for a webinar
+        attendee, who has neither a tile nor an audio item, it counts as closed.
+        That needs the user's name: without it their own tile cannot be told
+        apart, and the microphone is left to the tiles.
+        """
+        if self._own_mic_muted is not None:
+            return self._own_mic_muted
+        if self._menu_seen and self._self_name is not None and self._self_name not in self._roster:
+            return True
+        return None
 
     def _speaker(self, tiles: dict[str, Tile], minimal: bool) -> dict | None:
         # Minimal view has no "active speaker" wording: its only tile is the speaker.
@@ -479,12 +574,14 @@ class _StatusLog:
     def __init__(self) -> None:
         self.state: str | None = None
         self._unread_noted = False
+        self._own_mic_noted = False
 
     def note(self, state: str | None) -> None:
         if state == self.state:
             return
         self.state = state
         self._unread_noted = False
+        self._own_mic_noted = False
         print(
             f"[zoom-app] {self.MESSAGES.get(state or '', f'unknown helper state: {state}')}",
             file=sys.stderr,
@@ -498,6 +595,17 @@ class _StatusLog:
         print(
             f"[zoom-app] {len(unread)} participant tile(s) ignored: Zoom names them in a way "
             f"this version does not know, e.g. {json.dumps(unread[0], ensure_ascii=False)}",
+            file=sys.stderr,
+        )
+
+    def note_own_mic_unknown(self, unknown: bool) -> None:
+        """Once per meeting: the meeting menu's audio item says nothing known."""
+        if not unknown or self._own_mic_noted:
+            return
+        self._own_mic_noted = True
+        print(
+            "[zoom-app] the meeting menu has no known audio item: your microphone follows your "
+            "tile, or counts as muted without one (as for a webinar attendee)",
             file=sys.stderr,
         )
 
@@ -524,6 +632,7 @@ async def _pump(
                 frames = session.frames(json.loads(raw), time.time())
                 log.note(session.state)
                 log.note_unread(session.unread)
+                log.note_own_mic_unknown(session.own_mic_unknown)
                 for frame in frames:
                     await websocket.send(json.dumps(frame, ensure_ascii=False))
                 next_line = asyncio.ensure_future(lines.readline())

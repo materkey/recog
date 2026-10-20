@@ -21,6 +21,8 @@ from recog.zoom_app import (
     account_name,
     find_or_build_helper,
     load_vocabulary,
+    menu_account_name,
+    own_mic_muted,
     parse_tile,
     tile_name,
 )
@@ -122,6 +124,28 @@ RUSSIAN = {
 }
 
 
+def test_given_installed_zoom_when_vocabulary_is_loaded_then_it_has_its_mute_item_wording(
+    tmp_path,
+):
+    russian = {
+        "Mute Audio": "Выключить звук",
+        "Unmute Audio": "Включить звук",
+        "Join Audio": "Подключить звук",
+    }
+    vocabulary = load_vocabulary((_zoom_app(tmp_path, ru=russian),))
+
+    assert vocabulary.mic_open_item == {"выключить звук", "mute audio", "mute telephone"}
+    assert vocabulary.mic_closed_item == {
+        "включить звук",
+        "подключить звук",
+        "unmute audio",
+        "unmute telephone",
+        "join audio",
+    }
+    assert own_mic_muted([["Конференция", "Выключить звук"]], vocabulary) is False
+    assert own_mic_muted([["Конференция", "Включить звук"]], vocabulary) is True
+
+
 def test_given_installed_zoom_when_vocabulary_is_loaded_then_it_has_its_mute_wording_and_english(
     tmp_path,
 ):
@@ -211,6 +235,59 @@ def test_given_account_button_description_when_read_then_display_name_or_none(
     description, expected
 ):
     assert account_name(description) == expected
+
+
+MENU_ACCOUNT = [
+    ["Zoom Workplace", "Switch account", "Me(me@example.org)"],
+    ["Zoom Workplace", "Switch account", "Add account"],
+    ["Zoom Workplace", "Sign out", "Me(me@example.org)"],
+]
+
+
+def menu(audio_item=None):
+    """The menu bar as the helper reports it, with the meeting menu's audio item."""
+    items = ["Mute all", "Ask all to unmute", *([audio_item] if audio_item else []), "Start video"]
+    return MENU_ACCOUNT + [["Meeting", item] for item in items]
+
+
+@pytest.mark.parametrize(
+    ("menu_paths", "expected"),
+    [
+        (MENU_ACCOUNT, "Me"),
+        ([["Zoom Workplace", "Switch account", "Иван Петров (ivan@example.org)"]], "Иван Петров"),
+        (MENU_ACCOUNT + [["Zoom Workplace", "Switch account", "Bob(bob@example.org)"]], None),
+        ([["Zoom Workplace", "Switch account", "Add account"]], None),
+        # Not a submenu item: a window title in the Window menu, say.
+        ([["Window", "Chat(team@example.org)"]], None),
+        (None, None),
+    ],
+)
+def test_given_account_items_in_the_menu_when_read_then_the_single_account_or_none(
+    menu_paths, expected
+):
+    assert menu_account_name(menu_paths) == expected
+
+
+@pytest.mark.parametrize(
+    ("menu_paths", "expected"),
+    [
+        (menu("Mute audio"), False),
+        (menu("Unmute audio"), True),
+        (menu("Join audio"), True),
+        (menu("Mute telephone"), False),
+        (menu("Unmute telephone"), True),
+        # A webinar attendee who cannot unmute, or wording this version does not know.
+        (menu(), None),
+        (menu("Mute my microphone"), None),
+        # The item only, not a deeper one under another menu.
+        ([["Meeting", "Audio", "Mute audio"]], None),
+        (None, None),
+    ],
+)
+def test_given_meeting_menu_when_read_then_own_microphone_follows_known_wording_only(
+    menu_paths, expected
+):
+    assert own_mic_muted(menu_paths, ENGLISH) == expected
 
 
 # --- session: lifecycle ------------------------------------------------------
@@ -398,6 +475,160 @@ def test_given_account_seen_before_the_meeting_when_own_tile_is_marked_then_spea
 
     assert speaker_of(frames) == {"id": "Me", "name": "Me", "isLocal": True}
     assert [p["isLocal"] for p in frames[0]["participants"]] == [True, False]
+
+
+def test_given_own_microphone_muted_in_the_menu_when_own_tile_says_unmuted_then_the_menu_wins():
+    session = joined_session()
+
+    frames = session.frames(
+        meeting(tile("Me", "Computer audio unmuted"), account=ACCOUNT, menu=menu("Unmute audio")),
+        101.0,
+    )
+
+    assert frames[0] == {
+        "type": "participants_update",
+        "participants": [{"id": "Me", "name": "Me", "isLocal": True, "micMuted": False}],
+        "localMicMuted": True,
+    }
+
+
+def test_given_own_microphone_open_in_the_menu_when_processed_then_reported_open():
+    session = joined_session()
+
+    frames = session.frames(
+        meeting(tile("Me", "Computer audio muted"), account=ACCOUNT, menu=menu("Mute audio")),
+        101.0,
+    )
+
+    assert frames[0]["localMicMuted"] is False
+
+
+def test_given_main_window_closed_when_menu_names_the_account_then_own_tile_is_local():
+    session = joined_session()
+
+    frames = session.frames(
+        meeting(tile("Me", "Computer audio muted"), tile("Bob"), menu=menu("Unmute audio")),
+        101.0,
+    )
+
+    assert [(p["id"], p["isLocal"]) for p in frames[0]["participants"]] == [
+        ("Me", True),
+        ("Bob", False),
+    ]
+
+
+def test_given_webinar_attendee_without_tile_or_audio_item_when_processed_then_reported_muted():
+    session = joined_session()
+
+    frames = session.frames(
+        meeting(tile("Host", "Computer audio unmuted", "active speaker"), menu=menu()), 101.0
+    )
+
+    assert frames[0] == {
+        "type": "participants_update",
+        "participants": [{"id": "Host", "name": "Host", "isLocal": False, "micMuted": False}],
+        "localMicMuted": True,
+    }
+    assert session.own_mic_unknown is True
+
+
+def test_given_attendee_promoted_when_the_menu_offers_mute_then_reported_open():
+    session = joined_session()
+    session.frames(meeting(tile("Host"), menu=menu()), 101.0)
+
+    frames = session.frames(meeting(tile("Host"), menu=menu("Mute audio")), 102.0)
+
+    assert frames == [
+        {
+            "type": "participants_update",
+            "participants": [{"id": "Host", "name": "Host", "isLocal": False, "micMuted": False}],
+            "localMicMuted": False,
+        }
+    ]
+
+
+def test_given_own_tile_and_unknown_menu_wording_when_processed_then_left_to_the_tile():
+    session = joined_session()
+
+    frames = session.frames(
+        meeting(tile("Me", "Computer audio unmuted"), menu=menu("Mute my microphone")), 101.0
+    )
+
+    assert "localMicMuted" not in frames[0]
+    assert frames[0]["participants"][0] == {
+        "id": "Me",
+        "name": "Me",
+        "isLocal": True,
+        "micMuted": False,
+    }
+    assert session.own_mic_unknown is True
+
+
+def test_given_unknown_menu_wording_and_unknown_own_name_when_processed_then_left_to_the_tiles():
+    # A guest, or several accounts: the user's own tile may be there unrecognised.
+    session = joined_session()
+    menu_without_account = [path for path in menu("Mute my microphone") if path[0] == "Meeting"]
+
+    frames = session.frames(
+        meeting(tile("Me", "Computer audio unmuted"), menu=menu_without_account), 101.0
+    )
+
+    assert "localMicMuted" not in frames[0]
+    assert frames[0]["participants"][0]["isLocal"] is False
+    assert session.own_mic_unknown is True
+
+
+def test_given_menu_missing_from_one_snapshot_when_processed_then_the_last_word_is_kept():
+    session = joined_session()
+    session.frames(meeting(tile("Host"), menu=menu("Unmute audio")), 101.0)
+
+    frames = session.frames(meeting(tile("Host"), tile("Bob")), 102.0)
+
+    assert frames[0]["localMicMuted"] is True
+    assert session.own_mic_unknown is False
+
+
+def test_given_meeting_window_gone_briefly_when_it_returns_without_a_menu_then_the_word_is_kept():
+    session = joined_session()
+    session.frames(meeting(tile("Host"), menu=menu("Unmute audio")), 101.0)
+    session.frames({"state": "idle"}, 102.0)
+
+    frames = session.frames(meeting(tile("Host"), tile("Bob")), 102.0 + LEAVE_DEBOUNCE_S / 2)
+
+    assert frames[0]["localMicMuted"] is True
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+def test_given_meeting_ended_muted_when_the_next_one_has_no_menu_then_nothing_carries_over(
+    rejected,
+):
+    session = joined_session()
+    session.frames(meeting(tile("Me"), account=ACCOUNT, menu=menu("Unmute audio")), 101.0)
+    if rejected:
+        session.on_rejected(101.0)
+    session.frames({"state": "idle"}, 102.0)
+    session.frames({"state": "idle"}, 102.0 + LEAVE_DEBOUNCE_S)
+    later = 102.0 + LEAVE_DEBOUNCE_S + JOIN_RETRY_S
+    assert types(session.frames(meeting(tile("Me", "Computer audio unmuted")), later)) == [
+        "meeting_join"
+    ]
+
+    # Neither the last menu word nor "a menu was seen" (which, with no own
+    # tile, would count the microphone as closed) survives into this meeting.
+    frames = session.frames(meeting(tile("Host", "Computer audio unmuted")), later + 1)
+
+    assert "localMicMuted" not in frames[0]
+
+
+def test_given_helper_without_menu_when_processed_then_nothing_is_said_about_own_microphone():
+    session = joined_session()
+
+    frames = session.frames(meeting(tile("Me", "Computer audio unmuted"), account=ACCOUNT), 101.0)
+
+    assert frames[0] == {
+        "type": "participants_update",
+        "participants": [{"id": "Me", "name": "Me", "isLocal": True, "micMuted": False}],
+    }
 
 
 def test_given_minimal_view_when_processed_then_its_single_tile_is_the_speaker_and_roster_is_kept():
@@ -887,6 +1118,21 @@ def test_given_unreadable_tiles_when_logged_then_one_line_per_meeting_with_a_sam
     assert len(lines) == 2
     assert lines[0].startswith("[zoom-app] 2 participant tile(s) ignored")
     assert "Open Alice's card" in lines[0]
+
+
+def test_given_unknown_menu_audio_item_when_logged_then_one_line_per_meeting(capsys):
+    log = zoom_app._StatusLog()
+
+    log.note("meeting")
+    log.note_own_mic_unknown(False)
+    log.note_own_mic_unknown(True)
+    log.note_own_mic_unknown(True)
+    log.note("idle")
+    log.note("meeting")
+    log.note_own_mic_unknown(True)
+
+    lines = [line for line in capsys.readouterr().err.splitlines() if "audio item" in line]
+    assert len(lines) == 2
 
 
 # --- running inside the live process -----------------------------------------

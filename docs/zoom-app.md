@@ -59,7 +59,8 @@ differently). Then the log reports the missing permission again: remove the
 old "Recog Zoom Helper" entry in the Accessibility list and switch on the new
 one. To keep such changes rare the helper only reports what the tree says —
 the described tab groups with their children, the title of the meeting
-window, the account button; what any of it means is decided in
+window, the account button and, during a meeting, the titles of the menu
+bar's items; what any of it means is decided in
 `recog/zoom_app.py`, so a change in Zoom's wording is followed without
 touching the helper.
 
@@ -93,6 +94,10 @@ video off:
   them, so the speaker is still found; the participant list is what has been
   seen so far and is not trimmed when someone leaves.
 - Leaving is reported once the meeting window has been gone for six seconds.
+- Your own microphone is left out of the transcript while it is muted in
+  Zoom, also as a webinar attendee, who has no tile and cannot unmute. Checked
+  live: the meeting menu's audio item switched between "Unmute audio" and
+  "Mute audio" with the menus closed, in step with the own tile.
 
 ## How the tree is read
 
@@ -126,6 +131,24 @@ Ghidra pseudocode), not only what test meetings happened to show:
 - A room that shows name tags for the people in it words its tile as
   `<room>, <person>, active speaker`, without audio and video. Speech is then
   attributed to the room. Known from the binary only, not exercised.
+
+- **Own microphone** (`-[ZBCUIToolbarAudioComponent updateButtonAccessibility]`
+  in `zBusinessUIComponent`): the toolbar's audio button is described as
+  `Unmute my audio` / `Mute my audio` / `Join audio`, but the toolbar leaves
+  the tree a few seconds after the pointer leaves the window. The meeting
+  menu's audio item stays: titled by the `Mute Audio` key of the strings
+  files while the microphone is open and `Unmute Audio` while it is muted;
+  `Join Audio` counts as muted too, nobody hears an unconnected microphone.
+  The wording is read for every language from the strings files, and the
+  answer goes to the bridge as `localMicMuted`, which outranks the own tile.
+  Other wording says nothing (logged once per meeting): the own tile decides,
+  and without one, as for a webinar attendee, the microphone counts as muted.
+  That needs the account name: without it the own tile cannot be told apart,
+  and the microphone is left to the tiles.
+- **Own tile**: the one named like the account, from the account button of the
+  main window or, with that window closed, from the single `Name(email)` item
+  of the application menu's account submenus. A name changed for one meeting
+  does not match, so the own tile then counts as a remote participant.
 
 A tab group that words a participant's state but whose buttons name nobody is
 a tile this version cannot name: it is left out, and the log says so once per

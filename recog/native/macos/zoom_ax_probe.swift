@@ -7,9 +7,15 @@
 //   {"state": "zoom_not_running"}
 //   {"state": "idle", "account": "..."}   Zoom is running, no meeting window
 //   {"state": "meeting", "view": "window" | "minimal", "tiles": [...],
-//    "title": "...", "account": "..."}
+//    "title": "...", "account": "...", "menu": [[...], ...]}
 //
 // "title" is the title of the meeting window, absent in minimal view.
+//
+// "menu" lists the titles of the menu bar's items as paths, e.g. ["Meeting",
+// "Mute audio"], down to three levels and without the Apple menu; absent when
+// the menu bar cannot be read. Unlike the meeting toolbar, which leaves the
+// tree when the pointer is not over the window, the menu bar is always there,
+// and the meeting menu's audio item follows the user's own microphone.
 //
 // A tile is {"description": ..., "children": [{"role": ..., "description": ...,
 // "value": ...}, ...]}: a described tab group, e.g. "Alice, Computer audio
@@ -51,6 +57,7 @@ let meetingWindowId = "zm.meeting.window.main"
 let pollInterval: TimeInterval = 0.5
 let heartbeatInterval: TimeInterval = 2.0
 let maxDepth = 6
+let menuDepth = 3
 
 func value(_ element: AXUIElement, _ name: String) -> AnyObject? {
     var out: AnyObject?
@@ -119,6 +126,31 @@ func accountDescription(_ windows: [AXUIElement]) -> String? {
     return nil
 }
 
+/// The titles of the menu bar's items as paths from a top-level menu, read
+/// without opening any menu. The Apple menu, always the first, is skipped.
+func menuPaths(_ app: AXUIElement) -> [[String]]? {
+    guard let bar = value(app, kAXMenuBarAttribute as String) else { return nil }
+    var paths: [[String]] = []
+    func walk(_ element: AXUIElement, _ path: [String]) {
+        for child in children(element) {
+            // An item holds its submenu in an untitled AXMenu child.
+            if role(child) == "AXMenu" {
+                walk(child, path)
+                continue
+            }
+            guard let title = text(child, kAXTitleAttribute as String) else { continue }
+            let next = path + [title]
+            if next.count > 1 { paths.append(next) }
+            if next.count < menuDepth { walk(child, next) }
+        }
+    }
+    for item in children(bar as! AXUIElement).dropFirst() {
+        guard let title = text(item, kAXTitleAttribute as String) else { continue }
+        walk(item, [title])
+    }
+    return paths
+}
+
 func snapshot(app: AXUIElement) -> [String: Any] {
     let all = windows(app)
     var view: String?
@@ -141,7 +173,10 @@ func snapshot(app: AXUIElement) -> [String: Any] {
     // The account is reported outside a meeting too: the main window is not
     // always reachable during one, and the name is needed from its first tile.
     var out: [String: Any] = ["state": "idle"]
-    if let view { out = ["state": "meeting", "view": view, "tiles": tiles] }
+    if let view {
+        out = ["state": "meeting", "view": view, "tiles": tiles]
+        if let menu = menuPaths(app) { out["menu"] = menu }
+    }
     if let title { out["title"] = title }
     if let account = accountDescription(all) { out["account"] = account }
     return out
