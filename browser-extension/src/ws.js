@@ -20,6 +20,21 @@ function isOurMeeting(data) {
   return Boolean(state.currentMeetingId) && data.meeting_id === state.currentMeetingId;
 }
 
+/**
+ * `transcript_history` answers this tab's accepted `meeting_join` (or its own
+ * transcript request). The join made the bridge clear participant state, and
+ * a participants frame sent before it by the periodic refresh is gone: report
+ * the participants again, own microphone included, which an adapter that
+ * reports only on change (Zoom) would not resend. A tab whose join was refused
+ * has no `currentMeetingUrl` and stays quiet.
+ */
+function resendParticipantsAfterJoin() {
+  if (!state.currentMeetingUrl || !isInMeeting()) return;
+  const adapter = getPlatformAdapter();
+  const conf = adapter ? adapter.getConference() : window.$conf;
+  if (conf) sendParticipantsUpdate(conf);
+}
+
 export function connectWebSocket() {
   if (state.wsConnection && state.wsConnection.readyState === WebSocket.OPEN) {
     return;
@@ -41,22 +56,24 @@ export function connectWebSocket() {
       // offline" forever even after the channel came back.
       state.copilotChannelStatus = 'unknown';
 
-      // Send participants for both KTalk and vas3k
+      // Send participants for both KTalk and vas3k. The join goes first: the
+      // bridge clears participant and speaker state on meeting_join, and an
+      // adapter that reports only on change (Zoom) would not resend them.
       const adapter = getPlatformAdapter();
       if (adapter) {
         // Use the same membership predicate as the periodic join/leave check.
         const conf = isInMeeting() ? adapter.getConference() : null;
         if (conf) {
+          sendMeetingJoin();
           sendParticipantsUpdate(conf);
           const activeSpeaker = getActiveSpeaker(conf);
           sendFilteredSpeakerUpdate(activeSpeaker);
-          sendMeetingJoin();
         }
       } else if (isInMeeting()) {
+        sendMeetingJoin();
         sendParticipantsUpdate(window.$conf);
         const activeSpeaker = getActiveSpeaker(window.$conf);
         sendFilteredSpeakerUpdate(activeSpeaker);
-        sendMeetingJoin();
       }
 
       startMeetingCheck();
@@ -107,6 +124,7 @@ export function connectWebSocket() {
           handleTranscript(data);
         } else if (data.type === 'transcript_history') {
           handleTranscriptHistory(data);
+          resendParticipantsAfterJoin();
         } else if (data.type === 'transcript_refine') {
           handleTranscriptRefine(data);
         } else if (data.type === 'new_meeting') {
