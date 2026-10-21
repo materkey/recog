@@ -174,6 +174,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     fi
     if [ "$HOST_OS" = "darwin" ]; then
         echo "Would build sck_audio_capture with swiftc, or reuse the existing helper."
+        echo "Would build Recog.app with swiftc when its source changed, or reuse the existing one."
     fi
     if [ "$DO_PREFETCH" -eq 1 ]; then
         echo "Would prepare the GigaAM weight cache, downloading missing or corrupt files."
@@ -272,10 +273,10 @@ if [ "$HOST_OS" = "linux" ]; then
 elif [ "$HOST_OS" = "darwin" ]; then
     if deps_have swiftc; then
         report_dep swiftc 1 required "$(command -v swiftc)"
-    elif deps_sck_helper_ok; then
-        report_dep swiftc 1 optional "not needed — sck_audio_capture is already built"
+    elif deps_sck_helper_ok && deps_launcher_ok; then
+        report_dep swiftc 1 optional "not needed — sck_audio_capture and Recog.app are already built"
     else
-        report_dep swiftc 0 required "needed to build sck_audio_capture"
+        report_dep swiftc 0 required "needed to build sck_audio_capture and Recog.app"
     fi
 fi
 
@@ -485,6 +486,17 @@ if [ "$HOST_OS" = "darwin" ]; then
     else
         echo -e "  ${RED}[MISSING]${NC} sck_audio_capture — no swiftc to build it ($(deps_hint swiftc))"
         MISSING_REQUIRED+=("sck_audio_capture")
+    fi
+
+    # Rebuilt only when its source changed: a new signature means macOS asks
+    # for Screen Recording and the microphone again.
+    if "$VENV_PY" -m recog.macos_launcher > /dev/null; then
+        info "Recog.app is ready"
+    elif deps_launcher_ok; then
+        info "Recog.app is already built — reusing it"
+    else
+        echo -e "  ${RED}[MISSING]${NC} Recog.app — could not build it ($(deps_hint swiftc))"
+        MISSING_REQUIRED+=("Recog.app")
     fi
 fi
 

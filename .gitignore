@@ -45,6 +45,9 @@ meetings/
 /RecogZoomHelper.app/
 /RecogZoomHelper.app.build/
 /RecogZoomHelper.source-sha256
+/Recog.app/
+/Recog.app.build/
+/Recog.source-sha256
 /example_1_named.md
 /com.recog.*.plist
 

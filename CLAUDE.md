@@ -113,6 +113,16 @@ python -m recog.web.server  # http://127.0.0.1:9080
 ./recog-service.sh render --dry-run D # Render units into D only (tests/CI)
 ```
 
+On macOS the live unit's program is `Recog.app/Contents/MacOS/recog_launcher`
+(bundle id `com.recog.live`, source `recog/native/macos/recog_launcher.swift`,
+built by `setup.sh` through `python -m recog.macos_launcher` with the shared
+`recog/macos_bundle.py`, sha256 stamp `Recog.source-sha256` beside the bundle),
+which runs the interpreter as its child: macOS attributes Screen Recording and
+the microphone to the job's program, so the permissions belong to "Recog"
+instead of the Homebrew interpreter, whose ad-hoc identity changes with every
+upgrade and voided the grant of a running service. `scripts/deps.sh` refuses to
+start without it.
+
 The backend is chosen from `uname -s` (`RECOG_SERVICE_OS` overrides it, which
 only changes which templates/verbs are used, so a Mac can render Linux units):
 launchd on macOS, `systemd --user` on Linux. Units are rendered from

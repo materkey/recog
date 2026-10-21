@@ -124,6 +124,12 @@ deps_sck_helper_ok() {
     [ -x "$DEPS_REPO_DIR/sck_audio_capture" ]
 }
 
+# Recog.app is the program of the live launchd job (recog/macos_launcher.py):
+# without it launchd has nothing to start.
+deps_launcher_ok() {
+    [ -x "$DEPS_REPO_DIR/Recog.app/Contents/MacOS/recog_launcher" ]
+}
+
 # PortAudio is a shared library, so the only honest probe is loading it the
 # way sounddevice does. Needs the Python deps installed first.
 deps_portaudio_ok() {
@@ -190,6 +196,7 @@ deps_readiness_problems() {
         deps_portaudio_ok || echo "PortAudio not loadable (python -c 'import sounddevice' failed) — $(deps_hint portaudio), then rerun ./setup.sh"
     elif [ "$os" = "darwin" ]; then
         deps_sck_helper_ok || echo "sck_audio_capture helper missing or not executable — run ./setup.sh with swiftc available ($(deps_hint swiftc))"
+        deps_launcher_ok || echo "Recog.app missing — run ./setup.sh with swiftc available ($(deps_hint swiftc))"
     fi
 
     if ! asr_problem="$(deps_asr_config_check)"; then

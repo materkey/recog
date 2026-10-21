@@ -46,7 +46,7 @@ setup. See [requirements and install options](docs/usage.md#requirements).
 
 1. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**
    and select `browser-extension/dist/`.
-2. On macOS, grant **Screen Recording** and microphone permissions when prompted.
+2. On macOS, grant **Screen Recording** and microphone permissions to **Recog** when prompted.
 3. Open **http://127.0.0.1:9080** and set your name for microphone transcripts.
 4. Say a phrase or join a conference: the text appears on the **Live** page.
    No text? Check `./recog-service.sh status` and `./recog-service.sh logs`,

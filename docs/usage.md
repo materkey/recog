@@ -209,6 +209,15 @@ virtual device, no rerouting of your output. The first run compiles the
 Recording** permission (System Settings → Privacy & Security → Screen
 Recording) — without it the helper produces silence.
 
+The service asks as **Recog**: its launchd job starts `Recog.app`, a small
+launcher that `./setup.sh` builds and signs, and the launcher runs the Python
+interpreter as its child. macOS attributes Screen Recording and the
+microphone to the program the job starts, so without the launcher the dialogs
+would name `python3.12` and a Homebrew upgrade of the interpreter would void
+the grant of the running service. `Recog.app` is rebuilt only when
+`recog/native/macos/recog_launcher.swift` changes, and macOS then asks once
+more.
+
 BlackHole still works as an alternative if you prefer a loopback device:
 install it, create a Multi-Output Device in Audio MIDI Setup, then run with
 `--system-audio device:auto` (or `device:<id>` from `--list-devices`).
@@ -408,9 +417,9 @@ should produce data while something is playing. Without `--device`, `parec`
 records the default *source* (your microphone), which is why the monitor name
 matters.
 
-**No system audio (macOS).** Check Screen Recording permission for the terminal
-(or for the launchd service's parent) and that `sck_audio_capture` exists and
-is executable — `./setup.sh` rebuilds it when `swiftc` is available.
+**No system audio (macOS).** Check Screen Recording permission for **Recog**
+(the service) or for the terminal (a manual run), and that `sck_audio_capture`
+and `Recog.app` exist — `./setup.sh` builds both when `swiftc` is available.
 
 **It runs on CPU instead of CUDA.** `RECOG_ASR_DEVICE=cuda` makes the mismatch
 loud (it raises instead of falling back). If torch itself has no CUDA, you

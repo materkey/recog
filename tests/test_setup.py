@@ -114,6 +114,11 @@ def repo(tmp_path):
     helper.chmod(0o755)
     (dst / "recog/native/macos").mkdir(parents=True, exist_ok=True)
     (dst / "recog/native/macos/sck_audio_capture.swift").write_text("// stub\n")
+    # The live job's program: the darwin readiness probe wants it executable.
+    launcher = dst / "Recog.app/Contents/MacOS/recog_launcher"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text('#!/bin/sh\nexec "$@"\n')
+    launcher.chmod(0o755)
     return dst
 
 
@@ -637,6 +642,17 @@ def test_macos_readiness_requires_the_capture_helper(repo, stubs):
 
     assert result.returncode != 0
     assert "sck_audio_capture" in result.stdout + result.stderr
+    assert not [c for c in result.calls if c.startswith("launchctl load")]
+
+
+def test_macos_readiness_requires_the_launcher_application(repo, stubs):
+    """The live job starts Recog.app: without it launchd has nothing to run."""
+    shutil.rmtree(repo / "Recog.app")
+
+    result = run_setup(repo, stubs, *offline_args(), host_os="Darwin")
+
+    assert result.returncode != 0
+    assert "Recog.app" in result.stdout + result.stderr
     assert not [c for c in result.calls if c.startswith("launchctl load")]
 
 
