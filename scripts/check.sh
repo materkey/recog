@@ -83,6 +83,27 @@ if [ -d .github/workflows ]; then
     "$ACTIONLINT" -shellcheck "$SHELLCHECK"
 fi
 
+# Committed history plus the files a commit would take (tracked and new, not
+# ignored), copied out so that venvs and node_modules are not scanned. The
+# config path is relative: the copy carries the working tree's config too.
+step "secrets"
+GITLEAKS="$(quality_tool gitleaks "install gitleaks 8.30.1, e.g. brew install gitleaks")"
+GITLEAKS_ARGS=(--no-banner --redact --config scripts/quality-gitleaks.toml)
+if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    "$GITLEAKS" git "${GITLEAKS_ARGS[@]}" .
+    TREE_COPY="$(mktemp -d)"
+    trap 'rm -rf "$TREE_COPY"' EXIT
+    git ls-files --cached --others --exclude-standard -z \
+        | while IFS= read -r -d '' name; do
+            if [ -f "$name" ]; then printf '%s\0' "$name"; fi
+        done \
+        | tar --null -T - -cf - | tar -xf - -C "$TREE_COPY"
+    (cd "$TREE_COPY" && "$GITLEAKS" dir "${GITLEAKS_ARGS[@]}" .)
+    rm -rf "$TREE_COPY"
+else
+    "$GITLEAKS" dir "${GITLEAKS_ARGS[@]}" .
+fi
+
 step "CLI help"
 "$PYTHON" -m recog --help > /dev/null
 

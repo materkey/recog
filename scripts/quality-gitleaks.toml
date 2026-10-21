@@ -1,0 +1,15 @@
+# gitleaks rules of scripts/check.sh: the default rule set plus the reviewed
+# false positives below, matched on the whole line so they survive line moves.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Names that look random to generic-api-key but are not secrets"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  # The web UI's localStorage key for the meeting list cache.
+  '''(key: |CACHE_KEY = )'recog\.meetings\.v1'[,;]''',
+  # Reasoning-effort values in AI settings tests.
+  '''task_payload\(api, claude_effort='[a-z]+'\)''',
+]

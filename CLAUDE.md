@@ -412,7 +412,7 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 - `RECOG_PYTHON` - the interpreter baked into the rendered units (`scripts/service/common.sh`). Deliberately **not** `DEPS_PYTHON`, which only selects the interpreter `scripts/deps.sh` uses for its library probes.
 - `RECOG_HOST_OS` - overrides `uname -s` for the `scripts/deps.sh` probes (lets a Mac exercise the Linux ones).
 - `RECOG_CHECK_PYTHON` - interpreter override for `scripts/check.sh`.
-- `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs the full merge-base quality gate (`scripts/quality.py`, baseline + head pytest with branch coverage, `docs/quality.md`) instead of plain pytest; CI sets it on both hosts. Unset, `check.sh` runs pytest once plus only the gate's Ruff check of lines changed since the local `origin/main` (`quality.py --style-only`, no fetch; skipped when that ref is absent). Either way it runs shellcheck and actionlint first (`docs/quality.md`).
+- `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs the full merge-base quality gate (`scripts/quality.py`, baseline + head pytest with branch coverage, `docs/quality.md`) instead of plain pytest; CI sets it on both hosts. Unset, `check.sh` runs pytest once plus only the gate's Ruff check of lines changed since the local `origin/main` (`quality.py --style-only`, no fetch; skipped when that ref is absent). Either way it runs shellcheck, actionlint and gitleaks first (`docs/quality.md`); gitleaks needs a package-manager install.
 - `RECOG_QUALITY_OUTPUT` - output root for those quality runs (default `.local/quality`).
 - `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL` / `RECOG_GIGAAM_REF` / `RECOG_GIGAAM_EDITABLE` - see Setup above.
 
@@ -425,7 +425,7 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 ## Testing
 
 ```bash
-./scripts/check.sh                        # everything below plus shellcheck/actionlint and the Ruff check of lines changed since the local origin/main
+./scripts/check.sh                        # everything below plus shellcheck/actionlint/gitleaks and the Ruff check of lines changed since the local origin/main
 RECOG_QUALITY_BASE=origin/main ./scripts/check.sh   # what CI runs: the full quality gate replaces plain pytest
 
 python -m pytest tests/ -q -m "not e2e"   # unit tests (e2e needs playwright + a real conference)

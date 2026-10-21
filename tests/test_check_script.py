@@ -41,9 +41,13 @@ printf '%s\n' "recog-service.sh $*" >> "$STUB_LOG"
 exit "${STUB_RENDER_RC:-0}"
 """
 
-# The linters log their arguments.
+# The linters log their arguments; gitleaks also logs, per directory scan, the
+# files it was given, so a test can tell which files a scan saw.
 TOOL_STUB = r"""#!/bin/sh
 printf '%s\n' "$(basename "$0") $*" >> "$STUB_LOG"
+if [ "$(basename "$0")" = gitleaks ] && [ "$1" = dir ]; then
+  find . -type f | sed 's|^\./|gitleaks-file |' >> "$STUB_LOG"
+fi
 exit "$(eval echo "\${STUB_$(basename "$0" | tr a-z A-Z)_RC:-0}")"
 """
 
@@ -74,7 +78,7 @@ def stub_bin(tmp_path):
     bin_dir.mkdir()
     (bin_dir / "python3").write_text(PYTHON_STUB)
     (bin_dir / "python3").chmod(0o755)
-    for tool in ("shellcheck", "actionlint"):
+    for tool in ("shellcheck", "actionlint", "gitleaks"):
         (bin_dir / tool).write_text(TOOL_STUB)
         (bin_dir / tool).chmod(0o755)
     return bin_dir, tmp_path / "stub.log"
@@ -118,6 +122,7 @@ def test_runs_all_five_steps_and_reports_ok(repo, stub_bin):
         "compileall",
         "shell syntax",
         "shellcheck",
+        "secrets",
         "CLI help",
         "service units render",
         "pytest",
@@ -214,7 +219,7 @@ def test_a_failing_suite_fails_the_run(repo, stub_bin):
     assert "check: OK" not in result.stdout
 
 
-@pytest.mark.parametrize("tool", ["SHELLCHECK"])
+@pytest.mark.parametrize("tool", ["SHELLCHECK", "GITLEAKS"])
 def test_linter_finding_when_checking_then_run_stops_before_the_suite(repo, stub_bin, tool):
     result = run_check(repo, stub_bin, env_extra={f"STUB_{tool}_RC": "1"})
 
@@ -245,6 +250,36 @@ def test_workflows_when_present_then_actionlint_uses_the_same_shellcheck(repo, s
 
     assert result.returncode != 0
     assert f"actionlint -shellcheck {bin_dir / 'shellcheck'}" in result.calls
+
+
+def test_secret_scan_when_checking_then_history_and_only_committable_files_are_scanned(
+    repo, stub_bin
+):
+    (repo / ".gitignore").write_text("venv/\n")
+    (repo / "venv").mkdir()
+    (repo / "venv/vendored.py").write_text("")
+    (repo / "new_module.py").write_text("")
+
+    result = run_check(repo, stub_bin)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = "--no-banner --redact --config scripts/quality-gitleaks.toml ."
+    assert f"gitleaks git {args}" in result.calls
+    assert f"gitleaks dir {args}" in result.calls
+    scanned = {c.split(" ", 1)[1] for c in result.calls if c.startswith("gitleaks-file ")}
+    assert {"new_module.py", ".gitignore", "recog/__init__.py"} <= scanned
+    assert "venv/vendored.py" not in scanned
+
+
+def test_missing_tool_when_checking_then_run_names_it(repo, stub_bin):
+    bin_dir, _ = stub_bin
+    (bin_dir / "gitleaks").unlink()
+
+    result = run_check(repo, stub_bin)
+
+    assert result.returncode != 0
+    assert "check: gitleaks not found (install gitleaks" in result.stderr
+    assert not any("pytest" in c for c in result.calls)
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +412,13 @@ def test_ci_constrains_macos_installs(workflow):
     ]
     assert dependency_installs
     assert all("pip install $PIP_ARGS" in line for line in dependency_installs)
+
+
+def test_ci_installs_the_linters_check_script_requires(workflow):
+    """check.sh fails without gitleaks, and its hint names the CI pin."""
+    step = next(s for s in _steps(workflow) if s.get("name") == "Install gitleaks")
+    version = step["env"]["GITLEAKS_VERSION"]
+    assert f"install gitleaks {version}" in (REPO_ROOT / "scripts/check.sh").read_text()
 
 
 def test_ci_runs_the_check_script(workflow):
