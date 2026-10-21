@@ -528,7 +528,10 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         self._last_signal_at = time.monotonic()
 
         self.running = True
-        self._dead = False
+        # `_dead` не сбрасываем: потерянный захват восстановлен, только когда
+        # пришли данные. Сброс здесь (live останавливает и снова запускает
+        # захват между встречами ktalk-only) давал маркер «восстановлен» в
+        # новую встречу, где звука так и не было.
         self.clear_buffer()
 
         # Start reader thread
@@ -546,8 +549,9 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         # GigaAM) каждые 5 с. А это ровно тот случай, который на Linux
         # штатно бывает гонкой: юнит стартует раньше, чем поднялся
         # pipewire-pulse, и parec умирает мгновенно. Отдаём отказ тому же
-        # _reader_loop, который умеет подождать и, если не вышло, сдаться с
-        # маркером — остальной конвейер (микрофон, per-speaker PCM) живёт.
+        # _reader_loop, который умеет подождать, а если не вышло — объявить
+        # захват потерянным и пробовать дальше реже; остальной конвейер
+        # (микрофон, per-speaker PCM) живёт.
         if self.process.poll() is not None:
             self._absorb_dead_child_stderr()
             print(

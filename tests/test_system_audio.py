@@ -426,6 +426,25 @@ def test_child_dead_on_first_spawn_is_left_to_the_reader_loop(monkeypatch):
     assert "Connection refused" in cap._stderr_suffix()
 
 
+def test_restarting_a_lost_capture_keeps_it_lost_until_data_arrives(monkeypatch):
+    """given: захват потерян — быстрые попытки исчерпаны
+    when: live останавливает и снова запускает его (конец встречи и начало
+          следующей в ktalk-only, reconnect конференции)
+    then: dead остаётся True: восстановлением считаются только пришедшие
+          данные, иначе live писал «восстановлен» в новую встречу, где не
+          было ни сэмпла"""
+    cap = _make_capture(name="pulse")
+    monkeypatch.setattr(system_audio.time, "sleep", lambda _s: None)
+    cap._dead = True
+    cap._spawn = lambda: _DeadOnSpawn(b"")
+    cap._reader_loop = lambda: None
+
+    cap.start()
+
+    assert cap.running is True
+    assert cap.dead is True
+
+
 def test_transient_child_death_is_retried_with_backoff_then_slowly():
     """given: ребёнок умирает сразу после каждого respawn
     when: reader-loop крутится
@@ -466,11 +485,14 @@ def test_lost_capture_keeps_retrying_and_recovers_on_data():
     cap.process = None
 
     delays = []
-    states = {"restarts": 0, "dead_before_recovery": None}
+    states = {"restarts": 0, "dead_before_recovery": None, "dead_after_recovery": None}
     samples = np.ones(SR // 10, dtype=np.float32)
 
     def sleep(delay):
         delays.append(delay)
+        if len(delays) == MAX_RESTARTS + 3:
+            # Первая пауза после восстановления: данные уже прочитаны.
+            states["dead_after_recovery"] = cap.dead
         if len(delays) > MAX_RESTARTS + 2 + MAX_RESTARTS:
             cap.running = False
 
@@ -489,6 +511,7 @@ def test_lost_capture_keeps_retrying_and_recovers_on_data():
     cap._reader_loop()
 
     assert states["dead_before_recovery"] is True
+    assert states["dead_after_recovery"] is False
     assert np.concatenate(cap.buffer).size == samples.size
     fast = [RESTART_BACKOFF_S[min(i, len(RESTART_BACKOFF_S) - 1)] for i in range(MAX_RESTARTS)]
     # Две редкие попытки, вторая удалась; после чтения снова быстрые.
