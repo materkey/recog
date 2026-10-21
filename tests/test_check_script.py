@@ -415,7 +415,8 @@ def test_ci_constrains_macos_installs(workflow):
 
 
 def test_ci_installs_the_linters_check_script_requires(workflow):
-    """check.sh fails without gitleaks, and its hint names the CI pin."""
+    """check.sh fails without them, and its hint names the gitleaks CI pins."""
+    assert "npm ci --prefix deploy/node" in _run_script(workflow)
     step = next(s for s in _steps(workflow) if s.get("name") == "Install gitleaks")
     version = step["env"]["GITLEAKS_VERSION"]
     assert f"install gitleaks {version}" in (REPO_ROOT / "scripts/check.sh").read_text()

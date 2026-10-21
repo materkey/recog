@@ -27,6 +27,8 @@ from quality_policy import (
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "scripts"
 PYTHON = sys.executable
+NODE_TOOLS = ROOT / "deploy/node"
+ESLINT = NODE_TOOLS / "node_modules/.bin/eslint"
 
 
 def run(command, cwd, *, log=None, accepted=(0,), **kwargs):
@@ -44,7 +46,7 @@ def git(root, *arguments):
     return run(["git", *arguments], root)
 
 
-def python_files(root):
+def listed_files(root, *patterns):
     names = git(
         root,
         "ls-files",
@@ -53,9 +55,17 @@ def python_files(root):
         "--exclude-standard",
         "-z",
         "--",
-        "*.py",
+        *patterns,
     )
     return sorted({name for name in names.split("\0") if name and (root / name).is_file()})
+
+
+def python_files(root):
+    return listed_files(root, "*.py")
+
+
+def javascript_files(root):
+    return listed_files(root, "*.js", "*.cjs", "*.mjs")
 
 
 def source_files(root):
@@ -88,6 +98,18 @@ def versions(packages=None):
         actual = importlib.metadata.version(package)
         if actual != version:
             raise ValueError(f"{package}: expected {version}, installed {actual}")
+        result[package] = actual
+    manifest = json.loads((NODE_TOOLS / "package.json").read_text())
+    for package, version in manifest["devDependencies"].items():
+        if packages is not None and package not in packages:
+            continue
+        installed = NODE_TOOLS / "node_modules" / package / "package.json"
+        actual = json.loads(installed.read_text())["version"] if installed.is_file() else None
+        if actual != version:
+            raise ValueError(
+                f"{package}: expected {version}, installed {actual}; "
+                "run npm ci --prefix deploy/node"
+            )
         result[package] = actual
     return result
 
@@ -202,14 +224,44 @@ def lint(root, name, source):
     return validate_lint(json.loads(run(command, root, input=source, accepted=(0, 1))))
 
 
-def style(baseline, head):
-    failures = []
-    for name in python_files(head):
+def eslint(root, name, source):
+    command = [
+        str(ESLINT),
+        "--config",
+        str(CONFIG / "quality-eslint.config.mjs"),
+        "--format",
+        "json",
+        "--no-warn-ignored",
+        "--stdin",
+        "--stdin-filename",
+        name,
+    ]
+    reports = json.loads(run(command, root, input=source, accepted=(0, 1)))
+    # A parse error has no rule; it still counts as a finding of its line.
+    return validate_lint(
+        [
+            {
+                "code": message["ruleId"] or "parse-error",
+                "message": message["message"],
+                "location": {"row": message["line"], "column": message["column"]},
+            }
+            for report in reports
+            for message in report["messages"]
+        ]
+    )
+
+
+def changed_files(baseline, head, names):
+    for name in names:
         source = (head / name).read_text()
         before = (baseline / name).read_text() if (baseline / name).is_file() else ""
-        if source == before:
-            continue
-        mapping = unchanged_lines(before, source)
+        if source != before:
+            yield name, before, source, unchanged_lines(before, source)
+
+
+def style(baseline, head):
+    failures = []
+    for name, before, source, mapping in changed_files(baseline, head, python_files(head)):
         findings = lint_regressions(lint(baseline, name, before), lint(head, name, source), mapping)
         failures.extend({"kind": "lint", "path": name, **finding} for finding in findings)
         formatted = run(
@@ -231,6 +283,11 @@ def style(baseline, head):
             {"kind": "format", "path": name, "line": line}
             for line in format_regressions(source, formatted, mapping)
         )
+    for name, before, source, mapping in changed_files(baseline, head, javascript_files(head)):
+        findings = lint_regressions(
+            eslint(baseline, name, before), eslint(head, name, source), mapping
+        )
+        failures.extend({"kind": "lint", "path": name, **finding} for finding in findings)
     return failures
 
 
@@ -242,11 +299,11 @@ def describe(failure):
 
 
 def style_only(base, output):
-    """Only the Ruff checks of changed lines: seconds, no test suites and no report."""
+    """Only the Ruff and ESLint checks of changed lines: seconds, no test suites, no report."""
     output.mkdir(parents=True, exist_ok=True)
     baseline = Path(tempfile.mkdtemp(prefix="style-", dir=output.resolve())) / "baseline-tree"
     try:
-        versions({"ruff"})
+        versions({"ruff", "eslint", "@eslint/js", "globals"})
         merge_base = git(ROOT, "merge-base", "HEAD", base).strip()
         git(ROOT, "worktree", "add", "--detach", str(baseline), merge_base)
         failures = style(baseline, ROOT)
@@ -263,8 +320,11 @@ def style_only(base, output):
         shutil.rmtree(baseline.parent, ignore_errors=True)
     for failure in failures:
         print(f"quality: {describe(failure)}")
-    if failures:
+    if any(failure["kind"] == "format" for failure in failures):
         print("quality: style fail; see ruff format --diff --config scripts/quality-ruff.toml")
+        return 1
+    if failures:
+        print("quality: style fail")
         return 1
     print("quality: style pass")
     return 0

@@ -16,6 +16,8 @@ runtime setup and require Python 3.12 or newer:
 venv-gigaam/bin/python -m pip install -c deploy/python/constraints/macos.txt \
   -r deploy/python/requirements-quality.txt
 # Linux: omit the macOS constraint file.
+# ESLint for the JavaScript part (Node 22.13 or newer), both systems:
+npm ci --prefix deploy/node
 venv-gigaam/bin/python scripts/quality.py --base origin/main --output .local/quality
 # The same gate as part of the regular checks (what CI runs):
 RECOG_QUALITY_BASE=origin/main ./scripts/check.sh
@@ -45,6 +47,10 @@ without the optional quality tools; real analyzer integration tests require them
   erase its history. Formatting changes are required on changed/new lines;
   unrelated existing formatting debt is preserved. Tests and quality scripts
   participate in this check too. Nothing is automatically reformatted by the gate.
+- New ESLint findings in JavaScript (`*.js`, `*.cjs`, `*.mjs`) fail the same
+  way: `eslint:recommended` from `scripts/quality-eslint.config.mjs`, compared
+  against the merge base line by line like Ruff. There is no JavaScript
+  formatter check. Generated bundles are excluded.
 - Newly detected duplicate function pairs fail until resolved or explicitly
   reviewed in `scripts/quality-exceptions.json`. An exception names exactly two
   canonical function identities and explains why keeping the duplication is
@@ -56,7 +62,8 @@ without the optional quality tools; real analyzer integration tests require them
 
 Structural analysis covers Python source under `recog/` only, excluding native
 source; tests, scripts, JavaScript, generated bundles and ignored files are not
-included. Ruff applies to changed/new nonignored Python anywhere in the repository.
+included. Ruff applies to changed/new nonignored Python anywhere in the repository,
+ESLint to changed/new nonignored JavaScript.
 
 ## Shell, workflow and secret checks
 
@@ -97,6 +104,7 @@ Official tool contracts:
 [crapkit source](https://github.com/JeanFrancoisGagne/crapkit/tree/v0.7.3),
 [scb-check](https://github.com/gabeorlanski/scb-check),
 [Ruff](https://docs.astral.sh/ruff/),
+[ESLint](https://eslint.org/docs/latest/),
 [ShellCheck](https://www.shellcheck.net/wiki/),
 [actionlint](https://github.com/rhysd/actionlint/blob/main/docs/checks.md),
 [gitleaks](https://github.com/gitleaks/gitleaks),

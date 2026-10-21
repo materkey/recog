@@ -197,6 +197,68 @@ def test_style_only_when_changed_line_is_checked_then_only_ruff_decides(
     assert not list(output.iterdir())
 
 
+def commit(root, message):
+    subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Quality test",
+            "-c",
+            "user.email=quality@example.invalid",
+            "commit",
+            "-qm",
+            message,
+        ],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.skipif(not quality.ESLINT.exists(), reason="Run npm ci --prefix deploy/node")
+@pytest.mark.parametrize(
+    ("addition", "code", "reported"),
+    [
+        ("function added() {\n  return 1;\n}\n", 0, None),
+        ("function added() {\n  missing();\n}\n", 1, "no-undef"),
+        ("function added() {\n", 1, "parse-error"),
+    ],
+)
+def test_style_only_when_javascript_changes_then_only_new_eslint_findings_fail(
+    repository, tmp_path, monkeypatch, capsys, addition, code, reported
+):
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda packages=None: {})
+    script = repository / "recog/web/static/page.js"
+    script.parent.mkdir(parents=True)
+    old = "function inner() {\n  const unused = 1;\n}\n"
+    script.write_text(old)
+    commit(repository, "javascript")
+    script.write_text("// The old finding moves down a line.\n" + old + addition)
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "HEAD", "--style-only", "--output", str(output)]) == code
+    printed = capsys.readouterr().out
+    assert "no-unused-vars" not in printed
+    assert ("recog/web/static/page.js:" in printed) == bool(code)
+    if reported:
+        assert reported in printed
+
+
+def test_node_tool_when_installed_version_differs_then_measurement_fails(tmp_path, monkeypatch):
+    (tmp_path / "package.json").write_text('{"devDependencies": {"eslint": "10.12.0"}}')
+    monkeypatch.setattr(quality, "NODE_TOOLS", tmp_path)
+    with pytest.raises(ValueError, match="installed None; run npm ci"):
+        quality.versions({"eslint"})
+    installed = tmp_path / "node_modules/eslint/package.json"
+    installed.parent.mkdir(parents=True)
+    installed.write_text('{"version": "10.11.0"}')
+    with pytest.raises(ValueError, match="expected 10.12.0, installed 10.11.0"):
+        quality.versions({"eslint"})
+    installed.write_text('{"version": "10.12.0"}')
+    assert quality.versions({"eslint"}) == {"eslint": "10.12.0"}
+
+
 def test_style_only_when_base_is_missing_then_it_reports_that_it_could_not_run(
     repository, tmp_path, monkeypatch, capsys
 ):

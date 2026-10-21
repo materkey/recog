@@ -16,6 +16,7 @@ records are grouped separately, making it clear where a new file belongs.
 | `recog/native/macos/` | ScreenCaptureKit Swift helper source |
 | `browser-extension/` | Chrome extension source, platform adapters, build and tests |
 | `deploy/python/` | Client/server requirements and verified macOS dependency constraints |
+| `deploy/node/` | Pinned JavaScript quality tools (ESLint) for `scripts/quality.py` |
 | `deploy/macos/`, `deploy/linux/` | launchd and systemd service templates |
 | `deploy/examples/` | Non-personal seed data for setup |
 | `scripts/` | Setup/service helpers, data migration, enrollment and checks |
