@@ -30,10 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import json
-import os
-import plistlib
 import re
 import shutil
 import subprocess
@@ -43,6 +40,8 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from recog.macos_bundle import build_app, find_or_build_app
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BRIDGE_URL = "ws://127.0.0.1:8766"
@@ -448,39 +447,8 @@ def _helper_info() -> dict:
 
 
 def _build_helper(app: Path, source: Path) -> None:
-    # Built aside and swapped in on success: a failed build must not take a
-    # working helper away.
-    staging = app.with_name(app.name + ".build")
-    shutil.rmtree(staging, ignore_errors=True)
-    contents = staging / "Contents"
-    (contents / "MacOS").mkdir(parents=True)
     print(f"[zoom-app] Building {app.name} from {source}...", file=sys.stderr)
-    compile_command = ["swiftc", "-O", "-o", str(contents / "MacOS/zoom_ax_probe"), str(source)]
-    compile_command += ["-framework", "ApplicationServices", "-framework", "AppKit"]
-    with (contents / "Info.plist").open("wb") as handle:
-        plistlib.dump(_helper_info(), handle)
-    # macOS recognizes the permission holder by its signature. "-" is an ad-hoc
-    # signature, which is the hash of the bundle: it stays the same while the
-    # code does, and the permission must be granted again once the code
-    # changes. A real identity keeps the grant across such changes too.
-    identity = os.environ.get("RECOG_CODESIGN_IDENTITY") or "-"
-    sign_command = [
-        "codesign",
-        "--force",
-        "--sign",
-        identity,
-        "--identifier",
-        HELPER_BUNDLE_ID,
-        str(staging),
-    ]
-    for command in (compile_command, sign_command):
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Failed to build {app.name} ({command[0]}): {result.stderr.strip()}"
-            )
-    shutil.rmtree(app, ignore_errors=True)
-    staging.rename(app)
+    build_app(app, source, info=_helper_info(), frameworks=("ApplicationServices", "AppKit"))
     print(
         f'[zoom-app] Built {app.name}: allow "{HELPER_NAME}" in System Settings → '
         "Privacy & Security → Accessibility",
@@ -489,26 +457,13 @@ def _build_helper(app: Path, source: Path) -> None:
 
 
 def find_or_build_helper(repo_root: Path = REPO_ROOT) -> Path:
-    """The helper application; built when missing or when its source changed.
-
-    Freshness is the source's content hash, not its mtime, so a checkout that
-    merely touches the file does not rebuild. The stamp is written last: a
-    build that failed half-way is repeated on the next start.
-    """
-    app = repo_root / HELPER_APP
-    source = repo_root / HELPER_SOURCE
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    stamp = repo_root / HELPER_STAMP
-    built = (app / "Contents/_CodeSignature/CodeResources").exists()
-    if built and stamp.exists() and stamp.read_text().strip() == digest:
-        return app
-    if not shutil.which("swiftc"):
-        if built:
-            return app  # a stale helper is better than none
-        raise RuntimeError(f"swiftc not found — cannot build {HELPER_APP} (xcode-select --install)")
-    _build_helper(app, source)
-    stamp.write_text(digest)
-    return app
+    """The helper application; built when missing or when its source changed."""
+    return find_or_build_app(
+        repo_root / HELPER_APP,
+        repo_root / HELPER_SOURCE,
+        repo_root / HELPER_STAMP,
+        _build_helper,
+    )
 
 
 @contextlib.asynccontextmanager
