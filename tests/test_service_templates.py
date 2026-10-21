@@ -268,7 +268,6 @@ def test_render_rejects_a_template_with_an_unknown_placeholder(tmp_path):
     assert not dst.exists()
 
 
-@pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil is macOS-only")
 def test_macos_live_unit_starts_the_interpreter_through_the_recog_application(tmp_path):
     """macOS attributes Screen Recording and the microphone to the program the
     job starts: the interpreter itself made them "python3.12" and lost them on
@@ -282,6 +281,7 @@ def test_macos_live_unit_starts_the_interpreter_through_the_recog_application(tm
     assert program[2:5] == ["-m", "recog", "live"]
 
 
+@pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil is macOS-only")
 def test_rendered_plists_are_valid_property_lists(tmp_path):
     units = render("Darwin", tmp_path / "out")
 
