@@ -30,6 +30,21 @@ fi
 
 step() { printf '\n=== %s ===\n' "$1"; }
 
+# A quality tool from the interpreter's environment (the pins in
+# deploy/python/requirements-quality.txt install next to it), else from PATH.
+quality_tool() {
+    local candidate
+    candidate="$(dirname "$PYTHON")/$1"
+    if [ -x "$candidate" ]; then
+        echo "$candidate"
+    elif command -v "$1"; then
+        :
+    else
+        echo "check: $1 not found ($2)" >&2
+        return 1
+    fi
+}
+
 # Tracked plus not-yet-added scripts, minus the ignored ones: a checkout can
 # carry ignored worktrees and vendored trees whose scripts are none of our
 # business, but a brand-new script must be checked before it is committed.
@@ -54,6 +69,11 @@ while IFS= read -r -d '' script; do
     echo "  bash -n $script"
     bash -n "$script"
 done < <(list_shell_scripts)
+
+step "shellcheck"
+SHELLCHECK="$(quality_tool shellcheck "install deploy/python/requirements-quality.txt")"
+# -x with SCRIPTDIR follows the `source "$SCRIPT_DIR/…"` of each script.
+list_shell_scripts | xargs -0 "$SHELLCHECK" -x --source-path=SCRIPTDIR
 
 step "CLI help"
 "$PYTHON" -m recog --help > /dev/null

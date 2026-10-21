@@ -41,6 +41,12 @@ printf '%s\n' "recog-service.sh $*" >> "$STUB_LOG"
 exit "${STUB_RENDER_RC:-0}"
 """
 
+# The linter logs its arguments.
+TOOL_STUB = r"""#!/bin/sh
+printf '%s\n' "$(basename "$0") $*" >> "$STUB_LOG"
+exit "$(eval echo "\${STUB_$(basename "$0" | tr a-z A-Z)_RC:-0}")"
+"""
+
 
 @pytest.fixture
 def repo(tmp_path):
@@ -68,6 +74,9 @@ def stub_bin(tmp_path):
     bin_dir.mkdir()
     (bin_dir / "python3").write_text(PYTHON_STUB)
     (bin_dir / "python3").chmod(0o755)
+    for tool in ("shellcheck",):
+        (bin_dir / tool).write_text(TOOL_STUB)
+        (bin_dir / tool).chmod(0o755)
     return bin_dir, tmp_path / "stub.log"
 
 
@@ -105,8 +114,14 @@ def test_runs_all_five_steps_and_reports_ok(repo, stub_bin):
     result = run_check(repo, stub_bin)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    for step in ("compileall", "shell syntax", "CLI help",
-                 "service units render", "pytest"):
+    for step in (
+        "compileall",
+        "shell syntax",
+        "shellcheck",
+        "CLI help",
+        "service units render",
+        "pytest",
+    ):
         assert f"=== {step} ===" in result.stdout
     assert result.stdout.strip().endswith("check: OK")
 
@@ -197,6 +212,28 @@ def test_a_failing_suite_fails_the_run(repo, stub_bin):
 
     assert result.returncode != 0
     assert "check: OK" not in result.stdout
+
+
+@pytest.mark.parametrize("tool", ["SHELLCHECK"])
+def test_linter_finding_when_checking_then_run_stops_before_the_suite(repo, stub_bin, tool):
+    result = run_check(repo, stub_bin, env_extra={f"STUB_{tool}_RC": "1"})
+
+    assert result.returncode != 0
+    assert "check: OK" not in result.stdout
+    assert not any("pytest" in c for c in result.calls)
+
+
+def test_shell_scripts_when_linted_then_each_listed_script_follows_its_sources(repo, stub_bin):
+    add_script(repo, "nested/deep.sh")
+    (repo / ".gitignore").write_text("junk/\n")
+    add_script(repo, "junk/ignored.sh")
+
+    result = run_check(repo, stub_bin)
+
+    call = next(c for c in result.calls if c.startswith("shellcheck "))
+    assert call.startswith("shellcheck -x --source-path=SCRIPTDIR ")
+    assert "nested/deep.sh" in call and "scripts/check.sh" in call
+    assert "junk/ignored.sh" not in call
 
 
 # ---------------------------------------------------------------------------

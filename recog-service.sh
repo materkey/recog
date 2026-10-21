@@ -112,6 +112,7 @@ kill_copilot_tmux() {
         local session_name attempt session_alive failed=0
         for session_name in copilot copilot-manual; do
             session_alive=1
+            # shellcheck disable=SC2034 # attempt only counts the retries
             for attempt in 1 2 3; do
                 tmux -L recog-copilot kill-session -t "=$session_name" 2>/dev/null || true
                 if ! tmux -L recog-copilot has-session -t "=$session_name" 2>/dev/null; then
@@ -435,6 +436,7 @@ print(task["claude_effort"] or "auto")
         if [ "${RECOG_NO_AUTO_CONFIRM:-0}" != "1" ]; then
             warn "expect(1) not found — falling back to interactive launch (manual Enter needed)"
         fi
+        # shellcheck disable=SC2086 # flag lists split on purpose; the expect script below interpolates the same strings
         exec claude --model "$copilot_model" "${effort_args[@]}" --strict-mcp-config --mcp-config "$mcp_config" --dangerously-load-development-channels server:copilot $extra_dirs_args $agent_args
     fi
 

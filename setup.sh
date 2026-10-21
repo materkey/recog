@@ -564,6 +564,7 @@ else
         # (на Linux это штатный случай — нет user-D-Bus или linger).
         ACTIVATION_FAILED=""
         for service in $(svc_installed_services); do
+            # shellcheck disable=SC2015 # info only prints, so || runs when the service step failed
             case " $RUNNING_BEFORE " in
                 *" $service "*)
                     svc_restart "$service" && info "Restarted $(svc_label "$service")" \
@@ -588,6 +589,7 @@ fi
 frontend_responds() {
     deps_have curl || return 1
     local attempt
+    # shellcheck disable=SC2034 # attempt only counts the retries
     for attempt in 1 2 3 4 5; do
         if curl -sS --max-time 2 -o /dev/null http://127.0.0.1:9080/ 2>/dev/null; then
             return 0
