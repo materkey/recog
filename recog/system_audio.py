@@ -43,6 +43,10 @@ BYTES_PER_SAMPLE = 4  # float32
 # Backoff между попытками respawn, сек; последнее значение повторяется.
 RESTART_BACKOFF_S = (1.0, 2.0, 5.0, 10.0)
 MAX_RESTARTS = 5
+# После MAX_RESTARTS захват считается потерянным, но не брошенным: причина
+# бывает временной (Мак спит и дисплеев нет, разрешение ещё не подтверждено),
+# а сервис живёт сутками, так что попытки продолжаются с этой паузой.
+LOST_RETRY_S = 60.0
 
 # Имя резолвится в текущий монитор при создании потока, но за сменой
 # default sink само по себе не следует — за этим следит PulseAudioCapture.
@@ -184,8 +188,9 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         self._stderr_tail = deque(maxlen=200)
         # Неполный кадр float32 с прошлого чтения (см. _decode_pcm).
         self._pcm_tail = b""
-        # Захват сдался: попытки respawn исчерпаны. Потребитель (live.py)
-        # видит это и один раз отмечает потерю системного звука.
+        # Захват потерян: быстрые попытки respawn исчерпаны, идут редкие.
+        # Потребитель (live.py) видит это и отмечает потерю системного звука,
+        # а когда данные пошли снова — восстановление.
         self._dead = False
         # Плановый перезапуск ребёнка, запрошенный потребителем.
         self._restart_lock = threading.Lock()
@@ -238,19 +243,22 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         """Последние строки stderr ребёнка, пригодные для дописывания в лог.
 
         Причина смерти (`parec: Connection failure`, отказ в Screen Recording)
-        собиралась drain-потоком и никуда не попадала: единственный
-        необратимый отказ — `_give_up` — печатался без единого слова о том,
-        что произошло.
+        собиралась drain-потоком и никуда не попадала: потеря захвата —
+        `_mark_lost` — печаталась без единого слова о том, что произошло.
         """
         with self._stderr_lock:
             lines = list(self._stderr_tail)[-STDERR_REPORT_LINES:]
         tail = " | ".join(line.strip() for line in lines if line.strip())
         return f" (stderr: {tail})" if tail else ""
 
-    def _give_up(self, reason: str) -> None:
-        """Явная сдача: потребитель должен увидеть потерю захвата."""
+    def _mark_lost(self, reason: str) -> None:
+        """Потребитель должен увидеть потерю захвата; reader-loop пробует дальше.
+
+        Раньше здесь захват сдавался насовсем (`running=False`): Мак уснул,
+        пять попыток сгорели за полминуты, пока не было дисплеев, и
+        системный звук не возвращался до перезапуска сервиса — часами.
+        """
         self._dead = True
-        self.running = False
         print(f"[{self.name}] {reason}{self._stderr_suffix()}", file=sys.stderr)
 
     def _wait_readable(self, timeout: float) -> bool:
@@ -259,7 +267,7 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         `read()` на молчащем источнике блокируется без срока: sink,
         принудительно переведённый в suspend (`pactl suspend-sink`) или
         вставший на уровне драйвера, не отдаёт ни байта, а ребёнок при этом
-        жив — ни respawn, ни `_give_up` не срабатывают. Запрошенная смена
+        жив — ни respawn, ни `_mark_lost` не срабатывают. Запрошенная смена
         источника читается только на вершине цикла, поэтому без этого
         ожидания переключение на новый sink не доезжало никогда, и удалённая
         сторона встречи пропадала молча до перезапуска процесса.
@@ -302,6 +310,49 @@ class SubprocessPCMCapture(BufferedAudioCapture):
             self._pcm_tail = data[usable:]
         return np.frombuffer(data[:usable], dtype=np.float32)
 
+    def _respawn_dead_child(self, restart_count: int) -> Optional[int]:
+        """Пауза и respawn умершего ребёнка.
+
+        Возвращает новый счётчик быстрых попыток, None — stop() пришёл во
+        время паузы и reader-loop должен выйти.
+        """
+        if restart_count >= MAX_RESTARTS:
+            if not self._dead:
+                self._mark_lost(
+                    f"Max restarts ({MAX_RESTARTS}) reached, system audio lost — "
+                    f"retrying every {LOST_RETRY_S:.0f}s"
+                )
+            delay = LOST_RETRY_S
+        else:
+            delay = RESTART_BACKOFF_S[min(restart_count, len(RESTART_BACKOFF_S) - 1)]
+            restart_count += 1
+            print(
+                f"[{self.name}] Process died, restarting... "
+                f"(attempt {restart_count}){self._stderr_suffix()}",
+                file=sys.stderr,
+            )
+        # Пауза перед КАЖДЫМ respawn, а не только перед повтором после
+        # неудачного. Ребёнок, который стартует нормально и умирает
+        # через полсекунды (источник исчез, сервер перезапускается),
+        # проходил через ветку без единого sleep: пять попыток
+        # сгорали за ~3 с, и захват объявлялся потерянным.
+        self._sleep_while_running(delay)
+        if not self.running:
+            # stop() пришёл во время паузы: respawn здесь оставил бы
+            # осиротевшего ребёнка, которого stop() уже не увидит.
+            return None
+        try:
+            self._restart_process()
+        except Exception as e:
+            # Транзиентный сбой (parec умирает, пока перезапускается
+            # pipewire-pulse) не должен убивать поток: выход отсюда
+            # оставлял running=True и get_chunk() навсегда None.
+            log_rate_limited(
+                f"capture-restart-{self.name}",
+                f"[{self.name}] Restart failed: {e}",
+            )
+        return restart_count
+
     def _reader_loop(self):
         """Read audio data from subprocess stdout with auto-restart."""
         bytes_per_chunk = self.sample_rate * BYTES_PER_SAMPLE // 10  # 100ms chunks
@@ -341,40 +392,9 @@ class SubprocessPCMCapture(BufferedAudioCapture):
 
             # Check if process is alive
             if not self.process or self.process.poll() is not None:
-                if restart_count >= MAX_RESTARTS:
-                    self._give_up(
-                        f"Max restarts ({MAX_RESTARTS}) reached, giving up on system audio"
-                    )
+                restart_count = self._respawn_dead_child(restart_count)
+                if restart_count is None:
                     return
-
-                delay = RESTART_BACKOFF_S[min(restart_count, len(RESTART_BACKOFF_S) - 1)]
-                restart_count += 1
-                print(
-                    f"[{self.name}] Process died, restarting... "
-                    f"(attempt {restart_count}){self._stderr_suffix()}",
-                    file=sys.stderr,
-                )
-                # Пауза перед КАЖДЫМ respawn, а не только перед повтором после
-                # неудачного. Ребёнок, который стартует нормально и умирает
-                # через полсекунды (источник исчез, сервер перезапускается),
-                # проходил через ветку без единого sleep: пять попыток
-                # сгорали за ~3 с, `_give_up` срабатывал, и системный звук
-                # пропадал до конца жизни процесса — в сервисе это навсегда.
-                self._sleep_while_running(delay)
-                if not self.running:
-                    # stop() пришёл во время паузы: respawn здесь оставил бы
-                    # осиротевшего ребёнка, которого stop() уже не увидит.
-                    return
-                try:
-                    self._restart_process()
-                except Exception as e:
-                    # Транзиентный сбой (parec умирает, пока перезапускается
-                    # pipewire-pulse) не должен убивать поток: выход отсюда
-                    # оставлял running=True и get_chunk() навсегда None.
-                    log_rate_limited(
-                        f"capture-restart-{self.name}",
-                        f"[{self.name}] Restart failed: {e}",
-                    )
                 continue
 
             try:
@@ -387,6 +407,9 @@ class SubprocessPCMCapture(BufferedAudioCapture):
                     samples = self._decode_pcm(data)
                     # Reset restart count on successful read
                     restart_count = 0
+                    if self._dead:
+                        self._dead = False
+                        print(f"[{self.name}] System audio recovered", file=sys.stderr)
                     if samples.any():
                         self._last_signal_at = time.monotonic()
                     if samples.size:
@@ -516,7 +539,7 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         time.sleep(0.5)
 
         # Ребёнок, умерший на ПЕРВОМ спавне, раньше улетал RuntimeError'ом
-        # наружу — мимо всей машинерии backoff/_give_up (она ловит только
+        # наружу — мимо всей машинерии backoff/_mark_lost (она ловит только
         # смерть после успешного старта) и мимо try/finally в
         # `LiveTranscriber.run()`: встреча оставалась незакрытой, а
         # Restart=always перезапускал весь конвейер (с полной загрузкой
@@ -540,9 +563,9 @@ class SubprocessPCMCapture(BufferedAudioCapture):
     def stop(self):
         """Stop capturing.
 
-        Гварда `not self.running` мало: после `_give_up` захват уже не
-        running, но дохлый Popen с открытыми stdout/stderr всё ещё висит на
-        объекте — ранний return тёк двумя fd на каждую сдачу.
+        Гварда `not self.running` мало: захват бывает уже не running, когда
+        дохлый Popen с открытыми stdout/stderr всё ещё висит на объекте —
+        ранний return тёк бы двумя fd.
         """
         if not self.running and self.process is None and self._reader_thread is None:
             return

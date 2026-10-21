@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from recog import system_audio
 from recog.system_audio import (
     BYTES_PER_SAMPLE,
+    LOST_RETRY_S,
     MAX_RESTARTS,
     PULSE_DEFAULT_MONITOR,
     REPO_ROOT,
@@ -38,6 +39,23 @@ from recog.system_audio import (
 )
 
 SR = 16000
+
+
+def _sleep_until_slow_retry(cap, delays):
+    """Пауза reader-loop, которая записывает задержки и останавливает цикл на
+    первой редкой попытке: после быстрых он пробует вечно. Возвращает список,
+    куда пишется `running` в момент этой попытки — захват не должен
+    останавливать себя сам."""
+    running_at_slow_retry = []
+
+    def sleep(delay):
+        delays.append(delay)
+        if delay == LOST_RETRY_S:
+            running_at_slow_retry.append(cap.running)
+            cap.running = False
+
+    cap._sleep_while_running = sleep
+    return running_at_slow_retry
 
 
 # =============================================================================
@@ -404,15 +422,16 @@ def test_child_dead_on_first_spawn_is_left_to_the_reader_loop(monkeypatch):
     assert cap.running is True
     assert cap.dead is False
     assert loops == [True]
-    # Причина смерти доходит до логов тем же путём, что и при give-up.
+    # Причина смерти доходит до логов тем же путём, что и при потере захвата.
     assert "Connection refused" in cap._stderr_suffix()
 
 
-def test_transient_child_death_is_retried_with_backoff_then_gives_up():
+def test_transient_child_death_is_retried_with_backoff_then_slowly():
     """given: ребёнок умирает сразу после каждого respawn
     when: reader-loop крутится
-    then: попытки исчерпываются с backoff, затем _dead/running=False —
-          а не выход из потока на первой же ошибке"""
+    then: быстрые попытки исчерпываются с backoff, захват помечается
+          потерянным (_dead), но не останавливается: дальше попытка раз в
+          LOST_RETRY_S — Мак мог просто уснуть, и навсегда сдаваться нельзя"""
     cap = _make_capture(name="pulse")
     cap.running = True
     cap.process = None
@@ -425,30 +444,69 @@ def test_transient_child_death_is_retried_with_backoff_then_gives_up():
         raise RuntimeError("Audio capture failed to restart: parec: connection refused")
 
     cap._restart_process = failing_restart
-    cap._sleep_while_running = lambda delay: delays.append(delay)
+    running_at_slow_retry = _sleep_until_slow_retry(cap, delays)
 
     cap._reader_loop()
 
     assert len(attempts) == MAX_RESTARTS
     assert delays == [
         RESTART_BACKOFF_S[min(i, len(RESTART_BACKOFF_S) - 1)] for i in range(MAX_RESTARTS)
-    ]
+    ] + [LOST_RETRY_S]
     assert cap._dead is True
     assert cap.dead is True
-    assert cap.running is False
+    assert running_at_slow_retry == [True]
+
+
+def test_lost_capture_keeps_retrying_and_recovers_on_data():
+    """given: быстрые попытки исчерпаны, захват потерян
+    when: одна из редких попыток поднимает ребёнка, который отдаёт звук
+    then: dead снова False, звук в буфере, и бюджет быстрых попыток полный"""
+    cap = _make_capture()
+    cap.running = True
+    cap.process = None
+
+    delays = []
+    states = {"restarts": 0, "dead_before_recovery": None}
+    samples = np.ones(SR // 10, dtype=np.float32)
+
+    def sleep(delay):
+        delays.append(delay)
+        if len(delays) > MAX_RESTARTS + 2 + MAX_RESTARTS:
+            cap.running = False
+
+    cap._sleep_while_running = sleep
+
+    def restart():
+        states["restarts"] += 1
+        if states["restarts"] == MAX_RESTARTS + 2:
+            states["dead_before_recovery"] = cap.dead
+            cap.process = _OneBlockThenDead(samples.tobytes())
+            return
+        raise RuntimeError("no display")
+
+    cap._restart_process = restart
+
+    cap._reader_loop()
+
+    assert states["dead_before_recovery"] is True
+    assert np.concatenate(cap.buffer).size == samples.size
+    fast = [RESTART_BACKOFF_S[min(i, len(RESTART_BACKOFF_S) - 1)] for i in range(MAX_RESTARTS)]
+    # Две редкие попытки, вторая удалась; после чтения снова быстрые.
+    assert delays[: MAX_RESTARTS + 2] == fast + [LOST_RETRY_S, LOST_RETRY_S]
+    assert delays[MAX_RESTARTS + 2 : 2 * MAX_RESTARTS + 2] == fast
 
 
 def test_successful_read_resets_the_restart_budget():
     """given: рестарт удался, чанк прочитан, ребёнок умер снова
     when: reader-loop крутится до отказа
     then: backoff отсчитывается заново с первого шага — здоровый отрезок
-          захвата не приближает give-up"""
+          захвата не приближает потерю"""
     cap = _make_capture()
     cap.running = True
     cap.process = None
 
     delays = []
-    cap._sleep_while_running = lambda delay: delays.append(delay)
+    _sleep_until_slow_retry(cap, delays)
 
     samples = np.ones(SR // 10, dtype=np.float32)
     states = {"restarts": 0}
@@ -468,7 +526,7 @@ def test_successful_read_resets_the_restart_budget():
     # [1] — перед успешной; после успешного чтения бюджет полный с нуля.
     assert delays == list(RESTART_BACKOFF_S[:2]) + [
         RESTART_BACKOFF_S[min(i, len(RESTART_BACKOFF_S) - 1)] for i in range(MAX_RESTARTS)
-    ]
+    ] + [LOST_RETRY_S]
     assert np.concatenate(cap.buffer).size == samples.size
     assert cap._dead is True
 
@@ -477,13 +535,13 @@ def test_child_that_starts_then_dies_is_throttled_by_the_backoff():
     """given: respawn всегда удаётся, но ребёнок сразу умирает
     when: reader-loop крутится до отказа
     then: пауза берётся перед каждой попыткой — иначе весь бюджет сгорал за
-          пару секунд без единого sleep и захват сдавался навсегда"""
+          пару секунд без единого sleep"""
     cap = _make_capture(name="pulse")
     cap.running = True
     cap.process = None
 
     delays = []
-    cap._sleep_while_running = lambda delay: delays.append(delay)
+    running_at_slow_retry = _sleep_until_slow_retry(cap, delays)
 
     class _DeadOnArrival:
         stdout = None
@@ -499,9 +557,9 @@ def test_child_that_starts_then_dies_is_throttled_by_the_backoff():
 
     assert delays == [
         RESTART_BACKOFF_S[min(i, len(RESTART_BACKOFF_S) - 1)] for i in range(MAX_RESTARTS)
-    ]
+    ] + [LOST_RETRY_S]
     assert cap._dead is True
-    assert cap.running is False
+    assert running_at_slow_retry == [True]
 
 
 def test_zeros_do_not_count_as_signal_but_any_sample_does():
@@ -538,7 +596,7 @@ def test_requested_restart_respawns_the_child_once_without_spending_the_budget()
     cap.process = None
 
     delays = []
-    cap._sleep_while_running = lambda delay: delays.append(delay)
+    _sleep_until_slow_retry(cap, delays)
     restarts = []
 
     def restart():
@@ -554,8 +612,8 @@ def test_requested_restart_respawns_the_child_once_without_spending_the_budget()
     cap._reader_loop()
 
     # Плановый перезапуск — один лишний вызов без backoff посреди падений,
-    # после него MAX_RESTARTS попыток с полным бюджетом.
-    assert len(delays) == 2 + MAX_RESTARTS
+    # после него MAX_RESTARTS попыток с полным бюджетом, затем редкая.
+    assert len(delays) == 2 + MAX_RESTARTS + 1
     assert len(restarts) == 2 + 1 + MAX_RESTARTS
     assert cap._dead is True
 
@@ -818,13 +876,13 @@ def test_queued_source_switch_is_applied_while_the_source_is_silent(monkeypatch)
 def test_planned_switch_does_not_spend_the_crash_retry_budget():
     """given: захват уже потратил рестарты на падения ребёнка
     when: приходит плановая смена источника
-    then: бюджет сброшен — переподключение не приближает give-up"""
+    then: бюджет сброшен — переподключение не приближает потерю захвата"""
     cap, _ = _make_pulse([])
     cap.running = True
     cap.process = None
 
     delays = []
-    cap._sleep_while_running = lambda delay: delays.append(delay)
+    _sleep_until_slow_retry(cap, delays)
     switched = []
 
     def restart():
@@ -848,8 +906,9 @@ def test_planned_switch_does_not_spend_the_crash_retry_budget():
     cap._reader_loop()
 
     assert switched == ["sinkB.monitor"]
-    # После планового переключения бюджет полный: MAX_RESTARTS падений.
-    assert len(delays) == MAX_RESTARTS
+    # После планового переключения бюджет полный: MAX_RESTARTS падений,
+    # затем редкая попытка.
+    assert len(delays) == MAX_RESTARTS + 1
     assert cap._dead is True
 
 

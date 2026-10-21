@@ -331,6 +331,43 @@ def test_exhausted_capture_restarts_write_one_capture_loss_marker():
     assert "mixed" not in kwargs["text"]
 
 
+def test_recovered_capture_writes_one_recovery_marker():
+    """given: захват потерян, маркер потери записан
+    when: редкая попытка подняла захват, данные пошли
+    then: один маркер восстановления — без него транскрипт после ночи сна
+          так и заканчивался «потерян», хотя звук давно вернулся"""
+    transcriber = _transcriber_with_dead_capture(dead=True)
+
+    LiveTranscriber._check_system_capture_alive(transcriber)
+    transcriber.system_capture.dead = False
+    LiveTranscriber._check_system_capture_alive(transcriber)
+    LiveTranscriber._check_system_capture_alive(transcriber)
+
+    calls = transcriber._meeting_storage.append_segment.call_args_list
+    assert [c.kwargs["uncertain_reason"] for c in calls] == [
+        "system_audio_capture_lost",
+        "system_audio_capture_recovered",
+    ]
+    assert transcriber._system_capture_lost is False
+
+
+def test_capture_lost_again_after_recovery_writes_a_new_loss_marker():
+    transcriber = _transcriber_with_dead_capture(dead=True)
+
+    LiveTranscriber._check_system_capture_alive(transcriber)
+    transcriber.system_capture.dead = False
+    LiveTranscriber._check_system_capture_alive(transcriber)
+    transcriber.system_capture.dead = True
+    LiveTranscriber._check_system_capture_alive(transcriber)
+
+    calls = transcriber._meeting_storage.append_segment.call_args_list
+    assert [c.kwargs["uncertain_reason"] for c in calls] == [
+        "system_audio_capture_lost",
+        "system_audio_capture_recovered",
+        "system_audio_capture_lost",
+    ]
+
+
 def test_capture_loss_does_not_pause_refine_or_claim_a_pcm_transition():
     transcriber = _transcriber_with_dead_capture(dead=True)
 

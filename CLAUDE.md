@@ -201,10 +201,14 @@ Restart policy is shared: a died child is respawned with a bounded backoff
 after a failed one — a child that starts fine and dies half a second later
 otherwise burned the whole budget in ~3 s without a single pause. The wait
 **does not leave the reader loop while `running`** (and a `stop()` arriving
-during it aborts the respawn instead of orphaning a fresh child); only after
-`MAX_RESTARTS` does the capture give up, set `_dead`/`running=False`, and let
-`recog/live.py` write one system-capture-lost marker (with the child's last
-stderr lines appended). That marker is
+during it aborts the respawn instead of orphaning a fresh child); after
+`MAX_RESTARTS` the capture is marked lost (`_dead`, with the child's last
+stderr lines in the log) and `recog/live.py` writes one system-capture-lost
+marker, but the loop keeps running and retries every `LOST_RETRY_S` (60 s):
+the cause is often temporary (the Mac slept with no display, a permission
+awaiting confirmation), and giving up for good left a service without system
+audio for hours. The first data clears `_dead` and live writes a recovery
+marker. The loss marker is
 separate from `_emit_pcm_transition_marker` on purpose: a mixed-capture death
 must not claim a PCM→mixed transition or pause refine.
 

@@ -1559,7 +1559,9 @@ class LiveTranscriber:
                 )
 
     def _check_system_capture_alive(self):
-        """Один маркер, когда системный захват исчерпал рестарты и сдался.
+        """Один маркер, когда системный захват исчерпал быстрые рестарты, и
+        один — когда он снова отдаёт данные (дальше захват пробует раз в
+        минуту, `LOST_RETRY_S` в recog/system_audio.py).
 
         Отдельно от `_emit_pcm_transition_marker`: PCM-путь при этом может
         быть совершенно здоров (звук участников идёт из расширения), поэтому
@@ -1573,6 +1575,13 @@ class LiveTranscriber:
         if capture is None:
             return
         if not getattr(capture, "dead", False):
+            with self._state_lock:
+                if not self._system_capture_lost:
+                    return
+                self._system_capture_lost = False
+                self._system_capture_lost_meeting = None
+                marker_gen = self._meeting_generation
+            self._emit_capture_loss_marker(marker_gen, recovered=True)
             return
         # Compare-and-set вместе с чтением встречи и поколения под одним
         # локом: взвод вне лока успевал попасть в окно «взвели → встреча
@@ -1645,9 +1654,14 @@ class LiveTranscriber:
             return None
         return getattr(storage, "current_meeting_path", None)
 
-    def _emit_capture_loss_marker(self, marker_gen: int):
-        """Пишет маркер потери системного захвата в stdout и в транскрипт."""
-        msg = "[Системный звук потерян — захват не восстановился]"
+    def _emit_capture_loss_marker(self, marker_gen: int, recovered: bool = False):
+        """Пишет маркер потери (или восстановления) системного захвата в stdout и в транскрипт."""
+        if recovered:
+            msg = "[Системный звук восстановлен]"
+            reason = "system_audio_capture_recovered"
+        else:
+            msg = "[Системный звук потерян — захват перезапускается раз в минуту]"
+            reason = "system_audio_capture_lost"
         timestamp = datetime.now().strftime("%H:%M:%S")
         line = f"\n*{msg}* *[{timestamp}]*\n"
         sys.stdout.write(line)
@@ -1666,7 +1680,7 @@ class LiveTranscriber:
                     is_local=False,
                     is_continuation=False,
                     uncertain=False,
-                    uncertain_reason="system_audio_capture_lost",
+                    uncertain_reason=reason,
                     audio_offset_ms=0,
                 )
 
