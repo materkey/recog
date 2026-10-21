@@ -75,6 +75,14 @@ SHELLCHECK="$(quality_tool shellcheck "install deploy/python/requirements-qualit
 # -x with SCRIPTDIR follows the `source "$SCRIPT_DIR/…"` of each script.
 list_shell_scripts | xargs -0 "$SHELLCHECK" -x --source-path=SCRIPTDIR
 
+if [ -d .github/workflows ]; then
+    step "workflow lint"
+    ACTIONLINT="$(quality_tool actionlint "install deploy/python/requirements-quality.txt")"
+    # Without -shellcheck actionlint skips the run: scripts when shellcheck is
+    # not on PATH, and the venv is not.
+    "$ACTIONLINT" -shellcheck "$SHELLCHECK"
+fi
+
 step "CLI help"
 "$PYTHON" -m recog --help > /dev/null
 

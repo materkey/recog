@@ -9,3 +9,4 @@ ast-grep-cli==0.42.1
 tree-sitter==0.25.2
 tree-sitter-python==0.25.0
 shellcheck-py==0.11.0.1
+actionlint-py==1.7.12.25

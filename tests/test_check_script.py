@@ -41,7 +41,7 @@ printf '%s\n' "recog-service.sh $*" >> "$STUB_LOG"
 exit "${STUB_RENDER_RC:-0}"
 """
 
-# The linter logs its arguments.
+# The linters log their arguments.
 TOOL_STUB = r"""#!/bin/sh
 printf '%s\n' "$(basename "$0") $*" >> "$STUB_LOG"
 exit "$(eval echo "\${STUB_$(basename "$0" | tr a-z A-Z)_RC:-0}")"
@@ -74,7 +74,7 @@ def stub_bin(tmp_path):
     bin_dir.mkdir()
     (bin_dir / "python3").write_text(PYTHON_STUB)
     (bin_dir / "python3").chmod(0o755)
-    for tool in ("shellcheck",):
+    for tool in ("shellcheck", "actionlint"):
         (bin_dir / tool).write_text(TOOL_STUB)
         (bin_dir / tool).chmod(0o755)
     return bin_dir, tmp_path / "stub.log"
@@ -234,6 +234,17 @@ def test_shell_scripts_when_linted_then_each_listed_script_follows_its_sources(r
     assert call.startswith("shellcheck -x --source-path=SCRIPTDIR ")
     assert "nested/deep.sh" in call and "scripts/check.sh" in call
     assert "junk/ignored.sh" not in call
+
+
+def test_workflows_when_present_then_actionlint_uses_the_same_shellcheck(repo, stub_bin):
+    bin_dir, _ = stub_bin
+    assert not any(c.startswith("actionlint") for c in run_check(repo, stub_bin).calls)
+    (repo / ".github/workflows").mkdir(parents=True)
+
+    result = run_check(repo, stub_bin, env_extra={"STUB_ACTIONLINT_RC": "1"})
+
+    assert result.returncode != 0
+    assert f"actionlint -shellcheck {bin_dir / 'shellcheck'}" in result.calls
 
 
 # ---------------------------------------------------------------------------

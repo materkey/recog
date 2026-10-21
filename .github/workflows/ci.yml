@@ -61,12 +61,15 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
+          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
           pip install $PIP_ARGS --index-url https://download.pytorch.org/whl/cpu \
             torch torchaudio
 
       - name: Install GigaAM (pinned git ref)
         shell: bash
-        run: pip install $PIP_ARGS "gigaam @ git+${GIGAAM_URL}@${GIGAAM_REF}"
+        run: |
+          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
+          pip install $PIP_ARGS "gigaam @ git+${GIGAAM_URL}@${GIGAAM_REF}"
 
       - name: Install requirements
         shell: bash
@@ -75,11 +78,14 @@ jobs:
           if [ "$RUNNER_OS" = "macOS" ]; then
             reqs+=(-r deploy/python/requirements-macos.txt)
           fi
+          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
           pip install $PIP_ARGS "${reqs[@]}"
 
       - name: Install quality tools
         shell: bash
-        run: pip install $PIP_ARGS -r deploy/python/requirements-quality.txt
+        run: |
+          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
+          pip install $PIP_ARGS -r deploy/python/requirements-quality.txt
 
       - name: Select quality baseline
         env:

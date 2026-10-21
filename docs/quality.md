@@ -58,15 +58,16 @@ Structural analysis covers Python source under `recog/` only, excluding native
 source; tests, scripts, JavaScript, generated bundles and ignored files are not
 included. Ruff applies to changed/new nonignored Python anywhere in the repository.
 
-## Shell script check
+## Shell and workflow checks
 
-`scripts/check.sh` also runs a whole-repository check with no baseline:
+`scripts/check.sh` also runs two whole-repository checks with no baseline:
 any finding fails, and an accepted one carries an inline directive with its reason.
 
 - **shellcheck** over every nonignored `*.sh`, following `source` from each
   script's directory (`-x --source-path=SCRIPTDIR`).
+- **actionlint** over `.github/workflows`, with the same shellcheck for `run:` scripts.
 
-It is pinned in `deploy/python/requirements-quality.txt`.
+Both are pinned in `deploy/python/requirements-quality.txt`.
 
 CRAP calculation, coverage joins, function identity and duplicate detection come
 from pinned **crapkit 0.7.3**, not a local complexity implementation. It uses the
@@ -92,4 +93,5 @@ Official tool contracts:
 [scb-check](https://github.com/gabeorlanski/scb-check),
 [Ruff](https://docs.astral.sh/ruff/),
 [ShellCheck](https://www.shellcheck.net/wiki/),
+[actionlint](https://github.com/rhysd/actionlint/blob/main/docs/checks.md),
 [pytest-cov](https://pytest-cov.readthedocs.io/).

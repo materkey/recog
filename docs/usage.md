@@ -513,7 +513,8 @@ before/after comparison, not promised by setup.
 ```
 
 `scripts/check.sh` is what CI runs on macOS and Linux: `compileall`, `bash -n`
-and shellcheck over the shell scripts, the CLI smoke test, a dry-run render of the service
+and shellcheck over the shell scripts, actionlint over the CI workflow, the
+CLI smoke test, a dry-run render of the service
 units, and the unit suite. The linters come from the quality tools in
 [docs/quality.md](quality.md). It starts no service, captures no audio and loads no
 model weights — those belong to manual acceptance on a real host.
