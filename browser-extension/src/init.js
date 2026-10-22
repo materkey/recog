@@ -7,6 +7,7 @@ import { sendWsConnectionStatus } from './ws_api.js';
 import { ensureDebugPanel, updateDebugPanel } from './debug/panel.js';
 import { getPlatformAdapter, getPlatform, getPlatformDisplayName, isJitsiPlatform } from './platforms/index.js';
 import { showVas3kPrejoinState, showVas3kWaitingState } from './ui-vas3k.js';
+import { watchControlsDock } from './controls_dock.js';
 
 const AI_CONTENT_RECOVERY = [
   { selector: '.ktalk-transcript-content', stateKey: 'transcriptContentElement', create: createTranscriptContent },
@@ -400,6 +401,8 @@ export function init() {
     });
     uiObserver.observe(document.body, { childList: true, subtree: true });
   }
+
+  watchControlsDock(adapter);
 
   waitForConference(subscribeToDominantSpeaker);
 

@@ -534,6 +534,19 @@ export class ElementCallAdapter {
     return false; // use the floating panel
   }
 
+  /**
+   * Element Call's control bar. Its left column (settings button, logo) is
+   * empty space next to the call buttons, so the recog buttons dock there
+   * instead of floating over the layout switcher in the bottom-right corner.
+   */
+  getControlsBar() {
+    return this._doc.querySelector('[data-testid="footer-container"]');
+  }
+
+  getControlsDock() {
+    return this.getControlsBar()?.firstElementChild || null;
+  }
+
   // -- Cleanup ---------------------------------------------------------------
 
   dispose() {
