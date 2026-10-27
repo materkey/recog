@@ -54,8 +54,9 @@ def parse_extra_origins(raw: str | None) -> frozenset[str]:
 
 
 # Installation-specific exact origins from the environment (empty by default).
-EXTRA_ORIGINS = (parse_extra_origins(RECOG_EXTRA_WS_ORIGINS)
-                 | frozenset(INSTALL_CONFIG.jitsi + INSTALL_CONFIG.matrix))
+EXTRA_ORIGINS = parse_extra_origins(RECOG_EXTRA_WS_ORIGINS) | frozenset(
+    INSTALL_CONFIG.jitsi + INSTALL_CONFIG.matrix
+)
 
 
 def origin_allowed(

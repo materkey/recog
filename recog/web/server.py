@@ -29,13 +29,15 @@ from recog.web.ai_provider import get_provider, get_all_providers, build_prompt,
 from dotenv import load_dotenv
 from recog.desktop.service import DesktopIntegration, status as desktop_status
 
+# recog.config, imported above, has already loaded the root .env.
+from recog.install_config import INSTALL_CONFIG
+
 # Load .env from project root
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from recog.meeting_storage import MeetingStorage, get_external_paths
 from recog.log_utils import log_rate_limited
 from recog.config import get_data_dir, MIC_SPEAKER_NAME
-from recog.install_config import INSTALL_CONFIG
 from recog.user_profile import UserProfileStore
 from recog.privacy import PrivacyStore
 from recog.web.user_profile import ProfileCoordinator

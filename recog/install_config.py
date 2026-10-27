@@ -11,11 +11,10 @@ import json
 import os
 import re
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
-
-import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLATFORMS = frozenset({"ktalk", "vas3k", "jitsi", "matrix", "gmeet", "zoom"})
@@ -52,9 +51,7 @@ def config_path() -> Path:
 
 def legacy_hosts_path() -> Path:
     """Where installations kept conference hosts before config.toml."""
-    return _resolve(
-        os.environ.get("RECOG_CONFERENCE_HOSTS_FILE") or ".local/conference-hosts.json"
-    )
+    return _resolve(os.environ.get("RECOG_CONFERENCE_HOSTS_FILE") or ".local/conference-hosts.json")
 
 
 def _is_builtin_host(hostname: str) -> bool:
@@ -70,39 +67,41 @@ def _table(value, name: str, keys: set[str]) -> dict:
     return value
 
 
+def _canonical_hostname(hostname: str) -> bool:
+    return (
+        bool(hostname)
+        and len(hostname) <= 253
+        and all(
+            re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+            for label in hostname.split(".")
+        )
+    )
+
+
+def _ipv4_shorthand(hostname: str) -> bool:
+    # Browser URL parsing treats numeric last labels as IPv4. Require
+    # the canonical dotted address rather than accepting its shorthands.
+    last_label = hostname.rsplit(".", 1)[-1]
+    numeric = last_label.isdigit() or re.fullmatch(r"0x[0-9a-f]+", last_label)
+    return bool(numeric) and str(ipaddress.IPv4Address(hostname)) != hostname
+
+
 def _origin(origin) -> str:
     if not isinstance(origin, str):
         raise TypeError("Conference origins must be strings")
     hostname = urlsplit(origin).hostname or ""
     if (
-        not hostname
-        or len(hostname) > 253
-        or any(
-            not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-            for label in hostname.split(".")
-        )
+        not _canonical_hostname(hostname)
         or origin != f"https://{hostname}"
         or _is_builtin_host(hostname)
     ):
-        raise ValueError(
-            "Use canonical HTTPS origins without ports, paths or built-in hosts"
-        )
-    # Browser URL parsing treats numeric last labels as IPv4. Require
-    # the canonical dotted address rather than accepting its shorthands.
-    last_label = hostname.rsplit(".", 1)[-1]
-    numeric = last_label.isdigit() or re.fullmatch(r"0x[0-9a-f]+", last_label)
-    if numeric and str(ipaddress.IPv4Address(hostname)) != hostname:
+        raise ValueError("Use canonical HTTPS origins without ports, paths or built-in hosts")
+    if _ipv4_shorthand(hostname):
         raise ValueError("Use a canonical IPv4 address")
     return origin
 
 
-def parse_install_config(value: dict) -> InstallConfig:
-    """Validate the parsed TOML document; nothing unknown is ignored."""
-    value = _table(value, "The configuration", {"conferences", "sources"})
-    conferences = _table(
-        value.get("conferences", {}), "[conferences]", set(CONFIGURABLE_PLATFORMS)
-    )
-    sources = _table(value.get("sources", {}), "[sources]", {"aliases", "labels"})
+def _conference_hosts(conferences: dict) -> dict[str, tuple[str, ...]]:
     hosts = {}
     seen = set()
     for platform in CONFIGURABLE_PLATFORMS:
@@ -113,39 +112,56 @@ def parse_install_config(value: dict) -> InstallConfig:
         if seen & set(hosts[platform]) or len(set(hosts[platform])) != len(origins):
             raise ValueError("Conference origins must be unique across platforms")
         seen |= set(hosts[platform])
-    aliases = sources.get("aliases", {})
-    if not isinstance(aliases, dict) or any(
-        not key or key in PLATFORMS or target not in CONFIGURABLE_PLATFORMS
-        for key, target in aliases.items()
+    return hosts
+
+
+def _source_map(value, message: str, valid) -> dict[str, str]:
+    """A table from source names to strings that `valid(name, value)` accepts."""
+    if not isinstance(value, dict) or not all(
+        name and valid(name, target) for name, target in value.items()
     ):
-        raise ValueError("[sources.aliases] must map legacy names to jitsi or matrix")
-    labels = sources.get("labels", {})
-    if not isinstance(labels, dict) or any(
-        not key or not isinstance(label, str) or not label
-        for key, label in labels.items()
-    ):
-        raise ValueError("[sources.labels] must map source names to nonempty names")
+        raise ValueError(message)
+    return dict(value)
+
+
+def _alias(name: str, platform) -> bool:
+    return name not in PLATFORMS and platform in CONFIGURABLE_PLATFORMS
+
+
+def _label(name: str, label) -> bool:
+    return isinstance(label, str) and bool(label)
+
+
+def parse_install_config(value: dict) -> InstallConfig:
+    """Validate the parsed TOML document; nothing unknown is ignored."""
+    value = _table(value, "The configuration", {"conferences", "sources"})
+    conferences = _table(value.get("conferences", {}), "[conferences]", set(CONFIGURABLE_PLATFORMS))
+    sources = _table(value.get("sources", {}), "[sources]", {"aliases", "labels"})
     return InstallConfig(
-        source_aliases=dict(aliases), source_labels=dict(labels), **hosts
+        source_aliases=_source_map(
+            sources.get("aliases", {}),
+            "[sources.aliases] must map legacy names to jitsi or matrix",
+            _alias,
+        ),
+        source_labels=_source_map(
+            sources.get("labels", {}),
+            "[sources.labels] must map source names to nonempty names",
+            _label,
+        ),
+        **_conference_hosts(conferences),
     )
 
 
 def _from_legacy(value) -> dict:
     """The conference-hosts.json shape, as the config.toml document."""
     value = _table(value, "Conference hosts", {"jitsi", "matrix", "source_aliases"})
-    document = {
-        "conferences": {
-            key: value[key] for key in CONFIGURABLE_PLATFORMS if key in value
-        }
-    }
+    document = {"conferences": {key: value[key] for key in CONFIGURABLE_PLATFORMS if key in value}}
     if "source_aliases" in value:
         document["sources"] = {"aliases": value["source_aliases"]}
     return document
 
 
-def load_install_config(
-    path: Path | None = None, legacy: Path | None = None
-) -> InstallConfig:
+def load_install_config(path: Path | None = None, legacy: Path | None = None) -> InstallConfig:
     path = config_path() if path is None else path
     legacy = legacy_hosts_path() if legacy is None else legacy
     if path.exists() and legacy.exists():

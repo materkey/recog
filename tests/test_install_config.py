@@ -62,9 +62,7 @@ importer = "Phone Importer"
     assert config.source_labels == {"importer": "Phone Importer"}
 
 
-def test_only_legacy_hosts_file_when_loading_then_it_is_read_with_a_warning(
-    tmp_path, capsys
-):
+def test_only_legacy_hosts_file_when_loading_then_it_is_read_with_a_warning(tmp_path, capsys):
     legacy = tmp_path / "conference-hosts.json"
     legacy.write_text(
         json.dumps(
@@ -96,9 +94,7 @@ def test_malformed_toml_when_loading_then_rejected(tmp_path):
         load_install_config(path, tmp_path / "absent.json")
 
 
-def test_default_location_when_resolving_then_xdg_config_home_is_used(
-    monkeypatch, tmp_path
-):
+def test_default_location_when_resolving_then_xdg_config_home_is_used(monkeypatch, tmp_path):
     monkeypatch.delenv("RECOG_CONFIG_FILE", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert config_path() == tmp_path / "recog" / "config.toml"
@@ -295,9 +291,7 @@ def test_same_room_on_different_hosts_when_joining_then_recordings_stay_separate
     assert storage.get_meeting(first)["meta"]["conference"]["host"] == "a.example.org"
 
 
-def test_legacy_same_host_when_rejoining_then_existing_recording_is_reused(
-    tmp_path, monkeypatch
-):
+def test_legacy_same_host_when_rejoining_then_existing_recording_is_reused(tmp_path, monkeypatch):
     from recog.meeting_storage import MeetingStorage
 
     with_aliases(monkeypatch, {"old-meet": "jitsi"})
@@ -310,10 +304,7 @@ def test_legacy_same_host_when_rejoining_then_existing_recording_is_reused(
     meta = json.loads(path.read_text())
     meta["source"] = "old-meet"
     path.write_text(json.dumps(meta))
-    assert (
-        storage.on_meeting_join("https://a.example.org/daily", platform="jitsi")
-        == first
-    )
+    assert storage.on_meeting_join("https://a.example.org/daily", platform="jitsi") == first
 
 
 def test_invalid_host_config_when_readiness_is_checked_then_activation_is_rejected(
@@ -344,9 +335,7 @@ def test_invalid_host_config_when_readiness_is_checked_then_activation_is_reject
     assert "Invalid installation configuration" in result.stdout
 
 
-def test_legacy_index_when_listing_then_canonical_without_rewriting_cache(
-    tmp_path, monkeypatch
-):
+def test_legacy_index_when_listing_then_canonical_without_rewriting_cache(tmp_path, monkeypatch):
     from recog.meeting_storage import MeetingStorage
 
     with_aliases(monkeypatch, {"old-meet": "jitsi"})
