@@ -56,6 +56,8 @@ One parser reads the file, `recog/install_config.py`. The extension build takes
 the conference hosts from `python -m recog.install_config`, using
 `RECOG_PYTHON`, else `venv-gigaam/bin/python`, else `python3` (3.11 or newer).
 
+`scripts/backup-data.sh` copies the file into its snapshot as `config.toml`.
+
 After a change, rebuild the extension when conference hosts changed
 (`npm run build --prefix browser-extension`) and restart the services
 (`./recog-service.sh restart`).

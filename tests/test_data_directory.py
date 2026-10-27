@@ -150,14 +150,19 @@ def test_migrated_data_when_backing_up_then_all_databases_and_logs_are_in_snapsh
     (data / "logs").mkdir()
     (data / "logs/live.log").write_bytes(b"log\n")
     (data / "speakers_custom.json").write_bytes(b"{}")
+    config = tmp_path / "config home/recog/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_bytes(b'[asr]\nbackend = "local"\n')
     destination = tmp_path / "backup"
     result = subprocess.run(
         ["bash", str(repo / "scripts/backup-data.sh"), "--with-logs", "--dest", str(destination)],
-        env={**os.environ, "DEPS_PYTHON": sys.executable, "RECOG_DATA_DIR": str(data)},
+        env={**os.environ, "DEPS_PYTHON": sys.executable, "RECOG_DATA_DIR": str(data),
+             "RECOG_CONFIG_FILE": str(config)},
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
     for relative in ("meetings/transcript.jsonl", "logs/live.log", "speakers_custom.json"):
         assert (destination / relative).read_bytes() == (data / relative).read_bytes()
     assert (destination / "env.backup").read_bytes() == (repo / ".env").read_bytes()
+    assert (destination / "config.toml").read_bytes() == config.read_bytes()
     assert not (repo / "meetings").exists()

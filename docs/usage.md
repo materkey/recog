@@ -484,8 +484,9 @@ copy data, and refuses collisions or a destination inside the checkout.
 An interrupted migration can be re-run to move the remaining entries; it
 never merges two meeting archives or overwrites a database. `setup.sh` does
 not migrate existing data. `scripts/backup-data.sh` backs up the resolved
-data root plus the environment files in the checkout (`--with-logs` includes
-logs).
+data root, the [installation configuration](configuration.md) `config.toml`
+(as `config.toml` in the snapshot) and the environment files in the checkout
+(`--with-logs` includes logs).
 
 ## Updating an existing install
 

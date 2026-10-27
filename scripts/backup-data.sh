@@ -3,7 +3,8 @@
 # backup-data.sh — снимок пользовательских данных recog (вне git).
 #
 # Что сохраняется: meetings/ (транскрипты + аудио), speakers*.json (база
-# эмбеддингов), user-profile.json, ai-settings.json, .env / recog/web/.env (секреты).
+# эмбеддингов), user-profile.json, ai-settings.json, конфиг установки
+# config.toml (~/.config/recog, docs/configuration.md), .env / recog/web/.env (секреты).
 # logs/ — только с --with-logs.
 #
 # Usage:
@@ -20,6 +21,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR"
 DATA_DIR="$(bash "$SCRIPT_DIR/scripts/data-dir.sh")"
+# shellcheck source=scripts/deps.sh
+source "$SCRIPT_DIR/scripts/deps.sh"
+# Путь к конфигу решает recog.install_config, как и для сервисов.
+CONFIG_FILE="$("$(deps_python)" -c 'import sys; sys.path.insert(0, sys.argv[1]); from recog.install_config import config_path; print(config_path())' "$SCRIPT_DIR")"
 
 DEST="$HOME/backups/recog-$(date +%Y%m%d-%H%M)"
 REMOTE=""
@@ -57,6 +62,10 @@ fi
 if [ -f "$DATA_DIR/privacy.json" ]; then
     (umask 077; cp "$DATA_DIR/privacy.json" "$DEST/privacy.json")
     chmod 600 "$DEST/privacy.json"
+fi
+if [ -f "$CONFIG_FILE" ]; then
+    (umask 077; cp "$CONFIG_FILE" "$DEST/config.toml")
+    chmod 600 "$DEST/config.toml"
 fi
 # .env копируется под другим именем: иначе случайный `cp -r` обратно в репо
 # перезапишет рабочий .env, а его правит только человек.
