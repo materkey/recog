@@ -246,6 +246,64 @@ def test_style_only_when_javascript_changes_then_only_new_eslint_findings_fail(
         assert reported in printed
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("crapkit") is None
+    or importlib.util.find_spec("pytest_cov") is None
+    or not (quality.NODE_TOOLS / "node_modules/.bin/c8").exists(),
+    reason="Install requirements-quality.txt and run npm ci --prefix deploy/node",
+)
+def test_real_baseline_when_web_script_gets_uncovered_function_then_gate_fails(
+    repository, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda: {})
+    metrics = {"total_loc": 1, "verbosity": 0, "erosion": 0, "cog_erosion": 0}
+    monkeypatch.setattr(quality, "scb", lambda root: metrics)
+    script = repository / "recog/web/static/page.js"
+    script.parent.mkdir(parents=True)
+    script.write_text("function answer() {\n  return 42;\n}\n")
+    (repository / "tests/page.test.cjs").write_text(
+        "const { test } = require('node:test');\n"
+        "const assert = require('node:assert/strict');\n"
+        "const fs = require('node:fs');\n"
+        "const path = require('node:path');\n"
+        "const vm = require('node:vm');\n"
+        "const sourcePath = path.join(__dirname, '../recog/web/static/page.js');\n"
+        "test('answer', () => {\n"
+        "  const context = vm.createContext({});\n"
+        "  vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context,"
+        " { filename: sourcePath });\n"
+        "  assert.equal(vm.runInContext('answer()', context), 42);\n"
+        "});\n"
+    )
+    commit(repository, "web script")
+    branches = "".join(
+        f"  if (value === {index}) {{\n    return {index};\n  }}\n" for index in range(5)
+    )
+    # A handler that is registered but never called is never compiled, so V8 alone
+    # does not report it; the coverage must still list it.
+    code = f"function uncovered(value) {{\n{branches}  return -1;\n}}\n"
+    code += f"globalThis.handlers = [];\nglobalThis.handlers.push((value) => {{\n{branches}}});\n"
+    with script.open("a") as stream:
+        stream.write(code)
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "HEAD", "--output", str(output)]) == 1
+    result = json.loads(next(output.glob("run-*/report.json")).read_text())
+    assert result["status"] == "fail", result
+    failures = [item for item in result["failures"] if item["kind"] == "crap"]
+    assert [item["function"].split("::")[0] for item in failures] == [
+        "recog/web/static/page.js",
+        "recog/web/static/page.js",
+    ]
+    assert all(item["baseline"] is None for item in failures)
+    answers = [row for row in result["head"]["functions"] if row["path"].endswith("page.js")]
+    assert {row["long_name"].split("(")[0].strip(): row["cov"] for row in answers} == {
+        "answer": 1.0,
+        "uncovered": 0.0,
+        "": 0.0,
+    }
+
+
 def test_node_tool_when_installed_version_differs_then_measurement_fails(tmp_path, monkeypatch):
     (tmp_path / "package.json").write_text('{"devDependencies": {"eslint": "10.12.0"}}')
     monkeypatch.setattr(quality, "NODE_TOOLS", tmp_path)
@@ -258,6 +316,30 @@ def test_node_tool_when_installed_version_differs_then_measurement_fails(tmp_pat
         quality.versions({"eslint"})
     installed.write_text('{"version": "10.12.0"}')
     assert quality.versions({"eslint"}) == {"eslint": "10.12.0"}
+
+
+def test_extension_jest_when_installed_version_differs_from_lock_then_measurement_fails(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "deploy/python").mkdir(parents=True)
+    (tmp_path / "deploy/python/requirements-quality.txt").write_text("")
+    (tmp_path / "package.json").write_text('{"devDependencies": {}}')
+    extension = tmp_path / "browser-extension"
+    extension.mkdir()
+    (extension / "package-lock.json").write_text(
+        '{"packages": {"node_modules/jest": {"version": "30.1.3"}}}'
+    )
+    monkeypatch.setattr(quality, "ROOT", tmp_path)
+    monkeypatch.setattr(quality, "NODE_TOOLS", tmp_path)
+    with pytest.raises(ValueError, match="installed None; run npm ci --prefix browser-extension"):
+        quality.versions()
+    installed = extension / "node_modules/jest/package.json"
+    installed.parent.mkdir(parents=True)
+    installed.write_text('{"version": "30.1.2"}')
+    with pytest.raises(ValueError, match="expected 30.1.3, installed 30.1.2"):
+        quality.versions()
+    installed.write_text('{"version": "30.1.3"}')
+    assert quality.versions() == {"jest": "30.1.3"}
 
 
 def test_style_only_when_base_is_missing_then_it_reports_that_it_could_not_run(

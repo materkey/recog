@@ -377,6 +377,7 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
 - `snake_case` for functions/vars, `PascalCase` for classes
 - `*_worker.py` suffix for subprocess helpers
 - Prefer `pathlib.Path` and type hints for new code
+- JavaScript: start a callback on its own line, never on the line of the function enclosing it (`.filter(…)` and `.map(…)` on separate lines). The quality gate joins coverage to functions by line span and stops with a measurement error ("cannot distinguish functions with the same line span") on two functions sharing one; see `docs/quality.md`
 
 ## Environment Variables
 
@@ -412,7 +413,7 @@ Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env`
 - `RECOG_PYTHON` - the interpreter baked into the rendered units (`scripts/service/common.sh`). Deliberately **not** `DEPS_PYTHON`, which only selects the interpreter `scripts/deps.sh` uses for its library probes.
 - `RECOG_HOST_OS` - overrides `uname -s` for the `scripts/deps.sh` probes (lets a Mac exercise the Linux ones).
 - `RECOG_CHECK_PYTHON` - interpreter override for `scripts/check.sh`.
-- `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs the full merge-base quality gate (`scripts/quality.py`, baseline + head pytest with branch coverage, `docs/quality.md`) instead of plain pytest; CI sets it on both hosts. Unset, `check.sh` runs pytest once plus only the gate's Ruff and ESLint check of lines changed since the local `origin/main` (`quality.py --style-only`, no fetch; skipped when that ref is absent). Either way it runs shellcheck, actionlint and gitleaks first (`docs/quality.md`); ESLint needs `npm ci --prefix deploy/node`, gitleaks a package-manager install.
+- `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs the full merge-base quality gate (`scripts/quality.py`, baseline + head pytest with branch coverage, `docs/quality.md`) instead of plain pytest; CI sets it on both hosts. Unset, `check.sh` runs pytest once plus only the gate's Ruff and ESLint check of lines changed since the local `origin/main` (`quality.py --style-only`, no fetch; skipped when that ref is absent). Either way it runs shellcheck, actionlint and gitleaks first (`docs/quality.md`); ESLint needs `npm ci --prefix deploy/node`, the full gate's JavaScript coverage also `npm ci --prefix browser-extension`, gitleaks a package-manager install.
 - `RECOG_QUALITY_OUTPUT` - output root for those quality runs (default `.local/quality`).
 - `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL` / `RECOG_GIGAAM_REF` / `RECOG_GIGAAM_EDITABLE` - see Setup above.
 

@@ -30,6 +30,15 @@ CONFIG = ROOT / "scripts"
 PYTHON = sys.executable
 NODE_TOOLS = ROOT / "deploy/node"
 ESLINT = NODE_TOOLS / "node_modules/.bin/eslint"
+C8 = NODE_TOOLS / "node_modules/.bin/c8"
+EXTENSION = "browser-extension/"
+# The web UI and what the extension loads; its tests and build tooling are not production.
+JAVASCRIPT_SOURCES = (
+    "recog/",
+    f"{EXTENSION}src/",
+    f"{EXTENSION}content.js",
+    f"{EXTENSION}popup.js",
+)
 
 
 def run(command, cwd, *, log=None, accepted=(0,), **kwargs):
@@ -77,6 +86,16 @@ def source_files(root):
     }
 
 
+def javascript_sources(root):
+    return {
+        name: (root / name).read_text()
+        for name in javascript_files(root)
+        if name.startswith(JAVASCRIPT_SOURCES)
+        and not name.endswith(".test.js")
+        and name != f"{EXTENSION}src/test-setup.js"
+    }
+
+
 def fingerprint(root):
     names = git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
     digest = hashlib.sha256()
@@ -104,15 +123,22 @@ def versions(packages=None):
     for package, version in manifest["devDependencies"].items():
         if packages is not None and package not in packages:
             continue
-        installed = NODE_TOOLS / "node_modules" / package / "package.json"
-        actual = json.loads(installed.read_text())["version"] if installed.is_file() else None
-        if actual != version:
-            raise ValueError(
-                f"{package}: expected {version}, installed {actual}; "
-                "run npm ci --prefix deploy/node"
-            )
-        result[package] = actual
+        result[package] = installed_version(NODE_TOOLS, package, version, "deploy/node")
+    lock = ROOT / EXTENSION / "package-lock.json"
+    if lock.is_file() and (packages is None or "jest" in packages):
+        version = json.loads(lock.read_text())["packages"]["node_modules/jest"]["version"]
+        result["jest"] = installed_version(ROOT / EXTENSION, "jest", version, EXTENSION.rstrip("/"))
     return result
+
+
+def installed_version(prefix, package, version, install):
+    installed = prefix / "node_modules" / package / "package.json"
+    actual = json.loads(installed.read_text())["version"] if installed.is_file() else None
+    if actual != version:
+        raise ValueError(
+            f"{package}: expected {version}, installed {actual}; run npm ci --prefix {install}"
+        )
+    return actual
 
 
 def coverage(root, output, label):
@@ -151,7 +177,56 @@ def coverage(root, output, label):
     return artifact
 
 
-def structural(root, artifact):
+def javascript_coverage(root, output, label):
+    """Istanbul function coverage of production JavaScript: jest for the extension, c8 for node:test."""
+    from crapkit.covstream import parse_istanbul_file
+
+    names = javascript_sources(root)
+    extension = [name.removeprefix(EXTENSION) for name in names if name.startswith(EXTENSION)]
+    web = [name for name in names if not name.startswith(EXTENSION)]
+    artifacts = []
+    if extension:
+        directory = output / f"{label}-extension-coverage"
+        command = [
+            str(root / EXTENSION / "node_modules/.bin/jest"),
+            "--ci",
+            "--coverage",
+            "--coverageProvider=babel",
+            "--coverageReporters=json",
+            f"--coverageDirectory={directory}",
+            *(f"--collectCoverageFrom={name}" for name in extension),
+        ]
+        env = {**os.environ, "NODE_OPTIONS": "--experimental-vm-modules"}
+        run(command, root / EXTENSION, env=env, log=output / f"{label}-extension-tests.log")
+        artifacts.append(directory / "coverage-final.json")
+    if web:
+        directory = output / f"{label}-web-coverage"
+        command = [
+            str(C8),
+            # Functions from the source's syntax tree: V8 alone omits never-compiled ones.
+            "--experimental-monocart",
+            "--all",
+            "--src=.",
+            "--reporter=json",
+            f"--report-dir={directory}",
+            f"--temp-directory={directory / 'v8'}",
+            *(f"--include={name}" for name in web),
+            "node",
+            "--test",
+            "tests/*.test.cjs",
+        ]
+        run(command, root, log=output / f"{label}-web-tests.log")
+        artifacts.append(directory / "coverage-final.json")
+    measured = {}
+    for artifact in artifacts:
+        measured.update(parse_istanbul_file(artifact, repo_root=str(root))[0])
+    missing = sorted(set(names) - set(measured))
+    if missing:
+        raise ValueError(f"Missing JavaScript coverage: {missing}")
+    return measured
+
+
+def structural(root, artifact, javascript):
     from crapkit.analyze import analyze_source
     from crapkit.covstream import parse_coveragepy_file
     from crapkit.dup import find_duplicates
@@ -162,9 +237,11 @@ def structural(root, artifact):
     sources = source_files(root)
     if not sources:
         raise ValueError("Empty production source inventory")
+    sources.update(javascript_sources(root))
     records = [record for name, code in sources.items() for record in analyze_source(name, code)]
     rows = build_inventory_rows({"production": records})
     measured, _ = parse_coveragepy_file(artifact, path_prefix="")
+    measured.update(javascript)
     scored = score_rows(rows, measured, lane_scopes={"production"}, target=CRAP_CEILING)
     duplicates = find_duplicates(rows, lambda: sources, top=len(rows) ** 2)
     keys = key_names(rows)
@@ -435,9 +512,13 @@ def main(argv=None):
         for label, root in [("baseline", baseline), ("head", head)]:
             if (ROOT / "venv-gigaam").exists():
                 (root / "venv-gigaam").symlink_to(ROOT / "venv-gigaam", target_is_directory=True)
+            modules = ROOT / EXTENSION / "node_modules"
+            if modules.exists() and (root / EXTENSION).is_dir():
+                (root / EXTENSION / "node_modules").symlink_to(modules, target_is_directory=True)
             print(f"quality: measuring {label}; logs in {output}", flush=True)
             artifact = coverage(root, output, label)
-            data[label] = {**structural(root, artifact), "scb": scb(root)}
+            javascript = javascript_coverage(root, output, label)
+            data[label] = {**structural(root, artifact, javascript), "scb": scb(root)}
         data["failures"] = style(baseline, head)
         data["failures"] += crap_regressions(
             data["baseline"]["functions"], data["head"]["functions"]

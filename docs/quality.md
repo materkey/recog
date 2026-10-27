@@ -16,8 +16,10 @@ runtime setup and require Python 3.12 or newer:
 venv-gigaam/bin/python -m pip install -c deploy/python/constraints/macos.txt \
   -r deploy/python/requirements-quality.txt
 # Linux: omit the macOS constraint file.
-# ESLint for the JavaScript part (Node 22.13 or newer), both systems:
+# ESLint and c8 with monocart for the JavaScript part (Node 22.13 or newer), both systems,
+# and the extension's jest for its coverage:
 npm ci --prefix deploy/node
+npm ci --prefix browser-extension
 venv-gigaam/bin/python scripts/quality.py --base origin/main --output .local/quality
 # The same gate as part of the regular checks (what CI runs):
 RECOG_QUALITY_BASE=origin/main ./scripts/check.sh
@@ -60,9 +62,19 @@ without the optional quality tools; real analyzer integration tests require them
 - SCB verbosity, erosion, cognitive erosion, source LOC, per-function cognitive
   complexity and LOC are informational. They are not independent pass thresholds.
 
-Structural analysis covers Python source under `recog/` only, excluding native
-source; tests, scripts, JavaScript, generated bundles and ignored files are not
-included. Ruff applies to changed/new nonignored Python anywhere in the repository,
+Structural analysis covers Python source under `recog/`, excluding native
+source, and production JavaScript: the web UI under `recog/` and what the
+extension loads (`browser-extension/src/`, `content.js`, `popup.js`). Tests,
+scripts, build configuration, generated bundles and ignored files are not
+included. The extension's coverage comes from its jest suite
+(`--coverageProvider=babel`); the web UI's from the `node:test` suites
+`tests/*.test.cjs` under c8, which see a script only when it is evaluated with
+its path as the `vm` filename. c8 runs with monocart, which takes the functions
+from the source's syntax tree: raw V8 coverage omits a function that was never
+compiled, such as a registered handler no test fires. A JavaScript file no
+suite loads still gets its functions, at 0%. Functions written on the same line as the function enclosing them
+share its line span, which crapkit refuses to join to coverage; start such a
+callback on its own line. Ruff applies to changed/new nonignored Python anywhere in the repository,
 ESLint to changed/new nonignored JavaScript.
 
 ## Shell, workflow and secret checks
@@ -84,7 +96,8 @@ sha256; locally install it from a package manager (`brew install gitleaks`).
 CRAP calculation, coverage joins, function identity and duplicate detection come
 from pinned **crapkit 0.7.3**, not a local complexity implementation. It uses the
 smaller standard/modified cyclomatic complexity and per-function branch coverage
-(statement coverage for a function without branches). Same-named methods use
+(statement coverage for a function without branches; for JavaScript, from the
+Istanbul report). Same-named methods use
 crapkit's canonical ordinal identities; signature changes are conservatively new
 functions. Duplicate candidates use its default minimum eight normalized lines
 and 0.8 containment; all pairs are retained, not just the first 50. The gate owns

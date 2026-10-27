@@ -87,15 +87,20 @@ jobs:
           # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
           pip install $PIP_ARGS -r deploy/python/requirements-quality.txt
 
-      # ESLint for the JavaScript part of the quality gate (docs/quality.md).
+      # ESLint, c8 and the extension's jest for the JavaScript part of the
+      # quality gate (docs/quality.md).
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: deploy/node/package-lock.json
+          cache-dependency-path: |
+            deploy/node/package-lock.json
+            browser-extension/package-lock.json
 
       - name: Install JavaScript quality tools
-        run: npm ci --prefix deploy/node
+        run: |
+          npm ci --prefix deploy/node
+          npm ci --prefix browser-extension
 
       # gitleaks has no pip distribution: the pinned release, checked against
       # the sha256 published in its checksums file.
