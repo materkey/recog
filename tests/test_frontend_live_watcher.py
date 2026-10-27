@@ -446,3 +446,29 @@ async def test_index_modified_when_watching_then_new_current_meeting_is_announce
         }
     ]
     assert watcher.current_meeting_id == "m2"
+
+
+@pytest.mark.asyncio
+async def test_transcript_of_current_meeting_modified_when_watching_then_new_rows_are_sent(
+    storage,
+):
+    current = storage.base_path / "m1" / "transcript.jsonl"
+    other = storage.base_path / "m2" / "transcript.jsonl"
+    for path in (current, other):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_jsonl(path, [{"id": 1, "text": "hello"}])
+    watcher, broadcasts = _make_watcher()
+    watcher.set_current_meeting("m1", "ktalk")
+
+    watcher.on_modified(_Event(current))
+    await _drain()
+    assert broadcasts == []
+
+    watcher.set_loop(asyncio.get_running_loop())
+    watcher.on_modified(_Event(other))
+    await _drain()
+    assert broadcasts == []
+
+    watcher.on_modified(_Event(current))
+    await _drain()
+    assert [row["id"] for row in broadcasts[0]["data"]] == [1]
