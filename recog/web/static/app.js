@@ -168,8 +168,9 @@ const meetingListCache = {
     }
 };
 
-// Display names for known meeting sources; any other source value found in the
-// data (e.g. an EXTERNAL_MEETINGS_PATHS directory name) is shown as is.
+// Display names for the sources recog records itself. An installation names
+// the sources of its own importers in RECOG_SOURCE_LABELS, which the server
+// sends as each meeting's source_label; any other source is shown as is.
 const SOURCE_LABELS = {
     ktalk: 'KTalk',
     vas3k: 'vas3k',
@@ -180,10 +181,15 @@ const SOURCE_LABELS = {
     orphan: 'Orphan',
     local: 'Local',
     diarized: 'Diarized',
-    limitless: 'Limitless',
-    'ktalk-export': 'KTalk Export',
-    'zoom-export': 'Zoom Export',
 };
+
+function sourceLabels(meetings) {
+    const labels = { ...SOURCE_LABELS };
+    for (const m of meetings) {
+        if (m.source_label) labels[m.source] = m.source_label;
+    }
+    return labels;
+}
 
 const views = {
     meetings: {
@@ -343,6 +349,7 @@ const views = {
                 const source = m.source || 'unknown';
                 counts.set(source, (counts.get(source) || 0) + 1);
             }
+            const labels = sourceLabels(this.meetings);
             if (this.filterSource && this.filterSource !== 'active' && !counts.has(this.filterSource)) {
                 counts.set(this.filterSource, 0);
             }
@@ -353,7 +360,7 @@ const views = {
                 '<option value="">All sources</option>',
                 '<option value="active">Active (LIVE)</option>',
                 ...sources.map(source =>
-                    `<option value="${escapeHtml(source)}">${escapeHtml(SOURCE_LABELS[source] || source)}</option>`),
+                    `<option value="${escapeHtml(source)}">${escapeHtml(labels[source] || source)}</option>`),
             ].join('');
             select.value = this.filterSource;
         },

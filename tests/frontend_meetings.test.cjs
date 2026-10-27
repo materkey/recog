@@ -119,13 +119,13 @@ test('stored sources - load - dropdown lists only sources present plus the saved
         { id: 'a', title: 'A', source: 'orphan', created_at: '2026-09-01T10:00:00Z' },
         { id: 'b', title: 'B', source: 'orphan', created_at: '2026-09-01T11:00:00Z' },
         { id: 'c', title: 'C', source: 'jitsi', created_at: '2026-09-01T12:00:00Z' },
-        { id: 'd', title: 'D', source: 'zoom-export', created_at: '2026-09-01T13:00:00Z' },
+        { id: 'd', title: 'D', source: 'importer', created_at: '2026-09-01T13:00:00Z' },
     ];
     const h = harness(async () => response(rows));
     await h.view.load();
     const values = [...h.element('filter-source').innerHTML.matchAll(/value="([^"]*)"/g)].map(m => m[1]);
-    assert.deepEqual(values, ['', 'active', 'orphan', 'jitsi', 'zoom-export', 'ktalk']);
-    assert.match(h.element('filter-source').innerHTML, />Zoom Export</);
+    assert.deepEqual(values, ['', 'active', 'orphan', 'importer', 'jitsi', 'ktalk']);
+    assert.match(h.element('filter-source').innerHTML, /value="importer">importer</);
     assert.equal(h.element('filter-source').value, 'ktalk');
 });
 
@@ -135,14 +135,18 @@ test('stored gmeet meeting - load - dropdown shows Google Meet label', async () 
     assert.match(h.element('filter-source').innerHTML, /value="gmeet">Google Meet</);
 });
 
-test('stored zoom and zoom-export meetings - load - dropdown shows Zoom and Zoom Export labels', async () => {
-    const h = harness(async () => response([
-        { id: 'z', title: 'Z', source: 'zoom', created_at: '2026-09-01T10:00:00Z' },
-        { id: 'e', title: 'E', source: 'zoom-export', created_at: '2026-09-01T09:00:00Z' },
-    ]));
+test('stored zoom meeting - load - dropdown shows Zoom label', async () => {
+    const h = harness(async () => response([{ id: 'z', title: 'Z', source: 'zoom', created_at: '2026-09-01T10:00:00Z' }]));
     await h.view.load();
     assert.match(h.element('filter-source').innerHTML, /value="zoom">Zoom</);
-    assert.match(h.element('filter-source').innerHTML, /value="zoom-export">Zoom Export</);
+});
+
+test('imported meetings with a configured label - load - dropdown shows that label', async () => {
+    const h = harness(async () => response([
+        { id: 'i', title: 'I', source: 'importer', source_label: 'Phone Importer', created_at: '2026-09-01T10:00:00Z' },
+    ]));
+    await h.view.load();
+    assert.match(h.element('filter-source').innerHTML, /value="importer">Phone Importer</);
 });
 
 test('unavailable browser storage - load - fetched cards still render', async () => {

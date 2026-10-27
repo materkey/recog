@@ -55,6 +55,27 @@ BRIDGE_WS_URL = os.environ.get("RECOG_BRIDGE_WS_URL", "ws://localhost:8766")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 
 
+def get_source_labels() -> dict[str, str]:
+    """Display names of installation-specific meeting sources.
+
+    `RECOG_SOURCE_LABELS=source=Label,...` names sources an installation's own
+    importers write, so the repository does not have to know about them.
+    """
+    labels = {}
+    value = os.environ.get("RECOG_SOURCE_LABELS", "")
+    for entry in filter(None, (part.strip() for part in value.split(","))):
+        source, _, label = (part.strip() for part in entry.partition("="))
+        if not source or not label or source in labels:
+            raise ValueError(
+                f"RECOG_SOURCE_LABELS: expected unique source=Label entries, got {entry!r}"
+            )
+        labels[source] = label
+    return labels
+
+
+SOURCE_LABELS = get_source_labels()
+
+
 def get_storage() -> MeetingStorage:
     """Get MeetingStorage instance with external paths."""
     return MeetingStorage(MEETINGS_DIR, external_paths=get_external_paths())
@@ -651,7 +672,14 @@ async def list_meetings():
             meetings = meeting_catalog.list_meetings()
         else:
             meetings = await asyncio.to_thread(get_storage().list_meetings)
-        return JSONResponse(content=meetings)
+        return JSONResponse(
+            content=[
+                dict(meeting, source_label=SOURCE_LABELS[meeting["source"]])
+                if meeting.get("source") in SOURCE_LABELS
+                else meeting
+                for meeting in meetings
+            ]
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

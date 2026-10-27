@@ -199,3 +199,32 @@ def test_external_watch_unavailable_when_starting_then_catalog_uses_reconciliati
     monkeypatch.setattr(server, "BridgeSubscriber", Subscriber)
     with TestClient(server.app) as client:
         assert client.get("/api/meetings").status_code == 200
+
+
+def test_configured_source_label_when_listing_then_its_rows_carry_it(monkeypatch):
+    rows = [
+        {"id": "imported", "source": "importer"},
+        {"id": "recorded", "source": "ktalk"},
+    ]
+
+    class Catalog:
+        def list_meetings(self):
+            return rows
+
+    monkeypatch.setenv("RECOG_SOURCE_LABELS", "importer=Phone Importer, other = Other")
+    monkeypatch.setattr(server, "SOURCE_LABELS", server.get_source_labels())
+    monkeypatch.setattr(server, "meeting_catalog", Catalog())
+
+    response = asyncio.run(server.list_meetings())
+
+    labelled = {row["id"]: row.get("source_label") for row in json.loads(response.body)}
+    assert labelled == {"imported": "Phone Importer", "recorded": None}
+    assert "source_label" not in rows[0]
+
+
+@pytest.mark.parametrize("value", ["importer", "=Label", "importer=", "a=A,a=B"])
+def test_malformed_source_labels_when_parsing_then_rejected(monkeypatch, value):
+    monkeypatch.setenv("RECOG_SOURCE_LABELS", value)
+
+    with pytest.raises(ValueError, match="RECOG_SOURCE_LABELS"):
+        server.get_source_labels()
