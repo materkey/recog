@@ -156,9 +156,14 @@ def test_migrated_data_when_backing_up_then_all_databases_and_logs_are_in_snapsh
     destination = tmp_path / "backup"
     result = subprocess.run(
         ["bash", str(repo / "scripts/backup-data.sh"), "--with-logs", "--dest", str(destination)],
-        env={**os.environ, "DEPS_PYTHON": sys.executable, "RECOG_DATA_DIR": str(data),
-             "RECOG_CONFIG_FILE": str(config)},
-        capture_output=True, text=True,
+        env={
+            **os.environ,
+            "DEPS_PYTHON": sys.executable,
+            "RECOG_DATA_DIR": str(data),
+            "RECOG_CONFIG_FILE": str(config),
+        },
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr
     for relative in ("meetings/transcript.jsonl", "logs/live.log", "speakers_custom.json"):
