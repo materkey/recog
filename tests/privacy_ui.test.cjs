@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.join(__dirname, '../recog/web/static/app.js'), 'utf8');
+const sourcePath = path.join(__dirname, '../recog/web/static/app.js');
+const source = fs.readFileSync(sourcePath, 'utf8');
 const response = (enabled, configured = true) => ({ ok: true, json: async () => ({ enabled, configured }) });
 
 function harness(fetch, cached = 'false') {
@@ -21,7 +22,7 @@ function harness(fetch, cached = 'false') {
         document: { addEventListener() {}, getElementById: id => buttons.get(id) },
         alert: message => alerts.push(message),
     });
-    vm.runInContext(source, context);
+    vm.runInContext(source, context, { filename: sourcePath });
     return { context, buttons, alerts, calls, cached: () => cached };
 }
 

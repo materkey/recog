@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.join(__dirname, '../recog/web/static/user-profile.js'), 'utf8');
+const sourcePath = path.join(__dirname, '../recog/web/static/user-profile.js');
+const source = fs.readFileSync(sourcePath, 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '../recog/web/static/index.html'), 'utf8');
 const payload = (name = '', application_state = 'applied', suggested_name = '') => ({
     profile: { name, aliases: [], configured: !!name, revision: name || 'unconfigured' },
@@ -51,7 +52,7 @@ function harness(fetch, { stored = new Map(), storageFails = false } = {}) {
         setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
         clearTimeout(id) { timers.delete(id); },
     });
-    vm.runInContext(source, context);
+    vm.runInContext(source, context, { filename: sourcePath });
     const get = (id) => elements.get('profile-' + id);
     return {
         get, calls, stored, window, document, timers,

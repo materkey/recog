@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../recog/web/static/app.js'), 'utf8');
+const sourcePath = path.join(__dirname, '../recog/web/static/app.js');
+const source = fs.readFileSync(sourcePath, 'utf8');
 const CACHE_KEY = 'recog.meetings.v1';
 const row = (title) => ({ id: title, title, source: 'ktalk', created_at: '2026-09-01T10:00:00Z' });
 const response = (rows) => ({ ok: true, json: async () => rows });
@@ -40,7 +41,8 @@ function harness(fetch, cache = null, storageFails = false) {
         },
         DatePicker: { init() {}, getDate: () => '', filterMeetings: (rows) => rows },
     });
-    vm.runInContext(source + '\nthis.view = views.meetings; this.api = api;', context);
+    vm.runInContext(source, context, { filename: sourcePath });
+    vm.runInContext('this.view = views.meetings; this.api = api;', context);
     return { view: context.view, api: context.api, stored,
         element: (id) => elements.get(id),
         list: () => elements.get('meetings-list').innerHTML,

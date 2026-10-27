@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../recog/web/static/app.js'), 'utf8');
+const sourcePath = path.join(__dirname, '../recog/web/static/app.js');
+const source = fs.readFileSync(sourcePath, 'utf8');
 const markup = fs.readFileSync(path.join(__dirname, '../recog/web/static/index.html'), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const response = data => ({ ok: true, json: async () => data });
@@ -84,7 +85,8 @@ function harness({ increments = { summary: [meta()] }, fetch: fetchOverride } = 
             querySelectorAll(selector) { assert.ok(queries.has(selector), `Unexpected selector: ${selector}`); return queries.get(selector); },
         },
     });
-    vm.runInContext(source + '\nthis.meeting = views.meeting; this.snapshot = () => ({ session: aiModalSession, saved: _incrementState, responses: aiResponses, active: activeAiTab });', context);
+    vm.runInContext(source, context, { filename: sourcePath });
+    vm.runInContext('this.meeting = views.meeting; this.snapshot = () => ({ session: aiModalSession, saved: _incrementState, responses: aiResponses, active: activeAiTab });', context);
     context.meeting.id = 'a';
     context.meeting.meta = { participants: {
         local: { name: 'Me', is_local: true }, remote: { name: 'Alex' }, __system__: { name: 'System' }, duplicate: { name: 'Alex' },

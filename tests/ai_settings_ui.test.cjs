@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.join(__dirname, '../recog/web/static/ai-settings.js'), 'utf8');
+const sourcePath = path.join(__dirname, '../recog/web/static/ai-settings.js');
+const source = fs.readFileSync(sourcePath, 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '../recog/web/static/index.html'), 'utf8');
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => copy(data) });
@@ -66,7 +67,7 @@ function harness(fetch) {
         setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
         clearTimeout(id) { timers.delete(id); },
     });
-    vm.runInContext(source, context);
+    vm.runInContext(source, context, { filename: sourcePath });
     const get = (id) => elements.get('ai-settings-' + id);
     return {
         get, calls, confirmations, window, document, summary, timers,
