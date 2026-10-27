@@ -461,6 +461,8 @@ def main(argv=None):
                     capture_output=True,
                 )
         report(output, data)
+    if "error" in data:
+        print(f"quality: {data['error']}")
     print(f"quality: {data['status']}; {output / 'report.md'}")
     return 0 if data["status"] == "pass" else 1
 

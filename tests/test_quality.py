@@ -271,7 +271,7 @@ def test_style_only_when_base_is_missing_then_it_reports_that_it_could_not_run(
 
 
 def test_missing_base_when_runner_starts_then_report_explains_failure(
-    repository, tmp_path, monkeypatch
+    repository, tmp_path, monkeypatch, capsys
 ):
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda: {})
@@ -280,6 +280,7 @@ def test_missing_base_when_runner_starts_then_report_explains_failure(
     result = json.loads(next(output.glob("run-*/report.json")).read_text())
     assert result["status"] == "measurement-error"
     assert "merge-base" in result["error"]
+    assert result["error"] in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
