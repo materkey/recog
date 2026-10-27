@@ -1,59 +1,19 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
 
-export function validateConferenceHosts(value) {
-  if (!value || Array.isArray(value) || typeof value !== 'object' ||
-      Object.keys(value).some(key => !['jitsi', 'matrix', 'source_aliases'].includes(key))) {
-    throw new Error('Conference hosts must be an object with jitsi and matrix arrays and optional source_aliases');
-  }
-  if (value.source_aliases !== undefined && (!value.source_aliases ||
-      typeof value.source_aliases !== 'object' || Array.isArray(value.source_aliases) ||
-      Object.entries(value.source_aliases).some(([source, target]) =>
-        !source || ['ktalk', 'vas3k', 'jitsi', 'matrix', 'gmeet', 'zoom'].includes(source) ||
-        !['jitsi', 'matrix'].includes(target)))) {
-    throw new Error('source_aliases must map source names to jitsi or matrix');
-  }
-  const hosts = { jitsi: [], matrix: [] };
-  const seen = new Set();
-  for (const platform of Object.keys(hosts)) {
-    const origins = value[platform] === undefined ? [] : value[platform];
-    if (!Array.isArray(origins)) throw new Error(`${platform} must be an array of HTTPS origins`);
-    for (const origin of origins) {
-      let url;
-      try { url = new URL(origin); } catch { /* validated below */ }
-      if (typeof origin !== 'string' || !url || url.protocol !== 'https:' ||
-          url.origin !== origin || url.port || url.hostname.length > 253 ||
-          url.hostname.split('.').some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ||
-          url.username || url.password || url.search || url.hash || url.pathname !== '/') {
-        throw new Error(`Invalid ${platform} origin: expected https://host with no path, credentials or port`);
-      }
-      if (url.hostname === 'ktalk.ru' || url.hostname.endsWith('.ktalk.ru') ||
-          url.hostname === 'zoom.us' || url.hostname.endsWith('.zoom.us') ||
-          url.hostname === 'meet.vas3k.cloud' || url.hostname === 'meet.google.com') {
-        throw new Error('Built-in conference hosts must not be configured again');
-      }
-      if (seen.has(origin)) throw new Error('Conference origins must be unique across platforms');
-      seen.add(origin);
-      hosts[platform].push(origin);
-    }
-  }
-  return hosts;
-}
-
-export function loadConferenceHosts(configFile = process.env.RECOG_CONFERENCE_HOSTS_FILE || '.local/conference-hosts.json') {
-  const expandedPath = configFile === '~' ? os.homedir()
-    : configFile.startsWith('~/') ? path.join(os.homedir(), configFile.slice(2)) : configFile;
-  const filename = path.resolve(projectRoot, expandedPath);
-  let contents;
-  try { contents = fs.readFileSync(filename, 'utf8'); } catch (error) {
-    if (error.code === 'ENOENT') return { jitsi: [], matrix: [] };
-    throw error;
-  }
-  return validateConferenceHosts(JSON.parse(contents));
+// The installation config has one parser, recog/install_config.py; the build
+// asks it for the configured hosts instead of validating the file again.
+export function loadConferenceHosts(env = process.env) {
+  const venvPython = path.join(projectRoot, 'venv-gigaam/bin/python');
+  const python = env.RECOG_PYTHON || (fs.existsSync(venvPython) ? venvPython : 'python3');
+  const output = execFileSync(python, ['-m', 'recog.install_config'], {
+    cwd: projectRoot, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  return JSON.parse(output);
 }
 
 export function createManifest(template, hosts) {

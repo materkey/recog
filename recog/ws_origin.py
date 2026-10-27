@@ -12,8 +12,9 @@ supervisor, the copilot-channel daemon, `BridgeSubscriber`) send none.
 The literal string ``"null"`` (sandboxed iframe) is NOT an absent header
 and is rejected.
 
-Installation-specific Jitsi/Element hosts come from `.local/conference-hosts.json`,
-shared with the extension build (see docs/conference-hosts.md). The generated
+Installation-specific Jitsi/Element hosts come from the installation config
+(`recog/install_config.py`), shared with the extension build (see
+docs/conference-hosts.md). The generated
 extension manifest includes only those configured hosts. RECOG_EXTRA_WS_ORIGINS
 remains an additional backend-only exact-origin override; it does not cause
 extension injection on a host by itself.
@@ -23,7 +24,7 @@ from typing import Iterable, Optional
 from urllib.parse import urlsplit
 
 from .config import RECOG_EXTRA_WS_ORIGINS
-from .conference_hosts import CONFERENCE_HOSTS
+from .install_config import INSTALL_CONFIG
 
 # Exact-match origins: Jitsi/Google Meet/Element conference hosts used by the extension
 # (https only) plus the webapp's own origin on port 9080.
@@ -54,7 +55,7 @@ def parse_extra_origins(raw: str | None) -> frozenset[str]:
 
 # Installation-specific exact origins from the environment (empty by default).
 EXTRA_ORIGINS = (parse_extra_origins(RECOG_EXTRA_WS_ORIGINS)
-                 | frozenset(CONFERENCE_HOSTS["jitsi"] + CONFERENCE_HOSTS["matrix"]))
+                 | frozenset(INSTALL_CONFIG.jitsi + INSTALL_CONFIG.matrix))
 
 
 def origin_allowed(

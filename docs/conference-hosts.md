@@ -3,14 +3,13 @@
 KTalk, `meet.vas3k.cloud`, Google Meet (`meet.google.com`) and the Zoom web
 client (`*.zoom.us/wc/`) are built in.
 Other Jitsi and Element Call servers
-are installation settings, stored in the gitignored `.local/conference-hosts.json`
-at the repository root:
+are installation settings, stored in the
+[installation configuration](configuration.md) `~/.config/recog/config.toml`:
 
-```json
-{
-  "jitsi": ["https://meet.example.org"],
-  "matrix": ["https://element.example.org"]
-}
+```toml
+[conferences]
+jitsi = ["https://meet.example.org"]
+matrix = ["https://element.example.org"]
 ```
 
 Use exact lowercase HTTPS origins without a trailing slash, port, path,
@@ -19,7 +18,7 @@ repeat built-in hosts. A missing file enables only built-in hosts; malformed
 configuration fails startup/build rather than granting broader permissions.
 
 Both Python services and the extension build read this file. To use another
-location, pass `RECOG_CONFERENCE_HOSTS_FILE` in both processes' environments;
+location, pass `RECOG_CONFIG_FILE` in both processes' environments;
 relative paths are resolved against the repository root, and `~/` is supported.
 The extension build reads process environment, not the application's `.env`.
 
@@ -60,12 +59,12 @@ the meeting as `https://zoom.us/j/<meeting number>` without the password.
 New Jitsi meetings use the platform identifier `jitsi`. If an installation
 previously used a custom source label, add a local alias:
 
-```json
-{
-  "jitsi": ["https://meet.example.org"],
-  "matrix": [],
-  "source_aliases": {"old-meet": "jitsi"}
-}
+```toml
+[conferences]
+jitsi = ["https://meet.example.org"]
+
+[sources.aliases]
+old-meet = "jitsi"
 ```
 
 Aliases map nonstandard labels to `jitsi` or `matrix`. Platform identifiers

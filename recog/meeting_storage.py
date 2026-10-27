@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from recog.config import get_data_dir
-from recog.conference_hosts import canonical_source
+from recog.install_config import canonical_source
 
 
 UTC = timezone.utc

@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from recog.conference_hosts import canonical_source
+from recog.install_config import canonical_source
 
 from watchdog.events import FileSystemEventHandler
 

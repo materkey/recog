@@ -146,9 +146,9 @@ sys.path.insert(0, sys.argv[1])
 import recog.config as config
 
 try:
-    from recog.conference_hosts import CONFERENCE_HOSTS
+    import recog.install_config
 except (OSError, ValueError) as error:
-    print(f"Invalid conference host configuration: {error}")
+    print(f"Invalid installation configuration: {error}")
     sys.exit(1)
 
 try:

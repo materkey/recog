@@ -15,6 +15,7 @@ the current implementation contracts and commands used by coding agents.
 | [BMAD artifacts](bmad/) | BMAD brainstorming, specs, stories, reviews and deferred-work records; `_bmad-output` points here for tool compatibility |
 | [OpenSpec](../openspec/) | Tool-managed [specifications](../openspec/specs/) and [change proposals](../openspec/changes/), including [archived changes](../openspec/changes/archive/) |
 | [ASR server guide](asr-server.md) | Optional gateway/backend installation, configuration and transcription checks |
+| [Installation configuration](configuration.md) | The per-user `config.toml`: location, sections, moving from the old hosts file |
 | [Conference hosts](conference-hosts.md) | Local Jitsi/Element addresses, extension build and existing-recording aliases |
 | [Desktop KTalk](desktop-ktalk.md) | Enable, inspect and disable integration with the official desktop app |
 | [Zoom application](zoom-app.md) | Enable speaker detection for the native Zoom application on macOS; permission and limits |

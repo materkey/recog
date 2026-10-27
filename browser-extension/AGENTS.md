@@ -29,5 +29,5 @@ This directory contains the KTalk Speaker Detector Chrome extension. It injects 
 - PRs should include a brief summary, verification steps (build + reload + KTalk check), and screenshots for UI changes.
 
 ## Configuration & Runtime Tips
-- The tracked manifest includes KTalk, `meet.vas3k.cloud`, `meet.google.com` (Google Meet, host-wide; the adapter joins only on a room path) and `*.zoom.us/wc/*` (Zoom web client; the adapter joins only inside the meeting). Optional `.local/conference-hosts.json` at the repository root (or `RECOG_CONFERENCE_HOSTS_FILE`) adds exact Jitsi and Matrix origins when building; see README. Keep private origins out of tracked files and load `dist/` in Chrome.
+- The tracked manifest includes KTalk, `meet.vas3k.cloud`, `meet.google.com` (Google Meet, host-wide; the adapter joins only on a room path) and `*.zoom.us/wc/*` (Zoom web client; the adapter joins only inside the meeting). Optional `[conferences]` in the installation configuration `~/.config/recog/config.toml` (or `RECOG_CONFIG_FILE`, `docs/configuration.md`) adds exact Jitsi and Matrix origins when building; the build reads them through `python -m recog.install_config`, see README. Keep private origins out of tracked files and load `dist/` in Chrome.
 - Ensure the local bridge (`ktalk_bridge.py`) is running so WebSocket events resolve during manual testing.

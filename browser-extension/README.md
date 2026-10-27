@@ -62,21 +62,22 @@ manifest, popup, icons and audio worklet. The tracked `manifest.json` is a gener
 template; personal origins appear only in ignored build output.
 
 KTalk, `meet.vas3k.cloud`, `meet.google.com` and the Zoom web client work without configuration. For another Jitsi or
-Element deployment, create `.local/conference-hosts.json` at the repository root:
+Element deployment, add it to the installation configuration
+`~/.config/recog/config.toml` (see `docs/configuration.md`):
 
-```json
-{
-  "jitsi": ["https://meet.example.org"],
-  "matrix": ["https://element.example.org"]
-}
+```toml
+[conferences]
+jitsi = ["https://meet.example.org"]
+matrix = ["https://element.example.org"]
 ```
 
-Alternatively set `RECOG_CONFERENCE_HOSTS_FILE` in the build shell to a JSON
-file path (`~/` is expanded; relative paths resolve from the repository root). Use canonical HTTPS
+Alternatively set `RECOG_CONFIG_FILE` in the build shell to another TOML
+file (`~/` is expanded; relative paths resolve from the repository root). The build
+asks `python -m recog.install_config` for the hosts, so it needs Python 3.11 or newer. Use canonical HTTPS
 origins with lowercase ASCII DNS labels and no trailing slash, path, query, fragment, credentials, wildcard or
 explicit port. Origins must be unique across platforms and must not repeat the
 built-in hosts. A missing file means no custom hosts; malformed configuration
-fails the build. Optional `source_aliases` maps old stored source IDs to `jitsi`
+fails the build. Optional `[sources.aliases]` maps old stored source IDs to `jitsi`
 or `matrix` for the backend and is not included in the browser bundle; platform
 identifiers (`ktalk`, `vas3k`, `jitsi`, `matrix`, `gmeet`, `zoom`) cannot be alias names.
 

@@ -443,7 +443,7 @@ an empty URL. Fix what it lists and re-run `./setup.sh`. The same probes gate
 
 **The extension never connects.** The WS handshake is Origin-gated. If your
 conference host is not one of the built-in ones, add its exact HTTPS origin to
-[`.local/conference-hosts.json`](conference-hosts.md), rebuild the extension
+the [installation configuration](conference-hosts.md), rebuild the extension
 (`cd browser-extension && npm run build`), restart Recog and reload
 `browser-extension/dist/` in `chrome://extensions`.
 
