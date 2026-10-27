@@ -138,7 +138,7 @@ def test_migrated_data_when_backing_up_then_all_databases_and_logs_are_in_snapsh
     root = Path(__file__).resolve().parent.parent
     repo = tmp_path / "checkout"
     (repo / "scripts").mkdir(parents=True)
-    for name in ("backup-data.sh", "data-dir.sh", "deps.sh"):
+    for name in ("backup-data.sh", "config-path.sh", "data-dir.sh", "deps.sh"):
         shutil.copy2(root / "scripts" / name, repo / "scripts" / name)
     (repo / "recog").mkdir()
     for name in ("__init__.py", "config.py", "install_config.py"):

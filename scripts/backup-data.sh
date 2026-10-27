@@ -21,10 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR"
 DATA_DIR="$(bash "$SCRIPT_DIR/scripts/data-dir.sh")"
-# shellcheck source=scripts/deps.sh
-source "$SCRIPT_DIR/scripts/deps.sh"
-# Путь к конфигу решает recog.install_config, как и для сервисов.
-CONFIG_FILE="$("$(deps_python)" -c 'import sys; sys.path.insert(0, sys.argv[1]); from recog.install_config import config_path; print(config_path())' "$SCRIPT_DIR")"
+CONFIG_FILE="$(bash "$SCRIPT_DIR/scripts/config-path.sh")"
 
 DEST="$HOME/backups/recog-$(date +%Y%m%d-%H%M)"
 REMOTE=""

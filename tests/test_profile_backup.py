@@ -18,6 +18,7 @@ def test_isolated_installation_when_backed_up_then_profile_private_and_environme
     data = tmp_path / "data"
     data.mkdir()
     (scripts / "data-dir.sh").write_text('#!/bin/bash\nprintf "%s\\n" "$TEST_DATA_DIR"\n')
+    (scripts / "config-path.sh").write_text('#!/bin/bash\nprintf "%s\\n" "$TEST_CONFIG"\n')
     (data / "speakers_test.json").write_text('{"speakers": []}')
     profile = data / "user-profile.json"
     if has_profile:
@@ -36,7 +37,13 @@ def test_isolated_installation_when_backed_up_then_profile_private_and_environme
     dest = tmp_path / "backup"
     result = subprocess.run(
         ["bash", str(scripts / "backup-data.sh"), "--dest", str(dest)], cwd=repo,
-        env={**os.environ, "TEST_DATA_DIR": str(data)}, capture_output=True, text=True,
+        env={
+            **os.environ,
+            "TEST_DATA_DIR": str(data),
+            "TEST_CONFIG": str(tmp_path / "absent.toml"),
+        },
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr
     backed_profile = dest / "user-profile.json"
