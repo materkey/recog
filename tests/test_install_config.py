@@ -12,6 +12,7 @@ import pytest
 
 from recog import install_config
 from recog.install_config import (
+    SETTING_KEYS,
     SETTINGS,
     InstallConfig,
     config_path,
@@ -131,13 +132,26 @@ def test_settings_when_parsing_then_each_becomes_its_environment_value():
     }
 
 
+def test_setting_keys_when_naming_a_variable_then_its_table_and_key_are_given():
+    assert SETTING_KEYS["RECOG_COPILOT_AUTOSPAWN"] == "[copilot] autospawn"
+    assert len(SETTING_KEYS) == sum(len(keys) for keys in SETTINGS.values())
+
+
 def test_settings_when_applied_then_environment_values_win():
-    config = parse_install_config({"asr": {"backend": "remote", "remote_model": "big"}})
-    environ = {"RECOG_ASR_BACKEND": "local"}
+    config = parse_install_config(
+        {"asr": {"backend": "remote", "remote_model": "big", "remote_url": "https://a"}}
+    )
+    # A child process inherits what its parent applied: same value, no conflict.
+    environ = {"RECOG_ASR_BACKEND": "local", "RECOG_ASR_REMOTE_URL": "https://a"}
 
-    config.apply_settings(environ)
+    overridden = config.apply_settings(environ)
 
-    assert environ == {"RECOG_ASR_BACKEND": "local", "RECOG_ASR_REMOTE_MODEL": "big"}
+    assert environ == {
+        "RECOG_ASR_BACKEND": "local",
+        "RECOG_ASR_REMOTE_URL": "https://a",
+        "RECOG_ASR_REMOTE_MODEL": "big",
+    }
+    assert overridden == ["RECOG_ASR_BACKEND"]
 
 
 def test_config_file_when_recog_starts_then_its_settings_reach_the_code(tmp_path):
@@ -159,6 +173,9 @@ def test_config_file_when_recog_starts_then_its_settings_reach_the_code(tmp_path
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["3.5", "small"]
+    assert "RECOG_ASR_REMOTE_MODEL" in result.stderr
+    assert "[asr] remote_model" in result.stderr
+    assert "DEDUP_MAX_GAP_S" not in result.stderr
 
 
 @pytest.mark.parametrize(

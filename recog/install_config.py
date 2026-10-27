@@ -37,10 +37,20 @@ class InstallConfig:
     # Environment variable -> value, from the settings tables (SETTINGS).
     settings: dict[str, str] = field(default_factory=dict)
 
-    def apply_settings(self, environ) -> None:
-        """Fill what the process environment and .env left unset."""
+    def apply_settings(self, environ) -> list[str]:
+        """Fill what the process environment and .env left unset.
+
+        Returns the variables they had already set to another value: those
+        settings of the file do nothing, which the caller reports instead of
+        hiding. The same value is no conflict, and is what a child process
+        sees after its parent applied the file.
+        """
+        overridden = [
+            name for name, value in self.settings.items() if environ.get(name, value) != value
+        ]
         for name, value in self.settings.items():
             environ.setdefault(name, value)
+        return overridden
 
 
 # Settings the code reads from the environment: table -> key -> (variable,
@@ -76,6 +86,14 @@ SETTINGS = {
     "macos": {
         "codesign_identity": ("RECOG_CODESIGN_IDENTITY", str),
     },
+}
+
+
+# Environment variable -> its config.toml key, for messages.
+SETTING_KEYS = {
+    variable: f"[{table}] {key}"
+    for table, keys in SETTINGS.items()
+    for key, (variable, _) in keys.items()
 }
 
 

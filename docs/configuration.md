@@ -35,7 +35,10 @@ each key is the default of one environment variable the code reads (for example
 `EXTERNAL_MEETINGS_PATHS`), typed as in the example: `true`/`false` for flags,
 numbers for durations and counts, arrays for lists. `import recog` fills each
 variable the process environment and `.env` left unset, so either of those
-still overrides the file; the table that maps keys to variables is `SETTINGS`
+still overrides the file. A setting set to a different value in both places is
+reported on stderr at every start (`recog: RECOG_COPILOT_AUTOSPAWN from the
+environment or .env overrides [copilot] autospawn of config.toml`): delete
+the line from `.env`, since the file's value does nothing until then; the table that maps keys to variables is `SETTINGS`
 in `recog/install_config.py`. `RECOG_CONFIG_FILE` itself is read from the
 process environment, not from `.env`.
 

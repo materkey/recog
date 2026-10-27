@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from recog.install_config import INSTALL_CONFIG
+from recog.install_config import INSTALL_CONFIG, SETTING_KEYS
 
 
 def load_dotenv(env_path: Path = None):
@@ -33,7 +33,13 @@ def load_dotenv(env_path: Path = None):
 # Загружаем .env при импорте модуля
 load_dotenv()
 # Затем настройки config.toml заполняют то, что не задали окружение и .env.
-INSTALL_CONFIG.apply_settings(os.environ)
+# Настройка, заданная и там и там, из файла не действует: об этом пишем.
+for _name in INSTALL_CONFIG.apply_settings(os.environ):
+    print(
+        f"recog: {_name} from the environment or .env overrides "
+        f"{SETTING_KEYS[_name]} of config.toml; keep only one of them",
+        file=sys.stderr,
+    )
 
 
 def data_entries(root: Path) -> list[Path]:
