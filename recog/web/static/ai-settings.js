@@ -17,7 +17,9 @@
     let pollDelay = 5000;
 
     const dirty = () => globalDirty || taskDirty;
-    const selectedTask = () => snapshot?.tasks.find((task) => task.id === selectedId);
+    const selectedTask = () => snapshot?.tasks.find(
+        (task) => task.id === selectedId
+    );
 
     function schedulePoll() {
         clearTimeout(pollTimer);
@@ -296,7 +298,9 @@
                 method = 'DELETE';
                 path += '?revision=' + encodeURIComponent(snapshot.revision);
             } else {
-                const providers = [...providerInputs].filter(([, input]) => input.checked).map(([key]) => key);
+                const providers = [...providerInputs]
+                    .filter(([, input]) => input.checked)
+                    .map(([key]) => key);
                 if (!providers.length) { error('Выберите хотя бы одного провайдера.'); return; }
                 body = {
                     prompt: el('prompt').value, providers,

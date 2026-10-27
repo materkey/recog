@@ -451,7 +451,10 @@ export class ElementCallAdapter {
       this._speakerHandlers.push({ event, handler });
     }
     if (this._joinCallback) {
-      const joinHandler = (p) => setTimeout(() => this._joinCallback?.(p?.identity), 500);
+      const joinHandler = (p) => setTimeout(
+        () => this._joinCallback?.(p?.identity),
+        500
+      );
       room.on('participantConnected', joinHandler);
       this._speakerHandlers.push({ event: 'participantConnected', handler: joinHandler });
     }
@@ -470,7 +473,10 @@ export class ElementCallAdapter {
     this._joinCallback = callback;
     // If events are already attached, wire the join listener immediately.
     if (this._room && this._roomEventsAttached && typeof this._room.on === 'function') {
-      const joinHandler = (p) => setTimeout(() => callback(p?.identity), 500);
+      const joinHandler = (p) => setTimeout(
+        () => callback(p?.identity),
+        500
+      );
       this._room.on('participantConnected', joinHandler);
       this._speakerHandlers.push({ event: 'participantConnected', handler: joinHandler });
     }

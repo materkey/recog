@@ -717,9 +717,10 @@ function ensureDiagnosticsTimer() {
   if (!constants.PCM_WEBRTC_DIAGNOSTICS_ENABLED) return;
   if (diagnosticsTimer) return;
   diagnosticsTimer = setInterval(
-    () => updateDiagnostics().catch((e) => {
-      console.warn('[PcmTransport] diagnostics tick failed:', e?.message || e);
-    }),
+    () => updateDiagnostics()
+      .catch((e) => {
+        console.warn('[PcmTransport] diagnostics tick failed:', e?.message || e);
+      }),
     constants.PCM_STATS_INTERVAL_MS ?? 1000
   );
 }
@@ -775,7 +776,9 @@ async function updateWebrtcStats() {
   let bytesReceived = 0;
   let packetsReceived = 0;
   const reports = await Promise.all(
-    pcs.map((pc) => (pc?.getStats ? pc.getStats(null).catch(() => null) : null))
+    pcs.map((pc) => (pc?.getStats
+      ? pc.getStats(null).catch(() => null)
+      : null))
   );
   for (const report of reports) {
     if (!report) continue;
