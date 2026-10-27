@@ -33,6 +33,8 @@ class InstallConfig:
     matrix: tuple[str, ...] = ()
     # Nonstandard source names of old recordings -> the platform they were.
     source_aliases: dict[str, str] = field(default_factory=dict)
+    # Web UI names of the sources the installation's own importers write.
+    source_labels: dict[str, str] = field(default_factory=dict)
 
 
 def _resolve(configured: str) -> Path:
@@ -100,7 +102,7 @@ def parse_install_config(value: dict) -> InstallConfig:
     conferences = _table(
         value.get("conferences", {}), "[conferences]", set(CONFIGURABLE_PLATFORMS)
     )
-    sources = _table(value.get("sources", {}), "[sources]", {"aliases"})
+    sources = _table(value.get("sources", {}), "[sources]", {"aliases", "labels"})
     hosts = {}
     seen = set()
     for platform in CONFIGURABLE_PLATFORMS:
@@ -117,7 +119,15 @@ def parse_install_config(value: dict) -> InstallConfig:
         for key, target in aliases.items()
     ):
         raise ValueError("[sources.aliases] must map legacy names to jitsi or matrix")
-    return InstallConfig(source_aliases=dict(aliases), **hosts)
+    labels = sources.get("labels", {})
+    if not isinstance(labels, dict) or any(
+        not key or not isinstance(label, str) or not label
+        for key, label in labels.items()
+    ):
+        raise ValueError("[sources.labels] must map source names to nonempty names")
+    return InstallConfig(
+        source_aliases=dict(aliases), source_labels=dict(labels), **hosts
+    )
 
 
 def _from_legacy(value) -> dict:

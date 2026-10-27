@@ -169,8 +169,9 @@ const meetingListCache = {
 };
 
 // Display names for the sources recog records itself. An installation names
-// the sources of its own importers in RECOG_SOURCE_LABELS, which the server
-// sends as each meeting's source_label; any other source is shown as is.
+// the sources of its own importers in [sources.labels] of its config.toml,
+// which the server sends as each meeting's source_label; any other source is
+// shown as is.
 const SOURCE_LABELS = {
     ktalk: 'KTalk',
     vas3k: 'vas3k',

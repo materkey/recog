@@ -35,6 +35,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 from recog.meeting_storage import MeetingStorage, get_external_paths
 from recog.log_utils import log_rate_limited
 from recog.config import get_data_dir, MIC_SPEAKER_NAME
+from recog.install_config import INSTALL_CONFIG
 from recog.user_profile import UserProfileStore
 from recog.privacy import PrivacyStore
 from recog.web.user_profile import ProfileCoordinator
@@ -53,27 +54,6 @@ DATA_DIR = get_data_dir()
 MEETINGS_DIR = DATA_DIR / "meetings"
 BRIDGE_WS_URL = os.environ.get("RECOG_BRIDGE_WS_URL", "ws://localhost:8766")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
-
-
-def get_source_labels() -> dict[str, str]:
-    """Display names of installation-specific meeting sources.
-
-    `RECOG_SOURCE_LABELS=source=Label,...` names sources an installation's own
-    importers write, so the repository does not have to know about them.
-    """
-    labels = {}
-    value = os.environ.get("RECOG_SOURCE_LABELS", "")
-    for entry in filter(None, (part.strip() for part in value.split(","))):
-        source, _, label = (part.strip() for part in entry.partition("="))
-        if not source or not label or source in labels:
-            raise ValueError(
-                f"RECOG_SOURCE_LABELS: expected unique source=Label entries, got {entry!r}"
-            )
-        labels[source] = label
-    return labels
-
-
-SOURCE_LABELS = get_source_labels()
 
 
 def get_storage() -> MeetingStorage:
@@ -674,8 +654,11 @@ async def list_meetings():
             meetings = await asyncio.to_thread(get_storage().list_meetings)
         return JSONResponse(
             content=[
-                dict(meeting, source_label=SOURCE_LABELS[meeting["source"]])
-                if meeting.get("source") in SOURCE_LABELS
+                dict(
+                    meeting,
+                    source_label=INSTALL_CONFIG.source_labels[meeting["source"]],
+                )
+                if meeting.get("source") in INSTALL_CONFIG.source_labels
                 else meeting
                 for meeting in meetings
             ]

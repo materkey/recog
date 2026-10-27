@@ -21,6 +21,11 @@ matrix = ["https://element.example.org"]
 # Source names of old recordings and the platform they were.
 [sources.aliases]
 old-meet = "jitsi"
+
+# Web UI names of the sources your own importers write; recog names the
+# sources it records itself, any other source is shown as stored.
+[sources.labels]
+phone = "Phone"
 ```
 
 Unknown tables or keys are errors, not ignored, so a typo cannot silently drop

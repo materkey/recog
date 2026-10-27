@@ -1,7 +1,8 @@
 """Meeting-list reads must not rescan the archive after startup."""
 
-import json
 import asyncio
+import dataclasses
+import json
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -211,8 +212,10 @@ def test_configured_source_label_when_listing_then_its_rows_carry_it(monkeypatch
         def list_meetings(self):
             return rows
 
-    monkeypatch.setenv("RECOG_SOURCE_LABELS", "importer=Phone Importer, other = Other")
-    monkeypatch.setattr(server, "SOURCE_LABELS", server.get_source_labels())
+    config = dataclasses.replace(
+        server.INSTALL_CONFIG, source_labels={"importer": "Phone Importer"}
+    )
+    monkeypatch.setattr(server, "INSTALL_CONFIG", config)
     monkeypatch.setattr(server, "meeting_catalog", Catalog())
 
     response = asyncio.run(server.list_meetings())
@@ -221,10 +224,3 @@ def test_configured_source_label_when_listing_then_its_rows_carry_it(monkeypatch
     assert labelled == {"imported": "Phone Importer", "recorded": None}
     assert "source_label" not in rows[0]
 
-
-@pytest.mark.parametrize("value", ["importer", "=Label", "importer=", "a=A,a=B"])
-def test_malformed_source_labels_when_parsing_then_rejected(monkeypatch, value):
-    monkeypatch.setenv("RECOG_SOURCE_LABELS", value)
-
-    with pytest.raises(ValueError, match="RECOG_SOURCE_LABELS"):
-        server.get_source_labels()

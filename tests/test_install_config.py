@@ -52,6 +52,16 @@ old-meet = "jitsi"
     assert config.source_aliases == {"old-meet": "jitsi"}
 
 
+def test_source_labels_when_loading_then_importer_sources_are_named(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("""
+[sources.labels]
+importer = "Phone Importer"
+""")
+    config = load_install_config(path, tmp_path / "absent.json")
+    assert config.source_labels == {"importer": "Phone Importer"}
+
+
 def test_only_legacy_hosts_file_when_loading_then_it_is_read_with_a_warning(
     tmp_path, capsys
 ):
@@ -144,6 +154,10 @@ def test_explicit_location_when_resolving_then_it_wins(monkeypatch, tmp_path):
         {"sources": {"aliases": {"ktalk": "matrix"}}},
         {"sources": {"aliases": {"gmeet": "jitsi"}}},
         {"sources": {"aliases": {"zoom": "jitsi"}}},
+        {"sources": {"labels": {"importer": 1}}},
+        {"sources": {"labels": {"importer": ""}}},
+        {"sources": {"labels": {"": "Label"}}},
+        {"sources": {"labels": ["importer"]}},
     ],
 )
 def test_invalid_config_when_parsing_then_rejected(value):
