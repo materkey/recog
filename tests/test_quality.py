@@ -30,11 +30,12 @@ def scored(name="f()", value=15):
 @pytest.mark.parametrize(
     ("old", "new", "fails"),
     [
-        (15, 16, False),
-        (15, 16.001, True),
+        (10, 11, False),
+        (10, 11.001, True),
+        (12, 13.001, True),
         (30, 31, False),
         (30, 31.001, True),
-        (40, 15, False),
+        (40, 10, False),
         (40, 30, False),
     ],
 )
@@ -42,7 +43,7 @@ def test_existing_score_when_compared_then_absolute_delta_and_ceiling_apply(old,
     assert bool(policy.crap_regressions([scored(value=old)], [scored(value=new)])) == fails
 
 
-@pytest.mark.parametrize(("score", "fails"), [(15, False), (15.001, True)])
+@pytest.mark.parametrize(("score", "fails"), [(10, False), (10.001, True)])
 def test_new_function_when_scored_then_ceiling_applies(score, fails):
     assert bool(policy.crap_regressions([scored()], [scored("new()", score)])) == fails
 

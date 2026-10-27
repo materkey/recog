@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 from quality_policy import (
+    CRAP_CEILING,
     crap_regressions,
     duplicate_regressions,
     format_regressions,
@@ -164,7 +165,7 @@ def structural(root, artifact):
     records = [record for name, code in sources.items() for record in analyze_source(name, code)]
     rows = build_inventory_rows({"production": records})
     measured, _ = parse_coveragepy_file(artifact, path_prefix="")
-    scored = score_rows(rows, measured, lane_scopes={"production"}, target=15)
+    scored = score_rows(rows, measured, lane_scopes={"production"}, target=CRAP_CEILING)
     duplicates = find_duplicates(rows, lambda: sources, top=len(rows) ** 2)
     keys = key_names(rows)
     pair_names = {(row.path, row.long_name, row.start): keys[lookup(row)] for row in rows}

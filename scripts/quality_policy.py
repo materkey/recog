@@ -3,6 +3,8 @@
 import difflib
 import math
 
+CRAP_CEILING = 10
+
 
 def number(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -37,7 +39,7 @@ def crap_regressions(baseline, head):
     for key, row in current.items():
         old = previous.get(key)
         delta = row["crap"] - old["crap"] if old else None
-        if row["crap"] > 15 and (old is None or delta > 1):
+        if row["crap"] > CRAP_CEILING and (old is None or delta > 1):
             failures.append(
                 {
                     "kind": "crap",

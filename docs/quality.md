@@ -38,9 +38,9 @@ without the optional quality tools; real analyzer integration tests require them
 
 ## Policy
 
-- A new function fails when CRAP is **greater than 15**.
-- An existing function fails when its new CRAP is **greater than 15** and its
-  increase is **greater than 1**. Exactly 15 or exactly +1 is allowed. Smaller
+- A new function fails when CRAP is **greater than 10**.
+- An existing function fails when its new CRAP is **greater than 10** and its
+  increase is **greater than 1**. Exactly 10 or exactly +1 is allowed. Smaller
   increases remain visible in the report.
 - New Ruff lint findings fail. Existing findings survive only on unchanged
   source lines with the same diagnostic, column and rule; moving a line does not
