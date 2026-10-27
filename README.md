@@ -52,6 +52,15 @@ setup. See [requirements and install options](docs/usage.md#requirements).
    No text? Check `./recog-service.sh status` and `./recog-service.sh logs`,
    then [troubleshooting](docs/usage.md#troubleshooting).
 
+Optional settings — your own Jitsi or Element server, a remote ASR gateway,
+folders of imported meetings — go into `~/.config/recog/config.toml`: copy
+[`deploy/config.example.toml`](deploy/config.example.toml) there, uncomment
+what you need ([installation configuration](docs/configuration.md)) and run
+`./recog-service.sh restart`. Secrets stay in `.env`.
+
+To update, read the [changelog](CHANGELOG.md) since your last update, then
+`git pull && ./setup.sh` ([updating an install](docs/usage.md#updating-an-existing-install)).
+
 ## How it works
 
 ```mermaid
@@ -93,7 +102,8 @@ lets Claude Code search saved transcripts by speaker, keyword and date.
 ## Documentation
 
 - [Usage, configuration and troubleshooting](docs/usage.md), including
-  [updating an install](docs/usage.md#updating-an-existing-install)
+  [updating an install](docs/usage.md#updating-an-existing-install); the
+  [changelog](CHANGELOG.md) lists what each update asks of an installation
 - [Conference hosts](docs/conference-hosts.md), [desktop KTalk](docs/desktop-ktalk.md)
   and the [Zoom application](docs/zoom-app.md)
 - [Documentation index](docs/README.md): repository layout, architecture

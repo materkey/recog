@@ -43,6 +43,8 @@ reasoning.
   `RECOG_PYTHON`, else `venv-gigaam/bin/python`, else `python3`.
 - After pulling: `./recog-service.sh restart`, and
   `npm run build --prefix browser-extension` when conference hosts moved.
+  [Updating an install](docs/usage.md#updating-an-existing-install) now reads
+  this file instead of carrying one update's steps.
 
 ### Changed
 

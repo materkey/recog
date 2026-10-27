@@ -490,26 +490,20 @@ data root, the [installation configuration](configuration.md) `config.toml`
 
 ## Updating an existing install
 
-For the repository layout change, follow the [upgrade steps](repository-layout.md#updating-an-existing-checkout):
-re-render service units, update any manual launch commands, and reload the
-extension from `browser-extension/dist/` if Chrome still points to its old path.
-The macOS dependency and data safeguards below still apply.
-
-1. **Before pulling**, if you run `RECOG_ASR_BACKEND=remote`: write your actual
-   gateway URL into `.env` as `RECOG_ASR_REMOTE_URL=…`. The personal default is
-   gone, and setup refuses to activate services with `remote` + empty URL
-   (nothing edits your `.env` for you).
+1. Read the [changelog](../CHANGELOG.md) from the date of your last update.
+   Its **Action required** items say what each update asks of an existing
+   installation: moved settings or files, a new dependency, a setup or service
+   step.
 2. `git pull && ./setup.sh` — the venv and the weight cache are reused; macOS
    pip steps run under `deploy/python/constraints/macos.txt`, which pins the verified
-   torch/torchaudio/numpy/pyobjc set, so a Linux port does not silently bump
+   torch/torchaudio/numpy/pyobjc set, so an update does not silently bump
    your ML stack. Weight-cache preparation streams and hashes files without
-   deserializing them, so no temporary model is created in RAM.
-3. `./recog-service.sh install && ./recog-service.sh restart` if you skipped
-   services during setup — the units must be re-rendered from the templates
-   (the committed `.plist` files are gone).
-
-Memory behaviour is meant to be unchanged, but that is verified by a separate
-before/after comparison, not promised by setup.
+   deserializing them, so no temporary model is created in RAM. Setup also
+   rebuilds the extension: reload it in `chrome://extensions`.
+3. Do the changelog's steps, then `./recog-service.sh restart`. If you skipped
+   services during setup, run `./recog-service.sh install` first: the units are
+   rendered from the templates. Startup reports a malformed setting or a
+   setting `.env` overrides in `config.toml`.
 
 ## Testing
 
