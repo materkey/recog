@@ -51,6 +51,9 @@ export const GMEET_SELECTORS = {
   micMutedMarker: '[data-is-muted="true"]',
   // The toolbar's microphone button, the user's own microphone.
   micButton: '[jsname="hw0c9"][data-is-muted]',
+  // The call controls region in the middle of the bottom bar. Its parent is
+  // the bar row, its next sibling the right column (chat, meeting tools).
+  callControls: '[jsname="vNB5le"]',
 };
 
 // A room opened from an outside link (Calendar, the OS handler) stays on
@@ -614,6 +617,19 @@ export class GoogleMeetAdapter {
 
   supportsTabInjection() {
     return false; // use the floating panel
+  }
+
+  /**
+   * Meet's bottom bar. Its right column is right-aligned with free space next
+   * to the chat / meeting tools nav, so the recog buttons dock there instead
+   * of floating over the side panel's message box in the bottom-right corner.
+   */
+  getControlsBar() {
+    return this._doc.querySelector(GMEET_SELECTORS.callControls)?.parentElement || null;
+  }
+
+  getControlsDock() {
+    return this._doc.querySelector(GMEET_SELECTORS.callControls)?.nextElementSibling || null;
   }
 
   // -- Cleanup ---------------------------------------------------------------

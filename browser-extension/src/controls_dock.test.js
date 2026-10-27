@@ -1,5 +1,6 @@
 import { syncControlsDock } from './controls_dock.js';
 import { ElementCallAdapter } from './platforms/matrix.js';
+import { GoogleMeetAdapter } from './platforms/gmeet.js';
 
 function renderFooter({ rendered = true } = {}) {
   document.body.innerHTML = `
@@ -132,5 +133,58 @@ describe('syncControlsDock', () => {
 
     expect(toggle.parentElement).toBe(document.body);
     expect(document.documentElement.hasAttribute('data-recog-docked')).toBe(false);
+  });
+});
+
+function renderMeetBar() {
+  // The bar row: meeting info and Gemini on the left, the call controls region
+  // in the middle, a right-aligned column with the chat / meeting tools nav.
+  document.body.innerHTML = `
+    <div jsname="EaZ7Cc">
+      <div class="row">
+        <div class="left"></div>
+        <div jsname="vNB5le" role="region"><button jsname="hw0c9" data-is-muted="false"></button></div>
+        <div class="right"><nav><button aria-label="Chat with everyone"></button></nav></div>
+      </div>
+    </div>
+    <button class="jitsi-transcript-toggle"></button>
+    <button class="ktalk-debug-toggle">Debug</button>
+  `;
+  const row = document.querySelector('.row');
+  row.getBoundingClientRect = () => ({ top: window.innerHeight - 80 });
+  row.lastElementChild.getClientRects = () => [{}];
+  return row;
+}
+
+describe('syncControlsDock on Google Meet', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-recog-docked');
+    document.documentElement.style.removeProperty('--recog-dock-bottom');
+  });
+
+  test('Meet call bar rendered - sync - buttons move into the right column after the chat and meeting tools nav and panels open above the bar', () => {
+    const row = renderMeetBar();
+
+    expect(syncControlsDock(new GoogleMeetAdapter())).toBe(true);
+
+    const right = row.lastElementChild;
+    const dock = right.lastElementChild;
+    expect(dock.className).toBe('recog-controls-dock');
+    expect(dock.previousElementSibling.tagName).toBe('NAV');
+    expect(dock.querySelector('.jitsi-transcript-toggle')).not.toBeNull();
+    expect(dock.querySelector('.ktalk-debug-toggle')).not.toBeNull();
+    expect(document.documentElement.style.getPropertyValue('--recog-dock-bottom')).toBe('88px');
+  });
+
+  test('page without the Meet call bar - sync - buttons stay on the page body', () => {
+    document.body.innerHTML = `
+      <button class="jitsi-transcript-toggle"></button>
+      <button class="ktalk-debug-toggle">Debug</button>
+    `;
+
+    expect(syncControlsDock(new GoogleMeetAdapter())).toBe(false);
+
+    expect(document.querySelector('.jitsi-transcript-toggle').parentElement).toBe(document.body);
+    expect(document.querySelector('.ktalk-debug-toggle').parentElement).toBe(document.body);
   });
 });
