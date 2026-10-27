@@ -47,7 +47,7 @@ allow the same exact configured origins. `RECOG_EXTRA_WS_ORIGINS` remains
 available for backend-only integrations; it does not change extension injection.
 Google Meet needs no configuration: the extension runs on every
 `meet.google.com` page and joins a meeting only on a room path
-(`/abc-defg-hij`).
+(`/abc-defg-hij`, or `/meet/abc-defg-hij` when opened from an outside link).
 The Zoom web client needs no configuration either: the extension runs on
 `/wc/` paths of `zoom.us` and its subdomains and joins a meeting once you are
 past prejoin and the waiting room. The first time, Chrome asks whether

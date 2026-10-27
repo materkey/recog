@@ -53,7 +53,9 @@ export const GMEET_SELECTORS = {
   micButton: '[jsname="hw0c9"][data-is-muted]',
 };
 
-const ROOM_PATH_RE = /^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
+// A room opened from an outside link (Calendar, the OS handler) stays on
+// `/meet/<code>` instead of redirecting to `/<code>`.
+const ROOM_PATH_RE = /^\/(?:meet\/)?([a-z]{3}-[a-z]{4}-[a-z]{3})$/;
 const TITLE_PREFIX_RE = /^\s*Meet\s*[–—-]\s*/;
 
 export const SPEAKER_GRACE_MS = 1000;
@@ -73,10 +75,19 @@ const DRIFT_MESSAGES = {
 // Pure helpers (unit-tested in gmeet.test.js)
 // ---------------------------------------------------------------------------
 
-/** `origin + pathname` for a Meet room path (`/abc-defg-hij`), else null. */
+/** Meeting code of a Meet room path (`/abc-defg-hij`, `/meet/abc-defg-hij`), else null. */
+function meetingCode(location) {
+  const match = ROOM_PATH_RE.exec(location.pathname);
+  return match ? match[1] : null;
+}
+
+/**
+ * `origin + /<code>` for a Meet room path, else null: both path forms of a
+ * room give one url, so the backend reopens the same meeting.
+ */
 export function buildMeetingUrl(location) {
-  if (!location || !ROOM_PATH_RE.test(location.pathname || '')) return null;
-  return `${location.origin}${location.pathname}`;
+  const code = meetingCode(location);
+  return code ? `${location.origin}/${code}` : null;
 }
 
 /**
@@ -588,7 +599,7 @@ export class GoogleMeetAdapter {
       const rest = title.replace(TITLE_PREFIX_RE, '').trim();
       if (rest) return rest;
     }
-    return this.isRoomPage() ? this._win.location.pathname.slice(1) : '';
+    return meetingCode(this._win.location) || '';
   }
 
   // -- UI hooks --------------------------------------------------------------

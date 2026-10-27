@@ -143,7 +143,11 @@ describe('pure helpers', () => {
     expect(buildMeetingUrl(new URL('https://meet.google.com/qrs-tuvw-xyz?authuser=0'))).toBe(ROOM);
   });
 
-  test.each(['/', '/home', '/landing', '/qrs-tuvw-xyz/extra', '/QRS-TUVW-XYZ'])(
+  test('room path under /meet/ - buildMeetingUrl - the same url as the bare room path', () => {
+    expect(buildMeetingUrl(new URL('https://meet.google.com/meet/qrs-tuvw-xyz?authuser=0'))).toBe(ROOM);
+  });
+
+  test.each(['/', '/home', '/landing', '/meet/', '/foo/qrs-tuvw-xyz', '/qrs-tuvw-xyz/extra', '/QRS-TUVW-XYZ'])(
     'non-room path %s - buildMeetingUrl - null',
     (path) => {
       expect(buildMeetingUrl(new URL(`https://meet.google.com${path}`))).toBeNull();
@@ -835,6 +839,13 @@ describe('conference lifecycle', () => {
     const doc = newDoc();
     doc.title = 'Google Meet';
     expect(new GoogleMeetAdapter(makeWin(), doc).getMeetingTitle()).toBe('qrs-tuvw-xyz');
+  });
+
+  test('room path under /meet/ without the Meet prefix - getMeetingTitle - meeting code', () => {
+    const doc = newDoc();
+    doc.title = 'Google Meet';
+    const win = makeWin('https://meet.google.com/meet/qrs-tuvw-xyz');
+    expect(new GoogleMeetAdapter(win, doc).getMeetingTitle()).toBe('qrs-tuvw-xyz');
   });
 });
 
