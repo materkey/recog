@@ -7,6 +7,7 @@ the current implementation contracts and commands used by coding agents.
 
 | Location | What belongs here |
 | --- | --- |
+| [Changelog](../CHANGELOG.md) | What an update of `main` asks of an existing installation, newest first |
 | [Usage reference](usage.md) | Detailed installation, CLI, services, configuration and troubleshooting |
 | [Architecture decisions](adr/) | Why a design was chosen, its constraints and superseding decisions; check each ADR's status |
 | [Implementation plans](plans/) | Proposed work and its execution steps; [completed plans](plans/completed/) are historical records |

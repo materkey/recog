@@ -30,6 +30,15 @@ BMAD artifacts live in `docs/bmad/`; `_bmad-output` is a relative compatibility
 symlink to that directory. Keep `_bmad/` and tool configuration paths where their
 tools expect them. `AGENTS.md` is a symlink to this file.
 
+## Changelog
+
+`CHANGELOG.md` lists, by date, what an update asks of an existing installation
+(moved or renamed settings, files or units, new dependencies, a setup or service
+step, stricter validation) and behaviour users would notice. A commit that
+introduces such a change adds its entry in the same commit, under today's date,
+with what to do after `git pull`; internal refactors and fixes without a visible
+effect do not.
+
 ## Commands
 
 ### Preparing a revmux review

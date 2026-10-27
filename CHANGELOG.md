@@ -1,0 +1,87 @@
+# Changelog
+
+Recog has no releases: every installation runs `main`. This file lists, newest
+first, what an update asks of an existing installation after `git pull`
+(**Action required**) and changes of behaviour you would notice (**Changed**).
+Refactors and fixes without a visible effect stay in `git log`. An entry is
+written in the same commit as the change; the commit hashes lead to the
+reasoning.
+
+## 2026-10-27
+
+### Action required
+
+- **One installation config, `~/.config/recog/config.toml`**
+  ([docs/configuration.md](docs/configuration.md); `990fdb7`, `ade4dbe`).
+  Copy [`deploy/config.example.toml`](deploy/config.example.toml) there and
+  move into it:
+  - conference hosts and aliases from `.local/conference-hosts.json`
+    (`jitsi`/`matrix` → `[conferences]`, `source_aliases` →
+    `[sources.aliases]`), then delete the old file. It is still read, with a
+    warning, while `config.toml` does not exist; with both present the
+    services refuse to start;
+  - non-secret settings from `.env`: `RECOG_ASR_*`, `ASR_PENDING_BUFFER_CAP_S`,
+    `DEDUP_MAX_GAP_S`, `RECOG_PULSE_MONITOR_SOURCE`, `RECOG_ZOOM_APP`,
+    `RECOG_COPILOT_*`, `RECOG_BRIDGE_WS_URL`, `RECOG_EXTRA_WS_ORIGINS`,
+    `EXTERNAL_MEETINGS_PATHS`, `RECOG_CODESIGN_IDENTITY` → `[asr]`, `[live]`,
+    `[copilot]`, `[web]`, `[macos]`, then delete the lines from `.env`.
+
+  `.env` and the process environment still override the file; a setting with
+  a different value in both places is reported at every start
+  (`recog: … overrides … of config.toml`). `.env` keeps secrets.
+- **Importer source names are no longer built into the web UI** (`c125a01`,
+  `ec4c87a`). Limitless, KTalk Export and Zoom Export show their raw source
+  name until named in `[sources.labels]`, e.g. `limitless = "Limitless"`.
+  `RECOG_SOURCE_LABELS`, which existed for part of that day, is gone.
+- **A malformed setting stops startup**, naming the variable (`3ee76f6`):
+  `RECOG_TORCH_THREADS` that is not a positive integer (was ignored), a flag
+  outside `1/0`, `true/false`, `yes/no`, `on/off` (an unknown word used to
+  turn `RECOG_COPILOT_AUTOSPAWN` on), a number that does not parse. Check the
+  output of `./recog-service.sh restart`.
+- **The extension build needs Python 3.11 or newer** (`990fdb7`): it asks
+  `python -m recog.install_config` for the conference hosts, using
+  `RECOG_PYTHON`, else `venv-gigaam/bin/python`, else `python3`.
+- After pulling: `./recog-service.sh restart`, and
+  `npm run build --prefix browser-extension` when conference hosts moved.
+
+### Changed
+
+- `RECOG_ZOOM_APP=true` enables the Zoom application source; only `1` did.
+- `scripts/backup-data.sh` also saves `config.toml` (`b898bb4`).
+
+### Development
+
+- Quality gate: the CRAP ceiling is 10 (was 15), and production JavaScript is
+  measured too. Install `npm ci --prefix deploy/node` and
+  `npm ci --prefix browser-extension`; start a JavaScript callback on its own
+  line ([docs/quality.md](docs/quality.md)).
+- Code reads settings from `INSTALL_CONFIG` (`recog/install_config.py`),
+  never from `os.environ`; tests monkeypatch a field.
+
+## 2026-10-21
+
+### Action required
+
+- **macOS: the live service runs under `Recog.app`** (`a9e95fa`), so Screen
+  Recording and the microphone belong to "Recog" and survive Homebrew Python
+  upgrades. Run `./setup.sh` (it builds the bundle), then
+  `./recog-service.sh install` and `./recog-service.sh restart`, and allow
+  "Recog" when macOS asks. `scripts/deps.sh` refuses to start the live service
+  without the bundle.
+
+## 2026-09-05
+
+### Action required
+
+- **Personal data moved out of the checkout** to `~/.recog` (`c54af8b`).
+  An existing install keeps its data in the checkout, with a warning, until
+  migrated: stop the services, run `scripts/migrate-data.py` (dry run), then
+  `--apply`, `./recog-service.sh install` and `./recog-service.sh restart`
+  (CLAUDE.md, "Data directory").
+- **Repository layout reorganized** (`f65bccb`): re-render and restart the
+  services ([docs/repository-layout.md](docs/repository-layout.md#updating-an-existing-checkout)).
+- **Conference hosts are installation settings** (`d9dc137`): a Jitsi or
+  Element server other than the built-in ones must be configured locally
+  ([docs/conference-hosts.md](docs/conference-hosts.md)) and the extension
+  rebuilt. Chrome loads the built extension from `browser-extension/dist/`;
+  replace a registration that points at the source directory.
