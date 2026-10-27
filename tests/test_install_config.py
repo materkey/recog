@@ -5,12 +5,14 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from recog import install_config
 from recog.install_config import (
+    SETTINGS,
     InstallConfig,
     config_path,
     load_install_config,
@@ -109,6 +111,56 @@ def test_explicit_location_when_resolving_then_it_wins(monkeypatch, tmp_path):
     assert config_path() == ROOT / "relative.toml"
 
 
+def test_settings_when_parsing_then_each_becomes_its_environment_value():
+    config = parse_install_config(
+        {
+            "asr": {"backend": "remote", "remote_timeout_s": 20, "circuit_fails": 4},
+            "live": {"dedup_max_gap_s": 2.5, "zoom_app": True},
+            "copilot": {"autospawn": False},
+            "web": {"external_meetings_paths": ["/a/meetings:a", "/b/meetings"]},
+        }
+    )
+    assert config.settings == {
+        "RECOG_ASR_BACKEND": "remote",
+        "RECOG_ASR_REMOTE_TIMEOUT_S": "20",
+        "RECOG_ASR_CIRCUIT_FAILS": "4",
+        "DEDUP_MAX_GAP_S": "2.5",
+        "RECOG_ZOOM_APP": "1",
+        "RECOG_COPILOT_AUTOSPAWN": "0",
+        "EXTERNAL_MEETINGS_PATHS": "/a/meetings:a,/b/meetings",
+    }
+
+
+def test_settings_when_applied_then_environment_values_win():
+    config = parse_install_config({"asr": {"backend": "remote", "remote_model": "big"}})
+    environ = {"RECOG_ASR_BACKEND": "local"}
+
+    config.apply_settings(environ)
+
+    assert environ == {"RECOG_ASR_BACKEND": "local", "RECOG_ASR_REMOTE_MODEL": "big"}
+
+
+def test_config_file_when_recog_starts_then_its_settings_reach_the_code(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[live]\ndedup_max_gap_s = 3.5\n[asr]\nremote_model = "big"\n')
+    code = "import recog.config as c; print(c.DEDUP_MAX_GAP_S, c.RECOG_ASR_REMOTE_MODEL)"
+    env = {**os.environ, "RECOG_CONFIG_FILE": str(path), **NO_LEGACY}
+    env.pop("DEDUP_MAX_GAP_S", None)
+    env["RECOG_ASR_REMOTE_MODEL"] = "small"
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["3.5", "small"]
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -154,6 +206,14 @@ def test_explicit_location_when_resolving_then_it_wins(monkeypatch, tmp_path):
         {"sources": {"labels": {"importer": ""}}},
         {"sources": {"labels": {"": "Label"}}},
         {"sources": {"labels": ["importer"]}},
+        {"asr": {"other": "x"}},
+        {"asr": {"backend": 1}},
+        {"asr": {"remote_timeout_s": "15"}},
+        {"asr": {"remote_timeout_s": True}},
+        {"asr": {"circuit_fails": 3.5}},
+        {"live": {"zoom_app": "1"}},
+        {"web": {"extra_ws_origins": "https://a.example.org"}},
+        {"web": {"extra_ws_origins": [1]}},
     ],
 )
 def test_invalid_config_when_parsing_then_rejected(value):
@@ -345,3 +405,18 @@ def test_legacy_index_when_listing_then_canonical_without_rewriting_cache(tmp_pa
     path.write_text(raw)
     assert storage.list_meetings(include_active=False)[0]["source"] == "jitsi"
     assert path.read_text() == raw
+
+
+def test_shipped_example_when_every_setting_is_uncommented_then_it_parses_and_covers_all():
+    lines = (ROOT / "deploy/config.example.toml").read_text().splitlines()
+    uncommented = [
+        line[2:] if line.startswith("# ") and " = " in line and "RECOG" not in line else line
+        for line in lines
+    ]
+    document = tomllib.loads("\n".join(uncommented))
+
+    config = parse_install_config(document)
+
+    expected = {variable for keys in SETTINGS.values() for variable, _ in keys.values()}
+    assert set(config.settings) == expected
+    assert config.jitsi and config.matrix and config.source_aliases and config.source_labels

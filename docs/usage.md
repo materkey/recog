@@ -349,8 +349,12 @@ old nicknames. Without a known name, name-addressed proactive replies stay off.
 
 ## Environment variables
 
-Copy `.env.example` → `.env` (setup does it for you) — it carries an inline
-comment per variable. The ones you are most likely to touch:
+Settings other than secrets belong in the
+[installation configuration](configuration.md) `~/.config/recog/config.toml`:
+copy `deploy/config.example.toml` there, it explains each one. Each setting is
+the default of the variable below, so a variable in the environment or in
+`.env` (setup copies `.env.example`, which keeps secrets and legacy fallbacks)
+still overrides it. The ones you are most likely to touch:
 
 - `MIC_SPEAKER_NAME` — legacy microphone-name fallback before a profile is saved (default `Me`).
 - `RECOG_ASR_DEVICE` — `auto` (cuda > mps > cpu) | `cuda` | `mps` | `cpu`. An

@@ -7,12 +7,18 @@ Following datasette-enrichments patterns:
 - tmpdir for temporary test data
 """
 import json
+import os
 import pytest
 import pytest_asyncio
 from pathlib import Path
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# The suite must not depend on the developer's installation config: point both
+# the config file and the legacy hosts file at nothing before recog is imported.
+os.environ["RECOG_CONFIG_FILE"] = "/nonexistent/recog/config.toml"
+os.environ["RECOG_CONFERENCE_HOSTS_FILE"] = "/nonexistent/recog/conference-hosts.json"
 
 import recog.config as recog_config
 import recog.privacy as recog_privacy

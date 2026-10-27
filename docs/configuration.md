@@ -28,12 +28,24 @@ old-meet = "jitsi"
 phone = "Phone"
 ```
 
+`deploy/config.example.toml` lists every setting with its explanation. Besides
+the tables above it has `[asr]`, `[live]`, `[copilot]`, `[web]` and `[macos]`:
+each key is the default of one environment variable the code reads (for example
+`[asr] backend` of `RECOG_ASR_BACKEND`, `[web] external_meetings_paths` of
+`EXTERNAL_MEETINGS_PATHS`), typed as in the example: `true`/`false` for flags,
+numbers for durations and counts, arrays for lists. `import recog` fills each
+variable the process environment and `.env` left unset, so either of those
+still overrides the file; the table that maps keys to variables is `SETTINGS`
+in `recog/install_config.py`. `RECOG_CONFIG_FILE` itself is read from the
+process environment, not from `.env`.
+
 Unknown tables or keys are errors, not ignored, so a typo cannot silently drop
 a setting. A malformed file stops the services at startup
 (`./recog-service.sh start` reports it before activating anything) and fails
 the extension build.
 
-Secrets stay in `.env`. State the web UI writes (`ai-settings.json`,
+Secrets, and the legacy fallbacks `.env.example` still ships, stay in `.env`.
+State the web UI writes (`ai-settings.json`,
 `user-profile.json`, `privacy.json` under the data directory) is not
 configuration and stays where it is.
 

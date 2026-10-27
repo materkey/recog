@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+from recog.install_config import INSTALL_CONFIG
+
 
 def load_dotenv(env_path: Path = None):
     """Загружает переменные окружения из .env файла."""
@@ -30,6 +32,8 @@ def load_dotenv(env_path: Path = None):
 
 # Загружаем .env при импорте модуля
 load_dotenv()
+# Затем настройки config.toml заполняют то, что не задали окружение и .env.
+INSTALL_CONFIG.apply_settings(os.environ)
 
 
 def data_entries(root: Path) -> list[Path]:

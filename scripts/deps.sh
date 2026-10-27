@@ -143,13 +143,14 @@ deps_asr_config_check() {
     "$(deps_python)" -c '
 import sys
 sys.path.insert(0, sys.argv[1])
-import recog.config as config
 
 try:
     import recog.install_config
 except (OSError, ValueError) as error:
     print(f"Invalid installation configuration: {error}")
     sys.exit(1)
+
+import recog.config as config
 
 try:
     from recog.user_profile import UserProfileStore

@@ -34,6 +34,49 @@ class InstallConfig:
     source_aliases: dict[str, str] = field(default_factory=dict)
     # Web UI names of the sources the installation's own importers write.
     source_labels: dict[str, str] = field(default_factory=dict)
+    # Environment variable -> value, from the settings tables (SETTINGS).
+    settings: dict[str, str] = field(default_factory=dict)
+
+    def apply_settings(self, environ) -> None:
+        """Fill what the process environment and .env left unset."""
+        for name, value in self.settings.items():
+            environ.setdefault(name, value)
+
+
+# Settings the code reads from the environment: table -> key -> (variable,
+# type). A value here is the default the environment and .env can override.
+SETTINGS = {
+    "asr": {
+        "backend": ("RECOG_ASR_BACKEND", str),
+        "device": ("RECOG_ASR_DEVICE", str),
+        "torch_threads": ("RECOG_TORCH_THREADS", int),
+        "remote_url": ("RECOG_ASR_REMOTE_URL", str),
+        "remote_model": ("RECOG_ASR_REMOTE_MODEL", str),
+        "remote_timeout_s": ("RECOG_ASR_REMOTE_TIMEOUT_S", float),
+        "live_timeout_s": ("RECOG_ASR_LIVE_TIMEOUT_S", float),
+        "circuit_fails": ("RECOG_ASR_CIRCUIT_FAILS", int),
+        "circuit_open_s": ("RECOG_ASR_CIRCUIT_OPEN_S", float),
+        "pending_buffer_cap_s": ("ASR_PENDING_BUFFER_CAP_S", float),
+    },
+    "live": {
+        "dedup_max_gap_s": ("DEDUP_MAX_GAP_S", float),
+        "pulse_monitor_source": ("RECOG_PULSE_MONITOR_SOURCE", str),
+        "zoom_app": ("RECOG_ZOOM_APP", bool),
+    },
+    "copilot": {
+        "autospawn": ("RECOG_COPILOT_AUTOSPAWN", bool),
+        "grace_s": ("RECOG_COPILOT_GRACE_S", float),
+        "mcp_url": ("RECOG_COPILOT_MCP_URL", str),
+    },
+    "web": {
+        "bridge_ws_url": ("RECOG_BRIDGE_WS_URL", str),
+        "extra_ws_origins": ("RECOG_EXTRA_WS_ORIGINS", list),
+        "external_meetings_paths": ("EXTERNAL_MEETINGS_PATHS", list),
+    },
+    "macos": {
+        "codesign_identity": ("RECOG_CODESIGN_IDENTITY", str),
+    },
+}
 
 
 def _resolve(configured: str) -> Path:
@@ -132,9 +175,52 @@ def _label(name: str, label) -> bool:
     return isinstance(label, str) and bool(label)
 
 
+def _expect(value, kinds, name: str) -> None:
+    # bool is an int in Python, but `true` is never a number in the file.
+    if isinstance(value, bool) != (kinds is bool) or not isinstance(value, kinds):
+        raise TypeError(f"{name} has the wrong type")
+
+
+def _flag(value, name: str) -> str:
+    _expect(value, bool, name)
+    return "1" if value else "0"
+
+
+def _integer(value, name: str) -> str:
+    _expect(value, int, name)
+    return str(value)
+
+
+def _number(value, name: str) -> str:
+    _expect(value, (int, float), name)
+    return str(value)
+
+
+def _text(value, name: str) -> str:
+    _expect(value, str, name)
+    return value
+
+
+def _joined(value, name: str) -> str:
+    _expect(value, list, name)
+    return ",".join(_text(item, name) for item in value)
+
+
+_CONVERT = {bool: _flag, int: _integer, float: _number, str: _text, list: _joined}
+
+
+def _settings(document: dict) -> dict[str, str]:
+    settings = {}
+    for table, keys in SETTINGS.items():
+        for key, value in _table(document.get(table, {}), f"[{table}]", set(keys)).items():
+            variable, kind = keys[key]
+            settings[variable] = _CONVERT[kind](value, f"{table}.{key}")
+    return settings
+
+
 def parse_install_config(value: dict) -> InstallConfig:
     """Validate the parsed TOML document; nothing unknown is ignored."""
-    value = _table(value, "The configuration", {"conferences", "sources"})
+    value = _table(value, "The configuration", {"conferences", "sources", *SETTINGS})
     conferences = _table(value.get("conferences", {}), "[conferences]", set(CONFIGURABLE_PLATFORMS))
     sources = _table(value.get("sources", {}), "[sources]", {"aliases", "labels"})
     return InstallConfig(
@@ -148,6 +234,7 @@ def parse_install_config(value: dict) -> InstallConfig:
             "[sources.labels] must map source names to nonempty names",
             _label,
         ),
+        settings=_settings(value),
         **_conference_hosts(conferences),
     )
 

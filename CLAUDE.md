@@ -381,7 +381,7 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
 
 ## Environment Variables
 
-Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env` (`setup.sh` does both). `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL`/`RECOG_GIGAAM_REF`/`RECOG_GIGAAM_EDITABLE` are deliberately **not** in `.env`: `.env` is read by Python (`load_dotenv` in `recog/config.py`), no shell script reads it, and `setup.sh` needs those variables before it creates `.env` — they are call-shell variables (`RECOG_TORCH_INDEX_URL=… ./setup.sh`).
+Non-secret settings belong in the installation configuration `~/.config/recog/config.toml` (`deploy/config.example.toml`, `docs/configuration.md`): each key of its `[asr]`, `[live]`, `[copilot]`, `[web]` and `[macos]` tables is the default of one variable below (`SETTINGS` in `recog/install_config.py`), applied by `recog.config` after `.env`, so the process environment and `.env` still override it. `.env` keeps secrets and legacy fallbacks. Copy `.env.example` → `.env` and `recog/web/.env.example` → `recog/web/.env` (`setup.sh` does both). `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL`/`RECOG_GIGAAM_REF`/`RECOG_GIGAAM_EDITABLE` are deliberately **not** in `.env`: `.env` is read by Python (`load_dotenv` in `recog/config.py`), no shell script reads it, and `setup.sh` needs those variables before it creates `.env` — they are call-shell variables (`RECOG_TORCH_INDEX_URL=… ./setup.sh`).
 
 - `HF_TOKEN` - HuggingFace token (optional, was required for pyannote diarization which is now removed)
 - `CLAUDE_MODEL` / `CODEX_MODEL` - legacy model defaults; saved AI settings take precedence.
