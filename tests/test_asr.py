@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recog import asr as asr_module
 from recog.asr import ASRModule, resolve_device
+from recog.install_config import INSTALL_CONFIG
 
 
 @dataclass
@@ -438,7 +439,7 @@ def test_asrmodule_uses_config_device_when_device_none(monkeypatch):
     then: the env-configured device wins over auto-detect
     """
     _stub_availability(monkeypatch, cuda=True, mps=True)
-    monkeypatch.setattr(asr_module.config, "RECOG_ASR_DEVICE", "cpu")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "device", "cpu")
     asr = ASRModule(device=None)
     assert asr.device == "cpu"
     assert asr._device_auto is False
@@ -451,7 +452,7 @@ def test_asrmodule_auto_config_resolves_cuda(monkeypatch):
     then: self.device is "cuda" and the auto flag is set (OOM fallback armed)
     """
     _stub_availability(monkeypatch, cuda=True, mps=False)
-    monkeypatch.setattr(asr_module.config, "RECOG_ASR_DEVICE", "auto")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "device", "auto")
     asr = ASRModule(device=None)
     assert asr.device == "cuda"
     assert asr._device_auto is True
@@ -475,7 +476,7 @@ def test_asrmodule_falls_back_to_cpu_when_mps_unavailable(monkeypatch):
     then: self.device falls back to "cpu"
     """
     _stub_availability(monkeypatch, cuda=False, mps=False)
-    monkeypatch.setattr(asr_module.config, "RECOG_ASR_DEVICE", "auto")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "device", "auto")
     asr = ASRModule(device=None)
     assert asr.device == "cpu"
 
@@ -483,7 +484,7 @@ def test_asrmodule_falls_back_to_cpu_when_mps_unavailable(monkeypatch):
 def _make_loadable_asr(monkeypatch, *, device: str, load_side_effect) -> ASRModule:
     """ASRModule pinned to `device` with a stubbed gigaam.load_model."""
     _stub_availability(monkeypatch, cuda=True, mps=False)
-    monkeypatch.setattr(asr_module.config, "RECOG_ASR_DEVICE", "auto")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "device", "auto")
     asr = ASRModule(device=device)
     fake_gigaam = MagicMock()
     fake_gigaam.load_model.side_effect = load_side_effect
@@ -569,27 +570,26 @@ def test_load_model_propagates_non_oom_errors(monkeypatch):
 
 def test_asrmodule_applies_torch_threads(monkeypatch):
     """
-    given: RECOG_TORCH_THREADS="3"
+    given: [asr] torch_threads = 3
     when: ASRModule is instantiated
     then: torch.set_num_threads is called with 3
     """
     _stub_availability(monkeypatch, cuda=False, mps=False)
-    monkeypatch.setattr(asr_module.config, "RECOG_TORCH_THREADS", "3")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "torch_threads", 3)
     set_threads = MagicMock()
     monkeypatch.setattr(torch, "set_num_threads", set_threads)
     ASRModule(device="cpu")
     set_threads.assert_called_once_with(3)
 
 
-@pytest.mark.parametrize("raw", ["", "many", "0"])
-def test_asrmodule_ignores_unusable_torch_threads(monkeypatch, raw):
+def test_asrmodule_leaves_torch_threads_alone_when_unset(monkeypatch):
     """
-    given: RECOG_TORCH_THREADS unset or not a positive integer
+    given: [asr] torch_threads unset (install_config rejects nonpositive values)
     when: ASRModule is instantiated
     then: torch.set_num_threads is left alone
     """
     _stub_availability(monkeypatch, cuda=False, mps=False)
-    monkeypatch.setattr(asr_module.config, "RECOG_TORCH_THREADS", raw)
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "torch_threads", None)
     set_threads = MagicMock()
     monkeypatch.setattr(torch, "set_num_threads", set_threads)
     ASRModule(device="cpu")

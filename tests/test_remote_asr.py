@@ -34,8 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gigaam.types import TranscriptionResult, Word
 
-import recog.config as config
 import recog.remote_asr as remote_asr_mod
+from recog.install_config import INSTALL_CONFIG
 from recog.remote_asr import (
     ASRTemporarilyUnavailable,
     FallbackASR,
@@ -970,8 +970,8 @@ def test_build_asr_remote_without_url_raises_runtime_error(monkeypatch):
     then: RuntimeError с именами обеих переменных, ни один backend не создан
           (молчаливый уход на локальную модель — другая RAM и латентность)
     """
-    monkeypatch.setattr(config, "RECOG_ASR_BACKEND", "remote")
-    monkeypatch.setattr(config, "RECOG_ASR_REMOTE_URL", "")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "remote")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "remote_url", "")
 
     with pytest.raises(RuntimeError) as exc:
         build_asr()
@@ -986,8 +986,8 @@ def test_build_asr_remote_with_blank_url_raises_runtime_error(monkeypatch):
     when: build_asr()
     then: та же RuntimeError — пустой URL после strip не считается настроенным
     """
-    monkeypatch.setattr(config, "RECOG_ASR_BACKEND", "remote")
-    monkeypatch.setattr(config, "RECOG_ASR_REMOTE_URL", "   ")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "remote")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "remote_url", "   ")
 
     with pytest.raises(RuntimeError):
         build_asr()
@@ -1000,8 +1000,8 @@ def test_build_asr_remote_with_url_returns_fallback(monkeypatch):
     then: отдаётся FallbackASR поверх RemoteASRClient с этим URL
           (локальный ASRModule конструируется, но веса не грузятся)
     """
-    monkeypatch.setattr(config, "RECOG_ASR_BACKEND", "remote")
-    monkeypatch.setattr(config, "RECOG_ASR_REMOTE_URL", "https://gw.test/asr")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "remote")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "remote_url", "https://gw.test/asr")
     asr = build_asr()
 
     assert isinstance(asr, FallbackASR)
@@ -1014,8 +1014,8 @@ def test_build_asr_local_does_not_need_url(monkeypatch):
     when: build_asr()
     then: конструируется ASRModule (без загрузки весов), URL не требуется
     """
-    monkeypatch.setattr(config, "RECOG_ASR_BACKEND", "local")
-    monkeypatch.setattr(config, "RECOG_ASR_REMOTE_URL", "")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "local")
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "remote_url", "")
 
     built = []
     monkeypatch.setattr(

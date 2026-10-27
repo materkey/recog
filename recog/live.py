@@ -18,15 +18,22 @@ import torch
 from collections import deque
 from dataclasses import dataclass
 
-from .config import (VAD_RMS_THRESHOLD, SILENCE_SPLIT_TIMEOUT,
-                     LAST_SPEAKER_TTL, MIC_SPEAKER_NAME,
-                     RETROACTIVE_MAX_SEGMENTS, RETROACTIVE_MAX_SECONDS,
-                     SPEAKER_TURN_GAP, MAX_SEGMENT_DURATION,
-                     PCM_SILENCE_WATCHDOG_S, PCM_REFINE_WINDOW_S,
-                     PCM_WAV_ANCHOR_MAX_AGE_MS,
-                     DEDUP_MAX_GAP_S, ASR_PENDING_BUFFER_CAP_S)
+from .config import (
+    VAD_RMS_THRESHOLD,
+    SILENCE_SPLIT_TIMEOUT,
+    LAST_SPEAKER_TTL,
+    MIC_SPEAKER_NAME,
+    RETROACTIVE_MAX_SEGMENTS,
+    RETROACTIVE_MAX_SECONDS,
+    SPEAKER_TURN_GAP,
+    MAX_SEGMENT_DURATION,
+    PCM_SILENCE_WATCHDOG_S,
+    PCM_REFINE_WINDOW_S,
+    PCM_WAV_ANCHOR_MAX_AGE_MS,
+)
 from .asr import ASRModule, _mps_autoreleasepool
 from .audio_capture import BufferedAudioCapture
+from .install_config import INSTALL_CONFIG
 from .log_utils import log_rate_limited
 from .remote_asr import ASRTemporarilyUnavailable, FallbackASR, build_asr
 from .refine import RefineAborted, RefineResult, RefineWorker, make_abortable_decode
@@ -259,8 +266,9 @@ class SingleDeviceCapture(BufferedAudioCapture):
     # device list (Pa_Terminate + Pa_Initialize) closes every one of them.
     _open_captures: "weakref.WeakSet[SingleDeviceCapture]" = weakref.WeakSet()
 
-    def __init__(self, device, sample_rate=16000, name="device",
-                 max_buffer_s: float = ASR_PENDING_BUFFER_CAP_S):
+    def __init__(
+        self, device, sample_rate=16000, name="device", max_buffer_s: Optional[float] = None
+    ):
         import sounddevice as sd
         super().__init__(sample_rate=sample_rate, name=name, max_buffer_s=max_buffer_s)
         self.sd = sd
@@ -2275,7 +2283,7 @@ class LiveTranscriber:
         # Дедуп-окно (дизайн §4): last_words применяются только к временно́
         # смежным чанкам (audio overlap 0.5 s + джиттер). За пределами окна
         # повторённая фраза — реальная речь, её нельзя выбрасывать.
-        if chunk_start_time - state.last_words_capture_end > DEDUP_MAX_GAP_S:
+        if chunk_start_time - state.last_words_capture_end > INSTALL_CONFIG.live.dedup_max_gap_s:
             state.last_words = []
 
         text = deduplicate(text, state.last_words)

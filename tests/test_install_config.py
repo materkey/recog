@@ -12,12 +12,14 @@ import pytest
 
 from recog import install_config
 from recog.install_config import (
+    SECTIONS,
     SETTING_KEYS,
-    SETTINGS,
     InstallConfig,
     config_path,
+    load_dotenv,
     load_install_config,
     parse_install_config,
+    with_environment,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -112,7 +114,7 @@ def test_explicit_location_when_resolving_then_it_wins(monkeypatch, tmp_path):
     assert config_path() == ROOT / "relative.toml"
 
 
-def test_settings_when_parsing_then_each_becomes_its_environment_value():
+def test_settings_when_parsing_then_sections_hold_typed_values():
     config = parse_install_config(
         {
             "asr": {"backend": "remote", "remote_timeout_s": 20, "circuit_fails": 4},
@@ -121,43 +123,69 @@ def test_settings_when_parsing_then_each_becomes_its_environment_value():
             "web": {"external_meetings_paths": ["/a/meetings:a", "/b/meetings"]},
         }
     )
-    assert config.settings == {
-        "RECOG_ASR_BACKEND": "remote",
-        "RECOG_ASR_REMOTE_TIMEOUT_S": "20",
-        "RECOG_ASR_CIRCUIT_FAILS": "4",
-        "DEDUP_MAX_GAP_S": "2.5",
-        "RECOG_ZOOM_APP": "1",
-        "RECOG_COPILOT_AUTOSPAWN": "0",
-        "EXTERNAL_MEETINGS_PATHS": "/a/meetings:a,/b/meetings",
-    }
+    assert config.asr.backend == "remote"
+    assert config.asr.remote_timeout_s == 20.0
+    assert config.asr.circuit_fails == 4
+    assert config.asr.remote_model == "gigaam"
+    assert config.live.dedup_max_gap_s == 2.5
+    assert config.live.zoom_app is True
+    assert config.copilot.autospawn is False
+    assert config.web.external_meetings_paths == ("/a/meetings:a", "/b/meetings")
 
 
 def test_setting_keys_when_naming_a_variable_then_its_table_and_key_are_given():
     assert SETTING_KEYS["RECOG_COPILOT_AUTOSPAWN"] == "[copilot] autospawn"
-    assert len(SETTING_KEYS) == sum(len(keys) for keys in SETTINGS.values())
+    assert len(SETTING_KEYS) == sum(len(dataclasses.fields(cls)) for cls in SECTIONS.values())
 
 
-def test_settings_when_applied_then_environment_values_win():
+def test_environment_when_overlaid_then_it_wins_and_conflicts_with_the_file_are_named():
     config = parse_install_config(
-        {"asr": {"backend": "remote", "remote_model": "big", "remote_url": "https://a"}}
+        {"asr": {"backend": "remote", "remote_url": "https://a", "remote_timeout_s": 20}}
     )
-    # A child process inherits what its parent applied: same value, no conflict.
-    environ = {"RECOG_ASR_BACKEND": "local", "RECOG_ASR_REMOTE_URL": "https://a"}
-
-    overridden = config.apply_settings(environ)
-
-    assert environ == {
+    environ = {
         "RECOG_ASR_BACKEND": "local",
-        "RECOG_ASR_REMOTE_URL": "https://a",
+        "RECOG_ASR_REMOTE_URL": " https://a ",
         "RECOG_ASR_REMOTE_MODEL": "big",
+        "RECOG_ZOOM_APP": "yes",
+        "RECOG_EXTRA_WS_ORIGINS": " https://a.test , ,https://b.test",
+        "RECOG_TORCH_THREADS": "",
     }
+
+    resolved, overridden = with_environment(config, environ)
+
+    assert resolved.asr.backend == "local"
+    assert resolved.asr.remote_url == "https://a"
+    assert resolved.asr.remote_model == "big"
+    assert resolved.asr.remote_timeout_s == 20.0
+    assert resolved.asr.torch_threads is None
+    assert resolved.live.zoom_app is True
+    assert resolved.web.extra_ws_origins == ("https://a.test", "https://b.test")
+    # The same value as the file is no conflict; a variable the file left unset neither.
     assert overridden == ["RECOG_ASR_BACKEND"]
+    assert config.asr.backend == "remote"
+
+
+@pytest.mark.parametrize(
+    "variable,raw",
+    [
+        ("RECOG_ZOOM_APP", "maybe"),
+        ("RECOG_TORCH_THREADS", "many"),
+        ("RECOG_TORCH_THREADS", "0"),
+        ("RECOG_ASR_REMOTE_TIMEOUT_S", "soon"),
+    ],
+)
+def test_malformed_environment_value_when_overlaid_then_rejected_by_name(variable, raw):
+    with pytest.raises(ValueError, match=variable):
+        with_environment(InstallConfig(), {variable: raw})
 
 
 def test_config_file_when_recog_starts_then_its_settings_reach_the_code(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('[live]\ndedup_max_gap_s = 3.5\n[asr]\nremote_model = "big"\n')
-    code = "import recog.config as c; print(c.DEDUP_MAX_GAP_S, c.RECOG_ASR_REMOTE_MODEL)"
+    code = (
+        "from recog.install_config import INSTALL_CONFIG as c; "
+        "print(c.live.dedup_max_gap_s, c.asr.remote_model)"
+    )
     env = {**os.environ, "RECOG_CONFIG_FILE": str(path), **NO_LEGACY}
     env.pop("DEDUP_MAX_GAP_S", None)
     env["RECOG_ASR_REMOTE_MODEL"] = "small"
@@ -228,6 +256,7 @@ def test_config_file_when_recog_starts_then_its_settings_reach_the_code(tmp_path
         {"asr": {"remote_timeout_s": "15"}},
         {"asr": {"remote_timeout_s": True}},
         {"asr": {"circuit_fails": 3.5}},
+        {"asr": {"torch_threads": 0}},
         {"live": {"zoom_app": "1"}},
         {"web": {"extra_ws_origins": "https://a.example.org"}},
         {"web": {"extra_ws_origins": [1]}},
@@ -434,6 +463,33 @@ def test_shipped_example_when_every_setting_is_uncommented_then_it_parses_and_co
 
     config = parse_install_config(document)
 
-    expected = {variable for keys in SETTINGS.values() for variable, _ in keys.values()}
-    assert set(config.settings) == expected
+    assert config.from_file == frozenset(SETTING_KEYS)
     assert config.jitsi and config.matrix and config.source_aliases and config.source_labels
+
+
+def test_env_file_when_loaded_then_unset_variables_are_filled_without_overriding(
+    tmp_path, monkeypatch
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# comment\n"
+        "\n"
+        "RECOG_TEST_PLAIN=one\n"
+        'RECOG_TEST_QUOTED="two words"\n'
+        "RECOG_TEST_SINGLE='three'\n"
+        "RECOG_TEST_KEPT=from-file\n"
+        "not a setting\n"
+        "=orphan\n"
+    )
+    environ = {"RECOG_TEST_KEPT": "from-process"}
+    monkeypatch.setattr(install_config.os, "environ", environ)
+
+    load_dotenv(env_file)
+    load_dotenv(tmp_path / "absent.env")
+
+    assert environ == {
+        "RECOG_TEST_KEPT": "from-process",
+        "RECOG_TEST_PLAIN": "one",
+        "RECOG_TEST_QUOTED": "two words",
+        "RECOG_TEST_SINGLE": "three",
+    }

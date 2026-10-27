@@ -13,8 +13,8 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 import numpy as np
 import torch
 
-from . import config
 from .config import DEFAULT_MODEL, DEFAULT_CHUNK_DURATION, DEFAULT_OVERLAP
+from .install_config import INSTALL_CONFIG
 from .log_utils import log_rate_limited
 from .models import Segment
 
@@ -115,20 +115,12 @@ def _is_cuda_oom(exc: BaseException) -> bool:
 
 
 def _apply_torch_threads() -> None:
-    """Honour RECOG_TORCH_THREADS, if set. Best-effort — never fatal."""
-    raw = config.RECOG_TORCH_THREADS
-    if not raw:
-        return
-    try:
-        threads = int(raw)
-        if threads <= 0:
-            raise ValueError(raw)
-    except (TypeError, ValueError):
-        print(
-            f"[ASRModule] ignoring RECOG_TORCH_THREADS={raw!r}: "
-            "expected a positive integer",
-            file=sys.stderr,
-        )
+    """Honour [asr] torch_threads (RECOG_TORCH_THREADS), if set. Never fatal.
+
+    install_config already rejects a value that is not a positive integer.
+    """
+    threads = INSTALL_CONFIG.asr.torch_threads
+    if threads is None:
         return
     try:
         torch.set_num_threads(threads)
@@ -157,7 +149,7 @@ class ASRModule:
         # else "cpu" — it does not probe MPS. Resolve here so Apple-Silicon
         # hosts default to MPS and Linux hosts pick up CUDA, with
         # RECOG_ASR_DEVICE as the override.
-        spec = config.RECOG_ASR_DEVICE if device is None else device
+        spec = INSTALL_CONFIG.asr.device if device is None else device
         # Only an auto-resolved cuda may be demoted to cpu on OOM: an explicit
         # request names the device the operator wants, failures included.
         self._device_auto = str(spec).strip().lower() == "auto"

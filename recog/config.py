@@ -6,40 +6,9 @@ import os
 import sys
 from pathlib import Path
 
-from recog.install_config import INSTALL_CONFIG, SETTING_KEYS
-
-
-def load_dotenv(env_path: Path = None):
-    """Загружает переменные окружения из .env файла."""
-    if env_path is None:
-        env_path = Path(__file__).parent.parent / ".env"
-
-    if not env_path.exists():
-        return
-
-    with open(env_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if '=' in line:
-                key, value = line.split('=', 1)
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
-
-
-# Загружаем .env при импорте модуля
-load_dotenv()
-# Затем настройки config.toml заполняют то, что не задали окружение и .env.
-# Настройка, заданная и там и там, из файла не действует: об этом пишем.
-for _name in INSTALL_CONFIG.apply_settings(os.environ):
-    print(
-        f"recog: {_name} from the environment or .env overrides "
-        f"{SETTING_KEYS[_name]} of config.toml; keep only one of them",
-        file=sys.stderr,
-    )
+# Чтение .env и config.toml живёт в install_config; load_dotenv остаётся
+# доступным отсюда для прежних импортов.
+from recog.install_config import load_dotenv as load_dotenv
 
 
 def data_entries(root: Path) -> list[Path]:
@@ -116,22 +85,6 @@ MAX_SEGMENT_DURATION = 20.0
 MIC_SPEAKER_NAME = os.environ.get("MIC_SPEAKER_NAME", "").strip() or "Me"
 
 # ============================================================================
-# ASR DEVICE
-# ============================================================================
-#
-# Устройство инференса GigaAM: "auto" (cuda > mps > cpu), либо явное
-# "cuda" / "mps" / "cpu". Явно запрошенное недоступное устройство — ошибка
-# (fail-fast), чтобы машина без карты не уходила молча на CPU. CPU-режим
-# измерен и жизнеспособен (RTF 0.05–0.2), так что коллега без GPU получает
-# рабочий live-режим.
-RECOG_ASR_DEVICE = os.environ.get("RECOG_ASR_DEVICE", "").strip() or "auto"
-
-# Опциональный лимит числа потоков torch на CPU. Live и refine делят один
-# _model_lock и по умолчанию забирают все ядра; на слабой машине это мешает
-# остальному пайплайну. Пусто — не трогаем настройку torch.
-RECOG_TORCH_THREADS = os.environ.get("RECOG_TORCH_THREADS", "").strip()
-
-# ============================================================================
 # PER-SPEAKER PCM TRANSPORT
 # ============================================================================
 #
@@ -204,66 +157,15 @@ PCM_REFINE_WINDOW_S: float = 20.0
 PCM_REFINE_MONOLOG_CAP_S: float = 15.0
 
 
-# ============================================================================
-# REMOTE ASR OFFLOAD (ADR-0020)
-# ============================================================================
-#
-# Опционально выносит GigaAM-инференс на сетевой шлюз
-# (OpenAI-Whisper-совместимый). FallbackASR реализует все четыре пути
-# (transcribe_batch / transcribe_simple / transcribe_with_timestamps /
-# transcribe_chunk), но через `build_asr()` сегодня ходят только три live-пути —
-# offline `transcribe_simple` пока не подключён к CLI (recog/cli.py имеет лишь
-# `live`/`meetings`). committed default `local` — поведение
-# репозитория не меняется, пока пользователь не выставит env в `.env`.
-# При `remote` `build_asr()` отдаёт FallbackASR поверх RemoteASRClient с
-# circuit breaker'ом и ленивым локальным fallback'ом (см. recog/remote_asr.py).
-
-RECOG_ASR_BACKEND = os.environ.get("RECOG_ASR_BACKEND", "local")            # "local" | "remote"
-# Адрес шлюза не имеет дефолта: он у каждой установки свой. Пусто + backend
-# "remote" — ошибка конфигурации (build_asr поднимает RuntimeError), а не
-# молчаливый поход в чужую сеть.
-RECOG_ASR_REMOTE_URL = os.environ.get("RECOG_ASR_REMOTE_URL", "").strip()
-RECOG_ASR_REMOTE_MODEL = os.environ.get("RECOG_ASR_REMOTE_MODEL", "gigaam")
-RECOG_ASR_REMOTE_TIMEOUT_S = float(os.environ.get("RECOG_ASR_REMOTE_TIMEOUT_S", "15"))
-RECOG_ASR_CIRCUIT_FAILS = int(os.environ.get("RECOG_ASR_CIRCUIT_FAILS", "3"))
-RECOG_ASR_CIRCUIT_OPEN_S = float(os.environ.get("RECOG_ASR_CIRCUIT_OPEN_S", "60"))
-
+# Настройки установки (ASR-бэкенд и устройство, таймауты, дедуп live, буфер
+# при недоступном ASR, WS origin'ы, Zoom-приложение и др.) — типизированные
+# секции INSTALL_CONFIG в recog/install_config.py (config.toml + окружение).
 
 # ============================================================================
 # ASR FALLBACK BUFFERING (docs/plans/2026-06-02-asr-fallback-buffering-design.md)
 # ============================================================================
 
-# Таймаут remote-запроса для live-путей (transcribe_chunk / transcribe_batch).
-# Короче RECOG_ASR_REMOTE_TIMEOUT_S: 3-секундный live-чанк не должен блокировать
-# пайплайн на 15 s, когда шлюз лежит. Refine/offline остаются на длинном таймауте.
-RECOG_ASR_LIVE_TIMEOUT_S = float(os.environ.get("RECOG_ASR_LIVE_TIMEOUT_S", "5"))
-
-# Окно дедупликации live-сегментов: last_words применяются только если разрыв
-# (по capture-времени) между концом предыдущего сегмента и началом нового чанка
-# меньше этого значения. Дедуп существует для 0.5 s audio-overlap соседних
-# чанков; за пределами окна повторённая фраза — это реальная речь.
-DEDUP_MAX_GAP_S = float(os.environ.get("DEDUP_MAX_GAP_S", "2.0"))
-
-# Кап аудио-буфера AudioCapture, пока ASR недоступен (секунды). При превышении
-# старейшее аудио отбрасывается с rate-limited логом.
-ASR_PENDING_BUFFER_CAP_S = float(os.environ.get("ASR_PENDING_BUFFER_CAP_S", "600"))
 # Пока в capture-буфере не больше этого (consumer успевает: overlap + чанк),
 # метка времени буфера ресинхронизируется с wall-clock на каждом блоке. Больше —
 # бэклог при недоступном ASR, метки считаются по числу сэмплов (время произнесения).
 CAPTURE_RESYNC_MAX_S = 6.0
-
-
-# ============================================================================
-# WS ORIGIN ALLOWLIST
-# ============================================================================
-
-# Дополнительные origin'ы для WS-серверов (bridge + frontend live-stream),
-# через запятую, точным совпадением: "https://meet.example.com,https://ec.example.com".
-# Хосты конференций из manifest.json расширения зашиты в recog/ws_origin.py и
-# здесь не дублируются — эта ручка для чужой установки, где конференция живёт
-# на своём домене (его же надо добавить в manifest.json и пересобрать расширение).
-RECOG_EXTRA_WS_ORIGINS = os.environ.get("RECOG_EXTRA_WS_ORIGINS", "")
-
-# Источник сигналов нативного приложения Zoom (macOS, Accessibility) внутри
-# live-процесса: то же, что флаг `live --zoom-app`. См. docs/zoom-app.md.
-RECOG_ZOOM_APP = os.environ.get("RECOG_ZOOM_APP", "0") == "1"

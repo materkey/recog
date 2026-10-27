@@ -22,6 +22,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from recog import system_audio
+from recog.install_config import INSTALL_CONFIG
 from recog.system_audio import (
     BYTES_PER_SAMPLE,
     LOST_RETRY_S,
@@ -227,17 +228,21 @@ def test_parec_argv_follows_capture_sample_rate():
 
 
 def test_monitor_source_defaults_to_default_monitor():
-    assert resolve_pulse_monitor_source(env={}) == PULSE_DEFAULT_MONITOR
+    assert resolve_pulse_monitor_source(pinned="") == PULSE_DEFAULT_MONITOR
 
 
-def test_env_override_pins_the_monitor_source():
-    env = {"RECOG_PULSE_MONITOR_SOURCE": "  bluez.monitor  "}
-
-    assert resolve_pulse_monitor_source(env=env) == "bluez.monitor"
+def test_pinned_monitor_source_is_used():
+    assert resolve_pulse_monitor_source(pinned="  bluez.monitor  ") == "bluez.monitor"
 
 
-def test_blank_env_override_falls_back_to_default_monitor():
-    assert resolve_pulse_monitor_source(env={"RECOG_PULSE_MONITOR_SOURCE": "   "}) == PULSE_DEFAULT_MONITOR
+def test_blank_pinned_monitor_falls_back_to_default_monitor():
+    assert resolve_pulse_monitor_source(pinned="   ") == PULSE_DEFAULT_MONITOR
+
+
+def test_configured_monitor_source_is_the_default_pin(monkeypatch):
+    monkeypatch.setattr(INSTALL_CONFIG.live, "pulse_monitor_source", "bluez.monitor")
+
+    assert resolve_pulse_monitor_source() == "bluez.monitor"
 
 
 # =============================================================================
@@ -671,7 +676,7 @@ def _pactl_result(stdout: str, returncode: int = 0):
     return result
 
 
-def _make_pulse(sinks, env=None, poll_interval_s=0.01):
+def _make_pulse(sinks, pinned="", poll_interval_s=0.01):
     """PulseAudioCapture с инжектированным `run` вместо pactl."""
     calls = []
 
@@ -684,8 +689,9 @@ def _make_pulse(sinks, env=None, poll_interval_s=0.01):
             return _pactl_result(*value)
         return _pactl_result(value if value is not None else "")
 
-    cap = PulseAudioCapture(sample_rate=SR, env=env if env is not None else {},
-                            run=fake_run, poll_interval_s=poll_interval_s)
+    cap = PulseAudioCapture(
+        sample_rate=SR, pinned=pinned, run=fake_run, poll_interval_s=poll_interval_s
+    )
     return cap, calls
 
 
@@ -696,8 +702,8 @@ def test_pulse_capture_starts_on_the_default_monitor():
     assert cap._follow_default_sink is True
 
 
-def test_env_override_disables_default_sink_following():
-    cap, calls = _make_pulse([], env={"RECOG_PULSE_MONITOR_SOURCE": "bluez.monitor"})
+def test_pinned_monitor_disables_default_sink_following():
+    cap, calls = _make_pulse([], pinned="bluez.monitor")
 
     assert cap.argv == parec_argv("bluez.monitor", sample_rate=SR)
     assert cap._follow_default_sink is False
@@ -976,7 +982,7 @@ def test_stop_ends_the_default_sink_watch(monkeypatch):
 
 
 def test_override_start_does_not_watch_the_default_sink(monkeypatch):
-    cap, calls = _make_pulse([], env={"RECOG_PULSE_MONITOR_SOURCE": "bluez.monitor"})
+    cap, calls = _make_pulse([], pinned="bluez.monitor")
     cap._spawn = lambda: _FakeProcess(None)
     cap._reader_loop = lambda: None
     monkeypatch.setattr(system_audio.time, "sleep", lambda s: None)
@@ -1054,7 +1060,7 @@ def test_create_screencapture_uses_the_swift_helper(monkeypatch):
 
 
 def test_create_pulse_capture(monkeypatch):
-    monkeypatch.delenv("RECOG_PULSE_MONITOR_SOURCE", raising=False)
+    monkeypatch.setattr(INSTALL_CONFIG.live, "pulse_monitor_source", "")
 
     cap = create_system_capture("pulse", SR)
 

@@ -33,14 +33,20 @@ the tables above it has `[asr]`, `[live]`, `[copilot]`, `[web]` and `[macos]`:
 each key is the default of one environment variable the code reads (for example
 `[asr] backend` of `RECOG_ASR_BACKEND`, `[web] external_meetings_paths` of
 `EXTERNAL_MEETINGS_PATHS`), typed as in the example: `true`/`false` for flags,
-numbers for durations and counts, arrays for lists. `import recog` fills each
-variable the process environment and `.env` left unset, so either of those
-still overrides the file. A setting set to a different value in both places is
+numbers for durations and counts, arrays for lists. The variable, from the
+process environment or from `.env`, still overrides the file; flags accept
+`1/0`, `true/false`, `yes/no` and `on/off`, a list is comma-separated, and an
+empty value counts as unset. A malformed value in either place stops startup
+with the setting's name. A setting set to a different value in both places is
 reported on stderr at every start (`recog: RECOG_COPILOT_AUTOSPAWN from the
 environment or .env overrides [copilot] autospawn of config.toml`): delete
-the line from `.env`, since the file's value does nothing until then; the table that maps keys to variables is `SETTINGS`
-in `recog/install_config.py`. `RECOG_CONFIG_FILE` itself is read from the
-process environment, not from `.env`.
+the line from `.env`, since the file's value does nothing until then.
+
+`recog/install_config.py` loads `.env`, reads the file, lays the environment
+over it once at import and exposes the typed result as `INSTALL_CONFIG`
+(`INSTALL_CONFIG.asr.backend`, `INSTALL_CONFIG.copilot.grace_s`, ...): code
+reads that, never the environment. Each field declares its variable, type and
+default there. `RECOG_CONFIG_FILE` may be set in `.env` too.
 
 Unknown tables or keys are errors, not ignored, so a typo cannot silently drop
 a setting. A malformed file stops the services at startup

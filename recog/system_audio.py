@@ -17,7 +17,6 @@ Usage:
 Демо: `python -m recog.system_audio`.
 """
 
-import os
 import select
 import shutil
 import subprocess
@@ -31,7 +30,7 @@ from typing import Callable, List, Optional
 import numpy as np
 
 from recog.audio_capture import BufferedAudioCapture
-from recog.config import ASR_PENDING_BUFFER_CAP_S
+from recog.install_config import INSTALL_CONFIG
 from recog.log_utils import log_rate_limited
 
 # The Swift helper and its source live at the repo root, not inside the package.
@@ -166,18 +165,26 @@ def parec_argv(source: str, sample_rate: int = SAMPLE_RATE) -> List[str]:
     ]
 
 
-def resolve_pulse_monitor_source(env=os.environ) -> str:
-    """Начальный источник parec: override из env либо @DEFAULT_MONITOR@."""
-    override = (env.get("RECOG_PULSE_MONITOR_SOURCE") or "").strip()
-    return override or PULSE_DEFAULT_MONITOR
+def resolve_pulse_monitor_source(pinned: Optional[str] = None) -> str:
+    """Начальный источник parec: закреплённый монитор либо @DEFAULT_MONITOR@.
+
+    Без аргумента берётся `[live] pulse_monitor_source` (RECOG_PULSE_MONITOR_SOURCE).
+    """
+    if pinned is None:
+        pinned = INSTALL_CONFIG.live.pulse_monitor_source
+    return pinned.strip() or PULSE_DEFAULT_MONITOR
 
 
 class SubprocessPCMCapture(BufferedAudioCapture):
     """Захват PCM из stdout дочернего процесса с ограниченным respawn."""
 
-    def __init__(self, argv: List[str], name: str,
-                 sample_rate: int = SAMPLE_RATE,
-                 max_buffer_s: float = ASR_PENDING_BUFFER_CAP_S):
+    def __init__(
+        self,
+        argv: List[str],
+        name: str,
+        sample_rate: int = SAMPLE_RATE,
+        max_buffer_s: Optional[float] = None,
+    ):
         super().__init__(sample_rate=sample_rate, name=name,
                          max_buffer_s=max_buffer_s)
         self.argv = list(argv)
@@ -627,19 +634,22 @@ class PulseAudioCapture(SubprocessPCMCapture):
     идёт. С override источник фиксирован, наблюдение выключено.
     """
 
-    def __init__(self, sample_rate: int = SAMPLE_RATE,
-                 source: Optional[str] = None,
-                 env=os.environ,
-                 run: Callable[..., object] = subprocess.run,
-                 poll_interval_s: float = PULSE_POLL_INTERVAL_S,
-                 max_buffer_s: float = ASR_PENDING_BUFFER_CAP_S):
-        resolved = source or resolve_pulse_monitor_source(env)
+    def __init__(
+        self,
+        sample_rate: int = SAMPLE_RATE,
+        source: Optional[str] = None,
+        pinned: Optional[str] = None,
+        run: Callable[..., object] = subprocess.run,
+        poll_interval_s: float = PULSE_POLL_INTERVAL_S,
+        max_buffer_s: Optional[float] = None,
+    ):
+        resolved = source or resolve_pulse_monitor_source(pinned)
         super().__init__(parec_argv(resolved, sample_rate=sample_rate),
                          name="pulse", sample_rate=sample_rate,
                          max_buffer_s=max_buffer_s)
         self._run = run
         self._poll_interval_s = poll_interval_s
-        # Явный источник (env override или аргумент) отключает автопереключение.
+        # Явный источник (закреплённый монитор или аргумент) отключает автопереключение.
         self._follow_default_sink = source is None and resolved == PULSE_DEFAULT_MONITOR
         self._current_source = resolved
         self._pending_source: Optional[str] = None

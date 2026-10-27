@@ -14,7 +14,6 @@ from recog.ws_origin import (
     ALLOWED_ORIGINS,
     WILDCARD_DOMAINS,
     origin_allowed,
-    parse_extra_origins,
 )
 
 
@@ -253,22 +252,6 @@ def test_given_extra_origin_when_null_origin_checked_then_only_an_explicit_entry
     # even a literal "null" entry only matches the exact-set branch, which is
     # what an operator explicitly asked for
     assert origin_allowed("null", extra=extra) is True
-
-
-@pytest.mark.parametrize("raw,expected", [
-    (None, frozenset()),
-    ("", frozenset()),
-    ("   ", frozenset()),
-    ("https://a.test", frozenset({"https://a.test"})),
-    (" https://a.test , https://b.test ", frozenset({"https://a.test", "https://b.test"})),
-    ("https://a.test,,https://a.test", frozenset({"https://a.test"})),
-])
-def test_given_env_value_when_parsed_then_exact_origins_extracted(raw, expected):
-    """given: a RECOG_EXTRA_WS_ORIGINS value (possibly empty/padded)
-    when: parse_extra_origins runs
-    then: whitespace and empty items are dropped, entries stay exact strings
-    """
-    assert parse_extra_origins(raw) == expected
 
 
 def test_given_extra_origins_when_manifest_compared_then_builtin_set_unchanged():

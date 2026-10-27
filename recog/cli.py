@@ -152,10 +152,10 @@ def build_parser():
 
 
 def start_zoom_app_if_requested(args) -> None:
-    """Источник сигналов приложения Zoom: флаг `--zoom-app` или `RECOG_ZOOM_APP=1`."""
-    from recog.config import RECOG_ZOOM_APP
+    """Источник сигналов приложения Zoom: флаг `--zoom-app` или `[live] zoom_app`."""
+    from recog.install_config import INSTALL_CONFIG
 
-    if (args.zoom_app or RECOG_ZOOM_APP) and not args.list_devices:
+    if (args.zoom_app or INSTALL_CONFIG.live.zoom_app) and not args.list_devices:
         from recog import zoom_app
 
         zoom_app.start_in_background()

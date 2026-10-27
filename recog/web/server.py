@@ -54,7 +54,7 @@ HOST = "127.0.0.1"
 PORT = 9080
 DATA_DIR = get_data_dir()
 MEETINGS_DIR = DATA_DIR / "meetings"
-BRIDGE_WS_URL = os.environ.get("RECOG_BRIDGE_WS_URL", "ws://localhost:8766")
+BRIDGE_WS_URL = INSTALL_CONFIG.web.bridge_ws_url
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 
 

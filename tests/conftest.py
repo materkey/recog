@@ -20,8 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 os.environ["RECOG_CONFIG_FILE"] = "/nonexistent/recog/config.toml"
 os.environ["RECOG_CONFERENCE_HOSTS_FILE"] = "/nonexistent/recog/conference-hosts.json"
 
-import recog.config as recog_config
 import recog.privacy as recog_privacy
+from recog.install_config import INSTALL_CONFIG
 from recog.models import Segment
 
 
@@ -35,13 +35,13 @@ def isolated_privacy_settings(tmp_path, monkeypatch):
 def local_asr_backend(monkeypatch):
     """Pin the ASR backend to "local" for every unit test.
 
-    `recog.config` reads the developer's `.env` at import, so a machine
+    `recog.install_config` reads the developer's `.env` at import, so a machine
     running the remote offload would otherwise make every test that
     constructs a LiveTranscriber take the gateway path (and now fail
     outright when RECOG_ASR_REMOTE_URL is unset). Tests that exercise the
     remote path override this with their own monkeypatch.
     """
-    monkeypatch.setattr(recog_config, "RECOG_ASR_BACKEND", "local", raising=False)
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "local")
 
 
 @pytest.fixture

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from recog import zoom_app
+from recog.install_config import INSTALL_CONFIG
 from recog.zoom_app import (
     ENGLISH,
     JOIN_RETRY_S,
@@ -823,7 +824,7 @@ def test_given_no_helper_when_located_then_a_signed_bundle_with_a_stable_identif
     tmp_path, monkeypatch
 ):
     repo = _repo(tmp_path)
-    monkeypatch.delenv("RECOG_CODESIGN_IDENTITY", raising=False)
+    monkeypatch.setattr(INSTALL_CONFIG.macos, "codesign_identity", "")
     calls = _fake_toolchain(monkeypatch)
 
     app = find_or_build_helper(repo)
@@ -846,7 +847,9 @@ def test_given_signing_identity_configured_when_built_then_the_bundle_is_signed_
     tmp_path, monkeypatch
 ):
     repo = _repo(tmp_path)
-    monkeypatch.setenv("RECOG_CODESIGN_IDENTITY", "Developer ID Application: Example")
+    monkeypatch.setattr(
+        INSTALL_CONFIG.macos, "codesign_identity", "Developer ID Application: Example"
+    )
     calls = _fake_toolchain(monkeypatch)
 
     find_or_build_helper(repo)
@@ -1194,13 +1197,12 @@ def test_given_source_fails_when_supervised_then_it_is_logged_and_started_over(m
 def test_given_live_command_when_run_then_zoom_source_starts_only_when_asked(
     monkeypatch, argv, env_enabled, expected
 ):
-    import recog.config
     import recog.live
     from recog import cli
 
     started = []
     monkeypatch.setattr(cli.sys, "argv", ["recog", *argv])
-    monkeypatch.setattr(recog.config, "RECOG_ZOOM_APP", env_enabled)
+    monkeypatch.setattr(INSTALL_CONFIG.live, "zoom_app", env_enabled)
     monkeypatch.setattr(recog.live, "live_pipeline", lambda **kwargs: None)
     monkeypatch.setattr(zoom_app, "start_in_background", lambda: started.append(True))
 

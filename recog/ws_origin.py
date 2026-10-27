@@ -23,7 +23,6 @@ extension injection on a host by itself.
 from typing import Iterable, Optional
 from urllib.parse import urlsplit
 
-from .config import RECOG_EXTRA_WS_ORIGINS
 from .install_config import INSTALL_CONFIG
 
 # Exact-match origins: Jitsi/Google Meet/Element conference hosts used by the extension
@@ -46,16 +45,10 @@ def _in_wildcard_domain(hostname: str) -> bool:
     return any(hostname == domain or hostname.endswith("." + domain) for domain in WILDCARD_DOMAINS)
 
 
-def parse_extra_origins(raw: str | None) -> frozenset[str]:
-    """Split ``RECOG_EXTRA_WS_ORIGINS`` into a set of exact origins."""
-    if not raw:
-        return frozenset()
-    return frozenset(item.strip() for item in raw.split(",") if item.strip())
-
-
-# Installation-specific exact origins from the environment (empty by default).
-EXTRA_ORIGINS = parse_extra_origins(RECOG_EXTRA_WS_ORIGINS) | frozenset(
-    INSTALL_CONFIG.jitsi + INSTALL_CONFIG.matrix
+# Installation-specific exact origins ([web] extra_ws_origins and the
+# configured conference hosts; empty by default).
+EXTRA_ORIGINS = frozenset(
+    INSTALL_CONFIG.web.extra_ws_origins + INSTALL_CONFIG.jitsi + INSTALL_CONFIG.matrix
 )
 
 

@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from recog.config import get_data_dir
-from recog.install_config import canonical_source
+from recog.install_config import INSTALL_CONFIG, canonical_source
 
 
 UTC = timezone.utc
@@ -70,23 +70,16 @@ def is_conference_source(source: Optional[str]) -> bool:
 
 
 def get_external_paths() -> list[tuple[Path, Optional[str]]]:
-    """Get external meeting paths from environment variable.
+    """External meeting paths from `[web] external_meetings_paths`.
 
-    Format: path1:source1,path2:source2 or just path1,path2
+    Entries: "path:source" or just "path"
     If source not specified, uses parent directory name.
 
     Returns:
         List of (path, source_override) tuples
     """
-    paths_str = os.getenv("EXTERNAL_MEETINGS_PATHS", "")
-    if not paths_str:
-        return []
-
     result = []
-    for entry in paths_str.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
+    for entry in INSTALL_CONFIG.web.external_meetings_paths:
         if ":" in entry:
             path, source = entry.rsplit(":", 1)
             result.append((Path(path.strip()), source.strip()))

@@ -11,12 +11,13 @@ permission.
 from __future__ import annotations
 
 import hashlib
-import os
 import plistlib
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
+
+from recog.install_config import INSTALL_CONFIG
 
 
 def build_app(app: Path, source: Path, *, info: dict, frameworks: Sequence[str] = ()) -> None:
@@ -37,7 +38,7 @@ def build_app(app: Path, source: Path, *, info: dict, frameworks: Sequence[str] 
     # signature, which is the hash of the bundle: it stays the same while the
     # code does, and the permission must be granted again once the code
     # changes. A real identity keeps the grant across such changes too.
-    identity = os.environ.get("RECOG_CODESIGN_IDENTITY") or "-"
+    identity = INSTALL_CONFIG.macos.codesign_identity or "-"
     sign_command = [
         "codesign",
         "--force",

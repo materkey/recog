@@ -48,12 +48,11 @@ import websockets
 from recog.log_utils import log_rate_limited
 from recog.ai_settings import AiSettingsStore
 from recog.config import get_data_dir
+from recog.install_config import INSTALL_CONFIG
 
 
 LOG_PREFIX = "[copilot-supervisor]"
 DEFAULT_BRIDGE_URL = "ws://127.0.0.1:8766"
-DEFAULT_GRACE_S = 90.0
-DEFAULT_MCP_URL = "http://127.0.0.1:8767/mcp"
 TMUX_SOCKET = "recog-copilot"
 TMUX_SESSION = "copilot"
 # The tmux session name IS the session-kind marker (DW-9): manual (webapp)
@@ -88,13 +87,6 @@ def _linux_session_manager() -> bool:
     (container, chroot) falls back to plain tmux rather than failing to spawn.
     """
     return platform.system() == "Linux" and shutil.which("systemd-run") is not None
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    return raw.strip().lower() not in ("0", "false", "no", "off")
 
 
 # --- Commands: outputs of the state machine, executed by the supervisor glue ---
@@ -257,7 +249,7 @@ class TmuxRunner:
         ai_settings_store=None,
     ) -> None:
         self.repo_root = Path(repo_root) if repo_root is not None else REPO_ROOT
-        self.mcp_url = mcp_url or os.environ.get("RECOG_COPILOT_MCP_URL", DEFAULT_MCP_URL)
+        self.mcp_url = mcp_url or INSTALL_CONFIG.copilot.mcp_url
         self._run = run or _run_subprocess
         self.socket_name = socket_name
         self.session_name = session_name
@@ -782,16 +774,8 @@ class Supervisor:
         self._settings_error_logged = False
         self._latest_meeting_state = None
         self.lifecycle = SessionLifecycle()
-        self.grace_s = (
-            grace_s
-            if grace_s is not None
-            else float(os.environ.get("RECOG_COPILOT_GRACE_S", str(DEFAULT_GRACE_S)))
-        )
-        self.autospawn = (
-            autospawn
-            if autospawn is not None
-            else _env_flag("RECOG_COPILOT_AUTOSPAWN", True)
-        )
+        self.grace_s = grace_s if grace_s is not None else INSTALL_CONFIG.copilot.grace_s
+        self.autospawn = autospawn if autospawn is not None else INSTALL_CONFIG.copilot.autospawn
         if session_alive_probe is not None:
             self._session_alive_probe = session_alive_probe
         elif runner is not None and hasattr(runner, "alive"):

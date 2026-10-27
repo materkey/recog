@@ -14,8 +14,8 @@ import websockets
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import recog.copilot_supervisor as copilot_supervisor
+from recog.install_config import INSTALL_CONFIG
 from recog.copilot_supervisor import (
-    DEFAULT_MCP_URL,
     MANUAL_MEETING_ID,
     SYSTEMD_SESSION_UNIT,
     TMUX_SESSION,
@@ -499,20 +499,16 @@ async def test_autospawn_off_manual_frames_still_work():
     assert sup.lifecycle.state is State.IDLE
 
 
-def test_autospawn_env_flag_parsing(monkeypatch):
-    monkeypatch.setenv("RECOG_COPILOT_AUTOSPAWN", "0")
+def test_autospawn_from_installation_config(monkeypatch):
+    monkeypatch.setattr(INSTALL_CONFIG.copilot, "autospawn", False)
     assert Supervisor().autospawn is False
-    monkeypatch.setenv("RECOG_COPILOT_AUTOSPAWN", "1")
+    monkeypatch.setattr(INSTALL_CONFIG.copilot, "autospawn", True)
     assert Supervisor().autospawn is True
-    monkeypatch.delenv("RECOG_COPILOT_AUTOSPAWN")
-    assert Supervisor().autospawn is True  # default on
 
 
-def test_grace_env_default(monkeypatch):
-    monkeypatch.setenv("RECOG_COPILOT_GRACE_S", "17.5")
+def test_grace_from_installation_config(monkeypatch):
+    monkeypatch.setattr(INSTALL_CONFIG.copilot, "grace_s", 17.5)
     assert Supervisor().grace_s == 17.5
-    monkeypatch.delenv("RECOG_COPILOT_GRACE_S")
-    assert Supervisor().grace_s == 90.0
 
 
 # ---------------------------------------------------------------------------
@@ -1544,11 +1540,9 @@ def test_build_claude_command_flags_and_json():
     assert tokens[dev + 1] == "server:copilot"
 
 
-def test_mcp_url_from_env(monkeypatch):
-    monkeypatch.setenv("RECOG_COPILOT_MCP_URL", "http://127.0.0.1:9999/mcp")
+def test_mcp_url_from_installation_config(monkeypatch):
+    monkeypatch.setattr(INSTALL_CONFIG.copilot, "mcp_url", "http://127.0.0.1:9999/mcp")
     assert TmuxRunner(run=FakeTmux()).mcp_url == "http://127.0.0.1:9999/mcp"
-    monkeypatch.delenv("RECOG_COPILOT_MCP_URL")
-    assert TmuxRunner(run=FakeTmux()).mcp_url == DEFAULT_MCP_URL
 
 
 async def test_spawn_runs_new_session_with_socket_and_cwd(tmp_path):

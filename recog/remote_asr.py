@@ -579,22 +579,23 @@ def build_asr() -> "Union[ASRModule, FallbackASR]":
             адреса шлюза по умолчанию нет, и молча уходить на локальную
             модель нельзя: это разное потребление RAM и разная латентность.
     """
-    from . import config
+    from .install_config import INSTALL_CONFIG
 
-    if config.RECOG_ASR_BACKEND == "remote":
-        if not (config.RECOG_ASR_REMOTE_URL or "").strip():
+    settings = INSTALL_CONFIG.asr
+    if settings.backend == "remote":
+        if not settings.remote_url.strip():
             raise RuntimeError(
                 "RECOG_ASR_BACKEND=remote requires RECOG_ASR_REMOTE_URL"
             )
         remote = RemoteASRClient(
-            config.RECOG_ASR_REMOTE_URL,
-            config.RECOG_ASR_REMOTE_MODEL,
-            config.RECOG_ASR_REMOTE_TIMEOUT_S,
-            live_timeout_s=config.RECOG_ASR_LIVE_TIMEOUT_S,
+            settings.remote_url,
+            settings.remote_model,
+            settings.remote_timeout_s,
+            live_timeout_s=settings.live_timeout_s,
         )
         return FallbackASR(
             remote,
-            fail_threshold=config.RECOG_ASR_CIRCUIT_FAILS,
-            open_seconds=config.RECOG_ASR_CIRCUIT_OPEN_S,
+            fail_threshold=settings.circuit_fails,
+            open_seconds=settings.circuit_open_s,
         )
     return ASRModule()

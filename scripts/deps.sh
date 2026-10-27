@@ -166,10 +166,11 @@ except (OSError, ValueError) as error:
     print(f"Invalid AI settings: {error}")
     sys.exit(1)
 
-if config.RECOG_ASR_BACKEND == "remote" and not (config.RECOG_ASR_REMOTE_URL or "").strip():
+asr = recog.install_config.INSTALL_CONFIG.asr
+if asr.backend == "remote" and not asr.remote_url.strip():
     print("RECOG_ASR_BACKEND=remote but RECOG_ASR_REMOTE_URL is empty — "
-          "add your gateway URL to .env (build_asr() refuses to fall back to "
-          "the local model silently: different RAM and latency)")
+          "add the gateway URL as [asr] remote_url to config.toml (build_asr() "
+          "refuses to fall back to the local model silently: different RAM and latency)")
     sys.exit(1)
 ' "$DEPS_REPO_DIR" 2>&1
 }

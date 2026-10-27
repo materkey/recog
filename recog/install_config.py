@@ -4,6 +4,10 @@
 `RECOG_CONFIG_FILE`) holds what differs between installations of the same
 repository and is not a secret; secrets stay in `.env`. Python services and the
 extension build (`python -m recog.install_config`) share this one parser.
+
+Every setting is also an environment variable, which wins over the file: the
+process environment and the repository's `.env` (loaded here) override it.
+Modules read the typed result, `INSTALL_CONFIG`, never the environment.
 """
 
 import ipaddress
@@ -12,7 +16,7 @@ import os
 import re
 import sys
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -26,6 +30,79 @@ _BUILTIN_HOSTS = frozenset({"meet.vas3k.cloud", "meet.google.com"})
 _BUILTIN_WILDCARD_DOMAINS = ("ktalk.ru", "zoom.us")
 
 
+def _setting(variable: str, kind: str, default=None):
+    """A settings field: its environment variable and how values are read."""
+    return field(default=default, metadata={"env": variable, "kind": kind})
+
+
+# Sections are mutable only so that tests can monkeypatch one field; code
+# treats INSTALL_CONFIG as read-only.
+@dataclass
+class AsrSettings:
+    # "local" | "remote": remote offloads GigaAM to a gateway (ADR-0020).
+    backend: str = _setting("RECOG_ASR_BACKEND", "text", "local")
+    # auto (cuda > mps > cpu) | cuda | mps | cpu; explicit + unavailable fails.
+    device: str = _setting("RECOG_ASR_DEVICE", "text", "auto")
+    # torch.set_num_threads() cap for CPU inference; None leaves torch alone.
+    torch_threads: int | None = _setting("RECOG_TORCH_THREADS", "integer")
+    # Gateway base URL; no default, so remote without it fails at startup.
+    remote_url: str = _setting("RECOG_ASR_REMOTE_URL", "text", "")
+    remote_model: str = _setting("RECOG_ASR_REMOTE_MODEL", "text", "gigaam")
+    remote_timeout_s: float = _setting("RECOG_ASR_REMOTE_TIMEOUT_S", "number", 15.0)
+    # Shorter timeout of live chunk/batch calls; refine/offline keep the long one.
+    live_timeout_s: float = _setting("RECOG_ASR_LIVE_TIMEOUT_S", "number", 5.0)
+    circuit_fails: int = _setting("RECOG_ASR_CIRCUIT_FAILS", "integer", 3)
+    circuit_open_s: float = _setting("RECOG_ASR_CIRCUIT_OPEN_S", "number", 60.0)
+    # Audio kept in memory while no ASR can serve; the oldest is dropped beyond it.
+    pending_buffer_cap_s: float = _setting("ASR_PENDING_BUFFER_CAP_S", "number", 600.0)
+
+
+@dataclass
+class LiveSettings:
+    # Last-words dedup applies only within this gap from the previous segment.
+    dedup_max_gap_s: float = _setting("DEDUP_MAX_GAP_S", "number", 2.0)
+    # Pinned PulseAudio/PipeWire monitor (Linux); empty follows the default sink.
+    pulse_monitor_source: str = _setting("RECOG_PULSE_MONITOR_SOURCE", "text", "")
+    # Native Zoom application source on macOS, same as `live --zoom-app`.
+    zoom_app: bool = _setting("RECOG_ZOOM_APP", "flag", False)
+
+
+@dataclass
+class CopilotSettings:
+    autospawn: bool = _setting("RECOG_COPILOT_AUTOSPAWN", "flag", True)
+    grace_s: float = _setting("RECOG_COPILOT_GRACE_S", "number", 90.0)
+    mcp_url: str = _setting("RECOG_COPILOT_MCP_URL", "text", "http://127.0.0.1:8767/mcp")
+
+
+@dataclass
+class WebSettings:
+    bridge_ws_url: str = _setting("RECOG_BRIDGE_WS_URL", "text", "ws://localhost:8766")
+    # Exact origins allowed besides the conference hosts, backend only.
+    extra_ws_origins: tuple[str, ...] = _setting("RECOG_EXTRA_WS_ORIGINS", "list", ())
+    # Read-only meeting directories of other sources: "path" or "path:source".
+    external_meetings_paths: tuple[str, ...] = _setting("EXTERNAL_MEETINGS_PATHS", "list", ())
+
+
+@dataclass
+class MacosSettings:
+    # Signing identity of RecogZoomHelper.app; empty signs ad hoc.
+    codesign_identity: str = _setting("RECOG_CODESIGN_IDENTITY", "text", "")
+
+
+SECTIONS = {
+    "asr": AsrSettings,
+    "live": LiveSettings,
+    "copilot": CopilotSettings,
+    "web": WebSettings,
+    "macos": MacosSettings,
+}
+
+# Environment variable -> its config.toml key, for messages.
+SETTING_KEYS = {
+    f.metadata["env"]: f"[{name}] {f.name}" for name, cls in SECTIONS.items() for f in fields(cls)
+}
+
+
 @dataclass(frozen=True)
 class InstallConfig:
     jitsi: tuple[str, ...] = ()
@@ -34,67 +111,13 @@ class InstallConfig:
     source_aliases: dict[str, str] = field(default_factory=dict)
     # Web UI names of the sources the installation's own importers write.
     source_labels: dict[str, str] = field(default_factory=dict)
-    # Environment variable -> value, from the settings tables (SETTINGS).
-    settings: dict[str, str] = field(default_factory=dict)
-
-    def apply_settings(self, environ) -> list[str]:
-        """Fill what the process environment and .env left unset.
-
-        Returns the variables they had already set to another value: those
-        settings of the file do nothing, which the caller reports instead of
-        hiding. The same value is no conflict, and is what a child process
-        sees after its parent applied the file.
-        """
-        overridden = [
-            name for name, value in self.settings.items() if environ.get(name, value) != value
-        ]
-        for name, value in self.settings.items():
-            environ.setdefault(name, value)
-        return overridden
-
-
-# Settings the code reads from the environment: table -> key -> (variable,
-# type). A value here is the default the environment and .env can override.
-SETTINGS = {
-    "asr": {
-        "backend": ("RECOG_ASR_BACKEND", str),
-        "device": ("RECOG_ASR_DEVICE", str),
-        "torch_threads": ("RECOG_TORCH_THREADS", int),
-        "remote_url": ("RECOG_ASR_REMOTE_URL", str),
-        "remote_model": ("RECOG_ASR_REMOTE_MODEL", str),
-        "remote_timeout_s": ("RECOG_ASR_REMOTE_TIMEOUT_S", float),
-        "live_timeout_s": ("RECOG_ASR_LIVE_TIMEOUT_S", float),
-        "circuit_fails": ("RECOG_ASR_CIRCUIT_FAILS", int),
-        "circuit_open_s": ("RECOG_ASR_CIRCUIT_OPEN_S", float),
-        "pending_buffer_cap_s": ("ASR_PENDING_BUFFER_CAP_S", float),
-    },
-    "live": {
-        "dedup_max_gap_s": ("DEDUP_MAX_GAP_S", float),
-        "pulse_monitor_source": ("RECOG_PULSE_MONITOR_SOURCE", str),
-        "zoom_app": ("RECOG_ZOOM_APP", bool),
-    },
-    "copilot": {
-        "autospawn": ("RECOG_COPILOT_AUTOSPAWN", bool),
-        "grace_s": ("RECOG_COPILOT_GRACE_S", float),
-        "mcp_url": ("RECOG_COPILOT_MCP_URL", str),
-    },
-    "web": {
-        "bridge_ws_url": ("RECOG_BRIDGE_WS_URL", str),
-        "extra_ws_origins": ("RECOG_EXTRA_WS_ORIGINS", list),
-        "external_meetings_paths": ("EXTERNAL_MEETINGS_PATHS", list),
-    },
-    "macos": {
-        "codesign_identity": ("RECOG_CODESIGN_IDENTITY", str),
-    },
-}
-
-
-# Environment variable -> its config.toml key, for messages.
-SETTING_KEYS = {
-    variable: f"[{table}] {key}"
-    for table, keys in SETTINGS.items()
-    for key, (variable, _) in keys.items()
-}
+    asr: AsrSettings = field(default_factory=AsrSettings)
+    live: LiveSettings = field(default_factory=LiveSettings)
+    copilot: CopilotSettings = field(default_factory=CopilotSettings)
+    web: WebSettings = field(default_factory=WebSettings)
+    macos: MacosSettings = field(default_factory=MacosSettings)
+    # Environment variables whose setting the file gave, to report conflicts.
+    from_file: frozenset[str] = frozenset()
 
 
 def _resolve(configured: str) -> Path:
@@ -199,46 +222,88 @@ def _expect(value, kinds, name: str) -> None:
         raise TypeError(f"{name} has the wrong type")
 
 
-def _flag(value, name: str) -> str:
+def _positive(value: int, name: str) -> int:
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _file_flag(value, name: str) -> bool:
     _expect(value, bool, name)
-    return "1" if value else "0"
+    return value
 
 
-def _integer(value, name: str) -> str:
+def _file_integer(value, name: str) -> int:
     _expect(value, int, name)
-    return str(value)
+    return _positive(value, name)
 
 
-def _number(value, name: str) -> str:
+def _file_number(value, name: str) -> float:
     _expect(value, (int, float), name)
-    return str(value)
+    return float(value)
 
 
-def _text(value, name: str) -> str:
+def _file_text(value, name: str) -> str:
     _expect(value, str, name)
     return value
 
 
-def _joined(value, name: str) -> str:
+def _file_list(value, name: str) -> tuple[str, ...]:
     _expect(value, list, name)
-    return ",".join(_text(item, name) for item in value)
+    return tuple(_file_text(item, name) for item in value)
 
 
-_CONVERT = {bool: _flag, int: _integer, float: _number, str: _text, list: _joined}
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
 
 
-def _settings(document: dict) -> dict[str, str]:
-    settings = {}
-    for table, keys in SETTINGS.items():
-        for key, value in _table(document.get(table, {}), f"[{table}]", set(keys)).items():
-            variable, kind = keys[key]
-            settings[variable] = _CONVERT[kind](value, f"{table}.{key}")
-    return settings
+def _env_flag(raw: str, name: str) -> bool:
+    if raw.lower() not in _TRUE | _FALSE:
+        raise ValueError(f"{name}={raw!r} is not one of 1/0, true/false, yes/no, on/off")
+    return raw.lower() in _TRUE
+
+
+def _env_integer(raw: str, name: str) -> int:
+    return _positive(int(raw), name)
+
+
+def _env_list(raw: str, name: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+# kind -> (value from the file, value from an environment string).
+_KINDS = {
+    "flag": (_file_flag, _env_flag),
+    "integer": (_file_integer, _env_integer),
+    "number": (_file_number, lambda raw, name: float(raw)),
+    "text": (_file_text, lambda raw, name: raw),
+    "list": (_file_list, _env_list),
+}
+
+
+def _file_section(cls, document: dict, name: str):
+    table = _table(document.get(name, {}), f"[{name}]", {f.name for f in fields(cls)})
+    return cls(
+        **{
+            f.name: _KINDS[f.metadata["kind"]][0](table[f.name], f"{name}.{f.name}")
+            for f in fields(cls)
+            if f.name in table
+        }
+    )
+
+
+def _set_in_file(document: dict) -> frozenset[str]:
+    return frozenset(
+        f.metadata["env"]
+        for name, cls in SECTIONS.items()
+        for f in fields(cls)
+        if f.name in document.get(name, {})
+    )
 
 
 def parse_install_config(value: dict) -> InstallConfig:
     """Validate the parsed TOML document; nothing unknown is ignored."""
-    value = _table(value, "The configuration", {"conferences", "sources", *SETTINGS})
+    value = _table(value, "The configuration", {"conferences", "sources", *SECTIONS})
     conferences = _table(value.get("conferences", {}), "[conferences]", set(CONFIGURABLE_PLATFORMS))
     sources = _table(value.get("sources", {}), "[sources]", {"aliases", "labels"})
     return InstallConfig(
@@ -252,7 +317,8 @@ def parse_install_config(value: dict) -> InstallConfig:
             "[sources.labels] must map source names to nonempty names",
             _label,
         ),
-        settings=_settings(value),
+        **{name: _file_section(cls, value, name) for name, cls in SECTIONS.items()},
+        from_file=_set_in_file(value),
         **_conference_hosts(conferences),
     )
 
@@ -264,6 +330,39 @@ def _from_legacy(value) -> dict:
     if "source_aliases" in value:
         document["sources"] = {"aliases": value["source_aliases"]}
     return document
+
+
+def _environment_value(f, environ):
+    """The setting's value from the environment, or None when it is unset."""
+    raw = environ.get(f.metadata["env"], "").strip()
+    if not raw:
+        return None
+    try:
+        return _KINDS[f.metadata["kind"]][1](raw, f.metadata["env"])
+    except ValueError as error:
+        raise ValueError(f"{f.metadata['env']}: {error}") from error
+
+
+def with_environment(config: InstallConfig, environ) -> tuple[InstallConfig, list[str]]:
+    """The config with environment values over the file's.
+
+    Also returns the variables that override a different value the file gave:
+    the file's value does nothing, which the caller reports instead of hiding.
+    """
+    sections = {}
+    overridden = []
+    for name in SECTIONS:
+        section = getattr(config, name)
+        changes = {}
+        for f in fields(section):
+            value = _environment_value(f, environ)
+            if value is None:
+                continue
+            changes[f.name] = value
+            if f.metadata["env"] in config.from_file and value != getattr(section, f.name):
+                overridden.append(f.metadata["env"])
+        sections[name] = replace(section, **changes)
+    return replace(config, **sections), overridden
 
 
 def load_install_config(path: Path | None = None, legacy: Path | None = None) -> InstallConfig:
@@ -291,7 +390,41 @@ def load_install_config(path: Path | None = None, legacy: Path | None = None) ->
     return InstallConfig()
 
 
-INSTALL_CONFIG = load_install_config()
+def load_dotenv(env_path: Path | None = None) -> None:
+    """Load the repository's .env into the environment without overriding it."""
+    if env_path is None:
+        env_path = REPO_ROOT / ".env"
+
+    if not env_path.exists():
+        return
+
+    with open(env_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+
+
+def _load() -> InstallConfig:
+    config, overridden = with_environment(load_install_config(), os.environ)
+    for variable in overridden:
+        print(
+            f"recog: {variable} from the environment or .env overrides "
+            f"{SETTING_KEYS[variable]} of config.toml; keep only one of them",
+            file=sys.stderr,
+        )
+    return config
+
+
+# .env first: like the process environment, it wins over config.toml.
+load_dotenv()
+INSTALL_CONFIG = _load()
 
 
 def canonical_source(source: str | None) -> str | None:

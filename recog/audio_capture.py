@@ -15,14 +15,16 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from .config import ASR_PENDING_BUFFER_CAP_S, CAPTURE_RESYNC_MAX_S
+from .config import CAPTURE_RESYNC_MAX_S
+from .install_config import INSTALL_CONFIG
 
 
 class BufferedAudioCapture:
     """Буфер захвата с capture-временем, капом и overlap-нарезкой чанков."""
 
-    def __init__(self, sample_rate: int, name: str,
-                 max_buffer_s: float = ASR_PENDING_BUFFER_CAP_S):
+    def __init__(self, sample_rate: int, name: str, max_buffer_s: Optional[float] = None):
+        if max_buffer_s is None:
+            max_buffer_s = INSTALL_CONFIG.asr.pending_buffer_cap_s
         self.sample_rate = sample_rate
         self.name = name
         self.buffer = []

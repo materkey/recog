@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from recog import macos_bundle, macos_launcher
+from recog.install_config import INSTALL_CONFIG
 from recog.macos_launcher import find_or_build_launcher
 
 
@@ -33,7 +34,7 @@ def toolchain(monkeypatch):
 
     monkeypatch.setattr(macos_bundle.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(macos_bundle.subprocess, "run", fake_run)
-    monkeypatch.delenv("RECOG_CODESIGN_IDENTITY", raising=False)
+    monkeypatch.setattr(INSTALL_CONFIG.macos, "codesign_identity", "")
     return calls
 
 
