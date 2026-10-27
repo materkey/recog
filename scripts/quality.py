@@ -25,6 +25,15 @@ from quality_policy import (
     validate_region,
 )
 
+# At import, so that crapkit's spawned analysis workers, which import this
+# module again, read JavaScript with the same tokenizer.
+try:
+    import lizard_template_literals
+except ImportError:  # Quality tools absent: only the policy tests import this module.
+    pass
+else:
+    lizard_template_literals.install()
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "scripts"
 PYTHON = sys.executable

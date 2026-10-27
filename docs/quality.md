@@ -101,7 +101,12 @@ Istanbul report). Same-named methods use
 crapkit's canonical ordinal identities; signature changes are conservatively new
 functions. Duplicate candidates use its default minimum eight normalized lines
 and 0.8 containment; all pairs are retained, not just the first 50. The gate owns
-only comparison policy, orchestration and report formatting.
+only comparison policy, orchestration and report formatting, plus one
+correction of lizard 1.24.0 (`scripts/lizard_template_literals.py`): lizard ends
+a template literal at the next backtick, so one nested in another's `${…}` made
+the enclosing function absorb every function after it. The gate replaces that
+match with a scanner that finds the literal's real end and yields the same
+tokens otherwise; it refuses to run with another lizard version.
 
 SCB uses **scb-check 0.2.0**, including ast-grep. Exit 1 means valid findings and is
 accepted for its informational metrics; exit 2 or malformed/incomplete output is
