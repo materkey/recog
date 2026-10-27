@@ -7,6 +7,8 @@ Without rewrite detection the tailer goes blind to all subsequent
 appends. With detection we reset to 0 and filter duplicates via a
 `_seen_segment_ids` watermark so already-broadcast rows are not resent.
 """
+
+import asyncio
 import json
 import os
 import sys
@@ -340,3 +342,107 @@ async def test_missing_id_segments_still_broadcast(tmp_path):
     assert len(broadcasts) == 1
     assert len(broadcasts[0]["data"]) == 2
     assert watcher._seen_segment_ids == {1}
+
+
+class _Storage:
+    def __init__(self, base_path: Path, active: list[dict] | None = None):
+        self.base_path = base_path
+        self._active = active or []
+
+    def list_active_meetings(self):
+        return self._active
+
+
+class _Event:
+    def __init__(self, path: Path, is_directory: bool = False):
+        self.src_path = str(path)
+        self.is_directory = is_directory
+
+
+def _meeting_meta(base: Path, meeting_id: str, source: str) -> Path:
+    path = base / meeting_id / "meta.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"source": source}), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def storage(tmp_path, monkeypatch):
+    from recog.web import server
+
+    storage = _Storage(tmp_path)
+    monkeypatch.setattr(server, "get_storage", lambda: storage)
+    return storage
+
+
+async def _drain() -> None:
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_current_orphan_promoted_to_ktalk_when_checking_source_then_refine_flag_is_resent(
+    storage,
+):
+    _meeting_meta(storage.base_path, "m1", "ktalk")
+    watcher, broadcasts = _make_watcher()
+    watcher.set_current_meeting("m1", "orphan")
+
+    await watcher._check_source_change("m1")
+    await watcher._check_source_change("m1")
+
+    assert broadcasts == [{"type": "refine_state", "meeting_id": "m1", "refine_enabled": True}]
+    assert watcher.current_meeting_source == "ktalk"
+
+
+@pytest.mark.asyncio
+async def test_other_or_missing_meeting_when_checking_source_then_nothing_is_sent(storage):
+    _meeting_meta(storage.base_path, "other", "ktalk")
+    watcher, broadcasts = _make_watcher()
+    watcher.set_current_meeting("m1", "orphan")
+
+    await watcher._check_source_change("other")
+    await watcher._check_source_change("m1")
+
+    assert broadcasts == []
+    assert watcher.current_meeting_source == "orphan"
+
+
+@pytest.mark.asyncio
+async def test_meta_of_current_meeting_modified_when_watching_then_source_change_is_checked(
+    storage,
+):
+    meta = _meeting_meta(storage.base_path, "m1", "ktalk")
+    other = _meeting_meta(storage.base_path, "m2", "ktalk")
+    watcher, broadcasts = _make_watcher()
+    watcher.set_current_meeting("m1", "orphan")
+    watcher.set_loop(asyncio.get_running_loop())
+
+    watcher.on_modified(_Event(meta.parent, is_directory=True))
+    watcher.on_modified(_Event(other))
+    await _drain()
+    assert broadcasts == []
+
+    watcher.on_modified(_Event(meta))
+    await _drain()
+    assert broadcasts == [{"type": "refine_state", "meeting_id": "m1", "refine_enabled": True}]
+
+
+@pytest.mark.asyncio
+async def test_index_modified_when_watching_then_new_current_meeting_is_announced(storage):
+    storage._active = [{"id": "m2", "source": "ktalk"}]
+    watcher, broadcasts = _make_watcher()
+    watcher.set_current_meeting("m1", "orphan")
+    watcher.set_loop(asyncio.get_running_loop())
+
+    watcher.on_modified(_Event(storage.base_path / "index.json"))
+    await _drain()
+
+    assert broadcasts == [
+        {
+            "type": "meeting_change",
+            "meeting": {"id": "m2", "source": "ktalk"},
+            "refine_enabled": True,
+        }
+    ]
+    assert watcher.current_meeting_id == "m2"
