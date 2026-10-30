@@ -850,7 +850,12 @@ const views = {
                     break;
 
                 case 'copilot_reply':
-                    handleCopilotReply(msg);
+                case 'copilot_chat_echo':
+                    handleCopilotDialogFrame(msg);
+                    break;
+
+                case 'copilot_history':
+                    handleCopilotHistory(msg);
                     break;
 
                 case 'copilot_status':
@@ -1059,7 +1064,9 @@ function toggleFollowMode() {
 // --- Copilot Panel ---
 // Module-level state so chat history, chip state, and pending requests
 // survive view switches (views.live.disconnect() must not clear this).
-// F5 loses history by design; the session itself survives tab close (D2).
+// The conversation itself is shared: the server replays it to every new
+// connection, so F5 and a new tab get it back (local error bubbles stay local).
+// The session survives tab close (D2).
 
 const COPILOT_TRANSCRIPT_WINDOW_SIZE = 15;
 
@@ -1082,6 +1089,7 @@ const COPILOT_CONFERENCE_SOURCES = new Set(['ktalk', 'vas3k', 'jitsi', 'matrix',
 const copilotState = {
     messages: [],           // {id, kind, text, request_id, status, time}
     pending: new Map(),     // request_id -> {userId, assistantId, createdAt}
+    seenDialogIds: new Set(),   // dialog_id of the frames already shown
     agentState: 'offline',
     panelOpen: false,
     unread: false,
@@ -1089,12 +1097,16 @@ const copilotState = {
     stopPendingId: null     // request_id of the in-flight stop click
 };
 
-function copilotNowDisplay() {
-    return new Date().toLocaleTimeString('ru-RU', {
+function copilotTimeDisplay(ms) {
+    return new Date(ms).toLocaleTimeString('ru-RU', {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit'
     });
+}
+
+function copilotNowDisplay() {
+    return copilotTimeDisplay(Date.now());
 }
 
 function generateCopilotRequestId() {
@@ -1397,16 +1409,61 @@ function submitCopilotChat() {
     input.value = '';
 }
 
+// A frame of the shared dialog: live or replayed, each is shown once. A frontend
+// service not yet restarted after an update serves this file but sends no ids.
+function handleCopilotDialogFrame(frame) {
+    if (frame.dialog_id) {
+        if (copilotState.seenDialogIds.has(frame.dialog_id)) return;
+        copilotState.seenDialogIds.add(frame.dialog_id);
+    }
+    if (frame.type === 'copilot_chat_echo') {
+        handleCopilotChatEcho(frame);
+    } else {
+        handleCopilotReply(frame);
+    }
+}
+
+// Replayed frames were read elsewhere or earlier: the dot stays as it was.
+function handleCopilotHistory(data) {
+    const unread = copilotState.unread;
+    for (const frame of data.frames) {
+        handleCopilotDialogFrame(frame);
+    }
+    copilotState.unread = unread;
+    updateCopilotUnreadDot();
+}
+
+function copilotQuestionShown(requestId) {
+    for (const msg of copilotState.messages) {
+        if (msg.kind === 'user' && msg.request_id === requestId) return true;
+    }
+    return false;
+}
+
+// A question asked elsewhere. Its reply arrives as an ordinary append, since
+// only the asking tab holds a placeholder; this tab's own question is on screen.
+function handleCopilotChatEcho(data) {
+    if (copilotQuestionShown(data.request_id)) return;
+    appendCopilotMessage({
+        kind: 'user',
+        text: data.text,
+        request_id: data.request_id,
+        time: copilotTimeDisplay(data.created_at)
+    });
+}
+
 function handleCopilotReply(data) {
     const requestId = data && data.request_id;
     const replyText = (data && (data.text || data.message)) || '';
     const kind = data && data.kind === 'proactive' ? 'proactive' : 'assistant';
+    const time = copilotTimeDisplay(data.created_at);
 
     if (kind === 'proactive') {
         appendCopilotMessage({
             kind: 'proactive',
             text: replyText,
-            request_id: requestId || null
+            request_id: requestId || null,
+            time
         });
         return;
     }
@@ -1418,7 +1475,7 @@ function handleCopilotReply(data) {
             kind: 'assistant',
             text: replyText,
             status: 'done',
-            time: copilotNowDisplay()
+            time
         });
         copilotState.pending.delete(requestId);
         noteCopilotUnread('assistant');
@@ -1428,7 +1485,8 @@ function handleCopilotReply(data) {
     appendCopilotMessage({
         kind: 'assistant',
         text: replyText,
-        request_id: requestId || null
+        request_id: requestId || null,
+        time
     });
 }
 

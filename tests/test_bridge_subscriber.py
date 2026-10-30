@@ -280,6 +280,35 @@ async def test_subscriber_forwards_copilot_reply_and_drops_unknown():
 
 
 @pytest.mark.asyncio
+async def test_given_chat_echo_from_bridge_when_subscriber_runs_then_forwarded_verbatim():
+    forwarded: list[str] = []
+
+    async def forward(message: str) -> None:
+        forwarded.append(message)
+
+    echo = {"type": "copilot_chat_echo", "request_id": "req-1", "text": "вопрос", "created_at": 1.0}
+
+    async def handler(websocket):
+        await websocket.send(json.dumps(echo, ensure_ascii=False))
+        await asyncio.sleep(0.5)
+
+    server, port = await _start_mock_bridge(handler)
+    sub = BridgeSubscriber(
+        bridge_url=f"ws://127.0.0.1:{port}",
+        forward_callback=forward,
+    )
+    await sub.start()
+
+    try:
+        await _wait_for(lambda: forwarded)
+        assert [json.loads(raw) for raw in forwarded] == [echo]
+    finally:
+        await sub.stop()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_subscriber_forwards_copilot_status_variants():
     """given: connected bridge sends several copilot_status variants
     when: BridgeSubscriber processes the stream

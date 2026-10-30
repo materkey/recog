@@ -4,11 +4,13 @@
 receive loop routes frames through `handle_client_frame`: a three-type
 inbound whitelist relays accepted frames verbatim via `subscriber.send(raw)`
 and answers `copilot_status {status: "bridge_disconnected", request_id}` to
-the originating client on failure. The server is a pure relay (D5) — the only
-state it keeps is a primer cache of the last
-`copilot_status {status: "agent_state"}` bridge frame, delivered right after
-`init` on each new live-stream connection.
+the originating client on failure. The server is a relay (D5) — the only
+state it keeps is what a new live-stream connection needs right after `init`:
+a primer cache of the last `copilot_status {status: "agent_state"}` bridge
+frame and the recent frames of the shared dialog.
 """
+
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -69,6 +71,10 @@ class FakeActiveStorage:
         return {"segments": []}
 
 
+async def _noop_forward(raw: str) -> None:
+    pass
+
+
 @pytest.fixture(autouse=True)
 def reset_primer_cache():
     """Reset module globals mutated by tests around every test."""
@@ -77,6 +83,7 @@ def reset_primer_cache():
     previous_transcript_loop = server.transcript_watcher._loop
     previous_live_loop = server.live_watcher._loop
     server._agent_state_primer = None
+    server._copilot_dialog.clear()
     yield
     server._agent_state_primer = None
     server.observer = previous_observer
@@ -654,3 +661,81 @@ async def test_lifespan_wires_bridge_frames_bidirectionally(monkeypatch, tmp_pat
                 "request_id": "fail-2",
             }
             assert FakeBridgeSubscriber.instance.sent == [first, second]
+
+
+# =============================================================================
+# Shared dialog: every tab sees the same conversation
+# =============================================================================
+
+
+def dialog_frames() -> list[dict]:
+    return [
+        {"type": "copilot_chat_echo", "request_id": "r1", "text": "вопрос", "created_at": 1.0},
+        {
+            "type": "copilot_reply",
+            "request_id": "r1",
+            "kind": "assistant",
+            "text": "ответ",
+            "created_at": 2.0,
+        },
+    ]
+
+
+def test_given_dialog_when_new_tab_connects_then_history_follows_init(monkeypatch):
+    monkeypatch.setattr(server, "get_storage", lambda: FakeStorage())
+    monkeypatch.setattr(server, "_forward_bridge_message", _noop_forward)
+    for frame in dialog_frames():
+        asyncio.run(server._on_bridge_frame(json.dumps(frame)))
+
+    with TestClient(server.app).websocket_connect("/api/live/stream") as ws:
+        assert ws.receive_json()["type"] == "init"
+        history = ws.receive_json()
+
+    assert history["type"] == "copilot_history"
+    assert [f["text"] for f in history["frames"]] == ["вопрос", "ответ"]
+
+
+def test_given_no_dialog_when_new_tab_connects_then_no_history_frame(monkeypatch):
+    monkeypatch.setattr(server, "get_storage", lambda: FakeStorage())
+    server._agent_state_primer = agent_state_frame()
+
+    with TestClient(server.app).websocket_connect("/api/live/stream") as ws:
+        assert ws.receive_json()["type"] == "init"
+        assert ws.receive_json()["status"] == "agent_state"
+        ws.close()
+
+
+@pytest.mark.asyncio
+async def test_given_dialog_frame_when_forwarded_then_live_and_history_share_its_id(monkeypatch):
+    forwarded: list[str] = []
+
+    async def record(raw: str) -> None:
+        forwarded.append(raw)
+
+    monkeypatch.setattr(server, "_forward_bridge_message", record)
+    await server._on_bridge_frame(json.dumps(dialog_frames()[0]))
+
+    live = json.loads(forwarded[0])
+    assert live["text"] == "вопрос"
+    assert live["dialog_id"]
+    assert list(server._copilot_dialog) == [live]
+
+
+@pytest.mark.asyncio
+async def test_given_long_dialog_when_limit_exceeded_then_oldest_frames_dropped(monkeypatch):
+    monkeypatch.setattr(server, "_forward_bridge_message", _noop_forward)
+    for index in range(server.COPILOT_DIALOG_LIMIT + 1):
+        await server._on_bridge_frame(
+            json.dumps({"type": "copilot_reply", "request_id": f"r{index}", "text": str(index)})
+        )
+
+    assert len(server._copilot_dialog) == server.COPILOT_DIALOG_LIMIT
+    assert server._copilot_dialog[0]["text"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_given_status_frame_when_forwarded_then_not_part_of_dialog(monkeypatch):
+    monkeypatch.setattr(server, "_forward_bridge_message", _noop_forward)
+    await server._on_bridge_frame(agent_state_frame())
+
+    assert list(server._copilot_dialog) == []

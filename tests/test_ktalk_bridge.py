@@ -1551,6 +1551,50 @@ async def test_copilot_chat_message_forwarded_to_channel_client():
 
 
 @pytest.mark.asyncio
+async def test_given_webapp_tabs_when_extension_chat_delivered_then_only_subscribers_get_echo():
+    bridge = KTalkBridge()
+    bridge._copilot_channel_clients.add(RecordingClient())
+    extension_ws = RecordingClient()
+    bridge._connected_clients.add(extension_ws)
+    subscriber = RecordingClient()
+    bridge._subscriber_clients.add(subscriber)
+
+    await bridge._process_message(
+        {
+            "type": "copilot_chat_message",
+            "request_id": "req-echo",
+            "text": "к чему ведёт",
+            "created_at": 1700000123456.0,
+        },
+        websocket=extension_ws,
+    )
+
+    assert [json.loads(raw) for raw in subscriber.sent] == [
+        {
+            "type": "copilot_chat_echo",
+            "request_id": "req-echo",
+            "text": "к чему ведёт",
+            "created_at": 1700000123456.0,
+        }
+    ]
+    assert extension_ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_given_no_channel_when_chat_message_then_no_echo_to_subscribers():
+    bridge = KTalkBridge()
+    subscriber = RecordingClient()
+    bridge._subscriber_clients.add(subscriber)
+
+    await bridge._process_message(
+        {"type": "copilot_chat_message", "request_id": "req-lost", "text": "вопрос"},
+        websocket=RecordingClient(),
+    )
+
+    assert subscriber.sent == []
+
+
+@pytest.mark.asyncio
 async def test_copilot_chat_message_without_channel_returns_disconnected_status():
     """
     given: no Copilot channel client is connected

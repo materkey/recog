@@ -1456,25 +1456,29 @@ class KTalkBridge:
         The extension has no renderer for this status, so its frame stream
         stays byte-identical.
         """
-        with self._lock:
-            subscribers = list(self._subscriber_clients)
-        if not subscribers:
-            return
-        message = json.dumps(
+        await self._broadcast_to_subscribers(
             {
                 "type": "copilot_status",
                 "request_id": "",
                 "status": "manual_preempted",
                 "message": "Manual copilot session preempted by a conference meeting",
-            },
-            ensure_ascii=False,
+            }
         )
+
+    async def _broadcast_to_subscribers(self, data: dict) -> None:
+        """Send a frame to webapp subscribers only, leaving extension clients out."""
+        with self._lock:
+            subscribers = list(self._subscriber_clients)
+        if not subscribers:
+            return
+        message = json.dumps(data, ensure_ascii=False)
+
         async def dispatch(client):
             try:
                 await self._send_bounded(client, message)
             except Exception as e:
                 print(
-                    f"[KTalk Bridge] Failed to send manual_preempted to subscriber: {e}",
+                    f"[KTalk Bridge] Failed to send {data['type']} to subscriber: {e}",
                     file=sys.stderr,
                 )
 
@@ -2807,7 +2811,18 @@ class KTalkBridge:
                         file=sys.stderr,
                     )
 
+            # Every webapp tab shows the question next to the reply it will
+            # get. Only a delivered question enters the shared dialog; the
+            # asking tab learns about a failed one from the status frame above.
             await asyncio.gather(
+                self._broadcast_to_subscribers(
+                    {
+                        "type": "copilot_chat_echo",
+                        "request_id": request_id,
+                        "text": text,
+                        "created_at": created_at,
+                    }
+                ),
                 *(forward(client) for client in channel_clients),
                 return_exceptions=True,
             )

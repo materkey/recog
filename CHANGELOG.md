@@ -7,6 +7,17 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-10-30
+
+### Changed
+
+- **The Copilot dialog in the web UI is shared between tabs.** Every tab on
+  `#/live` shows the questions and replies of the others, and a new or reloaded
+  tab gets the last 200 of them when it connects, also questions asked from the
+  extension's panel. The history lives in the frontend service's memory and
+  ends with it. Run `./recog-service.sh restart` after `git pull`, then reload
+  open tabs.
+
 ## 2026-10-27
 
 ### Action required

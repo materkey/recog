@@ -40,9 +40,18 @@ class BridgeSubscriber:
     queueing across reconnects; a frame that failed is never redelivered).
     """
 
-    FORWARD_TYPES = frozenset({"transcript_refine", "copilot_reply", "copilot_status",
-                               "user_profile_applied", "user_profile_error",
-                               "ai_settings_applied", "ai_settings_error"})
+    FORWARD_TYPES = frozenset(
+        {
+            "transcript_refine",
+            "copilot_reply",
+            "copilot_chat_echo",
+            "copilot_status",
+            "user_profile_applied",
+            "user_profile_error",
+            "ai_settings_applied",
+            "ai_settings_error",
+        }
+    )
 
     INITIAL_BACKOFF_S = 1.0
     MAX_BACKOFF_S = 30.0

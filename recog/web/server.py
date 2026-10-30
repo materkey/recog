@@ -13,9 +13,11 @@ import json
 import os
 import shutil
 import sys
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Awaitable, Callable, Literal, Optional
+from uuid import uuid4
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -350,10 +352,11 @@ async def _bridge_settings_disconnected():
 
 
 # --- Copilot proxy (CAP-5) ---
-# The server is a pure relay (D5): no manual-session state, no spawn/stop
-# bookkeeping. The only thing kept is the last agent-state chip frame from
-# the bridge, replayed to each new live-stream client right after `init` so
-# a browser opening #/live mid-session does not show a stale chip.
+# The server is a relay (D5): no manual-session state, no spawn/stop
+# bookkeeping. What it keeps is replayed to each new live-stream client right
+# after `init`: the last agent-state chip frame, so a browser opening #/live
+# mid-session does not show a stale chip, and the recent dialog frames, so
+# every tab shows the same conversation. Both are lost on a frontend restart.
 
 INBOUND_COPILOT_TYPES = frozenset({
     "copilot_chat_message",
@@ -361,8 +364,22 @@ INBOUND_COPILOT_TYPES = frozenset({
     "copilot_stop_request",
 })
 
+COPILOT_DIALOG_TYPES = frozenset({"copilot_chat_echo", "copilot_reply"})
+COPILOT_DIALOG_LIMIT = 200
+
 # Last `copilot_status {status: "agent_state"}` frame seen from the bridge.
 _agent_state_primer: Optional[str] = None
+
+# Recent dialog frames, each with a `dialog_id` a tab uses to skip what it has
+# already shown when the history is replayed after a reconnect.
+_copilot_dialog: deque[dict] = deque(maxlen=COPILOT_DIALOG_LIMIT)
+
+
+def _remember_dialog_frame(frame: dict) -> str:
+    """Add a dialog frame to the history; return it as it goes to the tabs."""
+    stamped = {**frame, "dialog_id": uuid4().hex}
+    _copilot_dialog.append(stamped)
+    return json.dumps(stamped, ensure_ascii=False)
 
 
 def _cache_agent_state_frame(raw: str) -> None:
@@ -390,6 +407,8 @@ async def _on_bridge_frame(raw: str) -> None:
     if isinstance(frame, dict) and frame.get("type") in {"ai_settings_applied", "ai_settings_error"}:
         await ai_settings_coordinator.handle_frame(frame)
         return
+    if isinstance(frame, dict) and frame.get("type") in COPILOT_DIALOG_TYPES:
+        raw = _remember_dialog_frame(frame)
     _cache_agent_state_frame(raw)
     await _forward_bridge_message(raw)
 
@@ -407,6 +426,24 @@ async def _send_agent_state_primer(websocket: WebSocket) -> None:
     except Exception as exc:
         print(
             f"[live-stream] agent_state primer send failed: {exc!r}",
+            file=sys.stderr,
+        )
+
+
+async def _send_dialog_history(websocket: WebSocket) -> None:
+    """Deliver the shared dialog to a freshly connected client (best-effort)."""
+    if not _copilot_dialog:
+        return
+    try:
+        await websocket.send_text(
+            json.dumps(
+                {"type": "copilot_history", "frames": list(_copilot_dialog)},
+                ensure_ascii=False,
+            )
+        )
+    except Exception as exc:
+        print(
+            f"[live-stream] dialog history send failed: {exc!r}",
             file=sys.stderr,
         )
 
@@ -1498,6 +1535,7 @@ async def live_stream(websocket: WebSocket):
                 "refine_enabled": False,
             }))
             await _send_agent_state_primer(websocket)
+        await _send_dialog_history(websocket)
     except Exception as e:
         await websocket.send_text(json.dumps({
             "type": "error",
