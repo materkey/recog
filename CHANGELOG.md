@@ -17,6 +17,11 @@ reasoning.
   extension's panel. The history lives in the frontend service's memory and
   ends with it. Run `./recog-service.sh restart` after `git pull`, then reload
   open tabs.
+- **The Copilot panel moves, resizes and detaches.** Drag it by the header and
+  resize it by any edge or corner; the place is remembered. **Открепить** opens
+  it in a window of its own on top of other tabs and applications (Chrome and
+  Edge, on `127.0.0.1` or HTTPS; elsewhere the button is hidden). The tab that
+  opened the window has to stay open. Reload the page after `git pull`.
 
 ## 2026-10-27
 

@@ -233,11 +233,12 @@
 
     <!-- Copilot Chat Panel -->
     <div id="copilot-panel" class="copilot-panel" style="display: none;">
-        <div class="copilot-panel-header">
+        <div class="copilot-panel-header" id="copilot-panel-header" tabindex="0" role="group" aria-label="Recog Copilot. Стрелки двигают панель, Shift со стрелками меняет её размер">
             <span class="copilot-panel-title">Recog Copilot</span>
             <span class="copilot-agent-chip offline" id="copilot-panel-chip">&#9899; offline</span>
-            <button class="btn btn-danger btn-small" id="copilot-stop-btn" onclick="copilotStopClick()" disabled>Stop</button>
-            <button class="copilot-panel-close" onclick="closeCopilotPanel()">&times;</button>
+            <button class="btn btn-small" id="copilot-detach-btn" hidden>Открепить</button>
+            <button class="btn btn-danger btn-small" id="copilot-stop-btn" disabled>Stop</button>
+            <button class="copilot-panel-close" id="copilot-close-btn">&times;</button>
         </div>
         <div id="copilot-messages" class="copilot-messages">
             <div class="copilot-empty">Сообщений пока нет.</div>
@@ -245,9 +246,17 @@
         <div class="copilot-input-area">
             <textarea id="copilot-input" class="copilot-input" rows="2" placeholder="Спросить Claude..."></textarea>
             <div class="copilot-input-row">
-                <button class="btn" id="copilot-send-btn" onclick="submitCopilotChat()">Send</button>
+                <button class="btn" id="copilot-send-btn">Send</button>
             </div>
         </div>
+        <div class="copilot-resize-handle" data-edge="n" aria-hidden="true"></div>
+        <div class="copilot-resize-handle" data-edge="s" aria-hidden="true"></div>
+        <div class="copilot-resize-handle" data-edge="w" aria-hidden="true"></div>
+        <div class="copilot-resize-handle" data-edge="e" aria-hidden="true"></div>
+        <div class="copilot-resize-handle" data-edge="nw" aria-hidden="true"></div>
+        <div class="copilot-resize-handle" data-edge="ne" aria-hidden="true"></div>
+        <div class="copilot-resize-handle" data-edge="sw" aria-hidden="true"></div>
+        <div class="copilot-resize-handle" data-edge="se" aria-hidden="true"></div>
     </div>
 
     <script src="/static/datepicker.js"></script>

@@ -123,8 +123,8 @@ const router = {
     },
 
     showView(name) {
-        // Disconnect live if leaving
-        if (name !== 'live') {
+        // Disconnect live if leaving; a detached Copilot panel still needs the stream
+        if (name !== 'live' && !copilotState.detachedWindow) {
             views.live.disconnect();
         }
 
@@ -723,6 +723,11 @@ const views = {
         pendingRefines: new Map(),
 
         connect() {
+            // A detached Copilot panel kept the stream while another view was shown.
+            const previous = this.ws;
+            this.ws = null;
+            if (previous) previous.close();
+
             this.updateFollowButton();
             syncPrivacyButtons();
             const statusEl = document.getElementById('live-status');
@@ -1094,8 +1099,18 @@ const copilotState = {
     panelOpen: false,
     unread: false,
     spawnPendingId: null,   // request_id of the in-flight spawn click
-    stopPendingId: null     // request_id of the in-flight stop click
+    stopPendingId: null,    // request_id of the in-flight stop click
+    panelRect: null,        // {left, top, width, height} the user chose; null = default place
+    panelGesture: null,     // the drag or resize in progress
+    detachedWindow: null    // the floating window holding the panel, if detached
 };
+
+// The panel's elements are in the floating window's document while it is
+// detached; everything else is looked up on the page.
+function copilotEl(id) {
+    const detached = copilotState.detachedWindow;
+    return (detached && detached.document.getElementById(id)) || document.getElementById(id);
+}
 
 function copilotTimeDisplay(ms) {
     return new Date(ms).toLocaleTimeString('ru-RU', {
@@ -1135,7 +1150,7 @@ function copilotRoleLabel(kind) {
 }
 
 function getCopilotMessagesEl() {
-    return document.getElementById('copilot-messages');
+    return copilotEl('copilot-messages');
 }
 
 function scrollCopilotToBottom() {
@@ -1248,7 +1263,7 @@ function updateCopilotUnreadDot() {
 function updateCopilotChips() {
     const meta = COPILOT_AGENT_CHIP[copilotState.agentState] || COPILOT_AGENT_CHIP.offline;
     for (const id of ['copilot-chip', 'copilot-panel-chip']) {
-        const el = document.getElementById(id);
+        const el = copilotEl(id);
         if (!el) continue;
         el.classList.remove('online', 'working', 'blocked', 'offline');
         el.classList.add(meta.cls);
@@ -1258,9 +1273,9 @@ function updateCopilotChips() {
 }
 
 function updateCopilotControls() {
-    const input = document.getElementById('copilot-input');
-    const sendBtn = document.getElementById('copilot-send-btn');
-    const stopBtn = document.getElementById('copilot-stop-btn');
+    const input = copilotEl('copilot-input');
+    const sendBtn = copilotEl('copilot-send-btn');
+    const stopBtn = copilotEl('copilot-stop-btn');
     const spawning = copilotState.spawnPendingId !== null
         || copilotState.agentState === 'spawning';
     if (input) {
@@ -1288,7 +1303,8 @@ function updateCopilotControls() {
 
 function openCopilotPanel() {
     copilotState.panelOpen = true;
-    const panel = document.getElementById('copilot-panel');
+    const panel = copilotEl('copilot-panel');
+    copilotApplyPanelRect();
     if (panel) panel.style.display = 'flex';
     copilotState.unread = false;
     updateCopilotUnreadDot();
@@ -1298,8 +1314,9 @@ function openCopilotPanel() {
 
 function closeCopilotPanel() {
     copilotState.panelOpen = false;
-    const panel = document.getElementById('copilot-panel');
+    const panel = copilotEl('copilot-panel');
     if (panel) panel.style.display = 'none';
+    if (copilotState.detachedWindow) copilotState.detachedWindow.close();
 }
 
 function toggleCopilotPanel() {
@@ -1308,6 +1325,223 @@ function toggleCopilotPanel() {
     } else {
         openCopilotPanel();
     }
+}
+
+// --- Copilot panel place: moving, resizing, detaching ---
+
+const COPILOT_PANEL_RECT_KEY = 'recog.copilot-panel.rect';
+const COPILOT_PANEL_RECT_SIDES = ['left', 'top', 'width', 'height'];
+const COPILOT_PANEL_MARGIN = 8;
+const COPILOT_PANEL_MIN_WIDTH = 300;
+const COPILOT_PANEL_MIN_HEIGHT = 320;
+const COPILOT_PANEL_KEY_STEPS = {
+    ArrowLeft: [-15, 0],
+    ArrowRight: [15, 0],
+    ArrowUp: [0, -15],
+    ArrowDown: [0, 15]
+};
+
+function copilotViewport() {
+    return { width: window.innerWidth, height: window.innerHeight };
+}
+
+function copilotDefaultPanelRect(viewport) {
+    const width = Math.min(420, viewport.width - 48);
+    const height = Math.round(viewport.height * 0.7);
+    return { left: viewport.width - width - 24, top: viewport.height - height - 24, width, height };
+}
+
+// What is shown: fully inside the window, never smaller than the minimum
+// unless the window itself is.
+function copilotFitPanelRect(rect, viewport) {
+    const width = Math.min(Math.max(rect.width, COPILOT_PANEL_MIN_WIDTH), viewport.width - 2 * COPILOT_PANEL_MARGIN);
+    const height = Math.min(Math.max(rect.height, COPILOT_PANEL_MIN_HEIGHT), viewport.height - 2 * COPILOT_PANEL_MARGIN);
+    return {
+        left: Math.min(Math.max(rect.left, COPILOT_PANEL_MARGIN), viewport.width - COPILOT_PANEL_MARGIN - width),
+        top: Math.min(Math.max(rect.top, COPILOT_PANEL_MARGIN), viewport.height - COPILOT_PANEL_MARGIN - height),
+        width,
+        height
+    };
+}
+
+// `edge` is any of n, s, w, e, as in the handles' data-edge. The opposite edge stays.
+function copilotResizedPanelRect(rect, edge, dx, dy, viewport) {
+    const right = rect.left + rect.width;
+    const bottom = rect.top + rect.height;
+    let { left, top, width, height } = rect;
+    if (edge.includes('e')) {
+        width = Math.min(Math.max(rect.width + dx, COPILOT_PANEL_MIN_WIDTH), viewport.width - COPILOT_PANEL_MARGIN - rect.left);
+    }
+    if (edge.includes('w')) {
+        left = Math.max(Math.min(rect.left + dx, right - COPILOT_PANEL_MIN_WIDTH), COPILOT_PANEL_MARGIN);
+        width = right - left;
+    }
+    if (edge.includes('s')) {
+        height = Math.min(Math.max(rect.height + dy, COPILOT_PANEL_MIN_HEIGHT), viewport.height - COPILOT_PANEL_MARGIN - rect.top);
+    }
+    if (edge.includes('n')) {
+        top = Math.max(Math.min(rect.top + dy, bottom - COPILOT_PANEL_MIN_HEIGHT), COPILOT_PANEL_MARGIN);
+        height = bottom - top;
+    }
+    return { left, top, width, height };
+}
+
+// An empty edge moves the whole panel.
+function copilotDraggedPanelRect(rect, edge, dx, dy, viewport) {
+    if (edge) return copilotResizedPanelRect(rect, edge, dx, dy, viewport);
+    return copilotFitPanelRect({ ...rect, left: rect.left + dx, top: rect.top + dy }, viewport);
+}
+
+function copilotShownPanelRect() {
+    const viewport = copilotViewport();
+    return copilotFitPanelRect(copilotState.panelRect || copilotDefaultPanelRect(viewport), viewport);
+}
+
+function copilotApplyPanelRect() {
+    const panel = copilotEl('copilot-panel');
+    if (!panel || copilotState.detachedWindow) return;
+    const rect = copilotShownPanelRect();
+    for (const side of COPILOT_PANEL_RECT_SIDES) {
+        panel.style[side] = `${rect[side]}px`;
+    }
+}
+
+function isCopilotPanelRect(value) {
+    if (!value) return false;
+    for (const side of COPILOT_PANEL_RECT_SIDES) {
+        if (!Number.isFinite(value[side])) return false;
+    }
+    return true;
+}
+
+function copilotReadSavedPanelRect() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(COPILOT_PANEL_RECT_KEY));
+        return isCopilotPanelRect(saved) ? saved : null;
+    } catch (_) {
+        return null;  // Unreadable or disabled storage: the default place will do.
+    }
+}
+
+function copilotSavePanelRect() {
+    if (!copilotState.panelRect) return;
+    try {
+        localStorage.setItem(COPILOT_PANEL_RECT_KEY, JSON.stringify(copilotState.panelRect));
+    } catch (_) { /* Storage may be disabled. */ }
+}
+
+function copilotPanelPointerDown(event) {
+    if (event.button !== 0 || copilotState.detachedWindow || event.target.closest('button')) return;
+    const handle = event.target.closest('.copilot-resize-handle, .copilot-panel-header');
+    if (!handle) return;
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add('dragging');
+    copilotState.panelGesture = {
+        handle,
+        pointerId: event.pointerId,
+        edge: handle.dataset.edge || '',
+        startX: event.clientX,
+        startY: event.clientY,
+        rect: copilotShownPanelRect()
+    };
+}
+
+function copilotPanelPointerMove(event) {
+    const gesture = copilotState.panelGesture;
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    copilotState.panelRect = copilotDraggedPanelRect(
+        gesture.rect,
+        gesture.edge,
+        event.clientX - gesture.startX,
+        event.clientY - gesture.startY,
+        copilotViewport()
+    );
+    copilotApplyPanelRect();
+}
+
+function copilotPanelGestureEnd() {
+    const gesture = copilotState.panelGesture;
+    if (!gesture) return;
+    gesture.handle.classList.remove('dragging');
+    copilotState.panelGesture = null;
+    copilotSavePanelRect();
+}
+
+function copilotPanelKeyDown(event) {
+    const step = COPILOT_PANEL_KEY_STEPS[event.key];
+    if (!step || event.target !== event.currentTarget || copilotState.detachedWindow) return;
+    event.preventDefault();
+    copilotState.panelRect = copilotDraggedPanelRect(
+        copilotShownPanelRect(),
+        event.shiftKey ? 'se' : '',
+        step[0],
+        step[1],
+        copilotViewport()
+    );
+    copilotApplyPanelRect();
+    copilotSavePanelRect();
+}
+
+function syncCopilotDetachControls() {
+    const detached = Boolean(copilotState.detachedWindow);
+    const button = copilotEl('copilot-detach-btn');
+    button.hidden = !window.documentPictureInPicture;
+    button.textContent = detached ? 'Вернуть' : 'Открепить';
+    button.title = detached ? 'Вернуть панель на страницу' : 'Отдельное окно поверх других вкладок и приложений';
+    copilotEl('copilot-panel-header').tabIndex = detached ? -1 : 0;
+}
+
+function copyCopilotPageStyles(target) {
+    for (const source of document.querySelectorAll('link[rel="stylesheet"]')) {
+        const link = target.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = source.href;
+        target.head.append(link);
+    }
+}
+
+async function detachCopilotPanel() {
+    const panel = copilotEl('copilot-panel');
+    const { width, height } = panel.getBoundingClientRect();
+    let floating;
+    try {
+        floating = await window.documentPictureInPicture.requestWindow({ width, height });
+    } catch (error) {
+        appendCopilotMessage({ kind: 'error', text: `Не удалось открепить окно: ${error.message}` });
+        return;
+    }
+    copyCopilotPageStyles(floating.document);
+    floating.document.body.append(panel);
+    floating.addEventListener('pagehide', reattachCopilotPanel);
+    copilotState.detachedWindow = floating;
+    panel.classList.add('copilot-panel-detached');
+    for (const side of COPILOT_PANEL_RECT_SIDES) {
+        panel.style[side] = '';
+    }
+    syncCopilotDetachControls();
+    scrollCopilotToBottom();
+    if (!views.live.ws) views.live.connect();
+}
+
+// Fires however the window goes away: our buttons, or the browser's own
+// close and "back to tab", which is why this and not the buttons returns the panel.
+function reattachCopilotPanel() {
+    const panel = copilotEl('copilot-panel');
+    copilotState.detachedWindow = null;
+    panel.classList.remove('copilot-panel-detached');
+    document.body.append(panel);
+    copilotApplyPanelRect();
+    syncCopilotDetachControls();
+    scrollCopilotToBottom();
+    if (window.location.hash.slice(1) !== '/live') views.live.disconnect();
+}
+
+async function copilotDetachClick() {
+    if (copilotState.detachedWindow) {
+        copilotState.detachedWindow.close();
+        return;
+    }
+    await detachCopilotPanel();
 }
 
 function copilotButtonClick() {
@@ -1369,7 +1603,7 @@ function buildCopilotTranscriptWindow() {
 }
 
 function submitCopilotChat() {
-    const input = document.getElementById('copilot-input');
+    const input = copilotEl('copilot-input');
     if (!input || input.disabled) return;
     const text = (input.value || '').trim();
     if (!text) return;
@@ -1741,6 +1975,24 @@ function initCopilotPanel() {
             }
         });
     }
+    copilotState.panelRect = copilotReadSavedPanelRect();
+    bindCopilotPanelEvents();
+    syncCopilotDetachControls();
+}
+
+// Listeners, not onclick attributes: an attribute's handler is compiled in the
+// document its element is in, and the floating window has none of these functions.
+function bindCopilotPanelEvents() {
+    const panel = document.getElementById('copilot-panel');
+    panel.addEventListener('pointerdown', copilotPanelPointerDown);
+    panel.addEventListener('pointermove', copilotPanelPointerMove);
+    panel.addEventListener('lostpointercapture', copilotPanelGestureEnd);
+    document.getElementById('copilot-panel-header').addEventListener('keydown', copilotPanelKeyDown);
+    document.getElementById('copilot-detach-btn').addEventListener('click', copilotDetachClick);
+    document.getElementById('copilot-stop-btn').addEventListener('click', copilotStopClick);
+    document.getElementById('copilot-close-btn').addEventListener('click', closeCopilotPanel);
+    document.getElementById('copilot-send-btn').addEventListener('click', submitCopilotChat);
+    window.addEventListener('resize', copilotApplyPanelRect);
 }
 
 
