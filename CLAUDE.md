@@ -245,6 +245,22 @@ capturing (finished callback, inactive, 10 s without a callback), and the shared
 respawn starts a new one on a device list read afresh, the device found by name.
 A respawn keeps the buffer, so no source boundary is marked.
 
+Echo cancellation (`[live] echo_cancel`, off by default until it passes the checks
+in `docs/plans/2026-10-30-mic-echo-cancel-design.md`) is `EchoStage`
+(`recog/echo_cancel.py`, `pyaec`) between the microphone's frames and its buffer.
+With a stage `create_system_capture` runs `sck_audio_capture --frames`
+(`FramedSystemCapture`), whose frames also carry the presentation time and whether
+the default output can make an echo (the built-in speakers, audible, read by the
+helper every 100 ms). Both streams are placed by their stamps, which share the host
+uptime clock, not by counting samples, holes filled with zeros. The microphone comes
+out raw, byte for byte, unless the output can make an echo, the echo path is present
+(`EchoPathDetector`: a call can play elsewhere while the default output is the
+speakers), the reference has not been quiet for 300 ms and a reference exists;
+paused, Speex keeps its filter. An exception in the stage also leaves the microphone
+raw. `[mic] Echo cancelling` / `Back to the raw microphone` in the log tell which is
+on. The inverse of Speex's low cut is measured from `pyaec` at start, so its pin is
+what keeps the chain's numbers valid.
+
 sounddevice captures in the live process (`SingleDeviceCapture`: the microphone
 on Linux and `device:<id>`) fail differently: a configuration change of the device (e.g. another process
 changing the built-in microphone's sample rate) makes CoreAudio fail a render
@@ -367,7 +383,8 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
   - `ai_settings.py` / `ai_defaults.py` - Revisioned private `ai-settings.json` store and shipped LLM prompts/models. Web Settings edits global models and scenario overrides (analysis, titles, saved prompts, Copilot). Model precedence: scenario > saved global > legacy environment > shipped default. Each generation resolves one snapshot; saved increments and generated titles record model and revision. `web/ai_settings.py` coordinates bridge refresh/ack for Copilot policy; prompt changes reach the next event, model changes the next session. Stable file lock and atomic replacement protect concurrent writes; malformed settings fail visibly.
   - `asr.py` - GigaAM ASR wrapper
   - `audio_capture.py` - `BufferedAudioCapture`: the buffer/overlap/re-anchor machinery shared by the mic (`SingleDeviceCapture`) and the system-audio subprocess captures. Owns `_append_locked`, `clear_buffer`, `get_chunk() -> (chunk, capture_start_ts)`; the contract is 1-D mono float32
-  - `mic_capture.py` / `mic_worker.py` - The macOS microphone in a child process: `ChildMicCapture` in the live process, the worker holding the stream
+  - `mic_capture.py` / `mic_worker.py` - The macOS microphone in a child process: `ChildMicCapture` in the live process, the worker holding the stream; `FramedSystemCapture` for the system audio with time stamps
+  - `echo_cancel.py` - `EchoStage`: optional echo cancellation on the microphone (`pyaec`), placement by time stamps, `EchoPathDetector`
   - `system_audio.py` - `SubprocessPCMCapture` (generic child-process PCM reader) + `PulseAudioCapture` (Linux `parec`, follows the default sink) + `find_or_build_sck_utility` (macOS ScreenCaptureKit helper, `sck_audio_capture` resolved from `REPO_ROOT` — the binary stays at the repo root; its source is `recog/native/macos/sck_audio_capture.swift`) + `resolve_system_audio_backend` / `create_system_capture`. Manual smoke: `python -m recog.system_audio`
   - `live.py` - Real-time transcription (LiveTranscriber with decomposed methods: _setup_meeting_storage, _setup_ktalk_bridge, _start_audio_captures, _process_chunk, _handle_mic_chunk, _handle_ktalk_chunk, _teardown_session; module-level helpers: normalize_word, deduplicate)
   - `increment.py` - Auto-generate versioned AI summaries on ktalk_leave; multi-prompt support via generate_all(), stores per-prompt results in meetings/<id>/increments/<prompt-id>/vN.md
@@ -411,6 +428,7 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 - `RECOG_TORCH_THREADS` - Optional `torch.set_num_threads()` cap for CPU inference (live and refine share one `_model_lock` and all cores). A value that is not a positive integer stops startup.
 - `RECOG_PULSE_MONITOR_SOURCE` - Pins the PulseAudio/PipeWire monitor for the `pulse` backend (Linux) and disables follow-the-default-sink. Empty (default) = follow the current default sink.
 - `RECOG_ZOOM_APP` - `1` starts the native Zoom application source inside the live process (macOS only, default `0`; same as `live --zoom-app`). "Recog Zoom Helper" needs the Accessibility permission; see `docs/zoom-app.md`.
+- `RECOG_ECHO_CANCEL` - `1` cancels what the built-in speakers play out of the microphone (macOS with `--system-audio screencapture`, default `0`).
 - `RECOG_CODESIGN_IDENTITY` - Code-signing identity for `RecogZoomHelper.app` (default: ad hoc, `-`). With a real identity the Accessibility grant survives a rebuild of the helper.
 - `RECOG_EXTRA_WS_ORIGINS` - Comma-separated extra exact origins allowed to open the bridge / live-stream WS. Kept as a separate set so `ALLOWED_ORIGINS` in `recog/ws_origin.py` stays a literal mirror of the extension's `manifest.json` (a test asserts that equality); a new conference host must be added here **and** to `manifest.json` (separate rebuild).
 - `RECOG_CONFIG_FILE` - Path of the installation configuration (default `$XDG_CONFIG_HOME/recog/config.toml`, i.e. `~/.config/recog/config.toml`): non-secret per-installation settings such as conference hosts, source aliases and the web UI names of importer sources, parsed only by `recog/install_config.py` (`docs/configuration.md`). The old `.local/conference-hosts.json` (`RECOG_CONFERENCE_HOSTS_FILE`) is still read with a warning while `config.toml` is absent; both present is a startup error.

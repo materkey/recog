@@ -834,8 +834,16 @@ def resolve_system_audio_backend(spec: Optional[str],
     raise ValueError(f"unknown system audio backend: {spec!r}")
 
 
-def create_system_capture(backend: str, sample_rate: int = SAMPLE_RATE) -> SubprocessPCMCapture:
+def create_system_capture(
+    backend: str, sample_rate: int = SAMPLE_RATE, echo_stage=None
+) -> SubprocessPCMCapture:
     """Строит capture по уже разрешённому имени бэкенда."""
+    if backend == "screencapture" and echo_stage is not None:
+        from recog.mic_capture import FramedSystemCapture
+
+        return FramedSystemCapture(
+            [find_or_build_sck_utility(), "--frames"], echo_stage, sample_rate=sample_rate
+        )
     if backend == "screencapture":
         return SubprocessPCMCapture([find_or_build_sck_utility()],
                                     name="screencapture", sample_rate=sample_rate)

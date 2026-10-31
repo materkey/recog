@@ -57,6 +57,11 @@
 # RECOG_ZOOM_APP (macOS): speaker detection for the native Zoom application
 # (docs/zoom-app.md).
 # zoom_app = false
+# RECOG_ECHO_CANCEL (macOS): cancel what the built-in speakers play out of the
+# microphone, so it does not reach the transcript under your name. Needs
+# `--system-audio screencapture`, which `auto` is on macOS. Stays off by default
+# until it has been checked on real calls and headphones.
+# echo_cancel = false
 
 [copilot]
 # RECOG_COPILOT_AUTOSPAWN: spawn a Claude copilot session per conference

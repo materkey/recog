@@ -65,6 +65,8 @@ class LiveSettings:
     pulse_monitor_source: str = _setting("RECOG_PULSE_MONITOR_SOURCE", "text", "")
     # Native Zoom application source on macOS, same as `live --zoom-app`.
     zoom_app: bool = _setting("RECOG_ZOOM_APP", "flag", False)
+    # Cancel what the built-in speakers play out of the microphone (macOS).
+    echo_cancel: bool = _setting("RECOG_ECHO_CANCEL", "flag", False)
 
 
 @dataclass

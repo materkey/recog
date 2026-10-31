@@ -542,7 +542,25 @@ class SingleDeviceCapture(BufferedAudioCapture):
         return None
 
 
-def create_mic_capture(device, sample_rate: int, platform: str = ""):
+def create_echo_stage(system_audio: str, sample_rate: int):
+    """The echo stage, if it is switched on and has a reference to work with.
+
+    A stage that cannot be built leaves the microphone as it is today.
+    """
+    if not INSTALL_CONFIG.live.echo_cancel or system_audio != "screencapture":
+        return None
+    try:
+        from .echo_cancel import SR, EchoStage
+
+        if sample_rate != SR:
+            raise ValueError(f"it works at {SR} Hz, not {sample_rate} Hz")
+        return EchoStage()
+    except Exception as e:
+        print(f"Echo cancellation is off: {e}", file=sys.stderr)
+        return None
+
+
+def create_mic_capture(device, sample_rate: int, platform: str = "", echo_stage=None):
     """The microphone's capture: macOS has it in a child process, see recog/mic_worker.py."""
     platform = platform or sys.platform
     if platform != "darwin":
@@ -552,7 +570,7 @@ def create_mic_capture(device, sample_rate: int, platform: str = ""):
         import sounddevice as sd
 
         device_name = sd.query_devices(device)["name"]
-    return ChildMicCapture(device_name, sample_rate)
+    return ChildMicCapture(device_name, sample_rate, echo_stage=echo_stage)
 
 
 @dataclass
@@ -666,9 +684,15 @@ class LiveTranscriber:
         self.system_capture = None
 
         if self.system_audio in ("screencapture", "pulse"):
-            self.system_capture = create_system_capture(self.system_audio, self.sample_rate)
+            echo_stage = None
             if self.mic_enabled and self.mic_device is not None:
-                self.mic_capture = create_mic_capture(self.mic_device, self.sample_rate)
+                echo_stage = create_echo_stage(self.system_audio, self.sample_rate)
+                self.mic_capture = create_mic_capture(
+                    self.mic_device, self.sample_rate, echo_stage=echo_stage
+                )
+            self.system_capture = create_system_capture(
+                self.system_audio, self.sample_rate, echo_stage=echo_stage
+            )
         elif self.system_device is not None:
             self.system_capture = SingleDeviceCapture(self.system_device, self.sample_rate, "system")
             if self.mic_enabled and self.mic_device is not None:

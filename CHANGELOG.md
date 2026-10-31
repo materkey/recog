@@ -9,7 +9,21 @@ reasoning.
 
 ## 2026-10-31
 
+### Action required
+
+- **Run `./setup.sh` after `git pull`:** it installs the new dependency `pyaec`
+  and rebuilds `sck_audio_capture`. Without `pyaec` nothing breaks; echo
+  cancellation just stays off with a line in the log.
+
 ### Changed
+
+- **Echo cancellation for the built-in speakers, off by default.** With
+  `echo_cancel = true` under `[live]` in `~/.config/recog/config.toml` and
+  `./recog-service.sh restart`, what the speakers play no longer reaches the
+  transcript under your name. Headphones, another output, a muted output and a call
+  playing elsewhere leave the microphone exactly as it was. The log says
+  `[mic] Echo cancelling` and `[mic] Back to the raw microphone`. It stays off by
+  default until it has been checked on real calls and headphones.
 
 - **On macOS the microphone runs in a child process.** The live process lost
   0.4–0.6% of the microphone's audio whenever it was busy, in pieces that no log

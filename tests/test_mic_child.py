@@ -24,8 +24,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from recog.live import SingleDeviceCapture, create_mic_capture
-from recog.mic_capture import ONLY_ZEROS_REPORT_S, ChildMicCapture
+from recog.install_config import INSTALL_CONFIG
+from recog.live import SingleDeviceCapture, create_echo_stage, create_mic_capture
+from recog.mic_capture import (
+    ONLY_ZEROS_REPORT_S,
+    REFERENCE_HEADER,
+    ChildMicCapture,
+    FramedSystemCapture,
+)
 from recog.mic_worker import (
     EXIT_DEVICE_NOT_FOUND,
     EXIT_STREAM_LOST,
@@ -34,6 +40,7 @@ from recog.mic_worker import (
     encode_frame,
     find_input_device,
 )
+from recog.system_audio import SubprocessPCMCapture, create_system_capture
 
 SR = 16000
 MIC = "Микрофон MacBook Pro"
@@ -427,3 +434,149 @@ def test_header_is_what_the_fake_child_above_writes():
     then: they do not test another format"""
     assert FRAME_HEADER.format.lstrip("<") == "ddI"
     assert struct.calcsize("<ddI") == FRAME_HEADER.size
+
+
+# --- echo cancellation ----------------------------------------------------------
+
+
+class _FakeStage:
+    """Holds nothing back and doubles the microphone, to tell it from raw."""
+
+    def __init__(self, fail_on=None):
+        self.references = []
+        self.mic_times = []
+        self.fail_on = fail_on
+
+    def add_reference(self, samples, time_s, echo_possible):
+        if self.fail_on == "reference":
+            raise RuntimeError("stage failed")
+        self.references.append((samples.tolist(), time_s, echo_possible))
+
+    def add_mic(self, samples, time_s):
+        if self.fail_on == "mic":
+            raise RuntimeError("stage failed")
+        self.mic_times.append(time_s)
+        return samples * 2
+
+    def flush_raw(self):
+        return np.array([0.9], dtype=np.float32)
+
+
+def _reference_frame(samples, pts=50.0, wall=2000.0, echo=True):
+    samples = np.asarray(samples, dtype=np.float32)
+    return REFERENCE_HEADER.pack(pts, wall, len(samples), echo) + samples.tobytes()
+
+
+def test_microphone_goes_through_the_stage_by_its_adc_time():
+    """given: a capture with an echo stage
+    when: frames are decoded
+    then: the stage gets each with its ADC time, and its output is what reaches the buffer"""
+    stage = _FakeStage()
+    capture = ChildMicCapture(MIC, SR, argv=["unused"], echo_stage=stage)
+
+    batches = capture._decode_read(_frame([0.1], adc=7.0) + _frame([0.2], adc=7.5))
+
+    assert stage.mic_times == [7.0, 7.5]
+    assert batches[0][0].tolist() == pytest.approx([0.2, 0.4])
+
+
+def test_stage_turning_on_and_off_is_logged(capsys):
+    """given: the stage is the kind of thing a user asks about ("is it working now?")
+    when: it starts and stops cancelling
+    then: each change is logged once"""
+    stage = _FakeStage()
+    stage.active = False
+    capture = ChildMicCapture(MIC, SR, argv=["unused"], echo_stage=stage)
+
+    capture._decode_read(_frame([0.1]))
+    assert "cancelling" not in capsys.readouterr().err
+    stage.active = True
+    capture._decode_read(_frame([0.1]) + _frame([0.1]))
+    assert capsys.readouterr().err.count("Echo cancelling") == 1
+    stage.active = False
+    capture._decode_read(_frame([0.1]))
+    assert capsys.readouterr().err.count("raw") == 1
+
+
+def test_failing_stage_leaves_the_microphone_raw(capsys):
+    """given: the stage raises
+    when: the microphone keeps coming
+    then: what it held is flushed, audio continues raw and the failure is logged:
+    echo cancellation must never stop microphone transcription"""
+    capture = ChildMicCapture(MIC, SR, argv=["unused"], echo_stage=_FakeStage(fail_on="mic"))
+
+    first = capture._decode_read(_frame([0.1]))
+    second = capture._decode_read(_frame([0.2]))
+
+    assert first[0][0].tolist() == pytest.approx([0.9, 0.1])
+    assert second[0][0].tolist() == pytest.approx([0.2])
+    assert "stage failed" in capsys.readouterr().err
+
+
+def test_reference_reaches_the_stage_and_the_system_buffer():
+    """given: framed system audio
+    when: decoded, also when a read cuts a frame
+    then: the stage gets it with its time and output state, the system path the same audio"""
+    stage = _FakeStage()
+    capture = FramedSystemCapture(["unused"], stage, sample_rate=SR)
+    data = _reference_frame([0.1, 0.2], pts=50.0, wall=2000.0, echo=False)
+
+    assert capture._decode_read(data[:7]) == []
+    batches = capture._decode_read(data[7:])
+
+    assert stage.references[0][1:] == (50.0, False)
+    assert stage.references[0][0] == pytest.approx([0.1, 0.2])
+    assert batches[0][0].tolist() == pytest.approx([0.1, 0.2])
+    assert batches[0][1] == 2000.0
+
+
+def test_failing_stage_does_not_touch_the_system_audio(capsys):
+    """given: the stage raises on the reference
+    when: system audio keeps coming
+    then: the system path is untouched and the stage is not called again"""
+    stage = _FakeStage(fail_on="reference")
+    capture = FramedSystemCapture(["unused"], stage, sample_rate=SR)
+
+    assert capture._decode_read(_reference_frame([0.1]))[0][0].tolist() == pytest.approx([0.1])
+    assert capture._decode_read(_reference_frame([0.2]))[0][0].tolist() == pytest.approx([0.2])
+    assert capsys.readouterr().err.count("stage failed") == 1
+
+
+def test_helper_is_only_asked_for_frames_with_a_stage(monkeypatch):
+    """given: the switch off, there is no stage
+    when: the system capture is created
+    then: it is the capture it has always been"""
+    monkeypatch.setattr("recog.system_audio.find_or_build_sck_utility", lambda: "/helper")
+    plain = create_system_capture("screencapture", SR)
+    assert type(plain) is SubprocessPCMCapture and plain.argv == ["/helper"]
+
+    framed = create_system_capture("screencapture", SR, echo_stage=_FakeStage())
+    assert isinstance(framed, FramedSystemCapture) and framed.argv == ["/helper", "--frames"]
+
+
+def test_echo_switch_off_builds_no_stage(monkeypatch):
+    """given: the switch off, the default
+    when: the stage is asked for
+    then: there is none, and pyaec is not even imported"""
+    monkeypatch.setattr(INSTALL_CONFIG.live, "echo_cancel", False)
+    monkeypatch.setitem(sys.modules, "recog.echo_cancel", None)
+    assert create_echo_stage("screencapture", SR) is None
+
+
+def test_echo_stage_needs_a_reference_to_exist(monkeypatch):
+    """given: the switch on
+    when: the system audio has no time stamps to offer
+    then: there is no stage"""
+    monkeypatch.setattr(INSTALL_CONFIG.live, "echo_cancel", True)
+    assert create_echo_stage("none", SR) is None
+    assert create_echo_stage("pulse", SR) is None
+
+
+def test_echo_stage_that_cannot_be_built_leaves_the_microphone_raw(monkeypatch, capsys):
+    """given: the switch on and pyaec missing
+    when: the stage is asked for
+    then: there is none, the log says so, and nothing stops"""
+    monkeypatch.setattr(INSTALL_CONFIG.live, "echo_cancel", True)
+    monkeypatch.setitem(sys.modules, "recog.echo_cancel", None)
+    assert create_echo_stage("screencapture", SR) is None
+    assert "Echo cancellation is off" in capsys.readouterr().err

@@ -1,6 +1,8 @@
 # Microphone echo cancellation on macOS: design
 
-Status: the child microphone is built; timestamps, alignment and the stage follow.
+Status: built, the stage's switch off by default until validations 1, 2, 3 and 5 pass.
+Replaying the takes through `recog/echo_cancel.py`: reading 96.1% / 0 false words, lecture 22,
+quiet voice over echo 82.7% / 14, others silent 95.8%, which reproduces the table below.
 Measurements were made on 2026-10-30 and 2026-10-31 with throwaway
 code outside the repository, on one MacBook Pro with its built-in speakers and
 microphone, at one output volume.
@@ -260,7 +262,8 @@ with the reference leading 0–300 ms, band 200–3500 Hz, percentiles 1 / 50 / 
 | Echo at 5% of its level | above 0.31 at the 5th percentile |
 
 The rule is: present once a window exceeds 0.2, absent once the median of the last 10
-windows falls below 0.13. On 16 minutes of echo it never left "present"; on 300 s of no echo
+windows falls below 0.13, and a window with a quiet reference counts for neither, since it says
+nothing about the path. On 16 minutes of echo it never left "present"; on 300 s of no echo
 it never entered it; through both readings aloud it stayed "present". It enters within
 about 1 s and leaves about 5 s after the echo stops. A wrong "absent" under a loud voice
 leaves an echo for a moment, which is the accepted lesser failure.
@@ -298,7 +301,8 @@ The child's death is handled by the system capture's bounded respawn. The buffer
 source boundary is needed, and as with today's reopening the log holds it, without a marker in
 the transcript. This removes the sample loss even with cancellation switched off.
 
-**Reference.** `sck_audio_capture` adds each buffer's presentation time to its output. The
+**Reference.** `sck_audio_capture --frames` adds each buffer's presentation time and the output's
+state to its output, read every 100 ms. Without a stage the helper is run as before. The
 existing system-capture path is otherwise unchanged and the microphone never reads from it.
 
 **Alignment.** Both streams are placed on the uptime timeline at 16 kHz, zero-filling holes.
@@ -337,7 +341,8 @@ raw, with a 10 ms crossfade:
 - A reference exists at all. A lost system capture makes the microphone raw, and silently
   cannot make it worse than today.
 
-An exception raised in the stage also makes the microphone raw, logged at a limited rate.
+An exception raised in the stage also makes the microphone raw, logged once, for good until a
+restart.
 `audio_mic.wav` holds what ASR hears.
 
 **Silence restart.** `_restart_silent_system_capture` stays as it is, since the microphone

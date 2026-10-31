@@ -3,11 +3,16 @@
 // ScreenCaptureKit Audio Capture Utility
 // Captures system audio and outputs raw PCM to stdout
 // Usage: swift sck_audio_capture.swift | python script.py
+// With --frames every buffer is framed, for echo cancellation (recog/mic_capture.py):
+// presentation time, wall clock, sample count as "<ddIB" with whether the default
+// output can make an echo, then the samples.
 
 import Foundation
 import ScreenCaptureKit
 import CoreMedia
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 import Darwin
 
 /// Fixed-capacity ring buffer to avoid memory fragmentation from Data.append/removeFirst.
@@ -120,6 +125,19 @@ final class StdoutWriter {
         setNonBlocking(fd)
     }
 
+    /// Whole frames only: dropping the oldest bytes would break the framing, so a
+    /// parent this far behind gets a new process instead.
+    func enqueueFrame(_ data: Data) {
+        queue.async {
+            if data.count > self.buffer.freeSpace {
+                fputs("Parent is not reading, exiting for a fresh capture process\n", stderr)
+                exit(1)
+            }
+            self.buffer.append(data)
+            self.flushIfNeeded()
+        }
+    }
+
     func enqueue(_ data: Data) {
         guard !data.isEmpty else { return }
         queue.async {
@@ -171,8 +189,42 @@ private func setNonBlocking(_ fd: Int32) {
     _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
 }
 
+/// Whether the default output can make an echo: the built-in speakers, audible.
+/// Anything else, Bluetooth speakers included, leaves the microphone raw.
+func outputCanEcho() -> Bool {
+    func address(_ selector: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+    }
+    var device = AudioObjectID(0)
+    var size = UInt32(MemoryLayout<AudioObjectID>.size)
+    var defaultOutput = address(kAudioHardwarePropertyDefaultOutputDevice)
+    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &defaultOutput, 0, nil, &size, &device) == noErr else { return false }
+
+    var uid: Unmanaged<CFString>?
+    size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    var uidAddress = address(kAudioDevicePropertyDeviceUID)
+    guard AudioObjectGetPropertyData(device, &uidAddress, 0, nil, &size, &uid) == noErr,
+          let name = uid?.takeRetainedValue() as String?, name == "BuiltInSpeakerDevice" else { return false }
+
+    var muted = UInt32(0)
+    size = UInt32(MemoryLayout<UInt32>.size)
+    var muteAddress = address(kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput)
+    if AudioObjectGetPropertyData(device, &muteAddress, 0, nil, &size, &muted) == noErr, muted != 0 { return false }
+
+    var volume = Float32(1)
+    size = UInt32(MemoryLayout<Float32>.size)
+    var volumeAddress = address(kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioDevicePropertyScopeOutput)
+    if AudioObjectGetPropertyData(device, &volumeAddress, 0, nil, &size, &volume) == noErr, volume <= 0 { return false }
+    return true
+}
+
 class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
     private var stream: SCStream?
+
+    private let framed = CommandLine.arguments.contains("--frames")
+    // Read and written on audioQueue.
+    private var echoPossible = false
+    private var outputStateTimer: DispatchSourceTimer?
 
     private let targetSampleRate: Int = 16000
     private let streamSampleRate: Int = 48000
@@ -191,6 +243,9 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
     func start() async {
         fputs("Starting ScreenCaptureKit audio capture...\n", stderr)
         startWatchdog()
+        if framed {
+            startOutputStateTimer()
+        }
         await startWithRetry(reason: "initial")
     }
 
@@ -209,6 +264,16 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
         if let currentStream {
             Task { try? await currentStream.stopCapture() }
         }
+    }
+
+    private func startOutputStateTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: audioQueue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(100))
+        timer.setEventHandler { [weak self] in
+            self?.echoPossible = outputCanEcho()
+        }
+        timer.resume()
+        outputStateTimer = timer
     }
 
     private func startWatchdog() {
@@ -353,6 +418,8 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
             self.lastAudioUptimeNanos = DispatchTime.now().uptimeNanoseconds
         }
 
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+
         guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
 
         var length = 0
@@ -370,7 +437,7 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
             guard sampleCount > 0 else { return }
 
             let floatPtr = UnsafeRawPointer(dataPointer).bindMemory(to: Float32.self, capacity: sampleCount)
-            writeDownsampled(floatPtr: floatPtr, sampleCount: sampleCount)
+            writeDownsampled(floatPtr: floatPtr, sampleCount: sampleCount, presentationTime: presentationTime)
             return
         }
 
@@ -391,11 +458,11 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
         copied.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else { return }
             let floatPtr = base.bindMemory(to: Float32.self, capacity: sampleCount)
-            writeDownsampled(floatPtr: floatPtr, sampleCount: sampleCount)
+            writeDownsampled(floatPtr: floatPtr, sampleCount: sampleCount, presentationTime: presentationTime)
         }
     }
 
-    private func writeDownsampled(floatPtr: UnsafePointer<Float32>, sampleCount: Int) {
+    private func writeDownsampled(floatPtr: UnsafePointer<Float32>, sampleCount: Int, presentationTime: Double) {
         // ScreenCaptureKit outputs float32 at 48kHz, convert to 16kHz by simple decimation (48k -> 16k = factor 3).
         let outputCount = (sampleCount + 2) / 3
         var outputSamples = [Float32](repeating: 0, count: outputCount)
@@ -408,9 +475,20 @@ class AudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
             inIdx += 3
         }
 
-        outputSamples.withUnsafeBytes { buf in
-            stdoutWriter.enqueue(Data(buf))
+        guard framed else {
+            outputSamples.withUnsafeBytes { buf in
+                stdoutWriter.enqueue(Data(buf))
+            }
+            return
         }
+        var frame = Data(capacity: 21 + outputCount * MemoryLayout<Float32>.size)
+        let wallClock = Date().timeIntervalSince1970 - Double(outputCount) / Double(targetSampleRate)
+        withUnsafeBytes(of: presentationTime.bitPattern.littleEndian) { frame.append(contentsOf: $0) }
+        withUnsafeBytes(of: wallClock.bitPattern.littleEndian) { frame.append(contentsOf: $0) }
+        withUnsafeBytes(of: UInt32(outputCount).littleEndian) { frame.append(contentsOf: $0) }
+        frame.append(echoPossible ? 1 : 0)
+        outputSamples.withUnsafeBytes { frame.append(contentsOf: $0) }
+        stdoutWriter.enqueueFrame(frame)
     }
 
     private func isFatalStartError(_ error: Error) -> Bool {
