@@ -42,6 +42,9 @@ class Capture(BufferedAudioCapture):
 def transcriber(tmp_path, monkeypatch):
     monkeypatch.setenv("RECOG_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(live, "SingleDeviceCapture", Capture)
+    monkeypatch.setattr(
+        live, "create_mic_capture", lambda device, rate: Capture(device, rate, "mic")
+    )
     monkeypatch.setattr(live, "build_asr", lambda: Mock(available=True))
     t = live.LiveTranscriber(
         mic_device=1, system_audio="device:2", ktalk_only=True, save_audio=True

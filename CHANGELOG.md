@@ -7,6 +7,17 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-10-31
+
+### Changed
+
+- **On macOS the microphone runs in a child process.** The live process lost
+  0.4–0.6% of the microphone's audio whenever it was busy, in pieces that no log
+  showed; the transcript and `audio_mic.wav` now hold all of it. The process
+  appears as `mic_worker.py` next to the live service and needs no new permission.
+  A hole that still happens is logged as `[mic] … ms hole in the captured audio`.
+  Run `./recog-service.sh restart` after `git pull`.
+
 ## 2026-10-30
 
 ### Changed

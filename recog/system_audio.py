@@ -25,7 +25,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 
@@ -317,6 +317,18 @@ class SubprocessPCMCapture(BufferedAudioCapture):
             self._pcm_tail = data[usable:]
         return np.frombuffer(data[:usable], dtype=np.float32)
 
+    def _decode_read(self, data: bytes) -> List[Tuple[np.ndarray, float]]:
+        """Сэмплы одного чтения stdout и время захвата первого из них."""
+        samples = self._decode_pcm(data)
+        if not samples.size:
+            return []
+        return [(samples, time.time() - len(samples) / self.sample_rate)]
+
+    def _on_new_child(self) -> None:
+        """Новый ребёнок — новый поток: недочитанный кадр от прежнего склеивать
+        не с чем."""
+        self._pcm_tail = b""
+
     def _respawn_dead_child(self, restart_count: int) -> Optional[int]:
         """Пауза и respawn умершего ребёнка.
 
@@ -326,7 +338,7 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         if restart_count >= MAX_RESTARTS:
             if not self._dead:
                 self._mark_lost(
-                    f"Max restarts ({MAX_RESTARTS}) reached, system audio lost — "
+                    f"Max restarts ({MAX_RESTARTS}) reached, audio lost — "
                     f"retrying every {LOST_RETRY_S:.0f}s"
                 )
             delay = LOST_RETRY_S
@@ -411,16 +423,14 @@ class SubprocessPCMCapture(BufferedAudioCapture):
                     continue
                 data = self.process.stdout.read(bytes_per_chunk)
                 if data:
-                    samples = self._decode_pcm(data)
                     # Reset restart count on successful read
                     restart_count = 0
                     if self._dead:
                         self._dead = False
-                        print(f"[{self.name}] System audio recovered", file=sys.stderr)
-                    if samples.any():
-                        self._last_signal_at = time.monotonic()
-                    if samples.size:
-                        captured_at = time.time() - len(samples) / self.sample_rate
+                        print(f"[{self.name}] Audio recovered", file=sys.stderr)
+                    for samples, captured_at in self._decode_read(data):
+                        if samples.any():
+                            self._last_signal_at = time.monotonic()
                         with self._lock:
                             dropped = self._append_locked(samples, captured_at)
                         if dropped:
@@ -509,9 +519,7 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         """Restart the audio capture subprocess."""
         self._terminate_process()
 
-        # Новый ребёнок — новый поток: недочитанный кадр от прежнего склеивать
-        # не с чем.
-        self._pcm_tail = b""
+        self._on_new_child()
         self.process = self._spawn()
         self._last_signal_at = time.monotonic()
 
@@ -530,7 +538,7 @@ class SubprocessPCMCapture(BufferedAudioCapture):
         if self.running:
             return
 
-        self._pcm_tail = b""
+        self._on_new_child()
         self.process = self._spawn()
         self._last_signal_at = time.monotonic()
 

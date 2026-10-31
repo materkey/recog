@@ -35,6 +35,7 @@ from .asr import ASRModule, _mps_autoreleasepool
 from .audio_capture import BufferedAudioCapture
 from .install_config import INSTALL_CONFIG
 from .log_utils import log_rate_limited
+from .mic_capture import ChildMicCapture
 from .remote_asr import ASRTemporarilyUnavailable, FallbackASR, build_asr
 from .refine import RefineAborted, RefineResult, RefineWorker, make_abortable_decode
 from .system_audio import DIGITAL_SILENCE_RESTART_S, RESTART_BACKOFF_S
@@ -541,6 +542,19 @@ class SingleDeviceCapture(BufferedAudioCapture):
         return None
 
 
+def create_mic_capture(device, sample_rate: int, platform: str = ""):
+    """The microphone's capture: macOS has it in a child process, see recog/mic_worker.py."""
+    platform = platform or sys.platform
+    if platform != "darwin":
+        return SingleDeviceCapture(device, sample_rate, "mic")
+    device_name = None
+    if device is not None:
+        import sounddevice as sd
+
+        device_name = sd.query_devices(device)["name"]
+    return ChildMicCapture(device_name, sample_rate)
+
+
 @dataclass
 class RecentSegment:
     """Tracks a recent system-audio segment for retroactive correction."""
@@ -654,13 +668,13 @@ class LiveTranscriber:
         if self.system_audio in ("screencapture", "pulse"):
             self.system_capture = create_system_capture(self.system_audio, self.sample_rate)
             if self.mic_enabled and self.mic_device is not None:
-                self.mic_capture = SingleDeviceCapture(self.mic_device, self.sample_rate, "mic")
+                self.mic_capture = create_mic_capture(self.mic_device, self.sample_rate)
         elif self.system_device is not None:
             self.system_capture = SingleDeviceCapture(self.system_device, self.sample_rate, "system")
             if self.mic_enabled and self.mic_device is not None:
-                self.mic_capture = SingleDeviceCapture(self.mic_device, self.sample_rate, "mic")
+                self.mic_capture = create_mic_capture(self.mic_device, self.sample_rate)
         elif self.mic_enabled:
-            self.mic_capture = SingleDeviceCapture(self.mic_device, self.sample_rate, "mic")
+            self.mic_capture = create_mic_capture(self.mic_device, self.sample_rate)
 
         if self.mic_capture is None and self.system_capture is None:
             raise ValueError(

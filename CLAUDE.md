@@ -234,8 +234,19 @@ delivered only zeros for `DIGITAL_SILENCE_RESTART_S` (60 s) while a conference
 is active (`KTalkBridge.is_conference_active`); a restart during real silence
 loses nothing.
 
-sounddevice captures (`SingleDeviceCapture`: the microphone and `device:<id>`)
-fail differently: a configuration change of the device (e.g. another process
+On macOS the microphone is a subprocess capture too: `ChildMicCapture`
+(`recog/mic_capture.py`) reads framed audio from `recog/mic_worker.py`, each frame
+carrying its PortAudio ADC time and wall clock (`create_mic_capture` in
+`recog/live.py` chooses). `sounddevice` calls back about a thousand times a second
+and each call needs the interpreter lock, so in the live process any busy Python
+thread loses samples, with no status from PortAudio. The worker is run by file
+path with `-I` and must not import `recog`. It exits on every way a stream stops
+capturing (finished callback, inactive, 10 s without a callback), and the shared
+respawn starts a new one on a device list read afresh, the device found by name.
+A respawn keeps the buffer, so no source boundary is marked.
+
+sounddevice captures in the live process (`SingleDeviceCapture`: the microphone
+on Linux and `device:<id>`) fail differently: a configuration change of the device (e.g. another process
 changing the built-in microphone's sample rate) makes CoreAudio fail a render
 call with `-10863`, and PortAudio stops the stream for good — finished
 callback, `stream.active` False, no further callbacks, no zeros. The capture
@@ -356,6 +367,7 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
   - `ai_settings.py` / `ai_defaults.py` - Revisioned private `ai-settings.json` store and shipped LLM prompts/models. Web Settings edits global models and scenario overrides (analysis, titles, saved prompts, Copilot). Model precedence: scenario > saved global > legacy environment > shipped default. Each generation resolves one snapshot; saved increments and generated titles record model and revision. `web/ai_settings.py` coordinates bridge refresh/ack for Copilot policy; prompt changes reach the next event, model changes the next session. Stable file lock and atomic replacement protect concurrent writes; malformed settings fail visibly.
   - `asr.py` - GigaAM ASR wrapper
   - `audio_capture.py` - `BufferedAudioCapture`: the buffer/overlap/re-anchor machinery shared by the mic (`SingleDeviceCapture`) and the system-audio subprocess captures. Owns `_append_locked`, `clear_buffer`, `get_chunk() -> (chunk, capture_start_ts)`; the contract is 1-D mono float32
+  - `mic_capture.py` / `mic_worker.py` - The macOS microphone in a child process: `ChildMicCapture` in the live process, the worker holding the stream
   - `system_audio.py` - `SubprocessPCMCapture` (generic child-process PCM reader) + `PulseAudioCapture` (Linux `parec`, follows the default sink) + `find_or_build_sck_utility` (macOS ScreenCaptureKit helper, `sck_audio_capture` resolved from `REPO_ROOT` — the binary stays at the repo root; its source is `recog/native/macos/sck_audio_capture.swift`) + `resolve_system_audio_backend` / `create_system_capture`. Manual smoke: `python -m recog.system_audio`
   - `live.py` - Real-time transcription (LiveTranscriber with decomposed methods: _setup_meeting_storage, _setup_ktalk_bridge, _start_audio_captures, _process_chunk, _handle_mic_chunk, _handle_ktalk_chunk, _teardown_session; module-level helpers: normalize_word, deduplicate)
   - `increment.py` - Auto-generate versioned AI summaries on ktalk_leave; multi-prompt support via generate_all(), stores per-prompt results in meetings/<id>/increments/<prompt-id>/vN.md
