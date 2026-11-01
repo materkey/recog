@@ -1,6 +1,6 @@
 # Installation and usage reference
 
-See the [quick start](../README.md#installation) for the shortest installation path.
+See the [quick start](../README.md#установка) for the shortest installation path.
 Commands below run from the repository root.
 
 ## Requirements

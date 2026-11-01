@@ -1,114 +1,125 @@
 # recog
 
-Live transcription of Russian-language meetings on your own machine, with
-speaker names, saved meetings and a web UI. Speaker names come from conference
-participant signals and your profile, not from voice recognition. Supported
-conferences: KTalk (Kontur Talk, `*.ktalk.ru`), Jitsi, Google Meet and Zoom
-(the web client; the macOS application is [opt-in](docs/zoom-app.md)).
+Транскрибация русскоязычных встреч в реальном времени на вашем компьютере:
+с именами говорящих, сохранением встреч и веб-интерфейсом. Имена говорящих берутся
+из сигналов об участниках конференции и из вашего профиля, а не из распознавания
+голоса. Поддерживаемые конференции: KTalk (Контур.Толк, `*.ktalk.ru`), Jitsi,
+Google Meet и Zoom (веб-клиент; приложение для macOS
+[включается отдельно](docs/zoom-app.md)).
 
-Runs on macOS and Linux. Linux is covered by the automated tests on Ubuntu and
-by the [installation checks](docs/usage.md#python-on-linux); live audio capture and
-service activation there have no recorded end-to-end run.
+Работает на macOS и Linux. Linux покрыт автотестами на Ubuntu и
+[проверками при установке](docs/usage.md#python-on-linux); полный прогон захвата
+звука и запуска сервисов на нём пока не зафиксирован.
 
-## Installation
+## Установка
 
-**Recording:** setup starts the services, and the default live service then
-captures microphone and system audio, including between conferences. Meeting
-audio is deleted after 24 hours; transcripts stay until you remove them. The
-recording includes other participants' speech: tell them, and make sure you
-are allowed to record. `./recog-service.sh stop` stops the services and the
-recording; `./setup.sh --no-services` installs without starting them. To record
-during browser KTalk calls only, configure
-[`--ktalk-only`](docs/usage.md#recording-only-during-ktalk-calls); this mode
-requires the extension.
+**Запись:** установка запускает сервисы, после чего live-сервис по умолчанию
+захватывает микрофон и системный звук, в том числе между конференциями. Аудио
+встреч удаляется через 24 часа, транскрипты хранятся, пока вы их не удалите.
+В запись попадает речь других участников: предупредите их и убедитесь, что
+запись разрешена. `./recog-service.sh stop` останавливает сервисы и запись,
+`./setup.sh --no-services` устанавливает, не запуская их. Чтобы записывать только
+во время звонков KTalk в браузере, настройте
+[`--ktalk-only`](docs/usage.md#recording-only-during-ktalk-calls); для этого режима
+нужно расширение.
 
-Before running setup, have:
+Перед установкой подготовьте:
 
-- **macOS 13+ on Apple Silicon** (with `swiftc` to build the audio helper) or
-  **Linux** (PulseAudio or PipeWire with `pipewire-pulse`, `parec`, `pactl` and
+- **macOS 13+ на Apple Silicon** (нужен `swiftc`, чтобы собрать аудиохелпер) или
+  **Linux** (PulseAudio либо PipeWire с `pipewire-pulse`, `parec`, `pactl` и
   PortAudio).
-- **Python 3.12**. On Linux without it, follow
-  [Python on Linux](docs/usage.md#python-on-linux) first.
-- **ffmpeg**, **Node.js + npm** to build the Chrome extension, and roughly
-  **4 GB for models**.
-- For Copilot, an optional Claude Code session that follows the meeting and
-  answers in a chat: **tmux + Claude Code**; run `claude` once to sign in.
-  Setup requires both unless you [skip the Copilot check](docs/usage.md#copilot).
+- **Python 3.12**. Если на Linux его нет, сначала выполните шаги из раздела
+  [Python on Linux](docs/usage.md#python-on-linux).
+- **ffmpeg**, **Node.js + npm** для сборки расширения Chrome и примерно
+  **4 ГБ под модели**.
+- Для Copilot, необязательной сессии Claude Code, которая следит за встречей и
+  отвечает в чате: **tmux + Claude Code**; один раз запустите `claude`, чтобы
+  войти. Установка требует их обоих, если не
+  [пропустить проверку Copilot](docs/usage.md#copilot).
 
 ```bash
 git clone https://github.com/materkey/recog.git && cd recog
-./setup.sh --dry-run  # preview only; does not check dependencies or readiness
-./setup.sh            # without Copilot: RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh
+./setup.sh --dry-run  # только предпросмотр: зависимости и готовность не проверяются
+./setup.sh            # без Copilot: RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh
 ```
 
-Setup prints missing dependencies and how to install them; fix these and rerun
-setup. See [requirements and install options](docs/usage.md#requirements).
+Установка покажет, каких зависимостей не хватает и как их поставить; поставьте
+их и запустите её снова. Подробнее в разделе
+[требования и варианты установки](docs/usage.md#requirements).
 
-1. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**
-   and select `browser-extension/dist/`.
-2. On macOS, grant **Screen Recording** and microphone permissions to **Recog** when prompted.
-3. Open **http://127.0.0.1:9080** and set your name for microphone transcripts.
-4. Say a phrase or join a conference: the text appears on the **Live** page.
-   No text? Check `./recog-service.sh status` and `./recog-service.sh logs`,
-   then [troubleshooting](docs/usage.md#troubleshooting).
+1. Откройте `chrome://extensions`, включите **Режим разработчика** (Developer mode),
+   нажмите **Загрузить распакованное расширение** (Load unpacked) и выберите
+   `browser-extension/dist/`.
+2. На macOS разрешите приложению **Recog** **Запись экрана** (Screen Recording) и
+   доступ к микрофону, когда система об этом спросит.
+3. Откройте **http://127.0.0.1:9080** и укажите своё имя для транскриптов микрофона.
+4. Произнесите фразу или подключитесь к конференции: текст появится на странице
+   **Live**. Текста нет? Проверьте `./recog-service.sh status` и
+   `./recog-service.sh logs`, затем загляните в раздел
+   [решения проблем](docs/usage.md#troubleshooting).
 
-Optional settings — your own Jitsi or Element server, a remote ASR gateway,
-folders of imported meetings — go into `~/.config/recog/config.toml`: copy
-[`deploy/config.example.toml`](deploy/config.example.toml) there, uncomment
-what you need ([installation configuration](docs/configuration.md)) and run
-`./recog-service.sh restart`. Secrets stay in `.env`.
+Необязательные настройки (свой сервер Jitsi или Element, удалённый шлюз
+распознавания речи, папки импортированных встреч) хранятся в
+`~/.config/recog/config.toml`: скопируйте туда
+[`deploy/config.example.toml`](deploy/config.example.toml), раскомментируйте нужное
+([конфигурация установки](docs/configuration.md)) и выполните
+`./recog-service.sh restart`. Секреты остаются в `.env`.
 
-To update, read the [changelog](CHANGELOG.md) since your last update, then
-`git pull && ./setup.sh` ([updating an install](docs/usage.md#updating-an-existing-install)).
+Чтобы обновиться, прочитайте [журнал изменений](CHANGELOG.md) с момента прошлого
+обновления, затем выполните `git pull && ./setup.sh`
+([обновление установки](docs/usage.md#updating-an-existing-install)).
 
-## How it works
+## Как это работает
 
 ```mermaid
 flowchart TD
-    Mic[Microphone + your profile name] --> ASR[GigaAM speech recognition]
-    KTalk[KTalk extension: participant audio + names] --> ASR
-    System[System audio + conference speaker signals] --> ASR
-    ASR --> Transcript[Live transcript with speaker names]
-    Transcript --> Storage[Saved meetings]
-    Transcript --> Web[Web UI]
+    Mic[Микрофон + имя из вашего профиля] --> ASR[Распознавание речи GigaAM]
+    KTalk[Расширение KTalk: аудио и имена участников] --> ASR
+    System[Системный звук + сигналы конференции о говорящих] --> ASR
+    ASR --> Transcript[Живой транскрипт с именами говорящих]
+    Transcript --> Storage[Сохранённые встречи]
+    Transcript --> Web[Веб-интерфейс]
     Storage --> Web
-    Transcript --> Copilot[Optional Claude Code Copilot]
-    Storage --> Analysis[AI analysis on request: Claude / Codex]
+    Transcript --> Copilot[Необязательный Copilot на Claude Code]
+    Storage --> Analysis[AI-анализ по запросу: Claude / Codex]
 ```
 
-Microphone speech uses your saved profile.
-System audio outside a recognized conference has no speaker identity and is
-marked `Unknown`.
-Speech recognition (GigaAM) runs locally by default; a
-[remote ASR gateway](docs/asr-server.md) is optional, and so are Copilot and
-AI analysis, which use the Claude and Codex CLIs.
+Речь с микрофона подписывается именем из вашего профиля.
+Системный звук вне распознанной конференции не привязан к говорящему и
+помечается как `Unknown`.
+Распознавание речи (GigaAM) по умолчанию работает локально;
+[удалённый шлюз распознавания](docs/asr-server.md) необязателен, как и Copilot с
+AI-анализом, которые используют CLI Claude и Codex.
 
-The web UI shows live and saved transcripts, audio playback and AI analysis.
-Start Copilot from the web UI; automatic meeting startup is off on fresh
-installs. New installations keep meetings, logs and settings in `~/.recog`.
+В веб-интерфейсе есть живые и сохранённые транскрипты, воспроизведение аудио и
+AI-анализ. Copilot запускается из веб-интерфейса; автоматический старт на встречах
+в новых установках выключен. Новые установки хранят встречи, логи и настройки в
+`~/.recog`.
 
-The bundled [`recog-meetings` skill](.claude/skills/recog-meetings/SKILL.md)
-lets Claude Code search saved transcripts by speaker, keyword and date.
+Встроенный скилл [`recog-meetings`](.claude/skills/recog-meetings/SKILL.md)
+позволяет Claude Code искать по сохранённым транскриптам: по говорящему, ключевому
+слову и дате.
 
-## Everyday commands
+## Команды на каждый день
 
 ```bash
-./recog-service.sh status     # service state
-./recog-service.sh logs       # live transcription logs
-./recog-service.sh stop       # stop services and recording
-./recog-service.sh start      # start after readiness checks
+./recog-service.sh status     # состояние сервисов
+./recog-service.sh logs       # логи транскрибации
+./recog-service.sh stop       # остановить сервисы и запись
+./recog-service.sh start      # запустить после проверок готовности
 ```
 
-## Documentation
+## Документация
 
-- [Usage, configuration and troubleshooting](docs/usage.md), including
-  [updating an install](docs/usage.md#updating-an-existing-install); the
-  [changelog](CHANGELOG.md) lists what each update asks of an installation
-- [Conference hosts](docs/conference-hosts.md), [desktop KTalk](docs/desktop-ktalk.md)
-  and the [Zoom application](docs/zoom-app.md)
-- [Documentation index](docs/README.md): repository layout, architecture
-  decisions, development checks
+- [Использование, настройка и решение проблем](docs/usage.md), включая
+  [обновление установки](docs/usage.md#updating-an-existing-install);
+  в [журнале изменений](CHANGELOG.md) указано, что каждое обновление требует от
+  установки
+- [Хосты конференций](docs/conference-hosts.md),
+  [десктопный KTalk](docs/desktop-ktalk.md) и [приложение Zoom](docs/zoom-app.md)
+- [Оглавление документации](docs/README.md): структура репозитория, архитектурные
+  решения, проверки для разработки
 
-## License
+## Лицензия
 
 [MIT](LICENSE)
