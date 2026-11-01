@@ -101,8 +101,8 @@ def test_hole_in_adc_time_is_reported(capsys):
 
 
 def test_only_zeros_are_reported_once_and_rearm_on_signal(capsys, monkeypatch):
-    """given: macOS answers a refused microphone with exact zeros, which a real one
-    never gives, and the transcript would just stay empty
+    """given: macOS answers a refused microphone and a closed lid with exact zeros,
+    which an open one never gives, and the transcript would just stay empty
     when: zeros last past the limit, signal returns, zeros last again
     then: each stretch is logged once"""
     capture = _capture()
@@ -110,7 +110,9 @@ def test_only_zeros_are_reported_once_and_rearm_on_signal(capsys, monkeypatch):
 
     capture._decode_read(_frame([0.0]))
     capture._decode_read(_frame([0.0]))
-    assert capsys.readouterr().err.count("only exact zeros") == 1
+    err = capsys.readouterr().err
+    assert err.count("only exact zeros") == 1
+    assert "lid" in err and "permission" in err
 
     monkeypatch.setattr(capture, "digital_silence_s", lambda: 0.0)
     capture._decode_read(_frame([0.1]))

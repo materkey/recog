@@ -17,8 +17,8 @@ from recog.system_audio import SubprocessPCMCapture
 
 # Below this a gap in ADC time is the clock's own jitter (measured under 1 ms).
 ADC_HOLE_REPORT_S = 0.005
-# macOS answers a refused microphone with exact zeros, which a real one never
-# gives, so the transcript would just stay empty.
+# macOS answers a refused microphone and a closed lid with exact zeros, which an
+# open one never gives, so the transcript would just stay empty.
 ONLY_ZEROS_REPORT_S = 30.0
 
 # sck_audio_capture --frames: presentation time, wall clock, frame count, whether
@@ -105,7 +105,7 @@ class ChildMicCapture(SubprocessPCMCapture):
             self._zeros_reported = True
             print(
                 f"[{self.name}] only exact zeros from the microphone for "
-                f"{ONLY_ZEROS_REPORT_S:.0f}s: is its permission granted to Recog?",
+                f"{ONLY_ZEROS_REPORT_S:.0f}s: is the lid closed, or its permission not granted to Recog?",
                 file=sys.stderr,
             )
 
