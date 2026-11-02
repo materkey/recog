@@ -1,7 +1,7 @@
 """Independent Claude effort travels from stored scenario to each launch mode."""
 
 import shlex
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -38,8 +38,9 @@ async def test_independent_efforts_given_generation_when_spawned_then_claude_get
 
     class Process:
         returncode = 0
+        stdin = MagicMock(drain=AsyncMock())
 
-        async def communicate(self):
+        async def communicate(self, input=None):
             return b'answer', b''
 
         @property
