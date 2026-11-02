@@ -124,9 +124,40 @@ test('stored sources - load - dropdown lists only sources present plus the saved
     const h = harness(async () => response(rows));
     await h.view.load();
     const values = [...h.element('filter-source').innerHTML.matchAll(/value="([^"]*)"/g)].map(m => m[1]);
-    assert.deepEqual(values, ['', 'active', 'orphan', 'importer', 'jitsi', 'ktalk']);
+    assert.deepEqual(values, ['', 'except-orphan', 'active', 'orphan', 'importer', 'jitsi', 'ktalk']);
     assert.match(h.element('filter-source').innerHTML, /value="importer">importer</);
     assert.equal(h.element('filter-source').value, 'ktalk');
+});
+
+test('orphan and other meetings - choosing all except orphan - only orphans are hidden and the choice is no source', async () => {
+    const h = harness(async () => response([
+        { id: 'a', title: 'Orphan one', source: 'orphan', created_at: '2026-09-01T10:00:00Z' },
+        { id: 'b', title: 'Call one', source: 'ktalk', created_at: '2026-09-01T11:00:00Z' },
+        { id: 'c', title: 'Imported one', source: 'importer', created_at: '2026-09-01T12:00:00Z' },
+        { id: 'd', title: 'Sourceless one', created_at: '2026-09-01T13:00:00Z' },
+    ]));
+    await h.view.load();
+    h.element('filter-source').listeners.change({ target: { value: 'except-orphan' } });
+    assert.doesNotMatch(h.list(), /Orphan one/);
+    assert.match(h.list(), /Call one/);
+    assert.match(h.list(), /Imported one/);
+    assert.match(h.list(), /Sourceless one/);
+    h.view.renderSourceOptions();
+    const values = [...h.element('filter-source').innerHTML.matchAll(/value="([^"]*)"/g)].map(m => m[1]);
+    assert.equal(values.filter(value => value === 'except-orphan').length, 1);
+    assert.match(h.element('filter-source').innerHTML, /value="except-orphan">All except Orphan</);
+    assert.equal(h.element('filter-source').value, 'except-orphan');
+});
+
+test('live and finished meetings - choosing active - only live ones stay', async () => {
+    const h = harness(async () => response([
+        { ...row('Live one'), is_active: true },
+        row('Finished one'),
+    ]));
+    await h.view.load();
+    h.element('filter-source').listeners.change({ target: { value: 'active' } });
+    assert.match(h.list(), /Live one/);
+    assert.doesNotMatch(h.list(), /Finished one/);
 });
 
 test('stored gmeet meeting - load - dropdown shows Google Meet label', async () => {

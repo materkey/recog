@@ -11,6 +11,9 @@ reasoning.
 
 ### Changed
 
+- **The meeting list can hide orphan recordings.** The source filter has a new
+  choice, **All except Orphan**.
+
 - **A meeting page can answer questions about the meeting.** **Спросить** opens a
   panel beside the transcript; times in an answer scroll to the replica they cite.
   Run `./recog-service.sh restart-web` after `git pull`.

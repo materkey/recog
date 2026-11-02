@@ -184,6 +184,18 @@ const SOURCE_LABELS = {
     diarized: 'Diarized',
 };
 
+// Choices of the source dropdown that select across sources, not one of them.
+const CROSS_SOURCE_FILTERS = new Map([
+    ['except-orphan', {
+        label: 'All except Orphan',
+        matches: (m) => m.source !== 'orphan',
+    }],
+    ['active', {
+        label: 'Active (LIVE)',
+        matches: (m) => m.is_active,
+    }],
+]);
+
 function sourceLabels(meetings) {
     const labels = { ...SOURCE_LABELS };
     for (const m of meetings) {
@@ -351,7 +363,7 @@ const views = {
                 counts.set(source, (counts.get(source) || 0) + 1);
             }
             const labels = sourceLabels(this.meetings);
-            if (this.filterSource && this.filterSource !== 'active' && !counts.has(this.filterSource)) {
+            if (this.filterSource && !CROSS_SOURCE_FILTERS.has(this.filterSource) && !counts.has(this.filterSource)) {
                 counts.set(this.filterSource, 0);
             }
             const sources = [...counts.keys()].sort((a, b) =>
@@ -359,7 +371,8 @@ const views = {
             const select = document.getElementById('filter-source');
             select.innerHTML = [
                 '<option value="">All sources</option>',
-                '<option value="active">Active (LIVE)</option>',
+                ...[...CROSS_SOURCE_FILTERS].map(([value, filter]) =>
+                    `<option value="${value}">${filter.label}</option>`),
                 ...sources.map(source =>
                     `<option value="${escapeHtml(source)}">${escapeHtml(labels[source] || source)}</option>`),
             ].join('');
@@ -383,8 +396,9 @@ const views = {
 
                 // Filter by source
                 if (this.filterSource) {
-                    if (this.filterSource === 'active') {
-                        filtered = filtered.filter(m => m.is_active);
+                    const crossSource = CROSS_SOURCE_FILTERS.get(this.filterSource);
+                    if (crossSource) {
+                        filtered = filtered.filter(crossSource.matches);
                     } else {
                         filtered = filtered.filter(m => (m.source || 'unknown') === this.filterSource);
                     }
