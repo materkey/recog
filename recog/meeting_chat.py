@@ -5,9 +5,9 @@ cannot be stored: a failed model call leaves no trace and can simply be asked ag
 Each line is one append, which lets several browser tabs ask at the same time.
 """
 
-from dataclasses import asdict, dataclass
 import json
 import os
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 CHAT_FILE = "chat.jsonl"

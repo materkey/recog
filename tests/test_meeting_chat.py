@@ -7,7 +7,7 @@ import pytest
 
 from recog.ai_settings import AiSettingsStore
 from recog.meeting_storage import MeetingStorage
-from recog.web import server, ai_provider
+from recog.web import ai_provider, server
 
 
 class FakeProvider:
@@ -29,32 +29,64 @@ def chat(tmp_path, monkeypatch):
     meetings = tmp_path / "meetings"
     meeting = meetings / "m1"
     meeting.mkdir(parents=True)
-    (meeting / "meta.json").write_text(json.dumps({
-        "id": "m1", "title": "Обзор дизайна", "created_at": "2026-11-02T08:30:08+00:00",
-        "participants": {"a": {"name": "Peter"}, "b": {"name": "Мария", "is_local": True}},
-    }), encoding="utf-8")
+    (meeting / "meta.json").write_text(
+        json.dumps(
+            {
+                "id": "m1",
+                "title": "Обзор дизайна",
+                "created_at": "2026-11-02T08:30:08+00:00",
+                "participants": {
+                    "a": {"name": "Peter"},
+                    "b": {"name": "Мария", "is_local": True},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     rows = [
-        {"id": 1, "ts": "2026-11-02T08:30:14+00:00", "ts_display": "11:30:14", "speaker": "Peter",
-         "speaker_id": "a", "text": "Я за синюю кнопку."},
-        {"id": 2, "ts": "2026-11-02T08:31:00+00:00", "ts_display": "11:31:00", "speaker": "Мария",
-         "speaker_id": "b", "text": "Понял."},
+        {
+            "id": 1,
+            "ts": "2026-11-02T08:30:14+00:00",
+            "ts_display": "11:30:14",
+            "speaker": "Peter",
+            "speaker_id": "a",
+            "text": "Я за синюю кнопку.",
+        },
+        {
+            "id": 2,
+            "ts": "2026-11-02T08:31:00+00:00",
+            "ts_display": "11:31:00",
+            "speaker": "Мария",
+            "speaker_id": "b",
+            "text": "Понял.",
+        },
     ]
     (meeting / "transcript.jsonl").write_text(
-        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8"
+    )
     (meetings / "empty").mkdir()
-    (meetings / "empty" / "meta.json").write_text(json.dumps({"id": "empty", "created_at": "2026-11-02T08:30:08+00:00"}))
+    (meetings / "empty" / "meta.json").write_text(
+        json.dumps({"id": "empty", "created_at": "2026-11-02T08:30:08+00:00"})
+    )
     (meetings / "empty" / "transcript.jsonl").write_text("")
 
     provider = FakeProvider()
     monkeypatch.setattr(server, "get_storage", lambda: MeetingStorage(meetings))
     monkeypatch.setattr(ai_provider, "get_data_dir", lambda: tmp_path)
     monkeypatch.setattr(server, "get_provider", lambda task, settings: provider)
-    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test")
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server.app), base_url="http://test"
+    )
 
     class Chat:
         pass
 
-    Chat.provider, Chat.client, Chat.dir, Chat.store = provider, client, meeting, AiSettingsStore(tmp_path)
+    Chat.provider, Chat.client, Chat.dir, Chat.store = (
+        provider,
+        client,
+        meeting,
+        AiSettingsStore(tmp_path),
+    )
     return Chat
 
 
@@ -135,7 +167,9 @@ async def test_empty_model_answer_when_asked_then_it_counts_as_failure(chat):
 
 
 @pytest.mark.asyncio
-async def test_meeting_deleted_during_the_answer_when_finished_then_not_recreated(chat, monkeypatch):
+async def test_meeting_deleted_during_the_answer_when_finished_then_not_recreated(
+    chat, monkeypatch
+):
     import shutil
 
     async def complete(prompt):
@@ -212,7 +246,9 @@ async def test_meeting_without_speech_when_asked_then_explained_without_the_mode
 
 @pytest.mark.asyncio
 async def test_edited_prompt_and_model_when_asked_then_chat_uses_them(chat, monkeypatch):
-    chat.store.write_task("meeting_chat", {"prompt": "Мой промпт\n{transcript}", "models": {"claude": "other"}})
+    chat.store.write_task(
+        "meeting_chat", {"prompt": "Мой промпт\n{transcript}", "models": {"claude": "other"}}
+    )
     seen = {}
 
     def get_provider(task, settings):

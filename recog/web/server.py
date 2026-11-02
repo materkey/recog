@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+from recog.meeting_chat import ChatTurn, append_turn, build_chat_prompt, clear_turns, read_turns
 from recog.web.ai_provider import get_provider, get_all_providers, build_prompt, get_task_settings
 from dotenv import load_dotenv
 from recog.desktop.service import DesktopIntegration, status as desktop_status
@@ -39,7 +40,6 @@ from recog.install_config import INSTALL_CONFIG
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from recog.meeting_storage import MeetingStorage, get_external_paths
-from recog.meeting_chat import ChatTurn, append_turn, build_chat_prompt, clear_turns, read_turns
 from recog.log_utils import log_rate_limited
 from recog.config import get_data_dir, MIC_SPEAKER_NAME
 from recog.user_profile import UserProfileStore
@@ -1463,11 +1463,13 @@ CHAT_TRANSCRIPT_MAX_CHARS = 300_000
 
 
 class MeetingChatRequest(BaseModel):
-    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+    question: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
+    ]
 
 
 def _meeting_chat_path(storage: MeetingStorage, meeting_id: str) -> Path:
-    if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
+    if ".." in meeting_id or "/" in meeting_id or "\\" in meeting_id:
         raise HTTPException(status_code=400, detail="Invalid meeting ID")
     meeting_path = storage.find_meeting_path(meeting_id)
     if meeting_path is None:

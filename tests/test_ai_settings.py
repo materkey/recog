@@ -28,7 +28,10 @@ def test_missing_settings_when_read_then_defaults_without_creating_data(store):
     view = store.view()
     assert view["models"] == DEFAULT_MODELS
     assert {task["id"] for task in view["tasks"]} == {
-        "analysis.increment", "title", "meeting_chat", "copilot",
+        "analysis.increment",
+        "title",
+        "meeting_chat",
+        "copilot",
     }
     assert not store.path.parent.exists()
 
@@ -78,7 +81,12 @@ def test_retired_features_given_legacy_file_when_loaded_then_active_settings_rem
     view = store.view()
     assert set(view["models"]) == {"claude", "codex"}
     assert view["models"]["codex"] == "kept"
-    assert {task["id"] for task in view["tasks"]} == {"analysis.increment", "title", "meeting_chat", "copilot"}
+    assert {task["id"] for task in view["tasks"]} == {
+        "analysis.increment",
+        "title",
+        "meeting_chat",
+        "copilot",
+    }
     assert store.resolve_task("title")["providers"] == ["codex"]
     assert store.resolve_task("title")["prompt"] == "Keep {transcript}"
     assert store.path.read_bytes() == original

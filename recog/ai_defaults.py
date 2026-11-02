@@ -96,7 +96,11 @@ COPILOT_PROMPT = """Ты — помощник пользователя на вс
 DEFAULT_TASKS = {
     "analysis.increment": {"label": "Инкремент", "prompt": INCREMENT_PROMPT, "multiple": True},
     "title": {"label": "Название встречи", "prompt": TITLE_PROMPT, "multiple": False},
-    "meeting_chat": {"label": "Вопросы по встрече", "prompt": MEETING_CHAT_PROMPT, "multiple": False,
-                     "providers": ["claude"]},
+    "meeting_chat": {
+        "label": "Вопросы по встрече",
+        "prompt": MEETING_CHAT_PROMPT,
+        "multiple": False,
+        "providers": ["claude"],
+    },
     "copilot": {"label": "Copilot", "prompt": COPILOT_PROMPT, "multiple": False},
 }

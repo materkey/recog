@@ -7,6 +7,14 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-02
+
+### Changed
+
+- **A meeting page can answer questions about the meeting.** **Спросить** opens a
+  panel beside the transcript; times in an answer scroll to the replica they cite.
+  Run `./recog-service.sh restart-web` after `git pull`.
+
 ## 2026-10-31
 
 ### Action required

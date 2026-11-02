@@ -1757,3 +1757,157 @@ a:hover {
         max-height: 20vh;
     }
 }
+
+/* --- Questions about a meeting --- */
+.meeting-chat {
+    --chat-width: min(440px, 100vw);
+    position: fixed;
+    inset: 0 0 0 auto;
+    width: var(--chat-width);
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border);
+    box-shadow: -4px 0 16px var(--shadow);
+}
+
+.meeting-chat[hidden] {
+    display: none;
+}
+
+/* Leave the room for the panel: .main is centered with a max-width of 1200px. */
+@media (min-width: 900px) {
+    #view-meeting.chat-open {
+        padding-right: max(0px, calc(440px - max(0px, (100vw - 1200px) / 2)));
+    }
+}
+
+#view-meeting.chat-open .view-header {
+    flex-wrap: wrap;
+}
+
+#view-meeting.chat-open .view-header h1 {
+    flex-basis: 100%;
+}
+
+.meeting-chat-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.meeting-chat-header h2 {
+    flex: 1;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.meeting-chat-log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.chat-empty,
+.chat-provider,
+.chat-note,
+.meeting-chat-waiting {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.chat-provider {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 6px;
+}
+
+.chat-note {
+    margin-top: 8px;
+    color: var(--source-orphan);
+}
+
+.chat-question {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.chat-answer {
+    overflow-wrap: anywhere;
+}
+
+.chat-cite {
+    padding: 0 4px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--accent-hover);
+    font: inherit;
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+}
+
+.chat-cite:hover {
+    background: var(--bg-hover);
+}
+
+.meeting-chat-privacy {
+    display: none;
+    padding: 8px 16px 0;
+    color: var(--source-orphan);
+    font-size: 12px;
+}
+
+#view-meeting:has(#privacy-mode-btn.active) .meeting-chat-privacy {
+    display: block;
+}
+
+.meeting-chat #meeting-chat-error {
+    padding: 8px 16px 0;
+}
+
+.meeting-chat-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+}
+
+.meeting-chat-label {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.meeting-chat-form textarea {
+    field-sizing: content;
+    width: 100%;
+    min-block-size: 2lh;
+    max-block-size: 10lh;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font: inherit;
+    resize: none;
+}
+
+.meeting-chat-form .btn {
+    align-self: flex-end;
+}
+
+.transcript-segment.segment-cited {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}

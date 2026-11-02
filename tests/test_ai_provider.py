@@ -275,7 +275,9 @@ class TestFrontendClaudeProvider:
 
         assert answer == "answer"
         assert created["cmd"][:2] == ("/mock/claude", "-p")
-        assert created["stdin"].decode().startswith("<!-- ccs-automation:recog task=anchor -->\nhello")
+        assert (
+            created["stdin"].decode().startswith("<!-- ccs-automation:recog task=anchor -->\nhello")
+        )
         assert not any("hello" in str(arg) for arg in created["cmd"])
         assert "--safe-mode" in created["cmd"]
         assert "--bare" not in created["cmd"]

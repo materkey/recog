@@ -271,6 +271,22 @@ After editing backend code (`recog/web/server.py`, `recog/*.py`) run
 `./recog-service.sh restart`; for `recog/copilot_supervisor.py` alone,
 `./recog-service.sh restart-supervisor` is enough.
 
+## Questions about a meeting
+
+**Спросить** on a meeting page opens a panel beside its transcript: ask what someone
+said or what was decided, and follow up. The answer comes from the transcript alone,
+and each time in it is a button that scrolls the transcript to that replica, so a
+quote can be checked by eye. It works during a meeting too, on what has been said so
+far.
+
+The dialog is saved in the meeting's `chat.jsonl` and is deleted with the meeting or
+by **Начать заново**. A question is a single call of the provider's CLI, like AI
+Analysis, not the Copilot session, so it needs no running Copilot. Its prompt, provider
+and model are the **Вопросы по встрече** scenario in the AI settings; the default is
+Claude. The transcript goes to the model with real speaker names even when **Privacy**
+is on, and a meeting over 300,000 characters reaches it only by its end, which the
+answer then says.
+
 ## Copilot
 
 The **Privacy** toggle in the live and meeting views replaces speaker names with

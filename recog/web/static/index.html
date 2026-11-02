@@ -70,6 +70,7 @@
                         <button class="btn" onclick="copyToClipboard()">Copy</button>
                         <button class="btn" onclick="exportMarkdown()">Export MD</button>
                         <button class="btn btn-privacy" id="privacy-mode-btn" onclick="togglePrivacy()" title="Replace speaker names and profile in Copy/Export and Copilot MCP; text stays unchanged">Privacy</button>
+                        <button class="btn btn-ai" id="meeting-chat-btn" aria-expanded="false" aria-controls="meeting-chat" title="Задать вопрос по этой встрече">Спросить</button>
                         <button class="btn btn-ai" onclick="analyzeIncrement()">AI Analysis</button>
                         <button class="btn btn-danger" id="delete-meeting-btn" onclick="deleteMeeting()">Delete</button>
                     </div>
@@ -79,6 +80,21 @@
                     <input type="text" id="transcript-search" placeholder="Search in transcript..." class="search-input">
                 </div>
                 <div id="transcript" class="transcript"></div>
+                <aside id="meeting-chat" class="meeting-chat" aria-labelledby="meeting-chat-title" hidden>
+                    <div class="meeting-chat-header">
+                        <h2 id="meeting-chat-title">Вопрос по встрече</h2>
+                        <button type="button" class="btn" id="meeting-chat-clear" hidden>Начать заново</button>
+                        <button type="button" class="modal-close" id="meeting-chat-close" aria-label="Закрыть">&times;</button>
+                    </div>
+                    <div id="meeting-chat-log" class="meeting-chat-log" role="log" aria-live="polite" tabindex="0"></div>
+                    <p class="meeting-chat-privacy">Privacy здесь не действует: модель получает настоящие имена участников.</p>
+                    <p id="meeting-chat-error" class="profile-error" role="alert" hidden></p>
+                    <form id="meeting-chat-form" class="meeting-chat-form">
+                        <label for="meeting-chat-input" class="meeting-chat-label">Ваш вопрос</label>
+                        <textarea id="meeting-chat-input" rows="2" maxlength="4000" placeholder="Что решили по срокам?"></textarea>
+                        <button type="submit" class="btn btn-ai" id="meeting-chat-send">Спросить</button>
+                    </form>
+                </aside>
             </div>
 
             <!-- Live View -->
@@ -263,6 +279,7 @@
     <script src="/static/user-profile.js"></script>
     <script src="/static/ai-settings.js"></script>
     <script src="/static/desktop-status.js"></script>
+    <script src="/static/meeting-chat.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>
