@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">Как recog получает транскрипт</title>
+  <desc id="desc">Микрофон, расширение Chrome и системный звук идут в распознавание GigaAM. Из него выходит живой транскрипт с именами, который попадает в веб-интерфейс, сохранённые встречи и необязательный Copilot. Из сохранённых встреч по запросу делается AI-анализ.</desc>
+  <style>
+    .t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; font-size: 23px; font-weight: 600; }
+    .s { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; font-size: 19px; fill: #a0a0b8; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#6a6a80"/></marker>
+  </defs>
+  <rect width="1200" height="500" rx="20" fill="#0f0f1a"/>
+  <g id="sources">
+    <rect x="48" y="48" width="372" height="100" rx="8" fill="#1a1a2e" stroke="#4ade80" stroke-width="2"/>
+    <text x="70" y="92" class="t" fill="#4ade80">Микрофон</text>
+    <text x="70" y="122" class="s">имя из вашего профиля</text>
+    <rect x="48" y="200" width="372" height="100" rx="8" fill="#1a1a2e" stroke="#60a5fa" stroke-width="2"/>
+    <text x="70" y="244" class="t" fill="#60a5fa">Расширение Chrome</text>
+    <text x="70" y="274" class="s">аудио и имена участников KTalk</text>
+    <rect x="48" y="352" width="372" height="100" rx="8" fill="#1a1a2e" stroke="#60a5fa" stroke-width="2"/>
+    <text x="70" y="396" class="t" fill="#60a5fa">Системный звук</text>
+    <text x="70" y="426" class="s">и сигналы конференции о говорящих</text>
+  </g>
+  <g id="core">
+    <rect x="480" y="104" width="300" height="100" rx="8" fill="#1a1a2e" stroke="#6366f1" stroke-width="2"/>
+    <text x="502" y="148" class="t" fill="#e8e8f0">GigaAM</text>
+    <text x="502" y="178" class="s">распознавание речи</text>
+    <rect x="480" y="296" width="300" height="100" rx="8" fill="#1a1a2e" stroke="#6366f1" stroke-width="2"/>
+    <text x="502" y="340" class="t" fill="#e8e8f0">Живой транскрипт</text>
+    <text x="502" y="370" class="s">с именами говорящих</text>
+  </g>
+  <g id="outputs">
+    <rect x="840" y="48" width="312" height="84" rx="8" fill="#1a1a2e" stroke="#2d2d4a" stroke-width="2"/>
+    <text x="862" y="98" class="t" fill="#e8e8f0">Веб-интерфейс</text>
+    <rect x="840" y="156" width="312" height="84" rx="8" fill="#1a1a2e" stroke="#2d2d4a" stroke-width="2"/>
+    <text x="862" y="206" class="t" fill="#e8e8f0">Сохранённые встречи</text>
+    <rect x="840" y="264" width="312" height="84" rx="8" fill="#1a1a2e" stroke="#2d2d4a" stroke-width="2" stroke-dasharray="7 6"/>
+    <text x="862" y="300" class="t" fill="#e8e8f0">AI-анализ</text>
+    <text x="862" y="330" class="s">по запросу</text>
+    <rect x="840" y="372" width="312" height="84" rx="8" fill="#1a1a2e" stroke="#2d2d4a" stroke-width="2" stroke-dasharray="7 6"/>
+    <text x="862" y="408" class="t" fill="#e8e8f0">Copilot</text>
+    <text x="862" y="438" class="s">необязательный</text>
+  </g>
+  <g id="edges">
+    <path d="M420 98 C450 98 450 128 478 128" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+    <path d="M420 250 C450 250 450 154 478 154" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+    <path d="M420 402 C450 402 450 180 478 180" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+    <path d="M630 204 V294" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+    <path d="M780 320 C810 320 810 90 838 90" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+    <path d="M780 346 C822 346 822 198 838 198" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+    <path d="M780 372 C810 372 810 414 838 414" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+    <path d="M996 241 V262" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+    <path d="M996 155 V134" fill="none" stroke="#6a6a80" stroke-width="2.5" marker-end="url(#a)"/>
+  </g>
+</svg>

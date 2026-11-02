@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">recog: живой транскрипт встреч на русском языке</title>
+  <desc id="desc">Слева название проекта и его описание. Справа звуковая дорожка превращается в строки транскрипта с именами говорящих. Имена и реплики вымышленные.</desc>
+  <style>
+    .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .name { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; font-size: 20px; font-weight: 600; }
+    .line { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; font-size: 21px; fill: #e8e8f0; }
+    .ts { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 18px; fill: #a0a0b8; }
+  </style>
+  <rect width="1200" height="420" rx="20" fill="#0f0f1a"/>
+  <g id="title-block">
+    <text x="56" y="168" class="sans" font-size="104" font-weight="700" letter-spacing="-1" fill="#e8e8f0">recog</text>
+    <text x="58" y="224" class="sans" font-size="29" fill="#e8e8f0">Живой транскрипт встреч</text>
+    <text x="58" y="262" class="sans" font-size="29" fill="#e8e8f0">на русском языке, с именами</text>
+    <text x="58" y="300" class="sans" font-size="29" fill="#e8e8f0">говорящих, на вашем компьютере</text>
+    <text x="58" y="360" class="mono" font-size="19" fill="#a0a0b8">KTalk · Jitsi · Google Meet · Zoom</text>
+  </g>
+  <g id="waveform" transform="translate(576 66)">
+    <rect x="0" y="-23" width="5" height="46" rx="2.5" fill="#60a5fa"/>
+    <rect x="9" y="-11" width="5" height="22" rx="2.5" fill="#60a5fa"/>
+    <rect x="18" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="27" y="-4" width="5" height="8" rx="2.5" fill="#60a5fa"/>
+    <rect x="36" y="-7" width="5" height="14" rx="2.5" fill="#60a5fa"/>
+    <rect x="45" y="-7" width="5" height="14" rx="2.5" fill="#60a5fa"/>
+    <rect x="54" y="-23" width="5" height="46" rx="2.5" fill="#60a5fa"/>
+    <rect x="63" y="-4" width="5" height="8" rx="2.5" fill="#60a5fa"/>
+    <rect x="72" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="81" y="-4" width="5" height="8" rx="2.5" fill="#60a5fa"/>
+    <rect x="90" y="-7" width="5" height="14" rx="2.5" fill="#60a5fa"/>
+    <rect x="99" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="108" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="117" y="-7" width="5" height="14" rx="2.5" fill="#60a5fa"/>
+    <rect x="126" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="135" y="-7" width="5" height="14" rx="2.5" fill="#60a5fa"/>
+    <rect x="144" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="153" y="-4" width="5" height="8" rx="2.5" fill="#60a5fa"/>
+    <rect x="162" y="-7" width="5" height="14" rx="2.5" fill="#60a5fa"/>
+    <rect x="171" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="198" y="-4" width="5" height="8" rx="2.5" fill="#60a5fa"/>
+    <rect x="207" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="216" y="-4" width="5" height="8" rx="2.5" fill="#60a5fa"/>
+    <rect x="225" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="234" y="-4" width="5" height="8" rx="2.5" fill="#60a5fa"/>
+    <rect x="243" y="-11" width="5" height="22" rx="2.5" fill="#60a5fa"/>
+    <rect x="252" y="-19" width="5" height="38" rx="2.5" fill="#60a5fa"/>
+    <rect x="261" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="270" y="-11" width="5" height="22" rx="2.5" fill="#60a5fa"/>
+    <rect x="279" y="-7" width="5" height="14" rx="2.5" fill="#60a5fa"/>
+    <rect x="288" y="-19" width="5" height="38" rx="2.5" fill="#60a5fa"/>
+    <rect x="297" y="-11" width="5" height="22" rx="2.5" fill="#60a5fa"/>
+    <rect x="306" y="-7" width="5" height="14" rx="2.5" fill="#60a5fa"/>
+    <rect x="315" y="-15" width="5" height="30" rx="2.5" fill="#60a5fa"/>
+    <rect x="324" y="-23" width="5" height="46" rx="2.5" fill="#60a5fa"/>
+    <rect x="351" y="-7" width="5" height="14" rx="2.5" fill="#4ade80"/>
+    <rect x="360" y="-7" width="5" height="14" rx="2.5" fill="#4ade80"/>
+    <rect x="369" y="-4" width="5" height="8" rx="2.5" fill="#4ade80"/>
+    <rect x="378" y="-15" width="5" height="30" rx="2.5" fill="#4ade80"/>
+    <rect x="387" y="-9" width="5" height="18" rx="2.5" fill="#4ade80"/>
+    <rect x="396" y="-15" width="5" height="30" rx="2.5" fill="#4ade80"/>
+    <rect x="405" y="-23" width="5" height="46" rx="2.5" fill="#4ade80"/>
+    <rect x="414" y="-9" width="5" height="18" rx="2.5" fill="#4ade80"/>
+    <rect x="423" y="-9" width="5" height="18" rx="2.5" fill="#4ade80"/>
+    <rect x="432" y="-23" width="5" height="46" rx="2.5" fill="#4ade80"/>
+    <rect x="441" y="-19" width="5" height="38" rx="2.5" fill="#4ade80"/>
+    <rect x="450" y="-15" width="5" height="30" rx="2.5" fill="#4ade80"/>
+    <rect x="459" y="-11" width="5" height="22" rx="2.5" fill="#4ade80"/>
+    <rect x="468" y="-15" width="5" height="30" rx="2.5" fill="#4ade80"/>
+    <rect x="477" y="-7" width="5" height="14" rx="2.5" fill="#4ade80"/>
+    <rect x="486" y="-19" width="5" height="38" rx="2.5" fill="#4ade80"/>
+    <rect x="495" y="-9" width="5" height="18" rx="2.5" fill="#4ade80"/>
+    <rect x="504" y="-23" width="5" height="46" rx="2.5" fill="#4ade80"/>
+    <rect x="513" y="-9" width="5" height="18" rx="2.5" fill="#4ade80"/>
+    <rect x="522" y="-19" width="5" height="38" rx="2.5" fill="#4ade80"/>
+    <rect x="531" y="-7" width="5" height="14" rx="2.5" fill="#4ade80"/>
+    <rect x="540" y="-7" width="5" height="14" rx="2.5" fill="#4ade80"/>
+    <rect x="549" y="-15" width="5" height="30" rx="2.5" fill="#4ade80"/>
+    <rect x="558" y="-11" width="5" height="22" rx="2.5" fill="#4ade80"/>
+  </g>
+  <g id="transcript" transform="translate(576 106)">
+    <g transform="translate(0 0)">
+      <rect width="568" height="84" rx="8" fill="#1a1a2e"/>
+      <rect width="5" height="84" rx="2" fill="#60a5fa"/>
+      <text x="24" y="33" class="name" fill="#60a5fa">Анна Соколова</text>
+      <text x="548" y="33" class="ts" text-anchor="end">11:00:46</text>
+      <text x="24" y="65" class="line">Флаки в UI-тестах снова завалили релиз.</text>
+    </g>
+    <g transform="translate(0 92)">
+      <rect width="568" height="84" rx="8" fill="#1a1a2e"/>
+      <rect width="5" height="84" rx="2" fill="#60a5fa"/>
+      <text x="24" y="33" class="name" fill="#60a5fa">Михаил Орлов</text>
+      <text x="548" y="33" class="ts" text-anchor="end">11:01:09</text>
+      <text x="24" y="65" class="line">Эмуляторы на агентах не успевают стартовать.</text>
+    </g>
+    <g transform="translate(0 184)">
+      <rect width="568" height="84" rx="8" fill="#1a1a2e"/>
+      <rect width="5" height="84" rx="2" fill="#4ade80"/>
+      <text x="24" y="33" class="name" fill="#4ade80">Илья Морозов</text>
+      <text x="548" y="33" class="ts" text-anchor="end">11:04:12</text>
+      <text x="24" y="65" class="line">Хорошо, заводим пул прогретых эмуляторов.</text>
+    </g>
+  </g>
+</svg>

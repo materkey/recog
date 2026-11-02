@@ -22,6 +22,7 @@ records are grouped separately, making it clear where a new file belongs.
 | `scripts/` | Setup/service helpers, data migration, enrollment and checks |
 | `scripts/benchmarks/` | Manually run benchmark and experiment programs |
 | `tests/` | Unit tests and E2E tools/fixtures |
+| `assets/readme/` | Images embedded in the main README |
 | `docs/` | [Guides, decisions, plans, research and experiment reports](README.md) |
 | `docs/bmad/`, `openspec/` | BMAD artifacts and OpenSpec specifications/change records |
 | `.local/examples/` | Gitignored sample recordings and transcripts |
