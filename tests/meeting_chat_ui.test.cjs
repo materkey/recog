@@ -5,8 +5,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const staticDir = path.join(__dirname, '../recog/web/static');
-const chatSource = fs.readFileSync(path.join(staticDir, 'meeting-chat.js'), 'utf8');
-const appSource = fs.readFileSync(path.join(staticDir, 'app.js'), 'utf8');
+const chatPath = path.join(staticDir, 'meeting-chat.js');
+const appPath = path.join(staticDir, 'app.js');
+const chatSource = fs.readFileSync(chatPath, 'utf8');
+const appSource = fs.readFileSync(appPath, 'utf8');
 const markup = fs.readFileSync(path.join(staticDir, 'index.html'), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const ok = data => ({ ok: true, json: async () => data });
@@ -81,8 +83,8 @@ function harness(fetchFn, { hash = '#/meeting/m1' } = {}) {
             return fetchFn(url, options);
         },
     });
-    vm.runInContext(chatSource, context);
-    vm.runInContext(appSource, context);
+    vm.runInContext(chatSource, context, { filename: chatPath });
+    vm.runInContext(appSource, context, { filename: appPath });
     vm.runInContext('this.views = views;', context);
     documentListeners[0].callback();
     const el = id => elements.get(id);
