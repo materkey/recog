@@ -271,7 +271,7 @@ class AiSettingsStore:
         elif task_id == "copilot":
             providers = ["claude"]
         else:
-            providers = ["codex"]
+            providers = definition.get("providers", ["codex"])
         effort = override.get("reasoning_effort", os.getenv("CODEX_REASONING_EFFORT", "xhigh") or "xhigh")
         if effort not in REASONING_EFFORTS:
             raise ValueError("Invalid legacy CODEX_REASONING_EFFORT")

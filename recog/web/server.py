@@ -14,16 +14,17 @@ import os
 import shutil
 import sys
 from collections import deque
-from datetime import datetime, timedelta
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Awaitable, Callable, Literal, Optional
+from typing import Annotated, Awaitable, Callable, Literal, Optional
 from uuid import uuid4
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -38,6 +39,7 @@ from recog.install_config import INSTALL_CONFIG
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from recog.meeting_storage import MeetingStorage, get_external_paths
+from recog.meeting_chat import ChatTurn, append_turn, build_chat_prompt, clear_turns, read_turns
 from recog.log_utils import log_rate_limited
 from recog.config import get_data_dir, MIC_SPEAKER_NAME
 from recog.user_profile import UserProfileStore
@@ -1451,6 +1453,81 @@ async def analyze_meeting_stream(
             "Connection": "keep-alive",
         }
     )
+
+
+# --- Questions about a meeting ---
+
+MEETING_CHAT_TASK = "meeting_chat"
+# Far above the analysis limit: a question may be about any moment of the meeting.
+CHAT_TRANSCRIPT_MAX_CHARS = 300_000
+
+
+class MeetingChatRequest(BaseModel):
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+
+
+def _meeting_chat_path(storage: MeetingStorage, meeting_id: str) -> Path:
+    if '..' in meeting_id or '/' in meeting_id or '\\' in meeting_id:
+        raise HTTPException(status_code=400, detail="Invalid meeting ID")
+    meeting_path = storage.find_meeting_path(meeting_id)
+    if meeting_path is None:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return meeting_path
+
+
+@app.get("/api/meetings/{meeting_id}/chat")
+async def get_meeting_chat(meeting_id: str):
+    """The saved dialog about a meeting."""
+    return [asdict(turn) for turn in read_turns(_meeting_chat_path(get_storage(), meeting_id))]
+
+
+@app.delete("/api/meetings/{meeting_id}/chat")
+async def clear_meeting_chat(meeting_id: str):
+    """Start the dialog about a meeting anew; the meeting itself stays."""
+    clear_turns(_meeting_chat_path(get_storage(), meeting_id))
+    return {"success": True}
+
+
+@app.post("/api/meetings/{meeting_id}/chat")
+async def ask_meeting_chat(meeting_id: str, request: MeetingChatRequest):
+    """Answer a question from the transcript and save the exchange."""
+    storage = get_storage()
+    meeting_path = _meeting_chat_path(storage, meeting_id)
+    segments, local_participant, _ = _resolve_ai_context(meeting_id, storage, False)
+    transcript = _build_ai_transcript(segments, max_chars=CHAT_TRANSCRIPT_MAX_CHARS)
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Meeting has no transcript")
+
+    settings = get_task_settings(MEETING_CHAT_TASK)
+    instructions = build_prompt(
+        question=MEETING_CHAT_TASK,
+        transcript=transcript,
+        user_name=local_participant,
+        settings=settings,
+        **_analysis_prompt_metadata(storage, meeting_id),
+    )
+    prompt = build_chat_prompt(instructions, read_turns(meeting_path), request.question)
+    try:
+        provider = get_provider(task=MEETING_CHAT_TASK, settings=settings)
+        answer = (await provider.complete(prompt)).strip()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not answer:
+        raise HTTPException(status_code=502, detail="Модель вернула пустой ответ")
+
+    turn = ChatTurn(
+        asked_at=datetime.now(timezone.utc).isoformat(),
+        question=request.question,
+        answer=answer,
+        provider=provider.name,
+        settings_revision=settings["revision"],
+        transcript_truncated=transcript.startswith("...(truncated)..."),
+    )
+    try:
+        append_turn(meeting_path, turn)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Meeting not found") from exc
+    return asdict(turn)
 
 
 # --- WebSocket ---

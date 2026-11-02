@@ -1173,17 +1173,15 @@ class MeetingStorage:
         Returns:
             {"meta": {...}, "segments": [...]} или None
         """
-        # 1. Try base_path first
-        meeting_path = self.base_path / meeting_id
-        if meeting_path.exists():
-            return self._load_meeting_from_path(meeting_path)
+        meeting_path = self.find_meeting_path(meeting_id)
+        return self._load_meeting_from_path(meeting_path) if meeting_path else None
 
-        # 2. Try external paths
-        for ext_path, _ in self.external_paths:
-            meeting_path = ext_path / meeting_id
+    def find_meeting_path(self, meeting_id: str) -> Optional[Path]:
+        """Каталог встречи: сначала base_path, затем external_paths."""
+        for root in (self.base_path, *(ext_path for ext_path, _ in self.external_paths)):
+            meeting_path = root / meeting_id
             if meeting_path.exists():
-                return self._load_meeting_from_path(meeting_path)
-
+                return meeting_path
         return None
 
     def _read_meeting_meta(self, meeting_path: Path) -> dict:
