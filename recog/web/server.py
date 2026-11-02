@@ -1762,8 +1762,9 @@ async def get_segment_audio(
             detail="Audio file not found (may have been cleaned up)"
         )
 
-    # Slice length: bounded by the next same-track segment (continuations
-    # extend the group) — see compute_segment_duration_ms.
+    # Slice length: bounded by the next segment on the same timeline, its own
+    # track or, in a mix, either side (continuations extend the group) — see
+    # compute_segment_duration_ms.
     segment_duration_ms = compute_segment_duration_ms(
         segments, segment_index, shared_timeline=audio_path.name == "audio_mix.m4a"
     )
