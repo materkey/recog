@@ -9,7 +9,18 @@ reasoning.
 
 ## 2026-11-02
 
+### Action required
+
+- **Run `./setup.sh` after `git pull`, then reload the extension:** the KTalk fix
+  below is in the extension.
+
 ### Changed
+
+- **A KTalk participant who shares a screen with sound stays in the transcript.**
+  The extension used to switch to the screen's audio track and stay on it until
+  the end of the meeting, so the participant's speech was lost. It now listens
+  only to the microphone track, and the screen's sound is not transcribed as
+  their speech.
 
 - **The meeting list can hide orphan recordings.** The source filter has a new
   choice, **All except Orphan**.

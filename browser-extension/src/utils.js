@@ -2,6 +2,14 @@ export function sendUpdate(data) {
   window.dispatchEvent(new CustomEvent('ktalk-speaker-update', { detail: data }));
 }
 
+// A participant sharing a screen with sound has a second audio track next to the
+// microphone. KTalk tells them apart the same way: audioType, or for a track
+// without one the source name, `-a0` for the microphone and `-a1` for the screen.
+export function isScreenShareTrack(jitsiTrack) {
+  return jitsiTrack?.audioType === 'screenShare'
+    || (jitsiTrack?.audioType == null && jitsiTrack?.getSourceName?.()?.endsWith('-a1') === true);
+}
+
 export function getFullName(participant, info, fallback) {
   const userInfo = participant?._userInfo$?.value;
   if (userInfo) {

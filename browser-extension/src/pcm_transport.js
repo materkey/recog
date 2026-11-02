@@ -13,6 +13,7 @@
 
 import { constants } from './state.js';
 import { sendWsPcmChunk, sendWsPcmTransportStats } from './ws_api.js';
+import { isScreenShareTrack } from './utils.js';
 
 const BOUND_VIA = {
   WRAPPER: 'wrapper',
@@ -553,7 +554,7 @@ export function pcmAttachAllFromConf(conf) {
     const pid = jp._id || jp.getId?.() || jp.id;
     if (!pid || pid === localId || pending.has(pid)) continue;
     const tracks = jp.getTracks?.() || [];
-    const audioTrack = tracks.find((t) => t.getType?.() === 'audio');
+    const audioTrack = tracks.find((t) => t.getType?.() === 'audio' && !isScreenShareTrack(t));
     const stream = getStreamFromJitsiTrack(audioTrack);
     if (!stream) { jitsiSkippedNoStream++; continue; }
     const speakerName =

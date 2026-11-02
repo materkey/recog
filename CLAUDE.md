@@ -340,6 +340,7 @@ For any active KTalk meeting the pipeline routes through per-participant PCM str
 - Chrome extension attaches `AudioWorkletNode` to each remote `MediaStream` (`browser-extension/src/audio-worklet/downsampler.js`, `src/pcm_transport.js`), downsamples 48 kHz → 16 kHz Int16 PCM and sends chunks via WS (`type: "pcm_chunk"`) to `recog/ktalk_bridge.py`.
 - Bridge dispatches chunks to `PerSpeakerIngest` (`recog/per_speaker.py`) which per-pid reorders by `seq`, batches across speakers (200 ms window, max 8), and calls `ASRModule.transcribe_batch()` (`recog/asr.py`). Attribution comes from `speaker_name` already in the frame — no `get_dominant_speaker_for_period()` call.
 - Watchdog: if PCM is silent for `PCM_SILENCE_WATCHDOG_S` (30 s) during an active meeting, `PerSpeakerIngest._degraded` flips true, `LiveTranscriber._process_chunk` falls back to the existing mixed-path with `source="fallback_mixed"` and a gap-marker written to the transcript. Recovery marker is inserted when PCM returns.
+- Screen share: a participant sharing a screen with sound has a second audio track, which the adapter and both `attachAllFromConf` skip (`isScreenShareTrack` in `src/utils.js`, the client's own rule: `audioType`, else the source name `-a1`). The track gets no `trackRemoved` when sharing stops, so listening to it would silence the participant until the meeting ends.
 - Local mic (`MIC_SPEAKER_NAME`) stays on `sounddevice` — it is not routed through the worklet (D9).
 
 See `docs/plans/2026-04-22-per-speaker-asr-pipeline.md` for the decisions table and task breakdown.

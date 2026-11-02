@@ -8,6 +8,7 @@
  * - $conf.jitsiConf - underlying Jitsi conference
  */
 
+import { isScreenShareTrack } from '../utils.js';
 import { attachParticipant, detachParticipant, attachAllFromConf, dispose as audioAnalyzerDispose } from '../audio-analyzer.js';
 import {
   pcmAttachParticipant,
@@ -351,7 +352,7 @@ export class KTalkAdapter {
       this._onJitsi(jitsiConf, 'conference.dominantSpeaker', () => callback());
 
       this._onJitsi(jitsiConf, 'conference.trackAdded', (track) => {
-        if (track.getType?.() === 'audio') {
+        if (track.getType?.() === 'audio' && !isScreenShareTrack(track)) {
           callback();
           const pid = track.getParticipantId?.();
           const stream = track.stream || track.getOriginalStream?.();
@@ -376,7 +377,7 @@ export class KTalkAdapter {
       });
 
       this._onJitsi(jitsiConf, 'conference.trackRemoved', (track) => {
-        if (track.getType?.() === 'audio') {
+        if (track.getType?.() === 'audio' && !isScreenShareTrack(track)) {
           callback();
           const pid = track.getParticipantId?.();
           if (pid) {

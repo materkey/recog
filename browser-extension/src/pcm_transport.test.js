@@ -326,3 +326,20 @@ test('receiver rebind is skipped when no exact track match exists', async () => 
   expect(diag.bound_track_id).toBe('track-a');
   expect(diag.rebind_count).toBe(0);
 });
+
+test('joining a participant who already shares a screen - attaching from the conference - binds the microphone', async () => {
+  const screenTrack = new FakeTrack('track-screen');
+  const micTrack = new FakeTrack('track-mic');
+  const jitsiScreen = { ...makeJitsiTrack(screenTrack), audioType: 'screenShare' };
+  const jitsiMic = { ...makeJitsiTrack(micTrack), audioType: 'microphone' };
+  const conf = {
+    jitsiConf: {
+      getParticipants: () => [{ _id: 'pid-a', getTracks: () => [jitsiScreen, jitsiMic] }],
+    },
+  };
+
+  pcmTransport.pcmAttachAllFromConf(conf);
+  await waitForPid('pid-a');
+
+  expect(pcmTransport.pcmGetDiagnostics().per_pid['pid-a'].bound_track_id).toBe('track-mic');
+});

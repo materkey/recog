@@ -1,4 +1,5 @@
 import { constants } from './state.js';
+import { isScreenShareTrack } from './utils.js';
 
 let audioCtx = null;
 const analysers = new Map(); // participantId → { source, analyser, freqData, history[] }
@@ -106,7 +107,7 @@ export function attachAllFromConf(conf) {
     const pid = jp._id || jp.getId?.() || jp.id;
     if (!pid || analysers.has(pid)) continue;
     const tracks = jp.getTracks?.() || [];
-    const audioTrack = tracks.find(t => t.getType?.() === 'audio');
+    const audioTrack = tracks.find(t => t.getType?.() === 'audio' && !isScreenShareTrack(t));
     const stream = audioTrack?.stream || audioTrack?.getOriginalStream?.();
     if (stream) attachParticipant(pid, stream);
   }
