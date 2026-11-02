@@ -13,6 +13,9 @@ reasoning.
 
 - **Run `./setup.sh` after `git pull`, then reload the extension:** the KTalk fix
   below is in the extension.
+- **Restart the web service after `git pull`:** `./setup.sh` does it, or run
+  `./recog-service.sh restart-web`. Playing an imported call or a call recorded as
+  one file needs the new server code.
 
 ### Changed
 
