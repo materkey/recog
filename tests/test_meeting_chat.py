@@ -211,6 +211,14 @@ async def test_damaged_line_when_reading_dialog_then_the_rest_survives(chat):
     await ask(chat)
     with (chat.dir / "chat.jsonl").open("a", encoding="utf-8") as stream:
         stream.write('{"question": "оборв\n[1, 2]\n{"question": "нет ответа"}\n')
+        fields = {
+            "asked_at": "t",
+            "provider": "p",
+            "settings_revision": "r",
+            "transcript_truncated": False,
+        }
+        stream.write(json.dumps({**fields, "question": "без ответа", "answer": None}) + "\n")
+        stream.write(json.dumps({**fields, "question": None, "answer": "без вопроса"}) + "\n")
     await ask(chat, "Второй")
 
     turns = (await chat.client.get("/api/meetings/m1/chat")).json()
@@ -262,3 +270,10 @@ async def test_edited_prompt_and_model_when_asked_then_chat_uses_them(chat, monk
     assert chat.provider.prompts[0].startswith("Мой промпт")
     assert seen["providers"] == ["claude"] and seen["models"]["claude"] == "other"
     assert turn["settings_revision"] == seen["revision"]
+
+
+@pytest.mark.asyncio
+async def test_saved_dialog_when_searched_on_disk_then_russian_text_is_readable(chat):
+    await ask(chat)
+
+    assert "Что сказал Пётр?" in (chat.dir / "chat.jsonl").read_text(encoding="utf-8")
