@@ -1687,6 +1687,9 @@ async def get_segment_audio(
     import subprocess
     import tempfile
 
+    if ".." in meeting_id or "/" in meeting_id or "\\" in meeting_id:
+        raise HTTPException(status_code=400, detail="Invalid meeting ID")
+
     storage = get_storage()
     meeting = storage.get_meeting(meeting_id)
     if not meeting:

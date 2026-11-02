@@ -782,3 +782,34 @@ def test_call_with_a_file_per_side_playing_a_segment_should_slice_its_side(
     asyncio.run(server.get_segment_audio("call", 0))
 
     assert commands[0][commands[0].index("-i") + 1] == str(meeting / played)
+
+
+def test_path_outside_the_meetings_requesting_a_segment_should_refuse_it(tmp_path, monkeypatch):
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from recog.web import server
+
+    (tmp_path / "meta.json").write_text(
+        json.dumps({"id": "outside", "created_at": "2026-09-01T10:00:00+00:00"})
+    )
+    (tmp_path / "transcript.jsonl").write_text(
+        json.dumps({"text": "line", "audio_offset_ms": 0}) + "\n"
+    )
+    (tmp_path / "audio_mix.m4a").write_bytes(b"MIX")
+    meetings = tmp_path / "meetings"
+    meetings.mkdir()
+    monkeypatch.setattr(server, "MEETINGS_DIR", meetings)
+    monkeypatch.setattr(server, "get_external_paths", lambda: [])
+
+    def no_ffmpeg(command, **kwargs):
+        raise AssertionError("a refused meeting must not reach ffmpeg")
+
+    monkeypatch.setattr("subprocess.run", no_ffmpeg)
+
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(server.get_segment_audio("..", 0))
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail == "Invalid meeting ID"
