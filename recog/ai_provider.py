@@ -259,17 +259,19 @@ class ClaudeCliProvider(AIProvider):
 
     async def complete(self, prompt: str) -> str:
         marked_prompt = mark_ccs_automation(prompt, self.task)
+        # On stdin: Linux limits one argv string to 128 KiB, under 70k Cyrillic characters.
         proc = await asyncio.create_subprocess_exec(
-            self._cli, "-p", marked_prompt,
+            self._cli, "-p",
             "--safe-mode", "--disable-slash-commands",
             "--model", self.model,
             *(["--effort", self.reasoning_effort] if self.reasoning_effort else []),
             "--output-format", "text",
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=get_node_env()
         )
-        stdout, stderr = await proc.communicate()
+        stdout, stderr = await proc.communicate(input=marked_prompt.encode())
 
         if proc.returncode != 0:
             error_msg = stderr.decode().strip() if stderr else "Unknown error"
@@ -283,16 +285,20 @@ class ClaudeCliProvider(AIProvider):
 
         marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
-            self._cli, "-p", marked_prompt,
+            self._cli, "-p",
             "--safe-mode", "--disable-slash-commands",
             "--model", self.model,
             *(["--effort", self.reasoning_effort] if self.reasoning_effort else []),
             "--output-format", "stream-json",
             "--verbose",
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=get_node_env()
         )
+        proc.stdin.write(marked_prompt.encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
 
         full_text = ""
         try:

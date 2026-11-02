@@ -260,7 +260,8 @@ class TestFrontendClaudeProvider:
         class FakeProcess:
             returncode = 0
 
-            async def communicate(self):
+            async def communicate(self, input=None):
+                created["stdin"] = input
                 return b"answer\n", b""
 
         async def fake_create_subprocess_exec(*cmd, **kwargs):
@@ -273,9 +274,9 @@ class TestFrontendClaudeProvider:
             answer = await provider.complete("hello")
 
         assert answer == "answer"
-        prompt = created["cmd"][2]
         assert created["cmd"][:2] == ("/mock/claude", "-p")
-        assert prompt.startswith("<!-- ccs-automation:recog task=anchor -->\nhello")
+        assert created["stdin"].decode().startswith("<!-- ccs-automation:recog task=anchor -->\nhello")
+        assert not any("hello" in str(arg) for arg in created["cmd"])
         assert "--safe-mode" in created["cmd"]
         assert "--bare" not in created["cmd"]
         assert "--disable-slash-commands" in created["cmd"]
@@ -286,8 +287,16 @@ class TestFrontendClaudeProvider:
 
         created = {}
 
+        written = bytearray()
+
+        class FakeStdin:
+            write = staticmethod(written.extend)
+            drain = AsyncMock()
+            close = staticmethod(lambda: None)
+
         class FakeProcess:
             returncode = 0
+            stdin = FakeStdin()
 
             @property
             def stdout(self):
@@ -305,6 +314,8 @@ class TestFrontendClaudeProvider:
             result = [item async for item in ClaudeCliProvider().stream("hello")]
 
         assert result == [("answer", False), ("answer", True)]
+        assert written.decode().endswith("hello")
+        assert not any("hello" in str(arg) for arg in created["cmd"])
         assert "--safe-mode" in created["cmd"]
         assert "--bare" not in created["cmd"]
         assert "--disable-slash-commands" in created["cmd"]
