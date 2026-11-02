@@ -211,6 +211,7 @@ class MeetingCatalog(FileSystemEventHandler):
                 meta.get("conference", meta.get("ktalk", {})).get("live_url"),
             "segment_count": meta.get("stats", {}).get("segment_count", 0),
             "participants": [p.get("name", key) for key, p in meta.get("participants", {}).items()],
+            "recorder": meta.get("callrec", {}).get("recorder"),
         }
         if active:
             entry["is_active"] = True

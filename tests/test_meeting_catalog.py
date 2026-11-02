@@ -313,3 +313,25 @@ async def test_scan_error_when_directory_recovers_then_retry_does_not_wait_for_r
         await until(lambda: len(catalog.list_meetings()) == 2)
     finally:
         await catalog.stop()
+
+
+async def test_meeting_with_callrec_recorder_samsung_listing_should_carry_recorder(tmp_path):
+    write_meta(
+        tmp_path,
+        source="callrec",
+        title="Call",
+        callrec={"package": "com.example", "recorder": "samsung"},
+    )
+    catalog = MeetingCatalog(tmp_path)
+    await catalog.refresh()
+    meeting = catalog.list_meetings()[0]
+    assert meeting["recorder"] == "samsung"
+    assert meeting["title"] == "Call"
+
+
+@pytest.mark.parametrize("updates", [{"callrec": {"package": "com.example"}}, {}])
+async def test_meeting_without_it_listing_should_carry_none(tmp_path, updates):
+    write_meta(tmp_path, **updates)
+    catalog = MeetingCatalog(tmp_path)
+    await catalog.refresh()
+    assert catalog.list_meetings()[0]["recorder"] is None

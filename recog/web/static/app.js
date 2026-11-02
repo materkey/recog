@@ -579,6 +579,11 @@ const views = {
                         <span class="meta-value">${escapeHtml(participants)}</span>
                     </div>
                 ` : ''}
+                ${meta.callrec?.recorder === 'samsung' ? `
+                    <div class="meta-participants">
+                        <span class="meta-value">Записано: Samsung</span>
+                    </div>
+                ` : ''}
                 ${showGenerateTitle ? `
                     <div class="meta-title-actions">
                         <button class="btn btn-generate-title" onclick="generateTitle()">

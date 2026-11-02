@@ -16,6 +16,7 @@ reasoning.
 
 ### Changed
 
+- **A phone call recorded by Samsung says so.** Its details show `Записано: Samsung`.
 - **A call recorded as one file can be played.** The play buttons fall back to the
   meeting's `audio_mix.m4a`.
 - **A KTalk participant who shares a screen with sound stays in the transcript.**

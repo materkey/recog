@@ -42,8 +42,8 @@ function harness(fetch, cache = null, storageFails = false) {
         DatePicker: { init() {}, getDate: () => '', filterMeetings: (rows) => rows },
     });
     vm.runInContext(source, context, { filename: sourcePath });
-    vm.runInContext('this.view = views.meetings; this.api = api;', context);
-    return { view: context.view, api: context.api, stored,
+    vm.runInContext('this.view = views.meetings; this.meetingView = views.meeting; this.api = api;', context);
+    return { view: context.view, meetingView: context.meetingView, api: context.api, stored,
         element: (id) => elements.get(id),
         list: () => elements.get('meetings-list').innerHTML,
         status: () => elements.get('meetings-status')?.textContent || '',
@@ -211,5 +211,26 @@ for (const mutation of ['deleteMeeting', 'generateTitle']) {
         await loading;
         assert.equal(h.stored.has(CACHE_KEY), false);
         assert.equal(h.view.meetings.length, 0);
+    });
+}
+
+const meetingDetails = (meta) => {
+    const container = { innerHTML: '' };
+    harness(() => new Promise(() => {})).meetingView.renderMeta(
+        { created_at: '2026-09-01T10:00:00Z', source: 'callrec', ...meta }, container);
+    return container.innerHTML;
+};
+
+test('call recorded by samsung - opening its details - should show the recorder', () => {
+    assert.match(meetingDetails({ callrec: { recorder: 'samsung' } }), /Записано: Samsung/);
+});
+
+for (const [name, meta] of [
+    ['call without a recorder', { callrec: { package: 'com.example' } }],
+    ['call by another recorder', { callrec: { recorder: 'other' } }],
+    ['meeting that is not a call', {}],
+]) {
+    test(`${name} - opening its details - should not show a recorder`, () => {
+        assert.doesNotMatch(meetingDetails(meta), /Записано/);
     });
 }
