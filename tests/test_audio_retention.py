@@ -705,3 +705,38 @@ class TestWavHeaderAlwaysValid:
 
         w = wave.open(str(tmp_path / "audio.wav"))
         assert w.getnframes() == SR
+
+
+@pytest.mark.parametrize("is_local", [True, False])
+def test_call_with_only_a_mix_playing_a_segment_should_slice_the_mix(
+    tmp_path, monkeypatch, is_local
+):
+    import asyncio
+
+    from recog.web import server
+
+    meeting = tmp_path / "call"
+    meeting.mkdir()
+    (meeting / "meta.json").write_text(
+        json.dumps({"id": "call", "created_at": "2026-09-01T10:00:00+00:00"})
+    )
+    (meeting / "transcript.jsonl").write_text(
+        json.dumps({"text": "line", "audio_offset_ms": 2000, "is_local": is_local}) + "\n"
+    )
+    (meeting / "audio_mix.m4a").write_bytes(b"MIX")
+    monkeypatch.setattr(server, "MEETINGS_DIR", tmp_path)
+    monkeypatch.setattr(server, "get_external_paths", lambda: [])
+    commands = []
+
+    def fake_ffmpeg(command, **kwargs):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"WAV")
+        return Mock(returncode=0)
+
+    monkeypatch.setattr("subprocess.run", fake_ffmpeg)
+
+    response = asyncio.run(server.get_segment_audio("call", 0))
+
+    assert response.media_type == "audio/wav"
+    assert commands[0][commands[0].index("-i") + 1] == str(meeting / "audio_mix.m4a")
+    assert commands[0][commands[0].index("-ss") + 1] == "2.0"

@@ -1729,6 +1729,9 @@ async def get_segment_audio(
                 folder_audio = meeting_path / f"audio_{fallback_track}.wav"
                 if folder_audio.exists():
                     audio_path = str(folder_audio)
+                elif (meeting_path / "audio_mix.m4a").exists():
+                    # A call recorded as one file holds both sides.
+                    audio_path = str(meeting_path / "audio_mix.m4a")
                 else:
                     detail = (
                         "Audio expired (older than 24h retention)"
