@@ -740,3 +740,45 @@ def test_call_with_only_a_mix_playing_a_segment_should_slice_the_mix(
     assert response.media_type == "audio/wav"
     assert commands[0][commands[0].index("-i") + 1] == str(meeting / "audio_mix.m4a")
     assert commands[0][commands[0].index("-ss") + 1] == "2.0"
+
+
+@pytest.mark.parametrize(
+    ("files", "is_local", "played"),
+    [
+        (("audio_me.m4a", "audio_them.m4a"), True, "audio_me.m4a"),
+        (("audio_me.m4a", "audio_them.m4a"), False, "audio_them.m4a"),
+        (("audio_me.m4a",), False, "audio_me.m4a"),
+        (("audio_them.m4a",), True, "audio_them.m4a"),
+    ],
+)
+def test_call_with_a_file_per_side_playing_a_segment_should_slice_its_side(
+    tmp_path, monkeypatch, files, is_local, played
+):
+    import asyncio
+
+    from recog.web import server
+
+    meeting = tmp_path / "call"
+    meeting.mkdir()
+    (meeting / "meta.json").write_text(
+        json.dumps({"id": "call", "created_at": "2026-09-01T10:00:00+00:00"})
+    )
+    (meeting / "transcript.jsonl").write_text(
+        json.dumps({"text": "line", "audio_offset_ms": 2000, "is_local": is_local}) + "\n"
+    )
+    for name in files:
+        (meeting / name).write_bytes(b"SIDE")
+    monkeypatch.setattr(server, "MEETINGS_DIR", tmp_path)
+    monkeypatch.setattr(server, "get_external_paths", lambda: [])
+    commands = []
+
+    def fake_ffmpeg(command, **kwargs):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"WAV")
+        return Mock(returncode=0)
+
+    monkeypatch.setattr("subprocess.run", fake_ffmpeg)
+
+    asyncio.run(server.get_segment_audio("call", 0))
+
+    assert commands[0][commands[0].index("-i") + 1] == str(meeting / played)

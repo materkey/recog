@@ -1714,6 +1714,9 @@ async def get_segment_audio(
         is_local = segment.get("is_local", False)
         track = "mic" if is_local else "system"
 
+    # A phone call keeps each side in its own file.
+    side_audio = {"mic": meeting_path / "audio_me.m4a", "system": meeting_path / "audio_them.m4a"}
+
     # Get audio file path - check meta first, then look in folder
     audio_path = meta.get(f"audio_{track}_path")
     if not audio_path or not Path(audio_path).exists():
@@ -1721,6 +1724,8 @@ async def get_segment_audio(
         folder_audio = meeting_path / f"audio_{track}.wav"
         if folder_audio.exists():
             audio_path = str(folder_audio)
+        elif track in side_audio and side_audio[track].exists():
+            audio_path = str(side_audio[track])
         else:
             # Fallback to other track
             fallback_track = "system" if track == "mic" else "mic"
@@ -1729,6 +1734,8 @@ async def get_segment_audio(
                 folder_audio = meeting_path / f"audio_{fallback_track}.wav"
                 if folder_audio.exists():
                     audio_path = str(folder_audio)
+                elif side_audio[fallback_track].exists():
+                    audio_path = str(side_audio[fallback_track])
                 elif (meeting_path / "audio_mix.m4a").exists():
                     # A call recorded as one file holds both sides.
                     audio_path = str(meeting_path / "audio_mix.m4a")

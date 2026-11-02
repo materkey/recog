@@ -16,6 +16,8 @@ reasoning.
 
 ### Changed
 
+- **An imported phone call can be played.** The play buttons use the call's
+  `audio_me.m4a` and `audio_them.m4a`, each for its own side.
 - **A phone call recorded by Samsung says so.** Its details show `Записано: Samsung`.
 - **A call recorded as one file can be played.** The play buttons fall back to the
   meeting's `audio_mix.m4a`.
