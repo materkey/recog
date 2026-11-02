@@ -813,3 +813,43 @@ def test_path_outside_the_meetings_requesting_a_segment_should_refuse_it(tmp_pat
 
     assert refused.value.status_code == 400
     assert refused.value.detail == "Invalid meeting ID"
+
+
+@pytest.mark.parametrize(
+    ("files", "seconds"),
+    [(("audio_mix.m4a",), "2.0"), (("audio_me.m4a", "audio_them.m4a"), "12.0")],
+)
+def test_reply_after_a_line_playing_the_line_should_stop_at_the_reply_only_on_a_mix(
+    tmp_path, monkeypatch, files, seconds
+):
+    import asyncio
+
+    from recog.web import server
+
+    meeting = tmp_path / "call"
+    meeting.mkdir()
+    (meeting / "meta.json").write_text(
+        json.dumps({"id": "call", "created_at": "2026-09-01T10:00:00+00:00"})
+    )
+    (meeting / "transcript.jsonl").write_text(
+        "".join(
+            json.dumps({"text": "line", "audio_offset_ms": offset, "is_local": is_local}) + "\n"
+            for offset, is_local in ((0, True), (2000, False), (12000, True))
+        )
+    )
+    for name in files:
+        (meeting / name).write_bytes(b"AUDIO")
+    monkeypatch.setattr(server, "MEETINGS_DIR", tmp_path)
+    monkeypatch.setattr(server, "get_external_paths", lambda: [])
+    commands = []
+
+    def fake_ffmpeg(command, **kwargs):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"WAV")
+        return Mock(returncode=0)
+
+    monkeypatch.setattr("subprocess.run", fake_ffmpeg)
+
+    asyncio.run(server.get_segment_audio("call", 0))
+
+    assert commands[0][commands[0].index("-t") + 1] == seconds

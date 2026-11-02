@@ -20,7 +20,7 @@ reasoning.
   `audio_me.m4a` and `audio_them.m4a`, each for its own side.
 - **A phone call recorded by Samsung says so.** Its details show `Записано: Samsung`.
 - **A call recorded as one file can be played.** The play buttons fall back to the
-  meeting's `audio_mix.m4a`.
+  meeting's `audio_mix.m4a`, and a line stops where the other side's reply starts.
 - **A KTalk participant who shares a screen with sound stays in the transcript.**
   The extension used to switch to the screen's audio track and stay on it until
   the end of the meeting, so the participant's speech was lost. It now listens

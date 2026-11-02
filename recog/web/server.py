@@ -1631,14 +1631,17 @@ async def live_stream(websocket: WebSocket):
         live_watcher.unregister(websocket)
 
 
-def compute_segment_duration_ms(segments: list, segment_index: int) -> int:
+def compute_segment_duration_ms(
+    segments: list, segment_index: int, shared_timeline: bool = False
+) -> int:
     """
     Slice duration for a transcript segment inside its track's WAV.
 
     Mic and system WAVs are written independently (silence is skipped per
     track), so their timelines differ: only segments with the same is_local
     flag can bound each other's duration. Event rows carry no meaningful
-    offset and are skipped.
+    offset and are skipped. A file holding both sides has one timeline
+    (shared_timeline), so a segment of either side bounds the slice.
     """
     default_chunk_duration = 3000
     segment = segments[segment_index]
@@ -1652,7 +1655,9 @@ def compute_segment_duration_ms(segments: list, segment_index: int) -> int:
     idx = segment_index + 1
     while idx < len(segments):
         next_seg = segments[idx]
-        if next_seg.get("event_type") or next_seg.get("is_local", False) != track_local:
+        if next_seg.get("event_type") or (
+            not shared_timeline and next_seg.get("is_local", False) != track_local
+        ):
             idx += 1
             continue
         if next_seg.get("cont") and next_seg.get("speaker_id") == segment.get("speaker_id"):
@@ -1759,7 +1764,9 @@ async def get_segment_audio(
 
     # Slice length: bounded by the next same-track segment (continuations
     # extend the group) — see compute_segment_duration_ms.
-    segment_duration_ms = compute_segment_duration_ms(segments, segment_index)
+    segment_duration_ms = compute_segment_duration_ms(
+        segments, segment_index, shared_timeline=audio_path.name == "audio_mix.m4a"
+    )
 
     # Extract audio slice using ffmpeg
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
