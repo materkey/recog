@@ -664,6 +664,20 @@ class TestSegmentSliceDuration:
         ]
         assert compute_segment_duration_ms(rows, 0) == (7000 - 1000) + 3000
 
+    def test_continuation_without_offset_keeps_the_last_known_end(self):
+        """given: последнее продолжение группы без audio_offset_ms
+        when: compute_segment_duration_ms для начала группы
+        then: слайс тянется от последнего известного offset'а, без продолжения"""
+        from recog.web.server import compute_segment_duration_ms
+
+        rows = [
+            {"speaker_id": "A", "is_local": False, "audio_offset_ms": offset}
+            for offset in (1000, 4000, None)
+        ]
+        for row in rows[1:]:
+            row["cont"] = True
+        assert compute_segment_duration_ms(rows, 0) == (4000 - 1000) + 3000
+
     def test_event_rows_do_not_bound_duration(self):
         """given: маркер-событие (offset 0) между речевыми сегментами
         when: compute_segment_duration_ms
