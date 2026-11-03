@@ -245,7 +245,8 @@ def test_device_spec_creates_a_portaudio_system_capture():
     assert transcriber.dual_mode is False
 
 
-def test_legacy_system_device_still_reaches_the_same_capture():
+def test_legacy_system_device_still_reaches_the_same_capture(fake_sd):
+    fake_sd(_devices(("BlackHole 2ch", 2), ("External Microphone", 1)))
     transcriber = LiveTranscriber(mic_device=1, system_device=4)
 
     assert transcriber.system_audio == "device:4"

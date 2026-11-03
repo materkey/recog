@@ -10,6 +10,7 @@ import json
 import os
 import pytest
 import pytest_asyncio
+import types
 from pathlib import Path
 
 import sys
@@ -42,6 +43,36 @@ def local_asr_backend(monkeypatch):
     remote path override this with their own monkeypatch.
     """
     monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "local")
+
+
+class _PortAudioError(Exception):
+    pass
+
+
+@pytest.fixture(autouse=True)
+def no_host_portaudio(monkeypatch):
+    """Stand in for `sounddevice` as a PortAudio that sees no devices.
+
+    Importing the real module initialises the host's PortAudio, which raises
+    when PortAudio is built with PulseAudio and no sound server is running
+    (the ubuntu-26.04 runners), so a test merely constructing a capture
+    failed there. Tests that need devices install their own module over this.
+    """
+    module = types.ModuleType("sounddevice")
+    module.PortAudioError = _PortAudioError
+
+    def query_devices(device=None, kind=None):
+        if device is None and kind is None:
+            return []
+        raise _PortAudioError(f"no device {device!r} (kind {kind!r}) in unit tests")
+
+    def input_stream(*args, **kwargs):
+        raise _PortAudioError("unit tests open no audio stream")
+
+    module.query_devices = query_devices
+    module.InputStream = input_stream
+    module._initialize = module._terminate = lambda: None
+    monkeypatch.setitem(sys.modules, "sounddevice", module)
 
 
 @pytest.fixture
