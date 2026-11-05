@@ -20,6 +20,9 @@ reasoning.
   meeting while later arrivals were still transcribed. The oldest audio is now
   recognised first, and audio dropped because recognition is behind is reported in
   the live log.
+- **Silent participants no longer hold up speech recognition.** Each attached
+  participant streams audio, muted or not, and all of it went to recognition,
+  which fell behind with dozens of participants. Silence is no longer recognised.
 
 ## 2026-11-02
 

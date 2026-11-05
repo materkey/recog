@@ -612,6 +612,14 @@ class SourceState:
             self.last_text_time = time.time()
 
 
+def pcm_is_silent(pcm: np.ndarray) -> bool:
+    """A participant's int16 PCM below the mixed path's silence threshold."""
+    if pcm.size == 0:
+        return True
+    samples = pcm.astype(np.float32) / 32768.0
+    return float(np.sqrt(np.mean(samples * samples))) < VAD_RMS_THRESHOLD
+
+
 def normalize_word(w: str) -> str:
     """Strip punctuation and lowercase a word for deduplication comparison."""
     return ''.join(c.lower() for c in w if c.isalnum())
@@ -1126,10 +1134,25 @@ class LiveTranscriber:
         if not self.is_recording_active():
             self._refine_worker.pause()
         self._refine_worker.start()
-        self._per_speaker_ingest.set_refine_submit_callback(
-            self._refine_worker.submit
-        )
+        self._per_speaker_ingest.set_refine_submit_callback(self._submit_refine)
         print("RefineWorker started")
+
+    def _submit_refine(self, task):
+        """Submit a refine window only if it holds a live segment of its pid.
+
+        Refine rewrites live segments and nothing else; a window without one
+        (a silent participant's chunks keep its monolog trigger firing) would
+        only spend ASR on silence.
+        """
+        task_end_ms = task.offset_base_ms + PCM_REFINE_WINDOW_S * 1000.0
+        with self._state_lock:
+            segments = self._pcm_live_segments.get(task.pid, [])
+            has_live_segment = any(
+                seg_end >= task.offset_base_ms and seg_start <= task_end_ms
+                for _segment_id, seg_start, seg_end in segments
+            )
+        if has_live_segment:
+            self._refine_worker.submit(task)
 
     def _refine_transcribe_fn(self, pcm_samples, *, should_abort=None):
         """Run remote refine without reserving the local model.
@@ -1195,6 +1218,12 @@ class LiveTranscriber:
         drain_gen = ingest.last_drain_generation if ingest is not None else None
         chunk_gen = drain_gen if drain_gen is not None else self._meeting_generation
         if not self._is_current_recording(chunk_gen):
+            return
+        # Every attached participant streams a chunk every few seconds, muted
+        # or not. Sending their silence to ASR made a large meeting outrun it,
+        # and the queue then dropped real speech.
+        batch = [item for item in batch if not pcm_is_silent(item[3])]
+        if not batch:
             return
 
         pcm_list = [item[3] for item in batch]

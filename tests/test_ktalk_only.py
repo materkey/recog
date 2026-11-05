@@ -355,7 +355,7 @@ def enqueue_speech(t):
             chunk_start_ts=time.time(),
             chunk_end_ts=time.time() + 3,
             sample_rate=16000,
-            pcm=np.ones(48000, dtype=np.int16).tobytes(),
+            pcm=np.full(48000, 3000, dtype=np.int16).tobytes(),
         )
     )
 

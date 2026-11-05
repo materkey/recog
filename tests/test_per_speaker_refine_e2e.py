@@ -158,8 +158,8 @@ def _build_pipeline(
     return t, storage, ingest, refine_worker, bridge, update_calls
 
 
-def _silence_chunk_bytes() -> bytes:
-    return np.zeros(SAMPLES_PER_CHUNK, dtype="<i2").tobytes()
+def _speech_chunk_bytes() -> bytes:
+    return np.full(SAMPLES_PER_CHUNK, 3000, dtype="<i2").tobytes()
 
 
 def test_full_refine_contour_emits_refined_updates(tmp_path):
@@ -214,7 +214,7 @@ def test_full_refine_contour_emits_refined_updates(tmp_path):
         apply_hook=on_apply,
     )
 
-    chunk_bytes = _silence_chunk_bytes()
+    chunk_bytes = _speech_chunk_bytes()
     try:
         for s in range(1, 6):
             ingest.enqueue(_make_chunk(pid=pid, seq=s, pcm=chunk_bytes))
@@ -298,7 +298,7 @@ def test_full_refine_contour_pauses_when_watchdog_degraded(tmp_path):
         transcribe_ts_fn=transcribe_ts_fn,
     )
 
-    chunk_bytes = _silence_chunk_bytes()
+    chunk_bytes = _speech_chunk_bytes()
     try:
         # Trip the watchdog → `_refine_worker.pause()` is called via
         # `_emit_pcm_transition_marker`. Subsequent submits are dropped.

@@ -244,16 +244,18 @@ def test_pcm_on_batch_callback_does_not_query_bridge_speakers():
     t.asr.transcribe_batch.return_value = ["hello world"]
     import numpy as np
 
-    batch = [(
-        "pid-1",           # pid
-        "Alice",           # speaker_name
-        False,             # is_local
-        np.zeros(48000, dtype=np.int16),  # pcm
-        1000.0,            # chunk_start_ms
-        4300.0,            # chunk_end_ms
-        0.0,               # pid_audio_ms_start
-        3000.0,            # pid_audio_ms_end
-    )]
+    batch = [
+        (
+            "pid-1",  # pid
+            "Alice",  # speaker_name
+            False,  # is_local
+            np.full(48000, 3000, dtype=np.int16),  # pcm
+            1000.0,  # chunk_start_ms
+            4300.0,  # chunk_end_ms
+            0.0,  # pid_audio_ms_start
+            3000.0,  # pid_audio_ms_end
+        )
+    ]
 
     LiveTranscriber._on_pcm_batch(t, batch)
 
@@ -285,10 +287,18 @@ def test_pcm_on_batch_rejects_batch_when_meeting_switched_post_drain():
     t._per_speaker_ingest.last_drain_generation = 5  # drain-time snapshot
     import numpy as np
 
-    batch = [(
-        "pid-1", "Alice", False, np.zeros(48000, dtype=np.int16),
-        0.0, 3300.0, 0.0, 3000.0,
-    )]
+    batch = [
+        (
+            "pid-1",
+            "Alice",
+            False,
+            np.full(48000, 3000, dtype=np.int16),
+            0.0,
+            3300.0,
+            0.0,
+            3000.0,
+        )
+    ]
 
     LiveTranscriber._on_pcm_batch(t, batch)
 
@@ -309,16 +319,18 @@ def test_pcm_on_batch_sanitizes_newlines_in_speaker_name():
     t.asr.transcribe_batch.return_value = ["hi"]
     import numpy as np
 
-    batch = [(
-        "pid-xyz",
-        "Evil\nName\r**injected**",
-        False,
-        np.zeros(48000, dtype=np.int16),
-        0.0,
-        3300.0,
-        0.0,
-        3000.0,
-    )]
+    batch = [
+        (
+            "pid-xyz",
+            "Evil\nName\r**injected**",
+            False,
+            np.full(48000, 3000, dtype=np.int16),
+            0.0,
+            3300.0,
+            0.0,
+            3000.0,
+        )
+    ]
 
     LiveTranscriber._on_pcm_batch(t, batch)
 
@@ -356,12 +368,18 @@ def test_pcm_on_batch_falls_back_to_wav_writer_without_anchor():
     # chunk_start_ms is a wall-clock ms value (extension's clock_offset
     # already applied).  Stage it 2s in the past.
     now_ms = time.time() * 1000
-    batch = [(
-        "pid-1", "Alice", False,
-        np.zeros(48000, dtype=np.int16),
-        now_ms - 2000, now_ms + 1300,
-        0.0, 3300.0,
-    )]
+    batch = [
+        (
+            "pid-1",
+            "Alice",
+            False,
+            np.full(48000, 3000, dtype=np.int16),
+            now_ms - 2000,
+            now_ms + 1300,
+            0.0,
+            3300.0,
+        )
+    ]
 
     LiveTranscriber._on_pcm_batch(t, batch)
 
@@ -388,12 +406,18 @@ def test_pcm_on_batch_audio_offset_clamped_to_zero_when_no_wav_writer():
     t._meeting_storage = captured_storage
     t._wav_writer_system = None  # no recording wired
 
-    batch = [(
-        "pid-1", "Alice", False,
-        np.zeros(48000, dtype=np.int16),
-        time.time() * 1000 - 500, time.time() * 1000 + 2800,
-        0.0, 3300.0,
-    )]
+    batch = [
+        (
+            "pid-1",
+            "Alice",
+            False,
+            np.full(48000, 3000, dtype=np.int16),
+            time.time() * 1000 - 500,
+            time.time() * 1000 + 2800,
+            0.0,
+            3300.0,
+        )
+    ]
 
     LiveTranscriber._on_pcm_batch(t, batch)
 
@@ -405,7 +429,7 @@ def _anchor_batch(chunk_start_ms, end_ms=None):
     import numpy as np
     return (
         "pid-1", "Alice", False,
-        np.zeros(48000, dtype=np.int16),
+        np.full(48000, 3000, dtype=np.int16),
         chunk_start_ms, (end_ms if end_ms is not None else chunk_start_ms + 3300),
         0.0, 3300.0,
     )
@@ -453,10 +477,26 @@ def test_pcm_on_batch_consecutive_chunks_offsets_track_chunk_starts():
     now_ms = time.time() * 1000
     t._system_wav_anchor = (now_ms - 5000, 0)
     batch = [
-        ("pid-1", "Alice", False, __import__("numpy").zeros(48000, dtype="int16"),
-         now_ms - 2000, now_ms + 1300, 0.0, 3300.0),
-        ("pid-2", "Bob", False, __import__("numpy").zeros(48000, dtype="int16"),
-         now_ms - 1000, now_ms + 2300, 0.0, 3300.0),
+        (
+            "pid-1",
+            "Alice",
+            False,
+            __import__("numpy").full(48000, 3000, dtype="int16"),
+            now_ms - 2000,
+            now_ms + 1300,
+            0.0,
+            3300.0,
+        ),
+        (
+            "pid-2",
+            "Bob",
+            False,
+            __import__("numpy").full(48000, 3000, dtype="int16"),
+            now_ms - 1000,
+            now_ms + 2300,
+            0.0,
+            3300.0,
+        ),
     ]
 
     LiveTranscriber._on_pcm_batch(t, batch)
@@ -1039,8 +1079,18 @@ def test_delayed_pcm_when_emitted_then_storage_and_ui_use_speech_time():
     t._meeting_storage = Mock()
     t._meeting_storage.append_segment.return_value = 1
     spoken_at = time.time() - 220
-    batch = [("pid-1", "Alice", False, np.zeros(48000, dtype=np.int16),
-              (spoken_at - 3) * 1000, spoken_at * 1000, 0.0, 3000.0)]
+    batch = [
+        (
+            "pid-1",
+            "Alice",
+            False,
+            np.full(48000, 3000, dtype=np.int16),
+            (spoken_at - 3) * 1000,
+            spoken_at * 1000,
+            0.0,
+            3000.0,
+        )
+    ]
     LiveTranscriber._on_pcm_batch(t, batch)
     assert t._meeting_storage.append_segment.call_args.kwargs["captured_at"] == pytest.approx(
         spoken_at, rel=0, abs=1e-6)
@@ -1065,3 +1115,98 @@ def test_delayed_unattributed_when_emitted_then_storage_uses_speech_time():
     spoken_at = time.time() - 220
     LiveTranscriber._handle_unattributed_chunk(t, "hotfix", "12:00:00", spoken_at, 0, SourceState())
     assert t._meeting_storage.append_segment.call_args.kwargs["captured_at"] == spoken_at
+
+
+def _speech_pcm():
+    import numpy as np
+
+    t = np.arange(48000) / 16000.0
+    return (np.sin(2 * np.pi * 220.0 * t) * 8000).astype(np.int16)
+
+
+def test_silent_and_speaking_participants_in_batch_transcribing_only_speech_reaches_asr():
+    """
+    given: a batch with a muted participant's zeros and a speaking participant
+    when:  _on_pcm_batch runs
+    then:  only the speech goes to ASR and its text keeps its own speaker
+    """
+    import numpy as np
+
+    t = _fresh_transcriber_mock()
+    t.asr.transcribe_batch.return_value = ["hello world"]
+    speech = _speech_pcm()
+    batch = [
+        ("pid-muted", "Bob", False, np.zeros(48000, dtype=np.int16), 0.0, 3000.0, 0.0, 3000.0),
+        ("pid-talk", "Alice", False, speech, 0.0, 3000.0, 0.0, 3000.0),
+    ]
+
+    LiveTranscriber._on_pcm_batch(t, batch)
+
+    sent = t.asr.transcribe_batch.call_args[0][0]
+    assert len(sent) == 1 and sent[0] is speech
+    assert t._ktalk_bridge.send_transcript.call_args[0][:2] == ("Alice", "hello world")
+
+
+def test_batch_of_silence_transcribing_asr_is_not_called():
+    """
+    given: a batch holding only near-silent participant streams
+    when:  _on_pcm_batch runs
+    then:  ASR is not called at all
+    """
+    import numpy as np
+
+    t = _fresh_transcriber_mock()
+    batch = [
+        ("pid-a", "Bob", False, np.zeros(48000, dtype=np.int16), 0.0, 3000.0, 0.0, 3000.0),
+        ("pid-b", "Carol", False, np.ones(48000, dtype=np.int16), 0.0, 3000.0, 0.0, 3000.0),
+    ]
+
+    LiveTranscriber._on_pcm_batch(t, batch)
+
+    t.asr.transcribe_batch.assert_not_called()
+
+
+def _refine_task(pid, offset_base_ms):
+    import numpy as np
+
+    from recog.refine import RefineTask
+
+    return RefineTask(
+        pid=pid,
+        pcm_samples=np.zeros(16000, dtype=np.int16),
+        offset_base_ms=offset_base_ms,
+        submitted_at=0.0,
+        meeting_generation=0,
+    )
+
+
+def test_refine_window_without_live_segments_submitting_is_skipped():
+    """
+    given: a refine window of a participant who said nothing in it
+    when:  the window is offered for refine
+    then:  it is not sent to ASR, there is nothing it could rewrite
+    """
+    t = _fresh_transcriber_mock()
+    t._refine_worker = Mock()
+    t._pcm_live_segments = {"pid-a": [(1, 0.0, 3000.0)]}
+
+    LiveTranscriber._submit_refine(t, _refine_task("pid-a", 60_000.0))
+    LiveTranscriber._submit_refine(t, _refine_task("pid-b", 0.0))
+
+    t._refine_worker.submit.assert_not_called()
+
+
+def test_refine_window_with_live_segment_submitting_reaches_worker():
+    """
+    given: a refine window covering a live segment of the participant
+    when:  the window is offered for refine
+    then:  it is submitted to the refine worker
+    """
+    t = _fresh_transcriber_mock()
+    t._refine_worker = Mock()
+    t._pcm_live_segments = {"pid-a": [(1, 3000.0, 6000.0)]}
+    task = _refine_task("pid-a", 0.0)
+
+    LiveTranscriber._submit_refine(t, task)
+
+    t._refine_worker.submit.assert_called_once_with(task)
