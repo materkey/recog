@@ -1073,3 +1073,47 @@ def test_default_asr_available_getter_keeps_existing_behavior():
     ingest.enqueue(_make_chunk(pid="p1", seq=0))
     ingest.tick()
     assert len(received) == 1
+
+
+def test_early_and_late_participant_backlog_draining_oldest_audio_goes_first():
+    """
+    given: an early participant whose seq is already high and a participant who
+           joined later with seq from zero, both with queued chunks, the early
+           participant's audio captured first
+    when: a batch smaller than the backlog is drained
+    then: the oldest audio goes first, whatever each participant's own seq is
+    """
+    received: List[List[BatchedChunk]] = []
+    ingest = PerSpeakerIngest(
+        transcribe_callback=received.append,
+        max_batch_size=2,
+        max_chunks_per_pid=100,
+    )
+    ingest.enqueue(_make_chunk(pid="early", seq=700, start_ts=10.0, end_ts=13.0))
+    ingest.enqueue(_make_chunk(pid="early", seq=701, start_ts=13.0, end_ts=16.0))
+    ingest.enqueue(_make_chunk(pid="late", seq=0, start_ts=14.0, end_ts=17.0))
+    ingest.enqueue(_make_chunk(pid="late", seq=1, start_ts=17.0, end_ts=20.0))
+
+    ingest.tick(now=0.0)
+
+    assert [(b[0], b[4]) for b in received[0]] == [("early", 10_000.0), ("early", 13_000.0)]
+
+
+def test_queue_over_capacity_dropping_oldest_says_so(capsys):
+    """
+    given: a participant queue that holds two chunks
+    when: a third chunk arrives before the queue is drained
+    then: the dropped chunk is reported, not lost silently
+    """
+    from recog import log_utils
+
+    log_utils._reset_for_tests()
+    ingest = PerSpeakerIngest(
+        transcribe_callback=lambda b: None,
+        max_batch_size=100,
+        max_chunks_per_pid=2,
+    )
+    for s in range(3):
+        ingest.enqueue(_make_chunk(pid="p1", speaker_name="Alice", seq=s))
+
+    assert "dropped" in capsys.readouterr().err

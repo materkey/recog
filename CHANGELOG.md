@@ -7,6 +7,20 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-05
+
+### Action required
+
+- **Restart the services after `git pull`:** `./recog-service.sh restart`.
+
+### Changed
+
+- **A large KTalk meeting no longer loses the participants who joined first.**
+  When speech recognition fell behind, their audio was dropped for the rest of the
+  meeting while later arrivals were still transcribed. The oldest audio is now
+  recognised first, and audio dropped because recognition is behind is reported in
+  the live log.
+
 ## 2026-11-02
 
 ### Action required

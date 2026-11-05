@@ -41,6 +41,7 @@ from .config import (
     PCM_SILENCE_WATCHDOG_S,
     SPEAKER_TURN_GAP,
 )
+from .log_utils import log_rate_limited
 from .refine import RefineTask
 from .remote_asr import ASRTemporarilyUnavailable
 
@@ -294,8 +295,10 @@ class PerSpeakerIngest:
             idx = bisect.bisect_left(seqs, chunk.seq)
             buf.insert(idx, buffered)
             # Drop-oldest when over capacity.
+            dropped_overflow = 0
             while len(buf) > self._max_chunks_per_pid:
                 buf.pop(0)
+                dropped_overflow += 1
 
             stats = self._stats.setdefault(chunk.pid, {
                 "speaker_name": chunk.speaker_name,
@@ -391,6 +394,12 @@ class PerSpeakerIngest:
             total = sum(len(b) for b in self._buffers.values())
             if total >= self._max_batch_size:
                 wake = True
+        if dropped_overflow:
+            log_rate_limited(
+                "per-speaker-overflow",
+                f"[PerSpeakerIngest] ASR is behind: dropped {dropped_overflow} "
+                f"oldest pcm chunk(s) of {chunk.speaker_name or chunk.pid}",
+            )
         if wake:
             # Poke the worker thread to drain immediately without waiting
             # for the 200 ms tick.
@@ -722,19 +731,21 @@ class PerSpeakerIngest:
         dropped_stale = 0
 
         while len(batch) < self._max_batch_size:
-            # Pick the pid whose head chunk has the lowest seq (globally).
-            # Ties broken lexically by pid.  This gives deterministic
-            # interleaving across pids while preserving in-pid seq order.
+            # Pick the pid whose head chunk was captured first. Ties broken
+            # lexically by pid; in-pid seq order is kept by the buffer itself.
+            # Not the lowest seq: each pid counts seq from its own join, so a
+            # participant who joined late would always win and starve an early
+            # one whenever ASR falls behind.
             best_pid: Optional[str] = None
-            best_seq: Optional[int] = None
+            best_start: Optional[float] = None
             for pid in sorted(self._buffers.keys()):
                 buf = self._buffers[pid]
                 if not buf:
                     continue
-                head_seq = buf[0].chunk.seq
-                if best_seq is None or head_seq < best_seq:
+                head_start = buf[0].chunk.chunk_start_ts
+                if best_start is None or head_start < best_start:
                     best_pid = pid
-                    best_seq = head_seq
+                    best_start = head_start
             if best_pid is None:
                 break
 
