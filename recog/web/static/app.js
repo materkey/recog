@@ -562,7 +562,7 @@ const views = {
                     </div>
                     <div class="meta-block">
                         <span class="meta-label">Source</span>
-                        <span class="meta-value source-${meta.source || 'unknown'}">${meta.source || 'unknown'}</span>
+                        <span class="meta-value">${meta.source || 'unknown'}</span>
                     </div>
                     <div class="meta-block">
                         <span class="meta-label">Segments</span>
