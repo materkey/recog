@@ -99,6 +99,45 @@ class TestResolveCli:
 # CodexCliProvider
 # ---------------------------------------------------------------------------
 
+_AGENT_MESSAGE = '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}'
+_TURN_FAILED = '{"type":"turn.failed","error":{"message":"stream disconnected"}}'
+
+
+def _codex_process(stdout_lines, returncode, stderr):
+    """A finished codex exec process that printed these JSON lines."""
+    encoded = [line.encode() + b"\n" for line in stdout_lines]
+
+    async def lines():
+        for line in encoded:
+            yield line
+
+    proc = MagicMock(returncode=returncode)
+    proc.communicate = AsyncMock(return_value=(b"".join(encoded), stderr))
+    proc.stdout = lines()
+    proc.stdin.drain = AsyncMock()
+    proc.wait = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=stderr)
+    return proc
+
+
+async def _codex_complete(stdout_lines, returncode=0, stderr=b""):
+    proc = _codex_process(stdout_lines, returncode, stderr)
+    with (
+        patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
+        patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+    ):
+        return await CodexCliProvider().complete("hello")
+
+
+async def _codex_stream(stdout_lines, returncode=0, stderr=b""):
+    proc = _codex_process(stdout_lines, returncode, stderr)
+    with (
+        patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
+        patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+    ):
+        return [item async for item in CodexCliProvider().stream("hello")]
+
+
 class TestCodexCliProvider:
 
     def test_importable_from_recog(self):
@@ -216,68 +255,75 @@ class TestCodexCliProvider:
     @pytest.mark.asyncio
     async def test_reconnect_notice_then_answer_when_completing_then_answer_is_returned(self):
         # codex exec --json emits retry notices (will_retry) as "error" events too
-        stdout = (
-            b'{"type":"error","message":"Reconnecting... 2/5 (request timed out)"}\n'
-            b'{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}\n'
-            b'{"type":"turn.completed"}\n'
+        answer = await _codex_complete(
+            [
+                '{"type":"error","message":"Reconnecting... 2/5 (request timed out)"}',
+                _AGENT_MESSAGE % "answer",
+                '{"type":"turn.completed"}',
+            ]
         )
-        proc = MagicMock(returncode=0)
-        proc.communicate = AsyncMock(return_value=(stdout, b""))
-        with (
-            patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
-            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
-        ):
-            answer = await CodexCliProvider().complete("hello")
 
         assert answer == "answer"
 
     @pytest.mark.asyncio
     async def test_turn_failed_when_completing_then_its_error_is_raised(self):
-        stdout = (
-            b'{"type":"error","message":"Reconnecting... 5/5 (request timed out)"}\n'
-            b'{"type":"turn.failed","error":{"message":"stream disconnected"}}\n'
+        with pytest.raises(Exception, match="^stream disconnected$"):
+            await _codex_complete(
+                [
+                    '{"type":"error","message":"Reconnecting... 5/5 (request timed out)"}',
+                    _TURN_FAILED,
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_codex_exits_nonzero_when_completing_then_stderr_is_raised(self):
+        with pytest.raises(Exception, match="^Codex CLI error: auth expired$"):
+            await _codex_complete([], returncode=1, stderr=b"auth expired\n")
+
+    @pytest.mark.asyncio
+    async def test_no_agent_message_when_completing_then_no_response_is_raised(self):
+        reasoning = '{"type":"item.completed","item":{"type":"reasoning","text":"x"}}'
+        with pytest.raises(Exception, match="^No response from Codex$"):
+            await _codex_complete(["not json", "", reasoning])
+
+    @pytest.mark.asyncio
+    async def test_two_agent_messages_when_completing_then_they_are_joined(self):
+        answer = await _codex_complete([_AGENT_MESSAGE % "one", "garbage", _AGENT_MESSAGE % "two"])
+
+        assert answer == "one\ntwo"
+
+    @pytest.mark.asyncio
+    async def test_stream_ends_without_turn_completed_then_last_answer_is_final(self):
+        result = await _codex_stream(
+            ["", "garbage", _AGENT_MESSAGE % "", _AGENT_MESSAGE % "answer"]
         )
-        proc = MagicMock(returncode=0)
-        proc.communicate = AsyncMock(return_value=(stdout, b""))
-        with (
-            patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
-            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+
+        assert result == [("answer", False), ("answer", True)]
+
+    @pytest.mark.asyncio
+    async def test_codex_exits_nonzero_when_streaming_then_stderr_is_raised(self):
+        with pytest.raises(
+            Exception, match="^Codex streaming error: Codex CLI error: auth expired$"
         ):
-            with pytest.raises(Exception, match="stream disconnected"):
-                await CodexCliProvider().complete("hello")
+            await _codex_stream([], returncode=1, stderr=b"auth expired\n")
 
     @pytest.mark.asyncio
     async def test_reconnect_notice_then_answer_when_streaming_then_answer_is_returned(self):
-        async def lines():
-            yield b'{"type":"error","message":"Reconnecting... 2/5 (request timed out)"}\n'
-            yield b'{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}\n'
-            yield b'{"type":"turn.completed"}\n'
-
-        proc = MagicMock(returncode=0)
-        proc.stdout = lines()
-        proc.stdin.drain = AsyncMock()
-        with (
-            patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
-            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
-        ):
-            result = [item async for item in CodexCliProvider().stream("hello")]
+        result = await _codex_stream(
+            [
+                '{"type":"error","message":"Reconnecting... 2/5 (request timed out)"}',
+                _AGENT_MESSAGE % "answer",
+                '{"type":"turn.completed"}',
+                _AGENT_MESSAGE % "after the turn",
+            ]
+        )
 
         assert result == [("answer", False), ("answer", True)]
 
     @pytest.mark.asyncio
     async def test_turn_failed_when_streaming_then_its_error_is_raised(self):
-        async def lines():
-            yield b'{"type":"turn.failed","error":{"message":"stream disconnected"}}\n'
-
-        proc = MagicMock(returncode=0)
-        proc.stdout = lines()
-        proc.stdin.drain = AsyncMock()
-        with (
-            patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
-            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
-        ):
-            with pytest.raises(Exception, match="stream disconnected"):
-                [item async for item in CodexCliProvider().stream("hello")]
+        with pytest.raises(Exception, match="^Codex streaming error: stream disconnected$"):
+            await _codex_stream([_TURN_FAILED])
 
     @pytest.mark.asyncio
     async def test_streaming_analysis_when_spawning_codex_then_context_is_isolated(self):

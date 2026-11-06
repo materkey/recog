@@ -8,6 +8,7 @@ Provides:
 """
 
 import os
+import json
 import shutil
 import asyncio
 from abc import ABC, abstractmethod
@@ -71,6 +72,30 @@ def _codex_turn_error(event: dict) -> str:
     """Message of a codex exec ``turn.failed`` event."""
     error = event.get("error") or {}
     return error.get("message") or "turn failed"
+
+
+def _codex_event(line: str) -> tuple[str, str] | None:
+    """Read one ``codex exec --json`` line.
+
+    Returns ``("message", text)`` for an agent message, ``("done", "")`` for
+    ``turn.completed`` and None for anything else; raises on ``turn.failed``.
+    "error" events are not fatal: codex exec also emits its retry notices
+    ("Reconnecting... 2/5") that way, and a failure that does end the turn
+    arrives as ``turn.failed``.
+    """
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    kind = event.get("type")
+    if kind == "turn.failed":
+        raise Exception(_codex_turn_error(event))
+    if kind == "turn.completed":
+        return "done", ""
+    item = event.get("item", {}) if kind == "item.completed" else {}
+    if item.get("type") == "agent_message":
+        return "message", item.get("text", "")
+    return None
 
 
 def _nvm_version_key(path: str) -> tuple:
@@ -152,8 +177,6 @@ class CodexCliProvider(AIProvider):
         return f"Codex ({self.model} {self.reasoning_effort})"
 
     async def complete(self, prompt: str) -> str:
-        import json as json_module
-
         # Codex exec expects prompt via stdin when using "-"
         cmd = build_codex_exec_command(self._cli, self.model, self.reasoning_effort, isolated=True)
         marked_prompt = mark_ccs_automation(prompt, self.task)
@@ -172,22 +195,10 @@ class CodexCliProvider(AIProvider):
 
         # Parse JSON lines output to find the agent message
         answer_parts = []
-        for line in stdout.decode().strip().split('\n'):
-            if not line:
-                continue
-            try:
-                event = json_module.loads(line)
-                if event.get("type") == "item.completed":
-                    item = event.get("item", {})
-                    if item.get("type") == "agent_message":
-                        answer_parts.append(item.get("text", ""))
-                elif event.get("type") == "turn.failed":
-                    raise Exception(_codex_turn_error(event))
-                # "error" events are not fatal: codex exec also emits its retry
-                # notices ("Reconnecting... 2/5") that way, and a failure that
-                # does end the turn arrives as turn.failed.
-            except json_module.JSONDecodeError:
-                continue
+        for line in stdout.decode().splitlines():
+            event = _codex_event(line)
+            if event and event[0] == "message":
+                answer_parts.append(event[1])
 
         if not answer_parts:
             raise Exception("No response from Codex")
@@ -196,8 +207,6 @@ class CodexCliProvider(AIProvider):
 
     async def stream(self, prompt: str):
         """Stream Codex CLI response."""
-        import json as json_module
-
         cmd = build_codex_exec_command(self._cli, self.model, self.reasoning_effort, isolated=True)
         marked_prompt = mark_ccs_automation(prompt, self.task)
         proc = await asyncio.create_subprocess_exec(
@@ -216,25 +225,16 @@ class CodexCliProvider(AIProvider):
         full_text = ""
         try:
             async for line in proc.stdout:
-                line = line.decode().strip()
-                if not line:
+                event = _codex_event(line.decode())
+                if event is None:
                     continue
-                try:
-                    event = json_module.loads(line)
-                    if event.get("type") == "item.completed":
-                        item = event.get("item", {})
-                        if item.get("type") == "agent_message":
-                            text = item.get("text", "")
-                            if text:
-                                full_text = text
-                                yield text, False
-                    elif event.get("type") == "turn.completed":
-                        yield full_text, True
-                        return
-                    elif event.get("type") == "turn.failed":
-                        raise Exception(_codex_turn_error(event))
-                except json_module.JSONDecodeError:
-                    continue
+                kind, text = event
+                if kind == "done":
+                    yield full_text, True
+                    return
+                if text:
+                    full_text = text
+                    yield text, False
 
             await proc.wait()
             if proc.returncode != 0:
