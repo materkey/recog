@@ -11,16 +11,16 @@ Search and analyze meeting transcripts from the recog speech recognition system.
 
 ```bash
 # Find all quotes from a speaker
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane Doe"
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane Doe"
 
 # With date range
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane" --from 2026-01-15 --to 2026-01-20
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane" --from 2026-01-15 --to 2026-01-20
 
 # Search by keyword
-uv run .claude/skills/recog-meetings/search_meetings.py --text "gradle"
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --text "gradle"
 
 # Combined: speaker + keyword
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane" --text "релиз"
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane" --text "релиз"
 ```
 
 ## Data Location
@@ -59,22 +59,22 @@ Find all segments from a specific speaker (supports regex):
 
 ```bash
 # Exact name
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane Doe"
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane Doe"
 
 # Partial match
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane"
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane"
 
 # With date filter
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane" --from 2026-01-15
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane" --from 2026-01-15
 
 # With context (N lines before/after)
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane" --context 2
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane" --context 2
 
 # JSON output
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane" --json
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane" --json
 
 # Limit results
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane" --limit 10
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane" --limit 10
 ```
 
 ### 2. Search by Text/Keyword
@@ -83,13 +83,13 @@ Find segments containing specific text (supports regex):
 
 ```bash
 # Simple keyword
-uv run .claude/skills/recog-meetings/search_meetings.py --text "gradle"
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --text "gradle"
 
 # Regex pattern
-uv run .claude/skills/recog-meetings/search_meetings.py --text "релиз.*android"
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --text "релиз.*android"
 
 # Combined with speaker
-uv run .claude/skills/recog-meetings/search_meetings.py --speaker "Jane" --text "тест"
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --speaker "Jane" --text "тест"
 ```
 
 ### 3. List Speakers
@@ -98,13 +98,13 @@ Get all speakers with statistics:
 
 ```bash
 # All speakers
-uv run .claude/skills/recog-meetings/search_meetings.py --list-speakers
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --list-speakers
 
 # Speakers in date range
-uv run .claude/skills/recog-meetings/search_meetings.py --list-speakers --from 2026-01-15
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --list-speakers --from 2026-01-15
 
 # JSON output
-uv run .claude/skills/recog-meetings/search_meetings.py --list-speakers --json
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --list-speakers --json
 ```
 
 Output shows: segments count, words count, meetings count per speaker.
@@ -114,10 +114,10 @@ Output shows: segments count, words count, meetings count per speaker.
 Overall database statistics:
 
 ```bash
-uv run .claude/skills/recog-meetings/search_meetings.py --stats
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --stats
 
 # With date filter
-uv run .claude/skills/recog-meetings/search_meetings.py --stats --from 2026-01-01 --to 2026-01-31
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --stats --from 2026-01-01 --to 2026-01-31
 ```
 
 ### 5. List Meetings
@@ -126,13 +126,13 @@ List all meetings:
 
 ```bash
 # All meetings
-uv run .claude/skills/recog-meetings/search_meetings.py --list-meetings
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --list-meetings
 
 # Recent meetings
-uv run .claude/skills/recog-meetings/search_meetings.py --list-meetings --from 2026-01-20
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --list-meetings --from 2026-01-20
 
 # JSON output
-uv run .claude/skills/recog-meetings/search_meetings.py --list-meetings --json
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --list-meetings --json
 ```
 
 ### 6. Get Meeting Transcript
@@ -141,10 +141,10 @@ Full transcript of a specific meeting:
 
 ```bash
 # By meeting ID
-uv run .claude/skills/recog-meetings/search_meetings.py --meeting 2026-01-15_052231_310b068e
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --meeting 2026-01-15_052231_310b068e
 
 # JSON output
-uv run .claude/skills/recog-meetings/search_meetings.py --meeting 2026-01-15_052231_310b068e --json
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --meeting 2026-01-15_052231_310b068e --json
 ```
 
 ## Date Formats
@@ -185,7 +185,7 @@ Machine-readable with `--json`:
 ### Find what Jane said about releases this month
 
 ```bash
-uv run .claude/skills/recog-meetings/search_meetings.py \
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py \
   --speaker "Jane" \
   --text "релиз|release" \
   --from 2026-01-01 \
@@ -195,7 +195,7 @@ uv run .claude/skills/recog-meetings/search_meetings.py \
 ### Get context around specific quotes
 
 ```bash
-uv run .claude/skills/recog-meetings/search_meetings.py \
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py \
   --speaker "Jane" \
   --text "проблем" \
   --context 3
@@ -204,7 +204,7 @@ uv run .claude/skills/recog-meetings/search_meetings.py \
 ### Find all mentions of a project
 
 ```bash
-uv run .claude/skills/recog-meetings/search_meetings.py \
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py \
   --text "PROJ-\\d+" \
   --limit 50
 ```
@@ -212,7 +212,7 @@ uv run .claude/skills/recog-meetings/search_meetings.py \
 ### Who speaks the most?
 
 ```bash
-uv run .claude/skills/recog-meetings/search_meetings.py --list-speakers --json | head -20
+uv run ${CLAUDE_SKILL_DIR}/search_meetings.py --list-speakers --json | head -20
 ```
 
 ## Trigger Patterns
