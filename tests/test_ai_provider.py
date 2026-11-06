@@ -214,6 +214,72 @@ class TestCodexCliProvider:
         )
 
     @pytest.mark.asyncio
+    async def test_reconnect_notice_then_answer_when_completing_then_answer_is_returned(self):
+        # codex exec --json emits retry notices (will_retry) as "error" events too
+        stdout = (
+            b'{"type":"error","message":"Reconnecting... 2/5 (request timed out)"}\n'
+            b'{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}\n'
+            b'{"type":"turn.completed"}\n'
+        )
+        proc = MagicMock(returncode=0)
+        proc.communicate = AsyncMock(return_value=(stdout, b""))
+        with (
+            patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+        ):
+            answer = await CodexCliProvider().complete("hello")
+
+        assert answer == "answer"
+
+    @pytest.mark.asyncio
+    async def test_turn_failed_when_completing_then_its_error_is_raised(self):
+        stdout = (
+            b'{"type":"error","message":"Reconnecting... 5/5 (request timed out)"}\n'
+            b'{"type":"turn.failed","error":{"message":"stream disconnected"}}\n'
+        )
+        proc = MagicMock(returncode=0)
+        proc.communicate = AsyncMock(return_value=(stdout, b""))
+        with (
+            patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+        ):
+            with pytest.raises(Exception, match="stream disconnected"):
+                await CodexCliProvider().complete("hello")
+
+    @pytest.mark.asyncio
+    async def test_reconnect_notice_then_answer_when_streaming_then_answer_is_returned(self):
+        async def lines():
+            yield b'{"type":"error","message":"Reconnecting... 2/5 (request timed out)"}\n'
+            yield b'{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}\n'
+            yield b'{"type":"turn.completed"}\n'
+
+        proc = MagicMock(returncode=0)
+        proc.stdout = lines()
+        proc.stdin.drain = AsyncMock()
+        with (
+            patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+        ):
+            result = [item async for item in CodexCliProvider().stream("hello")]
+
+        assert result == [("answer", False), ("answer", True)]
+
+    @pytest.mark.asyncio
+    async def test_turn_failed_when_streaming_then_its_error_is_raised(self):
+        async def lines():
+            yield b'{"type":"turn.failed","error":{"message":"stream disconnected"}}\n'
+
+        proc = MagicMock(returncode=0)
+        proc.stdout = lines()
+        proc.stdin.drain = AsyncMock()
+        with (
+            patch("recog.ai_provider.resolve_cli", return_value="/mock/codex"),
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+        ):
+            with pytest.raises(Exception, match="stream disconnected"):
+                [item async for item in CodexCliProvider().stream("hello")]
+
+    @pytest.mark.asyncio
     async def test_streaming_analysis_when_spawning_codex_then_context_is_isolated(self):
         async def lines():
             yield b'{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}\n'

@@ -67,6 +67,12 @@ def build_codex_exec_command(
     return cmd
 
 
+def _codex_turn_error(event: dict) -> str:
+    """Message of a codex exec ``turn.failed`` event."""
+    error = event.get("error") or {}
+    return error.get("message") or "turn failed"
+
+
 def _nvm_version_key(path: str) -> tuple:
     """Extract semver tuple from nvm path for correct sorting (not lexicographic)."""
     return version_key(Path(path).parent.parent)
@@ -175,8 +181,11 @@ class CodexCliProvider(AIProvider):
                     item = event.get("item", {})
                     if item.get("type") == "agent_message":
                         answer_parts.append(item.get("text", ""))
-                elif event.get("type") == "error":
-                    raise Exception(event.get("message", "Unknown error"))
+                elif event.get("type") == "turn.failed":
+                    raise Exception(_codex_turn_error(event))
+                # "error" events are not fatal: codex exec also emits its retry
+                # notices ("Reconnecting... 2/5") that way, and a failure that
+                # does end the turn arrives as turn.failed.
             except json_module.JSONDecodeError:
                 continue
 
@@ -222,8 +231,8 @@ class CodexCliProvider(AIProvider):
                     elif event.get("type") == "turn.completed":
                         yield full_text, True
                         return
-                    elif event.get("type") == "error":
-                        raise Exception(event.get("message", "Unknown error"))
+                    elif event.get("type") == "turn.failed":
+                        raise Exception(_codex_turn_error(event))
                 except json_module.JSONDecodeError:
                     continue
 

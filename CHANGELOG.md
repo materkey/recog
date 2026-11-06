@@ -7,6 +7,18 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-06
+
+### Action required
+
+- **Restart the services after `git pull`:** `./recog-service.sh restart`.
+
+### Changed
+
+- **A Codex summary or title no longer fails with "Reconnecting... 2/5".** Codex
+  reports its own network retries that way; the answer it delivered after the
+  retry was thrown away. Generation now fails only when Codex gives up.
+
 ## 2026-11-05
 
 ### Action required
