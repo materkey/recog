@@ -273,7 +273,7 @@ After editing backend code (`recog/web/server.py`, `recog/*.py`) run
 
 ## Questions about a meeting
 
-**Спросить** on a meeting page opens a panel beside its transcript: ask what someone
+**Ask** on a meeting page opens a panel beside its transcript: ask what someone
 said or what was decided, and follow up. The answer comes from the transcript alone,
 and each time in it is a button that scrolls the transcript to that replica, so a
 quote can be checked by eye. It works during a meeting too, on what has been said so

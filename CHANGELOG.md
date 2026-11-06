@@ -18,6 +18,8 @@ reasoning.
 - **A Codex summary or title no longer fails with "Reconnecting... 2/5".** Codex
   reports its own network retries that way; the answer it delivered after the
   retry was thrown away. Generation now fails only when Codex gives up.
+- **The meeting page's Спросить button is now Ask**, like the other buttons beside
+  it. The send button inside the question panel keeps its name.
 
 ## 2026-11-05
 
