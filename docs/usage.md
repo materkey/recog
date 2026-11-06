@@ -347,7 +347,7 @@ real LAN (`ping` RTT < 5 ms).
 
 On your first web UI visit, **Как к вам обращаться?** asks for your name and
 optional forms of address (one per line). **Позже** keeps recording and manual
-Copilot chat available. Open **Настройки → Мой профиль** later to edit or clear
+Copilot chat available. Open **Settings → Мой профиль** later to edit or clear
 the profile. A non-generic existing `MIC_SPEAKER_NAME` pre-fills the form but is
 not saved until you choose **Сохранить**.
 

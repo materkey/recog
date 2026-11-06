@@ -20,6 +20,8 @@ reasoning.
   retry was thrown away. Generation now fails only when Codex gives up.
 - **The meeting page's Спросить button is now Ask**, like the other buttons beside
   it. The send button inside the question panel keeps its name.
+- **The Настройки menu in the top right corner is now Settings**, like the Meetings
+  and Live links beside it. Its items keep their names.
 - **The meeting page shows the source as plain text.** It carried the coloured
   background of the meeting list's source badge, stretched across its column.
 

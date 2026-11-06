@@ -300,7 +300,7 @@ finish remaining moves, then `./recog-service.sh install` and
 resolution. `user-profile.json` lives under `get_data_dir()`, is backed up and
 migrated with other personal data, and is never committed. The web UI owns writes
 through GET/PUT/DELETE `/api/user-profile`; initial onboarding and
-**Настройки → Мой профиль** share `recog/web/static/user-profile.js`.
+**Settings → Мой профиль** share `recog/web/static/user-profile.js`.
 
 Precedence: explicit CLI `--mic-speaker-name` > saved name > `MIC_SPEAKER_NAME` >
 `Me`. Live supplies the same resolved snapshot to its microphone and bridge.
