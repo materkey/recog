@@ -66,9 +66,10 @@ where they can.
      module from `rust/wavo-asr-py`). Through recog's own refine call on 80 labelled
      windows it gives the same text as PyTorch on 69, the same word starts and ends
      (p95 Δ 0 ms), in 84 ms against 865 ms.
+   - The live process on `wavo` no longer imports torch, torchaudio or gigaam: the
+     local module is imported only when a PyTorch backend is built.
    - Still to do: make it the default once a real meeting has run on it, then drop
-     torch. Today `recog/remote_asr.py` imports `recog/asr.py`, so torch is still
-     imported, though no PyTorch model is loaded.
+     torch from the dependencies (Linux CPU hosts without Vulkan still need it).
 4. **Audio capture.** System audio (`parec`, `sck_audio_capture`, the restart policy),
    the microphone through cpal instead of sounddevice and `mic_worker`, the capture
    buffer. Checked against the golden recordings.
