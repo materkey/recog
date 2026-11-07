@@ -4,9 +4,8 @@ Status: in progress.
 - Step 1 is done: [the ASR experiment](../experiments/2026-11-07-rust-asr-runtimes.md)
   picked `wavo` on the Mac; Linux is open.
 - Step 0 is designed: [golden sessions](2026-11-07-golden-sessions-design.md).
-- The first piece exists outside the repository: `speexdsp-aec`, a safe Rust port of
-  the echo canceller pyaec wraps, bit-exact with it (private repository
-  `materkey/speexdsp-aec`, not wired into recog yet).
+- Step 2 is done: the echo stage runs `speexdsp-aec` (`rust/`) instead of pyaec, and
+  `scripts/check.sh` and CI check the Rust workspace.
 
 ## Goal
 
@@ -50,7 +49,12 @@ where they can.
    - On Linux, `gigastt` matches PyTorch on CPU. The GPU run on Z270XX waits for free
      GPU memory.
 2. **PyO3 pilot.** `speexdsp-aec` replaces pyaec in `recog/echo_cancel.py`; the crate
-   moves into the repository with that commit.
+   moves into the repository with that commit. **Done 2026-11-07.**
+   - The module is bit-exact with pyaec and three times faster per block, and runs
+     without the interpreter lock.
+   - `setup.sh` builds it on macOS when cargo is present; without cargo, echo
+     cancellation stays unavailable.
+   - The golden-data generators stay in the port's repository.
 3. **ASR in Rust.** First behind `build_asr()` (an adapter to the chosen runtime, the way
    the remote backend is plugged in today), then inside the Rust process. torch and
    torchaudio leave the dependencies. `wavo` has no batch and no abort; both are
