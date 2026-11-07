@@ -1210,3 +1210,59 @@ def test_refine_window_with_live_segment_submitting_reaches_worker():
     LiveTranscriber._submit_refine(t, task)
 
     t._refine_worker.submit.assert_called_once_with(task)
+
+
+@pytest.mark.parametrize(
+    "participants,expected",
+    [
+        ({}, False),
+        ({"me": Participant(id="me", name="Me", is_local=True, mic_muted=False)}, False),
+        ({"a": Participant(id="a", name="Alice", is_local=False, mic_muted=True)}, True),
+    ],
+)
+def test_participants_has_remote_participants_counts_only_others(participants, expected):
+    """
+    given: no participants, only the user, or a muted remote participant
+    when:  the bridge is asked whether anyone remote is in the call
+    then:  only another participant counts, muted or not
+    """
+    bridge = KTalkBridge()
+    bridge._participants = participants
+
+    assert bridge.has_remote_participants() is expected
+
+
+@pytest.mark.parametrize(
+    "remote,speaker,uncertain",
+    [
+        (False, "Системный звук", False),
+        (True, "Unknown", True),
+    ],
+)
+def test_no_speaker_signal_handle_ktalk_chunk_names_the_system_audio_when_no_one_remote(
+    remote, speaker, uncertain
+):
+    """
+    given: no speaker signal for a system-audio chunk, with and without remote participants
+    when:  _handle_ktalk_chunk runs
+    then:  with no one remote (alone in a call, or no call) the audio is something the
+           computer plays: "Системный звук", certain; with someone remote it may be their
+           late-signalled turn: "Unknown", uncertain, as before
+    """
+    t = _fresh_transcriber_mock()
+    t._ktalk_bridge.get_dominant_speaker_for_period.return_value = None
+    t._ktalk_bridge.get_current_speaker.return_value = None
+    t._ktalk_bridge.get_sole_unmuted_remote_participant.return_value = None
+    t._ktalk_bridge.has_remote_participants.return_value = remote
+    t._ktalk_bridge.are_all_mics_muted.return_value = False
+    storage = Mock()
+    storage.append_segment.return_value = 1
+    t._meeting_storage = storage
+    state = SourceState()
+    now = time.time()
+
+    LiveTranscriber._handle_ktalk_chunk(t, "подкаст", "12:00:00", now - 3, now, now, 0, state)
+
+    kwargs = storage.append_segment.call_args.kwargs
+    assert (kwargs["speaker"], kwargs["uncertain"]) == (speaker, uncertain)
+    assert state.last_speaker is None

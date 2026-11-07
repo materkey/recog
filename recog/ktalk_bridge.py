@@ -644,6 +644,11 @@ class KTalkBridge:
             # Спикер не найден среди участников — не можем определить
             return False
 
+    def has_remote_participants(self) -> bool:
+        """Whether anyone besides the user is in the call, muted or not."""
+        with self._lock:
+            return any(not p.is_local for p in self._participants.values())
+
     def get_sole_unmuted_remote_participant(self) -> Optional[str]:
         """
         Возвращает имя единственного удалённого участника с включённым микрофоном.

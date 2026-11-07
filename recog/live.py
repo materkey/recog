@@ -69,6 +69,10 @@ NO_MIC = "none"
 # recog.system_audio.resolve_system_audio_backend).
 NO_SYSTEM_AUDIO = "none"
 
+# Speaker of system audio when no one else is in the call, or there is no call:
+# what the computer plays (a video, a podcast), not a participant.
+SYSTEM_AUDIO_SPEAKER = "Системный звук"
+
 PACTL_TIMEOUT_S = 2.0
 
 
@@ -1991,7 +1995,9 @@ class LiveTranscriber:
           3. last_speaker TTL -- reuse recent speaker if <10 s and not muted
           4. sole_unmuted_remote -- exactly 1 remote mic on -> likely speaker
              (marked uncertain; avoids false attribution when 2+ are unmuted)
-          5. "Unknown" -- no attribution possible
+          5. "Системный звук" -- no one remote in the call (or no call): the
+             audio is something the computer plays, not a participant
+          6. "Unknown" -- no attribution possible
 
         Why sole_unmuted fallback exists: Jitsi's _activeSpeaker$ event lags
         1-5 s behind actual speech. When Speaker A mutes and Speaker B starts,
@@ -2022,6 +2028,9 @@ class LiveTranscriber:
             speaker = sole_unmuted
             no_speaker_yet = False
             sole_unmuted_fallback = True
+        elif self._ktalk_bridge and not self._ktalk_bridge.has_remote_participants():
+            speaker = SYSTEM_AUDIO_SPEAKER
+            no_speaker_yet = False
         else:
             speaker = "Unknown"
             no_speaker_yet = True
@@ -2036,7 +2045,8 @@ class LiveTranscriber:
         # "Unknown" would poison the TTL fallback window, and
         # sole_unmuted is uncertain -- propagating it via TTL would
         # lose the uncertainty flag and cascade into retroactive rewrites.
-        if speaker != "Unknown" and not sole_unmuted_fallback:
+        # Nor with the system-audio label, which names no participant.
+        if speaker not in ("Unknown", SYSTEM_AUDIO_SPEAKER) and not sole_unmuted_fallback:
             state.last_speaker = speaker
         state.last_speech_time = chunk_time
         if not is_continuation:
@@ -2129,7 +2139,7 @@ class LiveTranscriber:
                     # Retroactive correction: if we just identified a speaker
                     # after a run of Unknown segments, correct them backwards
                     needs_correction = (
-                        speaker != "Unknown"
+                        speaker not in ("Unknown", SYSTEM_AUDIO_SPEAKER)
                         and len(self._recent_system_segments) >= 2
                         and self._recent_system_segments[-2].speaker == "Unknown"
                     )
