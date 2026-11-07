@@ -1,7 +1,8 @@
 # Golden sessions: recording and replaying the live process
 
-Status: the recorder is built (`recog/golden.py`, `[live] golden_record`, off by
-default); the clock seam and the player are not. Step 0 of
+Status: the recorder (`recog/golden.py`, `[live] golden_record`, off by default) and a
+real-time player for the Python implementation (`recog/golden_replay.py`) are built;
+the clock seam, the comparison and real recorded sessions are not. Step 0 of
 [the move to Rust](2026-11-07-rust-migration.md).
 
 ## Purpose
@@ -88,6 +89,14 @@ Mapped from the code on 2026-11-07:
 2. The recorder behind a setting, tested with a synthetic session. **Done.**
 3. The player for the Python implementation: a recorded session replays to the same
    normalized outputs. This is the player's own acceptance test.
+   **Built in real time, 2026-11-07:** `python -m recog.golden_replay replay <session>
+   <out>` runs the real `LiveTranscriber` in `<out>/data` on a free port, its captures
+   handing out the recorded chunks at their times (moved to now), ASR answering by
+   input key, the frames sent over WebSockets at their times so the bridge's clock
+   sync moves them to now as well, and LLM titles and summaries off. No clock seam is
+   needed at 1×; the seam is what a faster replay will need. A synthetic call replays
+   to its transcript (`tests/test_golden_replay.py`); comparing a real session with
+   the meeting it was recorded in is next.
 4. Recording a few real sessions on the user's machine: a KTalk meeting, Google Meet,
    a Zoom web call, and an orphan microphone recording.
 
