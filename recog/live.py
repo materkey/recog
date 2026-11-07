@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
-import torch
 
 from collections import deque
 from dataclasses import dataclass
@@ -31,7 +30,6 @@ from .config import (
     PCM_REFINE_WINDOW_S,
     PCM_WAV_ANCHOR_MAX_AGE_MS,
 )
-from .asr import ASRModule, _mps_autoreleasepool
 from .audio_capture import BufferedAudioCapture
 from .install_config import INSTALL_CONFIG
 from .log_utils import log_rate_limited

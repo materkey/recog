@@ -46,14 +46,23 @@ import httpx
 import numpy as np
 import soundfile as sf
 
-from gigaam.types import TranscriptionResult, Word
-
-from .asr import ASRModule
 from .log_utils import log_rate_limited
 from .models import Segment
 
 if TYPE_CHECKING:
+    # Imported where used: gigaam and recog.asr import torch, which the wavo
+    # backend never needs.
+    from gigaam.types import TranscriptionResult
+
+    from .asr import ASRModule
     from .wavo_backend import WavoASR
+
+
+def _local_asr_module() -> "ASRModule":
+    """The PyTorch model's wrapper, without its weights (they load lazily)."""
+    from .asr import ASRModule
+
+    return ASRModule()
 
 
 class RemoteASRError(Exception):
@@ -228,7 +237,7 @@ class RemoteASRClient:
 
     def transcribe_with_timestamps(
         self, audio: Union[np.ndarray, Any, str], sample_rate: int = 16000
-    ) -> TranscriptionResult:
+    ) -> "TranscriptionResult":
         """Refine-путь; POST WAV с timestamp_granularities="word".
 
         Парсит top-level ``words[]={word,start(sec),end(sec)}`` в
@@ -260,6 +269,8 @@ class RemoteASRClient:
             payload = resp.json()
         except Exception as e:
             raise RemoteASRError(f"transcribe_with_timestamps failed: {e}") from e
+
+        from gigaam.types import TranscriptionResult, Word
 
         words: List[Word] = []
         for w in payload.get("words") or []:
@@ -369,7 +380,7 @@ class FallbackASR:
     def __init__(
         self,
         remote: RemoteASRClient,
-        local_factory: Callable[[], "ASRModule"] = ASRModule,
+        local_factory: Callable[[], "ASRModule"] = _local_asr_module,
         fail_threshold: int = 3,
         open_seconds: float = 60.0,
     ):
@@ -558,8 +569,11 @@ class FallbackASR:
         )
 
     def transcribe_with_timestamps(
-        self, audio: Union[np.ndarray, Any, str], sample_rate: int = 16000,
-        *, local_transcribe: Optional[Callable[[ASRModule], Any]] = None,
+        self,
+        audio: Union[np.ndarray, Any, str],
+        sample_rate: int = 16000,
+        *,
+        local_transcribe: Optional[Callable[["ASRModule"], Any]] = None,
     ) -> Any:
         """Refine. Если локаль тоже падает — пере-поднимает её исключение."""
         return self._run(
@@ -606,4 +620,4 @@ def build_asr() -> "Union[ASRModule, FallbackASR, WavoASR]":
         from .wavo_backend import WavoASR
 
         return WavoASR()
-    return ASRModule()
+    return _local_asr_module()

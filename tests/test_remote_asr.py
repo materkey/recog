@@ -1018,9 +1018,7 @@ def test_build_asr_local_does_not_need_url(monkeypatch):
     monkeypatch.setattr(INSTALL_CONFIG.asr, "remote_url", "")
 
     built = []
-    monkeypatch.setattr(
-        remote_asr_mod, "ASRModule", lambda *a, **kw: built.append(1) or "LOCAL"
-    )
+    monkeypatch.setattr("recog.asr.ASRModule", lambda *a, **kw: built.append(1) or "LOCAL")
 
     assert build_asr() == "LOCAL"
     assert built == [1]

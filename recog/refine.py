@@ -30,13 +30,15 @@ import time
 import traceback
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Callable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Literal, Optional, Union
 
 import numpy as np
 
-from gigaam.types import TranscriptionResult, Word
-
 from .remote_asr import ASRTemporarilyUnavailable
+
+if TYPE_CHECKING:
+    # Types only: importing gigaam imports torch, which the wavo backend never needs.
+    from gigaam.types import TranscriptionResult, Word
 
 
 AbortMode = Literal["cooperative", "coarse"]
@@ -202,7 +204,7 @@ class RefineResult:
 # `transcribe_fn(pcm, should_abort=<bool-getter>)`; in coarse mode it calls
 # `transcribe_fn(pcm)`. Typed as `Callable[..., TranscriptionResult]` to
 # accommodate both shapes without forcing callers to accept kwargs.
-TranscribeFn = Callable[..., TranscriptionResult]
+TranscribeFn = Callable[..., "TranscriptionResult"]
 ApplyFn = Callable[["RefineResult"], None]
 
 

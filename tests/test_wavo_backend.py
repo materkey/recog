@@ -221,3 +221,33 @@ def test_backend_wavo_readiness_needs_the_rust_module(tmp_path, importable):
     assert (result.returncode == 0) is importable, result.stdout + result.stderr
     if not importable:
         assert "wavo_asr" in result.stdout and "setup.sh" in result.stdout
+
+
+def test_backend_wavo_live_process_imports_no_torch(tmp_path):
+    """given: RECOG_ASR_BACKEND=wavo
+    when: a fresh interpreter imports the live pipeline and builds its ASR
+    then: torch is not imported: with wavo it is dead weight, ~190 MB and a second of startup"""
+    import os
+    import subprocess
+
+    shadow = tmp_path / "wavo_asr"
+    shadow.mkdir()
+    (shadow / "__init__.py").write_text("class Model:\n    pass\n")
+    code = (
+        "import sys\n"
+        "import recog.live\n"
+        "from recog.remote_asr import build_asr\n"
+        "build_asr()\n"
+        "print(sorted(m for m in ('torch', 'torchaudio', 'gigaam') if m in sys.modules))\n"
+    )
+    env = {
+        **os.environ,
+        "RECOG_ASR_BACKEND": "wavo",
+        "PYTHONPATH": str(tmp_path),
+        "RECOG_DATA_DIR": str(tmp_path),
+    }
+
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"
