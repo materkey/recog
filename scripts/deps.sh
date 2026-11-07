@@ -103,6 +103,8 @@ deps_hint() {
             esac ;;
         claude)
             echo "npm install -g @anthropic-ai/claude-code" ;;
+        cargo)
+            echo "install Rust with rustup (https://rustup.rs)" ;;
         jq)
             case "$mgr" in
                 apt)    echo "sudo apt install jq" ;;

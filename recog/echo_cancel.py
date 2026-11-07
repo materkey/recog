@@ -17,7 +17,7 @@ from collections import deque
 from typing import Optional, Tuple
 
 import numpy as np
-import pyaec
+import speexdsp_aec
 
 SR = 16000
 FRAME = 160  # Speex
@@ -55,17 +55,17 @@ def _to16(x: np.ndarray) -> np.ndarray:
 
 
 class _Speex:
+    """Speex's canceller: the Rust port in rust/, bit-exact with pyaec 1.0.1, which
+    ran it with 8 kHz settings whatever rate it was given; so does this. A block of
+    whole frames goes through in one call, with the interpreter lock released."""
+
     def __init__(self):
-        self._aec = pyaec.Aec(FRAME, TAIL, SR, False)
+        self._aec = speexdsp_aec.EchoCanceller(FRAME, TAIL)
 
     def block(self, mic: np.ndarray, reference: np.ndarray) -> np.ndarray:
-        m, r = _to16(mic), _to16(reference)
-        out = np.zeros(len(m), dtype=np.float64)
-        for i in range(0, len(m), FRAME):
-            out[i : i + FRAME] = self._aec.cancel_echo(
-                m[i : i + FRAME].tolist(), r[i : i + FRAME].tolist()
-            )
-        return out / 32768.0
+        m, r = _to16(mic).astype("<i2"), _to16(reference).astype("<i2")
+        out = np.frombuffer(self._aec.cancel(m.tobytes(), r.tobytes()), dtype="<i2")
+        return out.astype(np.float64) / 32768.0
 
 
 def inverse_low_cut_fir(taps: int = 1024, regularization: float = 1e-3) -> np.ndarray:
@@ -73,7 +73,7 @@ def inverse_low_cut_fir(taps: int = 1024, regularization: float = 1e-3) -> np.nd
 
     With a silent reference Speex is not transparent: white noise loses 14 dB at
     100-200 Hz, and a quiet voice fell entirely under the VAD threshold. Measured
-    from pyaec with noise, so it follows the library it is used with.
+    from the canceller with noise, so it follows the library it is used with.
     """
     noise = np.random.default_rng(0).normal(0, 0.02, 30 * SR)
     thinned = _Speex().block(noise, np.zeros(len(noise)))

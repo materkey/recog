@@ -7,6 +7,24 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-07
+
+### Action required
+
+- **macOS, if you use echo cancellation (`[live] echo_cancel`): install Rust and
+  run `./setup.sh` after `git pull`.** The canceller is now the Rust port of the same
+  Speex build (`rust/speexdsp-aec`), and setup builds its Python module with cargo:
+  install it with rustup (https://rustup.rs), then `./setup.sh` and
+  `./recog-service.sh restart`. Without cargo setup goes on and the microphone
+  stays raw, as it does with echo cancellation off. `pyaec` is no longer a
+  dependency; `venv-gigaam/bin/pip uninstall pyaec` removes it.
+
+### Changed
+
+- **Echo cancellation gives the same output as before, with less load.** The port
+  is bit-exact with pyaec 1.0.1 and runs a block in about a third of the time,
+  without holding Python's interpreter lock.
+
 ## 2026-11-06
 
 ### Action required

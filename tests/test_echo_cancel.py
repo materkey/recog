@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-pytest.importorskip("pyaec")
+pytest.importorskip("speexdsp_aec")
 
 from recog.echo_cancel import (
     BLOCK,
@@ -330,7 +330,7 @@ def test_detector_enters_on_echo_leaves_after_it_and_ignores_a_silent_reference(
 
 
 def test_inverse_filter_lifts_what_speex_cuts_and_leaves_the_rest():
-    """given: the filter measured from pyaec itself
+    """given: the filter measured from the canceller itself
     then: it lifts the low band Speex cuts by about 14 dB, and is near 0 dB above 1 kHz"""
     h = inverse_low_cut_fir()
     assert len(h) == 1024

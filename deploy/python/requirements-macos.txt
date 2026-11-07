@@ -6,7 +6,3 @@
 # context manager degrades to a no-op and an MPS run leaks per call, so this
 # is a hard requirement on Apple Silicon, not an optional extra.
 pyobjc-core>=10.0
-
-# Echo cancellation on the microphone (recog/echo_cancel.py). Pinned: the inverse
-# of its low cut is measured from it at start, and the chain's numbers hold for it.
-pyaec==1.0.1

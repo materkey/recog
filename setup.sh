@@ -152,6 +152,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "Would install deploy/python/requirements.txt and deploy/python/requirements-web.txt"
     if [ "$HOST_OS" = "darwin" ]; then
         echo "Would also install deploy/python/requirements-macos.txt; all pip steps use deploy/python/constraints/macos.txt"
+        echo "Would build the echo canceller from rust/speexdsp-aec-py with pip and cargo, if cargo is available."
     fi
     if [ "$DO_ENV" -eq 1 ]; then
         for config in "$REPO_DIR/.env" "$REPO_DIR/recog/web/.env"; do
@@ -278,6 +279,7 @@ elif [ "$HOST_OS" = "darwin" ]; then
     else
         report_dep swiftc 0 required "needed to build sck_audio_capture and Recog.app"
     fi
+    check_cmd cargo optional "echo cancellation ([live] echo_cancel) needs the Rust echo canceller it builds"
 fi
 
 while IFS=$'\t' read -r name note; do
@@ -405,6 +407,20 @@ if [ "$HOST_OS" = "darwin" ]; then
 fi
 pip_install "${REQ_ARGS[@]}"
 info "Requirements installed"
+
+# Echo cancellation ([live] echo_cancel, macOS, off by default) runs the Rust
+# port of speexdsp's canceller, a Python module built here from rust/. Without
+# it the stage is not built and the microphone stays raw, so a missing cargo
+# or a failed build does not stop the installation.
+if [ "$HOST_OS" = "darwin" ]; then
+    if ! deps_have cargo; then
+        echo -e "  ${YELLOW}[absent]${NC} cargo — echo cancellation unavailable: $(deps_hint cargo), then rerun ./setup.sh"
+    elif pip_install "$REPO_DIR/rust/speexdsp-aec-py"; then
+        info "Echo canceller built (rust/speexdsp-aec-py)"
+    else
+        warn "The echo canceller was not built (rust/speexdsp-aec-py); echo cancellation stays unavailable"
+    fi
+fi
 
 if [ "$HOST_OS" = "linux" ]; then
     if deps_portaudio_ok; then

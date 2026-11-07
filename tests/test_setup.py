@@ -87,6 +87,8 @@ DEFAULT_STUBS = (
     "ffmpeg", "parec", "pactl", "pip", "npm", "node", "tmux", "claude",
     "jq", "swiftc", "launchctl", "systemctl", "curl",
 )
+# Builds the echo canceller on macOS (rust/speexdsp-aec-py).
+DEFAULT_STUBS += ("cargo",)
 
 COPY_FILES = (
     "setup.sh",
@@ -119,6 +121,9 @@ def repo(tmp_path):
     launcher.parent.mkdir(parents=True)
     launcher.write_text('#!/bin/sh\nexec "$@"\n')
     launcher.chmod(0o755)
+    # The echo canceller's Python package: setup.sh hands its directory to pip.
+    (dst / "rust/speexdsp-aec-py").mkdir(parents=True)
+    (dst / "rust/speexdsp-aec-py/pyproject.toml").write_text('[project]\nname = "speexdsp-aec"\n')
     return dst
 
 
@@ -359,6 +364,67 @@ def test_macos_pip_stages_all_apply_the_constraints_file(repo, stubs):
     for call in installs:
         assert "-c " in call and "deploy/python/constraints/macos.txt" in call, call
     assert any("deploy/python/requirements-macos.txt" in call for call in installs)
+
+
+def _echo_module_installs(result):
+    return [
+        c for c in pip_calls(result) if c.startswith("pip install") and "rust/speexdsp-aec-py" in c
+    ]
+
+
+def test_macos_with_cargo_setup_builds_the_echo_canceller_under_the_constraints(repo, stubs):
+    """given: macOS with cargo on PATH
+    when: setup runs
+    then: pip builds the Rust echo canceller, under the macOS constraints like every stage"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    [call] = _echo_module_installs(result)
+    assert "deploy/python/constraints/macos.txt" in call
+
+
+def test_macos_without_cargo_setup_goes_on_and_says_echo_cancellation_is_unavailable(repo, stubs):
+    """given: macOS without cargo (echo cancellation is off by default)
+    when: setup runs
+    then: it does not try the build, names rustup, and still finishes"""
+    (stubs[0] / "cargo").unlink()
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _echo_module_installs(result) == []
+    assert "echo cancellation" in result.stdout and "rustup" in result.stdout
+
+
+def test_macos_failed_echo_build_setup_goes_on_and_says_so(repo, stubs):
+    """given: macOS where the build of the echo canceller fails
+    when: setup runs
+    then: it reports the failure and finishes the rest"""
+    pip = stubs[0] / "pip"
+    pip.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "pip $*" >> "$STUB_LOG"\n'
+        'case "$*" in *speexdsp-aec-py*) exit 1 ;; esac\nexit 0\n'
+    )
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "echo canceller" in result.stdout and "not built" in result.stdout
+
+
+def test_linux_setup_does_not_build_the_echo_canceller(repo, stubs):
+    """given: Linux, where echo cancellation does not run
+    when: setup runs
+    then: no build"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert _echo_module_installs(result) == []
+
+
+def test_macos_dry_run_mentions_the_echo_canceller(repo, stubs):
+    result = run_setup(repo, stubs, "--dry-run", host_os="Darwin")
+
+    assert "rust/speexdsp-aec-py" in result.stdout
 
 
 def test_linux_does_not_apply_the_macos_constraints(repo, stubs):

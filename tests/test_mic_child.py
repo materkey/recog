@@ -559,7 +559,7 @@ def test_helper_is_only_asked_for_frames_with_a_stage(monkeypatch):
 def test_echo_switch_off_builds_no_stage(monkeypatch):
     """given: the switch off, the default
     when: the stage is asked for
-    then: there is none, and pyaec is not even imported"""
+    then: there is none, and the canceller is not even imported"""
     monkeypatch.setattr(INSTALL_CONFIG.live, "echo_cancel", False)
     monkeypatch.setitem(sys.modules, "recog.echo_cancel", None)
     assert create_echo_stage("screencapture", SR) is None
@@ -575,7 +575,7 @@ def test_echo_stage_needs_a_reference_to_exist(monkeypatch):
 
 
 def test_echo_stage_that_cannot_be_built_leaves_the_microphone_raw(monkeypatch, capsys):
-    """given: the switch on and pyaec missing
+    """given: the switch on and the canceller missing
     when: the stage is asked for
     then: there is none, the log says so, and nothing stops"""
     monkeypatch.setattr(INSTALL_CONFIG.live, "echo_cancel", True)
