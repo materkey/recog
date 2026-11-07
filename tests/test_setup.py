@@ -73,6 +73,7 @@ case "$*" in
   *recog.config*)       exit "${STUB_ASR_RC:-0}" ;;
   *sounddevice*)        exit "${STUB_PORTAUDIO_RC:-0}" ;;
   *prefetch_gigaam*)    exit "${STUB_PREFETCH_RC:-0}" ;;
+  *"print(INSTALL_CONFIG.asr.backend)"*) echo "${STUB_ASR_BACKEND:-local}"; exit 0 ;;
 esac
 exit 0
 """
@@ -124,6 +125,9 @@ def repo(tmp_path):
     # The echo canceller's Python package: setup.sh hands its directory to pip.
     (dst / "rust/speexdsp-aec-py").mkdir(parents=True)
     (dst / "rust/speexdsp-aec-py/pyproject.toml").write_text('[project]\nname = "speexdsp-aec"\n')
+    # The ASR backend "wavo"'s Python package, built only when that backend is chosen.
+    (dst / "rust/wavo-asr-py").mkdir(parents=True)
+    (dst / "rust/wavo-asr-py/pyproject.toml").write_text('[project]\nname = "wavo-asr"\n')
     return dst
 
 
@@ -419,6 +423,51 @@ def test_linux_setup_does_not_build_the_echo_canceller(repo, stubs):
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert _echo_module_installs(result) == []
+
+
+def _wavo_module_installs(result):
+    return [c for c in pip_calls(result) if c.startswith("pip install") and "rust/wavo-asr-py" in c]
+
+
+@pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
+def test_backend_wavo_with_cargo_setup_builds_the_wavo_module(repo, stubs, host_os):
+    """given: [asr] backend = "wavo" and cargo on PATH
+    when: setup runs
+    then: pip builds rust/wavo-asr-py, on either system"""
+    result = run_setup(
+        repo,
+        stubs,
+        *offline_args("--no-services"),
+        host_os=host_os,
+        env_extra={"STUB_ASR_BACKEND": "wavo"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(_wavo_module_installs(result)) == 1
+
+
+def test_backend_local_setup_does_not_build_the_wavo_module(repo, stubs):
+    """given: the default backend
+    when: setup runs
+    then: no wavo build, whose release build takes minutes"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert _wavo_module_installs(result) == []
+
+
+def test_backend_wavo_without_cargo_setup_goes_on_and_says_what_to_install(repo, stubs):
+    """given: backend wavo and no cargo
+    when: setup runs
+    then: no build attempt, rustup named, and the rest still runs (readiness then reports it)"""
+    (stubs[0] / "cargo").unlink()
+
+    result = run_setup(
+        repo, stubs, *offline_args("--no-services"), env_extra={"STUB_ASR_BACKEND": "wavo"}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _wavo_module_installs(result) == []
+    assert "wavo" in result.stdout and "rustup" in result.stdout
 
 
 def test_macos_dry_run_mentions_the_echo_canceller(repo, stubs):

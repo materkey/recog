@@ -343,6 +343,21 @@ stays unloaded while the gateway is healthy and loads lazily on the first
 failure; a circuit breaker routes around a dead gateway. Only worth it on a
 real LAN (`ping` RTT < 5 ms).
 
+## ASR on wavo
+
+`RECOG_ASR_BACKEND=wavo` (`[asr] backend = "wavo"`) runs the same GigaAM v3
+e2e_rnnt on [wavo](https://crates.io/crates/wavo), a Rust runtime, on the GPU:
+Metal on macOS, Vulkan on Linux. `./setup.sh` builds its Python module from
+`rust/wavo-asr-py` when this backend is set and cargo is on `PATH` (install Rust
+with rustup); without the module the services refuse to start and say so. The
+first start downloads the model (274 MB, Q8_0 GGUF) into the Hugging Face cache.
+
+Measured against the PyTorch model (`docs/experiments/2026-11-07-rust-asr-runtimes.md`):
+the same WER within 0.06 points and the same word timings, 6-12 times faster on an
+M3 Pro, 4.5 times on an RTX PRO 6000, about half the memory. It has no batch (the
+per-speaker clips run one after another) and a refine runs to its end instead of
+giving way to live mid-decode; at 60-100 ms per refine neither matters.
+
 ## Your name and Copilot profile
 
 On your first web UI visit, **Как к вам обращаться?** asks for your name and
@@ -383,7 +398,8 @@ still overrides it. The ones you are most likely to touch:
   (`recog/ws_origin.py`, mirroring the extension's `manifest.json`); if your
   conferences live on another host, add it **both** here and to the extension's
   `manifest.json` (that is a separate rebuild).
-- `RECOG_ASR_BACKEND`, `RECOG_ASR_REMOTE_URL` — see [Remote ASR](#remote-asr).
+- `RECOG_ASR_BACKEND`, `RECOG_ASR_REMOTE_URL` — see [Remote ASR](#remote-asr) and
+  [ASR on wavo](#asr-on-wavo).
 - `RECOG_COPILOT_AUTOSPAWN`, `RECOG_COPILOT_GRACE_S`, `RECOG_COPILOT_MCP_URL` —
   see [Copilot](#copilot).
 - `CLAUDE_MODEL` and `CODEX_MODEL` — legacy

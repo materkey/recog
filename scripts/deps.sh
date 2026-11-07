@@ -139,8 +139,9 @@ deps_portaudio_ok() {
 }
 
 # Prints nothing and returns 0 when the effective ASR config can serve. The
-# one failure mode worth blocking on is RECOG_ASR_BACKEND=remote with no
-# gateway URL: build_asr() raises at startup, so every service would crash-loop.
+# failure modes worth blocking on are RECOG_ASR_BACKEND=remote with no
+# gateway URL (build_asr() raises at startup) and RECOG_ASR_BACKEND=wavo without
+# the wavo_asr module (the first model load raises): every service would crash-loop.
 deps_asr_config_check() {
     "$(deps_python)" -c '
 import sys
@@ -174,7 +175,25 @@ if asr.backend == "remote" and not asr.remote_url.strip():
           "add the gateway URL as [asr] remote_url to config.toml (build_asr() "
           "refuses to fall back to the local model silently: different RAM and latency)")
     sys.exit(1)
+if asr.backend == "wavo":
+    try:
+        import wavo_asr  # noqa: F401
+    except ImportError as error:
+        print(f"RECOG_ASR_BACKEND=wavo but the wavo_asr module is not installed ({error}) — "
+              "run ./setup.sh with cargo on PATH; it builds rust/wavo-asr-py")
+        sys.exit(1)
 ' "$DEPS_REPO_DIR" 2>&1
+}
+
+# The effective [asr] backend (RECOG_ASR_BACKEND): local, remote or wavo. Empty
+# when the configuration cannot be read; deps_asr_config_check reports why.
+deps_asr_backend() {
+    "$(deps_python)" -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from recog.install_config import INSTALL_CONFIG
+print(INSTALL_CONFIG.asr.backend)
+' "$DEPS_REPO_DIR" 2> /dev/null || true
 }
 
 # --- readiness -------------------------------------------------------------

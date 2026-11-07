@@ -154,6 +154,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
         echo "Would also install deploy/python/requirements-macos.txt; all pip steps use deploy/python/constraints/macos.txt"
         echo "Would build the echo canceller from rust/speexdsp-aec-py with pip and cargo, if cargo is available."
     fi
+    echo "Would build the ASR backend wavo from rust/wavo-asr-py with pip and cargo, if [asr] backend is wavo."
     if [ "$DO_ENV" -eq 1 ]; then
         for config in "$REPO_DIR/.env" "$REPO_DIR/recog/web/.env"; do
             if [ -f "$config" ]; then
@@ -419,6 +420,20 @@ if [ "$HOST_OS" = "darwin" ]; then
         info "Echo canceller built (rust/speexdsp-aec-py)"
     else
         warn "The echo canceller was not built (rust/speexdsp-aec-py); echo cancellation stays unavailable"
+    fi
+fi
+
+# The ASR backend "wavo" ([asr] backend, not the default) runs GigaAM on wavo, a
+# Rust runtime, from a Python module built here from rust/. It is built only when
+# that backend is chosen, since its release build takes minutes; when it is
+# missing, the readiness check refuses to start the services and says why.
+if [ "$(deps_asr_backend)" = "wavo" ]; then
+    if ! deps_have cargo; then
+        echo -e "  ${YELLOW}[absent]${NC} cargo — the ASR backend wavo cannot be built: $(deps_hint cargo), then rerun ./setup.sh"
+    elif pip_install "$REPO_DIR/rust/wavo-asr-py"; then
+        info "ASR backend wavo built (rust/wavo-asr-py)"
+    else
+        warn "The ASR backend wavo was not built (rust/wavo-asr-py)"
     fi
 fi
 

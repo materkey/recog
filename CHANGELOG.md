@@ -21,6 +21,15 @@ reasoning.
 
 ### Changed
 
+- **ASR backend `wavo` (opt-in): the same GigaAM on a Rust runtime, 4-12 times
+  faster, with half the memory.** Set `[asr] backend = "wavo"` in
+  `~/.config/recog/config.toml` (or `RECOG_ASR_BACKEND=wavo`), install Rust with
+  rustup (https://rustup.rs), run `./setup.sh` (it builds `rust/wavo-asr-py`) and
+  `./recog-service.sh restart`. The first start downloads the 274 MB model into the
+  Hugging Face cache. Its WER matches PyTorch's within 0.06 points
+  (`docs/experiments/2026-11-07-rust-asr-runtimes.md`); a refine cannot be stopped
+  part-way, which at 60-100 ms it does not need. Back with `backend = "local"`.
+
 - **Echo cancellation gives the same output as before, with less load.** The port
   is bit-exact with pyaec 1.0.1 and runs a block in about a third of the time,
   without holding Python's interpreter lock.

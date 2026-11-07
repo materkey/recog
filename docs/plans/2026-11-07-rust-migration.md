@@ -6,6 +6,7 @@ Status: in progress.
 - Step 0 is designed: [golden sessions](2026-11-07-golden-sessions-design.md).
 - Step 2 is done: the echo stage runs `speexdsp-aec` (`rust/`) instead of pyaec, and
   `scripts/check.sh` and CI check the Rust workspace.
+- Step 3 has its first half: the opt-in ASR backend `wavo` behind `build_asr()`.
 
 ## Goal
 
@@ -61,6 +62,13 @@ where they can.
    torchaudio leave the dependencies. `wavo` has no batch and no abort; both are
    unnecessary at its speed, so the adapter runs clips one after another and lets a
    refine finish.
+   - **Adapter done 2026-11-07**, opt-in: `RECOG_ASR_BACKEND=wavo` (`recog/wavo_backend.py`,
+     module from `rust/wavo-asr-py`). Through recog's own refine call on 80 labelled
+     windows it gives the same text as PyTorch on 69, the same word starts and ends
+     (p95 Δ 0 ms), in 84 ms against 865 ms.
+   - Still to do: make it the default once a real meeting has run on it, then drop
+     torch. Today `recog/remote_asr.py` imports `recog/asr.py`, so torch is still
+     imported, though no PyTorch model is loaded.
 4. **Audio capture.** System audio (`parec`, `sck_audio_capture`, the restart policy),
    the microphone through cpal instead of sounddevice and `mic_worker`, the capture
    buffer. Checked against the golden recordings.

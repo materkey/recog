@@ -18,9 +18,11 @@
 # phone = "Phone"
 
 [asr]
-# RECOG_ASR_BACKEND: "local" (default) or "remote", which offloads all four
+# RECOG_ASR_BACKEND: "local" (default), "remote", which offloads all four
 # GigaAM paths to an OpenAI-Whisper-compatible gateway (ADR-0020) with a lazy
-# local fallback and a circuit breaker. Enable only on a confirmed LAN.
+# local fallback and a circuit breaker (enable only on a confirmed LAN), or
+# "wavo", the same model on the Rust runtime wavo on the GPU; ./setup.sh builds
+# it with cargo (docs/usage.md, "ASR on wavo").
 # backend = "local"
 # RECOG_ASR_REMOTE_URL: gateway base URL. No default: backend = "remote"
 # without it fails at startup instead of silently running on-device.

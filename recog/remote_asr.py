@@ -40,7 +40,7 @@ import time
 import traceback
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 
 import httpx
 import numpy as np
@@ -51,6 +51,9 @@ from gigaam.types import TranscriptionResult, Word
 from .asr import ASRModule
 from .log_utils import log_rate_limited
 from .models import Segment
+
+if TYPE_CHECKING:
+    from .wavo_backend import WavoASR
 
 
 class RemoteASRError(Exception):
@@ -567,10 +570,11 @@ class FallbackASR:
         )
 
 
-def build_asr() -> "Union[ASRModule, FallbackASR]":
+def build_asr() -> "Union[ASRModule, FallbackASR, WavoASR]":
     """Единственный конструктор ASR для caller'ов.
 
     ``RECOG_ASR_BACKEND == "remote"`` -> ``FallbackASR`` поверх шлюза;
+    ``"wavo"`` -> ``WavoASR`` (та же модель на Rust-рантайме wavo, GPU);
     иначе чистый локальный ``ASRModule`` (committed default — поведение
     репозитория не меняется, пока пользователь не выставит env).
 
@@ -598,4 +602,8 @@ def build_asr() -> "Union[ASRModule, FallbackASR]":
             fail_threshold=settings.circuit_fails,
             open_seconds=settings.circuit_open_s,
         )
+    if settings.backend == "wavo":
+        from .wavo_backend import WavoASR
+
+        return WavoASR()
     return ASRModule()

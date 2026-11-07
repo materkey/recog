@@ -37,6 +37,7 @@ from .install_config import INSTALL_CONFIG
 from .log_utils import log_rate_limited
 from .mic_capture import ChildMicCapture
 from .remote_asr import ASRTemporarilyUnavailable, FallbackASR, build_asr
+from .wavo_backend import WavoASR
 from .refine import RefineAborted, RefineResult, RefineWorker, make_abortable_decode
 from .system_audio import DIGITAL_SILENCE_RESTART_S, RESTART_BACKOFF_S
 from .config import get_data_dir
@@ -1167,6 +1168,9 @@ class LiveTranscriber:
                     return asr.transcribe_with_timestamps(pcm_samples)
                 if should_abort():
                     raise RefineAborted()
+                if isinstance(asr, WavoASR):
+                    # No hook inside wavo's decode: a refine runs to its end.
+                    return asr.transcribe_with_timestamps(pcm_samples)
                 model = getattr(asr, "model", None)
                 if model is None:
                     model = asr.load_model(quiet=True)
