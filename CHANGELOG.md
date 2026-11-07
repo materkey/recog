@@ -21,6 +21,11 @@ reasoning.
 
 ### Changed
 
+- **System audio is no longer put under your own name.** When the conference marked
+  you as the speaker (your microphone hearing what the speakers play, a podcast for
+  one), the system audio of that moment was attributed to you; it now goes to a
+  remote participant or stays "Unknown".
+
 - **ASR backend `wavo` (opt-in): the same GigaAM on a Rust runtime, 4-12 times
   faster, with half the memory.** Set `[asr] backend = "wavo"` in
   `~/.config/recog/config.toml` (or `RECOG_ASR_BACKEND=wavo`), install Rust with

@@ -6218,3 +6218,44 @@ async def test_nobody_speaking_when_bob_arrives_with_since_then_bob_is_recorded_
     history = bridge.get_speaker_history()
     assert [e.speaker_name for e in history] == ["Alice", None, "Bob"]
     assert history[-1].timestamp >= now
+
+
+def _local_speaker_update(pid, name):
+    update = _speaker_update(pid, name)
+    update["speaker"]["isLocal"] = True
+    return update
+
+
+@pytest.mark.asyncio
+async def test_only_the_user_speaking_when_system_audio_is_attributed_then_no_speaker():
+    """
+    given: the conference marks the user as the active speaker (their microphone hears
+           a podcast from the speakers) and no one else speaks
+    when:  system audio of that window is attributed
+    then:  no speaker: the user's own voice never plays from the speakers, so system
+           audio is not theirs, and live falls back to its other rules
+    """
+    bridge = KTalkBridge()
+    now = time.time()
+    await bridge._process_message(_local_speaker_update("me", "Me"))
+    bridge._speaker_history[-1].timestamp = now - 3.0
+
+    assert bridge.get_dominant_speaker_for_period(now - 3.0, now) is None
+    assert bridge.get_current_speaker() is None
+
+
+@pytest.mark.asyncio
+async def test_user_spoke_longer_than_alice_when_system_audio_is_attributed_then_alice():
+    """
+    given: in one window the user spoke 2 s and Alice 1 s
+    when:  the window's system audio is attributed
+    then:  Alice, the only remote speaker in it
+    """
+    bridge = KTalkBridge()
+    now = time.time()
+    await bridge._process_message(_local_speaker_update("me", "Me"))
+    bridge._speaker_history[-1].timestamp = now - 3.0
+    await bridge._process_message(_speaker_update("a", "Alice"))
+    bridge._speaker_history[-1].timestamp = now - 1.0
+
+    assert bridge.get_dominant_speaker_for_period(now - 3.0, now) == "Alice"

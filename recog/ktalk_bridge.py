@@ -466,11 +466,14 @@ class KTalkBridge:
 
         Должна вызываться только когда self._lock уже захвачен.
         """
+        # The user's own voice never plays from the speakers, so system audio is
+        # never theirs; the conference still marks them active when their
+        # microphone hears what the speakers play.
         if self._is_speaking and self._current_speaker:
-            return self._current_speaker
+            return None if self._current_is_local else self._current_speaker
 
         # Если никто не говорит, проверяем "память" о последнем спикере
-        if self._last_speaker:
+        if self._last_speaker and not self._last_is_local:
             elapsed = time.time() - self._last_speaker_time
             if elapsed < self.SPEAKER_MEMORY_SECONDS:
                 return self._last_speaker
@@ -512,7 +515,8 @@ class KTalkBridge:
             speaker_durations: Dict[str, float] = {}
 
             for i, event in enumerate(relevant_events):
-                if event.speaker_name is None:
+                # The user's own turns count as silence: see _get_current_speaker_unlocked.
+                if event.speaker_name is None or event.is_local:
                     continue
 
                 event_start = max(event.timestamp, start_time)
