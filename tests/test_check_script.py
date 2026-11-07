@@ -78,7 +78,7 @@ def stub_bin(tmp_path):
     bin_dir.mkdir()
     (bin_dir / "python3").write_text(PYTHON_STUB)
     (bin_dir / "python3").chmod(0o755)
-    for tool in ("shellcheck", "actionlint", "gitleaks"):
+    for tool in ("shellcheck", "actionlint", "gitleaks", "cargo"):
         (bin_dir / tool).write_text(TOOL_STUB)
         (bin_dir / tool).chmod(0o755)
     return bin_dir, tmp_path / "stub.log"
@@ -226,6 +226,73 @@ def test_linter_finding_when_checking_then_run_stops_before_the_suite(repo, stub
     assert result.returncode != 0
     assert "check: OK" not in result.stdout
     assert not any("pytest" in c for c in result.calls)
+
+
+def add_rust_workspace(repo):
+    (repo / "rust").mkdir()
+    (repo / "rust/Cargo.toml").write_text("[workspace]\n")
+
+
+def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_before_pytest(
+    repo, stub_bin
+):
+    """given: a checkout with the Rust workspace and no golden data configured
+    when: the checks run
+    then: rustfmt, clippy with warnings as errors and the data-free tests run, and the
+    golden parity tests do not"""
+    add_rust_workspace(repo)
+
+    result = run_check(repo, stub_bin)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "=== rust ===" in result.stdout
+    cargo = [c for c in result.calls if c.startswith("cargo ")]
+    assert cargo == [
+        "cargo fmt --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test -p speexdsp-aec --lib --test properties --test cli",
+        "cargo test -p speexdsp-aec --doc",
+    ]
+    assert result.calls.index(cargo[-1]) < next(
+        i for i, c in enumerate(result.calls) if "pytest" in c
+    )
+
+
+def test_golden_data_when_configured_then_parity_tests_run_too(repo, stub_bin):
+    """given: SPEEXDSP_AEC_GOLDEN pointing at the port's golden data
+    when: the checks run
+    then: the bit-exactness tests against pyaec run as well"""
+    add_rust_workspace(repo)
+
+    result = run_check(repo, stub_bin, env_extra={"SPEEXDSP_AEC_GOLDEN": str(repo)})
+
+    assert "cargo test -p speexdsp-aec --test parity --test fft_parity" in result.calls
+
+
+def test_rust_finding_when_checking_then_run_stops_before_the_suite(repo, stub_bin):
+    """given: a clippy or rustfmt finding
+    when: the checks run
+    then: they fail and pytest does not start"""
+    add_rust_workspace(repo)
+
+    result = run_check(repo, stub_bin, env_extra={"STUB_CARGO_RC": "1"})
+
+    assert result.returncode != 0
+    assert not any("pytest" in c for c in result.calls)
+
+
+def test_rust_workspace_when_cargo_is_missing_then_the_run_fails_with_a_hint(repo, stub_bin):
+    """given: the Rust workspace but no cargo on PATH
+    when: the checks run
+    then: they fail and say where cargo comes from"""
+    add_rust_workspace(repo)
+    bin_dir, _ = stub_bin
+    (bin_dir / "cargo").unlink()
+
+    result = run_check(repo, stub_bin)
+
+    assert result.returncode != 0
+    assert "rustup" in result.stderr
 
 
 def test_shell_scripts_when_linted_then_each_listed_script_follows_its_sources(repo, stub_bin):
@@ -424,6 +491,16 @@ def test_ci_installs_the_linters_check_script_requires(workflow):
 
 def test_ci_runs_the_check_script(workflow):
     assert any(step.get("run", "").strip() == "./scripts/check.sh" for step in _steps(workflow))
+
+
+def test_ci_builds_the_echo_canceller_module_for_the_suite(workflow):
+    """The Python test of the Rust echo canceller skips without the module, so CI
+    builds it the way setup.sh does, under the same pip constraints."""
+    assert "pip install $PIP_ARGS ./rust/speexdsp-aec-py" in _run_script(workflow)
+
+
+def test_ci_has_the_rust_components_check_script_runs(workflow):
+    assert "rustup component add clippy rustfmt" in _run_script(workflow)
 
 
 @pytest.mark.parametrize(

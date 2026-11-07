@@ -104,6 +104,28 @@ else
     "$GITLEAKS" dir "${GITLEAKS_ARGS[@]}" .
 fi
 
+# The Rust workspace (rust/Cargo.toml): format, lint, the tests that need no data.
+# The parity tests against pyaec need the port's golden data, named by
+# SPEEXDSP_AEC_GOLDEN (rust/speexdsp-aec/README.md). Run from rust/ so cargo reads
+# rust/.cargo/config.toml.
+if [ -f rust/Cargo.toml ]; then
+    step "rust"
+    if ! command -v cargo > /dev/null 2>&1; then
+        echo "check: cargo not found (install Rust with rustup, https://rustup.rs)" >&2
+        exit 1
+    fi
+    (
+        cd rust
+        cargo fmt --check
+        cargo clippy --workspace --all-targets -- -D warnings
+        cargo test -p speexdsp-aec --lib --test properties --test cli
+        cargo test -p speexdsp-aec --doc
+        if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
+            cargo test -p speexdsp-aec --test parity --test fft_parity
+        fi
+    )
+fi
+
 step "CLI help"
 "$PYTHON" -m recog --help > /dev/null
 

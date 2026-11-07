@@ -81,6 +81,22 @@ jobs:
           # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
           pip install $PIP_ARGS "${reqs[@]}"
 
+      # The Rust workspace: check.sh formats, lints and tests it, and the suite tests
+      # the echo canceller's Python module, built from it as setup.sh builds it.
+      - name: Install Rust components
+        shell: bash
+        run: rustup component add clippy rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build the echo canceller module
+        shell: bash
+        run: |
+          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
+          pip install $PIP_ARGS ./rust/speexdsp-aec-py
+
       - name: Install quality tools
         shell: bash
         run: |

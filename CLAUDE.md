@@ -468,7 +468,7 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 ## Testing
 
 ```bash
-./scripts/check.sh                        # everything below plus shellcheck/actionlint/gitleaks and the Ruff/ESLint check of lines changed since the local origin/main
+./scripts/check.sh                        # everything below plus shellcheck/actionlint/gitleaks, cargo fmt/clippy/test of rust/, and the Ruff/ESLint check of lines changed since the local origin/main
 RECOG_QUALITY_BASE=origin/main ./scripts/check.sh   # what CI runs: the full quality gate replaces plain pytest
 
 python -m pytest tests/ -q -m "not e2e"   # unit tests (e2e needs playwright + a real conference)

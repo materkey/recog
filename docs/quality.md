@@ -93,6 +93,15 @@ shellcheck and actionlint are pinned in `deploy/python/requirements-quality.txt`
 gitleaks has no pip distribution: CI downloads release 8.30.1 and checks its
 sha256; locally install it from a package manager (`brew install gitleaks`).
 
+## Rust checks
+
+With the `rust/` workspace present, `scripts/check.sh` runs `cargo fmt --check`,
+`cargo clippy --workspace --all-targets -- -D warnings` and the echo canceller's
+tests that need no data, from `rust/`. With `SPEEXDSP_AEC_GOLDEN` set it also runs
+the parity tests against pyaec (`rust/speexdsp-aec/README.md`). cargo comes from
+rustup (https://rustup.rs) with the clippy and rustfmt components; CI uses the
+runner's stable toolchain, so a new clippy lint can fail a run that passed before.
+
 CRAP calculation, coverage joins, function identity and duplicate detection come
 from pinned **crapkit 0.7.3**, not a local complexity implementation. It uses the
 smaller standard/modified cyclomatic complexity and per-function branch coverage
