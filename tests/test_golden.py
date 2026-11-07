@@ -208,3 +208,18 @@ def test_sessions_of_every_age_remove_old_sessions_keeps_recent_and_marked_ones(
 
     assert sorted(p.name for p in tmp_path.iterdir()) == ["notes.txt", "old-keep", "recent"]
     assert [p.name for p in removed] == ["old"]
+
+
+def test_open_session_read_session_sees_every_event_so_far(tmp_path):
+    """given: a session still being recorded (the live process runs for days)
+    when: it is read, or the process is killed now
+    then: every event so far is on disk, with its audio"""
+    recorder = GoldenRecorder(tmp_path)
+    recorder.frame(1, {"type": "clock_sync"})
+    recorder.capture("mic", np.ones(160, dtype=np.float32), 0.0)
+
+    events = list(read_session(tmp_path))
+
+    assert [e["kind"] for e in events] == ["frame", "capture"]
+    assert len(events[1]["audio"]) == 160
+    recorder.close()

@@ -63,7 +63,9 @@ class GoldenRecorder:
         self._clock, self._wall = clock, wall
         self._start = clock()
         self._lock = threading.Lock()
-        self._events = open(self.directory / EVENTS, "a", encoding="utf-8")
+        # Line-buffered, and audio flushed before its event: the process runs for days
+        # and can be killed, and a session is read while it is still being written.
+        self._events = open(self.directory / EVENTS, "a", encoding="utf-8", buffering=1)
         self._audio = open(self.directory / AUDIO, "ab")
 
     def _write(self, kind: str, fields: dict, audio: np.ndarray | None = None) -> None:
@@ -76,6 +78,7 @@ class GoldenRecorder:
                     data = np.ascontiguousarray(audio).tobytes()
                     event.update(dtype=audio.dtype.str, offset=self._audio.tell(), nbytes=len(data))
                     self._audio.write(data)
+                    self._audio.flush()
                 event.update(fields)
                 self._events.write(json.dumps(event, ensure_ascii=False) + "\n")
             except OSError as error:
