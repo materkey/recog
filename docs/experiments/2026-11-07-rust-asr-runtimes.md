@@ -4,7 +4,7 @@ Step 1 of [the move to Rust](../plans/2026-11-07-rust-migration.md). The questio
 whether a Rust runtime can replace recog's PyTorch GigaAM, so that Python can go
 entirely.
 
-**Outcome.** On macOS, yes: `wavo` 0.4.0 on the Metal GPU.
+**Outcome.** Yes: `wavo` 0.4.0 on the GPU, Metal on macOS and Vulkan on Linux.
 
 - Its WER matches PyTorch within 0.06 points.
 - It disagrees with PyTorch on 0.3-0.9 % of the words; `gigastt`, the other runtime,
@@ -12,8 +12,8 @@ entirely.
 - It returns the same word timings.
 - It is 6× faster on the live 3 s windows and 12× faster on refine windows. A 20 s
   refine takes 60-100 ms, which makes the decoder abort hook unnecessary.
-
-On Linux, not decided: the Z270XX GPU was not measured (below).
+- On the Z270XX GPU (Vulkan) the same WER, 4.5× faster than PyTorch on CUDA, with a
+  quarter of its memory. `gigastt` does not run on that card's CUDA (below).
 
 ## Runtimes
 
@@ -74,7 +74,8 @@ The figure is the time from that request until the call returns.
 **Hosts.**
 - MacBook Pro M3 Pro, macOS 27.0.1. The live service ran its ASR remotely during the
   runs, so the GPU was free and the CPU lightly loaded.
-- Z270XX: 32 cores, CPU only, `nice`, 8 threads.
+- Z270XX: 32 cores and an RTX PRO 6000 Blackwell (driver 615.71). CPU runs `nice`, 8
+  threads; GPU runs with the LLM asleep (the `comfyui` lease held), about 58 GB free.
 
 ## Results: Mac
 
@@ -104,18 +105,26 @@ Labelled corpus, WER %:
 - The labelled "live" figures are left out: that shape holds 8 long utterances there,
   not 3 s windows.
 
-## Results: Z270XX, CPU
+## Results: Z270XX
 
-Labelled corpus, 8 threads:
+Labelled corpus, CPU, 8 threads:
 
 | run | FLEURS ru | ToneWebinars | refine RTF | peak RSS MB | abort ms |
 |---|---:|---:|---:|---:|---:|
 | PyTorch CPU | 4.21 | 14.03 | 0.020 | 2843 | — |
 | gigastt CPU | 4.28 | 14.08 | 0.022 | 1559 | 397 |
 
-The GPU was not measured: vLLM holds 90 of its 98 GB and the remote GigaAM backend that
-serves the live service sits on the rest. The CUDA build of the harness is ready
-(`--features wavo,gigastt,cuda`). `wavo` has no CPU backend; on Linux it needs Vulkan.
+Labelled corpus, GPU:
+
+| run | FLEURS ru | ToneWebinars | live p50 ms | 8 clips ms | refine RTF | peak RSS MB | words differing from PyTorch % | refine text identical % | word start Δ p50/p95 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| PyTorch CUDA | 4.21 | 14.02 | 228 | 429 | 0.0103 | 4418 | — | — | — |
+| wavo Vulkan | 4.22 | 14.08 | 40 | 318 | 0.0023 | 1159 | 0.27 | 92 | 0 / 10 |
+
+- `wavo` loads in 28 s on Vulkan, against 2 s for PyTorch, once per process.
+- `gigastt` on CUDA fails on the first clip: `cudaErrorNoKernelImageForDevice` in the
+  encoder. The ONNX Runtime CUDA build it downloads has no kernels for Blackwell
+  (sm_120); running it would mean building ONNX Runtime from source.
 
 ## What it means for the plan
 
@@ -134,14 +143,15 @@ serves the live service sits on the rest. The CUDA build of the harness is ready
   pure Rust, so pin it exactly, keep its source vendored or forked, and repeat this run
   before any upgrade. `gigastt` is older and has a real abort, but it is slower than
   PyTorch on the Mac and its INT8 encoder drifts further (1-3 % of words).
-- **Linux** stays on PyTorch until a GPU run on Z270XX compares `wavo` (Vulkan) with
-  `gigastt` (CUDA). On CPU, `gigastt` matches PyTorch at about half the memory.
+- **Linux:** `wavo` on Vulkan, as on the Mac. `gigastt` matches PyTorch on CPU at
+  about half the memory, but its CUDA build does not run on Blackwell. `wavo` has no
+  CPU backend, so a Linux host without a GPU stays on PyTorch.
 
 ## Reproduce
 
 ```bash
 B=scripts/benchmarks/rust_asr
-(cd $B/harness && cargo build --release --features wavo,gigastt,coreml)   # cuda on Linux
+(cd $B/harness && cargo build --release --features wavo,gigastt,coreml)   # cuda on Linux, PATH with /opt/cuda/bin
 gigastt download --model-variant e2e_rnnt --model-dir .local/rust_asr/gigastt
 venv-gigaam/bin/python $B/prep.py my-sources.json .local/rust_asr/corpus   # from sources.example.json
 python $B/prep_labelled.py .local/rust_asr/corpus-labelled 300             # needs `datasets`

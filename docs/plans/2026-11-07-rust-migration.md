@@ -2,7 +2,7 @@
 
 Status: in progress.
 - Step 1 is done: [the ASR experiment](../experiments/2026-11-07-rust-asr-runtimes.md)
-  picked `wavo` on the Mac; Linux is open.
+  picked `wavo`, on Metal on the Mac and on Vulkan on Linux.
 - Step 0 is designed: [golden sessions](2026-11-07-golden-sessions-design.md).
 - Step 2 is done: the echo stage runs `speexdsp-aec` (`rust/`) instead of pyaec, and
   `scripts/check.sh` and CI check the Rust workspace.
@@ -46,8 +46,9 @@ where they can.
    - On the Mac, `wavo` 0.4.0 on Metal matches PyTorch's WER within 0.06 points and
      gives the same word timings. It is 6-12× faster, and a 60-100 ms refine needs no
      abort hook.
-   - On Linux, `gigastt` matches PyTorch on CPU. The GPU run on Z270XX waits for free
-     GPU memory.
+   - On Linux, `wavo` on Vulkan has the same WER and is 4.5× faster than PyTorch on
+     CUDA. `gigastt` matches PyTorch on CPU, but its CUDA build has no Blackwell
+     kernels.
 2. **PyO3 pilot.** `speexdsp-aec` replaces pyaec in `recog/echo_cancel.py`; the crate
    moves into the repository with that commit. **Done 2026-11-07.**
    - The module is bit-exact with pyaec and three times faster per block, and runs
