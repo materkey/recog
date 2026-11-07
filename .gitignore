@@ -77,3 +77,6 @@ _bmad/
 
 # BMAD skills are installed by the BMAD tooling, not tracked
 /.agents/skills/bmad-*/
+
+# Rust build output
+target/

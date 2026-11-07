@@ -1,0 +1,35 @@
+[
+ {
+  "name": "example",
+  "kind": "example",
+  "path": "~/projects/recog/.local/examples/example.mp4",
+  "start": 0,
+  "duration": 1800
+ },
+ {
+  "name": "example_5min",
+  "kind": "example",
+  "path": "~/projects/recog/.local/examples/example_5min.wav",
+  "duration": 300
+ },
+ {
+  "name": "vlad_sample",
+  "kind": "example",
+  "path": "~/projects/recog/.local/examples/vlad_sample.wav",
+  "duration": 60
+ },
+ {
+  "name": "meeting_mic",
+  "kind": "meeting",
+  "path": "~/.recog/meetings/<meeting id>/audio_mic.wav",
+  "start": 0,
+  "duration": 900
+ },
+ {
+  "name": "meeting_system",
+  "kind": "meeting",
+  "path": "~/.recog/meetings/<meeting id>/audio_system.wav",
+  "start": 0,
+  "duration": 900
+ }
+]
