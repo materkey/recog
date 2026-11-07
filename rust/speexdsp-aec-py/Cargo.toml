@@ -1,0 +1,15 @@
+[package]
+name = "speexdsp-aec-py"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+description = "Python module of speexdsp-aec, the safe Rust port of speexdsp's echo canceller"
+publish = false
+
+[lib]
+name = "speexdsp_aec"
+crate-type = ["cdylib"]
+
+[dependencies]
+aec = { package = "speexdsp-aec", path = "../speexdsp-aec" }
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py312"] }
