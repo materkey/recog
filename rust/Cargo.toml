@@ -1,9 +1,10 @@
 # The Rust code of recog (docs/plans/2026-11-07-rust-migration.md). Build and test from
 # this directory; speexdsp-aec/README.md says which tests need its golden data. The
-# Python module is built by pip from speexdsp-aec-py (maturin): see setup.sh.
+# Python modules are built by pip from speexdsp-aec-py and wavo-asr-py (maturin):
+# see setup.sh.
 [workspace]
 resolver = "3"
-members = ["speexdsp-aec", "speexdsp-aec-py"]
+members = ["speexdsp-aec", "speexdsp-aec-py", "wavo-asr-py"]
 
 [profile.release]
 lto = "fat"

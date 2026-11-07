@@ -1,0 +1,10 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "wavo-asr"
+version = "0.1.0"
+description = "GigaAM v3 e2e_rnnt on wavo (GPU through wgpu), text and word timings"
+requires-python = ">=3.12"
+license = { text = "MIT" }

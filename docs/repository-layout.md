@@ -14,7 +14,7 @@ records are grouped separately, making it clear where a new file belongs.
 | `recog/asr_server/` | Optional gateway and GigaAM server, launched independently of the client services |
 | `recog/prompts/` | Shared AI summary templates |
 | `recog/native/macos/` | ScreenCaptureKit Swift helper source |
-| `rust/` | Rust workspace: the echo canceller `speexdsp-aec` ([the move to Rust](plans/2026-11-07-rust-migration.md)) |
+| `rust/` | Rust workspace: the echo canceller `speexdsp-aec` and `wavo-asr-py`, the module of the ASR backend `wavo` ([the move to Rust](plans/2026-11-07-rust-migration.md)) |
 | `browser-extension/` | Chrome extension source, platform adapters, build and tests |
 | `deploy/python/` | Client/server requirements and verified macOS dependency constraints |
 | `deploy/node/` | Pinned JavaScript quality tools (ESLint) for `scripts/quality.py` |
