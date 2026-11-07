@@ -70,7 +70,10 @@ mod tests {
         let cases = [
             (Error::InvalidFrameSize { frame_size: 7, reason: "is odd" }, "frame size 7 is odd"),
             (Error::InvalidFilterLength { filter_length: 0, reason: "is zero" }, "filter length 0 is zero"),
-            (Error::UnsupportedSamplingRate { sampling_rate: 48_000, reason: "is too high" }, "sampling rate 48000 Hz is too high"),
+            (
+                Error::UnsupportedSamplingRate { sampling_rate: 48_000, reason: "is too high" },
+                "sampling rate 48000 Hz is too high",
+            ),
             (
                 Error::FrameLength { expected: 160, mic: 80, far_end: 160, out: 160 },
                 "every buffer must be one frame of 160 samples (microphone 80, far end 160, output 160)",

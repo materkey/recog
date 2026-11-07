@@ -15,7 +15,8 @@ fn case(name: &str, frames: usize, far_frames: usize, meta: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("speex-aec-cli-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    let bytes = |count: usize| -> Vec<u8> { (0..count * 8).flat_map(|i| ((i as i16 * 97) % 3000).to_le_bytes()).collect() };
+    let bytes =
+        |count: usize| -> Vec<u8> { (0..count * 8).flat_map(|i| ((i as i16 * 97) % 3000).to_le_bytes()).collect() };
     fs::write(dir.join("meta.json"), meta).unwrap();
     fs::write(dir.join("mic.i16"), bytes(frames)).unwrap();
     fs::write(dir.join("ref.i16"), bytes(far_frames)).unwrap();
@@ -66,7 +67,8 @@ fn the_written_output_is_what_the_library_gives_for_the_same_samples() {
 
 #[test]
 fn usage_errors_exit_with_2() {
-    for args in [vec![], vec!["--bogus"], vec!["dir", "--write"], vec!["dir", "--rate"], vec!["dir", "--rate", "fast"]] {
+    for args in [vec![], vec!["--bogus"], vec!["dir", "--write"], vec!["dir", "--rate"], vec!["dir", "--rate", "fast"]]
+    {
         let output = bin().args(&args).output().unwrap();
         assert_eq!(output.status.code(), Some(2), "{args:?}: {}", stderr(&output));
         assert!(!stderr(&output).is_empty());

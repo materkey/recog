@@ -5,7 +5,7 @@
 //! The recursion of `kf_shuffle` / `kf_work` is kept as it is: it fixes the order
 //! of every rounding, which is what bit-exactness depends on.
 
-use super::butterfly::{bfly2, bfly3, bfly4, bfly5, bfly_generic};
+use super::butterfly::{bfly_generic, bfly2, bfly3, bfly4, bfly5};
 use crate::fixed::{div32, pshr32, shl32};
 use crate::math::cos_norm;
 
@@ -204,7 +204,8 @@ impl ComplexFft {
     /// `kiss_fft(cfg, fin, fout)` on interleaved samples, for the tests.
     #[cfg(test)]
     pub(crate) fn transform(&self, fin: &[Cpx], fout: &mut [Cpx]) {
-        let (mut re, mut im): (Vec<i16>, Vec<i16>) = self.perm.iter().map(|&s| (fin[s as usize].r, fin[s as usize].i)).unzip();
+        let (mut re, mut im): (Vec<i16>, Vec<i16>) =
+            self.perm.iter().map(|&s| (fin[s as usize].r, fin[s as usize].i)).unzip();
         self.run(&mut re, &mut im);
         for (o, (r, i)) in fout.iter_mut().zip(re.into_iter().zip(im)) {
             *o = Cpx { r, i };

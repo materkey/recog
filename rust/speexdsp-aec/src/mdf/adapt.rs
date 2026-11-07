@@ -5,9 +5,7 @@
 use super::cancel::FrameEnergies;
 use super::spectral::{WEIGHT_SHIFT, adjust_prop, weighted_spectral_mul_conj};
 use super::state::EchoCanceller;
-use crate::fixed::{
-    add32, extract16, mac16_32_q15, mult16_16, mult16_32_q15, pshr32, q15, shl32, sub16,
-};
+use crate::fixed::{add32, extract16, mac16_32_q15, mult16_16, mult16_32_q15, pshr32, q15, shl32, sub16};
 use crate::pseudo_float::PFloat;
 
 /// "We don't really hope to get better than 33 dB (MIN_LEAK-3dB) attenuation."
@@ -171,7 +169,8 @@ impl EchoCanceller {
         for i in 0..=self.frame_size {
             let e = shl32(self.rf[i], 3).wrapping_add(1);
             let r = mult16_32_q15(leak as i32, shl32(self.yf[i], 3)).min(e >> 1);
-            let r = mult16_32_q15(q15::POINT_7, r).wrapping_add(mult16_32_q15(q15::POINT_3, mult16_32_q15(rer as i32, e)));
+            let r =
+                mult16_32_q15(q15::POINT_7, r).wrapping_add(mult16_32_q15(q15::POINT_3, mult16_32_q15(rer as i32, e)));
             let denominator = PFloat::mul32u(e, self.power[i].wrapping_add(10));
             self.power_1[i] = PFloat::div32_float(r, denominator).shl(WEIGHT_SHIFT as i32 + 16);
         }

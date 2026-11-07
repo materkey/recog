@@ -31,11 +31,7 @@ impl PFloat {
         let (m, e) = (m as i16, e as i16);
         // C tests each sign on its own; together that is |m| < 16384, zero included
         let shift = (m as i32).abs() < 16384;
-        if shift {
-            Self { m: ((m as i32) << 1) as i16, e: e.wrapping_sub(1) }
-        } else {
-            Self { m, e }
-        }
+        if shift { Self { m: ((m as i32) << 1) as i16, e: e.wrapping_sub(1) } } else { Self { m, e } }
     }
 
     /// `PSEUDOFLOAT(x)`.
@@ -91,11 +87,7 @@ impl PFloat {
         }
         // C also answers `self.m < 0` when b.m == 0; the comparison below gives that
         let (am, ae, bm, be) = (self.m as i32, self.e as i32, b.m as i32, b.e as i32);
-        if ae > be {
-            (am >> 1) < (bm >> min15(ae - be + 1))
-        } else {
-            (bm >> 1) > (am >> min15(be - ae + 1))
-        }
+        if ae > be { (am >> 1) < (bm >> min15(ae - be + 1)) } else { (bm >> 1) > (am >> min15(be - ae + 1)) }
     }
 
     /// `FLOAT_GT(self, b)`.
@@ -339,4 +331,3 @@ mod tests {
         assert_eq!(PFloat::new(16384, 0).divu(PFloat::new(1, 0)), PFloat::new(16384, 0));
     }
 }
-

@@ -135,8 +135,7 @@ impl Totals {
 fn run_case(dir: &Path, rate: u32, write: Option<&str>) -> Result<Totals, String> {
     let mut case = open_case(dir, rate, write)?;
     let mut aec = EchoCanceller::new(case.config).map_err(|e| e.to_string())?;
-    let mut totals = stream(&mut aec, &mut case)
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut totals = stream(&mut aec, &mut case).map_err(|e| format!("{}: {e}", dir.display()))?;
     if let Some(sink) = case.sink.as_mut() {
         sink.flush().map_err(|e| e.to_string())?;
     }

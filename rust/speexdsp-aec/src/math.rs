@@ -6,9 +6,7 @@
 //! from which the FFT twiddles are built. Each one is a polynomial in Q13–Q15 with
 //! the same intermediate truncations as C, so results are bit-identical.
 
-use crate::fixed::{
-    add16, add32, mult16_16_p, mult16_16_q, sub16, sub32, to16, vshr32,
-};
+use crate::fixed::{add16, add32, mult16_16_p, mult16_16_q, sub16, sub32, to16, vshr32};
 
 /// `spx_ilog2`: index of the highest set bit, 0 for 0 and 1.
 ///
@@ -133,11 +131,7 @@ pub(crate) const fn cos_norm(x: i32) -> i16 {
         x = (1 << 17) - x;
     }
     if x & 0x0000_7fff != 0 {
-        if x < 1 << 15 {
-            cos_pi_2(x as i16) as i16
-        } else {
-            (-cos_pi_2((65536 - x) as i16)) as i16
-        }
+        if x < 1 << 15 { cos_pi_2(x as i16) as i16 } else { (-cos_pi_2((65536 - x) as i16)) as i16 }
     } else if x & 0x0000_ffff != 0 {
         0
     } else if x & 0x0001_ffff != 0 {
@@ -176,7 +170,8 @@ mod tests {
     #[test]
     fn clz_logarithms_equal_c_for_every_bit_pattern_class() {
         // every power of two, its neighbours, and a stride over the whole range
-        let mut values: Vec<u32> = (0..32).flat_map(|k| [(1u32 << k).wrapping_sub(1), 1 << k, (1u32 << k) + 1]).collect();
+        let mut values: Vec<u32> =
+            (0..32).flat_map(|k| [(1u32 << k).wrapping_sub(1), 1 << k, (1u32 << k) + 1]).collect();
         values.extend((0..=u32::MAX).step_by(65_521));
         values.push(u32::MAX);
         for x in values {

@@ -7,8 +7,7 @@
 //! without changing a single output bit.
 
 use crate::fixed::{
-    abs32, div32, extract16, mac16_16, mult16_16, mult16_16_q, mult16_32_q15, pshr32, q15, saturate, shl32,
-    to16,
+    abs32, div32, extract16, mac16_16, mult16_16, mult16_16_q, mult16_32_q15, pshr32, q15, saturate, shl32, to16,
 };
 use crate::math::sqrt;
 use crate::pseudo_float::PFloat;
@@ -77,7 +76,12 @@ pub(super) fn spectral_mul_accum<'a, W: Copy + 'a>(
     for (xp, wp) in partitions {
         sums[0] = mac16_16(sums[0], xp[0] as i32, top16(wp[0]));
         sums[n - 1] = mac16_16(sums[n - 1], xp[n - 1] as i32, top16(wp[n - 1]));
-        let bins = sums[1..n - 1].as_chunks_mut::<2>().0.iter_mut().zip(xp[1..n - 1].as_chunks::<2>().0.iter()).zip(wp[1..n - 1].as_chunks::<2>().0.iter());
+        let bins = sums[1..n - 1]
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(xp[1..n - 1].as_chunks::<2>().0.iter())
+            .zip(wp[1..n - 1].as_chunks::<2>().0.iter());
         for ((s, x), w) in bins {
             let (xr, xi, wr, wi) = (x[0] as i32, x[1] as i32, top16(w[0]), top16(w[1]));
             s[0] = s[0].wrapping_add(xr * wr).wrapping_sub(xi * wi);
@@ -96,7 +100,9 @@ pub(super) fn weighted_spectral_mul_conj(w: &[PFloat], p: PFloat, x: &[i16], y: 
     prod[0] = p.amult(w[0]).mul32(mult16_16(x[0] as i32, y[0] as i32));
     prod[n - 1] = p.amult(w[n / 2]).mul32(mult16_16(x[n - 1] as i32, y[n - 1] as i32));
     let bins = prod[1..n - 1]
-        .as_chunks_mut::<2>().0.iter_mut()
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
         .zip(x[1..n - 1].as_chunks::<2>().0.iter())
         .zip(y[1..n - 1].as_chunks::<2>().0.iter())
         .zip(&w[1..n / 2]);

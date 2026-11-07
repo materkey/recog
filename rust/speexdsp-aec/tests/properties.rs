@@ -12,7 +12,10 @@ const FRAMES: [usize; 11] = [8, 12, 16, 20, 40, 60, 64, 80, 120, 140, 160];
 
 /// Samples biased towards the edges C mishandles: full scale, -32768, near zero.
 fn samples(len: usize) -> impl Strategy<Value = Vec<i16>> {
-    prop::collection::vec(prop_oneof![4 => any::<i16>(), 1 => Just(i16::MIN), 1 => Just(i16::MAX), 4 => -64i16..64], len)
+    prop::collection::vec(
+        prop_oneof![4 => any::<i16>(), 1 => Just(i16::MIN), 1 => Just(i16::MAX), 4 => -64i16..64],
+        len,
+    )
 }
 
 /// A valid configuration with a few frames of microphone and far end.

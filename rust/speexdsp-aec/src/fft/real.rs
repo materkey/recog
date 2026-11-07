@@ -129,7 +129,8 @@ impl SpeexFft {
     /// # Errors
     /// [`crate::Error::InvalidFrameSize`] when `n` does not satisfy that.
     pub fn new(n: usize) -> Result<Self, crate::Error> {
-        crate::mdf::validate_half_size(n / 2).map_err(|reason| crate::Error::InvalidFrameSize { frame_size: n / 2, reason })?;
+        crate::mdf::validate_half_size(n / 2)
+            .map_err(|reason| crate::Error::InvalidFrameSize { frame_size: n / 2, reason })?;
         if !n.is_multiple_of(2) {
             return Err(crate::Error::InvalidFrameSize { frame_size: n / 2, reason: "the window must be even" });
         }

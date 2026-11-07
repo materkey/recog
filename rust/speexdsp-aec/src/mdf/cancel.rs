@@ -148,7 +148,8 @@ impl EchoCanceller {
         let n = self.frame_size;
         let (far, head, slots, nn) = (&self.far_spectra, self.far_head, self.partitions + 1, self.window_size);
         let filter = &self.foreground;
-        let partitions = (0..self.partitions).map(|j| (&far[far_slot(head, slots, nn, j)], &filter[j * nn..(j + 1) * nn]));
+        let partitions =
+            (0..self.partitions).map(|j| (&far[far_slot(head, slots, nn, j)], &filter[j * nn..(j + 1) * nn]));
         spectral_mul_accum(partitions, &mut self.echo_spectrum, &mut self.sums, |w| w as i32);
         self.fft.inverse(&self.echo_spectrum, &mut self.e);
         for i in 0..n {
@@ -164,7 +165,8 @@ impl EchoCanceller {
         let n = self.frame_size;
         let (far, head, slots, nn) = (&self.far_spectra, self.far_head, self.partitions + 1, self.window_size);
         let filter = &self.weights;
-        let partitions = (0..self.partitions).map(|j| (&far[far_slot(head, slots, nn, j)], &filter[j * nn..(j + 1) * nn]));
+        let partitions =
+            (0..self.partitions).map(|j| (&far[far_slot(head, slots, nn, j)], &filter[j * nn..(j + 1) * nn]));
         spectral_mul_accum(partitions, &mut self.echo_spectrum, &mut self.sums, |w| w >> 16);
         self.fft.inverse(&self.echo_spectrum, &mut self.y);
         for i in 0..n {
@@ -244,4 +246,3 @@ mod tests {
         assert_eq!(out, [0; 160]);
     }
 }
-

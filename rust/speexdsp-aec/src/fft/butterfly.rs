@@ -132,10 +132,8 @@ pub(super) fn bfly3(re: &mut [i16], im: &mut [i16], s: &Stage, inverse: bool) {
             let s2 = f2.mul(Cpx { r: s.tw[1].re[k], i: s.tw[1].im[k] });
             let s3 = s1.add(s2);
             let s0 = s1.sub(s2).scale(epi3.i);
-            let half = Cpx {
-                r: (f0.r as i32 - ((s3.r as i32) >> 1)) as i16,
-                i: (f0.i as i32 - ((s3.i as i32) >> 1)) as i16,
-            };
+            let half =
+                Cpx { r: (f0.r as i32 - ((s3.r as i32) >> 1)) as i16, i: (f0.i as i32 - ((s3.i as i32) >> 1)) as i16 };
             store(re, im, a, f0.add(s3));
             store(re, im, a + 2 * m, Cpx { r: half.r.wrapping_add(s0.i), i: half.i.wrapping_sub(s0.r) });
             store(re, im, a + m, Cpx { r: half.r.wrapping_sub(s0.i), i: half.i.wrapping_add(s0.r) });

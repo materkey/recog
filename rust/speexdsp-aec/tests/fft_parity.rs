@@ -21,7 +21,8 @@ fn spx_fft_and_spx_ifft_are_bit_exact_with_c() {
         let data = read_i16(&entry.path());
         let mut fft = SpeexFft::new(n).unwrap();
         for (r, record) in data.chunks_exact(4 * n).enumerate() {
-            let (input, scaled, spectrum, time) = (&record[..n], &record[n..2 * n], &record[2 * n..3 * n], &record[3 * n..]);
+            let (input, scaled, spectrum, time) =
+                (&record[..n], &record[n..2 * n], &record[2 * n..3 * n], &record[3 * n..]);
             let mut buffer = input.to_vec();
             let mut out = vec![0i16; n];
             fft.forward(&mut buffer, &mut out);

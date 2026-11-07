@@ -25,14 +25,21 @@ fn golden_cases() -> Vec<PathBuf> {
 
 fn meta_value(meta: &str, key: &str) -> usize {
     let at = meta.find(&format!("\"{key}\"")).unwrap() + key.len() + 2;
-    meta[at..].trim_start_matches([':', ' ']).chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap()
+    meta[at..]
+        .trim_start_matches([':', ' '])
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .unwrap()
 }
 
 /// First (frame, sample, expected, got) where the outputs differ.
 fn first_mismatch(dir: &Path) -> Option<(usize, usize, i16, i16)> {
     let meta = fs::read_to_string(dir.join("meta.json")).unwrap();
     let (frame, tail) = (meta_value(&meta, "frame_size"), meta_value(&meta, "filter_length"));
-    let (mic, far, expected) = (read_i16(&dir.join("mic.i16")), read_i16(&dir.join("ref.i16")), read_i16(&dir.join("expected.i16")));
+    let (mic, far, expected) =
+        (read_i16(&dir.join("mic.i16")), read_i16(&dir.join("ref.i16")), read_i16(&dir.join("expected.i16")));
     let mut aec = EchoCanceller::new(Config::new(frame, tail)).unwrap();
     let mut out = vec![0i16; frame];
     for (k, (m, f)) in mic.chunks_exact(frame).zip(far.chunks_exact(frame)).enumerate() {
@@ -52,7 +59,8 @@ fn every_golden_case_is_bit_exact_with_pyaec() {
     let failures: Vec<String> = cases
         .iter()
         .filter_map(|dir| {
-            first_mismatch(dir).map(|(k, i, want, got)| format!("{}: frame {k} sample {i}: pyaec {want}, port {got}", dir.display()))
+            first_mismatch(dir)
+                .map(|(k, i, want, got)| format!("{}: frame {k} sample {i}: pyaec {want}, port {got}", dir.display()))
         })
         .collect();
     assert!(failures.is_empty(), "{} of {} cases diverge:\n{}", failures.len(), cases.len(), failures.join("\n"));
