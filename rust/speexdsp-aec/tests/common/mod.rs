@@ -24,5 +24,5 @@ pub fn golden(sub: &str) -> PathBuf {
 
 /// Little-endian int16 samples.
 pub fn read_i16(path: &Path) -> Vec<i16> {
-    fs::read(path).unwrap().chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    fs::read(path).unwrap().as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
 }

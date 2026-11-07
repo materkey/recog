@@ -93,7 +93,7 @@ impl RealFft {
             (*r, *i) = (self.tmp_re[src as usize], self.tmp_im[src as usize]);
         }
         self.sub.run(&mut self.re, &mut self.im);
-        for ((pair, &r), &i) in time.chunks_exact_mut(2).zip(&self.re).zip(&self.im) {
+        for ((pair, &r), &i) in time.as_chunks_mut::<2>().0.iter_mut().zip(&self.re).zip(&self.im) {
             (pair[0], pair[1]) = (r, i);
         }
     }

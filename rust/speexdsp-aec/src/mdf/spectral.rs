@@ -36,7 +36,7 @@ pub(super) fn filter_dc_notch16(input: &[i16], radius: i16, out: &mut [i16], mem
 /// `mdf_inner_prod`: Σ x·y over pairs of samples, each pair shifted down by 6
 /// before it is added. An odd last sample is ignored.
 pub(super) fn inner_prod(x: &[i16], y: &[i16]) -> i32 {
-    x.chunks_exact(2).zip(y.chunks_exact(2)).fold(0i32, |sum, (a, b)| {
+    x.as_chunks::<2>().0.iter().zip(y.as_chunks::<2>().0.iter()).fold(0i32, |sum, (a, b)| {
         let part = mac16_16(mult16_16(a[0] as i32, b[0] as i32), a[1] as i32, b[1] as i32);
         sum.wrapping_add(part >> 6)
     })
@@ -48,7 +48,7 @@ pub(super) fn inner_prod(x: &[i16], y: &[i16]) -> i32 {
 pub(super) fn power_spectrum(x: &[i16], ps: &mut [i32]) {
     let n = x.len();
     ps[0] = mult16_16(x[0] as i32, x[0] as i32);
-    for (j, pair) in x[1..n - 1].chunks_exact(2).enumerate() {
+    for (j, pair) in x[1..n - 1].as_chunks::<2>().0.iter().enumerate() {
         ps[j + 1] = mult16_16(pair[0] as i32, pair[0] as i32).wrapping_add(mult16_16(pair[1] as i32, pair[1] as i32));
     }
     ps[n / 2] = mult16_16(x[n - 1] as i32, x[n - 1] as i32);
@@ -77,7 +77,7 @@ pub(super) fn spectral_mul_accum<'a, W: Copy + 'a>(
     for (xp, wp) in partitions {
         sums[0] = mac16_16(sums[0], xp[0] as i32, top16(wp[0]));
         sums[n - 1] = mac16_16(sums[n - 1], xp[n - 1] as i32, top16(wp[n - 1]));
-        let bins = sums[1..n - 1].chunks_exact_mut(2).zip(xp[1..n - 1].chunks_exact(2)).zip(wp[1..n - 1].chunks_exact(2));
+        let bins = sums[1..n - 1].as_chunks_mut::<2>().0.iter_mut().zip(xp[1..n - 1].as_chunks::<2>().0.iter()).zip(wp[1..n - 1].as_chunks::<2>().0.iter());
         for ((s, x), w) in bins {
             let (xr, xi, wr, wi) = (x[0] as i32, x[1] as i32, top16(w[0]), top16(w[1]));
             s[0] = s[0].wrapping_add(xr * wr).wrapping_sub(xi * wi);
@@ -96,9 +96,9 @@ pub(super) fn weighted_spectral_mul_conj(w: &[PFloat], p: PFloat, x: &[i16], y: 
     prod[0] = p.amult(w[0]).mul32(mult16_16(x[0] as i32, y[0] as i32));
     prod[n - 1] = p.amult(w[n / 2]).mul32(mult16_16(x[n - 1] as i32, y[n - 1] as i32));
     let bins = prod[1..n - 1]
-        .chunks_exact_mut(2)
-        .zip(x[1..n - 1].chunks_exact(2))
-        .zip(y[1..n - 1].chunks_exact(2))
+        .as_chunks_mut::<2>().0.iter_mut()
+        .zip(x[1..n - 1].as_chunks::<2>().0.iter())
+        .zip(y[1..n - 1].as_chunks::<2>().0.iter())
         .zip(&w[1..n / 2]);
     for (((out, xs), ys), &rate) in bins {
         let weight = p.amult(rate);

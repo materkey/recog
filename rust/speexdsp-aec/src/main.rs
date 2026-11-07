@@ -81,7 +81,7 @@ fn json_usize(text: &str, key: &str) -> Result<usize, String> {
 fn read_frame(reader: &mut impl Read, bytes: &mut [u8], frame: &mut [i16]) -> Result<bool, String> {
     match reader.read_exact(bytes) {
         Ok(()) => {
-            for (sample, pair) in frame.iter_mut().zip(bytes.chunks_exact(2)) {
+            for (sample, pair) in frame.iter_mut().zip(bytes.as_chunks::<2>().0.iter()) {
                 *sample = i16::from_le_bytes([pair[0], pair[1]]);
             }
             Ok(true)

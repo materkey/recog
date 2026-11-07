@@ -26,7 +26,7 @@ const META: &str = r#"{"frame_size": 8, "filter_length": 64}"#;
 
 /// The samples of a 16-bit little-endian file.
 fn samples(path: &Path) -> Vec<i16> {
-    fs::read(path).unwrap().chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    fs::read(path).unwrap().as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
 }
 
 fn stderr(output: &Output) -> String {
@@ -55,7 +55,7 @@ fn the_written_output_is_what_the_library_gives_for_the_same_samples() {
     let (mic, far) = (samples(&dir.join("mic.i16")), samples(&dir.join("ref.i16")));
     let mut aec = EchoCanceller::new(Config { sampling_rate: 16_000, ..Config::new(8, 64) }).unwrap();
     let mut expected = Vec::new();
-    for (m, f) in mic.chunks_exact(8).zip(far.chunks_exact(8)) {
+    for (m, f) in mic.as_chunks::<8>().0.iter().zip(far.as_chunks::<8>().0.iter()) {
         let mut out = [0i16; 8];
         aec.cancel(m, f, &mut out).unwrap();
         expected.extend(out);
