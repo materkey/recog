@@ -185,8 +185,11 @@ class TimelinePlacer:
     device clock's slow drift against its stamps is taken up one sample at a time.
     """
 
-    # Stamps jitter; below this a difference is not a hole.
-    HOLE_SAMPLES = 16
+    # Below this a difference is not a hole. Stamps jitter by under 0.1 sample and
+    # drift keeps the difference under 2, while the microphone child loses 7-15
+    # samples now and then: taken up as drift, such a hole left the echo misplaced
+    # for seconds and Speex let it through.
+    HOLE_SAMPLES = 4
     # Longer than this the capture was off: start over rather than fill it.
     GAP_S = 1.0
     DRIFT_SMOOTHING_S = 5.0

@@ -27,6 +27,11 @@ reasoning.
   and system audio and the ASR answers. It holds the meeting's voices and words,
   0.5-1 GB per hour of meeting, and nothing deletes it.
 
+- **With echo cancellation on, what the speakers play rarely reaches your name.**
+  A loss of under a millisecond in the microphone left its audio misplaced against
+  the speakers' for seconds, and the echo came through in short fragments: on a
+  podcast from the MacBook speakers, 14 of 239 lines; now 2. Run
+  `./recog-service.sh restart` after `git pull`.
 - **System audio is no longer put under your own name.** When the conference marked
   you as the speaker (your microphone hearing what the speakers play, a podcast for
   one), the system audio of that moment was attributed to you; it now goes to a

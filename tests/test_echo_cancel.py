@@ -231,6 +231,30 @@ def test_hole_in_the_microphone_is_filled_and_keeps_the_filter():
     assert _rms(out[-5 * SR :]) < 0.005
 
 
+def test_hole_shorter_than_a_millisecond_keeps_the_echo_down():
+    """given: the microphone lost 10 samples, as the child's capture does now and then
+    when: the blocks after it arrive with their real times
+    then: the echo stays down right after the hole instead of returning for seconds"""
+    reference = _speech_like(30, seed=1)
+    mic = _echo_of(reference)
+    stage = EchoStage()
+    block = 160
+    out = []
+    ref_at = 0
+    hole_at, lost = 20 * SR, 10
+    for i in range(0, len(mic) - block + 1, block):
+        while ref_at + 341 <= len(reference) and ref_at <= i + block:
+            stage.add_reference(reference[ref_at : ref_at + 341], START_S + ref_at / SR, True)
+            ref_at += 341
+        start = i + lost if i == hole_at else i
+        out.append(stage.add_mic(mic[start : i + block], START_S + start / SR))
+    out = np.concatenate(out)
+
+    before = _rms(out[hole_at - 3 * SR : hole_at])
+    after = _rms(out[hole_at + SR // 2 : hole_at + 3 * SR])
+    assert after < before * 2
+
+
 # --- the timeline -------------------------------------------------------------
 
 
