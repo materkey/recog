@@ -239,7 +239,10 @@ On macOS the microphone is a subprocess capture too: `ChildMicCapture`
 carrying its PortAudio ADC time and wall clock (`create_mic_capture` in
 `recog/live.py` chooses). `sounddevice` calls back about a thousand times a second
 and each call needs the interpreter lock, so in the live process any busy Python
-thread loses samples, with no status from PortAudio. The worker is run by file
+thread loses samples, with no status from PortAudio. Even in the worker, a callback
+waiting for the lock held by its own writing loop lost as much audio as it was late,
+so the worker opens the stream with a fixed 10 ms block (`BLOCKSIZE`) instead of
+PortAudio's ~1 ms cycle, which gives the callback that slack. The worker is run by file
 path with `-I` and must not import `recog`. It exits on every way a stream stops
 capturing (finished callback, inactive, 10 s without a callback), and the shared
 respawn starts a new one on a device list read afresh, the device found by name.

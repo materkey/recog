@@ -33,6 +33,7 @@ from recog.mic_capture import (
     FramedSystemCapture,
 )
 from recog.mic_worker import (
+    BLOCKSIZE,
     EXIT_DEVICE_NOT_FOUND,
     EXIT_STREAM_LOST,
     FRAME_HEADER,
@@ -223,9 +224,12 @@ def test_device_is_found_by_name_among_inputs_only():
 
 
 class _FakeStream:
-    def __init__(self, backend, device, channels, samplerate, dtype, callback, finished_callback):
+    def __init__(
+        self, backend, device, channels, samplerate, blocksize, dtype, callback, finished_callback
+    ):
         backend.stream = self
         self.device = device
+        self.blocksize = blocksize
         self.channels = channels
         self.callback = callback
         self.finished_callback = finished_callback
@@ -330,6 +334,20 @@ def test_worker_writes_stereo_as_mono_with_the_adc_time():
     adc, _, samples = _parse(pipe.data)[0]
     assert adc == 7.5
     assert samples.tolist() == pytest.approx([0.3, 0.5])
+
+
+def test_worker_opens_the_stream_with_a_block_of_10_ms():
+    """given: a microphone
+    when: the worker opens it
+    then: it asks for a fixed 10 ms block, not PortAudio's ~1 ms IO cycle, whose
+    callbacks lost audio whenever they waited for the interpreter lock"""
+    sd, pipe = _FakeSd(_devices(("Out", 0), (MIC, 1))), _Pipe()
+    thread, result = _run_worker(sd, pipe)
+
+    assert sd.stream.blocksize == BLOCKSIZE == SR // 100
+    pipe.broken = True
+    sd.stream.feed([[0.0]])
+    assert _wait(thread, result) == 0
 
 
 def test_worker_exits_when_portaudio_stops_the_stream():

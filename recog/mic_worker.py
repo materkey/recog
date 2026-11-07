@@ -1,10 +1,11 @@
 """Microphone capture process: frames with their capture time on stdout.
 
-`sounddevice` calls back about a thousand times a second, and each call needs
+`sounddevice` calls back on CoreAudio's real-time thread, and each call needs
 the interpreter lock. In the live process any busy Python thread makes those
 calls late, and PortAudio then loses samples without reporting a status (a
 callback-time recording in the service was 0.41% short of this process's take
-of the same sound). Here nothing else competes for the lock.
+of the same sound). Here only the writing loop below competes for the lock, and
+the stream's block (`BLOCKSIZE`) leaves room for that.
 
 Every way a stream stops capturing ends in an exit, and the parent's respawn
 (`SubprocessPCMCapture`) opens a new stream on a device list read afresh.
@@ -30,8 +31,17 @@ BYTES_PER_SAMPLE = 4
 # there itself: a parent that stalls until the pipe is full must not block it.
 WRITE_INTERVAL_S = 0.02
 
-# CoreAudio calls back every ~1 ms; a stop that never reached the finished
-# callback leaves the stream silent like this.
+# Samples per callback, 10 ms at 16 kHz. Left to PortAudio it was 15 (an IO
+# cycle of about 1 ms), and a cycle whose callback waited for the interpreter
+# lock held by the writing loop lost as much audio as it was late: that loop's
+# thread is not real-time (a utility QoS one under launchd), and now and then it
+# was preempted while holding the lock. Started by launchd, a worker lost 71-72
+# holes and 137-142 ms in 30 minutes, with this block 3-5 holes and 25-36 ms
+# (2026-11-07; the ADC time stamps agree with a 15-sample take to a sample).
+BLOCKSIZE = 160
+
+# CoreAudio calls back every 10 ms (BLOCKSIZE); a stop that never reached the
+# finished callback leaves the stream silent like this.
 CALLBACK_STALL_S = 10.0
 
 EXIT_STREAM_LOST = 3
@@ -85,6 +95,7 @@ def capture_loop(
         device=device,
         channels=channels,
         samplerate=sample_rate,
+        blocksize=BLOCKSIZE,
         dtype="float32",
         callback=on_audio,
         finished_callback=finished.set,
