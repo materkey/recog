@@ -1,0 +1,18 @@
+[package]
+name = "speexdsp-aec"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+description = "Safe Rust port of the speexdsp 1.2.1 fixed-point MDF acoustic echo canceller"
+publish = false
+
+[lib]
+name = "speexdsp_aec"
+path = "src/lib.rs"
+
+[[bin]]
+name = "speex-aec"
+path = "src/main.rs"
+
+[dev-dependencies]
+proptest = "1.11"
