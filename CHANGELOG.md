@@ -21,6 +21,12 @@ reasoning.
 
 ### Changed
 
+- **Golden session recording (opt-in):** `[live] golden_record = true` records
+  each live session into `~/.recog/golden/` for replay when parts of recog are
+  rewritten: the extension's frames, and while a conference is on the microphone
+  and system audio and the ASR answers. It holds the meeting's voices and words,
+  0.5-1 GB per hour of meeting, and nothing deletes it.
+
 - **System audio is no longer put under your own name.** When the conference marked
   you as the speaker (your microphone hearing what the speakers play, a podcast for
   one), the system audio of that moment was attributed to you; it now goes to a

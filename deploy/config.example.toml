@@ -64,6 +64,12 @@
 # `--system-audio screencapture`, which `auto` is on macOS. Stays off by default
 # until it has been checked on real calls and headphones.
 # echo_cancel = false
+# RECOG_GOLDEN_RECORD: record each live session (bridge frames; microphone and
+# system audio and ASR answers while a conference is on) under <data dir>/golden,
+# to replay it into a new implementation
+# (docs/plans/2026-11-07-golden-sessions-design.md). It holds your and the other
+# participants' audio and words, 0.5-1 GB an hour of meeting; nothing is deleted.
+# golden_record = false
 
 [copilot]
 # RECOG_COPILOT_AUTOSPAWN: spawn a Claude copilot session per conference

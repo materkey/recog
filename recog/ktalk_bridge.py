@@ -289,6 +289,10 @@ class KTalkBridge:
         self._on_meeting_change: Optional[Callable[[str, Path], None]] = None
         self._on_pre_meeting_switch: Optional[Callable[[], None]] = None
         self._on_pcm_chunk: Optional[Callable[[PcmChunk], None]] = None
+        # Golden session recording (recog/golden.py), set by live when switched on.
+        # Clients are numbered per session: a replay cannot reuse addresses.
+        self.golden = None
+        self._golden_clients = 0
         # Optional callback returning a snapshot of PerSpeakerIngest stats.
         # LiveTranscriber wires it; bridge surfaces the result through the
         # debug file so frontend /api/pcm-diagnostics can read it.
@@ -1730,6 +1734,11 @@ class KTalkBridge:
             self._last_seq = 0
             channel_clients_present = bool(self._copilot_channel_clients)
         print(f"[KTalk Bridge] Client connected from {websocket.remote_address}", file=sys.stderr)
+        golden = self.golden
+        if golden is not None:
+            self._golden_clients += 1
+            golden_client = self._golden_clients
+            golden.client_connected(golden_client)
         # Late-joiner channel state: the new socket is currently in
         # `_connected_clients`; we can't tell yet whether it's an extension,
         # subscriber, or channel client (those send hellos later). Sending
@@ -1776,6 +1785,8 @@ class KTalkBridge:
             async for message in websocket:
                 try:
                     data = json.loads(message)
+                    if golden is not None:
+                        golden.frame(golden_client, data)
                     if data.get("type") == "subscriber_hello":
                         # Subscriber announces itself — move the connection
                         # from the extension set to the subscribers set so
@@ -1808,6 +1819,8 @@ class KTalkBridge:
         except Exception as e:
             print(f"[KTalk Bridge] Connection error: {e}", file=sys.stderr)
         finally:
+            if golden is not None:
+                golden.client_disconnected(golden_client)
             with self._lock:
                 was_subscriber = websocket in self._subscriber_clients
                 was_copilot_channel = websocket in self._copilot_channel_clients

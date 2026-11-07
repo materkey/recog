@@ -1,6 +1,8 @@
 # Golden sessions: recording and replaying the live process
 
-Status: design, nothing built. Step 0 of [the move to Rust](2026-11-07-rust-migration.md).
+Status: the recorder is built (`recog/golden.py`, `[live] golden_record`, off by
+default); the clock seam and the player are not. Step 0 of
+[the move to Rust](2026-11-07-rust-migration.md).
 
 ## Purpose
 
@@ -46,6 +48,17 @@ Mapped from the code on 2026-11-07:
    default, switched on by a setting, and never sent anywhere. A session holds
    personal audio and text, so it stays under the data directory. Committed fixtures
    are only synthetic ones built by tests.
+
+   As built (2026-11-07): one directory per live process, `<data dir>/golden/<start>/`,
+   not per meeting, since state carries across meeting switches and a replay starts
+   where the process started. The per-speaker PCM tap is not separate: `pcm_chunk`
+   frames are recorded as the bridge receives them, PCM included, and a replay sends
+   them through the bridge again, which applies the clock offset itself. Events
+   carry monotonic `t` and `time.time()` as `wall`; capture samples go to
+   `audio.bin` as `get_chunk` returned them (float32), so the replay hands ASR the
+   same bytes and finds its answer by key. Audio and ASR answers are recorded only
+   while a conference is on: the service listens all day, and a day of idle
+   microphone would be about 11 GB. So orphan recordings are not covered yet.
 2. **Replay with a fake clock and recorded ASR.**
    - The player owns a clock that the bridge, live, ingest and storage read. That
      means adding a clock parameter where `time.time()` is called today.
@@ -70,7 +83,7 @@ Mapped from the code on 2026-11-07:
 1. A clock seam: one `Clock` object passed to `KTalkBridge`, `LiveTranscriber`,
    `PerSpeakerIngest` and `MeetingStorage`; the default is the system clock, so
    behaviour does not change.
-2. The recorder behind a setting, tested with a synthetic session.
+2. The recorder behind a setting, tested with a synthetic session. **Done.**
 3. The player for the Python implementation: a recorded session replays to the same
    normalized outputs. This is the player's own acceptance test.
 4. Recording a few real sessions on the user's machine: a KTalk meeting, Google Meet,

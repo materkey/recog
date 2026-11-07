@@ -36,6 +36,7 @@ from .log_utils import log_rate_limited
 from .mic_capture import ChildMicCapture
 from .remote_asr import ASRTemporarilyUnavailable, FallbackASR, build_asr
 from .wavo_backend import WavoASR
+from .golden import GoldenRecorder
 from .refine import RefineAborted, RefineResult, RefineWorker, make_abortable_decode
 from .system_audio import DIGITAL_SILENCE_RESTART_S, RESTART_BACKOFF_S
 from .config import get_data_dir
@@ -833,6 +834,30 @@ class LiveTranscriber:
         """
         return bool(getattr(self.asr, "available", True))
 
+    @staticmethod
+    def _start_golden_recording() -> Optional[GoldenRecorder]:
+        """A golden session under <data dir>/golden when [live] golden_record is on."""
+        if not INSTALL_CONFIG.live.golden_record:
+            return None
+        directory = get_data_dir() / "golden" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        print(f"[golden] Recording the session into {directory}", file=sys.stderr)
+        return GoldenRecorder(directory)
+
+    def _golden_now(self) -> Optional[GoldenRecorder]:
+        """The recorder while a conference is on. Audio and ASR answers are kept for
+        conferences only: the service listens all day, and a day of idle microphone
+        would be about 11 GB. Bridge frames, small, are recorded throughout."""
+        golden = getattr(self, "_golden", None)
+        bridge = getattr(self, "_ktalk_bridge", None)
+        if golden is None or bridge is None or not bridge.is_conference_active():
+            return None
+        return golden
+
+    def _golden_asr(self, call: str, audio, output) -> None:
+        golden = self._golden_now()
+        if golden is not None:
+            golden.asr(call, audio, output)
+
     def _transcribe_direct(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Транскрибирует напрямую через tensor без temp файлов.
 
@@ -853,7 +878,9 @@ class LiveTranscriber:
                 # The forward+decode body lives in ASRModule.transcribe_chunk so
                 # the remote-offload FallbackASR can route this path too; the
                 # _model_lock / inference_mode / autoreleasepool live inside.
-                return self.asr.transcribe_chunk(audio_chunk)
+                text = self.asr.transcribe_chunk(audio_chunk)
+                self._golden_asr("transcribe_chunk", audio_chunk, text)
+                return text
             finally:
                 if refine_worker is not None:
                     refine_worker.clear_live_pending()
@@ -1185,9 +1212,12 @@ class LiveTranscriber:
                     model.decoding.decode = original_decode
 
         if isinstance(self.asr, FallbackASR):
-            return self.asr.transcribe_with_timestamps(
+            result = self.asr.transcribe_with_timestamps(
                 pcm_samples, local_transcribe=transcribe_local)
-        return transcribe_local(self.asr)
+        else:
+            result = transcribe_local(self.asr)
+        self._golden_asr("transcribe_with_timestamps", pcm_samples, result)
+        return result
 
     def _start_ktalk_bridge(self):
         """Start the KTalk bridge WS server after all callbacks are wired.
@@ -1243,6 +1273,7 @@ class LiveTranscriber:
             refine_worker.set_live_pending()
         try:
             texts = self.asr.transcribe_batch(pcm_list)
+            self._golden_asr("transcribe_batch", pcm_list, texts)
         except ASRTemporarilyUnavailable:
             # Пробрасываем в PerSpeakerIngest.tick — он сохранит батч для
             # повторного диспатча (дизайн §3, гонка первого сбоя).
@@ -1855,6 +1886,8 @@ class LiveTranscriber:
             self.mic_capture.stop()
         if self.system_capture:
             self.system_capture.stop()
+        if getattr(self, "_golden", None) is not None:
+            self._golden.close()
 
         # Stop the refine worker before the ingest so that a late refine
         # submission from the ingest's last tick does not land in a queue
@@ -2226,6 +2259,9 @@ class LiveTranscriber:
             chunk, capture_start_ts = result
             if len(chunk) < 1000:
                 return
+            golden = self._golden_now()
+            if golden is not None:
+                golden.capture("mic" if is_mic else "system", chunk, capture_start_ts)
             # Номер отрезка спрашиваем у самого чанка, а не снимком до/после
             # чтения буфера: capture фиксирует его под тем же локом, что и
             # нарезку (см. BufferedAudioCapture.chunk_epoch), поэтому граница
@@ -2426,8 +2462,11 @@ class LiveTranscriber:
         if self.ktalk_only:
             print("Recording policy: KTalk meetings only; idle audio capture is off")
 
+        self._golden = self._start_golden_recording()
         self._setup_meeting_storage()
         self._setup_ktalk_bridge()
+        if self._ktalk_bridge is not None:
+            self._ktalk_bridge.golden = self._golden
         self.asr.load_model(quiet=True)
 
         self._setup_per_speaker_ingest()

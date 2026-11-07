@@ -67,6 +67,8 @@ class LiveSettings:
     zoom_app: bool = _setting("RECOG_ZOOM_APP", "flag", False)
     # Cancel what the built-in speakers play out of the microphone (macOS).
     echo_cancel: bool = _setting("RECOG_ECHO_CANCEL", "flag", False)
+    # Record golden sessions under <data dir>/golden for replay (recog/golden.py).
+    golden_record: bool = _setting("RECOG_GOLDEN_RECORD", "flag", False)
 
 
 @dataclass

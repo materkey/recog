@@ -6259,3 +6259,27 @@ async def test_user_spoke_longer_than_alice_when_system_audio_is_attributed_then
     bridge._speaker_history[-1].timestamp = now - 1.0
 
     assert bridge.get_dominant_speaker_for_period(now - 3.0, now) == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_golden_recorder_set_client_session_is_recorded_frame_by_frame(tmp_path):
+    """
+    given: a bridge with a golden recorder
+    when:  a client connects, sends two frames (one of them not JSON) and goes away
+    then:  connect, the parsed frame, disconnect, all under one client number
+    """
+    from recog.golden import GoldenRecorder, read_session
+
+    bridge = KTalkBridge()
+    bridge.golden = GoldenRecorder(tmp_path)
+    fake_ws = FakeWebSocket()
+    fake_ws.add_message(json.dumps({"type": "clock_sync", "timestamp": 1}))
+    fake_ws.add_message("not json")
+
+    await bridge._handle_client(fake_ws)
+    bridge.golden.close()
+
+    events = list(read_session(tmp_path))
+    assert [e["kind"] for e in events] == ["connect", "frame", "disconnect"]
+    assert {e["client"] for e in events} == {1}
+    assert events[1]["data"]["type"] == "clock_sync"
