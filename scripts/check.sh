@@ -120,6 +120,7 @@ if [ -f rust/Cargo.toml ]; then
         cargo clippy --workspace --all-targets -- -D warnings
         cargo test -p speexdsp-aec --lib --test properties --test cli
         cargo test -p speexdsp-aec --doc
+        cargo test -p recog-mic
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi

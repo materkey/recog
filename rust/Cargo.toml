@@ -4,7 +4,7 @@
 # see setup.sh.
 [workspace]
 resolver = "3"
-members = ["speexdsp-aec", "speexdsp-aec-py", "wavo-asr-py"]
+members = ["recog-mic", "speexdsp-aec", "speexdsp-aec-py", "wavo-asr-py"]
 
 [profile.release]
 lto = "fat"

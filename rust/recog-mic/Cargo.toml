@@ -1,0 +1,20 @@
+[package]
+name = "recog-mic"
+version = "0.1.0"
+edition = "2024"
+description = "The microphone capture process of recog: framed audio with its ADC time on stdout"
+publish = false
+
+[[bin]]
+name = "recog-mic"
+path = "src/main.rs"
+
+# The capture runs on macOS only (the Linux microphone stays in the live process), and
+# cpal on Linux needs the ALSA headers: there the crate builds its pure parts and tests.
+[target.'cfg(target_os = "macos")'.dependencies]
+cpal = "0.18.2"
+# The version cpal uses: its physical-format helpers are what cpal itself calls.
+coreaudio-rs = { version = "0.14.2", default-features = false, features = ["audio_toolbox", "core_audio"] }
+libc = "0.2"
+nix = { version = "0.31.3", default-features = false, features = ["fs", "time"] }
+rtrb = "0.4.1"
