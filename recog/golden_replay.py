@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -220,6 +221,62 @@ def replay(session: Path, out: Path, profile: Optional[Path] = None) -> dict:
     return summary
 
 
+# Fields that make two transcript rows the same line; ids, offsets and the exact
+# time differ between runs and are not compared.
+ROW_KEY = ("speaker", "is_local", "text", "refined", "uncertain")
+# How far apart in time the same line may land in the two runs, in seconds.
+TOLERANCE_S = 1.5
+
+
+def _rows_between(meetings: Path, start: float, end: float, shift: float) -> list[dict]:
+    """Speech rows of every meeting under ``meetings`` with ``ts - shift`` in [start, end]."""
+    rows = []
+    for path in sorted(Path(meetings).glob("*/transcript.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line)
+            if row.get("speaker_id") == "__system__":  # markers: the replay's own pause, etc.
+                continue
+            t = datetime.fromisoformat(row["ts"]).timestamp() - shift
+            if start <= t <= end:
+                rows.append({"t": round(t, 3), **{k: row.get(k) for k in ROW_KEY}})
+    return sorted(rows, key=lambda r: r["t"])
+
+
+def compare(session: Path, original: Path, out: Path) -> dict:
+    """The meeting rows the live service wrote while ``session`` was recorded, under
+    ``original`` (a meetings directory), against the rows of its replay in ``out``.
+
+    Rows match on ``ROW_KEY`` within ``TOLERANCE_S``; what does not match on either
+    side is listed with its time from the recorded clock.
+    """
+    summary = json.loads((Path(out) / "replay.json").read_text())
+    events = list(read_session(session))
+    start, end = events[0]["wall"], events[-1]["wall"] + TAIL_S
+    shift = summary["start_wall"] - summary["recorded_start_wall"]
+    before = _rows_between(original, start, end, 0.0)
+    after = _rows_between(Path(out) / "data" / "meetings", start, end, shift)
+    unmatched = list(after)
+    only_original = []
+    for row in before:
+        twin = next(
+            (
+                r
+                for r in unmatched
+                if all(r[k] == row[k] for k in ROW_KEY) and abs(r["t"] - row["t"]) <= TOLERANCE_S
+            ),
+            None,
+        )
+        if twin is None:
+            only_original.append(row)
+        else:
+            unmatched.remove(twin)
+    return {
+        "matched": len(before) - len(only_original),
+        "only_original": only_original,
+        "only_replay": unmatched,
+    }
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m recog.golden_replay")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -227,10 +284,21 @@ def main(argv=None) -> int:
     r.add_argument("session", type=Path)
     r.add_argument("out", type=Path)
     r.add_argument("--profile", type=Path, help="user-profile.json to replay with")
+    c = sub.add_parser(
+        "compare", help="compare a replay with the meeting the session was recorded in"
+    )
+    c.add_argument("session", type=Path)
+    c.add_argument("out", type=Path, help="the replay's output directory")
+    c.add_argument("--meetings", type=Path, help="default: <data dir>/meetings")
     args = parser.parse_args(argv)
-    summary = replay(args.session, args.out, args.profile)
-    print(json.dumps(summary, indent=1))
-    return 0
+    if args.command == "replay":
+        print(json.dumps(replay(args.session, args.out, args.profile), indent=1))
+        return 0
+    from .config import get_data_dir
+
+    result = compare(args.session, args.meetings or get_data_dir() / "meetings", args.out)
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    return 0 if not result["only_original"] and not result["only_replay"] else 1
 
 
 if __name__ == "__main__":

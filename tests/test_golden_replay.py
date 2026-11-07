@@ -82,3 +82,50 @@ def test_synthetic_call_replay_gives_its_transcript(tmp_path):
     said = {(r["speaker"], r["text"]) for r in rows}
     assert ("Alice", "Добрый день, коллеги") in said
     assert any(text == "Привет, Алиса" for _speaker, text in said), said
+
+
+def _rows(meetings):
+    return [
+        (path, json.loads(line))
+        for path in sorted(meetings.glob("*/transcript.jsonl"))
+        for line in path.read_text().splitlines()
+    ]
+
+
+def test_replay_against_its_original_compare_matches_rows_and_names_a_changed_one(tmp_path):
+    """given: a replay, and the meeting as the live service wrote it at recording time
+    when: they are compared, then once more with one phrase changed in the original
+    then: every row matches the first time; the second time the two versions of the
+          changed phrase are reported, one on each side"""
+    from datetime import datetime, timedelta
+
+    from recog.golden_replay import compare
+
+    session, out = tmp_path / "session", tmp_path / "out"
+    _session(session)
+    code = "import sys, recog.golden_replay as r\nr.TAIL_S = 3.0\nsys.exit(r.main(['replay', sys.argv[1], sys.argv[2]]))\n"
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(session), str(out)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr[-3000:]
+    summary = json.loads((out / "replay.json").read_text())
+    shift = timedelta(seconds=summary["start_wall"] - summary["recorded_start_wall"])
+    original = tmp_path / "original"
+    for path, row in _rows(out / "data" / "meetings"):
+        row["ts"] = (datetime.fromisoformat(row["ts"]) - shift).isoformat()
+        target = original / path.parent.name / "transcript.jsonl"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    same = compare(session, original, out)
+
+    assert same["only_original"] == [] and same["only_replay"] == [] and same["matched"] >= 2
+    target = next(original.glob("*/transcript.jsonl"))
+    target.write_text(target.read_text().replace("Добрый день, коллеги", "Добрый вечер, коллеги"))
+    changed = compare(session, original, out)
+    assert [r["text"] for r in changed["only_original"]] == ["Добрый вечер, коллеги"]
+    assert [r["text"] for r in changed["only_replay"]] == ["Добрый день, коллеги"]
