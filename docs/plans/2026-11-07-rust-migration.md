@@ -1,8 +1,12 @@
 # Moving recog to Rust: high-level plan
 
-Status: proposed, nothing started. The first piece exists outside the repository:
-`speexdsp-aec`, a safe Rust port of the echo canceller pyaec wraps, bit-exact with it
-(private repository `materkey/speexdsp-aec`, not wired into recog).
+Status: in progress.
+- Step 1 is done: [the ASR experiment](../experiments/2026-11-07-rust-asr-runtimes.md)
+  picked `wavo` on the Mac; Linux is open.
+- Step 0 is designed: [golden sessions](2026-11-07-golden-sessions-design.md).
+- The first piece exists outside the repository: `speexdsp-aec`, a safe Rust port of
+  the echo canceller pyaec wraps, bit-exact with it (private repository
+  `materkey/speexdsp-aec`, not wired into recog yet).
 
 ## Goal
 
@@ -29,19 +33,29 @@ where they can.
 
 0. **Contracts and golden sessions.** Record sessions (extension frames, microphone and
    system audio, the resulting JSONL, WAVs and bridge frames) and a player that replays
-   them into either implementation for A/B comparison. `scripts/check.sh` and CI gain
-   `cargo test`, clippy and `#![forbid(unsafe_code)]`.
+   them into either implementation for A/B comparison
+   ([design](2026-11-07-golden-sessions-design.md)). `scripts/check.sh` and CI gain
+   `cargo test`, clippy and `#![forbid(unsafe_code)]` with the first Rust code in the
+   repository (step 2).
 1. **ASR experiment.** Transcribe our recordings with the current GigaAM
    (`v3_e2e_rnnt`, PyTorch) and with Rust runtimes: `wavo` (pure Rust, Metal and the
    Neural Engine, GGUF Q8_0) and `gigastt` (ONNX Runtime, CUDA on Linux), on the Mac and
    on Z270XX. Measure WER against the current text, speed and memory, word timings,
    batching of several speakers in one pass, and how fast a refine can be aborted.
    Outcome: a runtime, or "not yet".
+   **Done 2026-11-07** ([report](../experiments/2026-11-07-rust-asr-runtimes.md)).
+   - On the Mac, `wavo` 0.4.0 on Metal matches PyTorch's WER within 0.06 points and
+     gives the same word timings. It is 6-12× faster, and a 60-100 ms refine needs no
+     abort hook.
+   - On Linux, `gigastt` matches PyTorch on CPU. The GPU run on Z270XX waits for free
+     GPU memory.
 2. **PyO3 pilot.** `speexdsp-aec` replaces pyaec in `recog/echo_cancel.py`; the crate
    moves into the repository with that commit.
 3. **ASR in Rust.** First behind `build_asr()` (an adapter to the chosen runtime, the way
    the remote backend is plugged in today), then inside the Rust process. torch and
-   torchaudio leave the dependencies.
+   torchaudio leave the dependencies. `wavo` has no batch and no abort; both are
+   unnecessary at its speed, so the adapter runs clips one after another and lets a
+   refine finish.
 4. **Audio capture.** System audio (`parec`, `sck_audio_capture`, the restart policy),
    the microphone through cpal instead of sounddevice and `mic_worker`, the capture
    buffer. Checked against the golden recordings.
