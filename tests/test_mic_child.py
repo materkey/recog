@@ -440,6 +440,63 @@ def test_macos_default_input_has_no_name_to_pin(monkeypatch):
     assert "--device" not in capture.argv
 
 
+def _rust_worker(monkeypatch, tmp_path, built=True):
+    binary = tmp_path / "recog-mic"
+    if built:
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(0o755)
+    monkeypatch.setattr("recog.mic_capture.RUST_MIC_WORKER", binary)
+    return binary
+
+
+def test_default_setting_runs_the_python_worker(monkeypatch, tmp_path):
+    """given: [live] mic_worker left at its default, and a built Rust worker
+    when: the microphone capture is created
+    then: the Python worker runs: the default does not change with a build"""
+    _rust_worker(monkeypatch, tmp_path)
+    capture = create_mic_capture(None, SR, platform="darwin")
+    assert capture.argv[1] == "-I"
+    assert capture.argv[2].endswith("mic_worker.py")
+
+
+def test_rust_setting_runs_the_binary_with_the_same_arguments(monkeypatch, tmp_path):
+    """given: [live] mic_worker = "rust" and the binary built
+    when: the microphone capture is created for a named device
+    then: the binary is the child, given the rate and the name like the Python worker"""
+    _fake_portaudio(monkeypatch)
+    binary = _rust_worker(monkeypatch, tmp_path)
+    monkeypatch.setattr(INSTALL_CONFIG.live, "mic_worker", "rust")
+
+    capture = create_mic_capture(3, SR, platform="darwin")
+
+    assert isinstance(capture, ChildMicCapture)
+    assert capture.argv == [str(binary), "--sample-rate", str(SR), "--device", MIC]
+
+
+def test_rust_setting_without_a_build_falls_back_to_the_python_worker_and_says_so(
+    monkeypatch, tmp_path, capsys
+):
+    """given: [live] mic_worker = "rust" but no cargo when setup ran
+    when: the microphone capture is created
+    then: the Python worker runs, so the microphone still works, and the log says why"""
+    _rust_worker(monkeypatch, tmp_path, built=False)
+    monkeypatch.setattr(INSTALL_CONFIG.live, "mic_worker", "rust")
+
+    capture = create_mic_capture(None, SR, platform="darwin")
+
+    assert capture.argv[2].endswith("mic_worker.py")
+    assert "not built" in capsys.readouterr().err
+
+
+def test_unknown_worker_setting_stops_startup_with_its_name(monkeypatch):
+    """given: a typo in [live] mic_worker
+    when: the microphone capture is created
+    then: startup stops naming the setting instead of quietly picking one"""
+    monkeypatch.setattr(INSTALL_CONFIG.live, "mic_worker", "rsut")
+    with pytest.raises(ValueError, match=r"\[live\] mic_worker"):
+        create_mic_capture(None, SR, platform="darwin")
+
+
 def test_linux_microphone_stays_in_process(monkeypatch):
     """given: Linux
     when: the microphone capture is created

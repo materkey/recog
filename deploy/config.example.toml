@@ -64,6 +64,10 @@
 # `--system-audio screencapture`, which `auto` is on macOS. Stays off by default
 # until it has been checked on real calls and headphones.
 # echo_cancel = false
+# RECOG_MIC_WORKER (macOS): the process that captures the microphone, "python"
+# (recog/mic_worker.py) or "rust" (rust/recog-mic, which ./setup.sh builds when
+# cargo is installed; without the build the Python one runs and the log says so).
+# mic_worker = "python"
 # RECOG_GOLDEN_RECORD: record each live session (bridge frames; microphone and
 # system audio and ASR answers while a conference is on) under <data dir>/golden,
 # to replay it into a new implementation

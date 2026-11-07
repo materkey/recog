@@ -153,6 +153,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     if [ "$HOST_OS" = "darwin" ]; then
         echo "Would also install deploy/python/requirements-macos.txt; all pip steps use deploy/python/constraints/macos.txt"
         echo "Would build the echo canceller from rust/speexdsp-aec-py with pip and cargo, if cargo is available."
+        echo "Would build the Rust microphone worker rust/recog-mic with cargo, if cargo is available."
     fi
     echo "Would build the ASR backend wavo from rust/wavo-asr-py with pip and cargo, if [asr] backend is wavo."
     if [ "$DO_ENV" -eq 1 ]; then
@@ -420,6 +421,16 @@ if [ "$HOST_OS" = "darwin" ]; then
         info "Echo canceller built (rust/speexdsp-aec-py)"
     else
         warn "The echo canceller was not built (rust/speexdsp-aec-py); echo cancellation stays unavailable"
+    fi
+    # The microphone worker in Rust ([live] mic_worker = "rust", not the default);
+    # without it that setting falls back to the Python worker. Built from rust/ so
+    # cargo reads rust/.cargo/config.toml like the other builds there.
+    if deps_have cargo; then
+        if (cd "$REPO_DIR/rust" && cargo build --release -p recog-mic); then
+            info "Rust microphone worker built (rust/recog-mic)"
+        else
+            warn "The Rust microphone worker was not built (rust/recog-mic); the microphone stays on the Python worker"
+        fi
     fi
 fi
 

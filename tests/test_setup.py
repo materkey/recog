@@ -425,6 +425,45 @@ def test_linux_setup_does_not_build_the_echo_canceller(repo, stubs):
     assert _echo_module_installs(result) == []
 
 
+def _mic_worker_builds(result):
+    return [c for c in result.calls if c.startswith("cargo build") and "recog-mic" in c]
+
+
+def test_macos_with_cargo_setup_builds_the_rust_microphone_worker(repo, stubs):
+    """given: macOS with cargo on PATH
+    when: setup runs
+    then: cargo builds the release binary [live] mic_worker = "rust" runs"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _mic_worker_builds(result) == ["cargo build --release -p recog-mic"]
+
+
+def test_macos_failed_mic_worker_build_setup_goes_on_and_says_so(repo, stubs):
+    """given: macOS where the build of the Rust microphone worker fails
+    when: setup runs
+    then: it reports that the microphone stays on the Python worker and finishes"""
+    cargo = stubs[0] / "cargo"
+    cargo.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "cargo $*" >> "$STUB_LOG"\n'
+        'case "$*" in *recog-mic*) exit 1 ;; esac\nexit 0\n'
+    )
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "microphone worker was not built" in result.stdout
+
+
+def test_linux_setup_does_not_build_the_rust_microphone_worker(repo, stubs):
+    """given: Linux, where the microphone is captured in the live process
+    when: setup runs
+    then: no build"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
+
+    assert _mic_worker_builds(result) == []
+
+
 def _wavo_module_installs(result):
     return [c for c in pip_calls(result) if c.startswith("pip install") and "rust/wavo-asr-py" in c]
 

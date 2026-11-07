@@ -7,6 +7,18 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-08
+
+### Changed
+
+- **macOS: a microphone worker in Rust (opt-in).** `mic_worker = "rust"` under
+  `[live]` in `~/.config/recog/config.toml` captures the microphone with
+  `rust/recog-mic`, which `./setup.sh` now builds when cargo is installed. The
+  Python worker still loses a few milliseconds of audio now and then under the
+  service (1-3 holes in half an hour); the Rust one lost none in the same test. To
+  try it: `./setup.sh`, set the key, `./recog-service.sh restart`. Without the build
+  the Python worker runs and the log says so. The default stays `"python"`.
+
 ## 2026-11-07
 
 ### Action required

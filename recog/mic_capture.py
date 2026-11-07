@@ -4,6 +4,7 @@ The microphone in a child process (`recog/mic_worker.py`, see why there) and, wi
 echo cancellation on, the system audio with its time stamps as the reference.
 """
 
+import os
 import struct
 import sys
 from pathlib import Path
@@ -11,9 +12,14 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from recog.install_config import INSTALL_CONFIG, REPO_ROOT
 from recog.log_utils import log_rate_limited
 from recog.mic_worker import BYTES_PER_SAMPLE, FRAME_HEADER
 from recog.system_audio import SubprocessPCMCapture
+
+# The Rust worker (`[live] mic_worker = "rust"`): the same arguments, frames and exit
+# codes, but a callback that takes no lock, so CoreAudio never waits for it.
+RUST_MIC_WORKER = REPO_ROOT / "rust" / "target" / "release" / "recog-mic"
 
 # Below this a gap in ADC time is the clock's own jitter (measured under 1 ms).
 ADC_HOLE_REPORT_S = 0.005
@@ -27,8 +33,20 @@ REFERENCE_HEADER = struct.Struct("<ddIB")
 
 
 def mic_worker_argv(device_name: Optional[str], sample_rate: int) -> List[str]:
-    worker = Path(__file__).resolve().with_name("mic_worker.py")
-    argv = [sys.executable, "-I", str(worker), "--sample-rate", str(sample_rate)]
+    choice = INSTALL_CONFIG.live.mic_worker
+    if choice not in ("python", "rust"):
+        raise ValueError(f'[live] mic_worker must be "python" or "rust", not {choice!r}')
+    if choice == "rust" and os.access(RUST_MIC_WORKER, os.X_OK):
+        argv = [str(RUST_MIC_WORKER), "--sample-rate", str(sample_rate)]
+    else:
+        if choice == "rust":
+            print(
+                f"[mic] {RUST_MIC_WORKER} is not built (./setup.sh builds it when cargo is "
+                "installed): the microphone runs in the Python worker",
+                file=sys.stderr,
+            )
+        worker = Path(__file__).resolve().with_name("mic_worker.py")
+        argv = [sys.executable, "-I", str(worker), "--sample-rate", str(sample_rate)]
     if device_name is not None:
         argv += ["--device", device_name]
     return argv

@@ -7,6 +7,8 @@ Status: in progress.
 - Step 2 is done: the echo stage runs `speexdsp-aec` (`rust/`) instead of pyaec, and
   `scripts/check.sh` and CI check the Rust workspace.
 - Step 3 has its first half: the opt-in ASR backend `wavo` behind `build_asr()`.
+- Step 4 has the microphone: the opt-in worker `rust/recog-mic` behind
+  `[live] mic_worker`.
 
 ## Goal
 
@@ -73,6 +75,14 @@ where they can.
 4. **Audio capture.** System audio (`parec`, `sck_audio_capture`, the restart policy),
    the microphone through cpal instead of sounddevice and `mic_worker`, the capture
    buffer. Checked against the golden recordings.
+   - **Microphone worker done 2026-11-08**, opt-in: `[live] mic_worker = "rust"` runs
+     `rust/recog-mic` (cpal) with the Python worker's arguments, frames and exit codes.
+     Under a LaunchAgent, 30 minutes, two of each side by side: Python 1 and 3 holes
+     (9 and 26 ms, each an "IOWorkLoop: skipping cycle due to overload" in the system
+     log), Rust none. cpal changes the device's rate and physical format to what a
+     stream asks for, so the worker opens the device as it is and resamples itself.
+   - Still to do: make it the default after a real meeting on it; then system audio
+     and the capture buffer.
 5. **Live process and bridge.** `live.py`, `per_speaker.py`, `refine.py` and
    `ktalk_bridge.py` as one tokio binary. Criterion: the same JSONL and the same bridge
    frames on the golden sessions. This is where most of the gain is; stopping here is a
