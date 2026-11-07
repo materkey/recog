@@ -59,6 +59,8 @@ Mapped from the code on 2026-11-07:
    same bytes and finds its answer by key. Audio and ASR answers are recorded only
    while a conference is on: the service listens all day, and a day of idle
    microphone would be about 11 GB. So orphan recordings are not covered yet.
+   Sessions older than 14 days are deleted when the next one starts; a directory
+   renamed to end with `-keep` is kept.
 2. **Replay with a fake clock and recorded ASR.**
    - The player owns a clock that the bridge, live, ingest and storage read. That
      means adding a clock parameter where `time.time()` is called today.

@@ -25,7 +25,8 @@ reasoning.
   each live session into `~/.recog/golden/` for replay when parts of recog are
   rewritten: the extension's frames, and while a conference is on the microphone
   and system audio and the ASR answers. It holds the meeting's voices and words,
-  0.5-1 GB per hour of meeting, and nothing deletes it.
+  0.5-1 GB per hour of meeting. Sessions older than 14 days are deleted when the
+  next one starts; rename a session's directory to end with `-keep` to keep it.
 
 - **With echo cancellation on, what the speakers play rarely reaches your name.**
   A loss of under a millisecond in the microphone left its audio misplaced against

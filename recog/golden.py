@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sys
 import threading
 import time
@@ -110,6 +111,27 @@ class GoldenRecorder:
     def close(self) -> None:
         with self._lock:
             self._close_locked()
+
+
+KEEP_SUFFIX = "-keep"
+
+
+def remove_old_sessions(root: Path, max_age_days: float, now: float | None = None) -> list[Path]:
+    """Deletes the sessions under ``root`` last written more than ``max_age_days`` ago.
+
+    A session whose directory name ends with ``-keep`` is kept whatever its age, and
+    only directories holding an ``events.jsonl`` are sessions.
+    """
+    now = time.time() if now is None else now
+    removed = []
+    for directory in sorted(Path(root).iterdir()) if Path(root).is_dir() else []:
+        events = directory / EVENTS
+        if directory.name.endswith(KEEP_SUFFIX) or not events.is_file():
+            continue
+        if now - events.stat().st_mtime > max_age_days * 86400:
+            shutil.rmtree(directory)
+            removed.append(directory)
+    return removed
 
 
 def read_session(directory: Path) -> Iterator[dict]:

@@ -185,3 +185,26 @@ def test_no_conference_live_audio_and_asr_are_not_recorded(tmp_path):
     t._golden.close()
 
     assert [e["output"] for e in read_session(tmp_path)] == ["на встрече"]
+
+
+def test_sessions_of_every_age_remove_old_sessions_keeps_recent_and_marked_ones(tmp_path):
+    """given: sessions 20 and 2 days old, one 20 days old marked -keep, and a stray file
+    when: old sessions are removed with a 14-day limit
+    then: only the unmarked 20-day-old session goes"""
+    import os
+    import time as time_mod
+
+    from recog.golden import remove_old_sessions
+
+    now = time_mod.time()
+    for name, days in [("old", 20), ("recent", 2), ("old-keep", 20)]:
+        recorder = GoldenRecorder(tmp_path / name)
+        recorder.close()
+        for path in [tmp_path / name, *(tmp_path / name).iterdir()]:
+            os.utime(path, (now - days * 86400, now - days * 86400))
+    (tmp_path / "notes.txt").write_text("x")
+
+    removed = remove_old_sessions(tmp_path, max_age_days=14, now=now)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["notes.txt", "old-keep", "recent"]
+    assert [p.name for p in removed] == ["old"]

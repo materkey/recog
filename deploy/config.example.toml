@@ -68,7 +68,9 @@
 # system audio and ASR answers while a conference is on) under <data dir>/golden,
 # to replay it into a new implementation
 # (docs/plans/2026-11-07-golden-sessions-design.md). It holds your and the other
-# participants' audio and words, 0.5-1 GB an hour of meeting; nothing is deleted.
+# participants' audio and words, 0.5-1 GB an hour of meeting. A session older than
+# 14 days is deleted when the next one starts, unless its directory is renamed to
+# end with "-keep".
 # golden_record = false
 
 [copilot]

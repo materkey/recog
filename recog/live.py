@@ -36,7 +36,7 @@ from .log_utils import log_rate_limited
 from .mic_capture import ChildMicCapture
 from .remote_asr import ASRTemporarilyUnavailable, FallbackASR, build_asr
 from .wavo_backend import WavoASR
-from .golden import GoldenRecorder
+from .golden import GoldenRecorder, remove_old_sessions
 from .refine import RefineAborted, RefineResult, RefineWorker, make_abortable_decode
 from .system_audio import DIGITAL_SILENCE_RESTART_S, RESTART_BACKOFF_S
 from .config import get_data_dir
@@ -71,6 +71,10 @@ NO_SYSTEM_AUDIO = "none"
 # Speaker of system audio when no one else is in the call, or there is no call:
 # what the computer plays (a video, a podcast), not a participant.
 SYSTEM_AUDIO_SPEAKER = "Системный звук"
+
+# Golden sessions older than this are deleted when the next one starts, unless
+# their directory name ends with "-keep" (recog/golden.py).
+GOLDEN_KEEP_DAYS = 14
 
 PACTL_TIMEOUT_S = 2.0
 
@@ -839,7 +843,13 @@ class LiveTranscriber:
         """A golden session under <data dir>/golden when [live] golden_record is on."""
         if not INSTALL_CONFIG.live.golden_record:
             return None
-        directory = get_data_dir() / "golden" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        root = get_data_dir() / "golden"
+        for removed in remove_old_sessions(root, GOLDEN_KEEP_DAYS):
+            print(
+                f"[golden] Removed {removed.name}, older than {GOLDEN_KEEP_DAYS} days",
+                file=sys.stderr,
+            )
+        directory = root / datetime.now().strftime("%Y-%m-%d_%H%M%S")
         print(f"[golden] Recording the session into {directory}", file=sys.stderr)
         return GoldenRecorder(directory)
 
