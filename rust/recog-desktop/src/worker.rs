@@ -124,10 +124,49 @@ fn urlsplit(url: &str) -> Result<Split, PyErr> {
         if netloc.contains('[') != netloc.contains(']') {
             return Err(PyErr::value("Invalid IPv6 URL"));
         }
+        if netloc.contains('[') && netloc.contains(']') {
+            check_bracketed_netloc(&netloc)?;
+        }
     }
     let (rest, fragment) = rest.split_once('#').map_or((rest, ""), |(a, b)| (a, b));
     let (_, query) = rest.split_once('?').map_or((rest, ""), |(a, b)| (a, b));
     Ok(Split { scheme, netloc, query: query.to_owned(), fragment: fragment.to_owned() })
+}
+
+/// `_check_bracketed_netloc`: nothing before the bracket, only a port after it, and
+/// the host itself checked (also when the brackets were in the user part).
+fn check_bracketed_netloc(netloc: &str) -> Result<(), PyErr> {
+    let host_port = netloc.rsplit_once('@').map_or(netloc, |(_, h)| h);
+    let hostname = match host_port.split_once('[') {
+        Some((before, bracketed)) => {
+            let (hostname, port) = bracketed.split_once(']').unwrap_or((bracketed, ""));
+            if !before.is_empty() || (!port.is_empty() && !port.starts_with(':')) {
+                return Err(PyErr::value("Invalid IPv6 URL"));
+            }
+            hostname
+        }
+        None => host_port.split_once(':').map_or(host_port, |(h, _)| h),
+    };
+    check_bracketed_host(hostname)
+}
+
+/// `_check_bracketed_host`: an IPvFuture literal or an IPv6 address (with a zone).
+fn check_bracketed_host(hostname: &str) -> Result<(), PyErr> {
+    if let Some(future) = hostname.strip_prefix('v') {
+        let hex = future.chars().take_while(char::is_ascii_hexdigit).count();
+        let rest = &future[hex..];
+        let valid = hex > 0 && rest.len() > 1 && rest.starts_with('.') && !rest.contains('\n');
+        return if valid { Ok(()) } else { Err(PyErr::value("IPvFuture address is invalid")) };
+    }
+    if hostname.parse::<std::net::Ipv4Addr>().is_ok() {
+        return Err(PyErr::value("An IPv4 address cannot be in brackets"));
+    }
+    let (address, zone) = hostname.split_once('%').map_or((hostname, None), |(a, z)| (a, Some(z)));
+    let zone_valid = zone.is_none_or(|z| !z.is_empty() && !z.contains('%'));
+    if zone_valid && address.parse::<std::net::Ipv6Addr>().is_ok() {
+        return Ok(());
+    }
+    Err(PyErr::value(format!("{} does not appear to be an IPv4 or IPv6 address", recog_core::py::repr(hostname))))
 }
 
 impl Split {

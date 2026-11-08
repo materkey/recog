@@ -17,6 +17,27 @@ use crate::py::PyErr;
 /// The table of this Mac.
 pub struct MacTable;
 
+/// The names XNU gives the strings it appends after a process's environment
+/// (`exec_add_apple_strings`).
+const APPLE_STRINGS: [&str; 16] = [
+    "executable_path",
+    "stack_guard",
+    "malloc_entropy",
+    "ptr_munge",
+    "main_stack",
+    "executable_file",
+    "dyld_file",
+    "executable_cdhash",
+    "executable_boothash",
+    "th_port",
+    "arm64e_abi",
+    "dyld_flags",
+    "subsystem_root_path",
+    "has_sec_transition",
+    "security_config",
+    "apple_dyld_flags",
+];
+
 fn raw_pid(pid: i64) -> Result<i32, PyErr> {
     i32::try_from(pid).map_err(|_| PyErr::no_such_process(pid))
 }
@@ -92,8 +113,17 @@ impl ProcessTable for MacTable {
 
     fn environ(&self, pid: i64) -> Result<Vec<(String, String)>, PyErr> {
         kinfo(pid)?;
+        let mut entries = procargs(pid)?.1;
+        // sysinfo reads past the empty string that ends the environment, into the
+        // kernel's "apple" strings for dyld; psutil stops there.
+        while entries.last().is_some_and(|e| {
+            let entry = e.to_string_lossy();
+            entry.split_once('=').is_some_and(|(key, _)| APPLE_STRINGS.contains(&key))
+        }) {
+            entries.pop();
+        }
         let mut block = String::new();
-        for entry in procargs(pid)?.1 {
+        for entry in entries {
             block.push_str(&entry.to_string_lossy());
             block.push('\0');
         }

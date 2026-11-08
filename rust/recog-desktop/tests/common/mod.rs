@@ -673,16 +673,19 @@ pub fn fake_app(dir: &Path, name: &str) -> FakeApp {
     }
 }
 
-/// The scripted main process of a fake application: ready, started after its
-/// binary was written (so its fuses attest to it).
+/// When every scripted process started: after any binary a test writes (so its
+/// fuses attest to the running image), and the same on both sides of a comparison.
+pub const STARTED: f64 = 4_000_000_000.5;
+
+/// The scripted main process of a fake application, ready.
 pub fn ktalk_process(pid: i64, app: &FakeApp, app_ready_port: u16) -> Value {
     let name = app.executable.file_name().unwrap().to_string_lossy().into_owned();
-    let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() + 1000.0;
+    let started = STARTED;
     let mut map = Map::new();
     map.insert("pid", Value::Int(i128::from(pid)));
     map.insert("name", Value::from(name.as_str()));
     map.insert("uid", Value::from("self"));
-    map.insert("started", Value::Float(started.floor()));
+    map.insert("started", Value::Float(started));
     map.insert("exe", Value::from(app.executable.to_string_lossy().as_ref()));
     map.insert("cmdline", Value::Array(vec![Value::from(app.executable.to_string_lossy().as_ref())]));
     map.insert("environ", py::obj([("LANG", Value::from("C"))]));

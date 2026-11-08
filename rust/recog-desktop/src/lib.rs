@@ -15,9 +15,14 @@
 //!
 //! Known differences from Python:
 //! - a crash prints the exception's last line (`Kind: message`), not a traceback;
-//! - `psutil.NoSuchProcess`/`AccessDenied` messages are shorter (only logs show them);
+//! - `psutil.NoSuchProcess`/`AccessDenied` messages never name the process (psutil's
+//!   do once it has read the name; only an observer log line can show one);
 //! - macOS: a process start time is not corrected for a system clock change after
 //!   boot (psutil adjusts by the boot time's drift);
+//! - macOS: the environment is cut before the trailing strings XNU appends for dyld
+//!   (`ptr_munge=`, `th_port=`, ...) by their names, since sysinfo reads past the
+//!   empty string where psutil stops; an unknown new one would stay (none is a name
+//!   the integration reads);
 //! - macOS: the listening sockets come from a scan of every process (listeners has no
 //!   per-process call), a few tens of milliseconds per check;
 //! - an unreadable `Info.plist` is `InvalidFileException("Invalid file")` whatever the
