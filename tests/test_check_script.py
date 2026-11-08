@@ -266,8 +266,9 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
     core = result.calls.index("cargo test -p recog-core")
     assert result.calls[core + 1] == f"parity-python {stub_bin[0] / 'python3'}"
     assert sum(c.startswith("parity-python ") for c in result.calls) == 1
+    # "-m pytest": the stub's own path, logged by the parity lines, holds "pytest-of-".
     assert result.calls.index(cargo[-1]) < next(
-        i for i, c in enumerate(result.calls) if "pytest" in c
+        i for i, c in enumerate(result.calls) if "-m pytest" in c
     )
 
 
