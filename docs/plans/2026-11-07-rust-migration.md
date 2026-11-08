@@ -9,6 +9,7 @@ Status: in progress.
 - Step 3: `wavo` behind `build_asr()` is the default on macOS (`"auto"`).
 - Step 4 has the microphone: the opt-in worker `rust/recog-mic` behind
   `[live] mic_worker`.
+- Step 8 has the Zoom application source ported, not yet wired: `rust/recog-zoom`.
 
 ## Goal
 
@@ -102,6 +103,13 @@ where they can.
      real meeting on it.
 8. **Edges.** The `zoom_app` session logic (the Swift helper stays) and the KTalk desktop
    inspector.
+   - **`zoom_app` ported 2026-11-08**, not wired: `rust/recog-zoom` (library and the
+     standalone `recog-zoom-app`). Its tests run `recog/zoom_app.py` on the same input
+     and compare exactly: the Python test scenarios, sequences rebuilt from recorded
+     Accessibility dumps and 400 seeded random runs (about 12 800 events), the
+     installed Zoom's wording, and (on request, two Swift builds) a real helper build,
+     whose bundle is identical file by file to the Python one's.
+   - Still to do: start it from the live process instead of the Python thread.
 9. **Installation without Python.** `setup.sh` and the launchd/systemd units run
    binaries; `Recog.app` starts the Rust binary, so the permissions stay with "Recog".
    Python modules are deleted as they are replaced; each step gets its CHANGELOG entry.
@@ -114,7 +122,7 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 |---|---|---|
 | `recog-core` | `install_config.py`, `config.py` (data directory), `user_profile.py`, `meeting_storage.py`, `ws_origin.py`, `privacy.py` | library |
 | `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library |
-| `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library |
+| `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library, ported, not wired |
 | `recog-bridge` | `ktalk_bridge.py` | library |
 | `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same tokio process |
 | `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary |

@@ -97,7 +97,10 @@ sha256; locally install it from a package manager (`brew install gitleaks`).
 
 With the `rust/` workspace present, `scripts/check.sh` runs `cargo fmt --check`,
 `cargo clippy --workspace --all-targets -- -D warnings` and the echo canceller's
-tests that need no data, from `rust/`. With `SPEEXDSP_AEC_GOLDEN` set it also runs
+tests that need no data, from `rust/`. The tests of `recog-zoom` run
+`recog/zoom_app.py` on the same input through check.sh's interpreter
+(`RECOG_ZOOM_PARITY_PYTHON`), so it needs the Python dependencies like pytest does.
+With `SPEEXDSP_AEC_GOLDEN` set it also runs
 the parity tests against pyaec (`rust/speexdsp-aec/README.md`). cargo comes from
 rustup (https://rustup.rs) with the clippy and rustfmt components; CI uses the
 runner's stable toolchain, so a new clippy lint can fail a run that passed before.

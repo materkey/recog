@@ -1,0 +1,125 @@
+[
+ {
+  "name": "recorded meeting from the waiting room to minimal view and out",
+  "events": [
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Иван Петров, Computer audio unmuted\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}]}",
+    "at": 1000.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Иван Петров, Computer audio unmuted\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}]}",
+    "at": 1002.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Иван Петров, Computer audio unmuted\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}]}",
+    "at": 1004.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Web Tester, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Web Tester\"}, {\"role\": \"AXButton\", \"description\": \"Web Tester\"}]}, {\"description\": \"Иван Петров, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}]}",
+    "at": 1006.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Web Tester, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Web Tester\"}, {\"role\": \"AXButton\", \"description\": \"Web Tester\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}]}",
+    "at": 1008.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Web Tester, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Web Tester\"}, {\"role\": \"AXButton\", \"description\": \"Web Tester\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}]}",
+    "at": 1010.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"minimal\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}], \"account\": \"Zoom, Иван Петров, In a Zoom Meeting, Basic account\"}",
+    "at": 1012.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"minimal\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}], \"account\": \"Zoom, Иван Петров, In a Zoom Meeting, Basic account\"}",
+    "at": 1014.0
+   },
+   {
+    "line": "{\"state\": \"idle\"}",
+    "at": 1016.0
+   },
+   {
+    "line": "{\"state\": \"idle\"}",
+    "at": 1022.1
+   }
+  ]
+ },
+ {
+  "name": "recorded speakers taking turns, from the change log of a meeting",
+  "events": [
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker A, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker A\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}]}",
+    "at": 1000.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}]}",
+    "at": 1002.631
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker A, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker A\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}]}",
+    "at": 1005.592
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}]}",
+    "at": 1008.226
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}]}",
+    "at": 1032.319
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker A\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}]}",
+    "at": 1032.613
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker A, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}]}",
+    "at": 1039.849
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker A\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}]}",
+    "at": 1042.732
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker A, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}]}",
+    "at": 1045.346
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker A\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}]}",
+    "at": 1048.263
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXImage\"}, {\"role\": \"AXButton\", \"description\": \"Иван Петров\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker A\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Observer C\"}, {\"role\": \"AXButton\", \"description\": \"Observer C\"}]}]}",
+    "at": 1053.225
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Observer C\"}, {\"role\": \"AXStaticText\", \"value\": \"Observer C\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Observer C\"}, {\"role\": \"AXStaticText\", \"value\": \"Observer C\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Иван Петров\"}, {\"role\": \"AXImage\"}]}]}",
+    "at": 1053.503
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Observer C\"}, {\"role\": \"AXStaticText\", \"value\": \"Observer C\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}, {\"role\": \"AXButton\", \"description\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker B\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}]}, {\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Иван Петров\"}, {\"role\": \"AXImage\"}]}]}",
+    "at": 1058.958
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"view\": \"window\", \"tiles\": [{\"description\": \"Иван Петров, Computer audio muted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Иван Петров\"}, {\"role\": \"AXImage\"}]}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Speaker A\"}, {\"role\": \"AXStaticText\", \"value\": \"Speaker A\"}]}, {\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"children\": [{\"role\": \"AXStaticText\", \"value\": \"Speaker B\"}, {\"role\": \"AXButton\", \"description\": \"Speaker B\"}]}, {\"description\": \"Observer C, Computer audio unmuted, Video off\", \"children\": [{\"role\": \"AXButton\", \"description\": \"Observer C\"}, {\"role\": \"AXStaticText\", \"value\": \"Observer C\"}]}]}",
+    "at": 1059.248
+   }
+  ]
+ },
+ {
+  "name": "recorded lines of an early helper that named the tile itself",
+  "events": [
+   {
+    "line": "{\"state\": \"idle\"}",
+    "at": 998.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"tiles\": [{\"description\": \"Иван Петров, Computer audio muted, Video off\", \"name\": \"Иван Петров\"}, {\"description\": \"Web Tester, Computer audio unmuted, Video off\", \"name\": \"Web Tester\"}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"name\": \"Speaker A\"}, {\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"name\": \"Speaker B\"}], \"view\": \"window\"}",
+    "at": 1000.0
+   },
+   {
+    "line": "{\"state\": \"meeting\", \"tiles\": [{\"description\": \"Иван Петров, Computer audio muted, Video off\", \"name\": \"Иван Петров\"}, {\"description\": \"Web Tester, Computer audio unmuted, Video off\", \"name\": \"Web Tester\"}, {\"description\": \"Speaker A, Computer audio unmuted, Video off\", \"name\": \"Speaker A\"}, {\"description\": \"Speaker B, Computer audio unmuted, Video off, active speaker\", \"name\": \"Speaker B\"}], \"view\": \"window\"}",
+    "at": 1002.0
+   }
+  ]
+ }
+]
