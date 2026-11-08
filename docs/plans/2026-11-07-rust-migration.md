@@ -96,6 +96,30 @@ where they can.
    binaries; `Recog.app` starts the Rust binary, so the permissions stay with "Recog".
    Python modules are deleted as they are replaced; each step gets its CHANGELOG entry.
 
+## Target layout
+
+Crates under `rust/`, one decision per crate, dependencies pointing down the list:
+
+| Crate | Replaces | Kind |
+|---|---|---|
+| `recog-core` | `install_config.py`, `config.py` (data directory), `user_profile.py`, `meeting_storage.py`, `ws_origin.py`, `privacy.py` | library |
+| `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library |
+| `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library |
+| `recog-bridge` | `ktalk_bridge.py` | library |
+| `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same tokio process |
+| `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary |
+| `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries |
+| `recog-mic` | `mic_worker.py` | binary, done |
+
+Shared rules: edition 2024, `#![forbid(unsafe_code)]` in our code, clippy with
+`-D warnings`, tokio for anything asynchronous, serde for every file and frame format.
+Log lines keep the Python prefixes (`[KTalk Bridge]`, `[mic]`): tools and people grep
+them. A Rust part is accepted by the same files and frames the Python one produces:
+parity tests run both on the same input and compare the output, and the live process
+by golden replay. Python stays the default until its Rust replacement has passed that
+and a real meeting; each switch is a setting first, then the default, then the Python
+module goes.
+
 ## Risks
 
 - ASR text will change: a quantized model is not the PyTorch one, so the decision is a
