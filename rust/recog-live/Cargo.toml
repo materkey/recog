@@ -9,6 +9,9 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+# The model lock is reentrant, as Python's threading.RLock: the refine worker holds
+# it around a callback that may take it again inside the ASR.
+parking_lot = "0.12.5"
 recog-core = { path = "../recog-core" }
 speexdsp-aec = { path = "../speexdsp-aec" }
 # The real FFTs of the suppressor, the echo path detector and the inverse filter.

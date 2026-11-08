@@ -1442,6 +1442,7 @@ name = "recog-live"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "parking_lot",
  "realfft",
  "recog-core",
  "serde_json",
