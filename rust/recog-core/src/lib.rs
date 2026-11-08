@@ -14,10 +14,12 @@
 pub mod data_dir;
 pub mod install_config;
 pub mod paths;
+pub mod privacy;
 pub mod py;
 pub mod pyjson;
 pub mod time;
 #[rustfmt::skip]
 mod unicode_tables;
 pub mod url;
+pub mod user_profile;
 pub mod ws_origin;

@@ -13,5 +13,6 @@ toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 uuid = { version = "1.20", features = ["v4"] }
 
 [dev-dependencies]
+base64 = "0.22.1"
 serde_json = "1.0.141"
 tempfile = "3.20"
