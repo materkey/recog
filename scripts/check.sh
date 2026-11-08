@@ -135,6 +135,9 @@ if [ -f rust/Cargo.toml ]; then
         # Its differential tests run the Python capture, echo, per-speaker, refine and
         # golden modules on the same input, with this interpreter (numpy, speexdsp_aec).
         RECOG_LIVE_PARITY_PYTHON="$PYTHON" cargo test -p recog-live
+        # Its differential tests run recog/ktalk_bridge.py on the same scenarios with
+        # this interpreter (rust/recog-bridge/tests/parity/bridge_driver.py).
+        RECOG_BRIDGE_PARITY_PYTHON="$PYTHON" cargo test -p recog-bridge
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi
