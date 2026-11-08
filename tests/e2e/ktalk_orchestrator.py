@@ -411,7 +411,10 @@ class KTalkOrchestrator:
         time.sleep(2)  # let bridge WebSocket accept connections
 
         try:
-            ws = websocket.create_connection(_BRIDGE_WS_URL, timeout=5)
+            # Without an Origin header, as the Python daemons connect: the
+            # bridge admits only conference hosts, the webapp, and no Origin,
+            # and websocket-client would send http://localhost:8766.
+            ws = websocket.create_connection(_BRIDGE_WS_URL, timeout=5, suppress_origin=True)
         except Exception as exc:
             print(f"[e2e] Speaker injector failed to connect: {exc}", file=sys.stderr)
             return
