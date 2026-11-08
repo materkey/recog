@@ -13,9 +13,18 @@
 # Mac); DEPS_PYTHON overrides the interpreter used for library probes, which is
 # deliberately NOT RECOG_PYTHON — that one selects the interpreter baked into
 # the service units.
+#
+# Under `[install] runtime = "rust"` (deps_install_runtime) the installation has
+# no Python: the probes that ran a Python snippet ask the `recog` binary in
+# bin/ instead (recog check, recog config ...), and the PortAudio probe goes,
+# since the Rust live process records the Linux microphone with parec.
 
 DEPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPS_REPO_DIR="${DEPS_REPO_DIR:-$(cd "$DEPS_DIR/.." && pwd)}"
+# The programs of an installation without Python, copied there from
+# rust/target/release by setup.sh (a cargo cache may clean rust/target while a
+# service runs the binary). recog_core::install names the same directory.
+DEPS_BIN_DIR="$DEPS_REPO_DIR/bin"
 
 deps_host_os() {
     local raw="${RECOG_HOST_OS:-$(uname -s)}"
@@ -40,6 +49,92 @@ deps_python() {
     else
         echo "python3"
     fi
+}
+
+# `~` and `~/...` expanded as Python's Path.expanduser() does.
+_deps_expand_home() {
+    case "$1" in
+        \~)    printf '%s\n' "$HOME" ;;
+        \~/*)  printf '%s\n' "$HOME/${1#\~/}" ;;
+        *)     printf '%s\n' "$1" ;;
+    esac
+}
+
+# The installation configuration file, resolved as config_path() in
+# recog/install_config.py: RECOG_CONFIG_FILE (relative to the checkout), else
+# $XDG_CONFIG_HOME/recog/config.toml, else ~/.config/recog/config.toml.
+deps_config_file() {
+    local configured
+    if [ -n "${RECOG_CONFIG_FILE:-}" ]; then
+        configured="$(_deps_expand_home "$RECOG_CONFIG_FILE")"
+        case "$configured" in
+            /*) printf '%s\n' "$configured" ;;
+            *)  printf '%s\n' "$DEPS_REPO_DIR/$configured" ;;
+        esac
+    else
+        printf '%s/recog/config.toml\n' "$(_deps_expand_home "${XDG_CONFIG_HOME:-~/.config}")"
+    fi
+}
+
+# [install] runtime: "python" (default) or "rust", or whatever else was written,
+# which the callers reject. It decides what setup.sh installs and what the units
+# run before any program exists to ask, so it is read here: from
+# RECOG_INSTALL_RUNTIME in the calling shell, else from a `runtime = "..."` line
+# under [install] in the configuration file. Never from .env, which no shell
+# script reads; deps_install_runtime_problem compares the result with what the
+# real parser reads.
+deps_install_runtime() {
+    local value file
+    value="$(printf '%s' "${RECOG_INSTALL_RUNTIME:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    if [ -z "$value" ]; then
+        file="$(deps_config_file)"
+        if [ -f "$file" ]; then
+            value="$(awk '
+                /^[[:space:]]*\[/ {
+                    header = $0
+                    sub(/#.*/, "", header)
+                    gsub(/[[:space:]]/, "", header)
+                    in_install = (header == "[install]")
+                    next
+                }
+                in_install && /^[[:space:]]*runtime[[:space:]]*=/ {
+                    value = $0
+                    sub(/^[^=]*=[[:space:]]*/, "", value)
+                    if (value ~ /^"/) {
+                        sub(/^"/, "", value); sub(/".*$/, "", value)
+                    } else if (value ~ /^\047/) {
+                        sub(/^\047/, "", value); sub(/\047.*$/, "", value)
+                    } else {
+                        sub(/[[:space:]]*#.*$/, "", value); sub(/[[:space:]]+$/, "", value)
+                    }
+                    print value
+                    exit
+                }
+            ' "$file")"
+        fi
+    fi
+    printf '%s\n' "${value:-python}"
+}
+
+deps_rust_mode() { [ "$(deps_install_runtime)" = "rust" ]; }
+
+# The programs an installation without Python needs in bin/: the microphone
+# worker only on a Mac (Linux records the microphone with parec).
+deps_rust_programs() {
+    local programs="recog recog-web recog-copilot-supervisor recog-copilot-channel recog-desktop"
+    if [ "$(deps_host_os)" = "darwin" ]; then
+        programs="$programs recog-mic"
+    fi
+    printf '%s\n' "$programs"
+}
+
+# Runs `bin/recog <args>`, or says on stderr that it is missing and fails.
+deps_recog() {
+    if [ ! -x "$DEPS_BIN_DIR/recog" ]; then
+        echo "$DEPS_BIN_DIR/recog is not installed — run ./setup.sh with cargo on PATH ([install] runtime = \"rust\")" >&2
+        return 1
+    fi
+    "$DEPS_BIN_DIR/recog" "$@"
 }
 
 # apt | pacman | brew | unknown — picks which install hint to print.
@@ -143,7 +238,14 @@ deps_portaudio_ok() {
 # gateway URL (build_asr() raises at startup) and RECOG_ASR_BACKEND=wavo without
 # the wavo_asr module (the first model load raises): every service would crash-loop.
 # "auto" needs nothing: without wavo_asr it runs on PyTorch.
+#
+# Without Python, `recog check` checks the same files the same way; there is no
+# [asr] to check, since the Rust live process carries wavo.
 deps_asr_config_check() {
+    if deps_rust_mode; then
+        deps_recog check 2>&1
+        return
+    fi
     "$(deps_python)" -c '
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -227,6 +329,41 @@ print(INSTALL_CONFIG.copilot.runtime)
 ' "$DEPS_REPO_DIR" 2> /dev/null || true
 }
 
+# [install] runtime as recog/install_config.py (or, without Python, the recog
+# binary) reads it: from .env too, and from any TOML form. Empty when it cannot
+# be read; the configuration check reports why.
+deps_parsed_install_runtime() {
+    if deps_rust_mode; then
+        deps_recog config install-runtime 2> /dev/null || true
+        return
+    fi
+    "$(deps_python)" -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from recog.install_config import INSTALL_CONFIG
+print(INSTALL_CONFIG.install.runtime)
+' "$DEPS_REPO_DIR" 2> /dev/null || true
+}
+
+# One line when [install] runtime is invalid, or when the scripts and the parser
+# disagree on it (it was put into .env, or written in a form the line reader of
+# deps_install_runtime does not understand). Nothing otherwise.
+deps_install_runtime_problem() {
+    local expected parsed
+    expected="$(deps_install_runtime)"
+    case "$expected" in
+        python|rust) ;;
+        *)
+            echo "[install] runtime must be \"python\" or \"rust\", not \"$expected\" ($(deps_config_file) or RECOG_INSTALL_RUNTIME)"
+            return 0 ;;
+    esac
+    parsed="$(deps_parsed_install_runtime)"
+    if [ -n "$parsed" ] && [ "$parsed" != "$expected" ]; then
+        echo "[install] runtime is \"$parsed\" for recog but \"$expected\" for setup.sh and recog-service.sh, which read it from the calling shell or a plain runtime = \"...\" line under [install] in $(deps_config_file), never from .env — set it there"
+    fi
+    return 0
+}
+
 # --- readiness -------------------------------------------------------------
 
 # Everything the full live pipeline needs, one human-readable problem per
@@ -247,10 +384,20 @@ deps_readiness_problems() {
     if [ "$os" = "linux" ]; then
         deps_have parec || echo "parec not found — $(deps_hint parec)"
         deps_have pactl || echo "pactl not found — $(deps_hint pactl)"
-        deps_portaudio_ok || echo "PortAudio not loadable (python -c 'import sounddevice' failed) — $(deps_hint portaudio), then rerun ./setup.sh"
+        if ! deps_rust_mode; then
+            deps_portaudio_ok || echo "PortAudio not loadable (python -c 'import sounddevice' failed) — $(deps_hint portaudio), then rerun ./setup.sh"
+        fi
     elif [ "$os" = "darwin" ]; then
         deps_sck_helper_ok || echo "sck_audio_capture helper missing or not executable — run ./setup.sh with swiftc available ($(deps_hint swiftc))"
         deps_launcher_ok || echo "Recog.app missing — run ./setup.sh with swiftc available ($(deps_hint swiftc))"
+    fi
+
+    deps_install_runtime_problem
+    if deps_rust_mode; then
+        local program
+        for program in $(deps_rust_programs); do
+            [ -x "$DEPS_BIN_DIR/$program" ] || echo "$DEPS_BIN_DIR/$program is not installed — run ./setup.sh with cargo on PATH ($(deps_hint cargo))"
+        done
     fi
 
     if ! asr_problem="$(deps_asr_config_check)"; then

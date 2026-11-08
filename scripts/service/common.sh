@@ -9,7 +9,14 @@
 # Requires SVC_REPO_DIR to be set by the caller.
 
 SVC_REPO_DIR="${SVC_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# deps_install_runtime decides what the units run.
+if ! declare -F deps_install_runtime > /dev/null; then
+    DEPS_REPO_DIR="${DEPS_REPO_DIR:-$SVC_REPO_DIR}"
+    # shellcheck source=../deps.sh
+    source "$SVC_REPO_DIR/scripts/deps.sh"
+fi
 SVC_DATA_DIR="${SVC_DATA_DIR:-$(bash "$SVC_REPO_DIR/scripts/data-dir.sh")}"
+SVC_BIN_DIR="$SVC_REPO_DIR/bin"
 SVC_LOG_DIR="${SVC_LOG_DIR:-$SVC_DATA_DIR/logs}"
 
 # Canonical service names. Order matters: install/start/status walk it as-is.
@@ -80,6 +87,50 @@ svc_cli_path_prefix() {
     printf '%s' "$extra"
 }
 
+# The program and arguments a service's unit runs, one per line. With Python
+# that is `python -m <module>`, whose module hands over to the Rust binary when
+# the service's own runtime asks for it; without Python ([install] runtime =
+# "rust") the unit runs the binary in bin/ directly, the checkout named.
+svc_command() {
+    if [ "$(deps_install_runtime)" = "rust" ]; then
+        case "$1" in
+            live)               printf '%s\n' "$SVC_BIN_DIR/recog" live --system-audio auto --ktalk ;;
+            frontend)           printf '%s\n' "$SVC_BIN_DIR/recog-web" --host 127.0.0.1 --port 9080 --repo "$SVC_REPO_DIR" ;;
+            copilot-channel)    printf '%s\n' "$SVC_BIN_DIR/recog-copilot-channel" --repo-root "$SVC_REPO_DIR" ;;
+            copilot-supervisor) printf '%s\n' "$SVC_BIN_DIR/recog-copilot-supervisor" --repo-root "$SVC_REPO_DIR" ;;
+            *)                  return 1 ;;
+        esac
+        return
+    fi
+    local python; python="$(svc_python)"
+    case "$1" in
+        live)               printf '%s\n' "$python" -m recog live --system-audio auto --ktalk ;;
+        frontend)           printf '%s\n' "$python" -m recog.web.server ;;
+        copilot-channel)    printf '%s\n' "$python" -m recog.copilot_channel ;;
+        copilot-supervisor) printf '%s\n' "$python" -m recog.copilot_supervisor ;;
+        *)                  return 1 ;;
+    esac
+}
+
+# The command as the unit format writes it, one argument per line on stdin.
+# Backends override it; the default (systemd's ExecStart=) quotes the program,
+# as the templates quote every path, and any argument a space would split.
+svc_format_command() {
+    local arg first=1 line=""
+    while IFS= read -r arg; do
+        if [ "$first" -eq 1 ]; then
+            line="\"$arg\""
+            first=0
+        else
+            case "$arg" in
+                *[!A-Za-z0-9_./:=-]*|"") line="$line \"$arg\"" ;;
+                *)                       line="$line $arg" ;;
+            esac
+        fi
+    done
+    printf '%s' "$line"
+}
+
 # --- template rendering ----------------------------------------------------
 
 # Escape a value for the unit-file *format*. Backends override it; the default
@@ -101,19 +152,41 @@ _svc_value() {
     _svc_sed_escape "$(svc_escape_value "$1")"
 }
 
-# Render <src> into <dst>, substituting every @PLACEHOLDER@. Fails (leaving
-# <dst> untouched) if any @TOKEN@ survives — a typo in a template must not
-# reach the service manager as a literal path.
+# @COMMAND@: the service's command in the unit format, already escaped for it,
+# then for sed. A multi-line value (launchd's one <string> per argument) keeps
+# its lines: sed splits the output line on a backslash-escaped newline.
+_svc_command_value() {
+    # In variables: bash 3.2 (macOS /bin/bash) leaves $'...' inside a quoted
+    # ${...//...} unexpanded.
+    local value newline=$'\n' escaped_newline=$'\\\n'
+    value="$(svc_command "$1" | svc_format_command)" || return 1
+    value="$(_svc_sed_escape "$value")"
+    printf '%s' "${value//$newline/$escaped_newline}"
+}
+
+# Render <src> into <dst> for <service>, substituting every @PLACEHOLDER@.
+# Fails (leaving <dst> untouched) if any @TOKEN@ survives — a typo in a
+# template must not reach the service manager as a literal path. Without a
+# service @COMMAND@ stays and fails the same way.
 svc_render_template() {
-    local src="$1" dst="$2"
+    local src="$1" dst="$2" service="${3:-}"
     if [ ! -f "$src" ]; then
         echo "service template not found: $src" >&2
         return 1
     fi
     mkdir -p "$(dirname "$dst")"
 
+    local command_args=()
+    if [ -n "$service" ]; then
+        local command; command="$(_svc_command_value "$service")" || {
+            echo "no command for service: $service" >&2
+            return 1
+        }
+        command_args=(-e "s|@COMMAND@|$command|g")
+    fi
+
     local tmp="$dst.tmp.$$"
-    sed \
+    sed "${command_args[@]}" \
         -e "s|@REPO_DIR@|$(_svc_value "$SVC_REPO_DIR")|g" \
         -e "s|@DATA_DIR@|$(_svc_value "$SVC_DATA_DIR")|g" \
         -e "s|@HOME@|$(_svc_value "$HOME")|g" \
@@ -157,7 +230,7 @@ svc_render_all() {
     local dir="$1" s
     mkdir -p "$dir"
     for s in $(svc_all_services); do
-        svc_render_template "$(svc_template "$s")" "$dir/$(svc_unit_file "$s")" || return 1
+        svc_render_template "$(svc_template "$s")" "$dir/$(svc_unit_file "$s")" "$s" || return 1
         echo "$dir/$(svc_unit_file "$s")"
     done
 }

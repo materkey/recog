@@ -9,7 +9,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment="HOME=@HOME@"
 Environment="RECOG_DATA_DIR=@DATA_DIR@"
 Environment="PATH=@CLI_PATH_PREFIX@@NODE_BIN@:@EXTRA_PATH@:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-ExecStart="@PYTHON@" -m recog.web.server
+ExecStart=@COMMAND@
 # Mirrors launchd KeepAlive.SuccessfulExit=false — a clean exit is intentional.
 Restart=on-failure
 RestartSec=5

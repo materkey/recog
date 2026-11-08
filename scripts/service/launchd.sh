@@ -16,6 +16,16 @@ svc_escape_value() {
     printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
+# ProgramArguments: one <string> per argument, on the template's indentation.
+svc_format_command() {
+    local arg first=1
+    while IFS= read -r arg; do
+        [ "$first" -eq 1 ] || printf '\n        '
+        first=0
+        printf '<string>%s</string>' "$(svc_escape_value "$arg")"
+    done
+}
+
 svc_unit_file() { echo "com.recog.$1.plist"; }
 svc_unit_name() { echo "com.recog.$1"; }
 svc_template()  { echo "$SVC_TEMPLATE_DIR/com.recog.$1.plist.in"; }
@@ -25,7 +35,7 @@ svc_unit_path() { echo "$SVC_UNIT_DIR/$(svc_unit_file "$1")"; }
 # activation is a separate step so `setup.sh` can verify dependencies first.
 svc_install() {
     mkdir -p "$SVC_UNIT_DIR"
-    svc_render_template "$(svc_template "$1")" "$(svc_unit_path "$1")"
+    svc_render_template "$(svc_template "$1")" "$(svc_unit_path "$1")" "$1"
 }
 
 svc_post_install() { :; }

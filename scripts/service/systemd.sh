@@ -26,7 +26,7 @@ _systemctl() { systemctl --user "$@" 2>/dev/null; }
 # activation is a separate step so `setup.sh` can verify dependencies first.
 svc_install() {
     mkdir -p "$SVC_UNIT_DIR"
-    svc_render_template "$(svc_template "$1")" "$(svc_unit_path "$1")"
+    svc_render_template "$(svc_template "$1")" "$(svc_unit_path "$1")" "$1"
 }
 
 # systemd caches unit files; one reload after the whole batch is enough.

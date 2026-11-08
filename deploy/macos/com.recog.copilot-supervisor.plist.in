@@ -7,9 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>@PYTHON@</string>
-        <string>-m</string>
-        <string>recog.copilot_supervisor</string>
+        @COMMAND@
     </array>
 
     <key>WorkingDirectory</key>
