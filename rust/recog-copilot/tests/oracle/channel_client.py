@@ -45,28 +45,47 @@ async def main(url):
                 if getattr(root, "id", None) == request_id:
                     return
 
-        await request(1, "initialize", {
-            "protocolVersion": "2025-11-25", "capabilities": {},
-            "clientInfo": {"name": "parity-client", "version": "1"},
-        })
+        await request(
+            1,
+            "initialize",
+            {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "parity-client", "version": "1"},
+            },
+        )
         await receive_until(1)
         await send(JSONRPCNotification(jsonrpc="2.0", method="notifications/initialized"))
         await request(2, "tools/list")
         await receive_until(2)
-        await request(3, "tools/call", {"name": "set_copilot_status",
-                                        "arguments": {"request_id": "req-1", "status": "working"}})
+        await request(
+            3,
+            "tools/call",
+            {
+                "name": "set_copilot_status",
+                "arguments": {"request_id": "req-1", "status": "working"},
+            },
+        )
         await receive_until(3)
         await anyio.sleep(1.0)  # let the SDK's GET stream settle
         emit({"ready": True})
-        await request(4, "tools/call", {"name": "await_copilot_event", "arguments": {"timeout_seconds": 20}})
+        await request(
+            4, "tools/call", {"name": "await_copilot_event", "arguments": {"timeout_seconds": 20}}
+        )
         await asyncio.get_running_loop().run_in_executor(None, sys.stdin.readline)
         await receive_until(4)
         # The push travels the GET stream: wait for it if it has not arrived yet.
         with anyio.move_on_after(5):
             message = await read_stream.receive()
             emit(message.message.root.model_dump(by_alias=True, mode="json", exclude_none=True))
-        await request(5, "tools/call", {"name": "send_copilot_message",
-                                        "arguments": {"kind": "reply", "text": "Готово", "request_id": "req-1"}})
+        await request(
+            5,
+            "tools/call",
+            {
+                "name": "send_copilot_message",
+                "arguments": {"kind": "reply", "text": "Готово", "request_id": "req-1"},
+            },
+        )
         await receive_until(5)
 
 
