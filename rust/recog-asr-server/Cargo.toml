@@ -1,0 +1,32 @@
+[package]
+name = "recog-asr-server"
+version = "0.1.0"
+edition = "2024"
+description = "The optional ASR server of recog: the OpenAI-compatible gateway and the GigaAM backend on wavo, in place of recog/asr_server/"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# `python -m recog.asr_server.gateway`.
+[[bin]]
+name = "recog-asr-gateway"
+path = "src/bin/gateway.rs"
+
+# `python -m recog.asr_server.gigaam_backend`.
+[[bin]]
+name = "recog-asr-gigaam"
+path = "src/bin/gigaam.rs"
+
+[dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+# The timestamps of the log lines, as Python's logging writes them.
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
+recog-core = { path = "../recog-core" }
+# The upload and ffmpeg's output, as NamedTemporaryFile.
+tempfile = "3.20"
+tokio = { version = "1.49", features = ["macros", "net", "rt-multi-thread", "signal"] }
+# The gateway's requests to the backends: the client wavo's hub already brings.
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+# Pinned exactly, as in recog-live.
+wavo = { version = "=0.4.0", default-features = false, features = ["hub"] }

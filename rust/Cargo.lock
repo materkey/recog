@@ -1901,6 +1901,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "recog-asr-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "recog-core",
+ "tempfile",
+ "tokio",
+ "ureq",
+ "wavo",
+]
+
+[[package]]
 name = "recog-bridge"
 version = "0.1.0"
 dependencies = [
