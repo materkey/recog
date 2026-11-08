@@ -3,8 +3,14 @@ without a conference: which binary it runs and how, how it watches and stops
 it, and how it reads the transcript back from the meeting storage — the last
 against meetings the real binary wrote, by replaying a synthetic golden
 session (rust/recog-live/tests/parity/golden_sessions.py) when it is built.
+
+The same session with its ASR answers filled in by the Python replay is frozen
+in tests/fixtures/golden_ktalk_pcm/, so the replay holds without the Python live
+process; `RECOG_RECORD_E2E_GOLDEN_SESSION=1` on the test that fills it writes the
+fixture again.
 """
 
+import gzip
 import json
 import os
 import signal
@@ -28,6 +34,9 @@ from tests.e2e.live_process import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GOLDEN_SESSIONS = REPO_ROOT / "rust/recog-live/tests/parity/golden_sessions.py"
+# The filled `ktalk_pcm` session, each file of it gzipped.
+FROZEN_SESSION = REPO_ROOT / "tests/fixtures/golden_ktalk_pcm"
+SESSION_FILES = ("events.jsonl", "audio.bin")
 
 
 def _executable(path: Path) -> Path:
@@ -332,7 +341,34 @@ def test_meetings_the_rust_binary_stored_in_a_replayed_call_when_reading_the_tra
     # microphone), its ASR answers filled in by the Python replay.
     _run([*golden, "make", "ktalk_pcm", str(session)], env)
     _run([*golden, "fill", str(session), str(filled), "3"], env)
+    if os.environ.get("RECOG_RECORD_E2E_GOLDEN_SESSION"):
+        FROZEN_SESSION.mkdir(parents=True, exist_ok=True)
+        for name in SESSION_FILES:
+            data = gzip.compress((session / name).read_bytes(), compresslevel=9, mtime=0)
+            (FROZEN_SESSION / f"{name}.gz").write_bytes(data)
 
+    _assert_replayed_call_attributed(binary, session, out, env)
+
+
+def test_the_frozen_call_when_the_rust_binary_replays_it_and_the_transcript_is_read_then_both_remote_speakers_attributed(
+    tmp_path,
+):
+    binary = _built_binary()
+    if binary is None:
+        pytest.skip("recog is not built")
+    env = _sandbox_env(tmp_path)
+    session, out = tmp_path / "session", tmp_path / "rust"
+    session.mkdir()
+    for name in SESSION_FILES:
+        (session / name).write_bytes(gzip.decompress((FROZEN_SESSION / f"{name}.gz").read_bytes()))
+
+    _assert_replayed_call_attributed(binary, session, out, env)
+
+
+def _assert_replayed_call_attributed(binary: Path, session: Path, out: Path, env: dict) -> None:
+    """Replays the filled `ktalk_pcm` session into the binary and checks the
+    transcript it stored: every ASR call answered, Alice and Bob attributed, the
+    refined rows kept."""
     _run([str(binary), "replay", str(session), str(out), "--tail", "3"], env)
     summary = json.loads((out / "replay.json").read_text())
     lines, meeting = read_transcript(out / "data")
