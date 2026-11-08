@@ -116,8 +116,8 @@ where they can.
      a real storage, one scenario over real WebSockets) and compare every frame, live
      call, storage file and log line. The five local golden sessions replayed through
      both gave the same.
-   - Still to do: the Copilot policy and increments from `recog-ai`; then `recog-live`
-     hosting it.
+     The Copilot policy and the increments come from `recog-ai`.
+   - Still to do: `recog-live` hosting it.
 6. **Web backend.** FastAPI to axum; the static UI unchanged.
 7. **Copilot.** The supervisor (state machine, tmux, `systemd-run`, screen classifier)
    and the MCP channel (rmcp).

@@ -14,6 +14,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 # Insertion order of the pending Copilot requests: Python's dict, iterated when the
 # settings switch the Copilot off.
 indexmap = "2"
+recog-ai = { path = "../recog-ai" }
 recog-core = { path = "../recog-core" }
 tokio = { version = "1.49", features = ["macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = "0.29"

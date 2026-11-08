@@ -16,8 +16,8 @@
 //! | `set_meeting_capture_callback(cb, active_getter=)` | [`MeetingCapture`] |
 //! | `configure_user_profile(identity, read, apply)` | [`IdentitySource`] |
 //! | `set_meeting_storage` | [`MeetingStore`] (implemented for `recog_core`'s storage) |
-//! | `set_increment_generator` | [`IncrementGenerator`] |
-//! | `ai_settings_store=` | [`PolicySource`] |
+//! | `set_increment_generator` | [`IncrementGenerator`] (`crate::ai::AiIncrements` runs `recog-ai`'s) |
+//! | `ai_settings_store=` | [`PolicySource`] (`crate::ai::AiSettingsPolicy` reads `recog-ai`'s store) |
 //! | `bridge.golden = GoldenRecorder` | [`GoldenTap`] |
 //!
 //! Everything the live process calls the other way (`send_transcript`, `send_refine`,
@@ -179,8 +179,8 @@ impl CopilotPolicy {
 }
 
 /// Where the Copilot policy comes from: read at construction and again on every
-/// `ai_settings_refresh`. The file-backed reader of `ai-settings.json` belongs to
-/// `recog-ai`; until then a caller supplies one.
+/// `ai_settings_refresh`. [`crate::ai::AiSettingsPolicy`] reads `ai-settings.json`
+/// through `recog-ai`.
 pub trait PolicySource: Send + Sync {
     /// # Errors
     /// The settings cannot be read or are invalid.

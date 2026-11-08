@@ -69,6 +69,7 @@
 //!   on the bridge's runtime one task each, as `run_coroutine_threadsafe` does.
 #![forbid(unsafe_code)]
 
+pub mod ai;
 pub mod bridge;
 pub mod client;
 pub mod copilot;
