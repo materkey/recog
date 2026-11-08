@@ -54,6 +54,7 @@ if [ -n "${RECOG_LIVE_PARITY_PYTHON:-}" ]; then
 fi
 if [ -n "${RECOG_BRIDGE_PARITY_PYTHON:-}" ]; then
   printf '%s\n' "bridge-parity-python $RECOG_BRIDGE_PARITY_PYTHON" >> "$STUB_LOG"
+fi
 if [ -n "${RECOG_WEB_PARITY_PYTHON:-}" ]; then
   printf '%s\n' "web-parity-python $RECOG_WEB_PARITY_PYTHON" >> "$STUB_LOG"
 fi
@@ -251,10 +252,8 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
     """given: a checkout with the Rust workspace and no golden data configured
     when: the checks run
     then: rustfmt, clippy with warnings as errors and the data-free tests run, the
-    recog-core parity, recog-live and recog-bridge differential tests with the
-    check's interpreter, and the golden parity tests do not"""
-    recog-core parity and recog-web differential tests with the check's interpreter,
-    and the golden parity tests do not"""
+    recog-core parity, recog-live, recog-bridge and recog-web differential tests with
+    the check's interpreter, and the golden parity tests do not"""
     add_rust_workspace(repo)
 
     result = run_check(repo, stub_bin)
@@ -282,7 +281,6 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
     web = result.calls.index("cargo test -p recog-web")
     assert result.calls[web + 1] == f"web-parity-python {stub_bin[0] / 'python3'}"
     assert sum(c.startswith("web-parity-python ") for c in result.calls) == 1
-    # "-m pytest": the stub's own path, logged by the parity lines, holds "pytest-of-".
     live = result.calls.index("cargo test -p recog-live")
     assert result.calls[live + 1] == f"live-parity-python {stub_bin[0] / 'python3'}"
     assert sum(c.startswith("live-parity-python ") for c in result.calls) == 1
