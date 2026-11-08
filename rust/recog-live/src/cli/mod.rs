@@ -1,6 +1,7 @@
 //! The `recog` binary: `recog/cli.py` and `live_pipeline` of `recog/live.py`.
 
 pub mod args;
+pub mod install;
 pub mod meetings;
 
 use std::path::{Path, PathBuf};
@@ -306,6 +307,11 @@ pub fn main(argv: &[String]) -> i32 {
     let mut environ: Environ = std::env::vars().collect();
     let config = match install_config::load(&repo_root, &mut environ, &mut |notice| eprintln!("{notice}")) {
         Ok(config) => config,
+        // The readiness check reports an unreadable configuration as its problem.
+        Err(e) if argv == ["check"] => {
+            println!("Invalid installation configuration: {e}");
+            return 1;
+        }
         Err(e) => {
             eprintln!("{e}");
             return 1;
@@ -327,9 +333,10 @@ pub fn main(argv: &[String]) -> i32 {
         Command::Live(live) => run_live(&live, &config, &environ, &repo_root),
         Command::Meetings(meetings) => run_meetings(&meetings, &config, &environ, &repo_root),
         Command::Replay(replay) => run_replay(&replay, &config, &environ),
-        Command::Desktop => {
-            eprintln!("recog desktop is not part of the Rust binary: run python -m recog desktop");
-            2
-        }
+        Command::Desktop(args) => install::desktop(&repo_root, &args),
+        Command::Check => install::print(install::check(&repo_root, &config, &environ)),
+        Command::Config(query) => install::print(install::config(query, &repo_root, &config, &environ)),
+        Command::Launcher => install::print(install::launcher(&repo_root, &config)),
+        Command::Prefetch => install::print(install::prefetch()),
     }
 }

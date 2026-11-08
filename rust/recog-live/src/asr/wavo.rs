@@ -79,18 +79,26 @@ impl WavoEngine {
         wavo::hub::Hub::new().find(GIGAAM)
     }
 
+    /// The path of `gigaam-v3` in the Hugging Face cache, downloaded there first when it
+    /// is missing; nothing is loaded (`recog prefetch`).
+    ///
+    /// # Errors
+    /// The download's error, as [`AsrError::Failed`].
+    pub fn fetch() -> Result<PathBuf, AsrError> {
+        let hub = wavo::hub::Hub::new();
+        match hub.find(GIGAAM) {
+            Some(path) => Ok(path),
+            None => hub.pull(GIGAAM, |_| std::ops::ControlFlow::Continue(())).map_err(|e| engine_error(&e)),
+        }
+    }
+
     /// `gigaam-v3` from the Hugging Face cache, downloaded there first when it is missing:
     /// what `wavo_asr.Model()` does.
     ///
     /// # Errors
     /// The download's or the load's error, as [`AsrError::Failed`].
     pub fn from_hub() -> Result<Self, AsrError> {
-        let hub = wavo::hub::Hub::new();
-        let path = match hub.find(GIGAAM) {
-            Some(path) => path,
-            None => hub.pull(GIGAAM, |_| std::ops::ControlFlow::Continue(())).map_err(|e| engine_error(&e))?,
-        };
-        Self::load(&path)
+        Self::load(&Self::fetch()?)
     }
 }
 

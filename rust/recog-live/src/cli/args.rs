@@ -1,6 +1,7 @@
 //! The command line of `recog/cli.py` (argparse): `live` with every flag and the hidden
-//! aliases, `meetings`, and the Rust-only `replay`. Options take `--name value` or
-//! `--name=value` and, as argparse allows, any unambiguous prefix of their name.
+//! aliases, `meetings`, and the Rust-only `replay` and installation helpers (`check`,
+//! `config`, `launcher`, `prefetch`). Options take `--name value` or `--name=value`
+//! and, as argparse allows, any unambiguous prefix of their name.
 
 use std::fmt::Write as _;
 
@@ -57,14 +58,46 @@ pub struct ReplayArgs {
     pub tail: f64,
 }
 
+/// A value `recog config` prints for the shell scripts and the extension build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigQuery {
+    /// The data directory (`scripts/data-dir.sh`).
+    DataDir,
+    /// The installation configuration's path (`scripts/config-path.sh`).
+    ConfigPath,
+    /// The configured conference hosts as JSON (`python -m recog.install_config`).
+    Conferences,
+    /// `[install] runtime` as the parser reads it.
+    InstallRuntime,
+    /// The Copilot's Claude model and effort (`./recog-service.sh claude`).
+    CopilotLaunch,
+}
+
+/// The names `recog config` takes, in the order of its help.
+pub const CONFIG_QUERIES: [(&str, ConfigQuery); 5] = [
+    ("data-dir", ConfigQuery::DataDir),
+    ("config-path", ConfigQuery::ConfigPath),
+    ("conferences", ConfigQuery::Conferences),
+    ("install-runtime", ConfigQuery::InstallRuntime),
+    ("copilot-launch", ConfigQuery::CopilotLaunch),
+];
+
 /// What to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Live(LiveArgs),
     Meetings(MeetingsArgs),
     Replay(ReplayArgs),
-    /// The KTalk desktop subcommands, which stay in Python.
-    Desktop,
+    /// The KTalk desktop subcommands with their arguments, run by `recog-desktop`.
+    Desktop(Vec<String>),
+    /// Whether the settings can serve: what `scripts/deps.sh` asked Python.
+    Check,
+    /// One value for the shell scripts.
+    Config(ConfigQuery),
+    /// Build `Recog.app` when needed (`python -m recog.macos_launcher`).
+    Launcher,
+    /// Download the ASR model into the Hugging Face cache.
+    Prefetch,
     /// No command: the help, exit 1.
     None,
 }
@@ -77,7 +110,15 @@ pub struct Exit {
     pub code: i32,
 }
 
-pub const MAIN_USAGE: &str = "usage: recog [-h] {live,meetings,replay,desktop} ...";
+pub const MAIN_USAGE: &str = "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch} ...";
+
+const CHECK_USAGE: &str = "usage: recog check [-h]";
+
+const CONFIG_USAGE: &str = "usage: recog config [-h] {data-dir,config-path,conferences,install-runtime,copilot-launch}";
+
+const LAUNCHER_USAGE: &str = "usage: recog launcher [-h]";
+
+const PREFETCH_USAGE: &str = "usage: recog prefetch [-h]";
 
 const LIVE_USAGE: &str = "usage: recog live [-h] [--mic-device MIC_DEVICE] [--system-audio BACKEND]
                   [--chunk-duration CHUNK_DURATION] [--output OUTPUT]
@@ -96,12 +137,16 @@ pub fn main_help() -> String {
 CLI-утилита для live-транскрибирования и управления митингами
 
 positional arguments:
-  {{live,meetings,replay,desktop}}
+  {{live,meetings,replay,desktop,check,config,launcher,prefetch}}
                         Доступные команды
     live                Live транскрипция с микрофона и/или системного звука
     meetings            Просмотр сохранённых митингов
     replay              Воспроизвести golden-сессию в live-процессе
-    desktop             KTalk desktop (python -m recog desktop)
+    desktop             KTalk desktop (recog-desktop)
+    check               Проверить настройки установки (для scripts/deps.sh)
+    config              Напечатать значение для скриптов установки
+    launcher            Собрать Recog.app, если её исходник изменился (macOS)
+    prefetch            Скачать модель ASR в кэш Hugging Face
 
 options:
   -h, --help            show this help message and exit
@@ -334,6 +379,58 @@ fn parse_live(args: &[String], mic_default: &str) -> Result<Command, Exit> {
     Ok(Command::Live(live))
 }
 
+fn config_help() -> String {
+    format!(
+        "{CONFIG_USAGE}
+
+positional arguments:
+  {{data-dir,config-path,conferences,install-runtime,copilot-launch}}
+                        data-dir — каталог данных; config-path — путь
+                        config.toml; conferences — хосты конференций в JSON;
+                        install-runtime — [install] runtime; copilot-launch —
+                        модель и effort Claude для Copilot
+
+options:
+  -h, --help            show this help message and exit
+"
+    )
+}
+
+fn plain_help(usage: &str, description: &str) -> String {
+    format!("{usage}\n\n{description}\n\noptions:\n  -h, --help            show this help message and exit\n")
+}
+
+/// A command without arguments: `--help`, or the command.
+fn parse_bare(args: &[String], usage: &str, description: &str, command: Command) -> Result<Command, Exit> {
+    match args.first().map(String::as_str) {
+        None => Ok(command),
+        Some("-h" | "--help") => Err(Exit { stdout: plain_help(usage, description), stderr: String::new(), code: 0 }),
+        Some(_) => Err(error(MAIN_USAGE, "recog", &format!("unrecognized arguments: {}", args.join(" ")))),
+    }
+}
+
+fn parse_config(args: &[String]) -> Result<Command, Exit> {
+    let choices = CONFIG_QUERIES.iter().map(|(name, _)| format!("'{name}'")).collect::<Vec<_>>().join(", ");
+    match args {
+        [] => Err(error(CONFIG_USAGE, "recog config", "the following arguments are required: query")),
+        [flag, ..] if flag == "-h" || flag == "--help" => {
+            Err(Exit { stdout: config_help(), stderr: String::new(), code: 0 })
+        }
+        [name] => {
+            CONFIG_QUERIES.iter().find(|(choice, _)| choice == name).map(|(_, q)| Command::Config(*q)).ok_or_else(
+                || {
+                    error(
+                        CONFIG_USAGE,
+                        "recog config",
+                        &format!("argument query: invalid choice: {} (choose from {choices})", py_repr(name)),
+                    )
+                },
+            )
+        }
+        [_, rest @ ..] => Err(error(MAIN_USAGE, "recog", &format!("unrecognized arguments: {}", rest.join(" ")))),
+    }
+}
+
 fn parse_meetings(args: &[String]) -> Result<Command, Exit> {
     let specs = [Spec { name: "--json", takes_value: false }, Spec { name: "--refresh-cache", takes_value: false }];
     let (options, positionals, help) = split(args, &specs, MEETINGS_USAGE, "recog meetings")?;
@@ -401,13 +498,18 @@ pub fn parse(argv: &[String], mic_default: &str) -> Result<Command, Exit> {
         "live" => parse_live(rest, mic_default),
         "meetings" => parse_meetings(rest),
         "replay" => parse_replay(rest),
-        "desktop" => Ok(Command::Desktop),
+        "desktop" => Ok(Command::Desktop(rest.to_vec())),
+        "check" => parse_bare(rest, CHECK_USAGE, "Проверить настройки установки", Command::Check),
+        "config" => parse_config(rest),
+        "launcher" => parse_bare(rest, LAUNCHER_USAGE, "Собрать Recog.app (macOS)", Command::Launcher),
+        "prefetch" => parse_bare(rest, PREFETCH_USAGE, "Скачать модель ASR", Command::Prefetch),
         other if other.starts_with('-') => Err(error(MAIN_USAGE, "recog", &format!("unrecognized arguments: {other}"))),
         other => Err(error(
             MAIN_USAGE,
             "recog",
             &format!(
-                "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop')",
+                "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop', \
+                 'check', 'config', 'launcher', 'prefetch')",
                 py_repr(other)
             ),
         )),
@@ -531,5 +633,35 @@ mod tests {
     #[test]
     fn a_negative_number_as_a_value_parse_takes_it() {
         assert!((live("live --chunk-duration -1").chunk_duration + 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn installation_helpers_when_parsing_then_each_names_its_command() {
+        // given / when / then
+        assert_eq!(parse(&args("check"), "Me").unwrap(), Command::Check);
+        assert_eq!(parse(&args("launcher"), "Me").unwrap(), Command::Launcher);
+        assert_eq!(parse(&args("prefetch"), "Me").unwrap(), Command::Prefetch);
+        for (name, query) in CONFIG_QUERIES {
+            assert_eq!(parse(&args(&format!("config {name}")), "Me").unwrap(), Command::Config(query));
+        }
+        assert_eq!(
+            parse(&args("desktop status --json"), "Me").unwrap(),
+            Command::Desktop(vec!["status".into(), "--json".into()])
+        );
+    }
+
+    #[test]
+    fn installation_helpers_with_wrong_arguments_when_parsing_then_usage_errors() {
+        // given / when / then
+        assert!(
+            parse(&args("config"), "Me").unwrap_err().stderr.contains("the following arguments are required: query")
+        );
+        let unknown = parse(&args("config bogus"), "Me").unwrap_err();
+        assert_eq!(unknown.code, 2);
+        assert!(unknown.stderr.contains("invalid choice: 'bogus'"));
+        assert!(parse(&args("check now"), "Me").unwrap_err().stderr.contains("unrecognized arguments: now"));
+        assert!(parse(&args("config data-dir x"), "Me").unwrap_err().stderr.contains("unrecognized arguments: x"));
+        assert_eq!(parse(&args("prefetch --help"), "Me").unwrap_err().code, 0);
+        assert!(parse(&args("config -h"), "Me").unwrap_err().stdout.contains("install-runtime"));
     }
 }
