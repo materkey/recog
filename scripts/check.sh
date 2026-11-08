@@ -130,6 +130,8 @@ if [ -f rust/Cargo.toml ]; then
         # Parity with Python: the tests run the Python modules with this interpreter
         # (rust/recog-core/tests/parity/harness.py) and fail if it cannot run them.
         RECOG_PARITY_PYTHON="$PYTHON" cargo test -p recog-core
+        # recog-ai's parity tests run the Python modules it replaces with this interpreter.
+        RECOG_AI_PARITY_PYTHON="$PYTHON" cargo test -p recog-ai
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi

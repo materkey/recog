@@ -261,6 +261,7 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
         "cargo test -p recog-copilot",
         "cargo test -p recog-zoom",
         "cargo test -p recog-core",
+        "cargo test -p recog-ai",
     ]
     core = result.calls.index("cargo test -p recog-core")
     assert result.calls[core + 1] == f"parity-python {stub_bin[0] / 'python3'}"
