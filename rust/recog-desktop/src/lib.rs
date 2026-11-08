@@ -56,9 +56,13 @@ pub mod worker;
 
 use std::path::PathBuf;
 
-/// The checkout this crate was built from (`rust/recog-desktop/../..`).
+/// The checkout the binary is installed in (`<repo>/bin/`), else the one this crate
+/// was built from (`rust/recog-desktop/../..`).
 #[must_use]
 pub fn default_repo_root() -> PathBuf {
+    if let Some(repo) = recog_core::install::installed_repo() {
+        return repo;
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     std::fs::canonicalize(&root).unwrap_or(root)
 }

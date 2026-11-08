@@ -25,10 +25,14 @@ use crate::live::{NO_MIC, NO_SYSTEM_AUDIO};
 use crate::log::Logger;
 use args::{Command, LiveArgs, ReplayArgs};
 
-/// The checkout the binary belongs to: `rust/target/<profile>/recog` four levels down,
-/// else `RECOG_REPO_DIR`, else the checkout it was built from.
+/// The checkout the binary belongs to: `<repo>/bin/recog` (installed by setup.sh) or
+/// `rust/target/<profile>/recog` four levels down, else `RECOG_REPO_DIR`, else the
+/// checkout it was built from.
 #[must_use]
 pub fn repo_root() -> PathBuf {
+    if let Some(repo) = recog_core::install::installed_repo() {
+        return repo;
+    }
     if let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) {
         let mut ancestors = exe.ancestors();
         let (profile, target, rust) = (ancestors.nth(1), ancestors.next(), ancestors.next());

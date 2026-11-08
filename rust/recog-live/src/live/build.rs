@@ -59,6 +59,13 @@ pub fn create_echo_stage(system_audio: &str, config: &InstallConfig) -> Option<A
     Some(Arc::new(EchoStage::new()))
 }
 
+/// `[live] mic_worker`, except that an installation without Python
+/// (`[install] runtime = "rust"`) has only the Rust worker.
+#[must_use]
+pub fn mic_worker_choice(config: &InstallConfig) -> &str {
+    if config.install.runtime == "rust" { "rust" } else { &config.live.mic_worker }
+}
+
 /// `create_mic_capture`: the worker child on a Mac, `parec` elsewhere.
 ///
 /// # Errors
@@ -71,7 +78,7 @@ pub fn create_mic_capture(
     let cap = max_buffer_s(settings.config);
     if settings.platform == "darwin" {
         let argv = mic_worker_argv(
-            &settings.config.live.mic_worker,
+            mic_worker_choice(settings.config),
             settings.repo_root,
             &settings.python,
             device,
@@ -97,7 +104,7 @@ pub fn create_device_capture(name: &str, settings: &CaptureSettings<'_>) -> Resu
     let cap = max_buffer_s(settings.config);
     let builder = if settings.platform == "darwin" {
         let argv = mic_worker_argv(
-            &settings.config.live.mic_worker,
+            mic_worker_choice(settings.config),
             settings.repo_root,
             &settings.python,
             Some(name),
@@ -150,4 +157,22 @@ pub fn build_captures(system_audio: &str, mic: &MicChoice, settings: &CaptureSet
         return Ok((Some(create_mic_capture(named, None, settings)?), None));
     }
     Ok((None, None))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installation_without_python_when_choosing_the_mic_worker_then_rust_whatever_mic_worker_says() {
+        // given
+        let mut config = InstallConfig::default();
+        // when / then
+        assert_eq!(mic_worker_choice(&config), "python");
+        config.live.mic_worker = "rust".into();
+        assert_eq!(mic_worker_choice(&config), "rust");
+        config.live.mic_worker = "python".into();
+        config.install.runtime = "rust".into();
+        assert_eq!(mic_worker_choice(&config), "rust");
+    }
 }

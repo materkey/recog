@@ -111,10 +111,11 @@ pub fn encode_reference_frame(presentation_time: f64, wall_time: f64, echo_possi
     out
 }
 
-/// The Rust worker under `repo_root` (`RUST_MIC_WORKER`).
+/// The Rust worker under `repo_root` (`RUST_MIC_WORKER`): the installed one in
+/// `bin/` when there is one, else the release build.
 #[must_use]
 pub fn rust_mic_worker(repo_root: &Path) -> PathBuf {
-    repo_root.join("rust").join("target").join("release").join("recog-mic")
+    recog_core::install::program(repo_root, "recog-mic")
 }
 
 fn is_executable(path: &Path) -> bool {

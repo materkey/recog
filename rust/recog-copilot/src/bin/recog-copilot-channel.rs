@@ -1,7 +1,8 @@
 //! `recog-copilot-channel`, in place of `python -m recog.copilot_channel`: the same
 //! `--bridge-url`, `--mcp-host` and `--mcp-port` arguments, the same `[copilot-channel]`
-//! log lines on stderr, the same MCP endpoint and bridge frames. The checkout is the
-//! working directory (the service units set it), or `--repo-root`; it locates `.env`
+//! log lines on stderr, the same MCP endpoint and bridge frames. The checkout is
+//! `--repo-root`, else the one whose `bin/` holds the binary, else the working
+//! directory (the service units set it); it locates `.env`
 //! and the installation configuration, which decide the data directory holding
 //! `privacy.json`.
 #![forbid(unsafe_code)]
@@ -82,13 +83,16 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let repo_root = match args.repo_root.map_or_else(std::env::current_dir, Ok) {
-        Ok(root) => root,
-        Err(e) => {
-            eprintln!("recog-copilot-channel: no working directory: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    // The checkout: named, else the one this binary is installed in, else the working
+    // directory (the service units set it).
+    let repo_root =
+        match args.repo_root.or_else(recog_core::install::installed_repo).map_or_else(std::env::current_dir, Ok) {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("recog-copilot-channel: no working directory: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
     // What importing recog.privacy does in Python: .env and config.toml are read (a
     // malformed one stops the process), then the data directory is resolved.
     let mut environ: install_config::Environ = std::env::vars().collect();

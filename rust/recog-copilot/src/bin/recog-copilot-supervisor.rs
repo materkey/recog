@@ -1,7 +1,7 @@
 //! `recog-copilot-supervisor`, in place of `python -m recog.copilot_supervisor`: the same
 //! `--bridge-url` argument, the same log lines on stderr, the same frames and tmux
-//! commands. The checkout is the working directory (the service units set it), or
-//! `--repo-root`.
+//! commands. The checkout is `--repo-root`, else the one whose `bin/` holds the binary,
+//! else the working directory (the service units set it).
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
@@ -60,13 +60,16 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let repo_root = match args.repo_root.map_or_else(std::env::current_dir, Ok) {
-        Ok(root) => root,
-        Err(e) => {
-            eprintln!("recog-copilot-supervisor: no working directory: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    // The checkout: named, else the one this binary is installed in, else the working
+    // directory (the service units set it).
+    let repo_root =
+        match args.repo_root.or_else(recog_core::install::installed_repo).map_or_else(std::env::current_dir, Ok) {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("recog-copilot-supervisor: no working directory: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
     let settings = match config::load(&repo_root, Env::from_process()) {
         Ok(settings) => settings,
         Err(message) => {

@@ -239,6 +239,30 @@ fn default_setting_and_a_built_rust_worker_argv_runs_the_python_worker() {
 }
 
 #[test]
+fn installed_and_built_rust_worker_when_resolving_then_the_installed_one_runs() {
+    use std::os::unix::fs::PermissionsExt as _;
+    // given
+    let root = tempfile::tempdir().unwrap();
+    built_worker(root.path());
+    let installed = root.path().join("bin/recog-mic");
+    std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    std::fs::write(&installed, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // when
+    let argv = mic_worker_argv(
+        "rust",
+        root.path(),
+        std::path::Path::new("py"),
+        None,
+        SR,
+        &Logger::capture(ManualClock::new(0.0).shared()).0,
+    )
+    .unwrap();
+    // then
+    assert_eq!(argv[0], installed.display().to_string());
+}
+
+#[test]
 fn rust_setting_with_the_binary_built_argv_runs_it_with_the_same_arguments() {
     let root = tempfile::tempdir().unwrap();
     let binary = built_worker(root.path());

@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod data_dir;
+pub mod install;
 pub mod install_config;
 pub mod meeting_storage;
 pub mod paths;

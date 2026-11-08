@@ -131,8 +131,9 @@ impl Config {
     }
 }
 
-/// The checkout this binary was built from.
+/// The checkout this binary is installed in (`<repo>/bin/recog-web`), else the one it
+/// was built from.
 #[must_use]
 pub fn default_repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    recog_core::install::installed_repo().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
 }
