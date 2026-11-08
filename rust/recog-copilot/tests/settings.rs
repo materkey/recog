@@ -117,7 +117,7 @@ fn copilot_table_of_config_toml_sets_the_values_and_the_environment_wins_with_a_
     assert_eq!(file.grace_s, 30.0);
     assert_eq!(file.mcp_url, "http://file/mcp");
     assert_eq!(both.grace_s, 5.0);
-    assert!(capture.text().contains("RECOG_COPILOT_GRACE_S from the environment or .env overrides copilot.grace_s"));
+    assert!(capture.text().contains("RECOG_COPILOT_GRACE_S from the environment or .env overrides [copilot] grace_s"));
 }
 
 #[test]

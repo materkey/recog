@@ -135,8 +135,7 @@ where they can.
      `recog-copilot-supervisor`. Its differential tests feed the same lifecycle events,
      frames, panes and settings files to both implementations and compare the output;
      its protocol tests run both against a fake bridge and a fake tmux. It reads its
-     settings from the environment, `.env` and `[copilot]` of `config.toml` until
-     `recog-core` provides them.
+     settings and data directory through `recog-core`.
    - **MCP channel ported 2026-11-08**, not wired: binary `recog-copilot-channel` in the
      same crate. The protocol is rmcp's; the Streamable HTTP side reproduces mcp 1.27's
      session manager on the wire, since rmcp's server answers differently and does not
