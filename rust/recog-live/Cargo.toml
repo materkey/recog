@@ -11,6 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 recog-core = { path = "../recog-core" }
 speexdsp-aec = { path = "../speexdsp-aec" }
+# audio_key of the golden recorder: hashlib.sha1, the key the Python player looks answers up by.
+sha1 = "0.10.6"
 # Pinned exactly, as in wavo-asr-py: the measurements of
 # docs/experiments/2026-11-07-rust-asr-runtimes.md hold for this version.
 wavo = { version = "=0.4.0", default-features = false, features = ["hub"] }

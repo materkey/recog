@@ -1408,6 +1408,7 @@ dependencies = [
  "base64 0.22.1",
  "recog-core",
  "serde_json",
+ "sha1",
  "speexdsp-aec",
  "tempfile",
  "wavo",
