@@ -994,6 +994,15 @@ def test_recog_service_activation_runs_the_same_readiness_check(repo, stubs, com
     that unloads a working service and then fails is the worst outcome."""
     (stubs[0] / "ffmpeg").unlink()
     bin_dir, log, sys_dir = stubs
+    # The real interpreter for every probe but PortAudio's: on a Linux desktop
+    # loading PortAudio under this test's bare environment can wait forever on
+    # the sound server, and the gate under test is ffmpeg's.
+    deps_python = repo.parent / "deps-python"
+    deps_python.write_text(
+        '#!/bin/sh\n[ "$1 $2" = "-c import sounddevice" ] && exit 0\n'
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    deps_python.chmod(0o755)
     env = {
         "HOME": str(repo.parent / "home"),
         "PATH": f"{bin_dir}{os.pathsep}{sys_dir}",
@@ -1001,7 +1010,7 @@ def test_recog_service_activation_runs_the_same_readiness_check(repo, stubs, com
         "STUB_BIN": str(bin_dir),
         "RECOG_HOST_OS": "Linux",
         "RECOG_SERVICE_OS": "Linux",
-        "DEPS_PYTHON": sys.executable,
+        "DEPS_PYTHON": str(deps_python),
     }
     Path(env["HOME"]).mkdir(exist_ok=True)
     subprocess.run(
