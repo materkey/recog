@@ -141,6 +141,9 @@ if [ -f rust/Cargo.toml ]; then
         # recog-web's differential tests run recog/web/server.py under uvicorn with this
         # interpreter, beside the Rust server on the same data, and compare.
         RECOG_WEB_PARITY_PYTHON="$PYTHON" cargo test -p recog-web
+        # Its differential tests run recog/desktop/ on scripted processes and a fake
+        # inspector with this interpreter (rust/recog-desktop/tests/parity/desktop_driver.py).
+        RECOG_DESKTOP_PARITY_PYTHON="$PYTHON" cargo test -p recog-desktop
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi
