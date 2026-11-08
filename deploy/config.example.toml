@@ -71,7 +71,8 @@
 # mic_worker = "python"
 # RECOG_LIVE_RUNTIME: the live service's process, "python" (python -m recog live)
 # or "rust" (rust/recog-live, which ./setup.sh builds when cargo is installed, on
-# Linux only with this set). The Rust one runs ASR on wavo: another [asr] backend,
+# Linux only with this set). The Rust one runs ASR on wavo, or for the [asr]
+# backend "remote" on the gateway with wavo as the fallback: the backend "local",
 # or no build, keeps Python and the log says why. Apply with
 # ./recog-service.sh restart.
 # runtime = "python"
@@ -127,7 +128,7 @@
 # python -m ..., and the runtime of each table above picks the program behind it.
 # "rust": no Python at all; ./setup.sh builds rust/ with cargo into bin/ and the
 # units run those binaries (the live one through Recog.app on macOS), so the
-# runtime and mic_worker keys above and [asr] backend other than "wavo" do
+# runtime and mic_worker keys above and the [asr] backend "local" do
 # nothing. setup.sh and recog-service.sh read this key from this file or the
 # calling shell, never from .env. Apply with ./setup.sh (docs/usage.md,
 # "Installing without Python").

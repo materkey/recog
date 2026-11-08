@@ -74,3 +74,24 @@ fn installed_binary_with_a_dotenv_in_its_checkout_when_asked_then_the_dotenv_cou
     assert_eq!(runtime.0, "rust\n");
     assert_eq!((checked.0.as_str(), checked.2), ("", 0), "{}", checked.1);
 }
+
+#[test]
+fn installed_binary_with_the_remote_backend_and_no_gateway_when_checked_then_it_blocks_as_the_python_probe() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    let repo = std::fs::canonicalize(dir.path()).unwrap().join("checkout");
+    let home = repo.parent().unwrap().join("home");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let remote = "RECOG_INSTALL_RUNTIME=rust\nRECOG_ASR_BACKEND=remote\n";
+    std::fs::write(repo.join(".env"), remote).unwrap();
+    let program = installed(&repo);
+    // when
+    let (stdout, _, code) = run(&program, &home, &["check"]);
+    std::fs::write(repo.join(".env"), format!("{remote}RECOG_ASR_REMOTE_URL=http://gw\n")).unwrap();
+    let with_url = run(&program, &home, &["check"]);
+    // then
+    assert_eq!(code, 1);
+    assert!(stdout.starts_with("RECOG_ASR_BACKEND=remote but RECOG_ASR_REMOTE_URL is empty"), "{stdout}");
+    assert_eq!((with_url.0.as_str(), with_url.2), ("", 0), "{}", with_url.1);
+}

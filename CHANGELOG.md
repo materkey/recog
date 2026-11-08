@@ -11,6 +11,14 @@ reasoning.
 
 ### Changed
 
+- **The Rust live process runs remote ASR.** With `[asr] backend = "remote"` the
+  Rust live process now sends speech to the gateway of `[asr] remote_url`, falling
+  back to wavo while the gateway is down, as the Python one falls back to PyTorch. Before, `[live] runtime = "rust"` stayed on Python with this backend, and
+  `[install] runtime = "rust"` ignored it and ran wavo. Only `backend = "local"` now
+  keeps the live process in Python. After `git pull`: `./setup.sh` (it rebuilds the
+  binary), then `./recog-service.sh restart`. Without `remote_url` the readiness
+  check refuses to start the services in both installations.
+
 - **Installing without Python (opt-in).** `runtime = "rust"` under a new `[install]`
   table in `~/.config/recog/config.toml` makes `./setup.sh` build the Rust programs
   with cargo into `bin/` of the checkout, with no venv, pip, torch or GigaAM, and

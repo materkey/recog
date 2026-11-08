@@ -161,7 +161,8 @@ def rust_live_program(runtime: str, asr_backend: str, binary: Path = RUST_LIVE):
     """The Rust live binary when `[live] runtime = "rust"` asks for it and it can run;
     None keeps the live process in Python, and the log says why.
 
-    The binary runs ASR on wavo only, so another `[asr] backend` stays in Python.
+    The binary runs ASR on wavo, or on a gateway with wavo as the fallback, so the
+    PyTorch backend `local` stays in Python.
     """
     if runtime not in ("python", "rust"):
         raise ValueError(f'[live] runtime must be "python" or "rust", not {runtime!r}')
@@ -174,10 +175,10 @@ def rust_live_program(runtime: str, asr_backend: str, binary: Path = RUST_LIVE):
             file=sys.stderr,
         )
         return None
-    if asr_backend not in ("auto", "wavo"):
+    if asr_backend not in ("auto", "wavo", "remote"):
         print(
-            f"[live] the Rust live process runs ASR on wavo only; [asr] backend = {asr_backend!r} "
-            "keeps the live process in Python",
+            "[live] the Rust live process runs ASR on wavo or a remote gateway; "
+            f"[asr] backend = {asr_backend!r} keeps the live process in Python",
             file=sys.stderr,
         )
         return None

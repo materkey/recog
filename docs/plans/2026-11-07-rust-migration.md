@@ -123,6 +123,11 @@ where they can.
      and recovery) give the same rows, markers and `meta.json` fields with no ASR
      miss (`tests/replay_parity.rs`), and so did the user's five recorded sessions.
      The cases of the live-loop test suites are ported on fakes.
+   - **Remote ASR ported 2026-11-08**: `[asr] backend = "remote"` in the Rust live
+     process is the gateway client with wavo as the lazy local fallback and the two
+     circuit breakers of `recog/remote_asr.py`; against Python over one fake gateway,
+     the same requests, answers, breaker transitions and fallback routing
+     (`tests/asr_remote_parity.rs`).
    - Still to do: a real meeting on the Rust live process, then the default.
    - **Bridge ported 2026-11-08**, not wired: `rust/recog-bridge`, a library with the
      boundary toward the live process as traits (the callbacks `LiveTranscriber`

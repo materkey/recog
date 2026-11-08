@@ -273,7 +273,10 @@ A respawn keeps the buffer, so no source boundary is marked.
 `rust/recog-live`'s binary `recog` (`live` with every flag of `recog/cli.py`,
 `meetings`, and `replay <session> <out>`, the golden player), its main loop
 (`src/live/`) over the ported captures, ingest, refine worker and `recog-bridge` on
-its own runtime thread in the same process. It runs ASR on the `wavo` crate only. On
+its own runtime thread in the same process. It runs ASR on the `wavo` crate, or with
+`[asr] backend = "remote"` on the gateway with wavo as the lazy local fallback
+(`src/asr/remote.rs`, held to `recog/remote_asr.py` by `tests/asr_remote_parity.rs`
+over one fake gateway); `local` (PyTorch) is not in it. On
 Linux its microphone is `parec` on the default source instead of PortAudio. It is held
 to Python by golden replay: `tests/replay_parity.rs` records synthetic sessions with
 the Python recorder (`tests/parity/golden_sessions.py`), replays them into both, and
@@ -486,7 +489,7 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 - `RECOG_ZOOM_APP` - `1` starts the native Zoom application source inside the live process (macOS only, default `0`; same as `live --zoom-app`). "Recog Zoom Helper" needs the Accessibility permission; see `docs/zoom-app.md`.
 - `RECOG_ECHO_CANCEL` - `1` cancels what the built-in speakers play out of the microphone (macOS with `--system-audio screencapture`, default `0`).
 - `RECOG_MIC_WORKER` - `python` (default) | `rust`: the macOS microphone's child process, `recog/mic_worker.py` or `rust/recog-mic` (falls back to Python when unbuilt).
-- `RECOG_LIVE_RUNTIME` - `python` (default) | `rust`: the live process. With `rust`, `python -m recog live` execs `rust/target/release/recog` with the same arguments (`hand_over_to_rust_live` in `recog/cli.py`; an exec keeps the pid under Recog.app's launcher, so the permissions stay with "Recog"); unbuilt, or with an `[asr] backend` other than `auto`/`wavo`, it stays in Python and the log says why.
+- `RECOG_LIVE_RUNTIME` - `python` (default) | `rust`: the live process. With `rust`, `python -m recog live` execs `rust/target/release/recog` with the same arguments (`hand_over_to_rust_live` in `recog/cli.py`; an exec keeps the pid under Recog.app's launcher, so the permissions stay with "Recog"); unbuilt, or with `[asr] backend = "local"` (the only one it lacks), it stays in Python and the log says why.
 - `RECOG_GOLDEN_RECORD` - `1` records each live session for replay (`recog/golden.py`: bridge frames; microphone and system chunks and ASR answers only while a conference is on, since the service listens all day) under `<data dir>/golden/<start>/` (default `0`; personal audio; sessions older than 14 days are deleted when the next starts, unless the directory name ends with `-keep`).
 - `RECOG_CODESIGN_IDENTITY` - Code-signing identity for `RecogZoomHelper.app` (default: ad hoc, `-`). With a real identity the Accessibility grant survives a rebuild of the helper.
 - `RECOG_EXTRA_WS_ORIGINS` - Comma-separated extra exact origins allowed to open the bridge / live-stream WS. Kept as a separate set so `ALLOWED_ORIGINS` in `recog/ws_origin.py` stays a literal mirror of the extension's `manifest.json` (a test asserts that equality); a new conference host must be added here **and** to `manifest.json` (separate rebuild).

@@ -239,8 +239,8 @@ deps_portaudio_ok() {
 # the wavo_asr module (the first model load raises): every service would crash-loop.
 # "auto" needs nothing: without wavo_asr it runs on PyTorch.
 #
-# Without Python, `recog check` checks the same files the same way; there is no
-# [asr] to check, since the Rust live process carries wavo.
+# Without Python, `recog check` checks the same files the same way, and the
+# remote backend's gateway URL; wavo needs no check, the Rust live process carries it.
 deps_asr_config_check() {
     if deps_rust_mode; then
         deps_recog check 2>&1

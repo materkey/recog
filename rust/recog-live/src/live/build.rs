@@ -1,6 +1,6 @@
-//! Building the captures `LiveTranscriber.__init__` builds: the echo stage
-//! (`create_echo_stage`), the microphone (`create_mic_capture`) and the system audio
-//! (`create_system_capture` or a device).
+//! Building what `LiveTranscriber.__init__` builds: the echo stage
+//! (`create_echo_stage`), the microphone (`create_mic_capture`), the system audio
+//! (`create_system_capture` or a device) and ASR (`build_asr`).
 //!
 //! Known differences from Python, which captures some devices in its own process
 //! through sounddevice: on Linux the microphone is `parec` on the default source (or
@@ -12,16 +12,18 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use recog_core::install_config::InstallConfig;
+use recog_core::install_config::{AsrSettings, InstallConfig};
 
+use crate::asr::{FallbackAsr, RemoteAsrClient, WavoAsr};
 use crate::capture::backend::{SystemCaptureSettings, create_system_capture};
 use crate::capture::buffer::max_buffer_s;
 use crate::capture::framed::{MicDecoder, child_mic_capture, mic_worker_argv};
 use crate::capture::{SubprocessCapture, parec_argv};
+use crate::clock::SystemClock;
 use crate::config::SAMPLE_RATE;
 use crate::echo::EchoSink;
 use crate::echo::stage::EchoStage;
-use crate::live::parts::LiveCapture;
+use crate::live::parts::{LiveAsr, LiveCapture};
 use crate::log::Logger;
 
 /// The microphone after `--mic-device` is resolved.
@@ -159,6 +161,45 @@ pub fn build_captures(system_audio: &str, mic: &MicChoice, settings: &CaptureSet
     Ok((None, None))
 }
 
+/// `build_asr`: the ASR `[asr] backend` asks for. `remote` is the gateway with wavo as
+/// its lazy local fallback; `auto` and `wavo` are wavo; anything else (`local`, the
+/// PyTorch model) is not in this process and runs on wavo, which the log says.
+///
+/// # Errors
+/// `remote` without `remote_url`: there is no default gateway, and quietly serving from
+/// the local model would mean other memory use and latency.
+pub fn build_asr(settings: &AsrSettings, log: &Logger) -> Result<Arc<dyn LiveAsr>, String> {
+    match settings.backend.as_str() {
+        "remote" => {
+            if recog_core::py::strip(&settings.remote_url).is_empty() {
+                return Err("RECOG_ASR_BACKEND=remote requires RECOG_ASR_REMOTE_URL".into());
+            }
+            let remote = RemoteAsrClient::new(
+                &settings.remote_url,
+                &settings.remote_model,
+                settings.remote_timeout_s,
+                Some(settings.live_timeout_s),
+            );
+            Ok(Arc::new(FallbackAsr::new(
+                remote,
+                Arc::new(WavoAsr::from_hub()),
+                settings.circuit_fails,
+                settings.circuit_open_s,
+                SystemClock::shared(),
+                log.clone(),
+            )))
+        }
+        "auto" | "wavo" => Ok(Arc::new(WavoAsr::from_hub())),
+        other => {
+            log.line(&format!(
+                "[asr] backend = {} is not available in the Rust live process; it runs on wavo",
+                recog_core::py::repr(other)
+            ));
+            Ok(Arc::new(WavoAsr::from_hub()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +215,17 @@ mod tests {
         config.live.mic_worker = "python".into();
         config.install.runtime = "rust".into();
         assert_eq!(mic_worker_choice(&config), "rust");
+    }
+
+    #[test]
+    fn remote_backend_without_a_url_building_asr_fails_like_python() {
+        // given
+        let mut settings = InstallConfig::default().asr;
+        settings.backend = "remote".into();
+        settings.remote_url = "  ".into();
+        // when
+        let built = build_asr(&settings, &Logger::stderr());
+        // then
+        assert_eq!(built.err().as_deref(), Some("RECOG_ASR_BACKEND=remote requires RECOG_ASR_REMOTE_URL"));
     }
 }

@@ -144,8 +144,9 @@ asked Python (`recog check`, `recog config data-dir`, `recog config copilot-laun
 and `recog desktop …` runs `bin/recog-desktop`.
 
 In this mode `[live] runtime`, `[web] runtime`, `[copilot] runtime` and
-`[live] mic_worker` do nothing, and ASR always runs on wavo: an `[asr] backend` of
-`local` or `remote` is ignored with a line in the live log. `setup.sh`,
+`[live] mic_worker` do nothing, and ASR runs on wavo, or on the gateway with wavo as
+the fallback for `[asr] backend = "remote"`: `local` is ignored with a line in the
+live log. `setup.sh`,
 `recog-service.sh` and `scripts/deps.sh` read `[install] runtime` themselves, from
 the calling shell or a plain `runtime = "rust"` line under `[install]`, never from
 `.env`; the readiness check refuses to start the services when the parser reads
@@ -393,7 +394,8 @@ There is no default URL: `remote` without a URL fails at startup instead of
 silently running on-device with different RAM and latency. The local model
 stays unloaded while the gateway is healthy and loads lazily on the first
 failure; a circuit breaker routes around a dead gateway. Only worth it on a
-real LAN (`ping` RTT < 5 ms).
+real LAN (`ping` RTT < 5 ms). The Rust live process (`[live] runtime = "rust"`)
+does the same, with wavo as the local model.
 
 ## ASR on wavo
 

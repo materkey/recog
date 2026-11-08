@@ -61,9 +61,9 @@ fn data_dir(repo_root: &Path, environ: &Environ, warnings: &mut String) -> Resul
 /// problem on stdout and status 1, as `deps_asr_config_check` printed them.
 ///
 /// An unreadable `config.toml` or `.env` value is reported by the caller, which loads
-/// the configuration before the command runs. The `[asr]` checks of the Python probe
-/// have no counterpart: the Rust live process runs ASR on wavo, which is part of the
-/// binary, whatever `[asr] backend` says.
+/// the configuration before the command runs. Of the Python probe's `[asr]` checks
+/// only the remote one has a counterpart (a gateway without an address): the Rust live
+/// process runs ASR on wavo, which is part of the binary, for any other backend.
 #[must_use]
 pub fn check(repo_root: &Path, config: &InstallConfig, environ: &Environ) -> Printed {
     let runtime = &config.install.runtime;
@@ -81,6 +81,12 @@ pub fn check(repo_root: &Path, config: &InstallConfig, environ: &Environ) -> Pri
     }
     if let Err(e) = AiSettingsStore::new(&data_dir, Some(prompts_dir(repo_root))).read() {
         return printed(line(format!("Invalid AI settings: {e}")), warnings, 1);
+    }
+    if config.asr.backend == "remote" && recog_core::py::strip(&config.asr.remote_url).is_empty() {
+        let problem = "RECOG_ASR_BACKEND=remote but RECOG_ASR_REMOTE_URL is empty — add the gateway URL as [asr] \
+                       remote_url to config.toml (build_asr() refuses to fall back to the local model silently: \
+                       different RAM and latency)";
+        return printed(line(problem), warnings, 1);
     }
     printed("", warnings, 0)
 }

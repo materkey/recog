@@ -24,9 +24,9 @@ def test_default_runtime_choosing_the_program_keeps_python(tmp_path, capsys):
     assert capsys.readouterr().err == ""
 
 
-@pytest.mark.parametrize("backend", ["auto", "wavo"])
+@pytest.mark.parametrize("backend", ["auto", "wavo", "remote"])
 def test_rust_runtime_and_a_built_binary_choosing_the_program_gives_the_binary(tmp_path, backend):
-    """given: runtime "rust", the binary built, ASR on wavo (or auto)
+    """given: runtime "rust", the binary built, ASR on wavo (or auto, or a gateway)
     when: the program is chosen
     then: the binary"""
     binary = _binary(tmp_path)
@@ -45,7 +45,7 @@ def test_rust_runtime_without_the_build_choosing_the_program_falls_back_and_says
     assert str(missing) in err and "setup.sh" in err and "runs in Python" in err
 
 
-@pytest.mark.parametrize("backend", ["local", "remote"])
+@pytest.mark.parametrize("backend", ["local"])
 def test_rust_runtime_with_another_asr_backend_choosing_the_program_keeps_python(
     tmp_path, capsys, backend
 ):

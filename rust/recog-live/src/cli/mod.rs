@@ -11,13 +11,11 @@ use recog_bridge::BridgeConfig;
 use recog_core::install_config::{self, Environ, InstallConfig};
 use recog_core::meeting_storage::{MeetingStorage, StorageOptions, external_paths};
 
-use crate::asr::WavoAsr;
 use crate::capture::backend::{current_platform, resolve_system_audio_backend};
 use crate::clock::SystemClock;
 use crate::config::DEFAULT_MIC_SPEAKER_NAME;
-use crate::live::build::{CaptureSettings, MicChoice, build_captures};
+use crate::live::build::{CaptureSettings, MicChoice, build_asr, build_captures};
 use crate::live::devices::{self, DeviceInfo};
-use crate::live::parts::LiveAsr;
 use crate::live::replay::{ReplaySettings, replay};
 use crate::live::session::{self, AiTitles, SessionConfig, ai_increments, stop_on_interrupt};
 use crate::live::text::normalize_system_audio;
@@ -198,13 +196,13 @@ fn run_live(args: &LiveArgs, config: &InstallConfig, environ: &Environ, repo_roo
             return 1;
         }
     };
-    if !matches!(config.asr.backend.as_str(), "auto" | "wavo") {
-        eprintln!(
-            "[asr] backend = {} is not available in the Rust live process; it runs on wavo",
-            recog_core::py::repr(&config.asr.backend)
-        );
-    }
-    let asr: Arc<dyn LiveAsr> = Arc::new(WavoAsr::from_hub());
+    let asr = match build_asr(&config.asr, &log) {
+        Ok(asr) => asr,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
     let legacy = legacy_mic_name(environ);
     let env = LiveEnv {
         data_dir: data_dir.clone(),
