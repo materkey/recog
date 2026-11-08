@@ -13,6 +13,7 @@ covered from a Mac and vice versa.
 import email.message
 import hashlib
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,7 @@ case "$*" in
   *"print(INSTALL_CONFIG.live.runtime)"*) echo "${STUB_LIVE_RUNTIME:-python}"; exit 0 ;;
   *"print(INSTALL_CONFIG.web.runtime)"*) echo "${STUB_WEB_RUNTIME:-python}"; exit 0 ;;
   *"print(INSTALL_CONFIG.copilot.runtime)"*) echo "${STUB_COPILOT_RUNTIME:-python}"; exit 0 ;;
+  *"print(INSTALL_CONFIG.install.runtime)"*) echo "${STUB_PARSED_INSTALL_RUNTIME:-python}"; exit 0 ;;
 esac
 exit 0
 """
@@ -1054,6 +1056,7 @@ def test_intel_mac_is_rejected_before_anything_is_installed(repo, stubs):
 
 GIGAAM_INIT_SAMPLE = '''
 import os
+import plistlib
 _CACHE_DIR = os.path.expanduser("~/.cache/gigaam")
 _URL_DIR = "https://cdn.example.test/GigaAM"
 _MODEL_HASHES = {
@@ -1259,3 +1262,246 @@ def test_prefetch_main_reports_a_failure_without_raising(tmp_path, capsys):
 
     assert rc == 1
     assert "v9_imaginary" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Installation without Python: [install] runtime = "rust"
+# ---------------------------------------------------------------------------
+
+# Every program cargo builds: logs its arguments, answers the installation's
+# questions the way the real `recog` does.
+RUST_PROGRAM_STUB = r"""#!/bin/sh
+printf '%s\n' "$(basename "$0") $*" >> "$STUB_LOG"
+case "$*" in
+  "check") [ -n "$STUB_CHECK" ] && { printf '%s\n' "$STUB_CHECK"; exit 1; }; exit 0 ;;
+  "config install-runtime") echo rust ;;
+  "config data-dir") printf '%s\n' "$HOME/.recog" ;;
+  "config conferences") echo '{"jitsi": [], "matrix": []}' ;;
+  "launcher") printf '%s\n' "$(dirname "$0")/../Recog.app/Contents/MacOS/recog_launcher" ;;
+esac
+exit 0
+"""
+
+# cargo: logs, and for `build` writes each `--bin` into target/release.
+CARGO_STUB = r"""#!/bin/sh
+printf '%s\n' "cargo $*" >> "$STUB_LOG"
+[ "$1" = "build" ] || exit 0
+[ -n "$STUB_CARGO_FAIL" ] && exit 101
+mkdir -p target/release
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--bin" ]; then
+    cp "$STUB_BIN/.rust-program" "target/release/$arg"
+    chmod 755 "target/release/$arg"
+  fi
+  previous="$arg"
+done
+exit 0
+"""
+
+# Logged and failing: an installation without Python must never get here.
+NO_PYTHON_STUB = """#!/bin/sh
+printf '%s\\n' "python-called $(basename "$0") $*" >> "$STUB_LOG"
+exit 1
+"""
+
+RUST_PROGRAMS = {
+    "Linux": [
+        "recog",
+        "recog-copilot-channel",
+        "recog-copilot-supervisor",
+        "recog-desktop",
+        "recog-web",
+    ],
+    "Darwin": [
+        "recog",
+        "recog-copilot-channel",
+        "recog-copilot-supervisor",
+        "recog-desktop",
+        "recog-mic",
+        "recog-web",
+    ],
+}
+
+
+@pytest.fixture
+def rust_stubs(stubs):
+    """The stubs of `stubs` with cargo building stub programs and every Python
+    entry point (python3.12, python3, python, pip) logging and failing."""
+    bin_dir, log, sys_dir = stubs
+    (bin_dir / ".rust-program").write_text(RUST_PROGRAM_STUB)
+    (bin_dir / "cargo").write_text(CARGO_STUB)
+    for name in ("python3.12", "python3.13", "python3", "python", "pip"):
+        (bin_dir / name).write_text(NO_PYTHON_STUB)
+        (bin_dir / name).chmod(0o755)
+    return stubs
+
+
+def run_rust_setup(repo, stubs, *args, host_os="Linux", env_extra=None):
+    return run_setup(
+        repo,
+        stubs,
+        *args,
+        host_os=host_os,
+        env_extra={"RECOG_INSTALL_RUNTIME": "rust", **(env_extra or {})},
+    )
+
+
+def no_python(result):
+    return not [c for c in result.calls if c.startswith(("python", "pip"))]
+
+
+@pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
+def test_installation_without_python_when_setup_runs_then_cargo_builds_and_bin_holds_the_programs(
+    repo, rust_stubs, host_os
+):
+    """given: [install] runtime = "rust" and no usable Python on PATH
+    when: setup.sh runs end to end
+    then: no python or pip runs at all, cargo builds the programs in release,
+          they land in bin/, the units run them and every service is started
+    """
+    result = run_rust_setup(repo, rust_stubs, host_os=host_os)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert no_python(result), result.calls
+    builds = [c for c in result.calls if c.startswith("cargo build")]
+    assert len(builds) == 1
+    assert builds[0].startswith("cargo build --release ")
+    assert ("-p recog-mic --bin recog-mic" in builds[0]) is (host_os == "Darwin")
+    assert sorted(p.name for p in (repo / "bin").iterdir()) == RUST_PROGRAMS[host_os]
+    assert not (repo / "venv-gigaam").exists()
+    if host_os == "Darwin":
+        agents = repo.parent / "home/Library/LaunchAgents"
+        live = plistlib.loads((agents / "com.recog.live.plist").read_bytes())
+        assert live["ProgramArguments"][1:3] == [f"{repo}/bin/recog", "live"]
+        assert "recog launcher" in result.calls
+        assert len([c for c in result.calls if c.startswith("launchctl load")]) == 4
+    else:
+        units = repo.parent / "home/.config/systemd/user"
+        assert f'ExecStart="{repo}/bin/recog" live' in (units / "recog-live.service").read_text()
+        assert len([c for c in result.calls if "enable --now" in c]) == 4
+    assert "recog prefetch" in result.calls
+    assert f"Programs:  {repo}/bin" in result.stdout
+
+
+def test_installation_without_python_when_setup_runs_then_check_precedes_install_and_activation(
+    repo, rust_stubs
+):
+    result = run_rust_setup(repo, rust_stubs, *offline_args())
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = result.calls
+    build = next(i for i, c in enumerate(calls) if c.startswith("cargo build"))
+    check = calls.index("recog check")
+    first_enable = next(i for i, c in enumerate(calls) if "enable --now" in c)
+    assert build < check < first_enable
+    assert "recog prefetch" not in calls
+
+
+def test_installation_without_python_and_a_bad_config_when_setup_runs_then_nothing_is_installed(
+    repo, rust_stubs
+):
+    result = run_rust_setup(
+        repo, rust_stubs, *offline_args(), env_extra={"STUB_CHECK": "Invalid AI settings: x"}
+    )
+
+    assert result.returncode == 1
+    assert "Invalid AI settings: x" in result.stderr
+    assert "Nothing was installed or restarted" in result.stderr
+    assert not (repo / "bin").exists()
+    assert not [c for c in result.calls if c.startswith(("systemctl", "launchctl"))]
+    assert no_python(result)
+
+
+def test_installation_without_python_and_a_failed_build_when_setup_runs_then_it_stops(
+    repo, rust_stubs
+):
+    result = run_rust_setup(repo, rust_stubs, *offline_args(), env_extra={"STUB_CARGO_FAIL": "1"})
+
+    assert result.returncode == 1
+    assert "cargo build failed" in result.stderr
+    assert not (repo / "bin").exists()
+    assert not [c for c in result.calls if c.startswith(("systemctl", "launchctl"))]
+    assert no_python(result)
+
+
+def test_installation_without_python_and_no_cargo_when_setup_runs_then_it_stops_naming_rustup(
+    repo, rust_stubs
+):
+    (rust_stubs[0] / "cargo").unlink()
+
+    result = run_rust_setup(repo, rust_stubs, *offline_args())
+
+    assert result.returncode == 1
+    assert "cargo not found" in result.stderr
+    assert "rustup" in result.stderr
+    assert not (repo / "bin").exists()
+    assert no_python(result)
+
+
+@pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
+def test_installation_without_python_when_dry_run_then_the_plan_names_cargo_and_bin(
+    repo, rust_stubs, host_os
+):
+    result = run_rust_setup(repo, rust_stubs, "--dry-run", host_os=host_os)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.calls == []
+    assert "Installation without Python" in result.stdout
+    assert "Would build with cargo (release)" in result.stdout
+    assert f"install the programs into {repo}/bin" in result.stdout
+    assert "Would create venv" not in result.stdout
+    assert "Would install torch" not in result.stdout
+    assert "GigaAM from" not in result.stdout
+    assert "Would download the ASR model gigaam-v3" in result.stdout
+
+
+def test_install_runtime_in_config_file_when_setup_runs_then_it_installs_without_python(
+    repo, rust_stubs
+):
+    config = repo.parent / "home/.config/recog/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[install]\nruntime = "rust"\n')
+
+    result = run_setup(repo, rust_stubs, *offline_args("--no-services"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / "bin/recog").exists()
+    assert no_python(result)
+
+
+def test_unknown_install_runtime_when_setup_runs_then_it_stops_before_anything(repo, rust_stubs):
+    result = run_setup(repo, rust_stubs, *offline_args(), env_extra={"RECOG_INSTALL_RUNTIME": "go"})
+
+    assert result.returncode == 1
+    assert '[install] runtime must be "python" or "rust", not "go"' in result.stderr
+    assert result.calls == []
+
+
+def test_installation_without_python_when_the_extension_is_built_then_npm_runs_without_python(
+    repo, rust_stubs
+):
+    (repo / "browser-extension").mkdir()
+    (repo / "browser-extension/package-lock.json").write_text("{}")
+
+    result = run_rust_setup(repo, rust_stubs, "--no-prefetch", "--no-services")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "npm ci" in result.calls and "npm run build" in result.calls
+    assert no_python(result)
+
+
+def test_dotenv_saying_rust_when_python_setup_checks_readiness_then_activation_is_blocked(
+    repo, stubs
+):
+    """given: the scripts read "python", but the parser (from .env) reads "rust"
+    when: setup.sh reaches the readiness gate
+    then: no unit is activated and the problem names where to set it
+    """
+    result = run_setup(
+        repo, stubs, *offline_args(), env_extra={"STUB_PARSED_INSTALL_RUNTIME": "rust"}
+    )
+
+    assert result.returncode != 0
+    assert '[install] runtime is "rust" for recog but "python" for setup.sh' in result.stderr
+    assert not [c for c in result.calls if "enable --now" in c]

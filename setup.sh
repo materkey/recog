@@ -10,6 +10,11 @@
 # `git pull` — the venv and the weight cache are reused, previously running
 # services are explicitly restarted so they pick up new code and units.
 #
+# [install] runtime = "rust" in config.toml (or RECOG_INSTALL_RUNTIME=rust in
+# the calling shell) installs without Python: no venv, pip, torch or GigaAM;
+# cargo builds the programs of rust/ into bin/ and the units run them
+# (docs/usage.md, "Installing without Python").
+#
 # Flags:
 #   --dry-run        show the installation plan without changing anything
 #   --no-services    prepare everything, do not touch launchd / systemd
@@ -29,6 +34,7 @@
 #                           runtime). Set it empty to force plain PyPI.
 #   RECOG_GIGAAM_URL/REF    git source of GigaAM (defaults: upstream @ pin)
 #   RECOG_GIGAAM_EDITABLE   path to a local GigaAM checkout to install -e
+#   RECOG_INSTALL_RUNTIME   "python" or "rust": [install] runtime of config.toml
 #   RECOG_HOST_OS           override the detected OS (tests)
 #   RECOG_HOST_ARCH         override the detected CPU architecture (tests)
 #   RECOG_SERVICE_OS        override the service backend (tests)
@@ -53,6 +59,7 @@ CPU_TORCH_INDEX="https://download.pytorch.org/whl/cpu"
 
 VENV_DIR="$REPO_DIR/venv-gigaam"
 HOST_OS="$(deps_host_os)"
+BIN_DIR="$DEPS_BIN_DIR"
 
 DO_SERVICES=1
 DO_PREFETCH=1
@@ -76,7 +83,7 @@ warn() { echo -e "${YELLOW}[warn]${NC} $1"; WARNINGS+=("$1"); }
 fail() { echo -e "${RED}[error]${NC} $1" >&2; exit 1; }
 
 usage() {
-    sed -n '2,33p' "$REPO_DIR/setup.sh" | sed 's/^#\{0,1\} \{0,1\}//'
+    sed -n '2,40p' "$REPO_DIR/setup.sh" | sed 's/^#\{0,1\} \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -97,12 +104,33 @@ case "$HOST_OS" in
     *) fail "Unsupported OS: $HOST_OS (recog runs on macOS and Linux)" ;;
 esac
 
+# "python" (the venv) or "rust" (no Python, the programs of rust/ in bin/).
+INSTALL_RUNTIME="$(deps_install_runtime)"
+case "$INSTALL_RUNTIME" in
+    python|rust) ;;
+    *) fail "[install] runtime must be \"python\" or \"rust\", not \"$INSTALL_RUNTIME\" ($(deps_config_file) or RECOG_INSTALL_RUNTIME)" ;;
+esac
+
+# The programs cargo builds without Python, each with its package, and where
+# cargo puts them (CARGO_TARGET_DIR is relative to rust/, where cargo runs).
+RUST_BUILD_ARGS=(-p recog-live --bin recog -p recog-web --bin recog-web
+    -p recog-copilot --bin recog-copilot-supervisor --bin recog-copilot-channel
+    -p recog-desktop --bin recog-desktop)
+if [ "$HOST_OS" = "darwin" ]; then
+    RUST_BUILD_ARGS+=(-p recog-mic --bin recog-mic)
+fi
+RUST_RELEASE_DIR="${CARGO_TARGET_DIR:-target}"
+case "$RUST_RELEASE_DIR" in
+    /*) RUST_RELEASE_DIR="$RUST_RELEASE_DIR/release" ;;
+    *)  RUST_RELEASE_DIR="$REPO_DIR/rust/$RUST_RELEASE_DIR/release" ;;
+esac
+
 # Upstream torch publishes no macOS x86_64 wheels past 2.2.2, and
 # deploy/python/constraints/macos.txt pins the verified 2.8.0 — pip on an Intel Mac cannot
 # resolve the install at all. Say so in the first second instead of after a
 # venv and a failed resolve.
 HOST_ARCH="${RECOG_HOST_ARCH:-$(uname -m)}"
-if [ "$HOST_OS" = "darwin" ] && [ "$HOST_ARCH" != "arm64" ]; then
+if [ "$INSTALL_RUNTIME" = "python" ] && [ "$HOST_OS" = "darwin" ] && [ "$HOST_ARCH" != "arm64" ]; then
     fail "macOS on $HOST_ARCH is not supported: the pinned torch/torchaudio (deploy/python/constraints/macos.txt) have macOS wheels for Apple Silicon only. Use an Apple Silicon Mac or Linux. (A Rosetta shell on Apple Silicon also reports x86_64 — rerun in a native arm64 terminal.)"
 fi
 
@@ -131,9 +159,17 @@ services_already_installed() {
     )
 }
 
-echo "=== recog setup ($HOST_OS) ==="
+echo "=== recog setup ($HOST_OS, [install] runtime = $INSTALL_RUNTIME) ==="
 
-if [ "$DRY_RUN" -eq 1 ]; then
+if [ "$DRY_RUN" -eq 1 ] && [ "$INSTALL_RUNTIME" = "rust" ]; then
+    echo "Dry run — installation plan only; dependencies and readiness are not verified."
+    echo "Installation without Python: no venv, pip, torch or GigaAM."
+    echo "Would check cargo and the system dependencies."
+    echo "Would build with cargo (release) in rust/: ${RUST_BUILD_ARGS[*]}"
+    echo "Would check the configuration with the built recog, then install the programs into $BIN_DIR"
+fi
+
+if [ "$DRY_RUN" -eq 1 ] && [ "$INSTALL_RUNTIME" = "python" ]; then
     echo "Dry run — installation plan only; dependencies and readiness are not verified."
     echo "Would check Python >= 3.12, system dependencies and ASR configuration."
     if [ -x "$VENV_DIR/bin/python" ]; then
@@ -163,6 +199,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
         echo "Would build the Rust Copilot supervisor and channel rust/recog-copilot with cargo, if cargo is available and [copilot] runtime is rust."
     fi
     echo "Would build the ASR backend wavo from rust/wavo-asr-py with pip and cargo, if [asr] backend is wavo, or auto on macOS."
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
     if [ "$DO_ENV" -eq 1 ]; then
         for config in "$REPO_DIR/.env" "$REPO_DIR/recog/web/.env"; do
             if [ -f "$config" ]; then
@@ -186,10 +225,12 @@ if [ "$DRY_RUN" -eq 1 ]; then
         echo "Would build sck_audio_capture with swiftc, or reuse the existing helper."
         echo "Would build Recog.app with swiftc when its source changed, or reuse the existing one."
     fi
-    if [ "$DO_PREFETCH" -eq 1 ]; then
-        echo "Would prepare the GigaAM weight cache, downloading missing or corrupt files."
-    else
+    if [ "$DO_PREFETCH" -eq 0 ]; then
         echo "Skipped GigaAM weights (--no-prefetch)"
+    elif [ "$INSTALL_RUNTIME" = "rust" ]; then
+        echo "Would download the ASR model gigaam-v3 into the Hugging Face cache if it is missing."
+    else
+        echo "Would prepare the GigaAM weight cache, downloading missing or corrupt files."
     fi
     if [ "$DO_SERVICES" -eq 1 ]; then
         echo "Would install $RECOG_SERVICE_OS service units, check readiness, then restart running services and start the others."
@@ -204,6 +245,9 @@ fi
 # 1. Python interpreter
 # ---------------------------------------------------------------------------
 
+# Steps 1 and 3-7 are the Python installation's only; without Python the
+# block after step 7 builds and installs the programs instead.
+if [ "$INSTALL_RUNTIME" = "python" ]; then
 step "Python"
 
 python_minor() {
@@ -240,6 +284,7 @@ fi
 # Library probes run on this interpreter until the venv exists. Deliberately
 # not RECOG_PYTHON — that one selects the interpreter baked into the units.
 DEPS_PYTHON="$PYTHON_BIN"
+fi # [install] runtime = "python"
 
 # ---------------------------------------------------------------------------
 # 2. System dependencies
@@ -276,10 +321,15 @@ else
     check_cmd tmux required "Copilot sessions"
     check_cmd claude required "Copilot sessions (sign in with claude before first use)"
 fi
+if [ "$INSTALL_RUNTIME" = "rust" ]; then
+    check_cmd cargo required "builds the programs of rust/"
+fi
 if [ "$HOST_OS" = "linux" ]; then
     check_cmd parec required "system audio capture"
     check_cmd pactl required "default-sink discovery"
-    echo "  [later]   portaudio  microphone input — probed after the Python deps are installed"
+    if [ "$INSTALL_RUNTIME" = "python" ]; then
+        echo "  [later]   portaudio  microphone input — probed after the Python deps are installed"
+    fi
 elif [ "$HOST_OS" = "darwin" ]; then
     if deps_have swiftc; then
         report_dep swiftc 1 required "$(command -v swiftc)"
@@ -288,7 +338,9 @@ elif [ "$HOST_OS" = "darwin" ]; then
     else
         report_dep swiftc 0 required "needed to build sck_audio_capture and Recog.app"
     fi
-    check_cmd cargo optional "echo cancellation ([live] echo_cancel) needs the Rust echo canceller it builds"
+    if [ "$INSTALL_RUNTIME" = "python" ]; then
+        check_cmd cargo optional "echo cancellation ([live] echo_cancel) needs the Rust echo canceller it builds"
+    fi
 fi
 
 while IFS=$'\t' read -r name note; do
@@ -300,6 +352,7 @@ done <<< "$(deps_optional_list)"
 # 3. ASR configuration (before anything is installed or restarted)
 # ---------------------------------------------------------------------------
 
+if [ "$INSTALL_RUNTIME" = "python" ]; then
 step "ASR configuration"
 
 if asr_problem="$(deps_asr_config_check)"; then
@@ -500,6 +553,50 @@ if [ "$HOST_OS" = "linux" ]; then
         MISSING_REQUIRED+=("portaudio")
     fi
 fi
+fi # [install] runtime = "python"
+
+# ---------------------------------------------------------------------------
+# 3-7 without Python: the programs of rust/, checked, then installed into bin/
+# ---------------------------------------------------------------------------
+
+if [ "$INSTALL_RUNTIME" = "rust" ]; then
+    step "Rust programs"
+
+    # No Python to fall back on: without cargo or with a failed build there is
+    # nothing to install, so stop before anything is touched.
+    deps_have cargo || fail "cargo not found — an installation without Python builds its programs with it: $(deps_hint cargo), then rerun ./setup.sh"
+    # From rust/, so that cargo reads rust/.cargo/config.toml like every build there.
+    (cd "$REPO_DIR/rust" && cargo build --release "${RUST_BUILD_ARGS[@]}") \
+        || fail "cargo build failed — nothing was installed or restarted; fix the build and rerun ./setup.sh"
+    for program in $(deps_rust_programs); do
+        [ -x "$RUST_RELEASE_DIR/$program" ] || fail "cargo built no $RUST_RELEASE_DIR/$program — nothing was installed or restarted (is build.target-dir set elsewhere? set CARGO_TARGET_DIR)"
+    done
+    info "Built: $(deps_rust_programs)"
+
+    # The configuration, checked by the binary just built before it replaces
+    # the one the services run (what step 3 does with Python).
+    step "Configuration"
+    if ! config_problem="$(DEPS_BIN_DIR="$RUST_RELEASE_DIR" deps_asr_config_check)"; then
+        echo -e "${RED}[error]${NC} $config_problem" >&2
+        echo "  Nothing was installed or restarted. Fix the configuration and rerun ./setup.sh" >&2
+        exit 1
+    fi
+    runtime_problem="$(DEPS_BIN_DIR="$RUST_RELEASE_DIR" deps_install_runtime_problem)"
+    [ -z "$runtime_problem" ] || fail "$runtime_problem"
+    info "Configuration OK"
+
+    # Copied, then renamed over the old one: a running service keeps the file
+    # it was started from, and rust/target can be cleaned without touching them.
+    mkdir -p "$BIN_DIR"
+    for program in $(deps_rust_programs); do
+        staged="$BIN_DIR/.$program.$$"
+        if ! { cp "$RUST_RELEASE_DIR/$program" "$staged" && chmod 755 "$staged" && mv -f "$staged" "$BIN_DIR/$program"; }; then
+            rm -f "$staged"
+            fail "Could not install $BIN_DIR/$program"
+        fi
+    done
+    info "Installed into $BIN_DIR"
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Configuration files
@@ -527,7 +624,11 @@ if [ "$DO_ENV" -eq 1 ]; then
 else
     echo "Skipped environment files (--no-env)"
 fi
-DATA_DIR="$(DEPS_PYTHON="$VENV_PY" bash "$REPO_DIR/scripts/data-dir.sh")"
+if [ "$INSTALL_RUNTIME" = "rust" ]; then
+    DATA_DIR="$(bash "$REPO_DIR/scripts/data-dir.sh")"
+else
+    DATA_DIR="$(DEPS_PYTHON="$VENV_PY" bash "$REPO_DIR/scripts/data-dir.sh")"
+fi
 mkdir -p "$DATA_DIR"
 
 # ---------------------------------------------------------------------------
@@ -575,8 +676,14 @@ if [ "$HOST_OS" = "darwin" ]; then
     fi
 
     # Rebuilt only when its source changed: a new signature means macOS asks
-    # for Screen Recording and the microphone again.
-    if "$VENV_PY" -m recog.macos_launcher > /dev/null; then
+    # for Screen Recording and the microphone again. Both builders write the
+    # same bundle and keep the same stamp.
+    if [ "$INSTALL_RUNTIME" = "rust" ]; then
+        launcher_build=("$BIN_DIR/recog" launcher)
+    else
+        launcher_build=("$VENV_PY" -m recog.macos_launcher)
+    fi
+    if "${launcher_build[@]}" > /dev/null; then
         info "Recog.app is ready"
     elif deps_launcher_ok; then
         info "Recog.app is already built — reusing it"
@@ -594,6 +701,14 @@ step "GigaAM weights"
 
 if [ "$DO_PREFETCH" = "0" ]; then
     echo "Skipped (--no-prefetch)"
+elif [ "$INSTALL_RUNTIME" = "rust" ]; then
+    # wavo's GGUF of GigaAM v3 in the Hugging Face cache; the live process would
+    # otherwise download it on its first transcription.
+    if "$BIN_DIR/recog" prefetch > /dev/null; then
+        info "ASR model ready"
+    else
+        warn "Could not download the ASR model — the first transcription will download it"
+    fi
 elif "$VENV_PY" "$REPO_DIR/scripts/prefetch_gigaam.py"; then
     info "Weight cache ready"
 else
@@ -716,6 +831,9 @@ case "$SETUP_STATE" in
 esac
 
 echo ""
+if [ "$INSTALL_RUNTIME" = "rust" ]; then
+    echo "  Programs:  $BIN_DIR (no Python; [install] runtime = \"rust\")"
+fi
 echo "  Extension: chrome://extensions → Developer mode → Load unpacked →"
 echo "             $EXTENSION_DIR/dist"
 if [ "$HOST_OS" = "darwin" ]; then
