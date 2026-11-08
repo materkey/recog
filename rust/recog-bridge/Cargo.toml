@@ -1,0 +1,19 @@
+[package]
+name = "recog-bridge"
+version = "0.1.0"
+edition = "2024"
+description = "The conference bridge of recog: the WebSocket server between the extension, the live process and the Copilot"
+publish = false
+
+[dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Insertion order of the pending Copilot requests: Python's dict, iterated when the
+# settings switch the Copilot off.
+indexmap = "2"
+recog-core = { path = "../recog-core" }
+tokio = { version = "1.49", features = ["macros", "net", "rt", "sync", "time"] }
+tokio-tungstenite = "0.29"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1.49", features = ["macros", "net", "rt", "sync", "test-util", "time"] }

@@ -1412,6 +1412,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "recog-bridge"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "indexmap",
+ "recog-core",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "recog-copilot"
 version = "0.1.0"
 dependencies = [
