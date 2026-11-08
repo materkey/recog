@@ -30,8 +30,18 @@ from recog.wavo_backend import Result, Word  # noqa: E402
 
 SR = 16000
 VOCAB = [
-    "привет", "коллеги", "сегодня", "обсудим", "план", "релиза",
-    "да", "согласен", "давайте", "начнём", "вопрос", "спасибо",
+    "привет",
+    "коллеги",
+    "сегодня",
+    "обсудим",
+    "план",
+    "релиза",
+    "да",
+    "согласен",
+    "давайте",
+    "начнём",
+    "вопрос",
+    "спасибо",
 ]
 WORD_S, GAP_S = 0.36, 0.12
 FRAME = 320  # 20 ms
@@ -128,7 +138,9 @@ class Session:
     def __init__(self, directory: Path, seconds: float):
         self.clock = Clock()
         self.wall0 = 1_790_000_000.0
-        self.rec = GoldenRecorder(directory, clock=self.clock, wall=lambda: self.wall0 + self.clock.t)
+        self.rec = GoldenRecorder(
+            directory, clock=self.clock, wall=lambda: self.wall0 + self.clock.t
+        )
         self.events = []  # (t, callable)
         self.seconds = seconds
 
@@ -144,7 +156,9 @@ class Session:
     def conference(self, participants, join_at=0.3, leave_at=None):
         self.at(0.1, lambda: self.rec.client_connected(1))
         self.frame(0.2, {"type": "clock_sync", "browser_time": self.ms(0.2)})
-        self.frame(join_at, {"type": "meeting_join", "url": URL, "platform": "ktalk", "title": "Synthetic"})
+        self.frame(
+            join_at, {"type": "meeting_join", "url": URL, "platform": "ktalk", "title": "Synthetic"}
+        )
         self.frame(join_at + 0.1, {"type": "participants_update", "participants": participants})
         if leave_at is not None:
             self.frame(leave_at, {"type": "meeting_leave"})

@@ -184,7 +184,9 @@ def _replay_out(out, wall0, shift, rows, meta=None):
     lines = []
     for t, speaker, text, extra in rows:
         ts = datetime.fromtimestamp(wall0 + shift + t, timezone.utc).isoformat()
-        lines.append(json.dumps({"ts": ts, "speaker": speaker, "is_local": False, "text": text, **extra}))
+        lines.append(
+            json.dumps({"ts": ts, "speaker": speaker, "is_local": False, "text": text, **extra})
+        )
     (meeting / "transcript.jsonl").write_text("".join(line + "\n" for line in lines))
     base = {
         "created_at": "2026-01-01T00:00:00+00:00",
@@ -233,7 +235,9 @@ def test_a_changed_row_a_missing_marker_and_another_source_compare_replays_names
         0.0,
         [(0.4, "Alice", "Добрый день", {}), (1.0, "Система", "[lost]", MARKER)],
     )
-    _replay_out(tmp_path / "b", wall0, 0.0, [(0.4, "Alice", "Добрый вечер", {})], {"source": "orphan"})
+    _replay_out(
+        tmp_path / "b", wall0, 0.0, [(0.4, "Alice", "Добрый вечер", {})], {"source": "orphan"}
+    )
 
     result = compare_replays(session, tmp_path / "a", tmp_path / "b")
 

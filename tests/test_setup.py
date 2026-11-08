@@ -480,7 +480,9 @@ def test_macos_with_cargo_setup_builds_the_rust_live_process(repo, stubs):
 
 
 @pytest.mark.parametrize("runtime, built", [("python", 0), ("rust", 1)])
-def test_linux_setup_builds_the_rust_live_process_only_with_the_setting(repo, stubs, runtime, built):
+def test_linux_setup_builds_the_rust_live_process_only_with_the_setting(
+    repo, stubs, runtime, built
+):
     """given: Linux with cargo on PATH and [live] runtime set either way
     when: setup runs
     then: the minutes-long release build happens only for that runtime"""

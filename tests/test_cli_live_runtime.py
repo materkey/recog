@@ -33,7 +33,9 @@ def test_rust_runtime_and_a_built_binary_choosing_the_program_gives_the_binary(t
     assert cli.rust_live_program("rust", backend, binary) == binary
 
 
-def test_rust_runtime_without_the_build_choosing_the_program_falls_back_and_says_so(tmp_path, capsys):
+def test_rust_runtime_without_the_build_choosing_the_program_falls_back_and_says_so(
+    tmp_path, capsys
+):
     """given: runtime "rust" but no binary (cargo was missing when setup ran)
     when: the program is chosen
     then: Python, with a line naming the binary and setup.sh"""
@@ -55,13 +57,13 @@ def test_rust_runtime_with_another_asr_backend_choosing_the_program_keeps_python
 
 
 def test_unknown_runtime_choosing_the_program_stops_naming_the_key(tmp_path):
-    with pytest.raises(ValueError, match=r'\[live\] runtime must be "python" or "rust", not \'rsut\''):
+    with pytest.raises(
+        ValueError, match=r'\[live\] runtime must be "python" or "rust", not \'rsut\''
+    ):
         cli.rust_live_program("rsut", "auto", _binary(tmp_path))
 
 
-def test_rust_runtime_starting_live_execs_the_binary_with_the_same_arguments(
-    tmp_path, monkeypatch
-):
+def test_rust_runtime_starting_live_execs_the_binary_with_the_same_arguments(tmp_path, monkeypatch):
     """given: runtime "rust" and a built binary
     when: `recog live --system-audio auto --ktalk` starts
     then: the process becomes the binary with those arguments, the interpreter named

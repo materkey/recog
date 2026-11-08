@@ -198,7 +198,7 @@ def hand_over_to_rust_live(argv: list[str]) -> None:
     program = rust_live_program(INSTALL_CONFIG.live.runtime, INSTALL_CONFIG.asr.backend, RUST_LIVE)
     if program is None:
         return
-    print(f"[live] runtime = \"rust\": running {program}", file=sys.stderr, flush=True)
+    print(f'[live] runtime = "rust": running {program}', file=sys.stderr, flush=True)
     sys.stdout.flush()
     # The Python microphone worker, when [live] mic_worker keeps it, runs on this
     # interpreter.

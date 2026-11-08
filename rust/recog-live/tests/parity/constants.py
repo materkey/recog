@@ -33,7 +33,12 @@ NAMES = [
 ]
 
 MODULE_NAMES = {
-    "live": ["MAX_WAV_DATA_BYTES", "AUDIO_CLEANUP_INTERVAL_S", "SILENCE_CHECK_INTERVAL_S", "GOLDEN_KEEP_DAYS"],
+    "live": [
+        "MAX_WAV_DATA_BYTES",
+        "AUDIO_CLEANUP_INTERVAL_S",
+        "SILENCE_CHECK_INTERVAL_S",
+        "GOLDEN_KEEP_DAYS",
+    ],
     "system_audio": ["DIGITAL_SILENCE_RESTART_S"],
 }
 
