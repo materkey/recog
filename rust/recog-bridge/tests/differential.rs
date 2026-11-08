@@ -204,7 +204,11 @@ fn first_difference(path: &str, a: &Value, b: &Value) -> Option<String> {
 
 fn check(name: &str) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity/scenarios").join(format!("{name}.json"));
-    let scenario = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    check_file(name, &path);
+}
+
+fn check_file(name: &str, path: &Path) {
+    let scenario = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let python = normalize(run_python(&scenario));
     let rust = normalize(run_rust(&scenario));
     // RECOG_BRIDGE_PARITY_DUMP=<dir> keeps both outputs for a look.
@@ -250,4 +254,24 @@ scenarios! {
     given_ktalk_only_when_joining_then_same_capture_switching => "ktalk_only",
     given_stalled_and_failing_clients_when_broadcasting_then_same_timeouts_and_cleanup => "stalled_clients",
     given_odd_frames_and_hello_races_when_read_then_same_handling => "misc_frames",
+}
+
+/// A local check, never committed: every scenario in the directory named by
+/// `RECOG_BRIDGE_PARITY_SCENARIOS` (for one, scenarios made from the frames of golden
+/// sessions under `~/.recog/golden`). Without the variable nothing runs.
+#[test]
+fn given_local_scenarios_when_a_directory_is_named_then_both_bridges_agree_on_each() {
+    let Some(dir) = std::env::var_os("RECOG_BRIDGE_PARITY_SCENARIOS").filter(|d| !d.is_empty()) else { return };
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .expect("scenario directory")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    paths.sort();
+    assert!(!paths.is_empty(), "no scenarios in {}", PathBuf::from(&dir).display());
+    for path in paths {
+        let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        check_file(&name, &path);
+        eprintln!("local scenario {name}: same");
+    }
 }
