@@ -255,8 +255,6 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
     """given: a checkout with the Rust workspace and no golden data configured
     when: the checks run
     then: rustfmt, clippy with warnings as errors and the data-free tests run, the
-    recog-core parity, recog-live, recog-bridge and recog-web differential tests with
-    the check's interpreter, and the golden parity tests do not"""
     recog-core parity and the recog-live, recog-bridge, recog-web and recog-desktop
     differential tests with the check's interpreter, and the golden parity tests do not"""
     add_rust_workspace(repo)
