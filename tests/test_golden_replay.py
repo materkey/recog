@@ -166,3 +166,79 @@ def test_rows_outside_the_recorded_audio_compare_leaves_them_out(tmp_path):
     result = compare(session, tmp_path / "original", out)
 
     assert result == {"matched": 2, "only_original": [], "only_replay": []}
+
+
+MARKER = {"speaker_id": "__system__", "uncertain_reason": "pcm_watchdog_transition"}
+
+
+def _replay_out(out, wall0, shift, rows, meta=None):
+    """A replay's output as compare_replays reads it: replay.json and one meeting whose
+    rows are given at seconds from the recorded start."""
+    from datetime import datetime, timezone
+
+    meeting = out / "data" / "meetings" / "m"
+    meeting.mkdir(parents=True)
+    (out / "replay.json").write_text(
+        json.dumps({"start_wall": wall0 + shift, "recorded_start_wall": wall0, "asr_misses": 0})
+    )
+    lines = []
+    for t, speaker, text, extra in rows:
+        ts = datetime.fromtimestamp(wall0 + shift + t, timezone.utc).isoformat()
+        lines.append(json.dumps({"ts": ts, "speaker": speaker, "is_local": False, "text": text, **extra}))
+    (meeting / "transcript.jsonl").write_text("".join(line + "\n" for line in lines))
+    base = {
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "source": "ktalk",
+        "participants": {"a": {"name": "Alice", "first_seen": str(wall0 + shift)}},
+        "stats": {"segment_count": len(rows), "words_count": 3},
+    }
+    (meeting / "meta.json").write_text(json.dumps({**base, **(meta or {})}))
+
+
+def test_two_replays_compare_replays_agrees_on_rows_markers_and_meta_apart_from_times(tmp_path):
+    """given: two replays of a session started 100 s apart, with the same row, the same
+          marker and their participants first seen at their own times
+    when: they are compared
+    then: they agree"""
+    from recog.golden import read_session
+    from recog.golden_replay import compare_replays, replays_agree
+
+    session = tmp_path / "session"
+    _session(session)
+    wall0 = next(iter(read_session(session)))["wall"]
+    rows = [(0.4, "Alice", "Добрый день, коллеги", {}), (2.0, "Система", "[PCM recovered]", MARKER)]
+    _replay_out(tmp_path / "a", wall0, 0.0, rows)
+    _replay_out(tmp_path / "b", wall0, 100.0, rows)
+
+    result = compare_replays(session, tmp_path / "a", tmp_path / "b")
+
+    assert replays_agree(result), result
+    assert (result["matched"], result["markers_matched"]) == (1, 1)
+
+
+def test_a_changed_row_a_missing_marker_and_another_source_compare_replays_names_each(tmp_path):
+    """given: two replays differing in a row's text, a marker one of them lacks and the
+          meeting's source
+    when: they are compared
+    then: each difference is reported on its side and the replays disagree"""
+    from recog.golden import read_session
+    from recog.golden_replay import compare_replays, replays_agree
+
+    session = tmp_path / "session"
+    _session(session)
+    wall0 = next(iter(read_session(session)))["wall"]
+    _replay_out(
+        tmp_path / "a",
+        wall0,
+        0.0,
+        [(0.4, "Alice", "Добрый день", {}), (1.0, "Система", "[lost]", MARKER)],
+    )
+    _replay_out(tmp_path / "b", wall0, 0.0, [(0.4, "Alice", "Добрый вечер", {})], {"source": "orphan"})
+
+    result = compare_replays(session, tmp_path / "a", tmp_path / "b")
+
+    assert not replays_agree(result)
+    assert [r["text"] for r in result["only_first"]] == ["Добрый день"]
+    assert [r["text"] for r in result["only_second"]] == ["Добрый вечер"]
+    assert [r["text"] for r in result["markers_only_first"]] == ["[lost]"]
+    assert result["meta_equal"] is False

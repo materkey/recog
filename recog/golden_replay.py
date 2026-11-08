@@ -16,6 +16,10 @@ outputs land under ``<out>/data/meetings``; ``compare`` sets them against the me
 the session was recorded in.
 
     python -m recog.golden_replay replay <session> <out>
+
+``compare-replays <session> <first> <second>`` sets two replays of one session
+against each other: the Python one and the Rust one (``rust/target/release/recog
+replay <session> <out>``, the same player in the Rust live process).
 """
 
 from __future__ import annotations
@@ -139,10 +143,31 @@ def _isolate(data_dir: Path, port: int, captures: dict, asr: ReplayASR) -> None:
     meeting_storage.MeetingStorage._generate_title_for_meeting = lambda self, path: None
 
 
-def _drive(events: list[dict], captures: dict, port: int, transcriber, start: float) -> None:
-    """Sends the recording into the running live process at its recorded times."""
+def _connect(port: int):
+    """A client of the replayed bridge whose broadcasts are read and dropped.
+
+    Unread, they fill the client's queue (16 frames), the client stops reading the
+    socket, the bridge's pong to its keepalive ping is never seen, and the connection
+    dies with "keepalive ping timeout" a few minutes into a real session.
+    """
+    from websockets.exceptions import ConnectionClosed
     from websockets.sync.client import connect
 
+    ws = connect(f"ws://127.0.0.1:{port}")
+
+    def drain():
+        try:
+            for _ in ws:
+                pass
+        except ConnectionClosed:
+            pass
+
+    threading.Thread(target=drain, daemon=True).start()
+    return ws
+
+
+def _drive(events: list[dict], captures: dict, port: int, transcriber, start: float) -> None:
+    """Sends the recording into the running live process at its recorded times."""
     first_wall = events[0]["wall"]
     shift = start - first_wall
     clients: dict[int, Any] = {}
@@ -153,7 +178,7 @@ def _drive(events: list[dict], captures: dict, port: int, transcriber, start: fl
             time.sleep(delay)
         kind = event["kind"]
         if kind == "connect":
-            clients[event["client"]] = connect(f"ws://127.0.0.1:{port}")
+            clients[event["client"]] = _connect(port)
         elif kind == "disconnect":
             ws = clients.pop(event["client"], None)
             if ws is not None:
@@ -224,22 +249,50 @@ def replay(session: Path, out: Path, profile: Optional[Path] = None) -> dict:
 # Fields that make two transcript rows the same line; ids, offsets and the exact
 # time differ between runs and are not compared.
 ROW_KEY = ("speaker", "is_local", "text", "refined", "uncertain")
+# The same for a marker (a system row: the PCM watchdog, the system capture).
+MARKER_KEY = ("speaker", "text", "uncertain_reason")
 # How far apart in time the same line may land in the two runs, in seconds.
 TOLERANCE_S = 1.5
 
 
-def _rows_between(meetings: Path, start: float, end: float, shift: float) -> list[dict]:
-    """Speech rows of every meeting under ``meetings`` with ``ts - shift`` in [start, end]."""
+def _rows_between(
+    meetings: Path, start: float, end: float, shift: float, markers: bool = False
+) -> list[dict]:
+    """Speech rows of every meeting under ``meetings`` with ``ts - shift`` in [start, end]
+    (with ``markers``, the system markers instead, keyed by ``MARKER_KEY``)."""
     rows = []
+    keys = MARKER_KEY if markers else ROW_KEY
     for path in sorted(Path(meetings).glob("*/transcript.jsonl")):
         for line in path.read_text(encoding="utf-8").splitlines():
             row = json.loads(line)
-            if row.get("speaker_id") == "__system__":  # markers: the replay's own pause, etc.
+            # Markers: the replay's own pause, etc.
+            if (row.get("speaker_id") == "__system__") != markers:
                 continue
             t = datetime.fromisoformat(row["ts"]).timestamp() - shift
             if start <= t <= end:
-                rows.append({"t": round(t, 3), **{k: row.get(k) for k in ROW_KEY}})
+                rows.append({"t": round(t, 3), **{k: row.get(k) for k in keys}})
     return sorted(rows, key=lambda r: r["t"])
+
+
+def _match(before: list[dict], after: list[dict], keys=ROW_KEY) -> tuple[list, list]:
+    """The rows of ``before`` with no twin in ``after`` (same ``keys``, within
+    ``TOLERANCE_S``), and the rows of ``after`` left without one."""
+    unmatched = list(after)
+    only_before = []
+    for row in before:
+        twin = next(
+            (
+                r
+                for r in unmatched
+                if all(r[k] == row[k] for k in keys) and abs(r["t"] - row["t"]) <= TOLERANCE_S
+            ),
+            None,
+        )
+        if twin is None:
+            only_before.append(row)
+        else:
+            unmatched.remove(twin)
+    return only_before, unmatched
 
 
 def _recorded_audio_span(events) -> tuple[float, float]:
@@ -269,26 +322,104 @@ def compare(session: Path, original: Path, out: Path) -> dict:
     shift = summary["start_wall"] - summary["recorded_start_wall"]
     before = _rows_between(original, start, end, 0.0)
     after = _rows_between(Path(out) / "data" / "meetings", start, end, shift)
-    unmatched = list(after)
-    only_original = []
-    for row in before:
-        twin = next(
-            (
-                r
-                for r in unmatched
-                if all(r[k] == row[k] for k in ROW_KEY) and abs(r["t"] - row["t"]) <= TOLERANCE_S
-            ),
-            None,
-        )
-        if twin is None:
-            only_original.append(row)
-        else:
-            unmatched.remove(twin)
+    only_original, unmatched = _match(before, after)
     return {
         "matched": len(before) - len(only_original),
         "only_original": only_original,
         "only_replay": unmatched,
     }
+
+
+# meta.json fields two replays of one session must agree on; ids, times and paths
+# differ between runs.
+META_KEYS = (
+    "version",
+    "source",
+    "end_reason",
+    "mode",
+    "chunk_duration_ms",
+    "conference",
+    "title",
+    "title_source",
+    "participants",
+    "recording_active",
+)
+META_STATS = ("segment_count", "words_count")
+
+
+def _metas(meetings: Path) -> list[dict]:
+    """The comparable part of every meeting's meta.json, in creation order."""
+    metas = []
+    for path in Path(meetings).glob("*/meta.json"):
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        # When a participant was first and last seen is wall-clock time.
+        participants = {
+            pid: {k: v for k, v in info.items() if not k.endswith("_seen")}
+            for pid, info in (meta.get("participants") or {}).items()
+        }
+        metas.append(
+            {
+                "created_at": meta.get("created_at"),
+                **{k: meta.get(k) for k in META_KEYS},
+                "participants": participants,
+                "stats": {k: meta.get("stats", {}).get(k) for k in META_STATS},
+                "prev": meta.get("prev_meeting_id") is not None,
+                "next": meta.get("next_meeting_id") is not None,
+            }
+        )
+    metas.sort(key=lambda m: m["created_at"] or "")
+    for meta in metas:
+        del meta["created_at"]
+    return metas
+
+
+def compare_replays(session: Path, first: Path, second: Path) -> dict:
+    """Two replays of ``session`` (say the Python and the Rust live process) against
+    each other: speech rows as ``compare`` matches them, the markers on their own, and
+    the comparable fields of every meeting's meta.json."""
+    start, end = _recorded_audio_span(read_session(session))
+
+    def rows(out: Path, markers: bool) -> list[dict]:
+        summary = json.loads((Path(out) / "replay.json").read_text())
+        shift = summary["start_wall"] - summary["recorded_start_wall"]
+        # Markers are stamped when they are written, not with a capture time.
+        lo, hi = (float("-inf"), float("inf")) if markers else (start, end)
+        return _rows_between(Path(out) / "data" / "meetings", lo, hi, shift, markers)
+
+    a, b = rows(first, False), rows(second, False)
+    only_first, only_second = _match(a, b)
+    ma, mb = rows(first, True), rows(second, True)
+    markers_first, markers_second = _match(ma, mb, MARKER_KEY)
+    metas_first = _metas(Path(first) / "data" / "meetings")
+    metas_second = _metas(Path(second) / "data" / "meetings")
+    misses = [
+        json.loads((Path(out) / "replay.json").read_text())["asr_misses"] for out in (first, second)
+    ]
+    return {
+        "matched": len(a) - len(only_first),
+        "only_first": only_first,
+        "only_second": only_second,
+        "markers_matched": len(ma) - len(markers_first),
+        "markers_only_first": markers_first,
+        "markers_only_second": markers_second,
+        "meta_equal": metas_first == metas_second,
+        "meta_first": metas_first,
+        "meta_second": metas_second,
+        "asr_misses": misses,
+    }
+
+
+def replays_agree(result: dict) -> bool:
+    """Whether ``compare_replays`` found the two replays the same."""
+    return result["meta_equal"] and not any(
+        result[k]
+        for k in (
+            "only_first",
+            "only_second",
+            "markers_only_first",
+            "markers_only_second",
+        )
+    )
 
 
 def main(argv=None) -> int:
@@ -304,10 +435,21 @@ def main(argv=None) -> int:
     c.add_argument("session", type=Path)
     c.add_argument("out", type=Path, help="the replay's output directory")
     c.add_argument("--meetings", type=Path, help="default: <data dir>/meetings")
+    cr = sub.add_parser(
+        "compare-replays",
+        help="compare two replays of a session (the Python and the Rust live process)",
+    )
+    cr.add_argument("session", type=Path)
+    cr.add_argument("first", type=Path, help="the first replay's output directory")
+    cr.add_argument("second", type=Path, help="the second replay's output directory")
     args = parser.parse_args(argv)
     if args.command == "replay":
         print(json.dumps(replay(args.session, args.out, args.profile), indent=1))
         return 0
+    if args.command == "compare-replays":
+        result = compare_replays(args.session, args.first, args.second)
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0 if replays_agree(result) else 1
     from .config import get_data_dir
 
     result = compare(args.session, args.meetings or get_data_dir() / "meetings", args.out)
