@@ -36,3 +36,24 @@ pub const PCM_REFINE_MONOLOG_CAP_S: f64 = 15.0;
 /// While a capture buffer holds no more than this (seconds), its start time is
 /// re-anchored to the wall clock on every block.
 pub const CAPTURE_RESYNC_MAX_S: f64 = 6.0;
+
+/// Reuse the last named speaker of system audio only within this many seconds.
+pub const LAST_SPEAKER_TTL: f64 = 10.0;
+
+/// Without recognised text for this long (seconds), an orphan meeting is split.
+pub const SILENCE_SPLIT_TIMEOUT: f64 = 10.0 * 60.0;
+
+/// Retroactive correction scans at most this many recent system-audio segments.
+pub const RETROACTIVE_MAX_SEGMENTS: usize = 20;
+
+/// Retroactive correction reaches back at most this many seconds.
+pub const RETROACTIVE_MAX_SECONDS: f64 = 60.0;
+
+/// A segment of one speaker breaks after this many seconds of continuous speech.
+pub const MAX_SEGMENT_DURATION: f64 = 20.0;
+
+/// The wall-clock↔WAV anchor of PCM offsets is used only while younger than this (ms).
+pub const PCM_WAV_ANCHOR_MAX_AGE_MS: f64 = 30_000.0;
+
+/// `MIC_SPEAKER_NAME`'s default: the microphone's name without a profile.
+pub const DEFAULT_MIC_SPEAKER_NAME: &str = "Me";

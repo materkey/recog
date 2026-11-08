@@ -1804,15 +1804,23 @@ name = "recog-live"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "cpal",
+ "futures-util",
  "nix",
  "parking_lot",
  "realfft",
+ "recog-ai",
+ "recog-bridge",
  "recog-core",
+ "recog-zoom",
  "serde_json",
  "sha1",
  "sha2 0.10.9",
  "speexdsp-aec",
  "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "unicode-general-category",
  "wavo",
 ]
 

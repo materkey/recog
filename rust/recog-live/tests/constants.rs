@@ -22,6 +22,17 @@ fn python_config_constants_compared_then_every_value_is_the_same() {
         ("PCM_REFINE_WINDOW_S", PCM_REFINE_WINDOW_S),
         ("PCM_REFINE_MONOLOG_CAP_S", PCM_REFINE_MONOLOG_CAP_S),
         ("CAPTURE_RESYNC_MAX_S", CAPTURE_RESYNC_MAX_S),
+        ("LAST_SPEAKER_TTL", LAST_SPEAKER_TTL),
+        ("SILENCE_SPLIT_TIMEOUT", SILENCE_SPLIT_TIMEOUT),
+        ("RETROACTIVE_MAX_SEGMENTS", RETROACTIVE_MAX_SEGMENTS as f64),
+        ("RETROACTIVE_MAX_SECONDS", RETROACTIVE_MAX_SECONDS),
+        ("MAX_SEGMENT_DURATION", MAX_SEGMENT_DURATION),
+        ("PCM_WAV_ANCHOR_MAX_AGE_MS", PCM_WAV_ANCHOR_MAX_AGE_MS),
+        ("live.MAX_WAV_DATA_BYTES", recog_core::wav::MAX_WAV_DATA_BYTES as f64),
+        ("live.AUDIO_CLEANUP_INTERVAL_S", recog_live::live::AUDIO_CLEANUP_INTERVAL_S),
+        ("live.SILENCE_CHECK_INTERVAL_S", recog_live::live::SILENCE_CHECK_INTERVAL_S),
+        ("live.GOLDEN_KEEP_DAYS", recog_live::live::GOLDEN_KEEP_DAYS),
+        ("system_audio.DIGITAL_SILENCE_RESTART_S", recog_live::capture::subprocess::DIGITAL_SILENCE_RESTART_S),
     ];
     for (name, value) in ours {
         assert_eq!(answer[name].as_f64(), Some(value), "{name}");
