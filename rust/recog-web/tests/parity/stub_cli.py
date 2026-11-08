@@ -8,18 +8,16 @@ import os
 import sys
 import time
 
-here = os.path.dirname(os.path.realpath(__file__))
 name = os.path.basename(__file__)
 stdin = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
-calls = os.path.join(os.environ["RECOG_STUB_CALLS"])
+calls = os.environ["RECOG_STUB_CALLS"]
 os.makedirs(calls, exist_ok=True)
-with open(os.path.join(calls, f"{name}-{time.time_ns()}-{os.getpid()}.json"), "w", encoding="utf-8") as stream:
+with open(
+    os.path.join(calls, f"{name}-{time.time_ns()}-{os.getpid()}.json"), "w", encoding="utf-8"
+) as stream:
     json.dump({"argv": sys.argv[1:], "stdin": stdin}, stream, ensure_ascii=False)
 digest = hashlib.sha256(stdin.encode("utf-8", "surrogateescape")).hexdigest()[:12]
 answer = f"{name} ответ {digest}"
-if os.path.exists(os.path.join(here, "fail")):
-    sys.stderr.write(f"{name} failed on purpose\n")
-    sys.exit(3)
 if name == "claude":
     if "stream-json" in sys.argv:
         for part in (answer[:6], answer):
