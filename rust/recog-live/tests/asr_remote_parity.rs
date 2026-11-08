@@ -63,9 +63,39 @@ fn scripted_gateway_driving_both_fallback_backends_then_steps_logs_and_requests_
     assert_eq!(got.len(), expected.as_array().unwrap().len());
     assert!(python_requests.len() > 500, "only {} requests", python_requests.len());
     assert_every_state_reached(&expected);
-    if rust_requests != python_requests {
-        let only_rust: Vec<_> = rust_requests.iter().filter(|r| !python_requests.contains(r)).take(3).collect();
-        let only_python: Vec<_> = python_requests.iter().filter(|r| !rust_requests.contains(r)).take(3).collect();
+    // Python's batch is `Executor.map`, which cancels the clips not yet started once
+    // one fails: on an idle machine every clip has started by then, under CPU load
+    // some have not and never reach the gateway (seen as 8 failures in 10 runs on a
+    // loaded Linux box). Rust sends every clip of a batch, so beyond Python's
+    // requests it may only have such batch clips (shorter than a 1600-sample chunk).
+    // The frozen test holds Rust to the full set recorded on an idle machine.
+    let only_python = without(&python_requests, &rust_requests);
+    let only_rust = without(&rust_requests, &python_requests);
+    let not_batch_clips: Vec<&String> = only_rust.iter().filter(|r| !is_batch_clip(r)).collect();
+    if !only_python.is_empty() || !not_batch_clips.is_empty() {
+        let only_python: Vec<_> = only_python.iter().take(3).collect();
+        let only_rust: Vec<_> = not_batch_clips.iter().take(3).collect();
         panic!("requests differ:\nonly Rust: {only_rust:#?}\nonly Python: {only_python:#?}");
     }
+}
+
+/// The records of `all` left after taking out one of `seen` per occurrence.
+fn without(all: &[String], seen: &[String]) -> Vec<String> {
+    let mut seen = seen.to_vec();
+    all.iter()
+        .filter(|r| match seen.iter().position(|s| s == *r) {
+            Some(i) => {
+                seen.swap_remove(i);
+                false
+            }
+            None => true,
+        })
+        .cloned()
+        .collect()
+}
+
+fn is_batch_clip(record: &str) -> bool {
+    let record: Json = serde_json::from_str(record).unwrap();
+    let parts = record["parts"].as_array().cloned().unwrap_or_default();
+    parts.iter().any(|p| p["value"] == "json") && parts.iter().any(|p| p["n"].as_u64().is_some_and(|n| n < 1600))
 }
