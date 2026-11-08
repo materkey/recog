@@ -242,6 +242,21 @@ def _rows_between(meetings: Path, start: float, end: float, shift: float) -> lis
     return sorted(rows, key=lambda r: r["t"])
 
 
+def _recorded_audio_span(events) -> tuple[float, float]:
+    """Wall times from the first to the last recorded audio: captures (from their
+    capture time) and PCM frames. Rows outside came from audio the recorder left out,
+    the microphone and system audio between conferences."""
+    times = []
+    for event in events:
+        if event["kind"] == "capture":
+            times += [event["start_ts"], event["wall"]]
+        elif event["kind"] == "frame" and event["data"].get("type") == "pcm_chunk":
+            times.append(event["wall"])
+    if not times:
+        return 0.0, -1.0
+    return min(times) - TOLERANCE_S, max(times) + TOLERANCE_S
+
+
 def compare(session: Path, original: Path, out: Path) -> dict:
     """The meeting rows the live service wrote while ``session`` was recorded, under
     ``original`` (a meetings directory), against the rows of its replay in ``out``.
@@ -250,8 +265,7 @@ def compare(session: Path, original: Path, out: Path) -> dict:
     side is listed with its time from the recorded clock.
     """
     summary = json.loads((Path(out) / "replay.json").read_text())
-    events = list(read_session(session))
-    start, end = events[0]["wall"], events[-1]["wall"] + TAIL_S
+    start, end = _recorded_audio_span(read_session(session))
     shift = summary["start_wall"] - summary["recorded_start_wall"]
     before = _rows_between(original, start, end, 0.0)
     after = _rows_between(Path(out) / "data" / "meetings", start, end, shift)

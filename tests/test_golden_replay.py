@@ -129,3 +129,40 @@ def test_replay_against_its_original_compare_matches_rows_and_names_a_changed_on
     changed = compare(session, original, out)
     assert [r["text"] for r in changed["only_original"]] == ["Добрый вечер, коллеги"]
     assert [r["text"] for r in changed["only_replay"]] == ["Добрый день, коллеги"]
+
+
+def test_rows_outside_the_recorded_audio_compare_leaves_them_out(tmp_path):
+    """given: the service's rows of a recorded call, and a row from after the call,
+          when the service went on listening with no conference (its audio is not recorded)
+    when: a replay with the call's rows is compared with them
+    then: everything matches: the replay cannot reproduce audio that was never recorded"""
+    from datetime import datetime, timezone
+
+    from recog.golden import read_session
+    from recog.golden_replay import compare
+
+    session, out = tmp_path / "session", tmp_path / "out"
+    _session(session)
+    wall0 = next(iter(read_session(session)))["wall"]
+
+    def row(t, speaker, is_local, text):
+        ts = datetime.fromtimestamp(wall0 + t, timezone.utc).isoformat()
+        return {"ts": ts, "speaker": speaker, "is_local": is_local, "text": text}
+
+    call = [
+        row(0.4, "Alice", False, "Добрый день, коллеги"),
+        row(1.5, "Tester", True, "Привет, Алиса"),
+    ]
+    for meetings, rows in [
+        (out / "data" / "meetings", call),
+        (tmp_path / "original", call + [row(10.0, "Tester", True, "Да.")]),
+    ]:
+        (meetings / "m").mkdir(parents=True)
+        (meetings / "m" / "transcript.jsonl").write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+        )
+    (out / "replay.json").write_text(json.dumps({"start_wall": 0, "recorded_start_wall": 0}))
+
+    result = compare(session, tmp_path / "original", out)
+
+    assert result == {"matched": 2, "only_original": [], "only_replay": []}

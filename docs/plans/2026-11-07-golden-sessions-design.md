@@ -2,8 +2,8 @@
 
 Status: the recorder (`recog/golden.py`, `[live] golden_record`, off by default) and a
 real-time player for the Python implementation (`recog/golden_replay.py`) are built;
-the comparison with the original meeting too; the clock seam and runs on real
-recorded sessions are not. Step 0 of
+the comparison with the original meeting too, and the first real KTalk session
+replays to its meeting row for row; the clock seam is not built. Step 0 of
 [the move to Rust](2026-11-07-rust-migration.md).
 
 ## Purpose
@@ -99,7 +99,12 @@ Mapped from the code on 2026-11-07:
    to its transcript (`tests/test_golden_replay.py`). `python -m recog.golden_replay
    compare <session> <out>` sets the replay's rows against those the service wrote
    while the session was recorded: speaker, local or not, text, refined, uncertain,
-   within 1.5 s; markers are left out. Running it on real recorded meetings is next.
+   within 1.5 s; markers are left out, and so are rows outside the recorded audio
+   (from the first to the last capture or PCM frame): between conferences the service
+   transcribes audio the recorder does not keep.
+   **First real session, 2026-11-08:** a KTalk test call (the user on the microphone,
+   a podcast on the system audio, ASR on `wavo`, the Rust microphone worker, echo
+   cancellation on) replayed with no ASR miss, and its 10 rows matched the meeting's.
 4. Recording a few real sessions on the user's machine: a KTalk meeting, Google Meet,
    a Zoom web call, and an orphan microphone recording.
 
