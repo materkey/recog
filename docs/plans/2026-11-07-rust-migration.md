@@ -9,12 +9,15 @@ Status: in progress.
 - Step 3: `wavo` behind `build_asr()` is the default on macOS (`"auto"`).
 - Step 4 has the microphone: the opt-in worker `rust/recog-mic` behind
   `[live] mic_worker`.
-- Steps 4 and 5 have the lower layer of the live process ported, not yet wired:
-  `rust/recog-live` (capture, echo stage, ASR on `wavo`, per-speaker ingest, refine,
-  golden recorder).
-- Step 5 has the bridge ported, not yet wired: `rust/recog-bridge`.
-- Step 8 has the Zoom application source ported, not yet wired: `rust/recog-zoom`.
+- Steps 4 and 5: the whole live process is ported, opt-in: `[live] runtime = "rust"`
+  runs `rust/recog-live` (capture, echo stage, ASR on `wavo`, per-speaker ingest,
+  refine, golden recorder, the main loop and the command line) with the bridge
+  (`rust/recog-bridge`) in the same process.
+- Step 8 has the Zoom application source ported: `rust/recog-zoom`, started by the
+  Rust live process for `--zoom-app`.
 - Step 6 has the web backend ported, not yet wired: `rust/recog-web`.
+- Step 7 has the Copilot supervisor and MCP channel ported, not yet wired:
+  `rust/recog-copilot`.
 
 ## Goal
 
@@ -107,8 +110,16 @@ where they can.
      microphone raw and within one float32 step elsewhere (the FFT library rounds
      differently from numpy's); `wavo` in Rust gives the text and word timings of
      `wavo_asr` on every compared clip.
-   - Still to do: the main loop (`live.py`, `cli.py`) and the bridge in the same
-     process.
+   - **Main loop and command line ported 2026-11-08**, opt-in: `[live] runtime =
+     "rust"` makes `python -m recog live` exec `rust/recog-live`'s binary `recog`
+     (`live` with every flag, `meetings`, and `replay`), the bridge on its own runtime
+     thread in the same process. Golden replay against Python: five synthetic
+     sessions (a microphone alone, a KTalk call on per-speaker PCM with refine, system
+     audio with nobody else in the call, a silence split, the PCM watchdog's fallback
+     and recovery) give the same rows, markers and `meta.json` fields with no ASR
+     miss (`tests/replay_parity.rs`), and so did the user's five recorded sessions.
+     The cases of the live-loop test suites are ported on fakes.
+   - Still to do: a real meeting on the Rust live process, then the default.
    - **Bridge ported 2026-11-08**, not wired: `rust/recog-bridge`, a library with the
      boundary toward the live process as traits (the callbacks `LiveTranscriber`
      registers today). The bridge cases of the Python suites run against it, and its
@@ -118,7 +129,7 @@ where they can.
      call, storage file and log line. The five local golden sessions replayed through
      both gave the same.
      The Copilot policy and the increments come from `recog-ai`.
-   - Still to do: `recog-live` hosting it.
+   - `recog-live` hosts it under `[live] runtime = "rust"`.
 6. **Web backend.** FastAPI to axum; the static UI unchanged.
    - **Ported 2026-11-08**, not wired: `rust/recog-web`, binary `recog-web`, every
      route of `recog/web/server.py`, the live stream and the bridge subscriber, on
@@ -154,7 +165,8 @@ where they can.
      Accessibility dumps and 400 seeded random runs (about 12 800 events), the
      installed Zoom's wording, and (on request, two Swift builds) a real helper build,
      whose bundle is identical file by file to the Python one's.
-   - Still to do: start it from the live process instead of the Python thread.
+   - The Rust live process starts it (`--zoom-app`, `[live] zoom_app`); the Python
+     one still runs the Python thread.
 9. **Installation without Python.** `setup.sh` and the launchd/systemd units run
    binaries; `Recog.app` starts the Rust binary, so the permissions stay with "Recog".
    Python modules are deleted as they are replaced; each step gets its CHANGELOG entry.
@@ -169,7 +181,7 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 | `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library, ported, not wired |
 | `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library, ported, not wired |
 | `recog-bridge` | `ktalk_bridge.py` | library, ported, not wired |
-| `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same tokio process; the modules below the main loop ported (parity-tested against Python; no caller yet) |
+| `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `golden_replay.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same process; opt-in (`[live] runtime = "rust"`), held to Python by golden replay |
 | `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary, ported, not wired |
 | `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries; the supervisor ported, not wired |
 | `recog-mic` | `mic_worker.py` | binary, done |

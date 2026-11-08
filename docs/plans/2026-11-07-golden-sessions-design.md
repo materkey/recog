@@ -1,9 +1,10 @@
 # Golden sessions: recording and replaying the live process
 
 Status: the recorder (`recog/golden.py`, `[live] golden_record`, off by default) and a
-real-time player for the Python implementation (`recog/golden_replay.py`) are built;
-the comparison with the original meeting too, and the first real KTalk session
-replays to its meeting row for row; the clock seam is not built. Step 0 of
+real-time player for the Python implementation (`recog/golden_replay.py`) and for the
+Rust one (`recog replay`) are built; the comparison with the original meeting and of
+two replays too, and the first real KTalk session replays to its meeting row for row;
+the clock seam is not built. Step 0 of
 [the move to Rust](2026-11-07-rust-migration.md).
 
 ## Purpose
@@ -105,6 +106,16 @@ Mapped from the code on 2026-11-07:
    **First real session, 2026-11-08:** a KTalk test call (the user on the microphone,
    a podcast on the system audio, ASR on `wavo`, the Rust microphone worker, echo
    cancellation on) replayed with no ASR miss, and its 10 rows matched the meeting's.
+   **The Rust player, 2026-11-08:** `recog replay <session> <out>` (`rust/recog-live`)
+   does the same into the Rust live process, and `python -m recog.golden_replay
+   compare-replays <session> <first> <second>` sets two replays against each other:
+   the speech rows as `compare` matches them, the markers on their own, and the
+   comparable fields of every meeting's `meta.json`. `tests/replay_parity.rs` records
+   synthetic sessions with the Python recorder, fills in their ASR answers by
+   replaying them into Python with a model that reads tones back as words, and
+   requires the Rust replay to agree with that one. The players read and drop the
+   bridge's broadcasts: unread, they filled the Python client's queue, it stopped
+   reading the socket, and a long session died of "keepalive ping timeout".
 4. Recording a few real sessions on the user's machine: a KTalk meeting, Google Meet,
    a Zoom web call, and an orphan microphone recording.
 
