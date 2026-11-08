@@ -3,7 +3,6 @@
 
 #![allow(dead_code)]
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -122,9 +121,23 @@ pub fn shell_stub(dir: &Path, name: &str, stdout: &str, stderr: &str, code: i32)
         data.display()
     );
     let path = dir.join(name);
-    std::fs::write(&path, script).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&path, &script);
     path
+}
+
+/// Writes an executable through a child `sh`, so the test process never holds it open
+/// for writing: on Linux a test forking in another thread at that moment would inherit
+/// the descriptor and make running the file fail with ETXTBSY ("Text file busy").
+fn write_executable(path: &Path, content: &str) {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(content.as_bytes()).unwrap();
+    assert!(child.wait().unwrap().success(), "could not write {}", path.display());
 }
 
 /// The argv a [`shell_stub`] recorded, without argv[0].
