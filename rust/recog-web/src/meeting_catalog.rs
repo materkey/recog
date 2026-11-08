@@ -71,6 +71,8 @@ struct Inner {
     needs_retry: AtomicBool,
     stopping: AtomicBool,
     started: AtomicBool,
+    /// Files read and parsed, for tests: an unchanged file is never reopened.
+    parsed: std::sync::atomic::AtomicUsize,
 }
 
 /// `MeetingCatalog(base_path, external_paths)`.
@@ -216,6 +218,7 @@ impl Inner {
     }
 
     fn parse_file(&self, path: &Path) -> Result<Entry, Unusable> {
+        self.parsed.fetch_add(1, Ordering::SeqCst);
         let data = pyjson::loads(&read_text(path)?).map_err(|e| Unusable(e.0))?;
         if data.as_object().is_none() {
             return Err(Unusable("expected a JSON object".into()));
@@ -388,6 +391,7 @@ impl MeetingCatalog {
                 needs_retry: AtomicBool::new(false),
                 stopping: AtomicBool::new(false),
                 started: AtomicBool::new(false),
+                parsed: std::sync::atomic::AtomicUsize::new(0),
             }),
             task: Arc::new(Mutex::new(None)),
         }
@@ -404,10 +408,17 @@ impl MeetingCatalog {
         &self.inner.roots
     }
 
-    /// `start()`: a first refresh, then the loop.
+    /// How many files the catalog has read so far.
+    #[must_use]
+    pub fn files_read(&self) -> usize {
+        self.inner.parsed.load(Ordering::SeqCst)
+    }
+
+    /// `start()`: events count from now (the observer runs already), then a first
+    /// refresh, then the loop.
     pub async fn start(&self) {
-        self.refresh(None).await;
         self.inner.started.store(true, Ordering::SeqCst);
+        self.refresh(None).await;
         let inner = Arc::clone(&self.inner);
         let this = self.clone();
         *self.task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =

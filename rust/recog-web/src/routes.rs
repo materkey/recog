@@ -1021,7 +1021,7 @@ async fn ask_chat(state: &AppState, req: &Req) -> Reply {
     let path = chat_path(&storage, &meeting_id)?;
     let (segments, local) =
         resolve_ai_context(state, &meeting_id, &storage, false).map_err(|_| responses::internal_error())??;
-    let transcript = transcript::build_ai_transcript(&segments, state.chat_transcript_max_chars)
+    let transcript = transcript::build_ai_transcript(&segments, state.config.chat_transcript_max_chars)
         .map_err(|_| responses::internal_error())?;
     if transcript.is_empty() {
         return Err(bad_request("Meeting has no transcript"));

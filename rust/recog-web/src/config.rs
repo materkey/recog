@@ -43,6 +43,9 @@ pub struct Config {
     pub ktalk_debug_file: PathBuf,
     pub legacy_env: LegacyEnv,
     pub cli_env: CliEnv,
+    /// `CHAT_TRANSCRIPT_MAX_CHARS`: far above the analysis limit, a question may be
+    /// about any moment of the meeting.
+    pub chat_transcript_max_chars: usize,
 }
 
 impl Config {
@@ -90,6 +93,7 @@ impl Config {
             ktalk_debug_file,
             legacy_env,
             cli_env,
+            chat_transcript_max_chars: 300_000,
         })
     }
 

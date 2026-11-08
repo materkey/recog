@@ -69,8 +69,6 @@ pub struct AppState {
     pub privacy: PrivacyStore,
     pub copilot: Mutex<CopilotRelay>,
     pub debug_ai: Mutex<DebugAiContext>,
-    /// `CHAT_TRANSCRIPT_MAX_CHARS`.
-    pub chat_transcript_max_chars: usize,
 }
 
 impl AppState {
@@ -114,7 +112,6 @@ impl AppState {
             ai_settings,
             copilot: Mutex::new(CopilotRelay::default()),
             debug_ai: Mutex::new(DebugAiContext::default()),
-            chat_transcript_max_chars: 300_000,
         })
     }
 
