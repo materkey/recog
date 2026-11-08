@@ -14,14 +14,9 @@
 //!
 //! The recording holds personal audio and text: it stays under the data directory.
 //!
-//! Known differences:
-//! - an OS error is reported as Python's `str(OSError)` (`[Errno 28] No space left on
-//!   device`) only when it carries an errno; other I/O errors keep Rust's wording;
-//! - floats are printed by `recog_core::py::float_repr`, which, when the exact value
-//!   lies halfway between the two shortest round-tripping 17-digit strings, picks the
-//!   upper one where `repr` picks the even one (`967816371417934.25`: Rust `.3`,
-//!   Python `.2`). Both read back as the same float; only the bytes differ. A wall
-//!   clock reading that is an odd multiple of 1/256 s does this.
+//! Known difference: an OS error is reported as Python's `str(OSError)` (`[Errno 28]
+//! No space left on device`) only when it carries an errno; other I/O errors keep
+//! Rust's wording.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write};

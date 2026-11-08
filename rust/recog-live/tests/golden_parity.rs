@@ -160,12 +160,14 @@ fn random_clock(rng: &mut Rng, n: usize) -> (Vec<f64>, Vec<f64>) {
         };
         clock.push(now);
         #[allow(clippy::cast_precision_loss)]
-        wall.push(match i % 6 {
+        wall.push(match i % 7 {
             0 => 1_700_000_000.0,
             1 => 1.7e9 + rng.uniform() * 1e6,
             2 => 0.1,
             3 => 1e16,
             4 => 1e-5,
+            // An odd multiple of a power of two whose shortest repr is a tie.
+            5 => 967_816_371_417_934.0 + 0.25 + (2 * rng.range(0, 1000)) as f64,
             _ => rng.range(0, 1_000_000_000) as f64 / 1e3,
         });
     }
