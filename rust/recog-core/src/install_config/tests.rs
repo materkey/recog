@@ -154,7 +154,22 @@ fn setting_keys_when_naming_a_variable_then_its_table_and_key_are_given() {
     assert_eq!(setting_key("RECOG_COPILOT_AUTOSPAWN").as_deref(), Some("[copilot] autospawn"));
     assert_eq!(setting_key("ASR_PENDING_BUFFER_CAP_S").as_deref(), Some("[asr] pending_buffer_cap_s"));
     assert_eq!(setting_key("NOT_A_SETTING"), None);
-    assert_eq!(all_settings().count(), 26);
+    assert_eq!(setting_key("RECOG_INSTALL_RUNTIME").as_deref(), Some("[install] runtime"));
+    assert_eq!(all_settings().count(), 27);
+}
+
+#[test]
+fn install_runtime_when_parsing_and_overlaying_then_file_default_and_variable_apply() {
+    // given
+    let config = parse("[install]\nruntime = \"rust\"\n").unwrap();
+    // when
+    let (resolved, overridden) = with_environment(&config, &environ(&[("RECOG_INSTALL_RUNTIME", "python")])).unwrap();
+    // then
+    assert_eq!(InstallConfig::default().install.runtime, "python");
+    assert_eq!(config.install.runtime, "rust");
+    assert_eq!(resolved.install.runtime, "python");
+    assert_eq!(overridden, vec!["RECOG_INSTALL_RUNTIME"]);
+    assert!(parse("[install]\nruntime = \"rust\"\nvenv = false\n").unwrap_err().contains("[install]"));
 }
 
 #[test]

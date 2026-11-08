@@ -29,7 +29,8 @@ phone = "Phone"
 ```
 
 `deploy/config.example.toml` lists every setting with its explanation. Besides
-the tables above it has `[asr]`, `[live]`, `[copilot]`, `[web]` and `[macos]`:
+the tables above it has `[asr]`, `[live]`, `[copilot]`, `[web]`, `[macos]` and
+`[install]`:
 each key is the default of one environment variable the code reads (for example
 `[asr] backend` of `RECOG_ASR_BACKEND`, `[web] external_meetings_paths` of
 `EXTERNAL_MEETINGS_PATHS`), typed as in the example: `true`/`false` for flags,
@@ -48,6 +49,14 @@ over it once at import and exposes the typed result as `INSTALL_CONFIG`
 reads that, never the environment. Each field declares its variable, type and
 default there. `RECOG_CONFIG_FILE` may be set in `.env` too.
 
+`[install] runtime` (`RECOG_INSTALL_RUNTIME`) is the one setting the shell
+scripts read themselves, before any program exists: `setup.sh`, `recog-service.sh`
+and `scripts/deps.sh` take it from the calling shell or from a plain
+`runtime = "rust"` line under `[install]` in this file, never from `.env`. The
+readiness check compares that with what the parser reads and refuses to start
+services when they differ (a value in `.env`, or a form the line reader does not
+understand), naming both.
+
 Unknown tables or keys are errors, not ignored, so a typo cannot silently drop
 a setting. A malformed file stops the services at startup
 (`./recog-service.sh start` reports it before activating anything) and fails
@@ -58,9 +67,11 @@ State the web UI writes (`ai-settings.json`,
 `user-profile.json`, `privacy.json` under the data directory) is not
 configuration and stays where it is.
 
-One parser reads the file, `recog/install_config.py`. The extension build takes
-the conference hosts from `python -m recog.install_config`, using
-`RECOG_PYTHON`, else `venv-gigaam/bin/python`, else `python3` (3.11 or newer).
+One parser reads the file, `recog/install_config.py`, and its Rust port in
+`rust/recog-core`, held to it by parity tests. The extension build takes the
+conference hosts from `python -m recog.install_config`, using `RECOG_PYTHON`, else
+`bin/recog config conferences` when the installation runs without Python, else
+`venv-gigaam/bin/python`, else `python3` (3.11 or newer).
 
 `scripts/backup-data.sh` copies the file into its snapshot as `config.toml`.
 

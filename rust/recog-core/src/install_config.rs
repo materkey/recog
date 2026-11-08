@@ -253,8 +253,17 @@ section!(
     }
 );
 
+section!(
+    /// `[install]`.
+    InstallSettings, "install" {
+        /// How setup.sh installs recog and what the service units run: "python" (the
+        /// venv) or "rust" (the binaries in bin/, run by the units directly).
+        runtime: String = ("RECOG_INSTALL_RUNTIME", Text, "python".into()),
+    }
+);
+
 /// The section tables in the order Python declares them.
-pub const SECTIONS: [&str; 5] = ["asr", "live", "copilot", "web", "macos"];
+pub const SECTIONS: [&str; 6] = ["asr", "live", "copilot", "web", "macos", "install"];
 
 /// Every setting of every section.
 pub fn all_settings() -> impl Iterator<Item = &'static Setting> {
@@ -264,6 +273,7 @@ pub fn all_settings() -> impl Iterator<Item = &'static Setting> {
         .chain(CopilotSettings::SETTINGS)
         .chain(WebSettings::SETTINGS)
         .chain(MacosSettings::SETTINGS)
+        .chain(InstallSettings::SETTINGS)
 }
 
 /// `SETTING_KEYS[variable]`: the `config.toml` key of an environment variable, for
@@ -287,6 +297,7 @@ pub struct InstallConfig {
     pub copilot: CopilotSettings,
     pub web: WebSettings,
     pub macos: MacosSettings,
+    pub install: InstallSettings,
     /// Environment variables whose setting the file gave, to report conflicts.
     pub from_file: BTreeSet<String>,
 }
@@ -301,6 +312,7 @@ impl InstallConfig {
             "copilot" => self.copilot.get(key),
             "web" => self.web.get(key),
             "macos" => self.macos.get(key),
+            "install" => self.install.get(key),
             _ => unreachable!("no section {table}"),
         }
     }
@@ -312,6 +324,7 @@ impl InstallConfig {
             "copilot" => self.copilot.set(key, value),
             "web" => self.web.set(key, value),
             "macos" => self.macos.set(key, value),
+            "install" => self.install.set(key, value),
             _ => unreachable!("no section {table}"),
         }
     }
@@ -527,6 +540,7 @@ fn settings_of(table_name: &str) -> &'static [Setting] {
         "copilot" => CopilotSettings::SETTINGS,
         "web" => WebSettings::SETTINGS,
         "macos" => MacosSettings::SETTINGS,
+        "install" => InstallSettings::SETTINGS,
         _ => unreachable!("no section {table_name}"),
     }
 }

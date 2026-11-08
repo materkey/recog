@@ -120,3 +120,15 @@
 # RECOG_CODESIGN_IDENTITY: signing identity for RecogZoomHelper.app (default
 # ad hoc); with a real identity the Accessibility grant survives a rebuild.
 # codesign_identity = "Developer ID Application: ..."
+
+[install]
+# RECOG_INSTALL_RUNTIME: how ./setup.sh installs recog and what the service units
+# run. "python" (default): a venv with PyTorch and GigaAM, the units run
+# python -m ..., and the runtime of each table above picks the program behind it.
+# "rust": no Python at all; ./setup.sh builds rust/ with cargo into bin/ and the
+# units run those binaries (the live one through Recog.app on macOS), so the
+# runtime and mic_worker keys above and [asr] backend other than "wavo" do
+# nothing. setup.sh and recog-service.sh read this key from this file or the
+# calling shell, never from .env. Apply with ./setup.sh (docs/usage.md,
+# "Installing without Python").
+# runtime = "python"

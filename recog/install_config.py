@@ -107,12 +107,22 @@ class MacosSettings:
     codesign_identity: str = _setting("RECOG_CODESIGN_IDENTITY", "text", "")
 
 
+@dataclass
+class InstallSettings:
+    # How setup.sh installs recog and what the service units run: "python" (the venv;
+    # the runtime of each service above picks its program) or "rust" (no Python: the
+    # binaries of rust/ installed into bin/ and run by the units directly). setup.sh
+    # and recog-service.sh read it from the file and the calling shell, not from .env.
+    runtime: str = _setting("RECOG_INSTALL_RUNTIME", "text", "python")
+
+
 SECTIONS = {
     "asr": AsrSettings,
     "live": LiveSettings,
     "copilot": CopilotSettings,
     "web": WebSettings,
     "macos": MacosSettings,
+    "install": InstallSettings,
 }
 
 # Environment variable -> its config.toml key, for messages.
@@ -134,6 +144,7 @@ class InstallConfig:
     copilot: CopilotSettings = field(default_factory=CopilotSettings)
     web: WebSettings = field(default_factory=WebSettings)
     macos: MacosSettings = field(default_factory=MacosSettings)
+    install: InstallSettings = field(default_factory=InstallSettings)
     # Environment variables whose setting the file gave, to report conflicts.
     from_file: frozenset[str] = frozenset()
 

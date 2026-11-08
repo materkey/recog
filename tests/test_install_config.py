@@ -133,6 +133,19 @@ def test_settings_when_parsing_then_sections_hold_typed_values():
     assert config.web.external_meetings_paths == ("/a/meetings:a", "/b/meetings")
 
 
+def test_install_runtime_when_parsing_and_overlaying_then_file_default_and_variable_apply():
+    assert InstallConfig().install.runtime == "python"
+    config = parse_install_config({"install": {"runtime": "rust"}})
+
+    resolved, overridden = with_environment(config, {"RECOG_INSTALL_RUNTIME": "python"})
+
+    assert config.install.runtime == "rust"
+    assert resolved.install.runtime == "python"
+    assert overridden == ["RECOG_INSTALL_RUNTIME"]
+    with pytest.raises(ValueError, match="install"):
+        parse_install_config({"install": {"runtime": "rust", "venv": False}})
+
+
 def test_setting_keys_when_naming_a_variable_then_its_table_and_key_are_given():
     assert SETTING_KEYS["RECOG_COPILOT_AUTOSPAWN"] == "[copilot] autospawn"
     assert len(SETTING_KEYS) == sum(len(dataclasses.fields(cls)) for cls in SECTIONS.values())
