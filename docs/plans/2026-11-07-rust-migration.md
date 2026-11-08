@@ -12,6 +12,7 @@ Status: in progress.
 - Steps 4 and 5 have the lower layer of the live process ported, not yet wired:
   `rust/recog-live` (capture, echo stage, ASR on `wavo`, per-speaker ingest, refine,
   golden recorder).
+- Step 5 has the bridge ported, not yet wired: `rust/recog-bridge`.
 - Step 8 has the Zoom application source ported, not yet wired: `rust/recog-zoom`.
 
 ## Goal
@@ -107,6 +108,16 @@ where they can.
      `wavo_asr` on every compared clip.
    - Still to do: the main loop (`live.py`, `cli.py`) and the bridge in the same
      process.
+   - **Bridge ported 2026-11-08**, not wired: `rust/recog-bridge`, a library with the
+     boundary toward the live process as traits (the callbacks `LiveTranscriber`
+     registers today). The bridge cases of the Python suites run against it, and its
+     differential tests run `recog/ktalk_bridge.py` and the port on the same scripted
+     sessions (extensions with Origin headers, the webapp, the supervisor, the channel,
+     a real storage, one scenario over real WebSockets) and compare every frame, live
+     call, storage file and log line. The five local golden sessions replayed through
+     both gave the same.
+   - Still to do: the Copilot policy and increments from `recog-ai`; then `recog-live`
+     hosting it.
 6. **Web backend.** FastAPI to axum; the static UI unchanged.
 7. **Copilot.** The supervisor (state machine, tmux, `systemd-run`, screen classifier)
    and the MCP channel (rmcp).
@@ -140,7 +151,7 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 | `recog-core` | `install_config.py`, `config.py` (data directory), `user_profile.py`, `meeting_storage.py`, `ws_origin.py`, `privacy.py` | library, ported (parity-tested against Python; no caller yet) |
 | `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library |
 | `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library, ported, not wired |
-| `recog-bridge` | `ktalk_bridge.py` | library |
+| `recog-bridge` | `ktalk_bridge.py` | library, ported, not wired |
 | `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same tokio process; the modules below the main loop ported (parity-tested against Python; no caller yet) |
 | `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary |
 | `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries |
