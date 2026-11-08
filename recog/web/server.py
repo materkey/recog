@@ -1835,5 +1835,9 @@ app.mount(
 
 
 if __name__ == "__main__":
+    from recog.rust_runtime import hand_over_web
+
+    # [web] runtime = "rust": this process becomes recog-web (returns when it stays).
+    hand_over_web(HOST, PORT, sys.argv[1:])
     import uvicorn
     uvicorn.run(app, host=HOST, port=PORT)

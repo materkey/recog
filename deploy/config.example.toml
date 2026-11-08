@@ -103,6 +103,12 @@
 # extra_ws_origins = ["https://meet.example.com"]
 # RECOG_BRIDGE_WS_URL: bridge WebSocket the web server subscribes to.
 # bridge_ws_url = "ws://localhost:8766"
+# RECOG_WEB_RUNTIME: the web server's process, "python" (python -m recog.web.server)
+# or "rust" (rust/recog-web, which ./setup.sh builds when cargo is installed, on
+# Linux only with this set). Without the build Python runs and the log says so.
+# The KTalk desktop integration (docs/desktop-ktalk.md) runs under Python only
+# for now. Apply with ./recog-service.sh restart.
+# runtime = "python"
 
 [macos]
 # RECOG_CODESIGN_IDENTITY: signing identity for RecogZoomHelper.app (default

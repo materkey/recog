@@ -75,6 +75,7 @@ case "$*" in
   *prefetch_gigaam*)    exit "${STUB_PREFETCH_RC:-0}" ;;
   *"print(INSTALL_CONFIG.asr.backend)"*) echo "${STUB_ASR_BACKEND:-auto}"; exit 0 ;;
   *"print(INSTALL_CONFIG.live.runtime)"*) echo "${STUB_LIVE_RUNTIME:-python}"; exit 0 ;;
+  *"print(INSTALL_CONFIG.web.runtime)"*) echo "${STUB_WEB_RUNTIME:-python}"; exit 0 ;;
 esac
 exit 0
 """
@@ -517,6 +518,86 @@ def test_no_cargo_setup_does_not_try_the_live_build(repo, stubs):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert _live_builds(result) == []
+
+
+# The other services' Rust programs, built like the live process: (package, the stub
+# variable of its runtime setting, the cargo call, what setup says when it fails).
+RUST_SERVICE_BUILDS = [
+    pytest.param(
+        "recog-web",
+        "STUB_WEB_RUNTIME",
+        "cargo build --release -p recog-web --bin recog-web",
+        "web service stays on Python",
+        id="web",
+    ),
+]
+
+
+def _package_builds(result, package):
+    return [c for c in result.calls if c.startswith("cargo build") and f"-p {package} " in c]
+
+
+@pytest.mark.parametrize("package, runtime_stub, build, fallback", RUST_SERVICE_BUILDS)
+def test_macos_with_cargo_setup_builds_the_rust_service_binaries(
+    repo, stubs, package, runtime_stub, build, fallback
+):
+    """given: macOS with cargo on PATH and the runtime setting left at "python"
+    when: setup runs
+    then: cargo builds the release binaries the setting's "rust" runs"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _package_builds(result, package) == [build]
+
+
+@pytest.mark.parametrize("runtime, built", [("python", 0), ("rust", 1)])
+@pytest.mark.parametrize("package, runtime_stub, build, fallback", RUST_SERVICE_BUILDS)
+def test_linux_setup_builds_the_rust_service_binaries_only_with_the_setting(
+    repo, stubs, package, runtime_stub, build, fallback, runtime, built
+):
+    """given: Linux with cargo on PATH and the service's runtime set either way
+    when: setup runs
+    then: the minutes-long release build happens only for "rust\""""
+    result = run_setup(
+        repo, stubs, *offline_args("--no-services"), env_extra={runtime_stub: runtime}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(_package_builds(result, package)) == built
+
+
+@pytest.mark.parametrize("package, runtime_stub, build, fallback", RUST_SERVICE_BUILDS)
+def test_failed_service_build_setup_goes_on_and_says_the_service_stays_on_python(
+    repo, stubs, package, runtime_stub, build, fallback
+):
+    """given: macOS where the build of one service's Rust binaries fails
+    when: setup runs
+    then: it says that service stays on Python and finishes"""
+    cargo = stubs[0] / "cargo"
+    cargo.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "cargo $*" >> "$STUB_LOG"\n'
+        f'case "$*" in *"-p {package} "*) exit 1 ;; esac\nexit 0\n'
+    )
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert fallback in result.stdout
+
+
+@pytest.mark.parametrize("package, runtime_stub, build, fallback", RUST_SERVICE_BUILDS)
+def test_no_cargo_setup_does_not_try_the_service_builds(
+    repo, stubs, package, runtime_stub, build, fallback
+):
+    """given: macOS without cargo
+    when: setup runs
+    then: no build of the service's binaries is tried"""
+    (stubs[0] / "cargo").unlink()
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _package_builds(result, package) == []
 
 
 def _wavo_module_installs(result):

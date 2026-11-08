@@ -92,6 +92,9 @@ class WebSettings:
     extra_ws_origins: tuple[str, ...] = _setting("RECOG_EXTRA_WS_ORIGINS", "list", ())
     # Read-only meeting directories of other sources: "path" or "path:source".
     external_meetings_paths: tuple[str, ...] = _setting("EXTERNAL_MEETINGS_PATHS", "list", ())
+    # The web server: "python" (FastAPI) or "rust" (rust/recog-web's binary, built by
+    # setup.sh when cargo is present; recog/rust_runtime.py hands over to it).
+    runtime: str = _setting("RECOG_WEB_RUNTIME", "text", "python")
 
 
 @dataclass

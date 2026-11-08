@@ -238,6 +238,8 @@ section!(
         extra_ws_origins: Vec<String> = ("RECOG_EXTRA_WS_ORIGINS", List, Vec::new()),
         /// Read-only meeting directories of other sources: "path" or "path:source".
         external_meetings_paths: Vec<String> = ("EXTERNAL_MEETINGS_PATHS", List, Vec::new()),
+        /// The web server: "python" or "rust" (the `recog-web` binary).
+        runtime: String = ("RECOG_WEB_RUNTIME", Text, "python".into()),
     }
 );
 

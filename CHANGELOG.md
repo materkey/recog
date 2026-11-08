@@ -20,6 +20,15 @@ reasoning.
   backend`, or without the build, the service stays on Python and the log says why.
   No new permission: it still runs under Recog.app. The default stays `"python"`.
 
+- **The web server in Rust (opt-in).** `runtime = "rust"` under `[web]` in
+  `~/.config/recog/config.toml` (or `RECOG_WEB_RUNTIME=rust`) makes the frontend
+  service run `rust/recog-web` instead of FastAPI, on the same address with the same
+  API, live stream and static UI. `./setup.sh` now builds it when cargo is installed
+  (on Linux only with the setting set). To try it: `./setup.sh`, set the key,
+  `./recog-service.sh restart`. Without the build the service stays on Python and the
+  log says so. The KTalk desktop integration (`python -m recog desktop`) is not
+  watched under it yet: keep Python if you use it. The default stays `"python"`.
+
 - **macOS: speech recognition runs on wavo by default.** The default of `[asr]
   backend` is now `"auto"`: on a Mac it runs the same GigaAM model on the Rust
   runtime wavo, 6-12 times faster than PyTorch with the same word error rate, once

@@ -207,6 +207,16 @@ print(INSTALL_CONFIG.live.runtime)
 ' "$DEPS_REPO_DIR" 2> /dev/null || true
 }
 
+# [web] runtime of the installation configuration: "python" or "rust".
+deps_web_runtime() {
+    "$(deps_python)" -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from recog.install_config import INSTALL_CONFIG
+print(INSTALL_CONFIG.web.runtime)
+' "$DEPS_REPO_DIR" 2> /dev/null || true
+}
+
 # --- readiness -------------------------------------------------------------
 
 # Everything the full live pipeline needs, one human-readable problem per
