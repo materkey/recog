@@ -137,8 +137,16 @@ where they can.
      its protocol tests run both against a fake bridge and a fake tmux. It reads its
      settings from the environment, `.env` and `[copilot]` of `config.toml` until
      `recog-core` provides them.
-   - Still to do: the MCP channel; then a setting that runs the Rust supervisor, and a
-     real meeting on it.
+   - **MCP channel ported 2026-11-08**, not wired: binary `recog-copilot-channel` in the
+     same crate. The protocol is rmcp's; the Streamable HTTP side reproduces mcp 1.27's
+     session manager on the wire, since rmcp's server answers differently and does not
+     tell which session holds the GET stream a channel push needs. Its differential
+     tests run `python -m recog.copilot_channel` and the binary side by side, each with
+     a fake bridge, through the same 137-step conversation and compare every answer
+     byte for byte, plus seeded random cases of the formatting, argument validation,
+     result JSON and privacy masking, and the official Python SDK client against both.
+   - Still to do: a setting that runs the Rust supervisor and channel, and a real
+     meeting on them.
 8. **Edges.** The `zoom_app` session logic (the Swift helper stays) and the KTalk desktop
    inspector.
    - **`zoom_app` ported 2026-11-08**, not wired: `rust/recog-zoom` (library and the
