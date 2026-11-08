@@ -120,7 +120,7 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 
 | Crate | Replaces | Kind |
 |---|---|---|
-| `recog-core` | `install_config.py`, `config.py` (data directory), `user_profile.py`, `meeting_storage.py`, `ws_origin.py`, `privacy.py` | library |
+| `recog-core` | `install_config.py`, `config.py` (data directory), `user_profile.py`, `meeting_storage.py`, `ws_origin.py`, `privacy.py` | library, ported (parity-tested against Python; no caller yet) |
 | `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library |
 | `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library, ported, not wired |
 | `recog-bridge` | `ktalk_bridge.py` | library |

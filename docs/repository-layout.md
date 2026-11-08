@@ -15,6 +15,7 @@ records are grouped separately, making it clear where a new file belongs.
 | `recog/prompts/` | Shared AI summary templates |
 | `recog/native/macos/` | ScreenCaptureKit Swift helper source |
 | `rust/` | Rust workspace: the echo canceller `speexdsp-aec`, `wavo-asr-py`, the module of the ASR backend `wavo`, `recog-mic`, the microphone worker of `[live] mic_worker = "rust"`, `recog-copilot`, the port of the Copilot supervisor, and `recog-zoom`, the Zoom application source, both not yet wired ([the move to Rust](plans/2026-11-07-rust-migration.md)) |
+| `rust/` | Rust workspace: the echo canceller `speexdsp-aec`, `wavo-asr-py`, the module of the ASR backend `wavo`, `recog-mic`, the microphone worker of `[live] mic_worker = "rust"`, and `recog-core`, the settings, data directory, profile and meeting storage, not used yet ([the move to Rust](plans/2026-11-07-rust-migration.md)) |
 | `browser-extension/` | Chrome extension source, platform adapters, build and tests |
 | `deploy/python/` | Client/server requirements and verified macOS dependency constraints |
 | `deploy/node/` | Pinned JavaScript quality tools (ESLint) for `scripts/quality.py` |
