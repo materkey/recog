@@ -138,6 +138,9 @@ if [ -f rust/Cargo.toml ]; then
         # Its differential tests run recog/ktalk_bridge.py on the same scenarios with
         # this interpreter (rust/recog-bridge/tests/parity/bridge_driver.py).
         RECOG_BRIDGE_PARITY_PYTHON="$PYTHON" cargo test -p recog-bridge
+        # recog-web's differential tests run recog/web/server.py under uvicorn with this
+        # interpreter, beside the Rust server on the same data, and compare.
+        RECOG_WEB_PARITY_PYTHON="$PYTHON" cargo test -p recog-web
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi

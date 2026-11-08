@@ -54,6 +54,8 @@ if [ -n "${RECOG_LIVE_PARITY_PYTHON:-}" ]; then
 fi
 if [ -n "${RECOG_BRIDGE_PARITY_PYTHON:-}" ]; then
   printf '%s\n' "bridge-parity-python $RECOG_BRIDGE_PARITY_PYTHON" >> "$STUB_LOG"
+if [ -n "${RECOG_WEB_PARITY_PYTHON:-}" ]; then
+  printf '%s\n' "web-parity-python $RECOG_WEB_PARITY_PYTHON" >> "$STUB_LOG"
 fi
 if [ "$(basename "$0")" = gitleaks ] && [ "$1" = dir ]; then
   find . -type f | sed 's|^\./|gitleaks-file |' >> "$STUB_LOG"
@@ -251,6 +253,8 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
     then: rustfmt, clippy with warnings as errors and the data-free tests run, the
     recog-core parity, recog-live and recog-bridge differential tests with the
     check's interpreter, and the golden parity tests do not"""
+    recog-core parity and recog-web differential tests with the check's interpreter,
+    and the golden parity tests do not"""
     add_rust_workspace(repo)
 
     result = run_check(repo, stub_bin)
@@ -270,10 +274,14 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
         "cargo test -p recog-ai",
         "cargo test -p recog-live",
         "cargo test -p recog-bridge",
+        "cargo test -p recog-web",
     ]
     core = result.calls.index("cargo test -p recog-core")
     assert result.calls[core + 1] == f"parity-python {stub_bin[0] / 'python3'}"
     assert sum(c.startswith("parity-python ") for c in result.calls) == 1
+    web = result.calls.index("cargo test -p recog-web")
+    assert result.calls[web + 1] == f"web-parity-python {stub_bin[0] / 'python3'}"
+    assert sum(c.startswith("web-parity-python ") for c in result.calls) == 1
     # "-m pytest": the stub's own path, logged by the parity lines, holds "pytest-of-".
     live = result.calls.index("cargo test -p recog-live")
     assert result.calls[live + 1] == f"live-parity-python {stub_bin[0] / 'python3'}"
