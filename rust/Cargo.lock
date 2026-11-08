@@ -1990,6 +1990,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "unicode-general-category",
+ "ureq",
  "wavo",
 ]
 

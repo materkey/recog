@@ -267,6 +267,21 @@ impl WavoAsr {
         let words = words_from_tokens(&tokens);
         Ok(Transcription { text, words })
     }
+
+    /// The refine window as `_refine_transcribe_fn` runs it on a `WavoASR`: the abort
+    /// check under the model lock (cooperative mode, `should_abort` given), then a
+    /// decode that runs to its end.
+    ///
+    /// # Errors
+    /// [`AsrError::Aborted`] when a live call is waiting, else as
+    /// [`Self::transcribe_with_timestamps`].
+    pub fn refine(&self, pcm: &[i16], should_abort: Option<&dyn Fn() -> bool>) -> Result<Transcription, AsrError> {
+        let guard = self.lock_model();
+        if should_abort.is_some_and(|abort| abort()) {
+            return Err(AsrError::Aborted);
+        }
+        self.transcribe_with_timestamps_locked(&guard, Clip::I16(pcm), SAMPLE_RATE)
+    }
 }
 
 impl std::fmt::Debug for WavoAsr {

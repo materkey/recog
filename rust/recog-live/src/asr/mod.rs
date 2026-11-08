@@ -1,4 +1,5 @@
 //! ASR as the live pipeline calls it: the shapes of `ASRModule`/`WavoASR`'s answers
+//! (the backends: [`wavo`], and [`remote`] with the local fallback)
 //! and the errors the callers tell apart (`ASRTemporarilyUnavailable`, `RefineAborted`).
 
 use std::fmt;
@@ -78,8 +79,10 @@ impl fmt::Display for AsrError {
 
 impl std::error::Error for AsrError {}
 
+pub mod remote;
 pub mod wavo;
 pub mod words;
 
+pub use remote::{FallbackAsr, RemoteAsrClient};
 pub use wavo::{Engine, WavoAsr, WavoEngine};
 pub use words::words_from_tokens;

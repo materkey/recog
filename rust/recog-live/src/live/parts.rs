@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use recog_bridge::{Bridge, RefineUpdate, TranscriptLine};
 
-use crate::asr::{AsrError, Clip, Transcription, WavoAsr};
+use crate::asr::{AsrError, Clip, FallbackAsr, Transcription, WavoAsr};
 use crate::capture::{SubprocessCapture, SystemCapture};
 
 /// A microphone or system-audio capture as the loop uses it.
@@ -112,7 +112,7 @@ impl LiveCapture for SystemCapture {
     }
 }
 
-/// ASR as the loop calls it: the four paths of `ASRModule`/`WavoASR`.
+/// ASR as the loop calls it: the four paths of `ASRModule`/`WavoASR`/`FallbackASR`.
 pub trait LiveAsr: Send + Sync {
     /// `asr.available`: false while no backend can serve (the buffers are kept).
     fn available(&self) -> bool {
@@ -164,13 +164,33 @@ impl LiveAsr for WavoAsr {
         pcm: &[i16],
         should_abort: Option<&dyn Fn() -> bool>,
     ) -> Result<Transcription, AsrError> {
-        // `_refine_transcribe_fn` on a WavoASR: the abort check under the model lock,
-        // then a decode that runs to its end.
-        let guard = self.lock_model();
-        if should_abort.is_some_and(|abort| abort()) {
-            return Err(AsrError::Aborted);
-        }
-        self.transcribe_with_timestamps_locked(&guard, Clip::I16(pcm), crate::config::SAMPLE_RATE)
+        self.refine(pcm, should_abort)
+    }
+}
+
+impl LiveAsr for FallbackAsr {
+    fn available(&self) -> bool {
+        FallbackAsr::available(self)
+    }
+
+    fn load_model(&self) -> Result<(), AsrError> {
+        FallbackAsr::load_model(self)
+    }
+
+    fn transcribe_chunk(&self, chunk: &[f32]) -> Result<Option<String>, AsrError> {
+        FallbackAsr::transcribe_chunk(self, chunk)
+    }
+
+    fn transcribe_batch(&self, clips: &[&[i16]]) -> Result<Vec<String>, AsrError> {
+        FallbackAsr::transcribe_batch(self, clips)
+    }
+
+    fn transcribe_with_timestamps(
+        &self,
+        pcm: &[i16],
+        should_abort: Option<&dyn Fn() -> bool>,
+    ) -> Result<Transcription, AsrError> {
+        FallbackAsr::transcribe_with_timestamps(self, pcm, should_abort)
     }
 }
 
