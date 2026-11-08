@@ -124,6 +124,7 @@ if [ -f rust/Cargo.toml ]; then
         # Its differential and protocol tests run the Python supervisor with this
         # interpreter and compare.
         RECOG_ORACLE_PYTHON="$PYTHON" cargo test -p recog-copilot
+        cargo test -p recog-zoom
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi

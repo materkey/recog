@@ -254,6 +254,7 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
         "cargo test -p speexdsp-aec --doc",
         "cargo test -p recog-mic",
         "cargo test -p recog-copilot",
+        "cargo test -p recog-zoom",
     ]
     assert result.calls.index(cargo[-1]) < next(
         i for i, c in enumerate(result.calls) if "pytest" in c

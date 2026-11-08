@@ -1,0 +1,19 @@
+[package]
+name = "recog-zoom"
+version = "0.1.0"
+edition = "2024"
+description = "The native Zoom application as a conference signal source of recog, in place of recog/zoom_app.py"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+regex = "1.12"
+# preserve_order: a value keeps its keys in the order the helper wrote them, as a
+# Python dict does; the log quotes an unread tile that way.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
