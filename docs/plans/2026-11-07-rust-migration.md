@@ -92,6 +92,14 @@ where they can.
 6. **Web backend.** FastAPI to axum; the static UI unchanged.
 7. **Copilot.** The supervisor (state machine, tmux, `systemd-run`, screen classifier)
    and the MCP channel (rmcp).
+   - **Supervisor ported 2026-11-08**, not wired: `rust/recog-copilot`, binary
+     `recog-copilot-supervisor`. Its differential tests feed the same lifecycle events,
+     frames, panes and settings files to both implementations and compare the output;
+     its protocol tests run both against a fake bridge and a fake tmux. It reads its
+     settings from the environment, `.env` and `[copilot]` of `config.toml` until
+     `recog-core` provides them.
+   - Still to do: the MCP channel; then a setting that runs the Rust supervisor, and a
+     real meeting on it.
 8. **Edges.** The `zoom_app` session logic (the Swift helper stays) and the KTalk desktop
    inspector.
 9. **Installation without Python.** `setup.sh` and the launchd/systemd units run
