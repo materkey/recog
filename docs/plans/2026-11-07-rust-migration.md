@@ -159,15 +159,12 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 | Crate | Replaces | Kind |
 |---|---|---|
 | `recog-core` | `install_config.py`, `config.py` (data directory), `user_profile.py`, `meeting_storage.py`, `ws_origin.py`, `privacy.py` | library, ported (parity-tested against Python; no caller yet) |
-| `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library |
+| `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library, ported, not wired |
 | `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library, ported, not wired |
 | `recog-bridge` | `ktalk_bridge.py` | library, ported, not wired |
 | `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same tokio process; the modules below the main loop ported (parity-tested against Python; no caller yet) |
-| `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary |
-| `recog-bridge` | `ktalk_bridge.py` | library |
-| `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same tokio process |
 | `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary, ported, not wired |
-| `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries |
+| `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries; the supervisor ported, not wired |
 | `recog-mic` | `mic_worker.py` | binary, done |
 
 Shared rules: edition 2024, `#![forbid(unsafe_code)]` in our code, clippy with
