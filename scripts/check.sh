@@ -144,6 +144,10 @@ if [ -f rust/Cargo.toml ]; then
         # Its differential tests run recog/desktop/ on scripted processes and a fake
         # inspector with this interpreter (rust/recog-desktop/tests/parity/desktop_driver.py).
         RECOG_DESKTOP_PARITY_PYTHON="$PYTHON" cargo test -p recog-desktop
+        # Its differential tests run recog/asr_server/ under uvicorn with this
+        # interpreter (fastapi, httpx, python-multipart) beside the Rust gateway and
+        # backend, against one fake backend and one fake model, and compare.
+        RECOG_ASR_SERVER_PARITY_PYTHON="$PYTHON" cargo test -p recog-asr-server
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi
