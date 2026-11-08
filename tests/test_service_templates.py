@@ -11,6 +11,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -283,7 +284,10 @@ def test_macos_live_unit_starts_the_interpreter_through_the_recog_application(tm
     assert program[2:] == ["-m", "recog", "live", "--system-audio", "auto", "--ktalk"]
 
 
-@pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil is macOS-only")
+@pytest.mark.skipif(
+    sys.platform != "darwin" or shutil.which("plutil") is None,
+    reason="needs macOS plutil (Swift on Linux ships a plutil that cannot read files)",
+)
 def test_rendered_plists_are_valid_property_lists(tmp_path):
     units = render("Darwin", tmp_path / "out")
 

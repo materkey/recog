@@ -330,8 +330,16 @@ def test_rust_workspace_when_cargo_is_missing_then_the_run_fails_with_a_hint(rep
     add_rust_workspace(repo)
     bin_dir, _ = stub_bin
     (bin_dir / "cargo").unlink()
+    # A distribution's cargo lives in /usr/bin (Arch), so the system directories come
+    # through links to everything in them but cargo.
+    system = repo.parent / "system-bin"
+    system.mkdir()
+    for directory in (Path("/usr/bin"), Path("/bin")):
+        for entry in directory.iterdir():
+            if entry.name != "cargo" and not os.path.lexists(system / entry.name):
+                (system / entry.name).symlink_to(entry)
 
-    result = run_check(repo, stub_bin)
+    result = run_check(repo, stub_bin, {"PATH": f"{bin_dir}{os.pathsep}{system}"})
 
     assert result.returncode != 0
     assert "rustup" in result.stderr
