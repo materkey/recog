@@ -6,7 +6,7 @@ Status: in progress.
 - Step 0 is designed: [golden sessions](2026-11-07-golden-sessions-design.md).
 - Step 2 is done: the echo stage runs `speexdsp-aec` (`rust/`) instead of pyaec, and
   `scripts/check.sh` and CI check the Rust workspace.
-- Step 3 has its first half: the opt-in ASR backend `wavo` behind `build_asr()`.
+- Step 3: `wavo` behind `build_asr()` is the default on macOS (`"auto"`).
 - Step 4 has the microphone: the opt-in worker `rust/recog-mic` behind
   `[live] mic_worker`.
 
@@ -70,8 +70,10 @@ where they can.
      (p95 Δ 0 ms), in 84 ms against 865 ms.
    - The live process on `wavo` no longer imports torch, torchaudio or gigaam: the
      local module is imported only when a PyTorch backend is built.
-   - Still to do: make it the default once a real meeting has run on it, then drop
-     torch from the dependencies (Linux CPU hosts without Vulkan still need it).
+   - **Default on macOS 2026-11-08** (`[asr] backend = "auto"`), after a KTalk test
+     call on it; without the built module "auto" runs on PyTorch and says so.
+   - Still to do: measure `wavo` on a Linux host without a GPU, then make it the
+     Linux default too; drop torch from the dependencies with the Python ASR path.
 4. **Audio capture.** System audio (`parec`, `sck_audio_capture`, the restart policy),
    the microphone through cpal instead of sounddevice and `mic_worker`, the capture
    buffer. Checked against the golden recordings.

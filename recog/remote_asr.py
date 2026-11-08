@@ -589,8 +589,8 @@ def build_asr() -> "Union[ASRModule, FallbackASR, WavoASR]":
 
     ``RECOG_ASR_BACKEND == "remote"`` -> ``FallbackASR`` поверх шлюза;
     ``"wavo"`` -> ``WavoASR`` (та же модель на Rust-рантайме wavo, GPU);
-    иначе чистый локальный ``ASRModule`` (committed default — поведение
-    репозитория не меняется, пока пользователь не выставит env).
+    ``"auto"`` (по умолчанию) -> ``WavoASR`` на Mac, где модуль собран, иначе
+    чистый локальный ``ASRModule``; ``"local"`` -> всегда ``ASRModule``.
 
     Raises:
         RuntimeError: backend ``remote``, но ``RECOG_ASR_REMOTE_URL`` пуст —
@@ -616,8 +616,25 @@ def build_asr() -> "Union[ASRModule, FallbackASR, WavoASR]":
             fail_threshold=settings.circuit_fails,
             open_seconds=settings.circuit_open_s,
         )
-    if settings.backend == "wavo":
+    if settings.backend == "wavo" or (settings.backend == "auto" and _wavo_by_default()):
         from .wavo_backend import WavoASR
 
         return WavoASR()
     return _local_asr_module()
+
+
+def _wavo_by_default() -> bool:
+    """Whether the default backend "auto" runs on wavo: on a Mac where setup.sh built
+    it. Linux keeps PyTorch until wavo is measured there without a GPU."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        import wavo_asr  # noqa: F401
+    except ImportError as error:
+        print(
+            f"[asr] wavo is not built ({error}): GigaAM runs on PyTorch; "
+            "./setup.sh builds it when cargo is installed",
+            file=sys.stderr,
+        )
+        return False
+    return True

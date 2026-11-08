@@ -155,7 +155,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
         echo "Would build the echo canceller from rust/speexdsp-aec-py with pip and cargo, if cargo is available."
         echo "Would build the Rust microphone worker rust/recog-mic with cargo, if cargo is available."
     fi
-    echo "Would build the ASR backend wavo from rust/wavo-asr-py with pip and cargo, if [asr] backend is wavo."
+    echo "Would build the ASR backend wavo from rust/wavo-asr-py with pip and cargo, if [asr] backend is wavo, or auto on macOS."
     if [ "$DO_ENV" -eq 1 ]; then
         for config in "$REPO_DIR/.env" "$REPO_DIR/recog/web/.env"; do
             if [ -f "$config" ]; then
@@ -434,12 +434,16 @@ if [ "$HOST_OS" = "darwin" ]; then
     fi
 fi
 
-# The ASR backend "wavo" ([asr] backend, not the default) runs GigaAM on wavo, a
-# Rust runtime, from a Python module built here from rust/. It is built only when
-# that backend is chosen, since its release build takes minutes; when it is
-# missing, the readiness check refuses to start the services and says why.
-if [ "$(deps_asr_backend)" = "wavo" ]; then
-    if ! deps_have cargo; then
+# The ASR backend "wavo" runs GigaAM on wavo, a Rust runtime, from a Python module
+# built here from rust/. It is built when that backend is chosen, and on a Mac for the
+# default "auto", which runs on it there; elsewhere not, since its release build takes
+# minutes. Chosen explicitly and missing, the readiness check refuses to start the
+# services and says why; under "auto" ASR stays on PyTorch.
+ASR_BACKEND=$(deps_asr_backend)
+if [ "$ASR_BACKEND" = "wavo" ] || { [ "$ASR_BACKEND" = "auto" ] && [ "$HOST_OS" = "darwin" ]; }; then
+    if ! deps_have cargo && [ "$ASR_BACKEND" = "auto" ]; then
+        echo -e "  ${YELLOW}[absent]${NC} cargo — ASR stays on PyTorch; for the faster wavo: $(deps_hint cargo), then rerun ./setup.sh"
+    elif ! deps_have cargo; then
         echo -e "  ${YELLOW}[absent]${NC} cargo — the ASR backend wavo cannot be built: $(deps_hint cargo), then rerun ./setup.sh"
     elif pip_install "$REPO_DIR/rust/wavo-asr-py"; then
         info "ASR backend wavo built (rust/wavo-asr-py)"

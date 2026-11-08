@@ -73,7 +73,7 @@ case "$*" in
   *recog.config*)       exit "${STUB_ASR_RC:-0}" ;;
   *sounddevice*)        exit "${STUB_PORTAUDIO_RC:-0}" ;;
   *prefetch_gigaam*)    exit "${STUB_PREFETCH_RC:-0}" ;;
-  *"print(INSTALL_CONFIG.asr.backend)"*) echo "${STUB_ASR_BACKEND:-local}"; exit 0 ;;
+  *"print(INSTALL_CONFIG.asr.backend)"*) echo "${STUB_ASR_BACKEND:-auto}"; exit 0 ;;
 esac
 exit 0
 """
@@ -485,11 +485,41 @@ def test_backend_wavo_with_cargo_setup_builds_the_wavo_module(repo, stubs, host_
     assert len(_wavo_module_installs(result)) == 1
 
 
-def test_backend_local_setup_does_not_build_the_wavo_module(repo, stubs):
-    """given: the default backend
+@pytest.mark.parametrize("host_os, built", [("Darwin", 1), ("Linux", 0)])
+def test_default_backend_auto_setup_builds_wavo_on_a_mac_only(repo, stubs, host_os, built):
+    """given: the default backend "auto" and cargo on PATH
     when: setup runs
-    then: no wavo build, whose release build takes minutes"""
+    then: wavo is built on a Mac, where "auto" runs on it, and not on Linux"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os=host_os)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(_wavo_module_installs(result)) == built
+
+
+def test_default_backend_auto_without_cargo_setup_says_pytorch_stays(repo, stubs):
+    """given: the default backend on a Mac without cargo
+    when: setup runs
+    then: no build, no failure: ASR stays on PyTorch and setup says how to get wavo"""
+    (stubs[0] / "cargo").unlink()
+
     result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _wavo_module_installs(result) == []
+    assert "PyTorch" in result.stdout and "rustup" in result.stdout
+
+
+def test_backend_local_setup_does_not_build_the_wavo_module(repo, stubs):
+    """given: [asr] backend = "local"
+    when: setup runs on a Mac
+    then: no wavo build, whose release build takes minutes"""
+    result = run_setup(
+        repo,
+        stubs,
+        *offline_args("--no-services"),
+        host_os="Darwin",
+        env_extra={"STUB_ASR_BACKEND": "local"},
+    )
 
     assert _wavo_module_installs(result) == []
 

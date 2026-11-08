@@ -142,6 +142,7 @@ deps_portaudio_ok() {
 # failure modes worth blocking on are RECOG_ASR_BACKEND=remote with no
 # gateway URL (build_asr() raises at startup) and RECOG_ASR_BACKEND=wavo without
 # the wavo_asr module (the first model load raises): every service would crash-loop.
+# "auto" needs nothing: without wavo_asr it runs on PyTorch.
 deps_asr_config_check() {
     "$(deps_python)" -c '
 import sys
@@ -185,7 +186,7 @@ if asr.backend == "wavo":
 ' "$DEPS_REPO_DIR" 2>&1
 }
 
-# The effective [asr] backend (RECOG_ASR_BACKEND): local, remote or wavo. Empty
+# The effective [asr] backend (RECOG_ASR_BACKEND): auto, local, remote or wavo. Empty
 # when the configuration cannot be read; deps_asr_config_check reports why.
 deps_asr_backend() {
     "$(deps_python)" -c '

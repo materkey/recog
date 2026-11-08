@@ -39,8 +39,9 @@ def _setting(variable: str, kind: str, default=None):
 # treats INSTALL_CONFIG as read-only.
 @dataclass
 class AsrSettings:
-    # "local" | "remote": remote offloads GigaAM to a gateway (ADR-0020).
-    backend: str = _setting("RECOG_ASR_BACKEND", "text", "local")
+    # "auto" | "local" | "remote" | "wavo": auto is wavo on a Mac where setup.sh built
+    # it, else local (PyTorch); remote offloads GigaAM to a gateway (ADR-0020).
+    backend: str = _setting("RECOG_ASR_BACKEND", "text", "auto")
     # auto (cuda > mps > cpu) | cuda | mps | cpu; explicit + unavailable fails.
     device: str = _setting("RECOG_ASR_DEVICE", "text", "auto")
     # torch.set_num_threads() cap for CPU inference; None leaves torch alone.

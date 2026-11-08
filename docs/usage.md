@@ -347,10 +347,12 @@ real LAN (`ping` RTT < 5 ms).
 
 `RECOG_ASR_BACKEND=wavo` (`[asr] backend = "wavo"`) runs the same GigaAM v3
 e2e_rnnt on [wavo](https://crates.io/crates/wavo), a Rust runtime, on the GPU:
-Metal on macOS, Vulkan on Linux. `./setup.sh` builds its Python module from
-`rust/wavo-asr-py` when this backend is set and cargo is on `PATH` (install Rust
-with rustup); without the module the services refuse to start and say so. The
-first start downloads the model (274 MB, Q8_0 GGUF) into the Hugging Face cache.
+Metal on macOS, Vulkan on Linux. On macOS it is also what the default `"auto"` runs.
+`./setup.sh` builds its Python module from `rust/wavo-asr-py` when this backend is
+set, or on macOS for `"auto"`, and cargo is on `PATH` (install Rust with rustup).
+Without the module, `"wavo"` makes the services refuse to start and say so, while
+`"auto"` runs on PyTorch and says so in the log; `"local"` always runs on PyTorch.
+The first start downloads the model (274 MB, Q8_0 GGUF) into the Hugging Face cache.
 
 Measured against the PyTorch model (`docs/experiments/2026-11-07-rust-asr-runtimes.md`):
 the same WER within 0.06 points and the same word timings, 6-12 times faster on an

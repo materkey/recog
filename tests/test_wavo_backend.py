@@ -128,6 +128,34 @@ def test_backend_wavo_build_asr_returns_wavo_asr(monkeypatch, fake):
     assert fake.seen == []
 
 
+@pytest.mark.parametrize(
+    "platform, importable, expected",
+    [("darwin", True, "wavo"), ("darwin", False, "local"), ("linux", True, "local")],
+)
+def test_default_backend_auto_build_asr_takes_wavo_on_a_mac_where_it_is_built(
+    monkeypatch, capsys, platform, importable, expected
+):
+    """given: the default backend "auto", on a Mac or Linux, with and without wavo_asr
+    when: build_asr()
+    then: wavo on a Mac that has it; otherwise PyTorch, saying why on a Mac
+          (Linux without a GPU is not measured on wavo yet)"""
+    from recog.wavo_backend import WavoASR
+
+    monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "auto")
+    monkeypatch.setattr(remote_asr_mod.sys, "platform", platform)
+    if importable:
+        monkeypatch.setitem(sys.modules, "wavo_asr", types.ModuleType("wavo_asr"))
+    else:
+        monkeypatch.setitem(sys.modules, "wavo_asr", None)
+    monkeypatch.setattr(remote_asr_mod, "_local_asr_module", lambda: "pytorch")
+
+    asr = remote_asr_mod.build_asr()
+
+    assert isinstance(asr, WavoASR) if expected == "wavo" else asr == "pytorch"
+    err = capsys.readouterr().err
+    assert ("PyTorch" in err) is (platform == "darwin" and not importable)
+
+
 @pytest.mark.parametrize("abort_before", [False, True])
 def test_wavo_refine_live_pending_aborts_only_before_the_decode(asr, abort_before):
     """given: the wavo backend, which cannot stop a decode under way

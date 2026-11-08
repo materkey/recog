@@ -11,6 +11,14 @@ reasoning.
 
 ### Changed
 
+- **macOS: speech recognition runs on wavo by default.** The default of `[asr]
+  backend` is now `"auto"`: on a Mac it runs the same GigaAM model on the Rust
+  runtime wavo, 6-12 times faster than PyTorch with the same word error rate, once
+  `./setup.sh` has built it (it needs cargo: install Rust with rustup). After `git
+  pull`: `./setup.sh`, then `./recog-service.sh restart`. Without cargo ASR stays on
+  PyTorch and the log says so. To keep PyTorch: `backend = "local"`. Linux keeps
+  PyTorch under `"auto"`.
+
 - **macOS: a microphone worker in Rust (opt-in).** `mic_worker = "rust"` under
   `[live]` in `~/.config/recog/config.toml` captures the microphone with
   `rust/recog-mic`, which `./setup.sh` now builds when cargo is installed. The
