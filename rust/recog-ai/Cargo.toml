@@ -1,0 +1,26 @@
+[package]
+name = "recog-ai"
+version = "0.1.0"
+edition = "2024"
+description = "The AI side of recog: Claude and Codex CLI providers, AI settings, prompts, increments, titles and questions about a meeting"
+publish = false
+
+[lib]
+name = "recog_ai"
+path = "src/lib.rs"
+
+[dependencies]
+# Python's regular expressions have look-around and back-references, which the regex
+# crate lacks; prompt filters are written for Python's `re`.
+fancy-regex = "0.14"
+indexmap = "2"
+serde = "1"
+# Without preserve_order on purpose: a workspace-wide feature would change the key order
+# of every other crate's maps. Files are parsed into `json::Json`, which keeps the order.
+serde_json = "1"
+tempfile = "3"
+# Unicode 15.0, the version of Python 3.12's unicodedata: model names and saved prompt
+# IDs are validated by general category, which tests/parity.rs compares code point by
+# code point with Python.
+unicode-general-category = "0.6"
+uuid = { version = "1", features = ["v4"] }
