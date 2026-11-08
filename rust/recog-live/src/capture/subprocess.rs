@@ -648,6 +648,9 @@ impl SubprocessCapture {
         }
         self.inner.clock.sleep(self.inner.policy.startup_wait_s);
         let name = &self.inner.name;
+        // Python reads `self.process` again here: with a backoff shorter than the
+        // startup wait the reader may have replaced the child meanwhile.
+        let process = self.process().unwrap_or(process);
         if process.poll().is_some() {
             let text = process.read_stderr();
             for line in recog_core::py::splitlines(&text) {
