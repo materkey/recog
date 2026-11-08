@@ -1343,6 +1343,15 @@ impl MeetingStorage {
         Shared::save_meta(&inner, &meta)
     }
 
+    /// `_load_meta()`: the current meeting's `meta.json`, as the bridge reads it for the
+    /// meeting's source and title.
+    ///
+    /// # Errors
+    /// No current meeting (Python's `TypeError`), or the file cannot be read or parsed.
+    pub fn load_meta(&self) -> Result<Value> {
+        Shared::load_meta(&self.shared.lock())
+    }
+
     /// `get_current_transcript()`.
     ///
     /// # Errors

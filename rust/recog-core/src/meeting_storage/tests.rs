@@ -473,3 +473,16 @@ fn a_directory_without_audio_when_cleaned_then_its_meta_is_not_read() {
     // when / then
     assert_eq!(storage.cleanup_old_audio(24.0), Ok(0));
 }
+
+#[test]
+fn no_current_meeting_when_meta_loaded_then_type_error_and_after_start_the_orphan_meta() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _) = storage_at(dir.path());
+    // when / then
+    assert!(matches!(storage.load_meta(), Err(StorageError::Type(_))));
+    storage.start_session(&SessionMode { ktalk: true, ..SessionMode::default() }).unwrap();
+    let meta = storage.load_meta().unwrap();
+    assert_eq!(field(&meta, &["source"]), &Value::from("orphan"));
+    assert_eq!(meta, read_json(&storage.current_meeting_path().unwrap().join("meta.json")).unwrap());
+}
