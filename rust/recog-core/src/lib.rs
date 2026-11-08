@@ -11,6 +11,8 @@
 //! part over.
 #![forbid(unsafe_code)]
 
+pub mod data_dir;
+pub mod install_config;
 pub mod paths;
 pub mod py;
 pub mod pyjson;
@@ -18,3 +20,4 @@ pub mod time;
 #[rustfmt::skip]
 mod unicode_tables;
 pub mod url;
+pub mod ws_origin;

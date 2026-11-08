@@ -127,6 +127,9 @@ if [ -f rust/Cargo.toml ]; then
         # Its differential tests run recog/zoom_app.py on the same input: with this
         # interpreter, which has the repo's dependencies.
         RECOG_ZOOM_PARITY_PYTHON="$PYTHON" cargo test -p recog-zoom
+        # Parity with Python: the tests run the Python modules with this interpreter
+        # (rust/recog-core/tests/parity/harness.py) and fail if it cannot run them.
+        RECOG_PARITY_PYTHON="$PYTHON" cargo test -p recog-core
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi

@@ -42,9 +42,13 @@ exit "${STUB_RENDER_RC:-0}"
 """
 
 # The linters log their arguments; gitleaks also logs, per directory scan, the
-# files it was given, so a test can tell which files a scan saw.
+# files it was given, so a test can tell which files a scan saw, and a tool given
+# the parity tests' interpreter logs it.
 TOOL_STUB = r"""#!/bin/sh
 printf '%s\n' "$(basename "$0") $*" >> "$STUB_LOG"
+if [ -n "${RECOG_PARITY_PYTHON:-}" ]; then
+  printf '%s\n' "parity-python $RECOG_PARITY_PYTHON" >> "$STUB_LOG"
+fi
 if [ "$(basename "$0")" = gitleaks ] && [ "$1" = dir ]; then
   find . -type f | sed 's|^\./|gitleaks-file |' >> "$STUB_LOG"
 fi
@@ -238,8 +242,9 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
 ):
     """given: a checkout with the Rust workspace and no golden data configured
     when: the checks run
-    then: rustfmt, clippy with warnings as errors and the data-free tests run, and the
-    golden parity tests do not"""
+    then: rustfmt, clippy with warnings as errors and the data-free tests run, the
+    recog-core parity tests with the check's interpreter, and the golden parity tests
+    do not"""
     add_rust_workspace(repo)
 
     result = run_check(repo, stub_bin)
@@ -255,7 +260,11 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
         "cargo test -p recog-mic",
         "cargo test -p recog-copilot",
         "cargo test -p recog-zoom",
+        "cargo test -p recog-core",
     ]
+    core = result.calls.index("cargo test -p recog-core")
+    assert result.calls[core + 1] == f"parity-python {stub_bin[0] / 'python3'}"
+    assert sum(c.startswith("parity-python ") for c in result.calls) == 1
     assert result.calls.index(cargo[-1]) < next(
         i for i, c in enumerate(result.calls) if "pytest" in c
     )
