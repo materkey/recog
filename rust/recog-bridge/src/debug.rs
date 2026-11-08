@@ -52,7 +52,7 @@ impl Bridge {
                     "is_speaking" => sp.is_speaking,
                     "is_local" => sp.current_is_local,
                     "last_speaker" => sp.last_speaker.as_deref(),
-                    "last_speaker_time" => Value::Float(sp.last_speaker_time),
+                    "last_speaker_time" => sp.last_speaker_time.map_or(Value::Int(0), Value::Float),
                 },
                 "segments" => obj! {
                     "active_start" => opt(sp.segment_start_time),

@@ -1,0 +1,18 @@
+{
+  "about": "The same gate over real WebSockets: the handshake completes, a disallowed or duplicated Origin is closed with 1008 'origin not allowed', an allowed one stays open and is served; binary JSON, invalid JSON and a non-object.",
+  "transport": "ws",
+  "config": {},
+  "steps": [
+    {"op": "connect", "client": "good", "origins": ["https://test.ktalk.ru"]},
+    {"op": "connect", "client": "bad", "origins": ["https://evil.example"]},
+    {"op": "connect", "client": "dup", "origins": ["https://test.ktalk.ru", "https://other.ktalk.ru"]},
+    {"op": "connect", "client": "plain"},
+    {"op": "send", "client": "good", "frame": {"type": "meeting_join", "url": "https://test.ktalk.ru/ws-room", "title": "WS", "platform": "ktalk"}},
+    {"op": "send_text", "client": "good", "text": "{\"type\": \"request_transcript\"}", "binary": true},
+    {"op": "send_text", "client": "good", "text": "not json at all"},
+    {"op": "send_text", "client": "good", "text": "[1, 2, 3]"},
+    {"op": "send", "client": "plain", "frame": {"type": "subscriber_hello"}},
+    {"op": "close", "client": "plain"},
+    {"op": "close", "client": "good"}
+  ]
+}

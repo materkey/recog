@@ -1,0 +1,24 @@
+{
+  "about": "The Origin allowlist at accept time: conference hosts, the webapp, no header, null, look-alikes, duplicates; a rejected socket is closed with 1008 and never registered; the rate-limited log.",
+  "config": {"golden": true},
+  "steps": [
+    {"op": "connect", "client": "ktalk", "origins": ["https://test.ktalk.ru"]},
+    {"op": "connect", "client": "zoom", "origins": ["https://app.zoom.us"]},
+    {"op": "connect", "client": "meet", "origins": ["https://meet.google.com"]},
+    {"op": "connect", "client": "webapp", "origins": ["http://127.0.0.1:9080"]},
+    {"op": "connect", "client": "daemon"},
+    {"op": "connect", "client": "no_origin_header", "origins": []},
+    {"op": "connect", "client": "evil", "origins": ["https://evil-ktalk.ru"]},
+    {"op": "connect", "client": "insecure", "origins": ["http://test.ktalk.ru"]},
+    {"op": "connect", "client": "null", "origins": ["null"]},
+    {"op": "connect", "client": "duplicate", "origins": ["https://test.ktalk.ru", "https://test.ktalk.ru"]},
+    {"op": "connect", "client": "port", "origins": ["https://app.zoom.us:8443"]},
+    {"op": "query", "method": "state"},
+    {"op": "close", "client": "ktalk"},
+    {"op": "close", "client": "zoom"},
+    {"op": "close", "client": "meet"},
+    {"op": "close", "client": "webapp"},
+    {"op": "close", "client": "daemon"},
+    {"op": "close", "client": "no_origin_header"}
+  ]
+}

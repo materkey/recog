@@ -1,0 +1,27 @@
+{
+  "about": "One meeting at a time: a second tab's join is refused with another_tab_active, its participants and speaker frames do not count while the owner lives; the owner's disconnect ends the meeting even with an idle tab connected; then the second tab can join.",
+  "config": {},
+  "steps": [
+    {"op": "connect", "client": "owner", "origins": ["https://test.ktalk.ru"]},
+    {"op": "connect", "client": "idle", "origins": ["https://example.ktalk.ru"]},
+    {"op": "send", "client": "owner", "frame": {"type": "meeting_join", "url": "https://test.ktalk.ru/room-a", "title": "A", "platform": "ktalk"}},
+    {"op": "send", "client": "owner", "frame": {"type": "participants_update", "participants": [{"id": "a", "name": "Alice", "isLocal": false, "micMuted": false}], "localMicMuted": true}},
+    {"op": "connect", "client": "second", "origins": ["https://test.ktalk.ru"]},
+    {"op": "send", "client": "second", "frame": {"type": "meeting_join", "url": "https://test.ktalk.ru/room-b", "title": "B", "platform": "ktalk"}},
+    {"op": "send", "client": "second", "frame": {"type": "participants_update", "participants": [{"id": "x", "name": "Xavier", "isLocal": true, "micMuted": false}], "localMicMuted": false}},
+    {"op": "send", "client": "second", "frame": {"type": "speaker_update", "speaker": {"id": "x", "name": "Xavier", "isLocal": false}}},
+    {"op": "query", "method": "get_participants"},
+    {"op": "query", "method": "is_local_mic_muted"},
+    {"op": "query", "method": "get_current_speaker"},
+    {"op": "query", "method": "state"},
+    {"op": "advance", "seconds": 2},
+    {"op": "close", "client": "owner"},
+    {"op": "query", "method": "is_conference_active"},
+    {"op": "query", "method": "state"},
+    {"op": "send", "client": "second", "frame": {"type": "meeting_join", "url": "https://test.ktalk.ru/room-b", "title": "B", "platform": "ktalk"}},
+    {"op": "query", "method": "state"},
+    {"op": "close", "client": "idle"},
+    {"op": "query", "method": "is_conference_active"},
+    {"op": "close", "client": "second"}
+  ]
+}

@@ -34,7 +34,8 @@ pub struct Speakers {
     pub current_is_local: bool,
     pub is_speaking: bool,
     pub last_speaker: Option<String>,
-    pub last_speaker_time: f64,
+    /// None: Python's initial (and cleared) int `0`, which the debug file shows as `0`.
+    pub last_speaker_time: Option<f64>,
     pub last_is_local: bool,
     pub participants: IndexMap<String, Participant>,
     /// `localMicMuted` of the last `participants_update`: the source's own word on the
@@ -91,7 +92,7 @@ impl Speakers {
         self.current_speaker = None;
         self.current_speaker_id = None;
         self.last_speaker = None;
-        self.last_speaker_time = 0.0;
+        self.last_speaker_time = None;
         self.last_is_local = false;
         self.history.clear();
         self.segment_start_time = None;
@@ -160,7 +161,7 @@ impl Speakers {
             self.current_is_local = new_is_local;
             self.is_speaking = true;
             self.last_speaker.clone_from(&self.current_speaker);
-            self.last_speaker_time = now;
+            self.last_speaker_time = Some(now);
             self.last_is_local = new_is_local;
             let timestamp = self.switch_time(fields, now, clock_offset);
             self.history.push(SpeakerEvent {
@@ -280,7 +281,7 @@ impl Speakers {
         }
         if let Some(last) = self.last_speaker.as_ref().filter(|s| !s.is_empty())
             && !self.last_is_local
-            && now - self.last_speaker_time < SPEAKER_MEMORY_SECONDS
+            && now - self.last_speaker_time.unwrap_or(0.0) < SPEAKER_MEMORY_SECONDS
         {
             return Some(last.clone());
         }
@@ -324,7 +325,7 @@ impl Speakers {
             return self.current_is_local;
         }
         if self.last_speaker.as_ref().is_some_and(|s| !s.is_empty())
-            && now - self.last_speaker_time < SPEAKER_MEMORY_SECONDS
+            && now - self.last_speaker_time.unwrap_or(0.0) < SPEAKER_MEMORY_SECONDS
         {
             return self.last_is_local;
         }

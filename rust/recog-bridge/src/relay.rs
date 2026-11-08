@@ -59,8 +59,14 @@ impl Bridge {
                 self.set_manual_copilot_active(false);
                 let pending: Vec<String> = self.st().pending.keys().cloned().collect();
                 for request_id in pending {
-                    self.broadcast_copilot_frame(&status_frame(&request_id, "error", "Copilot выключен в настройках."))
-                        .await;
+                    // Python builds this one with `status` before `request_id`.
+                    let frame = obj! {
+                        "type" => "copilot_status",
+                        "status" => "error",
+                        "request_id" => request_id.as_str(),
+                        "message" => "Copilot выключен в настройках.",
+                    };
+                    self.broadcast_copilot_frame(&frame).await;
                 }
                 self.st().pending.clear();
             }

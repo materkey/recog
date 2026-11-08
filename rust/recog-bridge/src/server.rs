@@ -5,7 +5,8 @@
 //! The transport keeps what the Python server (`websockets.serve` with its defaults)
 //! shows a peer: 1 MiB messages, a ping every 20 s that closes a connection whose pong
 //! does not come within 20 s (1011), pongs to the clients' own pings, text and binary
-//! JSON, and a close with 1000 when the handler ends. One server serves every role, as
+//! JSON, a close with 1000 when the handler ends, and a handshake with two Origin
+//! headers refused with 400. One server serves every role, as
 //! in Python: the extension, the webapp's subscriber, the supervisor and the Copilot
 //! channel all connect to `ws://localhost:8766` and tell apart by their hello.
 
@@ -19,7 +20,8 @@ use recog_core::pyjson::{self, Value};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::{self, Message};
@@ -158,13 +160,40 @@ async fn serve_connection(bridge: Arc<Bridge>, tcp: TcpStream, peer: SocketAddr)
     let seen = origins.clone();
     #[allow(clippy::result_large_err)] // the signature tungstenite's callback has
     let callback = move |request: &Request, response: Response| {
-        let values =
-            request.headers().get_all("origin").iter().map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
+        let values: Vec<String> = request
+            .headers()
+            .get_all("origin")
+            .iter()
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+            .collect();
+        // websockets refuses a second Origin at the handshake (RFC 6454 allows one),
+        // before the bridge's handler sees the connection.
+        if values.len() > 1 {
+            let body = "Failed to open a WebSocket connection: invalid Origin header: multiple values.\n";
+            let mut refusal = ErrorResponse::new(Some(body.to_owned()));
+            *refusal.status_mut() = StatusCode::BAD_REQUEST;
+            let headers = refusal.headers_mut();
+            headers.insert("Connection", HeaderValue::from_static("close"));
+            headers.insert("Content-Type", HeaderValue::from_static("text/plain; charset=utf-8"));
+            return Err(refusal);
+        }
         seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(values);
         Ok(response)
     };
     let config = WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE));
-    let Ok(ws) = tokio_tungstenite::accept_hdr_async_with_config(tcp, callback, Some(config)).await else { return };
+    let ws = match tokio_tungstenite::accept_hdr_async_with_config(tcp, callback, Some(config)).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            // websockets logs a refused handshake (with its traceback).
+            if let tungstenite::Error::Http(response) = &e {
+                let reason =
+                    String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()).trim_end().to_owned();
+                let reason = reason.strip_prefix("Failed to open a WebSocket connection: ").unwrap_or(&reason);
+                bridge.log(&format!("opening handshake failed: {}", reason.trim_end_matches('.')));
+            }
+            return;
+        }
+    };
     let (sink, stream) = ws.split();
     let sink = Arc::new(tokio::sync::Mutex::new(sink));
     let (tx, rx) = mpsc::unbounded_channel();
@@ -386,7 +415,7 @@ impl Bridge {
 
     /// `_run_server`: accepts on the listeners and runs the periodic duties (segment
     /// timeout and agent-state recompute every second, the debug file) until `stop`.
-    /// Runs on a current-thread runtime, within a `LocalSet`.
+    /// Runs on a current-thread runtime, as the bridge's own loop.
     pub async fn serve(self: &Arc<Self>, listeners: Vec<TcpListener>) {
         self.attach_runtime(tokio::runtime::Handle::current());
         self.st().running = true;
@@ -395,11 +424,7 @@ impl Bridge {
             .into_iter()
             .map(|listener| {
                 let bridge = self.clone();
-                tokio::task::spawn_local(async move {
-                    while let Ok((tcp, peer)) = listener.accept().await {
-                        tokio::task::spawn_local(serve_connection(bridge.clone(), tcp, peer));
-                    }
-                })
+                tokio::spawn(async move { bridge.accept(listener).await })
             })
             .collect();
         let mut ticker = tokio::time::interval(Duration::from_millis(100));
@@ -426,6 +451,15 @@ impl Bridge {
             self.log(&format!("[KTalk Bridge] Server error: {e}"));
         }
         self.drain_background_tasks(Duration::from_secs(30)).await;
+    }
+
+    /// Accepts connections on one listener and serves each with
+    /// [`Bridge::handle_client`], without the periodic duties of [`Bridge::serve`]
+    /// (what `websockets.serve(bridge._handle_client, ...)` alone does).
+    pub async fn accept(self: &Arc<Self>, listener: TcpListener) {
+        while let Ok((tcp, peer)) = listener.accept().await {
+            tokio::spawn(serve_connection(self.clone(), tcp, peer));
+        }
     }
 
     /// The once-a-second duties of the server loop.
