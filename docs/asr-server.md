@@ -145,3 +145,59 @@ Install pytest separately if using only the server requirements. These tests do
 not validate a fresh dependency installation, CUDA/CPU inference, model access,
 or speaker diarization on the target host; run the transcription smoke there
 before relying on the service.
+
+## Rust binaries (no Python, no speaker diarization)
+
+`rust/recog-asr-server` builds both services as programs that need neither
+Python, PyTorch nor pyannote: `recog-asr-gateway` in place of
+`python -m recog.asr_server.gateway` and `recog-asr-gigaam` in place of
+`python -m recog.asr_server.gigaam_backend`. They read the same environment
+variables (table above), listen on the same defaults, and answer the same
+routes with the same bodies and status codes, FastAPI's own answers included
+(422 validation details, 400 for an unreadable form, 404, 405 with `Allow`, the
+307 of a trailing slash). Build them on the server with Rust installed
+(<https://rustup.rs>) and `ffmpeg` on `PATH`:
+
+```bash
+cd rust && cargo build --release -p recog-asr-server
+# Backend first: it loads the model before it listens.
+GIGAAM_DIARIZATION=0 target/release/recog-asr-gigaam
+ASR_GATEWAY_HOST=127.0.0.1 target/release/recog-asr-gateway
+```
+
+The backend runs GigaAM v3 on the `wavo` crate, as the Rust live process does:
+the Q8_0 GGUF of `GIGAAM_VARIANT` (`v3_e2e_rnnt` is `gigaam-v3`; `v3_e2e_ctc`,
+`v3_rnnt` and `v3_ctc` also exist, older variants stop the start with an
+error) comes from the Hugging Face cache (`HF_HOME`) and is downloaded there on
+the first start; no token is needed. wavo picks the GPU itself through wgpu
+(Vulkan on Linux, `WGPU_BACKEND` overrides the API), so `GIGAAM_DEVICE` and
+`GIGAAM_FP16_ENCODER` are only logged and a second GPU cannot be chosen. A
+failed model load exits with code 3, as uvicorn does after a failed startup.
+
+What differs from the Python backend:
+
+- **No speaker diarization.** pyannote has no Rust counterpart. The backend
+  behaves as the Python one does when its pipeline failed to load (pyannote not
+  installed, no Hugging Face access): with `GIGAAM_DIARIZATION=1` it logs
+  `pyannote pipeline failed to load — diarization will be disabled`,
+  `/healthz` reports `"diarization": false`, and a request with a `diarized`
+  model or `response_format=diarized_json` gets HTTP 503
+  `diarization pipeline unavailable` after the transcription. `DIAR_MODEL` and
+  `HF_TOKEN_PATH` have no effect.
+- **Segments.** Without pyannote's VAD the audio is cut at its quietest
+  moments into pieces of at most 25 s; each piece with text is one segment
+  from its first to its last sample, so a segment can begin or end in silence.
+  Words keep GigaAM's rule (from a word's first token to the end of its last
+  40 ms frame), in float seconds. The text is wavo's, not PyTorch's.
+- Requests run concurrently (the Python backend handles one at a time, health
+  checks included); there are no `/docs` or `/openapi.json` pages.
+
+The gateway's differences are limited to error texts httpx would word
+differently (a host that does not resolve, for example); a refused
+connection, a timeout and a URL without an `http(s)://` scheme read as in
+Python. The differential tests run both implementations of each service side
+by side, against one fake backend and a fake model, and compare every answer:
+
+```bash
+cd rust && RECOG_ASR_SERVER_PARITY_PYTHON=../venv-gigaam/bin/python cargo test -p recog-asr-server
+```

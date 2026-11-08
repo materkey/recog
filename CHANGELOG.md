@@ -11,6 +11,17 @@ reasoning.
 
 ### Changed
 
+- **The optional ASR server without Python (opt-in).** `rust/recog-asr-server`
+  builds `recog-asr-gateway` and `recog-asr-gigaam`, which replace `python -m
+  recog.asr_server.gateway` and `python -m recog.asr_server.gigaam_backend` with the
+  same environment variables, ports and answers; the backend runs GigaAM on wavo and
+  downloads its model into the Hugging Face cache on first start. They have no
+  speaker diarization: `/healthz` says `"diarization": false` and diarized requests
+  get 503, as from the Python backend without pyannote. Nothing changes for an
+  existing server until you switch: `cd rust && cargo build --release -p
+  recog-asr-server`, then start the binaries from `rust/target/release/` instead of
+  the Python modules (docs/asr-server.md, "Rust binaries").
+
 - **The Rust live process runs remote ASR.** With `[asr] backend = "remote"` the
   Rust live process now sends speech to the gateway of `[asr] remote_url`, falling
   back to wavo while the gateway is down, as the Python one falls back to PyTorch. Before, `[live] runtime = "rust"` stayed on Python with this backend, and

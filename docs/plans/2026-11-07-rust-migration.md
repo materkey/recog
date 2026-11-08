@@ -192,6 +192,19 @@ where they can.
      harness compares `/api/desktop/status` and the observers' files on 8 cases.
    - Still to do: `recog desktop …` delegating to it from the `recog` binary; then the
      Rust web service as the default, and an attachment to the real KTalk application.
+   - **Optional ASR server ported 2026-11-08**: `rust/recog-asr-server`, binaries
+     `recog-asr-gateway` and `recog-asr-gigaam` (GigaAM on `wavo`), started by hand as
+     the Python modules are. Same environment, routes, bodies and status codes,
+     FastAPI's and Starlette's answers around the handlers included (form parsing as
+     python-multipart 0.0.33 does it). pyannote has no Rust counterpart: the backend
+     answers as Python does without its pipeline (`"diarization": false`, 503), and
+     cuts segments at quiet moments instead of VAD. Its differential tests run the
+     Python gateway and the binary against one fake backend (74 requests: aliases,
+     fields as httpx forwards them, backend answers, health aggregation, timeouts,
+     validation) and the Python backend beside the Rust one with the same fake model
+     and fake ffmpeg (132 requests: every format over awkward times, words,
+     diarization, failures, validation, a model still loading); a manual run with the
+     real model transcribed GigaAM's own examples on Z270XX's GPU.
 9. **Installation without Python.** `setup.sh` and the launchd/systemd units run
    binaries; `Recog.app` starts the Rust binary, so the permissions stay with "Recog".
    Python modules are deleted as they are replaced; each step gets its CHANGELOG entry.
@@ -225,6 +238,7 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 | `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary, opt-in (`[web] runtime = "rust"`) |
 | `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries, opt-in (`[copilot] runtime = "rust"`) |
 | `recog-mic` | `mic_worker.py` | binary, done |
+| `recog-asr-server` | `recog/asr_server/` (pyannote diarization has no replacement) | binaries `recog-asr-gateway`, `recog-asr-gigaam`, ported, run by hand |
 
 Shared rules: edition 2024, `#![forbid(unsafe_code)]` in our code, clippy with
 `-D warnings`, tokio for anything asynchronous, serde for every file and frame format.
