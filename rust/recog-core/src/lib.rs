@@ -13,6 +13,7 @@
 
 pub mod data_dir;
 pub mod install_config;
+pub mod meeting_storage;
 pub mod paths;
 pub mod privacy;
 pub mod py;
@@ -22,4 +23,5 @@ pub mod time;
 mod unicode_tables;
 pub mod url;
 pub mod user_profile;
+pub mod wav;
 pub mod ws_origin;
