@@ -32,6 +32,9 @@ fn sandboxed(command: &mut Command, sandbox: &Path) {
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
         .env("TZ", "UTC")
+        // The checkout's .env may name the user (MIC_SPEAKER_NAME); the environment
+        // wins over it in both implementations, so the sessions' "Me" holds anywhere.
+        .env("MIC_SPEAKER_NAME", "Me")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
