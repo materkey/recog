@@ -7,12 +7,11 @@
 //! would overflow.
 //!
 //! Samples convert as NumPy's `(chunk * 32767).astype(np.int16)` does: the product in
-//! float32, truncated toward zero to 32 bits (saturating), then wrapped to 16 bits, so
-//! out-of-range input wraps instead of clipping. The parity test checks this against
-//! NumPy 2.3 on arm64, NaN and infinities included. Known difference: the conversion
-//! of NaN, infinities and values beyond the 32-bit range is undefined in C, and NumPy
-//! on x86-64 may give other values for them than the port (finite input within range
-//! converts the same everywhere).
+//! float32, truncated toward zero to 32 bits, then wrapped to 16 bits, so out-of-range
+//! input wraps instead of clipping. NaN, infinities and values beyond the 32-bit range
+//! are undefined in C and follow the CPU: saturating on arm64, `i32::MIN` on x86-64
+//! (`to_int16`). The parity test checks this against NumPy on arm64 and x86-64, NaN
+//! and infinities included.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek as _, SeekFrom, Write as _};
@@ -193,11 +192,19 @@ impl IncrementalWavWriter {
     }
 }
 
-/// `np.float32(x * 32767).astype(np.int16)` as the C cast does it on arm64/x86-64.
+/// `np.float32(x * 32767).astype(np.int16)` as the C cast does it on arm64/x86-64:
+/// through a 32-bit integer, whose low half is kept. A value outside the 32-bit range
+/// saturates on arm64 (NaN to 0), as Rust's `as` does, but becomes `i32::MIN`
+/// ("integer indefinite") on x86-64, so infinity writes 0 there and -1 on a Mac.
 #[must_use]
 pub fn to_int16(x: f32) -> i16 {
+    let scaled = x * 32767.0;
     #[allow(clippy::cast_possible_truncation)]
-    let wide = (x * 32767.0) as i32;
+    let wide = if cfg!(target_arch = "x86_64") && !(-2_147_483_648.0..2_147_483_648.0).contains(&scaled) {
+        i32::MIN
+    } else {
+        scaled as i32
+    };
     #[allow(clippy::cast_possible_truncation)]
     let narrow = wide as i16;
     narrow
@@ -273,5 +280,13 @@ mod tests {
         assert_eq!(to_int16(1.5), -16386);
         assert_eq!(to_int16(f32::NAN), 0);
         assert_eq!(to_int16(0.99999), 32766);
+    }
+
+    #[test]
+    fn infinite_samples_written_then_low_half_of_the_platform_cast() {
+        // given / when / then
+        let expected = if cfg!(target_arch = "x86_64") { (0, 0) } else { (-1, 0) };
+        assert_eq!((to_int16(f32::INFINITY), to_int16(f32::NEG_INFINITY)), expected);
+        assert_eq!(to_int16(1e6), if cfg!(target_arch = "x86_64") { 0 } else { -1 });
     }
 }
