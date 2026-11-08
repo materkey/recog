@@ -46,6 +46,10 @@ pydantic==2.13.3
 watchdog==6.0.0
 httpx==0.28.1
 python-dotenv==1.2.2
+# The forms of recog/asr_server; rust/recog-asr-server's differential test parses
+# them as this version does (0.0.26 reads filename*= and a capitalised
+# Multipart/Form-Data differently).
+python-multipart==0.0.33
 
 # --- tests -----------------------------------------------------------------
 pytest==9.0.2
