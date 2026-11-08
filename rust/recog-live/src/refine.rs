@@ -290,6 +290,12 @@ impl RefineWorker {
         self.inner.lock_queue().items.iter().filter(|t| t.is_some()).count()
     }
 
+    /// The queued tasks in order, without taking them.
+    #[must_use]
+    pub fn queued_tasks(&self) -> Vec<Arc<RefineTask>> {
+        self.inner.lock_queue().items.iter().flatten().cloned().collect()
+    }
+
     /// Whether a worker thread is running.
     #[must_use]
     pub fn is_running(&self) -> bool {
