@@ -11,12 +11,16 @@
 
 pub mod defaults;
 pub mod error;
+pub mod increment;
 pub mod install;
 pub mod json;
+pub mod meeting_chat;
 pub mod prompt_registry;
 pub mod provider;
 pub mod pytext;
 pub mod settings;
 pub mod template;
+pub mod timestamp;
+pub mod title;
 
 pub use error::{AiError, Result};

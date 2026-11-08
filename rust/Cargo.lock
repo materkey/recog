@@ -1364,6 +1364,7 @@ name = "recog-ai"
 version = "0.1.0"
 dependencies = [
  "fancy-regex",
+ "futures-util",
  "indexmap",
  "rustix",
  "serde",

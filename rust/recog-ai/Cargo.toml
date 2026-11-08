@@ -13,6 +13,7 @@ path = "src/lib.rs"
 # Python's regular expressions have look-around and back-references, which the regex
 # crate lacks; prompt filters are written for Python's `re`.
 fancy-regex = "0.14"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 indexmap = "2"
 rustix = { version = "1", features = ["fs"] }
 serde = "1"
@@ -28,4 +29,4 @@ unicode-general-category = "0.6"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
