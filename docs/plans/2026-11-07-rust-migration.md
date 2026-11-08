@@ -17,9 +17,10 @@ Status: in progress.
   Rust live process for `--zoom-app`.
 - Step 8 also has the KTalk desktop integration ported, hosted by `rust/recog-web`:
   `rust/recog-desktop`.
-- Step 6 has the web backend ported, not yet wired: `rust/recog-web`.
-- Step 7 has the Copilot supervisor and MCP channel ported, not yet wired:
-  `rust/recog-copilot`.
+- Step 6 has the web backend ported, opt-in: `[web] runtime = "rust"` runs
+  `rust/recog-web` as the frontend service.
+- Step 7 has the Copilot supervisor and MCP channel ported, opt-in:
+  `[copilot] runtime = "rust"` runs `rust/recog-copilot`'s two binaries.
 
 ## Goal
 
@@ -140,8 +141,10 @@ where they can.
      compare 197 requests and two browser and bridge sessions: status codes, the
      headers that matter, bodies, audio bytes, prompts, files written and frames. Its
      lifespan hosts the desktop integration's observer from `recog-desktop` (step 8).
-   - Still to do: a setting that runs it as the frontend service, and a real meeting on
-     it.
+   - **Wired 2026-11-08**, opt-in: `[web] runtime = "rust"` makes `python -m
+     recog.web.server` exec `recog-web` (`recog/rust_runtime.py`); a smoke test starts
+     the module that way and gets answers from the binary.
+   - Still to do: a real meeting on it.
 7. **Copilot.** The supervisor (state machine, tmux, `systemd-run`, screen classifier)
    and the MCP channel (rmcp).
    - **Supervisor ported 2026-11-08**, not wired: `rust/recog-copilot`, binary
@@ -157,8 +160,10 @@ where they can.
      a fake bridge, through the same 137-step conversation and compare every answer
      byte for byte, plus seeded random cases of the formatting, argument validation,
      result JSON and privacy masking, and the official Python SDK client against both.
-   - Still to do: a setting that runs the Rust supervisor and channel, and a real
-     meeting on them.
+   - **Wired 2026-11-08**, opt-in: `[copilot] runtime = "rust"` makes both modules exec
+     their binary (`recog/rust_runtime.py`); smoke tests get an MCP initialize answer
+     from the channel and a `supervisor_hello` from the supervisor started that way.
+   - Still to do: a real meeting on them.
 8. **Edges.** The `zoom_app` session logic (the Swift helper stays) and the KTalk desktop
    inspector.
    - **`zoom_app` ported 2026-11-08**, not wired: `rust/recog-zoom` (library and the
@@ -197,8 +202,8 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 | `recog-desktop` | `recog/desktop/*.py` (`bootstrap.js` stays) | library and binary `recog-desktop`, ported; hosted by `recog-web` |
 | `recog-bridge` | `ktalk_bridge.py` | library, ported, not wired |
 | `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `golden_replay.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same process; opt-in (`[live] runtime = "rust"`), held to Python by golden replay |
-| `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary, ported, not wired |
-| `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries; the supervisor ported, not wired |
+| `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary, opt-in (`[web] runtime = "rust"`) |
+| `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries, opt-in (`[copilot] runtime = "rust"`) |
 | `recog-mic` | `mic_worker.py` | binary, done |
 
 Shared rules: edition 2024, `#![forbid(unsafe_code)]` in our code, clippy with
