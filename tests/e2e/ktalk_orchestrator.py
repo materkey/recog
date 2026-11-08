@@ -1,7 +1,9 @@
 """KTalk E2E test orchestrator.
 
 Coordinates browser participants and live transcription for end-to-end
-diarization tests.
+diarization tests. The live transcription is the Rust `recog live` process
+(tests/e2e/live_process.py), started with a data directory of its own; the
+transcript is read from that directory's meeting storage after it stops.
 
 Speaker timing is controlled by the WAV files themselves (speech at scheduled
 offsets, silence elsewhere) because KTalk mute/unmute does NOT stop Chromium's
@@ -16,6 +18,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -31,6 +34,14 @@ from tests.e2e.ktalk_pages import (
     kontur_login,
     create_public_room,
     guest_join_room,
+)
+from tests.e2e.live_process import (
+    LiveProcess,
+    find_binary,
+    live_argv,
+    live_env,
+    pcm_ever_seen,
+    read_transcript,
 )
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -56,8 +67,8 @@ class E2ETestResult:
     errors: list[str] = field(default_factory=list)
     debug_state: dict = field(default_factory=dict)
     meeting_path: Optional[Path] = None
-    # True iff at least one real PCM chunk reached PerSpeakerIngest before
-    # the test finished. If False in a test that requires PCM flow (e.g.
+    # True iff at least one real PCM chunk reached the live process's
+    # per-speaker ingest before the test finished (its bridge debug file). If False in a test that requires PCM flow (e.g.
     # degraded-mode), the caller should fail with a clear diagnostic
     # instead of asserting downstream markers that depend on pcm_ever_seen.
     first_pcm_seen: bool = False
@@ -78,7 +89,7 @@ class KTalkOrchestrator:
     Launches a host browser (with the KTalk speaker extension) and one or
     more guest browsers (with per-speaker timed audio files), joins them all
     into a single room, waits for the audio to play through, and collects the
-    live transcript produced by LiveTranscriber.
+    transcript the live process stored.
 
     Speaker timing is baked into the WAV files: each file contains silence
     where the guest should be quiet and speech where they should talk.
@@ -95,6 +106,8 @@ class KTalkOrchestrator:
         host_reload_at_s: Optional[float] = None,
         pcm_disable_at_s: Optional[float] = None,
         pcm_warmup_timeout_s: float = 25.0,
+        data_dir: Optional[Path] = None,
+        live_ready_timeout_s: float = 120.0,
     ):
         if len(guest_names) != len(guest_audio_files):
             raise ValueError("guest_names and guest_audio_files must have the same length")
@@ -123,6 +136,10 @@ class KTalkOrchestrator:
         # the result's ``first_pcm_seen`` stays False and degraded-mode
         # simulation is skipped (nothing to degrade from).
         self.pcm_warmup_timeout_s = pcm_warmup_timeout_s
+        # The live process's RECOG_DATA_DIR: a fresh directory unless given.
+        # It is kept after the run (meetings, live-process.log) for diagnosis.
+        self.data_dir = data_dir
+        self.live_ready_timeout_s = live_ready_timeout_s
 
         # Pre-made room URL (skips SSO login + create_public_room). Supply
         # via env when you want to reuse an existing public room on any
@@ -136,8 +153,7 @@ class KTalkOrchestrator:
             self._login = os.environ["SSO_LOGIN"]
             self._password = os.environ["SSO_PASSWORD"]
 
-        self._transcriber = None
-        self._transcriber_thread: Optional[threading.Thread] = None
+        self._live: Optional[LiveProcess] = None
         self._transcript_lines: list[str] = []
         self._debug_state: dict = {}
         self._meeting_path: Optional[Path] = None
@@ -194,7 +210,14 @@ class KTalkOrchestrator:
 
             # --- Start transcriber BEFORE guests join ---
             # This ensures the bridge is ready when the extension connects.
-            self._start_transcriber()
+            live_error = self._start_transcriber()
+            if live_error:
+                errors.append(live_error)
+                self._stop_transcriber()
+                host_context.close()
+                return E2ETestResult(
+                    errors=errors, browser_console_lines=list(self._browser_console_lines)
+                )
 
             # --- Guest browsers (timed audio files handle who speaks when) ---
             guest_browsers = []
@@ -260,7 +283,9 @@ class KTalkOrchestrator:
             self._debug_state = self._collect_debug_state(host_page)
 
             # --- Stop transcriber ---
-            self._stop_transcriber()
+            live_error = self._stop_transcriber()
+            if live_error:
+                errors.append(live_error)
 
             # --- Cleanup ---
             for browser, context in guest_browsers:
@@ -346,7 +371,7 @@ class KTalkOrchestrator:
             print(f"  {line}", flush=True)
 
     def _wait_with_preflight(self, host_page, timeout_s: float) -> bool:
-        """Poll PerSpeakerIngest.pcm_ever_seen and take a one-shot
+        """Poll the live process's pcm_ever_seen and take a one-shot
         preflight snapshot of remote tracks during the same window —
         no extra serial sleep before the poll starts.
 
@@ -354,11 +379,8 @@ class KTalkOrchestrator:
         guest-join time on top). Failing tests get both the snapshot and
         the browser console tail for diagnosis.
         """
-        if self._transcriber is None:
-            return False
-        ingest = getattr(self._transcriber, "_per_speaker_ingest", None)
-        if ingest is None:
-            print("[e2e] PCM wait skipped — no PerSpeakerIngest on transcriber", flush=True)
+        if self._live is None:
+            print("[e2e] PCM wait skipped — the live process did not start", flush=True)
             return False
 
         preflight_deadline = time.time() + 2.0
@@ -373,7 +395,7 @@ class KTalkOrchestrator:
                     flush=True,
                 )
                 took_preflight = True
-            if ingest.pcm_ever_seen:
+            if pcm_ever_seen(since=self._live.started_at):
                 waited = timeout_s - (warmup_deadline - time.time())
                 print(f"[e2e] PCM first-chunk observed after {waited:.1f}s", flush=True)
                 if not took_preflight:
@@ -482,60 +504,41 @@ class KTalkOrchestrator:
             print(f"[e2e] Debug state: {state}")
         return state
 
-    def _start_transcriber(self) -> None:
-        """Import LiveTranscriber, find BlackHole device, start in daemon thread."""
-        import traceback
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-        from recog.live import LiveTranscriber, SingleDeviceCapture
-
-        blackhole_device = SingleDeviceCapture.find_blackhole()
-        print(f"[e2e] BlackHole device: {blackhole_device}")
-
-        self._transcriber = LiveTranscriber(
-            system_device=blackhole_device,
-            use_ktalk=True,
+    def _start_transcriber(self) -> Optional[str]:
+        """Start the Rust live process on BlackHole with its own data directory;
+        None once its bridge listens, else what went wrong."""
+        binary = find_binary()
+        if binary is None:
+            return (
+                "No recog binary: build it with `cargo build --release -p recog-live` "
+                'in rust/ (or install with [install] runtime = "rust")'
+            )
+        if self.data_dir is None:
+            self.data_dir = Path(tempfile.mkdtemp(prefix="recog-e2e-"))
+        print(f"[e2e] Live process: {binary}, data directory {self.data_dir}")
+        self._live = LiveProcess(
+            live_argv(binary),
+            live_env(self.data_dir),
+            self.data_dir / "live-process.log",
         )
+        error = self._live.start(self.live_ready_timeout_s)
+        if error is None:
+            print(f"[e2e] Live process ready after {time.time() - self._live.started_at:.0f}s")
+        return error
 
-        self._transcriber_error: Optional[str] = None
-
-        def _run():
-            try:
-                self._transcriber.run()
-            except Exception as exc:
-                self._transcriber_error = f"{exc}\n{traceback.format_exc()}"
-                print(f"[e2e] Transcriber error: {self._transcriber_error}", file=sys.stderr)
-
-        self._transcriber_thread = threading.Thread(target=_run, daemon=True)
-        self._transcriber_thread.start()
-
-        # Wait for model to load and transcriber to start
-        for i in range(30):
-            time.sleep(1)
-            if self._transcriber.running:
-                print(f"[e2e] Transcriber ready after {i+1}s")
-                break
-        else:
-            print("[e2e] WARNING: Transcriber not ready after 30s")
-
-    def _stop_transcriber(self) -> None:
-        """Signal the transcriber to stop and collect transcript_lines."""
-        if self._transcriber is not None:
-            print(f"[e2e] Stopping transcriber. Lines so far: {len(self._transcriber.transcript_lines)}")
-            # Capture meeting_path before stop_session clears it.
-            storage = getattr(self._transcriber, "_meeting_storage", None)
-            if storage is not None:
-                self._meeting_path = getattr(storage, "current_meeting_path", None)
-            self._transcriber.running = False
-
-        if self._transcriber_thread is not None:
-            self._transcriber_thread.join(timeout=10)
-
-        if self._transcriber is not None:
-            self._transcript_lines = list(self._transcriber.transcript_lines)
-            print(f"[e2e] Final transcript lines: {len(self._transcript_lines)}")
-            if hasattr(self, '_transcriber_error') and self._transcriber_error:
-                print(f"[e2e] Transcriber had error: {self._transcriber_error}")
+    def _stop_transcriber(self) -> Optional[str]:
+        """Stop the live process (it saves the meeting) and read the transcript
+        it stored; None after a clean stop, else what went wrong."""
+        if self._live is None:
+            return None
+        error = self._live.stop(timeout=60)
+        self._transcript_lines, self._meeting_path = read_transcript(self.data_dir)
+        print(f"[e2e] Final transcript lines: {len(self._transcript_lines)}")
+        if error:
+            print(f"[e2e] {error}; last output lines:", flush=True)
+            for line in list(self._live.output_tail)[-40:]:
+                print(f"  {line}", flush=True)
+        return error
 
 
 # ------------------------------------------------------------------
