@@ -30,3 +30,8 @@ tokio = { version = "1.49", features = ["macros", "net", "rt-multi-thread", "sig
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 # Pinned exactly, as in recog-live.
 wavo = { version = "=0.4.0", default-features = false, features = ["hub"] }
+
+[dev-dependencies]
+# The answers the frozen tests compare, recorded as JSON with the SHA-256 of the steps.
+serde_json = "1.0.141"
+sha2 = "0.10.9"

@@ -201,3 +201,10 @@ by side, against one fake backend and a fake model, and compare every answer:
 ```bash
 cd rust && RECOG_ASR_SERVER_PARITY_PYTHON=../venv-gigaam/bin/python cargo test -p recog-asr-server
 ```
+
+The frozen tests (`gateway_frozen`, `backend_frozen`) hold the Rust services to
+the answers Python gave to the same steps, recorded in
+`rust/recog-asr-server/tests/fixtures/`, and need no Python. The fixtures carry
+the SHA-256 of the steps; after a change of the steps record them again with
+`RECOG_ASR_SERVER_PARITY_PYTHON` and `RECOG_RECORD_ASR_SERVER_FIXTURE=1` on
+`--test gateway_differential --test backend_differential`.

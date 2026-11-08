@@ -1,0 +1,1841 @@
+{
+  "answers": [
+    {
+      "answer": {
+        "body": "{\"ok\":true,\"variant\":\"v3_e2e_rnnt\",\"diarization\":false}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "healthz"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": null,
+          "location": "http://127.0.0.1:<port>/healthz"
+        },
+        "status": 307
+      },
+      "step": "healthz with a trailing slash"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": "GET",
+          "content-length": "31",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 405
+      },
+      "step": "healthz by HEAD"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Not Found\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 404
+      },
+      "step": "models are the gateway's"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Method Not Allowed\"}",
+        "headers": {
+          "allow": "POST",
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 405
+      },
+      "step": "transcriptions by GET"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames as json"
+    },
+    {
+      "answer": {
+        "body": "Привет, мир. Второй",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames as text"
+    },
+    {
+      "answer": {
+        "body": "1\n00:00:00,000 --> 00:00:01,500\nПривет, мир.\n\n2\n00:00:01,500 --> 00:00:03,250\nВторой\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames as srt"
+    },
+    {
+      "answer": {
+        "body": "WEBVTT\n\n00:00:00.000 --> 00:00:01.500\nПривет, мир.\n\n00:00:01.500 --> 00:00:03.250\nВторой\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/vtt; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames as vtt"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":3.25,\"text\":\"Привет, мир. Второй\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":1.5,\"text\":\"Привет, мир.\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.5,\"end\":3.25,\"text\":\"Второй\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames as verbose_json"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames as xml"
+    },
+    {
+      "answer": {
+        "body": "1\n00:00:00,000 --> 00:00:01,500\nПривет, мир.\n\n2\n00:00:01,500 --> 00:00:03,250\nВторой\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames as SRT"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":3.25,\"text\":\"Привет, мир. Второй\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":1.5,\"text\":\"Привет, мир.\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.5,\"end\":3.25,\"text\":\"Второй\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames as Verbose_JSON"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":3.25,\"text\":\"Привет, мир. Второй\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":1.5,\"text\":\"Привет, мир.\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.5,\"end\":3.25,\"text\":\"Второй\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"Привет,\",\"start\":0.08,\"end\":0.52},{\"word\":\"мир.\",\"start\":0.6,\"end\":1.0},{\"word\":\"Второй\",\"start\":1.6,\"end\":2.04}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames, verbose_json, granularities word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":3.25,\"text\":\"Привет, мир. Второй\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":1.5,\"text\":\"Привет, мир.\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.5,\"end\":3.25,\"text\":\"Второй\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"Привет,\",\"start\":0.08,\"end\":0.52},{\"word\":\"мир.\",\"start\":0.6,\"end\":1.0},{\"word\":\"Второй\",\"start\":1.6,\"end\":2.04}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames, verbose_json, granularities segment,word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":3.25,\"text\":\"Привет, мир. Второй\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":1.5,\"text\":\"Привет, мир.\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.5,\"end\":3.25,\"text\":\"Второй\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"Привет,\",\"start\":0.08,\"end\":0.52},{\"word\":\"мир.\",\"start\":0.6,\"end\":1.0},{\"word\":\"Второй\",\"start\":1.6,\"end\":2.04}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames, verbose_json, granularities WORD"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":3.25,\"text\":\"Привет, мир. Второй\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":1.5,\"text\":\"Привет, мир.\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.5,\"end\":3.25,\"text\":\"Второй\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1600 frames, verbose_json, granularities segment"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1600 frames, diarized_json"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1600 frames, a diarized model"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"час int neg sum tiny\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames as json"
+    },
+    {
+      "answer": {
+        "body": "час int neg sum tiny",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames as text"
+    },
+    {
+      "answer": {
+        "body": "1\n00:59:59,999 --> 01:02:05,998\nчас\n\n2\n00:00:01,000 --> 00:00:02,000\nint\n\n3\n-1:59:58,-500 --> -1:59:59,-250\nneg\n\n4\n00:00:00,300 --> 27777777777777776:46:40,000\nsum\n\n5\n00:00:00,000 --> 00:00:59,999\ntiny\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames as srt"
+    },
+    {
+      "answer": {
+        "body": "WEBVTT\n\n00:59:59.999 --> 01:02:05.998\nчас\n\n00:00:01.000 --> 00:00:02.000\nint\n\n-1:59:58.-500 --> -1:59:59.-250\nneg\n\n00:00:00.300 --> 27777777777777776:46:40.000\nsum\n\n00:00:00.000 --> 00:00:59.999\ntiny\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/vtt; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames as vtt"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":59.9999999,\"text\":\"час int neg sum tiny\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":3599.9995,\"end\":3725.999,\"text\":\"час\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"int\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":-1.5,\"end\":-0.25,\"text\":\"neg\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":3,\"seek\":0,\"start\":0.30000000000000004,\"end\":1e+20,\"text\":\"sum\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":4,\"seek\":0,\"start\":1e-07,\"end\":59.9999999,\"text\":\"tiny\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames as verbose_json"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"час int neg sum tiny\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames as xml"
+    },
+    {
+      "answer": {
+        "body": "1\n00:59:59,999 --> 01:02:05,998\nчас\n\n2\n00:00:01,000 --> 00:00:02,000\nint\n\n3\n-1:59:58,-500 --> -1:59:59,-250\nneg\n\n4\n00:00:00,300 --> 27777777777777776:46:40,000\nsum\n\n5\n00:00:00,000 --> 00:00:59,999\ntiny\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames as SRT"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":59.9999999,\"text\":\"час int neg sum tiny\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":3599.9995,\"end\":3725.999,\"text\":\"час\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"int\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":-1.5,\"end\":-0.25,\"text\":\"neg\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":3,\"seek\":0,\"start\":0.30000000000000004,\"end\":1e+20,\"text\":\"sum\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":4,\"seek\":0,\"start\":1e-07,\"end\":59.9999999,\"text\":\"tiny\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames as Verbose_JSON"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":59.9999999,\"text\":\"час int neg sum tiny\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":3599.9995,\"end\":3725.999,\"text\":\"час\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"int\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":-1.5,\"end\":-0.25,\"text\":\"neg\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":3,\"seek\":0,\"start\":0.30000000000000004,\"end\":1e+20,\"text\":\"sum\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":4,\"seek\":0,\"start\":1e-07,\"end\":59.9999999,\"text\":\"tiny\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"час\",\"start\":3599.9995,\"end\":3600.5}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames, verbose_json, granularities word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":59.9999999,\"text\":\"час int neg sum tiny\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":3599.9995,\"end\":3725.999,\"text\":\"час\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"int\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":-1.5,\"end\":-0.25,\"text\":\"neg\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":3,\"seek\":0,\"start\":0.30000000000000004,\"end\":1e+20,\"text\":\"sum\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":4,\"seek\":0,\"start\":1e-07,\"end\":59.9999999,\"text\":\"tiny\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"час\",\"start\":3599.9995,\"end\":3600.5}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames, verbose_json, granularities segment,word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":59.9999999,\"text\":\"час int neg sum tiny\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":3599.9995,\"end\":3725.999,\"text\":\"час\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"int\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":-1.5,\"end\":-0.25,\"text\":\"neg\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":3,\"seek\":0,\"start\":0.30000000000000004,\"end\":1e+20,\"text\":\"sum\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":4,\"seek\":0,\"start\":1e-07,\"end\":59.9999999,\"text\":\"tiny\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"час\",\"start\":3599.9995,\"end\":3600.5}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames, verbose_json, granularities WORD"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":59.9999999,\"text\":\"час int neg sum tiny\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":3599.9995,\"end\":3725.999,\"text\":\"час\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"int\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":-1.5,\"end\":-0.25,\"text\":\"neg\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":3,\"seek\":0,\"start\":0.30000000000000004,\"end\":1e+20,\"text\":\"sum\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":4,\"seek\":0,\"start\":1e-07,\"end\":59.9999999,\"text\":\"tiny\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1601 frames, verbose_json, granularities segment"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1601 frames, diarized_json"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1601 frames, a diarized model"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames as json"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames as text"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames as srt"
+    },
+    {
+      "answer": {
+        "body": "WEBVTT\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/vtt; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames as vtt"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.0,\"text\":\"\",\"segments\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames as verbose_json"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames as xml"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames as SRT"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.0,\"text\":\"\",\"segments\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames as Verbose_JSON"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.0,\"text\":\"\",\"segments\":[],\"words\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames, verbose_json, granularities word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.0,\"text\":\"\",\"segments\":[],\"words\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames, verbose_json, granularities segment,word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.0,\"text\":\"\",\"segments\":[],\"words\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames, verbose_json, granularities WORD"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.0,\"text\":\"\",\"segments\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1602 frames, verbose_json, granularities segment"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1602 frames, diarized_json"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1602 frames, a diarized model"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"  таб\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames as json"
+    },
+    {
+      "answer": {
+        "body": "  таб",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames as text"
+    },
+    {
+      "answer": {
+        "body": "1\n00:00:00,000 --> 00:00:00,500\n\n\n2\n00:00:00,500 --> 00:00:01,000\n\n\n3\n00:00:01,000 --> 00:00:02,000\nтаб\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames as srt"
+    },
+    {
+      "answer": {
+        "body": "WEBVTT\n\n00:00:00.000 --> 00:00:00.500\n\n\n00:00:00.500 --> 00:00:01.000\n\n\n00:00:01.000 --> 00:00:02.000\nтаб\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/vtt; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames as vtt"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":2.0,\"text\":\"  таб\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":0.5,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":0.5,\"end\":1.0,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"таб\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames as verbose_json"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"  таб\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames as xml"
+    },
+    {
+      "answer": {
+        "body": "1\n00:00:00,000 --> 00:00:00,500\n\n\n2\n00:00:00,500 --> 00:00:01,000\n\n\n3\n00:00:01,000 --> 00:00:02,000\nтаб\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames as SRT"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":2.0,\"text\":\"  таб\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":0.5,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":0.5,\"end\":1.0,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"таб\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames as Verbose_JSON"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":2.0,\"text\":\"  таб\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":0.5,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":0.5,\"end\":1.0,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"таб\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames, verbose_json, granularities word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":2.0,\"text\":\"  таб\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":0.5,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":0.5,\"end\":1.0,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"таб\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames, verbose_json, granularities segment,word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":2.0,\"text\":\"  таб\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":0.5,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":0.5,\"end\":1.0,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"таб\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames, verbose_json, granularities WORD"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":2.0,\"text\":\"  таб\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":0.5,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":0.5,\"end\":1.0,\"text\":\"\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":2,\"seek\":0,\"start\":1.0,\"end\":2.0,\"text\":\"таб\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1603 frames, verbose_json, granularities segment"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1603 frames, diarized_json"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1603 frames, a diarized model"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"x\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1604 frames as json"
+    },
+    {
+      "answer": {
+        "body": "x",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1604 frames as text"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames as srt"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames as vtt"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames as verbose_json"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"x\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1604 frames as xml"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames as SRT"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames as Verbose_JSON"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames, verbose_json, granularities word"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames, verbose_json, granularities segment,word"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames, verbose_json, granularities WORD"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1604 frames, verbose_json, granularities segment"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1604 frames, diarized_json"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1604 frames, a diarized model"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames as json"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames as text"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames as srt"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames as vtt"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames as verbose_json"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames as xml"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames as SRT"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames as Verbose_JSON"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames, verbose_json, granularities word"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames, verbose_json, granularities segment,word"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames, verbose_json, granularities WORD"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames, verbose_json, granularities segment"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames, diarized_json"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "1605 frames, a diarized model"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"\\\"кавычки\\\" и \\\\ слэш\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames as json"
+    },
+    {
+      "answer": {
+        "body": "\"кавычки\" и \\ слэш",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames as text"
+    },
+    {
+      "answer": {
+        "body": "1\n00:00:00,040 --> 00:00:00,120\n\"кавычки\" и \\ слэш\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames as srt"
+    },
+    {
+      "answer": {
+        "body": "WEBVTT\n\n00:00:00.040 --> 00:00:00.120\n\"кавычки\" и \\ слэш\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/vtt; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames as vtt"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.04,\"end\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames as verbose_json"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"\\\"кавычки\\\" и \\\\ слэш\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames as xml"
+    },
+    {
+      "answer": {
+        "body": "1\n00:00:00,040 --> 00:00:00,120\n\"кавычки\" и \\ слэш\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames as SRT"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.04,\"end\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames as Verbose_JSON"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.04,\"end\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"\\\"кавычки\\\"\",\"start\":0.04,\"end\":0.08}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames, verbose_json, granularities word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.04,\"end\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"\\\"кавычки\\\"\",\"start\":0.04,\"end\":0.08}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames, verbose_json, granularities segment,word"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.04,\"end\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}],\"words\":[{\"word\":\"\\\"кавычки\\\"\",\"start\":0.04,\"end\":0.08}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames, verbose_json, granularities WORD"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"ru\",\"duration\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.04,\"end\":0.12,\"text\":\"\\\"кавычки\\\" и \\\\ слэш\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "1606 frames, verbose_json, granularities segment"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1606 frames, diarized_json"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"diarization pipeline unavailable\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "1606 frames, a diarized model"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "no format"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "json words"
+    },
+    {
+      "answer": {
+        "body": "{\"task\":\"transcribe\",\"language\":\"en\",\"duration\":3.25,\"text\":\"Привет, мир. Второй\",\"segments\":[{\"id\":0,\"seek\":0,\"start\":0.0,\"end\":1.5,\"text\":\"Привет, мир.\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0},{\"id\":1,\"seek\":0,\"start\":1.5,\"end\":3.25,\"text\":\"Второй\",\"speaker\":null,\"tokens\":[],\"temperature\":0.0,\"avg_logprob\":0.0,\"compression_ratio\":0.0,\"no_speech_prob\":0.0}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "a language"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "an empty language and format"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "prompt and temperature"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "file name \"rec.mp3\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "file name \"noext\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "file name \"\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "file name \"dir/x.ogg\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "file name \".hidden\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "file name \"a.\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "file name \"x.tar.gz\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"Привет, мир. Второй\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "file name \"Запись.WAV\""
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"ffmpeg could not decode the audio\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "step": "ffmpeg fails"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"ffmpeg could not decode the audio\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "step": "ffmpeg fails, diarization asked"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"ffmpeg could not decode the audio\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "step": "ffmpeg is killed"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "ffmpeg output is not a WAV"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "step": "an empty upload"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"file\"],\"msg\":\"Field required\",\"input\":null}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "step": "no file"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"file\"],\"msg\":\"Field required\",\"input\":null}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "step": "no body"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"file\"],\"msg\":\"Value error, Expected UploadFile, received: <class 'str'>\",\"input\":\"abc\",\"ctx\":{\"error\":{}}},{\"type\":\"float_parsing\",\"loc\":[\"body\",\"temperature\"],\"msg\":\"Input should be a valid number, unable to parse string as a number\",\"input\":\"x\"}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "step": "a file as text"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"float_parsing\",\"loc\":[\"body\",\"temperature\"],\"msg\":\"Input should be a valid number, unable to parse string as a number\",\"input\":\"hot\"}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "step": "a bad temperature"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Missing boundary in multipart.\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "step": "no boundary"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"There was an error parsing the body\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "step": "not multipart data"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"The Content-Disposition header field \\\"name\\\" must be provided.\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "step": "a part without a name"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Part exceeded maximum size of 1024KB.\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "step": "a field over 1 MiB"
+    }
+  ],
+  "ffmpeg": [
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.mp3 -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.mp3.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.ogg -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.ogg.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav",
+    "-y -i tmp<8>.gz -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.gz.16k.wav",
+    "-y -i tmp<8>.WAV -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.WAV.16k.wav",
+    "-y -i tmp<8>.mp3 -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.mp3.16k.wav",
+    "-y -i tmp<8>.mp3 -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.mp3.16k.wav",
+    "-y -i tmp<8>.mp3 -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.mp3.16k.wav",
+    "-y -i tmp<8>.mp3 -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.mp3.16k.wav",
+    "-y -i tmp<8>.wav -ar 16000 -ac 1 -c:a pcm_s16le tmp<8>.wav.16k.wav"
+  ],
+  "loading": [
+    {
+      "answer": {
+        "body": "{\"ok\":false,\"variant\":\"v3_e2e_rnnt\",\"diarization\":false}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "step": "loading: healthz"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"model loading\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "step": "loading: a transcription"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"file\"],\"msg\":\"Field required\",\"input\":null}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "step": "loading: no file"
+    }
+  ],
+  "steps_sha256": "6e913ba3239d2437da134473f1c107f78871f3fc3723367a8cd71527b7970d17"
+}

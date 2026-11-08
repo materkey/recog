@@ -1,6 +1,7 @@
-//! What the differential tests share: the interpreter of the Python side, free ports,
-//! a raw HTTP/1.1 client, multipart and WAV builders, a Python server process and the
-//! comparison of two answers. Nothing here uses the ports of installed services.
+//! What the differential and frozen tests share: the interpreter of the Python side,
+//! free ports, a raw HTTP/1.1 client, multipart and WAV builders, a server process, an
+//! answer as it is compared and recorded, and the comparison of two runs. Nothing here
+//! uses the ports of installed services.
 
 #![allow(dead_code)]
 
@@ -9,6 +10,9 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
+
+use serde_json::{Value as Json, json};
+use sha2::{Digest as _, Sha256};
 
 /// Ports of the user's services and of a production ASR stack, never used by a test.
 const RESERVED: [u16; 8] = [8765, 8766, 8767, 9080, 8770, 9001, 9002, 9003];
@@ -237,43 +241,93 @@ pub fn wav(frames: usize) -> Vec<u8> {
 /// The headers whose values are compared.
 pub const COMPARED_HEADERS: [&str; 4] = ["content-type", "content-length", "allow", "location"];
 
-/// Collects the differences between the Python and the Rust answers.
+/// `text` with each `127.0.0.1:<port>` of `masks` replaced by `127.0.0.1:<name>`.
+pub fn mask(text: &str, masks: &[(u16, &str)]) -> String {
+    masks.iter().fold(text.to_owned(), |text, (port, name)| {
+        text.replace(&format!("127.0.0.1:{port}"), &format!("127.0.0.1:{name}"))
+    })
+}
+
+/// The lowercase hex of `bytes`.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The lowercase hex SHA-256 of `bytes`.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+/// A response as the tests compare and record it: the status, the compared headers and
+/// the body, the ports of `masks` (the server's own, the backends it is pointed at)
+/// replaced by their names, so that runs on different ports compare. A
+/// `Content-Length` equal to the body's length is `<body>`, since a masked port can
+/// change the length; a body that is not UTF-8 is kept as hex.
+pub fn answer(response: &HttpResponse, masks: &[(u16, &str)]) -> Json {
+    let headers: serde_json::Map<String, Json> = COMPARED_HEADERS
+        .iter()
+        .map(|name| {
+            let value = response.header(name).map(|v| {
+                if *name == "content-length" && v == response.body.len().to_string() {
+                    "<body>".to_owned()
+                } else {
+                    mask(v, masks)
+                }
+            });
+            ((*name).to_owned(), json!(value))
+        })
+        .collect();
+    let body = match std::str::from_utf8(&response.body) {
+        Ok(text) => json!(mask(text, masks)),
+        Err(_) => json!({"hex": hex(&response.body)}),
+    };
+    json!({"status": response.status, "headers": headers, "body": body})
+}
+
+/// Writes a fixture as pretty JSON with a final newline.
+pub fn write_fixture(path: &Path, fixture: &Json) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(fixture).unwrap())).unwrap();
+}
+
+/// Reads a fixture of recorded Python answers, checking that it was recorded for the
+/// steps whose SHA-256 is `steps_sha256`.
+pub fn read_fixture(path: &Path, steps_sha256: &str, how_to_record: &str) -> Json {
+    let fixture: Json = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(
+        fixture["steps_sha256"].as_str().unwrap(),
+        steps_sha256,
+        "the steps changed since the answers were recorded: record them again on a checkout with the Python side \
+         ({how_to_record})"
+    );
+    fixture
+}
+
+/// Collects the differences between two runs of the same steps: the answers the Rust
+/// ones are held to (Python's, live or recorded) and the Rust ones.
 pub struct Diff {
+    expected: &'static str,
     failures: Vec<String>,
     steps: usize,
 }
 
 impl Diff {
-    pub fn new() -> Self {
-        Self { failures: Vec::new(), steps: 0 }
+    /// `expected` names the side the Rust answers are held to.
+    pub fn new(expected: &'static str) -> Self {
+        Self { expected, failures: Vec::new(), steps: 0 }
     }
 
-    /// Compares the status, the compared headers (each side's own port replaced by
-    /// `<port>`) and the body bytes (the same replacement).
-    pub fn check(&mut self, step: &str, py: &HttpResponse, py_port: u16, rs: &HttpResponse, rs_port: u16) {
-        self.steps += 1;
-        let local = |text: &str, port: u16| text.replace(&format!("127.0.0.1:{port}"), "127.0.0.1:<port>");
-        if py.status != rs.status {
-            self.failures.push(format!(
-                "{step}: status {} != {}\n  py: {}\n  rs: {}",
-                py.status,
-                rs.status,
-                py.text(),
-                rs.text()
-            ));
-            return;
+    /// Compares the answers step by step, each named by its `step` field.
+    pub fn compare(&mut self, expected: &[Json], got: &[Json]) {
+        if expected.len() != got.len() {
+            self.failures.push(format!("{}: {} steps, Rust: {}", self.expected, expected.len(), got.len()));
         }
-        for name in COMPARED_HEADERS {
-            let a = py.header(name).map(|v| local(v, py_port));
-            let b = rs.header(name).map(|v| local(v, rs_port));
-            if a != b {
-                self.failures.push(format!("{step}: header {name}: {a:?} != {b:?}"));
+        for (want, have) in expected.iter().zip(got) {
+            self.steps += 1;
+            if want != have {
+                let step = have["step"].as_str().unwrap_or("?");
+                self.failures.push(format!("{step}: differs\n  {}: {want}\n  Rust: {have}", self.expected));
             }
-        }
-        let a = local(&py.text(), py_port);
-        let b = local(&rs.text(), rs_port);
-        if a != b || (py.body != rs.body && String::from_utf8(py.body.clone()).is_err()) {
-            self.failures.push(format!("{step}: body differs\n  py: {a:?}\n  rs: {b:?}"));
         }
     }
 

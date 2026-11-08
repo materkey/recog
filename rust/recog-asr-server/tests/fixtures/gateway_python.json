@@ -1,0 +1,1349 @@
+{
+  "answers": [
+    {
+      "answer": {
+        "body": "{\"object\":\"list\",\"data\":[{\"id\":\"gigaam\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"gigaam-diarized\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"gigaam-diarized-v3\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"gigaam-v3\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"gigaam-v3-e2e-rnnt\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"qwen\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"qwen3-asr\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"qwen3-asr-1.7b\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"whisper-1\",\"object\":\"model\",\"owned_by\":\"local\"}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [],
+      "step": "models"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": null,
+          "location": "http://127.0.0.1:<port>/v1/models?x=a%20b&y"
+        },
+        "status": 307
+      },
+      "received": [],
+      "step": "models with a trailing slash"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": null,
+          "location": "http://127.0.0.1:<port>/healthz"
+        },
+        "status": 307
+      },
+      "received": [],
+      "step": "healthz with a trailing slash"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Method Not Allowed\"}",
+        "headers": {
+          "allow": "GET",
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 405
+      },
+      "received": [],
+      "step": "healthz by POST"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": "GET",
+          "content-length": "31",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 405
+      },
+      "received": [],
+      "step": "healthz by HEAD"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Method Not Allowed\"}",
+        "headers": {
+          "allow": "POST",
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 405
+      },
+      "received": [],
+      "step": "transcriptions by GET"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Not Found\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 404
+      },
+      "received": [],
+      "step": "an unknown path"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Not Found\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 404
+      },
+      "received": [],
+      "step": "an unknown path with a slash"
+    },
+    {
+      "answer": {
+        "body": "{\"object\":\"list\",\"data\":[{\"id\":\"gigaam\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"gigaam-diarized\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"gigaam-diarized-v3\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"gigaam-v3\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"gigaam-v3-e2e-rnnt\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"qwen\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"qwen3-asr\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"qwen3-asr-1.7b\",\"object\":\"model\",\"owned_by\":\"local\"},{\"id\":\"whisper-1\",\"object\":\"model\",\"owned_by\":\"local\"}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [],
+      "step": "a percent-encoded route"
+    },
+    {
+      "answer": {
+        "body": "{\"qwen\":{\"error\":\"All connection attempts failed\"},\"gigaam\":{\"ok\":true,\"variant\":\"v3_e2e_rnnt\",\"diarization\":false,\"load\":0.25}}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [],
+      "step": "healthz, backend json"
+    },
+    {
+      "answer": {
+        "body": "{\"qwen\":{\"error\":\"All connection attempts failed\"},\"gigaam\":{\"error\":\"Expecting value: line 1 column 1 (char 0)\"}}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [],
+      "step": "healthz, backend html"
+    },
+    {
+      "answer": {
+        "body": "{\"qwen\":{\"error\":\"All connection attempts failed\"},\"gigaam\":{\"detail\":\"boom\"}}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [],
+      "step": "healthz, backend 500"
+    },
+    {
+      "answer": {
+        "body": "{\"qwen\":{\"error\":\"All connection attempts failed\"},\"gigaam\":{\"error\":\"'utf-8' codec can't decode byte 0xff in position 0: invalid start byte\"}}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [],
+      "step": "healthz, backend bad utf-8"
+    },
+    {
+      "answer": {
+        "body": "Internal Server Error",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 500
+      },
+      "received": [],
+      "step": "healthz, backend NaN"
+    },
+    {
+      "answer": {
+        "body": "{\"qwen\":{\"error\":\"All connection attempts failed\"},\"gigaam\":{\"error\":\"\"}}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [],
+      "step": "healthz, backend slower than 5 s"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "file only"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngigaam\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "model \"gigaam\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngigaam-v3\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "model \"gigaam-v3\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngigaam-v3-e2e-rnnt\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "model \"gigaam-v3-e2e-rnnt\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngigaam-diarized\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "model \"gigaam-diarized\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngigaam-diarized-v3\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "model \"gigaam-diarized-v3\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "model \"whisper-1\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nGigaAM-V3\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "model \"GigaAM-V3\""
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"backend http://127.0.0.1:<refused> unreachable: All connection attempts failed\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 502
+      },
+      "received": [],
+      "step": "model \"qwen\""
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"backend http://127.0.0.1:<refused> unreachable: All connection attempts failed\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 502
+      },
+      "received": [],
+      "step": "model \"qwen3-asr\""
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"backend http://127.0.0.1:<refused> unreachable: All connection attempts failed\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 502
+      },
+      "received": [],
+      "step": "model \"QWEN3-ASR-1.7B\""
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"unknown model 'whisper'. Available: ['gigaam', 'gigaam-diarized', 'gigaam-diarized-v3', 'gigaam-v3', 'gigaam-v3-e2e-rnnt', 'qwen', 'qwen3-asr', 'qwen3-asr-1.7b', 'whisper-1']\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "received": [],
+      "step": "model \"whisper\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "model \"\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngigaam\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "the last of two models"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n0.0\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"0\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n0.7\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"0.7\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n1e-05\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"1e-5\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n10.0\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"1_0\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n2.0\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \" 2 \""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n-0.0\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"-0\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\ninf\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"inf\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\ninf\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"1e400\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\nnan\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"nan\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "temperature \"\""
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"float_parsing\",\"loc\":[\"body\",\"temperature\"],\"msg\":\"Input should be a valid number, unable to parse string as a number\",\"input\":\"abc\"}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [],
+      "step": "temperature \"abc\""
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngigaam\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\nverbose_json\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\nru\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nhello\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"temperature\"\r\n\r\n0.2\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"timestamp_granularities\"\r\n\r\nword\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "every field"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "empty optional fields"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "no content type"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "an empty content type"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"rec.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "an mpeg file"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "an empty file name"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"запись.ogg\"\r\nContent-Type: audio/ogg\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "a Cyrillic file name"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a%22b.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "an escaped quote in the name"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"y.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "a Windows path"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a%01b.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "a control character in the name"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a%0Ab.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "a percent sign in the name"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"file\"],\"msg\":\"Value error, Expected UploadFile, received: <class 'str'>\",\"input\":\"RIFF¤\\f\\u0000\\u0000WAVEfmt \\u0010\\u0000\\u0000\\u0000\\u0001\\u0000\\u0001\\u0000>\\u0000\\u0000\\u0000}\\u0000\\u0000\\u0002\\u0000\\u0010\\u0000data\\f\\u0000\\u0000\\u0000\\u00001\\u0000c\\u0000\\u0000Æ\\u0000÷\\u0000'\\u0001V\\u0001\\u0001²\\u0001ß\\u0001\\n\\u00024\\u0002]\\u0002\\u0002©\\u0002Í\\u0002ï\\u0002\\u000f\\u0003-\\u0003I\\u0003c\\u0003{\\u0003\\u0003¤\\u0003´\\u0003Ã\\u0003Ï\\u0003Ù\\u0003à\\u0003å\\u0003ç\\u0003ç\\u0003ä\\u0003ß\\u0003×\\u0003Í\\u0003Á\\u0003²\\u0003 \\u0003\\u0003w\\u0003_\\u0003D\\u0003(\\u0003\\n\\u0003é\\u0002Ç\\u0002£\\u0002}\\u0002V\\u0002-\\u0002\\u0003\\u0002Ø\\u0001«\\u0001}\\u0001N\\u0001\\u001f\\u0001ï\\u0000¾\\u0000\\u0000[\\u0000)\\u0000øÿÆÿÿcÿ2ÿ\\u0001ÿÑþ¢þsþFþ\\u001aþïýÅýývýQý-ý\\fýìüÎü³üüülüYüIü;ü/ü&ü\\u001fü\\u001aü\\u0019ü\\u0019ü\\u001cü\\\"ü*ü5üBüQücüwüü¦üÀüÝüüü\\u001cý?ýcýý±ýÚý\\u0004þ0þ]þþ¹þéþ\\u0019ÿJÿ|ÿ­ÿßÿ\\u0010\\u0000B\\u0000t\\u0000¦\\u0000×\\u0000\\u0007\\u00017\\u0001f\\u0001\\u0001Â\\u0001î\\u0001\\u0018\\u0002B\\u0002j\\u0002\\u0002µ\\u0002Ø\\u0002ú\\u0002\\u0019\\u00037\\u0003R\\u0003k\\u0003\\u0003\\u0003©\\u0003º\\u0003Ç\\u0003Ó\\u0003Ü\\u0003â\\u0003æ\\u0003ç\\u0003æ\\u0003ã\\u0003Ý\\u0003Ô\\u0003É\\u0003¼\\u0003¬\\u0003\\u0003\\u0003o\\u0003V\\u0003;\\u0003\\u001e\\u0003ÿ\\u0002Þ\\u0002»\\u0002\\u0002p\\u0002H\\u0002\\u001f\\u0002õ\\u0001É\\u0001\\u0001n\\u0001?\\u0001\\u000f\\u0001Þ\\u0000­\\u0000|\\u0000J\\u0000\\u0018\\u0000çÿµÿÿRÿ!ÿñþÁþþdþ7þ\\u000bþàý·ýýiýEý\\\"ý\\u0001ýâüÅüªüüzüfüTüDü7ü,ü#ü\\u001dü\\u001aü\\u0019ü\\u001aü\\u001eü$ü-ü9üFüWüiü~üü®üÊüçü\\u0007ý(ýKýpýý¾ýèý\\u0013þ?þlþþÉþùþ*ÿ[ÿÿ¾ÿðÿ!\\u0000S\\u0000\\u0000¶\\u0000ç\\u0000\\u0017\\u0001G\\u0001v\\u0001¤\\u0001Ð\\u0001ü\\u0001'\\u0002P\\u0002w\\u0002\\u0002Á\\u0002ä\\u0002\\u0005\\u0003#\\u0003@\\u0003[\\u0003s\\u0003\\u0003\\u0003¯\\u0003¿\\u0003Ì\\u0003Ö\\u0003Þ\\u0003ä\\u0003ç\\u0003ç\\u0003æ\\u0003á\\u0003Ú\\u0003Ñ\\u0003Å\\u0003·\\u0003¦\\u0003\\u0003~\\u0003g\\u0003M\\u00032\\u0003\\u0014\\u0003ô\\u0002Ò\\u0002¯\\u0002\\u0002c\\u0002;\\u0002\\u0011\\u0002æ\\u0001º\\u0001\\u0001^\\u0001/\\u0001ÿ\\u0000Î\\u0000\\u0000k\\u00009\\u0000\\u0007\\u0000Öÿ¥ÿsÿBÿ\\u0011ÿáþ±þþUþ(þýýÒýªýý]ý9ý\\u0016ýöüØü»ü¡üüsü_üNü?ü3ü(ü!ü\\u001cü\\u0019ü\\u0019ü\\u001bü ü'ü1ü=üLü]üpüüü·üÓüñü\\u0012ý3ýWý}ý¤ýÌýöý!þNþ{þªþÙþ\\nÿ:ÿlÿÿÏÿ\\u0000\\u00002\\u0000d\\u0000\\u0000Ç\\u0000÷\\u0000'\\u0001W\\u0001\\u0001³\\u0001ß\\u0001\\u000b\\u00025\\u0002]\\u0002\\u0002©\\u0002Í\\u0002ï\\u0002\\u000f\\u0003-\\u0003I\\u0003c\\u0003{\\u0003\\u0003¤\\u0003µ\\u0003Ã\\u0003Ï\\u0003Ù\\u0003à\\u0003å\\u0003ç\\u0003ç\\u0003ä\\u0003ß\\u0003×\\u0003Í\\u0003Á\\u0003²\\u0003 \\u0003\\u0003w\\u0003^\\u0003D\\u0003(\\u0003\\t\\u0003é\\u0002Ç\\u0002£\\u0002}\\u0002V\\u0002-\\u0002\\u0003\\u0002×\\u0001ª\\u0001}\\u0001N\\u0001\\u001f\\u0001î\\u0000½\\u0000\\u0000[\\u0000)\\u0000øÿÆÿÿbÿ1ÿ\\u0001ÿÑþ¡þsþFþ\\u0019þîýÅýývýPý-ý\\u000býìüÎü²üüülüYüIü;ü/ü&ü\\u001fü\\u001aü\\u0019ü\\u0019ü\\u001cü\\\"ü*ü5üBüQücüwüü¦üÀüÝüüü\\u001dý?ýdýý±ýÚý\\u0005þ0þ]þþºþêþ\\u001aÿKÿ|ÿ®ÿàÿ\\u0011\\u0000C\\u0000t\\u0000¦\\u0000×\\u0000\\b\\u00017\\u0001g\\u0001\\u0001Â\\u0001î\\u0001\\u0019\\u0002B\\u0002j\\u0002\\u0002¶\\u0002Ù\\u0002ú\\u0002\\u0019\\u00037\\u0003R\\u0003k\\u0003\\u0003\\u0003ª\\u0003º\\u0003È\\u0003Ó\\u0003Ü\\u0003â\\u0003æ\\u0003ç\\u0003æ\\u0003ã\\u0003Ý\\u0003Ô\\u0003É\\u0003¼\\u0003¬\\u0003\\u0003\\u0003o\\u0003V\\u0003;\\u0003\\u001e\\u0003ÿ\\u0002Þ\\u0002»\\u0002\\u0002p\\u0002H\\u0002\\u001f\\u0002ô\\u0001È\\u0001\\u0001m\\u0001>\\u0001\\u000e\\u0001Þ\\u0000­\\u0000|\\u0000J\\u0000\\u0018\\u0000çÿµÿÿRÿ!ÿðþÁþþdþ7þ\\u000bþàý·ýýiýDý\\\"ý\\u0001ýáüÄü©üüzüfüSüDü6ü+ü#ü\\u001dü\\u001aü\\u0019ü\\u001aü\\u001eü$ü-ü9üGüWüiü~üü¯üÊüçü\\u0007ý(ýKýpýý¿ýèý\\u0013þ?þlþþÊþúþ*ÿ[ÿÿ¿ÿñÿ\\\"\\u0000S\\u0000\\u0000·\\u0000ç\\u0000\\u0018\\u0001G\\u0001v\\u0001¤\\u0001Ñ\\u0001ý\\u0001'\\u0002P\\u0002w\\u0002\\u0002Â\\u0002ä\\u0002\\u0005\\u0003$\\u0003@\\u0003[\\u0003s\\u0003\\u0003\\u0003¯\\u0003¿\\u0003Ì\\u0003Ö\\u0003Þ\\u0003ä\\u0003ç\\u0003ç\\u0003å\\u0003á\\u0003Ú\\u0003Ñ\\u0003Å\\u0003·\\u0003¦\\u0003\\u0003~\\u0003g\\u0003M\\u00031\\u0003\\u0013\\u0003ô\\u0002Ò\\u0002¯\\u0002\\u0002c\\u0002:\\u0002\\u0011\\u0002æ\\u0001¹\\u0001\\u0001]\\u0001.\\u0001þ\\u0000Î\\u0000\\u0000k\\u00009\\u0000\\u0007\\u0000Öÿ¤ÿsÿAÿ\\u0010ÿàþ±þþTþ(þüýÒý©ýý\\\\ý8ý\\u0016ýöü×ü»ü¡üüsü_üNü?ü2ü(ü!ü\\u001cü\\u0019ü\\u0019ü\\u001bü ü'ü1ü=üLü]üpüüü¸üÔüòü\\u0012ý4ýXý}ý¤ýÍý÷ý\\\"þNþ|þªþÚþ\\nÿ;ÿlÿÿÏÿ\\u0000\\u00002\\u0000d\\u0000\\u0000Ç\\u0000ø\\u0000(\\u0001W\\u0001\\u0001³\\u0001à\\u0001\\u000b\\u00025\\u0002]\\u0002\\u0002ª\\u0002Í\\u0002ï\\u0002\\u000f\\u0003-\\u0003I\\u0003c\\u0003{\\u0003\\u0003¤\\u0003µ\\u0003Ã\\u0003Ï\\u0003Ù\\u0003à\\u0003å\\u0003ç\\u0003ç\\u0003ä\\u0003ß\\u0003×\\u0003Í\\u0003Á\\u0003²\\u0003 \\u0003\\u0003v\\u0003^\\u0003D\\u0003'\\u0003\\t\\u0003é\\u0002Æ\\u0002¢\\u0002}\\u0002U\\u0002,\\u0002\\u0002\\u0002×\\u0001ª\\u0001|\\u0001N\\u0001\\u001e\\u0001î\\u0000½\\u0000\\u0000Z\\u0000(\\u0000÷ÿÅÿÿbÿ1ÿ\\u0000ÿÐþ¡þsþEþ\\u0019þîýÄýýuýPý-ý\\u000býëüÎü²üüülüYüIü:ü/ü&ü\\u001fü\\u001aü\\u0019ü\\u0019ü\\u001cü\\\"ü*ü5üBüQücüwüü¦üÁüÞüüü\\u001dý@ýdýý²ýÛý\\u0005þ1þ^þþºþêþ\\u001aÿKÿ}ÿ®ÿàÿ\\u0011\\u0000C\\u0000u\\u0000¦\\u0000×\\u0000\\b\\u00018\\u0001g\\u0001\\u0001Â\\u0001î\\u0001\\u0019\\u0002C\\u0002k\\u0002\\u0002¶\\u0002Ù\\u0002ú\\u0002\\u001a\\u00037\\u0003R\\u0003l\\u0003\\u0003\\u0003ª\\u0003º\\u0003È\\u0003Ó\\u0003Ü\\u0003â\\u0003æ\\u0003ç\\u0003æ\\u0003ã\\u0003Ý\\u0003Ô\\u0003É\\u0003¼\\u0003¬\\u0003\\u0003\\u0003o\\u0003V\\u0003;\\u0003\\u001d\\u0003þ\\u0002Ý\\u0002º\\u0002\\u0002p\\u0002H\\u0002\\u001e\\u0002ô\\u0001È\\u0001\\u0001m\\u0001>\\u0001\\u000e\\u0001Þ\\u0000­\\u0000{\\u0000I\\u0000\\u0017\\u0000æÿ´ÿÿQÿ ÿðþÀþþcþ6þ\\nþàý·ýýiýDý!ý\\u0000ýáüÄü©üüzüeüSüDü6ü+ü#ü\\u001dü\\u0019ü\\u0019ü\\u001aü\\u001eü%ü.ü9üGüWüjü~üü¯üÊüèü\\u0007ý(ýLýqýý¿ýéý\\u0014þ@þmþþÊþúþ+ÿ\\\\ÿÿ¿ÿñÿ\\\"\\u0000T\\u0000\\u0000·\\u0000è\\u0000\\u0018\\u0001H\\u0001w\\u0001¤\\u0001Ñ\\u0001ý\\u0001'\\u0002P\\u0002x\\u0002\\u0002Â\\u0002ä\\u0002\\u0005\\u0003$\\u0003A\\u0003[\\u0003t\\u0003\\u0003\\u0003¯\\u0003¿\\u0003Ì\\u0003Ö\\u0003Þ\\u0003ä\\u0003ç\\u0003ç\\u0003å\\u0003á\\u0003Ú\\u0003Ñ\\u0003Å\\u0003·\\u0003¦\\u0003\\u0003~\\u0003f\\u0003M\\u00031\\u0003\\u0013\\u0003ó\\u0002Ò\\u0002®\\u0002\\u0002b\\u0002:\\u0002\\u0010\\u0002å\\u0001¹\\u0001\\u0001]\\u0001.\\u0001þ\\u0000Í\\u0000\\u0000j\\u00009\\u0000\\u0007\\u0000Öÿ¤ÿrÿAÿ\\u0010ÿàþ°þþTþ'þüýÒý©ýý\\\\ý8ý\\u0016ýöü×ü»ü¡üüsü_üNü?ü2ü(ü!ü\\u001cü\\u0019ü\\u0019ü\\u001bü ü'ü1ü=üLü]üpüüü¸üÔüòü\\u0012ý4ýXý}ý¤ýÍý÷ý\\\"þOþ|þ«þÚþ\\nÿ;ÿlÿÿÐÿ\\u0001\\u00003\\u0000e\\u0000\\u0000Ç\\u0000ø\\u0000(\\u0001X\\u0001\\u0001´\\u0001à\\u0001\\u000b\\u00025\\u0002^\\u0002\\u0002ª\\u0002Î\\u0002ð\\u0002\\u0010\\u0003.\\u0003J\\u0003d\\u0003{\\u0003\\u0003¤\\u0003µ\\u0003Ã\\u0003Ð\\u0003Ù\\u0003à\\u0003å\\u0003ç\\u0003ç\\u0003ä\\u0003ß\\u0003×\\u0003Í\\u0003À\\u0003±\\u0003 \\u0003\\u0003v\\u0003^\\u0003D\\u0003'\\u0003\\t\\u0003è\\u0002Æ\\u0002¢\\u0002|\\u0002U\\u0002,\\u0002\\u0002\\u0002Ö\\u0001ª\\u0001|\\u0001M\\u0001\\u001e\\u0001í\\u0000½\\u0000\\u0000Z\\u0000(\\u0000÷ÿÅÿÿaÿ0ÿ\\u0000ÿÐþ þrþEþ\\u0019þîýÄýýuýPý,ý\\u000býëüÍü²üüülüYüHü:ü/ü%ü\\u001fü\\u001aü\\u0019ü\\u0019ü\\u001cü\\\"ü*ü5üBüQücüwüü¦üÁüÞüýü\\u001dý@ýdýý²ýÛý\\u0005þ1þ^þþ»þêþ\\u001bÿLÿ}ÿ¯ÿáÿ\\u0012\\u0000D\\u0000u\\u0000§\\u0000Ø\\u0000\\b\\u00018\\u0001g\\u0001\\u0001Ã\\u0001ï\\u0001\\u001a\\u0002C\\u0002k\\u0002\\u0002¶\\u0002Ù\\u0002û\\u0002\\u001a\\u00037\\u0003S\\u0003l\\u0003\\u0003\\u0003ª\\u0003º\\u0003È\\u0003Ó\\u0003Ü\\u0003â\\u0003æ\\u0003ç\\u0003æ\\u0003ã\\u0003Ý\\u0003Ô\\u0003É\\u0003¼\\u0003¬\\u0003\\u0003\\u0003n\\u0003U\\u0003:\\u0003\\u001d\\u0003þ\\u0002Ý\\u0002º\\u0002\\u0002o\\u0002G\\u0002\\u001e\\u0002ó\\u0001Ç\\u0001\\u0001l\\u0001=\\u0001\\u000e\\u0001Ý\\u0000¬\\u0000{\\u0000I\\u0000\\u0017\\u0000æÿ´ÿÿQÿ ÿïþÀþþcþ6þ\\nþßý¶ýýhýDý!ý\\u0000ýáüÄü©üüzüeüSüCü6ü+ü#ü\\u001dü\\u0019ü\\u0019ü\\u001aü\\u001eü%ü.ü9üGüWüjüüü¯üÊüèü\\u0007ý)ýLýqýýÀýéý\\u0014þ@þmþþËþûþ+ÿ\\\\ÿÿÀÿñÿ\\\"\\u0000T\\u0000\\u0000·\\u0000è\\u0000\\u0019\\u0001H\\u0001w\\u0001¥\\u0001Ò\\u0001ý\\u0001(\\u0002Q\\u0002x\\u0002\\u0002Â\\u0002å\\u0002\\u0005\\u0003$\\u0003A\\u0003[\\u0003t\\u0003\\u0003\\u0003°\\u0003¿\\u0003Ì\\u0003Ö\\u0003Þ\\u0003ä\\u0003ç\\u0003ç\\u0003å\\u0003á\\u0003Ú\\u0003Ñ\\u0003Å\\u0003·\\u0003¦\\u0003\\u0003~\\u0003f\\u0003M\\u00031\\u0003\\u0013\\u0003ó\\u0002Ñ\\u0002®\\u0002\\u0002b\\u0002:\\u0002\\u0010\\u0002å\\u0001¸\\u0001\\u0001]\\u0001-\\u0001ý\\u0000Í\\u0000\\u0000j\\u00008\\u0000\\u0006\\u0000Õÿ£ÿrÿ@ÿ\\u0010ÿßþ°þþTþ'þûýÑý©ýý\\\\ý8ý\\u0016ýõü×ü»ü üürü_üNü?ü2ü(ü!ü\\u001bü\\u0019ü\\u0019ü\\u001bü ü'ü1ü=üLü]üpüüü¸üÔüòü\\u0012ý4ýXý~ý¥ýÍý÷ý#þOþ}þ«þÛþ\\u000bÿ<ÿmÿÿÐÿ\\u0001\\u00003\\u0000e\\u0000\\u0000È\\u0000ù\\u0000)\\u0001X\\u0001\\u0001´\\u0001à\\u0001\\f\\u00026\\u0002^\\u0002\\u0002ª\\u0002Î\\u0002ð\\u0002\\u0010\\u0003.\\u0003J\\u0003d\\u0003|\\u0003\\u0003¤\\u0003µ\\u0003Ä\\u0003Ð\\u0003Ù\\u0003à\\u0003å\\u0003ç\\u0003ç\\u0003ä\\u0003ß\\u0003×\\u0003Í\\u0003À\\u0003±\\u0003 \\u0003\\u0003v\\u0003^\\u0003C\\u0003'\\u0003\\b\\u0003è\\u0002Æ\\u0002¢\\u0002|\\u0002U\\u0002,\\u0002\\u0001\\u0002Ö\\u0001©\\u0001|\\u0001M\\u0001\\u001d\\u0001í\\u0000¼\\u0000\\u0000Y\\u0000'\\u0000öÿÄÿÿaÿ0ÿÿþÏþ þrþDþ\\u0018þíýÃýýuýOý,ý\\u000býëüÍü²üüülüYüHü:ü/ü%ü\",\"ctx\":{\"error\":{}}}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [],
+      "step": "an RFC 2231 file name"
+    },
+    {
+      "answer": {
+        "body": "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nпривет\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/vtt; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nvtt\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer vtt"
+    },
+    {
+      "answer": {
+        "body": "привет",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "text/plain; charset=utf-8",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nplain\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer plain"
+    },
+    {
+      "answer": {
+        "body": "1\n00:00:00,000 --> 00:00:01,000\nx\n",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/x-subrip",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nsrt\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer srt"
+    },
+    {
+      "answer": {
+        "body": "raw",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": null,
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nnone\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer none"
+    },
+    {
+      "answer": {
+        "body": "{}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 201
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ncreated\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer created"
+    },
+    {
+      "answer": {
+        "body": "",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": null,
+          "location": null
+        },
+        "status": 302
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nredirect\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer redirect"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"{\\\"detail\\\":[{\\\"type\\\":\\\"missing\\\"}]}\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ne422\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer e422"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"{\\\"detail\\\":\\\"diarization pipeline unavailable\\\"}\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 503
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ne503\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer e503"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Internal Server Error\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 500
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ne500\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer e500"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"��oops �\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\ne400bin\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer e400bin"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"backend http://127.0.0.1:<backend> unreachable: \"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 502
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nsleep\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "backend answer sleep"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"file\"],\"msg\":\"Field required\",\"input\":null}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [],
+      "step": "no file"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"file\"],\"msg\":\"Field required\",\"input\":null}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [],
+      "step": "no body"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"file\"],\"msg\":\"Field required\",\"input\":null}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [],
+      "step": "a JSON body"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"file\"],\"msg\":\"Value error, Expected UploadFile, received: <class 'str'>\",\"input\":\"abc\",\"ctx\":{\"error\":{}}},{\"type\":\"float_parsing\",\"loc\":[\"body\",\"temperature\"],\"msg\":\"Input should be a valid number, unable to parse string as a number\",\"input\":\"x\"}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [],
+      "step": "a file as text"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"float_parsing\",\"loc\":[\"body\",\"temperature\"],\"msg\":\"Input should be a valid number, unable to parse string as a number\",\"input\":\"warm\"}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [],
+      "step": "a bad temperature with a file"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"Missing boundary in multipart.\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "received": [],
+      "step": "no boundary"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"There was an error parsing the body\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "received": [],
+      "step": "not multipart data"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "an uppercase multipart type with parameters"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":\"The Content-Disposition header field \\\"name\\\" must be provided.\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 400
+      },
+      "received": [],
+      "step": "a part without a name"
+    },
+    {
+      "answer": {
+        "body": "{\"text\":\"привет\"}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 200
+      },
+      "received": [
+        {
+          "body": "--<boundary>\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\né\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: application/octet-stream\r\n\r\n<wav>\r\n--<boundary>--\r\n",
+          "content_type": "multipart/form-data; boundary=<boundary>",
+          "method": "POST",
+          "path": "/v1/audio/transcriptions"
+        }
+      ],
+      "step": "a field that is not UTF-8"
+    },
+    {
+      "answer": {
+        "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"file\"],\"msg\":\"Field required\",\"input\":null}]}",
+        "headers": {
+          "allow": null,
+          "content-length": "<body>",
+          "content-type": "application/json",
+          "location": null
+        },
+        "status": 422
+      },
+      "received": [],
+      "step": "a body cut inside the file"
+    }
+  ],
+  "steps_sha256": "803e59e2f05fdc8c30a977cd95d2ee4986ecbfae5f44ce299e16f0ef19bbabda"
+}
