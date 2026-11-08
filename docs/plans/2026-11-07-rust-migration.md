@@ -9,6 +9,9 @@ Status: in progress.
 - Step 3: `wavo` behind `build_asr()` is the default on macOS (`"auto"`).
 - Step 4 has the microphone: the opt-in worker `rust/recog-mic` behind
   `[live] mic_worker`.
+- Steps 4 and 5 have the lower layer of the live process ported, not yet wired:
+  `rust/recog-live` (capture, echo stage, ASR on `wavo`, per-speaker ingest, refine,
+  golden recorder).
 - Step 8 has the Zoom application source ported, not yet wired: `rust/recog-zoom`.
 
 ## Goal
@@ -84,12 +87,26 @@ where they can.
      (9 and 26 ms, each an "IOWorkLoop: skipping cycle due to overload" in the system
      log), Rust none. cpal changes the device's rate and physical format to what a
      stream asks for, so the worker opens the device as it is and resamples itself.
-   - Still to do: make it the default after a real meeting on it; then system audio
-     and the capture buffer.
+   - Still to do: make it the default after a real meeting on it.
+   - **System audio and the capture buffer ported 2026-11-08**, not wired:
+     `rust/recog-live` (`capture`). Its differential tests feed the same blocks, byte
+     streams cut at random points and scripted `pactl` answers to Python and Rust and
+     get the same chunks, capture times, frames and log lines; the restart policy runs
+     beside Python's on the same stub child with the same backoff timeline.
 5. **Live process and bridge.** `live.py`, `per_speaker.py`, `refine.py` and
    `ktalk_bridge.py` as one tokio binary. Criterion: the same JSONL and the same bridge
    frames on the golden sessions. This is where most of the gain is; stopping here is a
    reasonable outcome.
+   - **Lower layer ported 2026-11-08**, not wired: `rust/recog-live` has the echo stage
+     on `speexdsp-aec` directly, ASR on the `wavo` crate, the per-speaker ingest, the
+     refine worker and the golden recorder. Against Python on the same input: the
+     ingest's batches, refine windows and watchdog on 400 random scenarios and the
+     golden files byte for byte; the echo stage is bit-exact wherever it passes the
+     microphone raw and within one float32 step elsewhere (the FFT library rounds
+     differently from numpy's); `wavo` in Rust gives the text and word timings of
+     `wavo_asr` on every compared clip.
+   - Still to do: the main loop (`live.py`, `cli.py`) and the bridge in the same
+     process.
 6. **Web backend.** FastAPI to axum; the static UI unchanged.
 7. **Copilot.** The supervisor (state machine, tmux, `systemd-run`, screen classifier)
    and the MCP channel (rmcp).
@@ -124,7 +141,7 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 | `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library |
 | `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library, ported, not wired |
 | `recog-bridge` | `ktalk_bridge.py` | library |
-| `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same tokio process |
+| `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same tokio process; the modules below the main loop ported (parity-tested against Python; no caller yet) |
 | `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary |
 | `recog-copilot` | `copilot_supervisor.py`, `copilot_channel.py` (MCP through rmcp) | binaries |
 | `recog-mic` | `mic_worker.py` | binary, done |
