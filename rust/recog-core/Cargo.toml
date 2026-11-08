@@ -1,0 +1,13 @@
+[package]
+name = "recog-core"
+version = "0.1.0"
+edition = "2024"
+description = "The installation settings, data directory, user profile and meeting storage of recog"
+publish = false
+
+[dependencies]
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
+uuid = { version = "1.20", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.20"
