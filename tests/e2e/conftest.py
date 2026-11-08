@@ -10,7 +10,23 @@ import pytest
 # Load .env from project root so SSO_* vars are available
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
-from recog.config import load_dotenv
+
+
+def load_dotenv(env_path: Path) -> None:
+    """Load KEY=VALUE lines of ``env_path`` into the environment without
+    overriding it, as recog's own loader does (the suite does not import recog)."""
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
+
 load_dotenv(_PROJECT_ROOT / ".env")
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"

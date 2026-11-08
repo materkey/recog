@@ -62,5 +62,5 @@ All three ran on a 3-participant SFU room (host + two fake-audio guests).
 
 These scripts contain no account logins, room URLs, or user
 names. All runtime data is passed via CLI. Credentials live in `.env`
-(read by other e2e tests through `recog.config.load_dotenv`) but these
+(read by the other e2e tests through `tests/e2e/conftest.py`) but these
 research scripts deliberately do not touch them.
