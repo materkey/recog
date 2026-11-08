@@ -11,6 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 recog-core = { path = "../recog-core" }
 speexdsp-aec = { path = "../speexdsp-aec" }
+# The real FFTs of the suppressor, the echo path detector and the inverse filter.
+realfft = "3.5.1"
 # audio_key of the golden recorder: hashlib.sha1, the key the Python player looks answers up by.
 sha1 = "0.10.6"
 # Pinned exactly, as in wavo-asr-py: the measurements of
