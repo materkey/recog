@@ -214,6 +214,8 @@ section!(
         echo_cancel: bool = ("RECOG_ECHO_CANCEL", Flag, false),
         /// The microphone's child process on macOS: "python" or "rust".
         mic_worker: String = ("RECOG_MIC_WORKER", Text, "python".into()),
+        /// The live process: "python" or "rust" (the `recog` binary of recog-live).
+        runtime: String = ("RECOG_LIVE_RUNTIME", Text, "python".into()),
         /// Record golden sessions under <data dir>/golden for replay.
         golden_record: bool = ("RECOG_GOLDEN_RECORD", Flag, false),
     }

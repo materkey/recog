@@ -69,6 +69,12 @@
 # (recog/mic_worker.py) or "rust" (rust/recog-mic, which ./setup.sh builds when
 # cargo is installed; without the build the Python one runs and the log says so).
 # mic_worker = "python"
+# RECOG_LIVE_RUNTIME: the live service's process, "python" (python -m recog live)
+# or "rust" (rust/recog-live, which ./setup.sh builds when cargo is installed, on
+# Linux only with this set). The Rust one runs ASR on wavo: another [asr] backend,
+# or no build, keeps Python and the log says why. Apply with
+# ./recog-service.sh restart.
+# runtime = "python"
 # RECOG_GOLDEN_RECORD: record each live session (bridge frames; microphone and
 # system audio and ASR answers while a conference is on) under <data dir>/golden,
 # to replay it into a new implementation

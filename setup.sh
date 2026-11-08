@@ -154,6 +154,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
         echo "Would also install deploy/python/requirements-macos.txt; all pip steps use deploy/python/constraints/macos.txt"
         echo "Would build the echo canceller from rust/speexdsp-aec-py with pip and cargo, if cargo is available."
         echo "Would build the Rust microphone worker rust/recog-mic with cargo, if cargo is available."
+        echo "Would build the Rust live process rust/recog-live with cargo, if cargo is available."
+    else
+        echo "Would build the Rust live process rust/recog-live with cargo, if cargo is available and [live] runtime is rust."
     fi
     echo "Would build the ASR backend wavo from rust/wavo-asr-py with pip and cargo, if [asr] backend is wavo, or auto on macOS."
     if [ "$DO_ENV" -eq 1 ]; then
@@ -431,6 +434,18 @@ if [ "$HOST_OS" = "darwin" ]; then
         else
             warn "The Rust microphone worker was not built (rust/recog-mic); the microphone stays on the Python worker"
         fi
+    fi
+fi
+
+# The live process in Rust ([live] runtime = "rust", not the default); without the
+# binary that setting falls back to the Python live process. Built on a Mac whenever
+# cargo is present, like the microphone worker; on Linux only with the setting, since
+# its first release build takes minutes.
+if deps_have cargo && { [ "$HOST_OS" = "darwin" ] || [ "$(deps_live_runtime)" = "rust" ]; }; then
+    if (cd "$REPO_DIR/rust" && cargo build --release -p recog-live --bin recog); then
+        info "Rust live process built (rust/recog-live)"
+    else
+        warn "The Rust live process was not built (rust/recog-live); the live service stays on Python"
     fi
 fi
 

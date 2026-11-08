@@ -74,6 +74,7 @@ case "$*" in
   *sounddevice*)        exit "${STUB_PORTAUDIO_RC:-0}" ;;
   *prefetch_gigaam*)    exit "${STUB_PREFETCH_RC:-0}" ;;
   *"print(INSTALL_CONFIG.asr.backend)"*) echo "${STUB_ASR_BACKEND:-auto}"; exit 0 ;;
+  *"print(INSTALL_CONFIG.live.runtime)"*) echo "${STUB_LIVE_RUNTIME:-python}"; exit 0 ;;
 esac
 exit 0
 """
@@ -462,6 +463,58 @@ def test_linux_setup_does_not_build_the_rust_microphone_worker(repo, stubs):
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert _mic_worker_builds(result) == []
+
+
+def _live_builds(result):
+    return [c for c in result.calls if c.startswith("cargo build") and "recog-live" in c]
+
+
+def test_macos_with_cargo_setup_builds_the_rust_live_process(repo, stubs):
+    """given: macOS with cargo on PATH
+    when: setup runs
+    then: cargo builds the release binary [live] runtime = "rust" runs"""
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _live_builds(result) == ["cargo build --release -p recog-live --bin recog"]
+
+
+@pytest.mark.parametrize("runtime, built", [("python", 0), ("rust", 1)])
+def test_linux_setup_builds_the_rust_live_process_only_with_the_setting(repo, stubs, runtime, built):
+    """given: Linux with cargo on PATH and [live] runtime set either way
+    when: setup runs
+    then: the minutes-long release build happens only for that runtime"""
+    result = run_setup(
+        repo, stubs, *offline_args("--no-services"), env_extra={"STUB_LIVE_RUNTIME": runtime}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(_live_builds(result)) == built
+
+
+def test_failed_live_build_setup_goes_on_and_says_the_service_stays_on_python(repo, stubs):
+    """given: macOS where the build of the Rust live process fails
+    when: setup runs
+    then: it says the live service stays on Python and finishes"""
+    cargo = stubs[0] / "cargo"
+    cargo.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "cargo $*" >> "$STUB_LOG"\n'
+        'case "$*" in *recog-live*) exit 1 ;; esac\nexit 0\n'
+    )
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "live service stays on Python" in result.stdout
+
+
+def test_no_cargo_setup_does_not_try_the_live_build(repo, stubs):
+    (stubs[0] / "cargo").unlink()
+
+    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _live_builds(result) == []
 
 
 def _wavo_module_installs(result):

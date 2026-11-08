@@ -15,6 +15,7 @@ Recog - CLI-утилита для live-транскрибирования и у�
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -151,6 +152,60 @@ def build_parser():
     return parser
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+# The live process in Rust (rust/recog-live), built by setup.sh when cargo is present.
+RUST_LIVE = REPO_ROOT / "rust" / "target" / "release" / "recog"
+
+
+def rust_live_program(runtime: str, asr_backend: str, binary: Path = RUST_LIVE):
+    """The Rust live binary when `[live] runtime = "rust"` asks for it and it can run;
+    None keeps the live process in Python, and the log says why.
+
+    The binary runs ASR on wavo only, so another `[asr] backend` stays in Python.
+    """
+    if runtime not in ("python", "rust"):
+        raise ValueError(f'[live] runtime must be "python" or "rust", not {runtime!r}')
+    if runtime == "python":
+        return None
+    if not (binary.is_file() and os.access(binary, os.X_OK)):
+        print(
+            f"[live] {binary} is not built (./setup.sh builds it when cargo is installed): "
+            "the live process runs in Python",
+            file=sys.stderr,
+        )
+        return None
+    if asr_backend not in ("auto", "wavo"):
+        print(
+            f"[live] the Rust live process runs ASR on wavo only; [asr] backend = {asr_backend!r} "
+            "keeps the live process in Python",
+            file=sys.stderr,
+        )
+        return None
+    return binary
+
+
+def hand_over_to_rust_live(argv: list[str]) -> None:
+    """`recog live` under `[live] runtime = "rust"`: this process becomes the Rust
+    binary, with the same arguments.
+
+    An exec, not a child: the process keeps its pid and its place under Recog.app's
+    launcher (recog_launcher starts it as its own child), so macOS still attributes
+    Screen Recording and the microphone to "Recog" and the launcher's signals reach
+    the Rust process. Returns only when the live process stays in Python.
+    """
+    from recog.install_config import INSTALL_CONFIG
+
+    program = rust_live_program(INSTALL_CONFIG.live.runtime, INSTALL_CONFIG.asr.backend, RUST_LIVE)
+    if program is None:
+        return
+    print(f"[live] runtime = \"rust\": running {program}", file=sys.stderr, flush=True)
+    sys.stdout.flush()
+    # The Python microphone worker, when [live] mic_worker keeps it, runs on this
+    # interpreter.
+    env = dict(os.environ, RECOG_LIVE_PYTHON=sys.executable)
+    os.execve(program, [str(program), *argv], env)
+
+
 def start_zoom_app_if_requested(args) -> None:
     """Источник сигналов приложения Zoom: флаг `--zoom-app` или `[live] zoom_app`."""
     from recog.install_config import INSTALL_CONFIG
@@ -172,6 +227,7 @@ def main():
         sys.exit(desktop_main(args, get_data_dir()))
 
     if args.command == "live":
+        hand_over_to_rust_live(sys.argv[1:])
         from recog.live import live_pipeline
 
         start_zoom_app_if_requested(args)

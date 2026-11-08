@@ -11,6 +11,15 @@ reasoning.
 
 ### Changed
 
+- **The live process in Rust (opt-in).** `runtime = "rust"` under `[live]` in
+  `~/.config/recog/config.toml` (or `RECOG_LIVE_RUNTIME=rust`) makes the live
+  service run `rust/recog-live` instead of the Python live process: the same flags,
+  meetings, WAVs and bridge, in one process. `./setup.sh` now builds it when cargo is
+  installed (on Linux only with the setting set). To try it: `./setup.sh`, set the
+  key, `./recog-service.sh restart`. It runs ASR on wavo: with another `[asr]
+  backend`, or without the build, the service stays on Python and the log says why.
+  No new permission: it still runs under Recog.app. The default stays `"python"`.
+
 - **macOS: speech recognition runs on wavo by default.** The default of `[asr]
   backend` is now `"auto"`: on a Mac it runs the same GigaAM model on the Rust
   runtime wavo, 6-12 times faster than PyTorch with the same word error rate, once
