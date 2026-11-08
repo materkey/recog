@@ -1402,6 +1402,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "recog-live"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "recog-core",
+ "serde_json",
+ "speexdsp-aec",
+ "tempfile",
+ "wavo",
+]
+
+[[package]]
 name = "recog-mic"
 version = "0.1.0"
 dependencies = [

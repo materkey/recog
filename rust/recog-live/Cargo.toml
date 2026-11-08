@@ -1,0 +1,21 @@
+[package]
+name = "recog-live"
+version = "0.1.0"
+edition = "2024"
+description = "The live process of recog: capture, echo cancellation, ASR, per-speaker ingest, refine, golden recording"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+recog-core = { path = "../recog-core" }
+speexdsp-aec = { path = "../speexdsp-aec" }
+# Pinned exactly, as in wavo-asr-py: the measurements of
+# docs/experiments/2026-11-07-rust-asr-runtimes.md hold for this version.
+wavo = { version = "=0.4.0", default-features = false, features = ["hub"] }
+
+[dev-dependencies]
+base64 = "0.22.1"
+serde_json = "1.0.141"
+tempfile = "3.20"

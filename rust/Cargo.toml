@@ -4,7 +4,7 @@
 # see setup.sh.
 [workspace]
 resolver = "3"
-members = ["recog-ai", "recog-copilot", "recog-core", "recog-mic", "recog-zoom", "speexdsp-aec", "speexdsp-aec-py", "wavo-asr-py"]
+members = ["recog-ai", "recog-copilot", "recog-core", "recog-live", "recog-mic", "recog-zoom", "speexdsp-aec", "speexdsp-aec-py", "wavo-asr-py"]
 
 [profile.release]
 lto = "fat"

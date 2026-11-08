@@ -49,6 +49,9 @@ printf '%s\n' "$(basename "$0") $*" >> "$STUB_LOG"
 if [ -n "${RECOG_PARITY_PYTHON:-}" ]; then
   printf '%s\n' "parity-python $RECOG_PARITY_PYTHON" >> "$STUB_LOG"
 fi
+if [ -n "${RECOG_LIVE_PARITY_PYTHON:-}" ]; then
+  printf '%s\n' "live-parity-python $RECOG_LIVE_PARITY_PYTHON" >> "$STUB_LOG"
+fi
 if [ "$(basename "$0")" = gitleaks ] && [ "$1" = dir ]; then
   find . -type f | sed 's|^\./|gitleaks-file |' >> "$STUB_LOG"
 fi
@@ -243,8 +246,8 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
     """given: a checkout with the Rust workspace and no golden data configured
     when: the checks run
     then: rustfmt, clippy with warnings as errors and the data-free tests run, the
-    recog-core parity tests with the check's interpreter, and the golden parity tests
-    do not"""
+    recog-core parity and recog-live differential tests with the check's interpreter,
+    and the golden parity tests do not"""
     add_rust_workspace(repo)
 
     result = run_check(repo, stub_bin)
@@ -262,11 +265,16 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
         "cargo test -p recog-zoom",
         "cargo test -p recog-core",
         "cargo test -p recog-ai",
+        "cargo test -p recog-live",
     ]
     core = result.calls.index("cargo test -p recog-core")
     assert result.calls[core + 1] == f"parity-python {stub_bin[0] / 'python3'}"
     assert sum(c.startswith("parity-python ") for c in result.calls) == 1
     # "-m pytest": the stub's own path, logged by the parity lines, holds "pytest-of-".
+    live = result.calls.index("cargo test -p recog-live")
+    assert result.calls[live + 1] == f"live-parity-python {stub_bin[0] / 'python3'}"
+    assert sum(c.startswith("live-parity-python ") for c in result.calls) == 1
+    # "-m pytest": the logged interpreter paths hold this test's name, "pytest" too.
     assert result.calls.index(cargo[-1]) < next(
         i for i, c in enumerate(result.calls) if "-m pytest" in c
     )
