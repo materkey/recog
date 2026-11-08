@@ -406,7 +406,7 @@ impl Bridge {
         }
     }
 
-    pub(crate) fn set_meeting_capture_active(&self, active: bool) -> Result<(), String> {
+    pub fn set_meeting_capture_active(&self, active: bool) -> Result<(), String> {
         match self.wired().capture {
             Some(capture) => capture.set_capture(active),
             None if active && self.config.ktalk_only => Err("No capture controller registered".to_owned()),
@@ -475,7 +475,7 @@ impl Bridge {
     }
 
     /// `_has_active_ktalk_meeting()`: the PCM gate, without the extension check.
-    pub(crate) fn has_active_conference_meeting(&self) -> bool {
+    pub fn has_active_conference_meeting(&self) -> bool {
         let Some(storage) = self.storage() else { return false };
         if storage.current_meeting_path().is_none() {
             return false;
@@ -489,7 +489,7 @@ impl Bridge {
         }
     }
 
-    pub(crate) fn copilot_should_be_alive(&self) -> bool {
+    pub fn copilot_should_be_alive(&self) -> bool {
         self.is_conference_active() || self.st().manual_copilot_active
     }
 
@@ -683,7 +683,7 @@ impl Bridge {
     /// client (later broadcasts skip it), schedules its close and answers false; the
     /// role sets keep it until its handler reaps the socket, so the role's disconnect
     /// cleanup still runs. Other send errors are returned, for the caller to log.
-    pub(crate) async fn send_bounded(&self, client: &Arc<Client>, message: &str) -> Result<bool, SendError> {
+    pub async fn send_bounded(&self, client: &Arc<Client>, message: &str) -> Result<bool, SendError> {
         if self.st().clients.timed_out.contains(&client.id) {
             return Ok(false);
         }
@@ -728,7 +728,7 @@ impl Bridge {
     }
 
     /// `_broadcast_message`: extensions only (transcript, lifecycle, meeting frames).
-    pub(crate) async fn broadcast_message(&self, data: &Value) {
+    pub async fn broadcast_message(&self, data: &Value) {
         let recipients = {
             let st = self.st();
             st.clients.list(&st.clients.connected)
@@ -740,7 +740,7 @@ impl Bridge {
     }
 
     /// `_broadcast_copilot_frame`: extensions and subscribers, even with no extension.
-    pub(crate) async fn broadcast_copilot_frame(&self, data: &Value) {
+    pub async fn broadcast_copilot_frame(&self, data: &Value) {
         let recipients = {
             let st = self.st();
             let mut list = st.clients.list(&st.clients.connected);
@@ -758,7 +758,7 @@ impl Bridge {
     }
 
     /// `_broadcast_to_channel_clients`.
-    pub(crate) async fn broadcast_to_channel_clients(&self, data: &Value) {
+    pub async fn broadcast_to_channel_clients(&self, data: &Value) {
         let recipients = {
             let st = self.st();
             st.clients.list(&st.clients.channels)
@@ -774,7 +774,7 @@ impl Bridge {
     }
 
     /// `_broadcast_to_subscribers`: the webapp only.
-    pub(crate) async fn broadcast_to_subscribers(&self, data: &Value) {
+    pub async fn broadcast_to_subscribers(&self, data: &Value) {
         let recipients = {
             let st = self.st();
             st.clients.list(&st.clients.subscribers)
@@ -792,7 +792,7 @@ impl Bridge {
     /// `_emit_lifecycle`: `meeting_started`/`meeting_ended` to the channel (when the
     /// Copilot is on), the extensions and the supervisor, one fan-out point so no
     /// emit site can skip the supervisor.
-    pub(crate) async fn emit_lifecycle(&self, frame: Value) {
+    pub async fn emit_lifecycle(&self, frame: Value) {
         let frame = if Self::frame_type(&frame) == "meeting_started" {
             let base = frame.as_object().cloned().unwrap_or_default();
             Value::Object(json::merged(
@@ -822,7 +822,7 @@ impl Bridge {
 
     /// `_relay_to_supervisors`: true only when a supervisor actually got the frame. A
     /// spawn stops being relayed once a conference has started.
-    pub(crate) async fn relay_to_supervisors(&self, frame: &Value) -> bool {
+    pub async fn relay_to_supervisors(&self, frame: &Value) -> bool {
         let supervisors = {
             let st = self.st();
             st.clients.list(&st.clients.supervisors)
@@ -847,7 +847,7 @@ impl Bridge {
     }
 
     /// `_reply_copilot_status`: a per-request status to its originator only.
-    pub(crate) async fn reply_copilot_status(
+    pub async fn reply_copilot_status(
         &self,
         client: Option<&Arc<Client>>,
         request_id: &str,

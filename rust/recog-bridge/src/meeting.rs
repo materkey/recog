@@ -289,7 +289,7 @@ impl Bridge {
 
     /// `_send_transcript_history(websocket)`: to that client, or to every extension
     /// without one.
-    pub(crate) async fn send_transcript_history(&self, client: Option<&Arc<Client>>) -> Result<(), String> {
+    pub async fn send_transcript_history(&self, client: Option<&Arc<Client>>) -> Result<(), String> {
         let Some(storage) = self.storage() else { return Ok(()) };
         let segments = storage.get_current_transcript()?;
         let meeting_id = storage.current_meeting_id();
@@ -309,7 +309,7 @@ impl Bridge {
 
     /// `_preempt_manual_copilot(notify=)`: a conference takes the Copilot over; the
     /// manual mirror clears and the manual requests go stale. True when it was armed.
-    pub(crate) async fn preempt_manual_copilot(&self, notify: bool) -> bool {
+    pub async fn preempt_manual_copilot(&self, notify: bool) -> bool {
         if !self.st().manual_copilot_active {
             return false;
         }
@@ -335,7 +335,7 @@ impl Bridge {
     }
 
     /// `_notify_manual_copilot_preempted`: the webapp only.
-    pub(crate) async fn notify_manual_copilot_preempted(&self) {
+    pub async fn notify_manual_copilot_preempted(&self) {
         let frame = obj! {
             "type" => "copilot_status",
             "request_id" => "",

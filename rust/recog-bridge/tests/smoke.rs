@@ -36,7 +36,8 @@ fn given_real_server_when_extension_joins_then_meeting_started_and_history_arriv
     let config = BridgeConfig { host: "127.0.0.1".into(), port: 0, debug_file: None, ..BridgeConfig::default() };
     let (log, lines) = collecting_log();
     let bridge =
-        Bridge::with_clock(config, SwitchablePolicy::enabled(), Arc::new(recog_bridge::hooks::SystemClock), log).unwrap();
+        Bridge::with_clock(config, SwitchablePolicy::enabled(), Arc::new(recog_bridge::hooks::SystemClock), log)
+            .unwrap();
     bridge.set_meeting_storage(storage.clone());
     let live = RecordingLive::new();
     bridge.set_live_events(Some(live.clone()));
@@ -57,7 +58,10 @@ fn given_real_server_when_extension_joins_then_meeting_started_and_history_arriv
         vec![primer, started, history]
     });
     // then
-    assert_eq!(frames.iter().map(kind).collect::<Vec<_>>(), ["copilot_status", "meeting_started", "transcript_history"]);
+    assert_eq!(
+        frames.iter().map(kind).collect::<Vec<_>>(),
+        ["copilot_status", "meeting_started", "transcript_history"]
+    );
     std::thread::sleep(Duration::from_millis(300));
     bridge.stop();
     assert!(live.names().contains(&"meeting_changed".to_owned()));
@@ -72,7 +76,8 @@ fn given_disallowed_origin_when_connecting_then_closed_with_1008() {
     let config = BridgeConfig { host: "127.0.0.1".into(), port: 0, debug_file: None, ..BridgeConfig::default() };
     let (log, _lines) = collecting_log();
     let bridge =
-        Bridge::with_clock(config, SwitchablePolicy::enabled(), Arc::new(recog_bridge::hooks::SystemClock), log).unwrap();
+        Bridge::with_clock(config, SwitchablePolicy::enabled(), Arc::new(recog_bridge::hooks::SystemClock), log)
+            .unwrap();
     let addrs = bridge.start().unwrap();
     // when
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

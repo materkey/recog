@@ -135,7 +135,7 @@ fn div_1000(value: &Value) -> Result<f64, String> {
 impl Bridge {
     /// `_frame_from_non_owner`: while a meeting has an owner, the call frames of other tabs
     /// (a second conference whose join was refused) do not count.
-    pub(crate) fn frame_from_non_owner(&self, client: Option<&Arc<Client>>) -> bool {
+    pub fn frame_from_non_owner(&self, client: Option<&Arc<Client>>) -> bool {
         let owner = self.st().meeting_owner;
         matches!((client, owner), (Some(c), Some(o)) if c.id != o)
     }

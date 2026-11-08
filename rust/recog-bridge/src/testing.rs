@@ -162,7 +162,11 @@ impl FakeConnection {
     }
 
     #[must_use]
-    pub fn with_sink(sink: Arc<RecordingSink>, remote_address: &str, origins: Option<Vec<String>>) -> (Self, Connection) {
+    pub fn with_sink(
+        sink: Arc<RecordingSink>,
+        remote_address: &str,
+        origins: Option<Vec<String>>,
+    ) -> (Self, Connection) {
         let queue = Arc::new(Queue::default());
         let connection = Connection {
             sink: sink.clone(),
@@ -356,7 +360,8 @@ impl RecordingLive {
     fn path(&self, path: Option<&Path>) -> Value {
         let Some(path) = path else { return Value::Null };
         let root = lock(&self.root).clone();
-        let shown = root.and_then(|r| path.strip_prefix(r).ok().map(Path::to_path_buf)).unwrap_or_else(|| path.to_path_buf());
+        let shown =
+            root.and_then(|r| path.strip_prefix(r).ok().map(Path::to_path_buf)).unwrap_or_else(|| path.to_path_buf());
         Value::from(shown.to_string_lossy().into_owned())
     }
 }
@@ -457,7 +462,11 @@ pub struct StaticIdentity {
 impl StaticIdentity {
     #[must_use]
     pub fn new(identity: Value) -> Arc<Self> {
-        Arc::new(Self { identity: Mutex::new(Ok(identity)), applied: Mutex::new(Vec::new()), apply_error: Mutex::new(None) })
+        Arc::new(Self {
+            identity: Mutex::new(Ok(identity)),
+            applied: Mutex::new(Vec::new()),
+            apply_error: Mutex::new(None),
+        })
     }
 
     pub fn set(&self, identity: Result<Value, String>) {
@@ -584,7 +593,8 @@ impl MeetingStore for FakeStore {
         source.is_some_and(|s| recog_core::meeting_storage::CONFERENCE_SOURCES.contains(&s))
     }
     fn on_meeting_join(&self, url: &str, title: Option<&str>, platform: &str) -> Result<Option<String>, String> {
-        lock(&self.calls).push(obj! {"op" => "on_meeting_join", "url" => url, "title" => title, "platform" => platform});
+        lock(&self.calls)
+            .push(obj! {"op" => "on_meeting_join", "url" => url, "title" => title, "platform" => platform});
         if let Some(e) = lock(&self.join_error).clone() {
             return Err(e);
         }
@@ -617,4 +627,12 @@ pub fn collecting_log() -> (crate::Logger, Arc<Mutex<Vec<String>>>) {
     let lines = Arc::new(Mutex::new(Vec::new()));
     let sink = lines.clone();
     (Arc::new(move |line: &str| lock(&sink).push(line.to_owned())), lines)
+}
+
+impl FakeConnection {
+    /// The messages pushed but not yet read by the handler (Python's `fake_ws._messages`).
+    #[must_use]
+    pub fn queued(&self) -> usize {
+        lock(&self.queue.state).items.len()
+    }
 }

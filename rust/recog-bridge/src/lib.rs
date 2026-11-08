@@ -74,6 +74,7 @@ pub mod client;
 pub mod copilot;
 mod debug;
 pub mod hooks;
+pub mod introspect;
 pub mod json;
 pub mod meeting;
 mod messages;
@@ -84,3 +85,4 @@ pub mod testing;
 
 pub use bridge::{Bridge, BridgeConfig, Logger, RefineUpdate, TranscriptLine};
 pub use client::{Client, ClientId, ClientSink, Connection, Inbound, SendError};
+pub use introspect::Role;
