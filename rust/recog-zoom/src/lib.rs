@@ -15,11 +15,24 @@
 //! - [`session::ZoomAppSession`]: snapshots to frames, pure.
 //! - [`vocabulary::load_vocabulary`]: the mute wording of every language the installed
 //!   Zoom ships.
+//! - [`helper_app::find_or_build_helper`]: `RecogZoomHelper.app`, rebuilt only when
+//!   its source's content changes.
+//! - [`helper_link::helper_lines`], [`bridge::serve`], [`run::run_with`]: the helper
+//!   started through LaunchServices, its stream, the bridge link, the restarts.
+//!
+//! The crate builds and is tested on Linux as well; only the entry points that start
+//! the real helper are macOS-only.
 #![forbid(unsafe_code)]
 
+pub mod bridge;
 pub mod frame;
+pub mod helper_app;
+pub mod helper_link;
+pub mod log;
 pub mod py;
+pub mod run;
 pub mod session;
+pub mod settings;
 pub mod tile;
 pub mod vocabulary;
 

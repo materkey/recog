@@ -8,12 +8,22 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "recog-zoom-app"
+path = "src/main.rs"
+
+# Everything builds and is tested on Linux too: only the entry points that start the
+# helper application (run::run, run::spawn_in_background, the binary) are macOS-only.
 [dependencies]
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 regex = "1.12"
 # preserve_order: a value keeps its keys in the order the helper wrote them, as a
 # Python dict does; the log quotes an unread tile that way.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-
-[dev-dependencies]
+sha2 = "0.10.9"
 tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
+tokio-tungstenite = "0.29.0"
+toml = "0.9.12"
+
