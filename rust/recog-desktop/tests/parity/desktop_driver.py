@@ -158,22 +158,14 @@ def functions(request, processes, service, worker):
             results.append(call(processes.ready, processes.Target.from_dict(args[0])))
         elif name == "same_process":
             app = Path(args[1]) if len(args) > 1 and args[1] else None
-            results.append(
-                call(processes.same_process, processes.Target.from_dict(args[0]), app)
-            )
+            results.append(call(processes.same_process, processes.Target.from_dict(args[0]), app))
         elif name == "owns_inspector":
-            results.append(
-                call(processes.owns_inspector, processes.Target.from_dict(args[0]))
-            )
+            results.append(call(processes.owns_inspector, processes.Target.from_dict(args[0])))
         elif name == "inspector_supported":
             processes._inspect_fuses.cache_clear()
-            results.append(
-                call(processes.inspector_supported, processes.Target.from_dict(args[0]))
-            )
+            results.append(call(processes.inspector_supported, processes.Target.from_dict(args[0])))
         elif name == "target_from_dict":
-            results.append(
-                call(lambda d: processes.Target.from_dict(d).to_dict(), args[0])
-            )
+            results.append(call(lambda d: processes.Target.from_dict(d).to_dict(), args[0]))
         elif name == "read_json":
             results.append(call(storage.read_json, Path(args[0])))
         elif name == "write_status":
@@ -183,9 +175,7 @@ def functions(request, processes, service, worker):
         elif name == "prepare_bundle":
             results.append(
                 call(
-                    lambda s, r: list(
-                        map(str, storage.prepare_bundle(Path(s), Path(r)))
-                    ),
+                    lambda s, r: list(map(str, storage.prepare_bundle(Path(s), Path(r)))),
                     *args,
                 )
             )
@@ -206,15 +196,11 @@ class Recorder:
         async def create(*args, **kwargs):
             if args and args[0] in ("osascript", "notify-send"):
                 self.notifications.append(list(args))
-                return SimpleNamespace(
-                    wait=lambda: asyncio.sleep(0, 0), terminate=lambda: None
-                )
+                return SimpleNamespace(wait=lambda: asyncio.sleep(0, 0), terminate=lambda: None)
             return await real(*args, **kwargs)
 
         service.asyncio.create_subprocess_exec = create
-        service.shutil.which = lambda name: (
-            "/usr/bin/notify-send" if notify_send else None
-        )
+        service.shutil.which = lambda name: "/usr/bin/notify-send" if notify_send else None
 
 
 def snapshot(root, service, extra):
@@ -326,16 +312,10 @@ def handle(request):
     if request["kind"] == "functions":
         return functions(request, processes, service, worker)
     if request["kind"] == "worker":
-        target = (
-            processes.Target.from_dict(request["target"])
-            if request.get("target")
-            else None
-        )
+        target = processes.Target.from_dict(request["target"]) if request.get("target") else None
         try:
             return {
-                "value": worker.run(
-                    Path(request["root"]), target, request.get("recover", False)
-                )
+                "value": worker.run(Path(request["root"]), target, request.get("recover", False))
             }
         except Exception as exc:  # noqa: BLE001
             return failure(exc)
