@@ -15,6 +15,8 @@ Status: in progress.
   (`rust/recog-bridge`) in the same process.
 - Step 8 has the Zoom application source ported: `rust/recog-zoom`, started by the
   Rust live process for `--zoom-app`.
+- Step 8 also has the KTalk desktop integration ported, hosted by `rust/recog-web`:
+  `rust/recog-desktop`.
 - Step 6 has the web backend ported, not yet wired: `rust/recog-web`.
 - Step 7 has the Copilot supervisor and MCP channel ported, not yet wired:
   `rust/recog-copilot`.
@@ -136,8 +138,8 @@ where they can.
      `recog-core` and `recog-ai`. Its differential tests run the Python server and the
      Rust one on copies of the same synthetic data (stub CLIs, a fake bridge each) and
      compare 197 requests and two browser and bridge sessions: status codes, the
-     headers that matter, bodies, audio bytes, prompts, files written and frames. The
-     KTalk desktop integration stays Python (its status is read from its files).
+     headers that matter, bodies, audio bytes, prompts, files written and frames. Its
+     lifespan hosts the desktop integration's observer from `recog-desktop` (step 8).
    - Still to do: a setting that runs it as the frontend service, and a real meeting on
      it.
 7. **Copilot.** The supervisor (state machine, tmux, `systemd-run`, screen classifier)
@@ -167,6 +169,18 @@ where they can.
      whose bundle is identical file by file to the Python one's.
    - The Rust live process starts it (`--zoom-app`, `[live] zoom_app`); the Python
      one still runs the Python thread.
+   - **KTalk desktop integration ported 2026-11-08**: `rust/recog-desktop` (library,
+     and `recog-desktop` with the `desktop` subcommands; `bootstrap.js` unchanged),
+     its observer hosted by `recog-web`'s lifespan, which also serves as its worker
+     (`recog-web desktop-worker`). psutil's role is a process table per OS (libproc,
+     sysinfo and listeners on macOS, `/proc` on Linux). Its differential tests run
+     `recog/desktop/` on a scripted process table and a fake Node inspector: 1281
+     function calls, 29 worker scenarios (results, files, signals and every inspector
+     frame), 7 observer timelines with real worker children, 38 CLI invocations of
+     both binaries, and the macOS table against psutil on a real process; recog-web's
+     harness compares `/api/desktop/status` and the observers' files on 8 cases.
+   - Still to do: `recog desktop …` delegating to it from the `recog` binary; then the
+     Rust web service as the default, and an attachment to the real KTalk application.
 9. **Installation without Python.** `setup.sh` and the launchd/systemd units run
    binaries; `Recog.app` starts the Rust binary, so the permissions stay with "Recog".
    Python modules are deleted as they are replaced; each step gets its CHANGELOG entry.
@@ -180,6 +194,7 @@ Crates under `rust/`, one decision per crate, dependencies pointing down the lis
 | `recog-core` | `install_config.py`, `config.py` (data directory), `user_profile.py`, `meeting_storage.py`, `ws_origin.py`, `privacy.py` | library, ported (parity-tested against Python; no caller yet) |
 | `recog-ai` | `ai_provider.py`, `ai_settings.py`, `ai_defaults.py`, `prompt_registry.py`, `increment.py`, `title_generator.py`, `meeting_chat.py` | library, ported, not wired |
 | `recog-zoom` | `zoom_app.py` (the Swift helper stays) | library, ported, not wired |
+| `recog-desktop` | `recog/desktop/*.py` (`bootstrap.js` stays) | library and binary `recog-desktop`, ported; hosted by `recog-web` |
 | `recog-bridge` | `ktalk_bridge.py` | library, ported, not wired |
 | `recog-live` | `live.py`, `per_speaker.py`, `refine.py`, `audio_capture.py`, `system_audio.py`, `mic_capture.py`, `echo_cancel.py`, `golden.py`, `golden_replay.py`, `cli.py`; ASR through the `wavo` crate | binary `recog`, the bridge in the same process; opt-in (`[live] runtime = "rust"`), held to Python by golden replay |
 | `recog-web` | `recog/web/*.py` (the static UI stays as it is) | binary, ported, not wired |
