@@ -1365,9 +1365,11 @@ version = "0.1.0"
 dependencies = [
  "fancy-regex",
  "indexmap",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "unicode-general-category",
  "uuid",
 ]

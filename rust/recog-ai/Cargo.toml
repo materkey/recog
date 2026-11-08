@@ -14,13 +14,18 @@ path = "src/lib.rs"
 # crate lacks; prompt filters are written for Python's `re`.
 fancy-regex = "0.14"
 indexmap = "2"
+rustix = { version = "1", features = ["fs"] }
 serde = "1"
 # Without preserve_order on purpose: a workspace-wide feature would change the key order
 # of every other crate's maps. Files are parsed into `json::Json`, which keeps the order.
 serde_json = "1"
 tempfile = "3"
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 # Unicode 15.0, the version of Python 3.12's unicodedata: model names and saved prompt
 # IDs are validated by general category, which tests/parity.rs compares code point by
 # code point with Python.
 unicode-general-category = "0.6"
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }

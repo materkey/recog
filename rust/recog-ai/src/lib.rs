@@ -14,6 +14,7 @@ pub mod error;
 pub mod install;
 pub mod json;
 pub mod prompt_registry;
+pub mod provider;
 pub mod pytext;
 pub mod settings;
 pub mod template;
