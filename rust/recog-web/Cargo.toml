@@ -1,0 +1,32 @@
+[package]
+name = "recog-web"
+version = "0.1.0"
+edition = "2024"
+description = "The web backend of recog (HTTP API, live stream, static UI), in place of recog/web/"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "recog-web"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+futures-util = { version = "0.3.31", default-features = false, features = ["sink", "std"] }
+form_urlencoded = "1.2"
+httpdate = "1.0.3"
+md-5 = "0.10.6"
+notify = "8.2"
+percent-encoding = "2.3"
+recog-ai = { path = "../recog-ai" }
+recog-core = { path = "../recog-core" }
+tempfile = "3.20"
+tokio = { version = "1.49", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = "0.29"
+uuid = { version = "1.20", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5.2", features = ["util"] }
+http-body-util = "0.1.3"
