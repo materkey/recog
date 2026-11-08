@@ -93,6 +93,12 @@
 # grace_s = 90
 # RECOG_COPILOT_MCP_URL: the copilot_channel MCP daemon the session uses.
 # mcp_url = "http://127.0.0.1:8767/mcp"
+# RECOG_COPILOT_RUNTIME: the supervisor's and the MCP channel's processes,
+# "python" (python -m recog.copilot_supervisor, python -m recog.copilot_channel)
+# or "rust" (rust/recog-copilot, which ./setup.sh builds when cargo is installed,
+# on Linux only with this set). Without the build Python runs and the log says
+# so. Apply with ./recog-service.sh restart.
+# runtime = "python"
 
 [web]
 # EXTERNAL_MEETINGS_PATHS: read-only meeting directories of other sources,

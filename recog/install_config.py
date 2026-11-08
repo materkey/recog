@@ -83,6 +83,10 @@ class CopilotSettings:
     autospawn: bool = _setting("RECOG_COPILOT_AUTOSPAWN", "flag", True)
     grace_s: float = _setting("RECOG_COPILOT_GRACE_S", "number", 90.0)
     mcp_url: str = _setting("RECOG_COPILOT_MCP_URL", "text", "http://127.0.0.1:8767/mcp")
+    # The supervisor and the MCP channel: "python" or "rust" (rust/recog-copilot's
+    # binaries, built by setup.sh when cargo is present; recog/rust_runtime.py hands
+    # over to them).
+    runtime: str = _setting("RECOG_COPILOT_RUNTIME", "text", "python")
 
 
 @dataclass

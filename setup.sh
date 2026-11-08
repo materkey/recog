@@ -156,9 +156,11 @@ if [ "$DRY_RUN" -eq 1 ]; then
         echo "Would build the Rust microphone worker rust/recog-mic with cargo, if cargo is available."
         echo "Would build the Rust live process rust/recog-live with cargo, if cargo is available."
         echo "Would build the Rust web server rust/recog-web with cargo, if cargo is available."
+        echo "Would build the Rust Copilot supervisor and channel rust/recog-copilot with cargo, if cargo is available."
     else
         echo "Would build the Rust live process rust/recog-live with cargo, if cargo is available and [live] runtime is rust."
         echo "Would build the Rust web server rust/recog-web with cargo, if cargo is available and [web] runtime is rust."
+        echo "Would build the Rust Copilot supervisor and channel rust/recog-copilot with cargo, if cargo is available and [copilot] runtime is rust."
     fi
     echo "Would build the ASR backend wavo from rust/wavo-asr-py with pip and cargo, if [asr] backend is wavo, or auto on macOS."
     if [ "$DO_ENV" -eq 1 ]; then
@@ -459,6 +461,16 @@ if deps_have cargo && { [ "$HOST_OS" = "darwin" ] || [ "$(deps_web_runtime)" = "
         info "Rust web server built (rust/recog-web)"
     else
         warn "The Rust web server was not built (rust/recog-web); the web service stays on Python"
+    fi
+fi
+
+# The Copilot supervisor and MCP channel in Rust ([copilot] runtime = "rust", not the
+# default), built the same way; without the binaries both services stay on Python.
+if deps_have cargo && { [ "$HOST_OS" = "darwin" ] || [ "$(deps_copilot_runtime)" = "rust" ]; }; then
+    if (cd "$REPO_DIR/rust" && cargo build --release -p recog-copilot --bin recog-copilot-supervisor --bin recog-copilot-channel); then
+        info "Rust Copilot supervisor and channel built (rust/recog-copilot)"
+    else
+        warn "The Rust Copilot supervisor and channel were not built (rust/recog-copilot); the Copilot services stay on Python"
     fi
 fi
 

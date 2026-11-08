@@ -484,6 +484,7 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 - `RECOG_COPILOT_AUTOSPAWN` - Gate for meeting-driven auto-spawn only (code default `1`, but `.env.example` ships `0` so a fresh install never spawns Claude unattended | `0` keeps the daemon connected and makes meeting frames inert; manual webapp spawn/stop and crash-respawn work regardless — webapp plan D3). Read by `recog/copilot_supervisor.py`.
 - `RECOG_COPILOT_GRACE_S` - Seconds the supervisor waits after `meeting_ended` before killing the copilot tmux session (default `90`); cancelled by a same-id `meeting_started` (flap). Not used for an explicit webapp Stop — that kills immediately.
 - `RECOG_COPILOT_MCP_URL` - URL of the copilot MCP daemon the spawned Claude session connects to (default `http://127.0.0.1:8767/mcp`).
+- `RECOG_COPILOT_RUNTIME` - `python` (default) | `rust`: the supervisor and the MCP channel. With `rust`, `python -m recog.copilot_supervisor` and `python -m recog.copilot_channel` exec `rust/target/release/recog-copilot-supervisor` / `recog-copilot-channel` with `--repo-root <checkout>` and their own arguments (`hand_over_copilot` in `recog/rust_runtime.py`); unbuilt, each stays in Python and the log says so.
 
 ### Call-shell variables (read by the scripts, never from `.env`)
 

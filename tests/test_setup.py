@@ -76,6 +76,7 @@ case "$*" in
   *"print(INSTALL_CONFIG.asr.backend)"*) echo "${STUB_ASR_BACKEND:-auto}"; exit 0 ;;
   *"print(INSTALL_CONFIG.live.runtime)"*) echo "${STUB_LIVE_RUNTIME:-python}"; exit 0 ;;
   *"print(INSTALL_CONFIG.web.runtime)"*) echo "${STUB_WEB_RUNTIME:-python}"; exit 0 ;;
+  *"print(INSTALL_CONFIG.copilot.runtime)"*) echo "${STUB_COPILOT_RUNTIME:-python}"; exit 0 ;;
 esac
 exit 0
 """
@@ -529,6 +530,14 @@ RUST_SERVICE_BUILDS = [
         "cargo build --release -p recog-web --bin recog-web",
         "web service stays on Python",
         id="web",
+    ),
+    pytest.param(
+        "recog-copilot",
+        "STUB_COPILOT_RUNTIME",
+        "cargo build --release -p recog-copilot"
+        " --bin recog-copilot-supervisor --bin recog-copilot-channel",
+        "Copilot services stay on Python",
+        id="copilot",
     ),
 ]
 

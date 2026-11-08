@@ -154,7 +154,7 @@ fn setting_keys_when_naming_a_variable_then_its_table_and_key_are_given() {
     assert_eq!(setting_key("RECOG_COPILOT_AUTOSPAWN").as_deref(), Some("[copilot] autospawn"));
     assert_eq!(setting_key("ASR_PENDING_BUFFER_CAP_S").as_deref(), Some("[asr] pending_buffer_cap_s"));
     assert_eq!(setting_key("NOT_A_SETTING"), None);
-    assert_eq!(all_settings().count(), 25);
+    assert_eq!(all_settings().count(), 26);
 }
 
 #[test]

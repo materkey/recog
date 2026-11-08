@@ -227,6 +227,8 @@ section!(
         autospawn: bool = ("RECOG_COPILOT_AUTOSPAWN", Flag, true),
         grace_s: f64 = ("RECOG_COPILOT_GRACE_S", Number, 90.0),
         mcp_url: String = ("RECOG_COPILOT_MCP_URL", Text, "http://127.0.0.1:8767/mcp".into()),
+        /// The supervisor and the MCP channel: "python" or "rust" (recog-copilot's binaries).
+        runtime: String = ("RECOG_COPILOT_RUNTIME", Text, "python".into()),
     }
 );
 

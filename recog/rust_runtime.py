@@ -1,7 +1,8 @@
-"""The Rust programs of the services besides live (`[web] runtime`).
+"""The Rust programs of the services besides live (`[web] runtime`, `[copilot] runtime`).
 
-With "rust", `python -m recog.web.server` execs the matching binary of rust/ (built by
-setup.sh) with equivalent arguments, so the service units, recog-service.sh and the readiness
+With "rust", `python -m recog.web.server`, `python -m recog.copilot_supervisor` and
+`python -m recog.copilot_channel` exec the matching binary of rust/ (built by setup.sh)
+with equivalent arguments, so the service units, recog-service.sh and the readiness
 gate stay as they are: the exec keeps the unit's pid, environment and working
 directory, and the binary resolves the same `.env`, `config.toml` and data directory
 from the checkout it is given. Without the binary the service stays in Python and the
@@ -15,6 +16,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RELEASE_DIR = REPO_ROOT / "rust" / "target" / "release"
 RUST_WEB = RELEASE_DIR / "recog-web"
+RUST_COPILOT_SUPERVISOR = RELEASE_DIR / "recog-copilot-supervisor"
+RUST_COPILOT_CHANNEL = RELEASE_DIR / "recog-copilot-channel"
 
 
 def rust_program(key: str, runtime: str, binary: Path, prefix: str, service: str):
@@ -69,3 +72,21 @@ def hand_over_web(host: str, port: int, argv: list[str]) -> None:
     program = rust_program(key, INSTALL_CONFIG.web.runtime, RUST_WEB, "[web]", "the web server")
     if program is not None:
         exec_program(program, web_argv(host, port, argv), key)
+
+
+def copilot_argv(argv: list[str]) -> list[str]:
+    """The supervisor's or channel's arguments: the checkout, which the binaries
+    otherwise take from the working directory, then Python's own (`--bridge-url`,
+    `--mcp-host`, `--mcp-port`), which the binaries take alike."""
+    return ["--repo-root", str(REPO_ROOT), *argv]
+
+
+def hand_over_copilot(binary: Path, prefix: str, service: str, argv: list[str]) -> None:
+    """`python -m recog.copilot_supervisor` or `python -m recog.copilot_channel` under
+    `[copilot] runtime = "rust"`; returns only when the process stays in Python."""
+    from recog.install_config import INSTALL_CONFIG
+
+    key = "[copilot] runtime"
+    program = rust_program(key, INSTALL_CONFIG.copilot.runtime, binary, prefix, service)
+    if program is not None:
+        exec_program(program, copilot_argv(argv), key)

@@ -136,3 +136,74 @@ def test_rust_web_runtime_without_the_build_starting_the_server_stays_in_python(
 
     assert execs == []
     assert "the web server runs in Python" in capsys.readouterr().err
+
+
+COPILOT_SERVICES = [
+    pytest.param("RUST_COPILOT_SUPERVISOR", "recog-copilot-supervisor", id="supervisor"),
+    pytest.param("RUST_COPILOT_CHANNEL", "recog-copilot-channel", id="channel"),
+]
+
+
+@pytest.mark.parametrize("attr, name", COPILOT_SERVICES)
+def test_rust_copilot_runtime_starting_a_copilot_process_execs_its_binary_with_its_arguments(
+    tmp_path, monkeypatch, execs, capsys, attr, name
+):
+    """given: [copilot] runtime = "rust" and the built binary
+    when: the supervisor or the channel starts with Python's own arguments
+    then: the process becomes the binary with the checkout and those arguments"""
+    binary = _binary(tmp_path, name)
+    monkeypatch.setattr(INSTALL_CONFIG.copilot, "runtime", "rust")
+
+    with pytest.raises(SystemExit):
+        rust_runtime.hand_over_copilot(
+            binary, "[copilot-x]", "the process", ["--bridge-url", "ws://127.0.0.1:1"]
+        )
+
+    path, argv = execs[0]
+    assert path == binary
+    assert argv == [
+        str(binary),
+        "--repo-root",
+        str(rust_runtime.REPO_ROOT),
+        "--bridge-url",
+        "ws://127.0.0.1:1",
+    ]
+    assert '[copilot] runtime = "rust": running' in capsys.readouterr().err
+    assert getattr(rust_runtime, attr) == rust_runtime.RELEASE_DIR / name
+
+
+def test_python_copilot_runtime_starting_a_copilot_process_returns_without_exec(
+    tmp_path, monkeypatch, execs
+):
+    monkeypatch.setattr(INSTALL_CONFIG.copilot, "runtime", "python")
+
+    rust_runtime.hand_over_copilot(_binary(tmp_path), "[copilot-x]", "the process", [])
+
+    assert execs == []
+
+
+def test_rust_copilot_runtime_without_the_build_starting_the_channel_stays_in_python(
+    tmp_path, monkeypatch, execs, capsys
+):
+    """given: [copilot] runtime = "rust" but no binary
+    when: the channel starts
+    then: no exec, and one line under the channel's prefix says it runs in Python"""
+    monkeypatch.setattr(INSTALL_CONFIG.copilot, "runtime", "rust")
+
+    rust_runtime.hand_over_copilot(
+        tmp_path / "recog-copilot-channel", "[copilot-channel]", "the channel", []
+    )
+
+    assert execs == []
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1
+    assert err.startswith("[copilot-channel] ") and "the channel runs in Python" in err
+
+
+def test_unknown_copilot_runtime_starting_a_copilot_process_stops_naming_the_key(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(INSTALL_CONFIG.copilot, "runtime", "Rust")
+
+    with pytest.raises(ValueError, match=r"\[copilot\] runtime must be"):
+        rust_runtime.hand_over_copilot(_binary(tmp_path), "[copilot-x]", "x", [])

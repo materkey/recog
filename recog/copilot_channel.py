@@ -1065,4 +1065,9 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 
 if __name__ == "__main__":
+    from recog.rust_runtime import RUST_COPILOT_CHANNEL, hand_over_copilot
+
+    # [copilot] runtime = "rust": this process becomes recog-copilot-channel (returns
+    # when it stays in Python).
+    hand_over_copilot(RUST_COPILOT_CHANNEL, LOG_PREFIX, "the channel", sys.argv[1:])
     main()

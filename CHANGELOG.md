@@ -29,6 +29,15 @@ reasoning.
   log says so. The KTalk desktop integration (`python -m recog desktop`) is not
   watched under it yet: keep Python if you use it. The default stays `"python"`.
 
+- **The Copilot supervisor and MCP channel in Rust (opt-in).** `runtime = "rust"`
+  under `[copilot]` in `~/.config/recog/config.toml` (or `RECOG_COPILOT_RUNTIME=rust`)
+  makes the copilot-supervisor and copilot-channel services run `rust/recog-copilot`'s
+  two binaries instead of Python, with the same tmux session, bridge frames and MCP
+  endpoint. `./setup.sh` now builds them when cargo is installed (on Linux only with
+  the setting set). To try it: `./setup.sh`, set the key, `./recog-service.sh
+  restart`. Without the build both stay on Python and the log says so. The default
+  stays `"python"`.
+
 - **macOS: speech recognition runs on wavo by default.** The default of `[asr]
   backend` is now `"auto"`: on a Mac it runs the same GigaAM model on the Rust
   runtime wavo, 6-12 times faster than PyTorch with the same word error rate, once
