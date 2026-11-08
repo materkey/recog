@@ -254,8 +254,13 @@ pub fn float_repr(x: f64) -> String {
     if x == 0.0 {
         return if x.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
     }
-    // `{:e}` gives the shortest round-trip digits: d[.ddd]e<exp>.
-    let formatted = format!("{:e}", x.abs());
+    // `{:e}` gives how many digits the shortest round-trip needs: d[.ddd]e<exp>. Of two
+    // such strings equally near the value Rust may take the upper one, where Python
+    // takes the even one (967816371417934.25 is "…934.2" there): the value correctly
+    // rounded to that many digits, as `{:.N$e}` rounds it, is the one Python prints.
+    let shortest = format!("{:e}", x.abs());
+    let precision = shortest.split_once('e').map_or(0, |(m, _)| m.chars().filter(char::is_ascii_digit).count() - 1);
+    let formatted = format!("{:.precision$e}", x.abs());
     let (mantissa, exponent) = formatted.split_once('e').unwrap_or((&formatted, "0"));
     let exponent: i32 = exponent.parse().unwrap_or(0);
     let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
@@ -342,6 +347,9 @@ mod tests {
             (-0.0, "-0.0"),
             (1e300, "1e+300"),
             (-2.5e-7, "-2.5e-07"),
+            // A tie of two shortest strings: Python takes the even digit.
+            (967_816_371_417_934.0 + 0.25, "967816371417934.2"),
+            (1_762_000_000.750_976_6, "1762000000.7509766"),
         ] {
             assert_eq!(float_repr(x), text);
         }
