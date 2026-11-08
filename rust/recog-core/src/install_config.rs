@@ -181,8 +181,9 @@ macro_rules! section {
 section!(
     /// `[asr]`.
     AsrSettings, "asr" {
-        /// "local" | "remote": remote offloads GigaAM to a gateway (ADR-0020).
-        backend: String = ("RECOG_ASR_BACKEND", Text, "local".into()),
+        /// "auto" | "local" | "remote" | "wavo": auto is wavo on a Mac where setup.sh
+        /// built it, else local (PyTorch); remote offloads GigaAM to a gateway (ADR-0020).
+        backend: String = ("RECOG_ASR_BACKEND", Text, "auto".into()),
         /// auto (cuda > mps > cpu) | cuda | mps | cpu; explicit + unavailable fails.
         device: String = ("RECOG_ASR_DEVICE", Text, "auto".into()),
         /// torch.set_num_threads() cap for CPU inference; None leaves torch alone.
