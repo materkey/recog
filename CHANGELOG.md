@@ -26,8 +26,8 @@ reasoning.
   API, live stream and static UI. `./setup.sh` now builds it when cargo is installed
   (on Linux only with the setting set). To try it: `./setup.sh`, set the key,
   `./recog-service.sh restart`. Without the build the service stays on Python and the
-  log says so. The KTalk desktop integration (`python -m recog desktop`) is not
-  watched under it yet: keep Python if you use it. The default stays `"python"`.
+  log says so. It also runs the KTalk desktop integration's observer
+  (`rust/recog-desktop`). The default stays `"python"`.
 
 - **The Copilot supervisor and MCP channel in Rust (opt-in).** `runtime = "rust"`
   under `[copilot]` in `~/.config/recog/config.toml` (or `RECOG_COPILOT_RUNTIME=rust`)

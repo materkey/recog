@@ -112,8 +112,8 @@
 # RECOG_WEB_RUNTIME: the web server's process, "python" (python -m recog.web.server)
 # or "rust" (rust/recog-web, which ./setup.sh builds when cargo is installed, on
 # Linux only with this set). Without the build Python runs and the log says so.
-# The KTalk desktop integration (docs/desktop-ktalk.md) runs under Python only
-# for now. Apply with ./recog-service.sh restart.
+# It also runs the KTalk desktop integration's observer (docs/desktop-ktalk.md).
+# Apply with ./recog-service.sh restart.
 # runtime = "python"
 
 [macos]
