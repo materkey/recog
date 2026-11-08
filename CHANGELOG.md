@@ -11,6 +11,18 @@ reasoning.
 
 ### Changed
 
+- **Installing without Python (opt-in).** `runtime = "rust"` under a new `[install]`
+  table in `~/.config/recog/config.toml` makes `./setup.sh` build the Rust programs
+  with cargo into `bin/` of the checkout, with no venv, pip, torch or GigaAM, and
+  makes the service units run those binaries directly (the live one still through
+  Recog.app, so the permissions stay with "Recog"). `recog-service.sh` and the
+  readiness check then ask `bin/recog` instead of Python. To switch: add the key,
+  run `./setup.sh`, check `./recog-service.sh status`; delete it and rerun
+  `./setup.sh` to go back. `setup.sh` reads this key itself and never from `.env`:
+  setting it there makes the readiness check refuse to start the services. The
+  default stays `"python"`, whose units are rendered byte for byte as before
+  (docs/usage.md, "Installing without Python").
+
 - **The live process in Rust (opt-in).** `runtime = "rust"` under `[live]` in
   `~/.config/recog/config.toml` (or `RECOG_LIVE_RUNTIME=rust`) makes the live
   service run `rust/recog-live` instead of the Python live process: the same flags,

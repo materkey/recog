@@ -83,6 +83,22 @@ install into `venv-gigaam` with the same constraint file, because a bare
 GigaAM is deliberately not in `deploy/python/requirements.txt`: it comes from the git pin in
 `setup.sh` (`GIGAAM_REF`), mirrored in `.github/workflows/ci.yml`.
 
+**Installation without Python (opt-in)**: `[install] runtime = "rust"` in
+`config.toml` (or `RECOG_INSTALL_RUNTIME=rust` in the calling shell — never `.env`:
+`scripts/deps.sh`'s `deps_install_runtime` reads the key itself with a line reader,
+before any program exists, and the readiness check refuses to start services when
+the parser reads something else). `setup.sh` then needs cargo instead of Python:
+`cargo build --release` of `recog`, `recog-web`, the two Copilot binaries,
+`recog-desktop` (and `recog-mic` on macOS), `recog check` by the fresh binary,
+then a copy into `<repo>/bin/` (gitignored, outside `rust/target`, which a cargo
+cache cleaned twice under running services; `recog_core::install` makes a binary
+there take that checkout as its own). Every Python snippet of the scripts has a
+`recog` subcommand: `recog check` (`deps_asr_config_check`), `recog config
+data-dir|config-path|conferences|install-runtime|copilot-launch`, `recog launcher`
+(`python -m recog.macos_launcher`, same bundle bytes and stamp), `recog prefetch`
+(the wavo model), `recog desktop …` (execs `recog-desktop`). In this mode the
+per-service `runtime` keys and `[live] mic_worker` do nothing (Rust everywhere).
+
 ### Running
 ```bash
 # Always use venv-gigaam for main CLI
@@ -121,6 +137,11 @@ python -m recog.web.server  # http://127.0.0.1:9080
 ./recog-service.sh logs-supervisor    # Tail copilot supervisor daemon logs
 ./recog-service.sh render --dry-run D # Render units into D only (tests/CI)
 ```
+
+The units' commands come from `svc_command` in `scripts/service/common.sh`
+(`@COMMAND@` in the templates): `python -m <module>` by default, the binaries in
+`bin/` under `[install] runtime = "rust"` (`bin/recog live …`, `bin/recog-web --host
+127.0.0.1 --port 9080 --repo <repo>`, `bin/recog-copilot-* --repo-root <repo>`).
 
 On macOS the live unit's program is `Recog.app/Contents/MacOS/recog_launcher`
 (bundle id `com.recog.live`, source `recog/native/macos/recog_launcher.swift`,

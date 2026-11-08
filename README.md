@@ -83,6 +83,11 @@ git clone https://github.com/materkey/recog.git && cd recog
 их и запустите её снова. Подробнее в разделе
 [требования и варианты установки](docs/usage.md#requirements).
 
+Установка без Python: добавьте в `~/.config/recog/config.toml` строки `[install]` и
+`runtime = "rust"` и запустите `./setup.sh`. Вместо Python 3.12 нужен `cargo`:
+установка соберёт программы из `rust/` в `bin/` и запустит сервисы на них
+([установка без Python](docs/usage.md#installing-without-python)).
+
 1. Откройте `chrome://extensions`, включите **Режим разработчика** (Developer mode),
    нажмите **Загрузить распакованное расширение** (Load unpacked) и выберите
    `browser-extension/dist/`.

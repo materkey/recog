@@ -103,6 +103,58 @@ RECOG_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 ./setup.sh
   (defaults: upstream at the pinned commit the ASR code is written against).
 - `RECOG_GIGAAM_EDITABLE` — path to a local GigaAM checkout to install with
   `pip install -e`, for hacking on the ASR library itself.
+- `RECOG_INSTALL_RUNTIME` — `python` or `rust`, the `[install] runtime` below for
+  one run.
+
+### Installing without Python
+
+Every service has a Rust implementation in `rust/`. With
+
+```toml
+# ~/.config/recog/config.toml
+[install]
+runtime = "rust"
+```
+
+`./setup.sh` installs without Python: no venv, pip, torch, GigaAM or weight cache.
+It needs `cargo` ([rustup](https://rustup.rs)) instead of Python 3.12, and on Linux
+no PortAudio (the microphone is recorded with `parec`). It:
+
+1. builds `recog`, `recog-web`, `recog-copilot-supervisor`, `recog-copilot-channel`,
+   `recog-desktop` and, on macOS, `recog-mic` with `cargo build --release` (the first
+   build takes several minutes);
+2. checks the configuration with the `recog` just built (`recog check`: `config.toml`,
+   `.env`, the user profile, the AI settings) and stops, with nothing installed, on a
+   problem;
+3. copies the programs into `bin/` of the checkout (gitignored), each renamed over
+   the old one, so a running service keeps the file it started from, and a cleaned
+   `rust/target` cannot take them away;
+4. builds the extension (the hosts come from `bin/recog config conferences`),
+   `sck_audio_capture` and `Recog.app` (`bin/recog launcher`, rebuilt only when its
+   source changed, so the permissions of "Recog" stay), downloads the ASR model
+   `gigaam-v3` into the Hugging Face cache (`bin/recog prefetch`), and installs and
+   starts the units.
+
+The units then run the binaries: the live one as
+`Recog.app/Contents/MacOS/recog_launcher bin/recog live --system-audio auto --ktalk`
+on macOS, the web server as `bin/recog-web --host 127.0.0.1 --port 9080 --repo
+<checkout>`, the Copilot ones as `bin/recog-copilot-{supervisor,channel} --repo-root
+<checkout>`. `recog-service.sh` and its readiness check ask `bin/recog` what they
+asked Python (`recog check`, `recog config data-dir`, `recog config copilot-launch`),
+and `recog desktop …` runs `bin/recog-desktop`.
+
+In this mode `[live] runtime`, `[web] runtime`, `[copilot] runtime` and
+`[live] mic_worker` do nothing, and ASR always runs on wavo: an `[asr] backend` of
+`local` or `remote` is ignored with a line in the live log. `setup.sh`,
+`recog-service.sh` and `scripts/deps.sh` read `[install] runtime` themselves, from
+the calling shell or a plain `runtime = "rust"` line under `[install]`, never from
+`.env`; the readiness check refuses to start the services when the parser reads
+something else.
+
+To switch an installation over: add the two lines, run `./setup.sh`, and check the
+services with `./recog-service.sh status`. To go back: delete them (or set
+`"python"`) and run `./setup.sh` again; it recreates the venv when it is missing,
+and `bin/` can be deleted.
 
 ## Usage
 

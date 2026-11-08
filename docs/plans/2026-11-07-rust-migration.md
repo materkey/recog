@@ -21,6 +21,7 @@ Status: in progress.
   `rust/recog-web` as the frontend service.
 - Step 7 has the Copilot supervisor and MCP channel ported, opt-in:
   `[copilot] runtime = "rust"` runs `rust/recog-copilot`'s two binaries.
+- Step 9 has the installation without Python, opt-in: `[install] runtime = "rust"`.
 
 ## Goal
 
@@ -189,6 +190,20 @@ where they can.
 9. **Installation without Python.** `setup.sh` and the launchd/systemd units run
    binaries; `Recog.app` starts the Rust binary, so the permissions stay with "Recog".
    Python modules are deleted as they are replaced; each step gets its CHANGELOG entry.
+   - **Done 2026-11-08**, opt-in: `[install] runtime = "rust"`, one key for the whole
+     installation, read by the shell scripts themselves (the per-service runtime keys
+     only choose what a Python entry point execs). `setup.sh` builds the programs with
+     cargo, checks the configuration with the new `recog` and copies them into `bin/`
+     of the checkout, outside `rust/target`, which a cargo cache cleaned twice under
+     running services. The units run them (`recog_launcher bin/recog live …`); the
+     Python snippets of `scripts/deps.sh`, `data-dir.sh`, `config-path.sh`,
+     `recog-service.sh claude` and the extension build became `recog check` and
+     `recog config …`; `recog launcher` builds `Recog.app` through recog-zoom's
+     bundle builder with plistlib's bytes and the same stamp; `recog prefetch`
+     downloads the model. Stub runs of `setup.sh` in that mode make no Python or pip
+     call; the units of the Python mode render byte for byte as before.
+   - Still to do, after a real meeting on Rust: delete the Python modules with a Rust
+     replacement and make this the only installation (prepared on a branch).
 
 ## Target layout
 

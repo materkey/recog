@@ -80,3 +80,5 @@ _bmad/
 
 # Rust build output
 target/
+# The installed programs of an installation without Python (setup.sh)
+/bin/
