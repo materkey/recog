@@ -1,0 +1,38 @@
+[package]
+name = "recog-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "The KTalk desktop integration of recog (observer, inspector worker, CLI), in place of recog/desktop/"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "recog-desktop"
+path = "src/main.rs"
+
+[dependencies]
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+httparse = "1.10"
+nix = { version = "0.31", features = ["feature", "fs", "signal", "user"] }
+plist = "1.7"
+recog-core = { path = "../recog-core" }
+sha2 = "0.10.9"
+socket2 = "0.6"
+tokio = { version = "1.54", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = "0.29"
+uuid = { version = "1.20", features = ["v4"] }
+
+# psutil's role. macOS: the process table through sysctl and libproc (start time to the
+# microsecond, real uid, short name, executable), the arguments and environment
+# through sysinfo (KERN_PROCARGS2), the listening sockets through listeners. Linux
+# reads /proc itself (src/system/linux.rs), as psutil does.
+[target.'cfg(target_os = "macos")'.dependencies]
+libproc = "0.15"
+listeners = "0.6"
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
+
+[dev-dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+tempfile = "3.20"
