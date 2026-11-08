@@ -14,8 +14,8 @@
 //!   served;
 //! - `/api/debug` reports the host and port this server listens on; Python reports
 //!   its module constants (127.0.0.1:9080) whatever uvicorn was given;
-//! - the KTalk desktop integration (`recog/desktop/`) is not ported: its status is read
-//!   from the files it keeps, nothing observes the desktop application;
+//! - the desktop integration's worker is `recog-web desktop-worker`, not
+//!   `python -m recog.desktop.worker` (see `recog-desktop` for its own differences);
 //! - log lines that quote a Python exception quote the Rust error instead;
 //! - `RECOG_WEB_KTALK_DEBUG_FILE` moves the bridge's debug file
 //!   (`/tmp/ktalk_debug.json`), for tests.

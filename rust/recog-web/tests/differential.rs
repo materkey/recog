@@ -564,6 +564,194 @@ fn sse_by_provider(response: &HttpResponse) -> SseEvents {
     (starts, providers, events.last().cloned())
 }
 
+/// A fake KTalk installation named so that no real process matches it: a bundle with
+/// the official identifier on macOS, an executable file on Linux.
+fn fake_desktop_app(dir: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let name = "RecogDesktopFixture";
+    if cfg!(target_os = "macos") {
+        let app = dir.join(format!("{name}.app"));
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(
+            app.join("Contents/Info.plist"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+                 <key>CFBundleIdentifier</key><string>kontur.talk</string>\
+                 <key>CFBundleExecutable</key><string>{name}</string></dict></plist>\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(app.join("Contents/MacOS").join(name), "").unwrap();
+        app
+    } else {
+        let app = dir.join(name);
+        std::fs::write(&app, "").unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        app
+    }
+}
+
+/// Notification commands that record their arguments instead of showing anything.
+fn install_notification_stubs(bin: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::create_dir_all(bin).unwrap();
+    for name in ["osascript", "notify-send"] {
+        let path = bin.join(name);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nprintf '%s|%s\\n' {name} \"$*\" >> \"$(dirname \"$0\")/../notifications.log\"\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// The desktop integration's files of one case: what is written under
+/// `data/desktop/` before the servers start (`<root>` replaced by the side's root).
+/// A case's name, its files, and whether the observers claim the installation.
+type DesktopCase = (&'static str, Vec<(&'static str, &'static str)>, bool);
+
+fn desktop_cases() -> Vec<DesktopCase> {
+    let enabled = r#"{"enabled": true, "app": "<app>", "bundle": "x"}"#;
+    vec![
+        ("absent", vec![], false),
+        ("disabled", vec![("config.json", r#"{"enabled": false, "app": "<app>"}"#)], true),
+        ("enabled without a process", vec![("config.json", enabled)], true),
+        (
+            "enabled with a missing application",
+            vec![("config.json", r#"{"enabled": true, "app": "<root>/missing.app"}"#)],
+            true,
+        ),
+        ("enabled without an application", vec![("config.json", r#"{"enabled": true}"#)], true),
+        (
+            "unclosed warning while disabled",
+            vec![
+                ("config.json", r#"{"enabled": false}"#),
+                (
+                    "status.json",
+                    r#"{"state": "inspector_unclosed", "reason": "cleanup_failed", "inspector_closed": false}"#,
+                ),
+            ],
+            true,
+        ),
+        ("malformed configuration", vec![("config.json", "{broken")], false),
+        (
+            "interrupted operation of a process long gone",
+            vec![
+                ("config.json", enabled),
+                (
+                    "operation.json",
+                    r#"{"target": {"pid": 2147483646, "started": 1.0, "executable": "/gone"}, "phase": "opened", "token": "t"}"#,
+                ),
+            ],
+            true,
+        ),
+    ]
+}
+
+/// Waits until the observer of a server has ticked (its heartbeat is written) and
+/// its status settled.
+fn wait_observed(server: &Server) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let heartbeat = server.data().join("desktop/heartbeat.json");
+    while std::time::Instant::now() < deadline {
+        let settled = server
+            .request("GET", "/api/desktop/status", &[], b"")
+            .json()
+            .as_object()
+            .and_then(|m| m.get("state"))
+            .is_some_and(|s| s.as_str() != Some("server_offline") && s.as_str() != Some("attaching"));
+        if heartbeat.exists() && settled {
+            // One more poll period, so that both have written what a tick writes.
+            std::thread::sleep(std::time::Duration::from_millis(2500));
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("{:?} observer did not tick:\n{}", server.side, server.log());
+}
+
+#[test]
+fn desktop_status_given_the_same_integration_files_when_both_observers_run_then_same_answers_and_files() {
+    let Some(python) = common::python() else { return };
+    let mut d = Diff::new();
+    for (name, files, observed) in desktop_cases() {
+        let base = tempfile::tempdir().unwrap();
+        let mut servers = Vec::new();
+        for side in [Side::Python, Side::Rust] {
+            let root = base.path().join(format!("{side:?}"));
+            std::fs::create_dir_all(root.join("home")).unwrap();
+            let root = std::fs::canonicalize(&root).unwrap();
+            install_notification_stubs(&root.join("bin"));
+            let app = fake_desktop_app(&root);
+            for (file, contents) in &files {
+                let path = root.join("data/desktop").join(file);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let contents =
+                    contents.replace("<app>", &app.to_string_lossy()).replace("<root>", &root.to_string_lossy());
+                std::fs::write(path, contents).unwrap();
+            }
+            servers.push(Server::start(side, &root, &python, common::free_port()));
+        }
+        let (py, rs) = (&servers[0], &servers[1]);
+        if observed {
+            wait_observed(py);
+            wait_observed(rs);
+        }
+        let before = d.failures.len();
+        let (_, answer) = d.same(py, rs, "GET", "/api/desktop/status", &[], b"");
+        // Agreeing is not enough: each case must reach the state it is about.
+        let state = answer.json().as_object().and_then(|m| m.get("state")).map(Value::py_str).unwrap_or_default();
+        let reason = answer.json().as_object().and_then(|m| m.get("reason")).map(Value::py_str).unwrap_or_default();
+        let expected = match name {
+            "absent" | "disabled" => ("disabled", "None"),
+            "enabled without a process" | "interrupted operation of a process long gone" => ("waiting", "None"),
+            "enabled with a missing application" | "enabled without an application" => ("error", "observer_failed"),
+            "unclosed warning while disabled" => ("inspector_unclosed", "cleanup_failed"),
+            _ => ("error", "invalid_configuration"),
+        };
+        assert_eq!((state.as_str(), reason.as_str()), expected, "{name}");
+        for failure in &mut d.failures[before..] {
+            *failure = format!("{name}: {failure}");
+        }
+        let observer_lines = |server: &Server| -> Vec<String> {
+            let log = server.log().replace(&server.root.to_string_lossy().into_owned(), "<root>");
+            log.lines().filter(|l| l.starts_with("Desktop ")).map(str::to_owned).collect()
+        };
+        if observer_lines(py) != observer_lines(rs) {
+            d.failures.push(format!(
+                "{name}: observer logs differ\n  py: {:?}\n  rs: {:?}",
+                observer_lines(py),
+                observer_lines(rs)
+            ));
+        }
+        let (py_files, rs_files) =
+            (snapshot_files(&py.data().join("desktop")), snapshot_files(&rs.data().join("desktop")));
+        let localize = |files: std::collections::BTreeMap<String, String>, root: &Path| -> Vec<(String, String)> {
+            files.into_iter().map(|(k, v)| (k, v.replace(&root.to_string_lossy().into_owned(), "<root>"))).collect()
+        };
+        let notifications =
+            |server: &Server| std::fs::read_to_string(server.root.join("notifications.log")).unwrap_or_default();
+        d.steps += 1;
+        if localize(py_files.clone(), &py.root) != localize(rs_files.clone(), &rs.root) {
+            d.failures.push(format!("{name}: desktop files differ\n  py: {py_files:?}\n  rs: {rs_files:?}"));
+        }
+        if notifications(py) != notifications(rs) {
+            d.failures.push(format!(
+                "{name}: notifications differ\n  py: {:?}\n  rs: {:?}",
+                notifications(py),
+                notifications(rs)
+            ));
+        }
+        if !observed
+            && py.data().join("desktop/heartbeat.json").exists() != rs.data().join("desktop/heartbeat.json").exists()
+        {
+            d.failures.push(format!("{name}: only one observer claimed the installation"));
+        }
+    }
+    d.finish();
+}
+
 #[test]
 fn masking_given_clock_and_uuid_values_when_compared_then_only_those_are_hidden() {
     // given

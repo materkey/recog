@@ -2018,6 +2018,7 @@ dependencies = [
  "percent-encoding",
  "recog-ai",
  "recog-core",
+ "recog-desktop",
  "tempfile",
  "tokio",
  "tokio-tungstenite",

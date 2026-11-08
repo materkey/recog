@@ -22,6 +22,7 @@ notify = "8.2"
 percent-encoding = "2.3"
 recog-ai = { path = "../recog-ai" }
 recog-core = { path = "../recog-core" }
+recog-desktop = { path = "../recog-desktop" }
 tempfile = "3.20"
 tokio = { version = "1.49", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = "0.29"

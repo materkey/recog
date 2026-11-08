@@ -1,7 +1,8 @@
 //! `recog-web`: the web backend, as `python -m recog.web.server` runs it.
 //!
 //! `recog-web [--host HOST] [--port PORT] [--repo DIR]`: 127.0.0.1:9080 and the
-//! checkout the binary was built from by default.
+//! checkout the binary was built from by default. `recog-web desktop-worker …` is the
+//! desktop integration's inspector worker, which the server's observer starts.
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
@@ -51,7 +52,23 @@ async fn shutdown_signal() {
     }
 }
 
+fn desktop_worker(args: &[String]) -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let code = runtime.block_on(recog_desktop::worker::main(&recog_desktop::host::Host::system(), args));
+    ExitCode::from(u8::try_from(code).unwrap_or(1))
+}
+
 fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some(recog_web::desktop::WORKER_ARGUMENT) {
+        return desktop_worker(&argv[2..]);
+    }
     let args = match parse_args() {
         Ok(args) => args,
         Err(message) => {

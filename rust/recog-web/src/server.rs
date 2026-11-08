@@ -253,11 +253,12 @@ impl BridgeHandler for WebBridgeHandler {
 pub struct Services {
     catalog: MeetingCatalog,
     subscriber: Arc<BridgeSubscriber>,
+    desktop: Arc<recog_desktop::service::DesktopIntegration>,
     _watcher: Option<FsWatcher>,
 }
 
-/// The lifespan's startup: the meetings directory, the file watchers, the catalog and
-/// the bridge link.
+/// The lifespan's startup: the meetings directory, the file watchers, the catalog,
+/// the bridge link and the desktop integration's observer.
 pub async fn start_services(state: &Arc<AppState>) -> Services {
     let config = &state.config;
     let _ = std::fs::create_dir_all(&config.meetings_dir);
@@ -270,11 +271,15 @@ pub async fn start_services(state: &Arc<AppState>) -> Services {
     let subscriber = Arc::new(BridgeSubscriber::new(&config.bridge_ws_url, handler));
     subscriber.start();
     state.set_subscriber(Some(subscriber.sender()));
-    Services { catalog, subscriber, _watcher: watcher }
+    let desktop = crate::desktop::integration(config);
+    desktop.start();
+    Services { catalog, subscriber, desktop, _watcher: watcher }
 }
 
-/// The lifespan's shutdown.
+/// The lifespan's shutdown. The desktop observer goes first and finishes its tick, so
+/// that an inspector operation in progress is cleaned up rather than abandoned.
 pub async fn stop_services(state: &Arc<AppState>, services: Services) {
+    services.desktop.stop().await;
     services.subscriber.stop().await;
     state.set_subscriber(None);
     services.catalog.stop().await;
