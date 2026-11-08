@@ -29,6 +29,10 @@
 //!   parser says (plistlib raises expat's own error for broken XML);
 //! - `json.loads` of `app.asar` metadata reads UTF-8 only (Python also detects UTF-16
 //!   and UTF-32);
+//! - inspector URLs are split as Python 3.12.15's `urlsplit` splits them; older 3.12
+//!   patch releases (3.12.8 is one) lack its bracketed-netloc check, so with them
+//!   Python refuses `ws://x[::1]:9229/x` as `invalid_inspector_endpoint` where this
+//!   says `attachment_failed` (no real inspector reports such a URL);
 //! - `/json/list` is read with one-second timeouts on connect and each read, without
 //!   `Accept-Encoding` (httpx: one second per operation, and it would decompress);
 //! - the attachment deadline interrupts the worker at its awaits; a process query

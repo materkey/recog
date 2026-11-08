@@ -464,7 +464,19 @@ fn functions_given_the_same_inputs_when_called_on_both_sides_then_same_answers()
     for words in shlex_inputs(&mut rng) {
         calls.push(call("shlex", vec![s(&words)]));
     }
+    // The port follows urlsplit's bracketed-netloc check, which an older 3.12 patch
+    // release lacks; with such an interpreter bracketed hosts are not compared.
+    let info = ask_python(&python, &py::obj([("kind", s("python")), ("repo", path_value(&repo_root()))]), &[]);
+    let current_urlsplit = field(&info, "bracketed_netloc").truthy();
     for targets in url_inputs(&mut rng) {
+        let url = match &targets {
+            Value::Array(items) if items.len() == 1 => field(&items[0], "webSocketDebuggerUrl").py_str(),
+            _ => String::new(),
+        };
+        let bracketed = url.contains('[') && url.contains(']');
+        if bracketed && !current_urlsplit {
+            continue;
+        }
         calls.push(call("inspector_url", vec![targets]));
     }
     for (root, now) in status_roots(&base) {

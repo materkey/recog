@@ -295,6 +295,12 @@ def handle(request):
             except SystemExit as exc:
                 code = exc.code if isinstance(exc.code, int) else 1
         return {"code": code, "stdout": out.getvalue(), "stderr": err.getvalue()}
+    if request["kind"] == "python":
+        # Which urlsplit this interpreter has: the bracketed-netloc check came with a
+        # 3.12 patch release, and the port follows it.
+        import urllib.parse
+
+        return {"bracketed_netloc": hasattr(urllib.parse, "_check_bracketed_netloc")}
     if request["kind"] == "psutil":
         # The real psutil on a process the test started itself.
         import psutil
