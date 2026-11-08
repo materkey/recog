@@ -9,6 +9,8 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+# SIGTERM to a capture child before the kill, as Popen.terminate().
+nix = { version = "0.31.3", default-features = false, features = ["signal"] }
 # The model lock is reentrant, as Python's threading.RLock: the refine worker holds
 # it around a callback that may take it again inside the ASR.
 parking_lot = "0.12.5"
