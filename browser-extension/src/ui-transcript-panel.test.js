@@ -358,6 +358,26 @@ describe('handleTranscriptHistory and handleNewMeeting', () => {
 
     expect(state.currentMeetingId).toBeNull();
   });
+
+  test('a null history frame - received - keeps the meeting and the lines', () => {
+    state.currentMeetingId = 'm1';
+    state.transcriptLines = [{ speaker: 'A', text: 'kept' }];
+
+    expect(() => ui.handleTranscriptHistory(null)).not.toThrow();
+
+    expect(state.currentMeetingId).toBe('m1');
+    expect(state.transcriptLines).toEqual([{ speaker: 'A', text: 'kept' }]);
+  });
+
+  test('a null new meeting frame - received - starts a meeting without id', () => {
+    state.currentMeetingId = 'm1';
+    state.transcriptLines = [{ speaker: 'A', text: 'gone' }];
+
+    expect(() => ui.handleNewMeeting(null)).not.toThrow();
+
+    expect(state.currentMeetingId).toBeNull();
+    expect(state.transcriptLines).toEqual([]);
+  });
 });
 
 describe('handleTranscriptRefine edge frames', () => {

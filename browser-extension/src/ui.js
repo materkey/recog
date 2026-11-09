@@ -1714,13 +1714,13 @@ function renderAllTranscriptLines() {
 }
 
 export function handleTranscriptHistory(data) {
-  console.log('[KTalk Transcript] Received history:', data.segments?.length || 0, 'segments');
+  console.log('[KTalk Transcript] Received history:', data?.segments?.length || 0, 'segments');
 
   if (data && data.meeting_id) {
     state.currentMeetingId = data.meeting_id;
   }
 
-  if (!data.segments || data.segments.length === 0) {
+  if (!data?.segments || data.segments.length === 0) {
     return;
   }
 
@@ -1733,7 +1733,7 @@ export function handleTranscriptHistory(data) {
 }
 
 export function handleNewMeeting(data) {
-  console.log('[KTalk Transcript] New meeting:', data.meeting_id);
+  console.log('[KTalk Transcript] New meeting:', data?.meeting_id);
 
   state.currentMeetingId = data && data.meeting_id ? data.meeting_id : null;
   state.transcriptLines = [];
