@@ -61,77 +61,94 @@ pub fn decode(message: &Message) -> Option<Value> {
 /// Connects, says hello and serves frames until the connection ends. `delay` goes back
 /// to the initial backoff once connected, as the Python loop resets it.
 pub async fn serve<R: Runner + 'static>(sup: &Supervisor<R>, delay: &mut f64) -> Result<(), BridgeError> {
-    let config = WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE));
-    let connect = tokio_tungstenite::connect_async_with_config(sup.bridge_url.as_str(), Some(config), false);
-    let (socket, _) = tokio::time::timeout(OPEN_TIMEOUT, connect)
-        .await
-        .map_err(|_| BridgeError { kind: "TimeoutError", message: "timed out during opening handshake".into() })?
-        .map_err(BridgeError::of)?;
-    let (mut sink, mut stream) = socket.split();
+    let (mut sink, stream) = connect(&sup.bridge_url).await?.split();
 
     // Announce ourselves: the bridge moves this socket into its supervisor set and
     // replies with `meeting_state`. `current_meeting_id` lets a restarted bridge re-arm
     // its manual mirror from the one runtime owner of that truth, us (D5).
     let hello = json!({"type": protocol::SUPERVISOR_HELLO, "current_meeting_id": sup.live_meeting_id()});
     sink.send(Message::text(py::json_dumps(&hello))).await.map_err(BridgeError::of)?;
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    sup.set_ws(Some(tx.clone()));
+    let (tx, rx) = mpsc::unbounded_channel::<Message>();
+    sup.set_ws(Some(tx));
     sup.on_connected();
     *delay = sup.tunables().initial_backoff_s;
 
     let ping_sent: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     let broken = Rc::new(Notify::new());
-    let writer = {
-        let ping_sent = ping_sent.clone();
-        let broken = broken.clone();
-        tokio::task::spawn_local(async move {
-            let mut ping = tokio::time::interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL);
-            loop {
-                tokio::select! {
-                    message = rx.recv() => {
-                        let Some(message) = message else { break };
-                        if let Err(e) = sink.send(message).await {
-                            crate::log::line(&format!("{} status send failed: {e}", crate::log::SUPERVISOR_PREFIX));
-                        }
-                    }
-                    _ = ping.tick() => {
-                        if ping_sent.get().is_some_and(|sent| sent.elapsed() >= PING_TIMEOUT) {
-                            broken.notify_one();
-                            break;
-                        }
-                        if ping_sent.get().is_none() {
-                            ping_sent.set(Some(Instant::now()));
-                            if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
-                                broken.notify_one();
-                                break;
-                            }
-                        }
+    let writer = tokio::task::spawn_local(write_frames(sink, rx, ping_sent.clone(), broken.clone()));
+    let result = read_frames(sup, stream, &ping_sent, &broken).await;
+    sup.set_ws(None);
+    writer.abort();
+    result
+}
+
+type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Opens the bridge WebSocket within the 10 s handshake, with 1 MiB messages.
+async fn connect(url: &str) -> Result<Socket, BridgeError> {
+    let config = WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE));
+    let connect = tokio_tungstenite::connect_async_with_config(url, Some(config), false);
+    let (socket, _) = tokio::time::timeout(OPEN_TIMEOUT, connect)
+        .await
+        .map_err(|_| BridgeError { kind: "TimeoutError", message: "timed out during opening handshake".into() })?
+        .map_err(BridgeError::of)?;
+    Ok(socket)
+}
+
+/// The writing half: the statuses queued by the supervisor, and a keepalive ping
+/// every 20 s; a pong not back within 20 s, or a ping that cannot be sent, wakes
+/// `broken`.
+async fn write_frames(
+    mut sink: futures_util::stream::SplitSink<Socket, Message>,
+    mut rx: mpsc::UnboundedReceiver<Message>,
+    ping_sent: Rc<Cell<Option<Instant>>>,
+    broken: Rc<Notify>,
+) {
+    let mut ping = tokio::time::interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL);
+    loop {
+        tokio::select! {
+            message = rx.recv() => {
+                let Some(message) = message else { break };
+                if let Err(e) = sink.send(message).await {
+                    crate::log::line(&format!("{} status send failed: {e}", crate::log::SUPERVISOR_PREFIX));
+                }
+            }
+            _ = ping.tick() => {
+                if ping_sent.get().is_some_and(|sent| sent.elapsed() >= PING_TIMEOUT) {
+                    broken.notify_one();
+                    break;
+                }
+                if ping_sent.get().is_none() {
+                    ping_sent.set(Some(Instant::now()));
+                    if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        broken.notify_one();
+                        break;
                     }
                 }
             }
-        })
-    };
-    drop(tx);
+        }
+    }
+}
 
-    let result = loop {
+/// The reading half: frames to the supervisor until the connection ends.
+async fn read_frames<R: Runner + 'static>(
+    sup: &Supervisor<R>,
+    mut stream: futures_util::stream::SplitStream<Socket>,
+    ping_sent: &Cell<Option<Instant>>,
+    broken: &Notify,
+) -> Result<(), BridgeError> {
+    loop {
         let next = tokio::select! {
             next = stream.next() => next,
-            _ = broken.notified() => break Err(BridgeError {
+            _ = broken.notified() => return Err(BridgeError {
                 kind: "ConnectionClosedError",
                 message: "keepalive ping timeout".into(),
             }),
         };
         match next {
-            None => break Ok(()),
-            Some(Err(e)) => break Err(BridgeError::of(e)),
-            Some(Ok(Message::Close(frame))) => {
-                let clean = frame.as_ref().is_none_or(|f| matches!(f.code, CloseCode::Normal | CloseCode::Away));
-                if clean {
-                    break Ok(());
-                }
-                let frame = frame.map(|f| format!("received {} ({})", u16::from(f.code), f.reason)).unwrap_or_default();
-                break Err(BridgeError { kind: "ConnectionClosedError", message: frame });
-            }
+            None => return Ok(()),
+            Some(Err(e)) => return Err(BridgeError::of(e)),
+            Some(Ok(Message::Close(frame))) => return close_result(frame),
             Some(Ok(Message::Pong(_))) => ping_sent.set(None),
             Some(Ok(message)) => {
                 if let Some(data) = decode(&message) {
@@ -139,8 +156,15 @@ pub async fn serve<R: Runner + 'static>(sup: &Supervisor<R>, delay: &mut f64) ->
                 }
             }
         }
-    };
-    sup.set_ws(None);
-    writer.abort();
-    result
+    }
+}
+
+/// A close with code 1000/1001 (or none) is a clean end, any other a failure.
+fn close_result(frame: Option<tungstenite::protocol::CloseFrame>) -> Result<(), BridgeError> {
+    let clean = frame.as_ref().is_none_or(|f| matches!(f.code, CloseCode::Normal | CloseCode::Away));
+    if clean {
+        return Ok(());
+    }
+    let frame = frame.map(|f| format!("received {} ({})", u16::from(f.code), f.reason)).unwrap_or_default();
+    Err(BridgeError { kind: "ConnectionClosedError", message: frame })
 }
