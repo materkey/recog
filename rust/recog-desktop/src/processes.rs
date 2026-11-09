@@ -722,3 +722,46 @@ pub fn inspector_supported(host: &Host, target: &Target) -> Result<bool, PyErr> 
         other => other,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plist_values_when_named_then_their_python_types() {
+        // given
+        let date = plist::Date::from(std::time::UNIX_EPOCH);
+        let cases = [
+            (plist::Value::Array(Vec::new()), "list"),
+            (plist::Value::Dictionary(plist::Dictionary::new()), "dict"),
+            (plist::Value::Boolean(true), "bool"),
+            (plist::Value::Data(Vec::new()), "bytes"),
+            (plist::Value::Date(date), "datetime"),
+            (plist::Value::Real(1.5), "float"),
+            (plist::Value::Integer(plist::Integer::from(1i64)), "int"),
+            (plist::Value::String(String::new()), "str"),
+            (plist::Value::Uid(plist::Uid::new(1)), "UID"),
+        ];
+        for (value, name) in cases {
+            // when / then
+            assert_eq!(plist_type(&value), name, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn paths_when_split_and_normalized_then_like_posixpath() {
+        // given / when / then
+        assert_eq!(split("/a/b"), ("/a".to_owned(), "b".to_owned()));
+        assert_eq!(split("/a"), ("/".to_owned(), "a".to_owned()));
+        assert_eq!(split("a"), (String::new(), "a".to_owned()));
+        assert_eq!(split("//a//b"), ("//a".to_owned(), "b".to_owned()));
+        assert_eq!(split("//x"), ("//".to_owned(), "x".to_owned()));
+        assert_eq!(normpath("//a/./b/../c"), "//a/c");
+        assert_eq!(normpath("///a//b/"), "/a/b");
+        assert_eq!(normpath("a/../../b"), "../b");
+        assert_eq!(normpath("../x/.."), "..");
+        assert_eq!(normpath("/../a"), "/a");
+        assert_eq!(normpath(""), ".");
+        assert_eq!(normpath("a/.."), ".");
+    }
+}

@@ -282,6 +282,30 @@ mod tests {
     }
 
     #[test]
+    fn truncated_name_when_its_command_line_unreadable_then_kept_or_failed_like_psutil() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // given: four processes whose stat names are cut at 15 characters
+        let tree = tempfile::tempdir().unwrap();
+        let root = tree.path();
+        let table = LinuxTable::with_ticks(root, 100.0);
+        for pid in [1, 2, 3, 4] {
+            process(root, pid, "gnome-keyring-d");
+        }
+        fs::write(root.join("1/cmdline"), "/usr/bin/gnome-keyring-daemon\0--start\0").unwrap();
+        fs::write(root.join("3/cmdline"), "").unwrap();
+        fs::set_permissions(root.join("3/cmdline"), fs::Permissions::from_mode(0o000)).unwrap();
+        fs::create_dir(root.join("4/cmdline")).unwrap();
+        // when / then: extended, a zombie's, an unreadable one's, a broken one's
+        assert_eq!(table.name(1).unwrap(), "gnome-keyring-daemon");
+        assert_eq!(table.name(2).unwrap(), "gnome-keyring-d");
+        let readable = fs::read(root.join("3/cmdline")).is_ok();
+        assert_eq!(table.name(3).unwrap(), "gnome-keyring-d", "readable as root: {readable}");
+        assert_eq!(table.name(4).unwrap_err().kind, "IsADirectoryError");
+        assert!(table.exe(2).unwrap().is_empty());
+        assert!(table.uid_real(5).unwrap_err().is("NoSuchProcess"));
+    }
+
+    #[test]
     fn retitled_process_when_cmdline_read_then_split_on_spaces_like_psutil() {
         // given / when / then
         assert_eq!(split_cmdline("ktalk --a --b"), ["ktalk", "--a", "--b"]);
