@@ -54,16 +54,23 @@ pub(crate) fn py_float(value: &Value) -> Result<f64, String> {
 /// `base64.b64decode(s, validate=True)` of Python 3.12 (`binascii.a2b_base64` in
 /// strict mode), with its error texts.
 pub(crate) fn b64decode_strict(text: &str) -> Result<Vec<u8>, String> {
-    fn value(c: u8) -> Option<u8> {
-        match c {
-            b'A'..=b'Z' => Some(c - b'A'),
-            b'a'..=b'z' => Some(c - b'a' + 26),
-            b'0'..=b'9' => Some(c - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
+    let data = b64_input(text)?;
+    let mut decoder = Base64Decoder::with_capacity(data.len() / 4 * 3);
+    for (i, &c) in data.iter().enumerate() {
+        if c != b'=' {
+            decoder.push(c)?;
+        } else if decoder.pad()? {
+            if i + 1 < data.len() {
+                return Err("Excess data after padding".into());
+            }
+            return Ok(decoder.out);
         }
     }
+    decoder.finish()
+}
+
+/// The bytes of `text`, refused when it is not ASCII or starts with padding.
+fn b64_input(text: &str) -> Result<&[u8], String> {
     if !text.is_ascii() {
         return Err("string argument should contain only ASCII characters".into());
     }
@@ -71,62 +78,144 @@ pub(crate) fn b64decode_strict(text: &str) -> Result<Vec<u8>, String> {
     if data.first() == Some(&b'=') {
         return Err("Leading padding not allowed".into());
     }
-    let mut out = Vec::with_capacity(data.len() / 4 * 3);
-    let (mut quad_pos, mut left, mut pads, mut padding_started) = (0u8, 0u8, 0usize, false);
-    for (i, &c) in data.iter().enumerate() {
-        if c == b'=' {
-            padding_started = true;
-            if quad_pos == 0 {
-                return Err("Excess padding not allowed".into());
-            }
-            pads += 1;
-            if quad_pos >= 2 && usize::from(quad_pos) + pads >= 4 {
-                if i + 1 < data.len() {
-                    return Err("Excess data after padding".into());
-                }
-                return Ok(out);
-            }
-            continue;
+    Ok(data)
+}
+
+fn b64_value(c: u8) -> Option<u8> {
+    match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+/// The state of `a2b_base64` between characters: the position in the current quad,
+/// the bits left over from its previous character, and the padding seen.
+struct Base64Decoder {
+    out: Vec<u8>,
+    quad_pos: u8,
+    left: u8,
+    pads: usize,
+    padding_started: bool,
+}
+
+impl Base64Decoder {
+    fn with_capacity(capacity: usize) -> Self {
+        Self { out: Vec::with_capacity(capacity), quad_pos: 0, left: 0, pads: 0, padding_started: false }
+    }
+
+    /// One `=`; true when it completes the padding of the quad.
+    fn pad(&mut self) -> Result<bool, String> {
+        self.padding_started = true;
+        if self.quad_pos == 0 {
+            return Err("Excess padding not allowed".into());
         }
-        let Some(v) = value(c) else { return Err("Only base64 data is allowed".into()) };
-        if padding_started {
+        self.pads += 1;
+        Ok(self.quad_pos >= 2 && usize::from(self.quad_pos) + self.pads >= 4)
+    }
+
+    /// One data character.
+    fn push(&mut self, c: u8) -> Result<(), String> {
+        let Some(v) = b64_value(c) else { return Err("Only base64 data is allowed".into()) };
+        if self.padding_started {
             return Err("Discontinuous padding not allowed".into());
         }
-        pads = 0;
-        match quad_pos {
+        self.pads = 0;
+        match self.quad_pos {
             0 => {
-                quad_pos = 1;
-                left = v;
+                self.quad_pos = 1;
+                self.left = v;
             }
             1 => {
-                quad_pos = 2;
-                out.push((left << 2) | (v >> 4));
-                left = v & 0x0f;
+                self.quad_pos = 2;
+                self.out.push((self.left << 2) | (v >> 4));
+                self.left = v & 0x0f;
             }
             2 => {
-                quad_pos = 3;
-                out.push((left << 4) | (v >> 2));
-                left = v & 0x03;
+                self.quad_pos = 3;
+                self.out.push((self.left << 4) | (v >> 2));
+                self.left = v & 0x03;
             }
             _ => {
-                quad_pos = 0;
-                out.push((left << 6) | v);
-                left = 0;
+                self.quad_pos = 0;
+                self.out.push((self.left << 6) | v);
+                self.left = 0;
             }
         }
+        Ok(())
     }
-    match quad_pos {
-        0 => Ok(out),
-        1 => Err(format!(
-            "Invalid base64-encoded string: number of data characters ({}) cannot be 1 more than a multiple of 4",
-            out.len() / 3 * 4 + 1
-        )),
-        _ => Err("Incorrect padding".into()),
+
+    /// The end of the input without completed padding.
+    fn finish(self) -> Result<Vec<u8>, String> {
+        match self.quad_pos {
+            0 => Ok(self.out),
+            1 => Err(format!(
+                "Invalid base64-encoded string: number of data characters ({}) cannot be 1 more than a multiple of 4",
+                self.out.len() / 3 * 4 + 1
+            )),
+            _ => Err("Incorrect padding".into()),
+        }
     }
 }
 
 fn key_error(key: &str) -> String {
     recog_core::py::repr(key)
+}
+
+/// The fields of a `pcm_chunk` as Python's handler converts them.
+struct PcmFields {
+    pid: String,
+    speaker_name: String,
+    seq: i128,
+    start_ms: f64,
+    end_ms: f64,
+    sample_rate: i128,
+    pcm_base64: Value,
+}
+
+/// Why a `pcm_chunk` was not converted.
+enum PcmRefusal {
+    /// `KeyError`/`TypeError`/`ValueError`: logged as malformed and skipped.
+    Malformed(String),
+    /// `OverflowError`: not caught by the handler.
+    Raise(String),
+}
+
+fn pcm_field<'a>(data: &'a Map, key: &str) -> Result<&'a Value, PcmRefusal> {
+    data.get(key).ok_or_else(|| PcmRefusal::Malformed(key_error(key)))
+}
+
+fn pcm_int(data: &Map, key: &str) -> Result<i128, PcmRefusal> {
+    py_int(pcm_field(data, key)?).map_err(|e| match e {
+        IntError::Malformed(e) => PcmRefusal::Malformed(e),
+        IntError::Overflow(e) => PcmRefusal::Raise(e),
+    })
+}
+
+fn pcm_float(data: &Map, key: &str) -> Result<f64, PcmRefusal> {
+    py_float(pcm_field(data, key)?).map_err(PcmRefusal::Malformed)
+}
+
+/// `str(data["pid"])` (refused when empty), `str(data.get("speaker_name") or "")`,
+/// then `int`/`float` of the numbers, in Python's order.
+fn parse_pcm_fields(data: &Map) -> Result<PcmFields, PcmRefusal> {
+    let pid = json::py_str(pcm_field(data, "pid")?);
+    if pid.is_empty() {
+        return Err(PcmRefusal::Malformed("pid is empty".into()));
+    }
+    let speaker_name = data.get("speaker_name").filter(|v| v.truthy()).map_or_else(String::new, json::py_str);
+    Ok(PcmFields {
+        pid,
+        speaker_name,
+        seq: pcm_int(data, "seq")?,
+        start_ms: pcm_float(data, "chunk_start_ms")?,
+        end_ms: pcm_float(data, "chunk_end_ms")?,
+        sample_rate: pcm_int(data, "sample_rate")?,
+        pcm_base64: pcm_field(data, "pcm_base64")?.clone(),
+    })
 }
 
 /// `a / 1000` of a frame value, or Python's `TypeError`.
@@ -156,22 +245,109 @@ impl Bridge {
     /// The exception text where Python's handler would raise.
     pub async fn process_message(self: &Arc<Self>, data: &Map, client: Option<&Arc<Client>>) -> Result<(), String> {
         let msg_type = data.get("type").and_then(Value::as_str).unwrap_or("");
-        if matches!(msg_type, protocol::COPILOT_SPAWN_REQUEST | protocol::COPILOT_CHAT_MESSAGE)
-            && !self.policy_enabled()
-        {
-            if let Some(request_id) = json::nonempty_str(data.get("request_id")) {
-                self.reply_copilot_status(client, request_id, "error", "Copilot выключен в настройках.").await;
-            }
-            return Ok(());
-        }
-        if matches!(msg_type, protocol::COPILOT_CHANNEL_REPLY | protocol::COPILOT_CHANNEL_STATUS)
-            && !self.policy_enabled()
-        {
+        if self.refused_while_copilot_off(msg_type, data, client).await {
             return Ok(());
         }
         match msg_type {
+            protocol::AI_SETTINGS_REFRESH
+            | protocol::USER_PROFILE_REFRESH
+            | protocol::COPILOT_SPAWN_REQUEST
+            | protocol::COPILOT_STOP_REQUEST
+            | protocol::SUPERVISOR_HELLO
+            | protocol::COPILOT_AGENT_STATUS
+            | protocol::CLAUDE_SESSIONS => self.process_session_frame(msg_type, data, client).await,
+            protocol::COPILOT_CHANNEL_HELLO
+            | protocol::COPILOT_CHAT_MESSAGE
+            | protocol::COPILOT_CHANNEL_REPLY
+            | protocol::COPILOT_CHANNEL_STATUS
+            | protocol::GET_RECENT_TRANSCRIPT_REQUEST => self.process_channel_frame(msg_type, data, client).await,
+            protocol::MEETING_JOIN | protocol::MEETING_LEAVE | "meeting_title_update" | "request_transcript" => {
+                self.process_meeting_frame(msg_type, data, client).await
+            }
+            _ => self.process_call_frame(msg_type, data, client).await,
+        }
+    }
+
+    /// Copilot frames while the settings switch the Copilot off: a request with an id
+    /// gets the error, the channel's answers are dropped. True when the frame is done.
+    async fn refused_while_copilot_off(&self, msg_type: &str, data: &Map, client: Option<&Arc<Client>>) -> bool {
+        match msg_type {
+            protocol::COPILOT_SPAWN_REQUEST | protocol::COPILOT_CHAT_MESSAGE if !self.policy_enabled() => {
+                if let Some(request_id) = json::nonempty_str(data.get("request_id")) {
+                    self.reply_copilot_status(client, request_id, "error", "Copilot выключен в настройках.").await;
+                }
+                true
+            }
+            protocol::COPILOT_CHANNEL_REPLY | protocol::COPILOT_CHANNEL_STATUS => !self.policy_enabled(),
+            _ => false,
+        }
+    }
+
+    /// The webapp's refreshes and the Copilot session's lifecycle (spawn/stop, the
+    /// supervisor and the channel's session count).
+    async fn process_session_frame(
+        self: &Arc<Self>,
+        msg_type: &str,
+        data: &Map,
+        client: Option<&Arc<Client>>,
+    ) -> Result<(), String> {
+        match msg_type {
             protocol::AI_SETTINGS_REFRESH => self.refresh_ai_settings(client).await,
             protocol::USER_PROFILE_REFRESH => self.refresh_user_profile(client).await,
+            protocol::COPILOT_SPAWN_REQUEST => self.on_spawn_request(data, client).await,
+            protocol::COPILOT_STOP_REQUEST => self.on_stop_request(data, client).await,
+            protocol::SUPERVISOR_HELLO => self.on_supervisor_hello(data, client).await,
+            protocol::COPILOT_AGENT_STATUS => self.on_agent_status(data).await,
+            protocol::CLAUDE_SESSIONS => self.on_claude_sessions(data).await,
+            // Only the types above are routed here.
+            _ => Ok(()),
+        }
+    }
+
+    /// The Copilot channel's frames and the chat it relays.
+    async fn process_channel_frame(
+        self: &Arc<Self>,
+        msg_type: &str,
+        data: &Map,
+        client: Option<&Arc<Client>>,
+    ) -> Result<(), String> {
+        match msg_type {
+            protocol::COPILOT_CHANNEL_HELLO => self.on_channel_hello(client).await,
+            protocol::COPILOT_CHAT_MESSAGE => self.on_chat_message(data, client).await,
+            protocol::COPILOT_CHANNEL_REPLY => self.on_channel_reply(data).await,
+            protocol::COPILOT_CHANNEL_STATUS => self.on_channel_status(data).await,
+            protocol::GET_RECENT_TRANSCRIPT_REQUEST => self.on_recent_transcript_request(data, client).await,
+            // Only the types above are routed here.
+            _ => Ok(()),
+        }
+    }
+
+    /// The extension's meeting lifecycle and its transcript history.
+    async fn process_meeting_frame(
+        self: &Arc<Self>,
+        msg_type: &str,
+        data: &Map,
+        client: Option<&Arc<Client>>,
+    ) -> Result<(), String> {
+        match msg_type {
+            protocol::MEETING_JOIN => self.on_meeting_join(data, client).await,
+            protocol::MEETING_LEAVE => self.on_meeting_leave(data, client).await,
+            "meeting_title_update" => self.on_meeting_title_update(data),
+            "request_transcript" => self.send_transcript_history(client).await,
+            // Only the types above are routed here.
+            _ => Ok(()),
+        }
+    }
+
+    /// The extension's frames about the call itself; `ping` (heartbeat) and unknown
+    /// types do nothing.
+    async fn process_call_frame(
+        self: &Arc<Self>,
+        msg_type: &str,
+        data: &Map,
+        client: Option<&Arc<Client>>,
+    ) -> Result<(), String> {
+        match msg_type {
             protocol::SPEAKER_UPDATE => self.on_speaker_update(data, client),
             protocol::PARTICIPANTS_UPDATE => self.on_participants_update(data, client),
             "pcm_transport_stats" => {
@@ -179,23 +355,8 @@ impl Bridge {
                 Ok(())
             }
             "connection_status" => self.on_connection_status(data, client).await,
-            protocol::MEETING_JOIN => self.on_meeting_join(data, client).await,
-            protocol::MEETING_LEAVE => self.on_meeting_leave(data, client).await,
-            "meeting_title_update" => self.on_meeting_title_update(data),
-            "request_transcript" => self.send_transcript_history(client).await,
             "clock_sync" => self.on_clock_sync(data),
             "pcm_chunk" => self.on_pcm_chunk(data, client),
-            protocol::COPILOT_CHANNEL_HELLO => self.on_channel_hello(client).await,
-            protocol::COPILOT_CHAT_MESSAGE => self.on_chat_message(data, client).await,
-            protocol::COPILOT_CHANNEL_REPLY => self.on_channel_reply(data).await,
-            protocol::COPILOT_CHANNEL_STATUS => self.on_channel_status(data).await,
-            protocol::GET_RECENT_TRANSCRIPT_REQUEST => self.on_recent_transcript_request(data, client).await,
-            protocol::COPILOT_SPAWN_REQUEST => self.on_spawn_request(data, client).await,
-            protocol::COPILOT_STOP_REQUEST => self.on_stop_request(data, client).await,
-            protocol::SUPERVISOR_HELLO => self.on_supervisor_hello(data, client).await,
-            protocol::COPILOT_AGENT_STATUS => self.on_agent_status(data).await,
-            protocol::CLAUDE_SESSIONS => self.on_claude_sessions(data).await,
-            // `ping` (heartbeat) and unknown types do nothing.
             _ => Ok(()),
         }
     }
@@ -322,93 +483,19 @@ impl Bridge {
     /// ingress (one bad chunk must not drop the batch it would join) and handed to
     /// the live process.
     fn on_pcm_chunk(&self, data: &Map, client: Option<&Arc<Client>>) -> Result<(), String> {
-        if self.config.ktalk_only {
-            let owner = self.st().meeting_owner;
-            if !self.is_recording_active() || client.map(|c| c.id) != owner {
-                return Ok(());
-            }
+        if !self.pcm_gate_open(client) {
+            return Ok(());
         }
-        let malformed = |e: String| format!("[KTalk Bridge] Malformed pcm_chunk frame, skipped: {e}");
-        let field = |key: &str| data.get(key).ok_or_else(|| key_error(key));
-        let parsed = (|| -> Result<Result<_, String>, String> {
-            let pid = match field("pid") {
-                Ok(v) => json::py_str(v),
-                Err(e) => return Ok(Err(e)),
-            };
-            if pid.is_empty() {
-                return Ok(Err("pid is empty".into()));
-            }
-            let speaker_name = data.get("speaker_name").filter(|v| v.truthy()).map_or_else(String::new, json::py_str);
-            let int = |key: &str| -> Result<Result<i128, String>, String> {
-                match field(key) {
-                    Err(e) => Ok(Err(e)),
-                    Ok(v) => match py_int(v) {
-                        Ok(n) => Ok(Ok(n)),
-                        Err(IntError::Malformed(e)) => Ok(Err(e)),
-                        Err(IntError::Overflow(e)) => Err(e),
-                    },
-                }
-            };
-            let seq = match int("seq")? {
-                Ok(n) => n,
-                Err(e) => return Ok(Err(e)),
-            };
-            let float = |key: &str| field(key).and_then(py_float);
-            let start_ms = match float("chunk_start_ms") {
-                Ok(x) => x,
-                Err(e) => return Ok(Err(e)),
-            };
-            let end_ms = match float("chunk_end_ms") {
-                Ok(x) => x,
-                Err(e) => return Ok(Err(e)),
-            };
-            let sample_rate = match int("sample_rate")? {
-                Ok(n) => n,
-                Err(e) => return Ok(Err(e)),
-            };
-            let pcm = match field("pcm_base64") {
-                Ok(v) => v.clone(),
-                Err(e) => return Ok(Err(e)),
-            };
-            Ok(Ok((pid, speaker_name, seq, start_ms, end_ms, sample_rate, pcm)))
-        })()?;
-        let (pid, speaker_name, seq, start_ms, end_ms, sample_rate, pcm_base64) = match parsed {
+        let fields = match parse_pcm_fields(data) {
             Ok(fields) => fields,
-            Err(e) => {
-                self.log(&malformed(e));
+            Err(PcmRefusal::Malformed(e)) => {
+                self.log(&format!("[KTalk Bridge] Malformed pcm_chunk frame, skipped: {e}"));
                 return Ok(());
             }
+            Err(PcmRefusal::Raise(e)) => return Err(e),
         };
-        if sample_rate != 16000 {
-            self.log(&format!(
-                "[KTalk Bridge] pcm_chunk unsupported sample_rate={sample_rate} (pid={pid}, seq={seq}); expected 16000"
-            ));
-            return Ok(());
-        }
-        let Value::Str(text) = &pcm_base64 else {
-            return Err(format!(
-                "argument should be a bytes-like object or ASCII string, not '{}'",
-                pcm_base64.type_name()
-            ));
-        };
-        let pcm = match b64decode_strict(text) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                self.log(&format!("[KTalk Bridge] pcm_chunk base64 decode failed (pid={pid}, seq={seq}): {e}"));
-                return Ok(());
-            }
-        };
-        if pcm.is_empty() {
-            self.log(&format!("[KTalk Bridge] pcm_chunk empty payload skipped (pid={pid}, seq={seq})"));
-            return Ok(());
-        }
-        if pcm.len() % 2 != 0 {
-            self.log(&format!(
-                "[KTalk Bridge] pcm_chunk odd-length payload skipped (pid={pid}, seq={seq}, bytes={})",
-                pcm.len()
-            ));
-            return Ok(());
-        }
+        let Some(pcm) = self.pcm_payload(&fields)? else { return Ok(()) };
+        let PcmFields { pid, speaker_name, seq, start_ms, end_ms, sample_rate, .. } = fields;
         let offset = self.st().clock_offset;
         let chunk = PcmChunk {
             pid: pid.clone(),
@@ -421,38 +508,101 @@ impl Bridge {
             sample_rate,
             pcm,
         };
+        if self.pcm_for_current_meeting(data, &pid, seq) {
+            self.hand_pcm_to_live(chunk);
+        }
+        Ok(())
+    }
+
+    /// A `ktalk_only` installation takes PCM only from the owner's tab while it records.
+    fn pcm_gate_open(&self, client: Option<&Arc<Client>>) -> bool {
+        if !self.config.ktalk_only {
+            return true;
+        }
+        let owner = self.st().meeting_owner;
+        self.is_recording_active() && client.map(|c| c.id) == owner
+    }
+
+    /// The decoded samples, or None (logged) for a rate, an encoding or a length the
+    /// ingest cannot take.
+    ///
+    /// # Errors
+    /// Python's `TypeError` for a payload that is not a string.
+    fn pcm_payload(&self, fields: &PcmFields) -> Result<Option<Vec<u8>>, String> {
+        let PcmFields { pid, seq, sample_rate, .. } = fields;
+        if *sample_rate != 16000 {
+            self.log(&format!(
+                "[KTalk Bridge] pcm_chunk unsupported sample_rate={sample_rate} (pid={pid}, seq={seq}); expected 16000"
+            ));
+            return Ok(None);
+        }
+        let Value::Str(text) = &fields.pcm_base64 else {
+            return Err(format!(
+                "argument should be a bytes-like object or ASCII string, not '{}'",
+                fields.pcm_base64.type_name()
+            ));
+        };
+        let pcm = match b64decode_strict(text) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                self.log(&format!("[KTalk Bridge] pcm_chunk base64 decode failed (pid={pid}, seq={seq}): {e}"));
+                return Ok(None);
+            }
+        };
+        if pcm.is_empty() {
+            self.log(&format!("[KTalk Bridge] pcm_chunk empty payload skipped (pid={pid}, seq={seq})"));
+            return Ok(None);
+        }
+        if pcm.len() % 2 != 0 {
+            self.log(&format!(
+                "[KTalk Bridge] pcm_chunk odd-length payload skipped (pid={pid}, seq={seq}, bytes={})",
+                pcm.len()
+            ));
+            return Ok(None);
+        }
+        Ok(Some(pcm))
+    }
+
+    /// A conference meeting is on and the chunk is not a sibling tab's, tagged with
+    /// its own meeting; a refusal is logged (a sibling's once per 10 s and pid).
+    fn pcm_for_current_meeting(&self, data: &Map, pid: &str, seq: i128) -> bool {
         if !self.has_active_conference_meeting() {
             self.log(&format!("[KTalk Bridge] pcm_chunk outside active ktalk meeting skipped (pid={pid}, seq={seq})"));
-            return Ok(());
+            return false;
         }
-        // A sibling tab's PCM, tagged with its own meeting, must not enter this one.
         if let Some(chunk_meeting) = json::nonempty_str(data.get("meeting_id"))
             && let Some(current) = self.current_meeting_id().filter(|c| !c.is_empty())
             && chunk_meeting != current
         {
-            let now = self.now();
-            let log_it = {
-                let mut st = self.st();
-                let last = st.pcm_drop_log_ts.get(&pid).copied().unwrap_or(0.0);
-                let due = now - last > 10.0;
-                if due {
-                    st.pcm_drop_log_ts.insert(pid.clone(), now);
-                }
-                due
-            };
-            if log_it {
+            if self.pcm_drop_log_due(pid) {
                 self.log(&format!(
                     "[KTalk Bridge] pcm_chunk cross-meeting dropped (pid={pid}, seq={seq}, chunk={chunk_meeting}, current={current})"
                 ));
             }
-            return Ok(());
+            return false;
         }
+        true
+    }
+
+    /// True (and the time kept) when `pid`'s last cross-meeting drop was logged more
+    /// than 10 s ago.
+    fn pcm_drop_log_due(&self, pid: &str) -> bool {
+        let now = self.now();
+        let mut st = self.st();
+        let last = st.pcm_drop_log_ts.get(pid).copied().unwrap_or(0.0);
+        let due = now - last > 10.0;
+        if due {
+            st.pcm_drop_log_ts.insert(pid.to_owned(), now);
+        }
+        due
+    }
+
+    fn hand_pcm_to_live(&self, chunk: PcmChunk) {
         if let Some(live) = self.wired().live.filter(|l| l.wants_pcm())
             && let Err(e) = live.pcm_chunk(chunk)
         {
             self.log(&format!("[KTalk Bridge] pcm_chunk callback raised: {e}"));
         }
-        Ok(())
     }
 }
 
@@ -519,6 +669,7 @@ mod tests {
             ),
             ("YQ\n==", Err("Only base64 data is allowed")),
             ("AAA=", Ok(b"\x00\x00")),
+            ("+/8=", Ok(b"\xfb\xff")),
             ("YQ===", Err("Excess data after padding")),
             ("YWJj=", Err("Excess padding not allowed")),
             ("ЖЖЖЖ", Err("string argument should contain only ASCII characters")),
