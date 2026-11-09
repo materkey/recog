@@ -2134,6 +2134,11 @@ async function startSegmentAudio(buttonEl, audioBlob) {
 }
 
 function stopAudio() {
+    // An abandoned load never reaches its own reset, so its button is reset here.
+    if (audioLoadingFor) {
+        audioLoadingFor.classList.remove('loading');
+        audioLoadingFor.disabled = false;
+    }
     audioLoadingFor = null;
 
     if (currentAudio) {

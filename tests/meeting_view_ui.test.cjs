@@ -233,6 +233,31 @@ test('segment loading - another segment clicked - the first load is abandoned', 
     assert.equal(p.groups()[0].classList.contains('segment-playing'), false);
 });
 
+test('segment loading - another segment takes over playback - the first button returns to play at once', async () => {
+    let release;
+    const slow = new Promise(resolve => { release = resolve; });
+    const p = meetingPage({
+        segments: meetingWithTwoPlayable,
+        routes: {
+            'GET /api/meetings/m1/audio/0': async () => { await slow; return { ok: true, blob: async () => 'wav-0' }; },
+            'GET /api/meetings/m1/audio/3': async () => ({ ok: true, blob: async () => 'wav-3' }),
+        },
+    });
+    await p.settle();
+    p.playButton(0).click();
+    await p.flush();
+    p.playButton(1).click();
+    assert.equal(p.playButton(0).disabled, false);
+    assert.equal(p.playButton(0).className, 'btn-play-segment');
+    await p.settle();
+    assert.equal(p.playButton(1).className, 'btn-play-segment playing');
+    release();
+    await p.settle();
+    assert.equal(p.playButton(0).disabled, false);
+    assert.equal(p.playButton(0).className, 'btn-play-segment');
+    assert.notEqual(p.playButton(0).querySelector('.play-icon'), null);
+});
+
 test('meeting shown - Copy clicked - Markdown with real names is copied and the button confirms', async () => {
     const p = meetingPage();
     await p.settle();

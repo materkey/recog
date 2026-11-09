@@ -28,6 +28,12 @@ reasoning.
   as text. `./setup.sh` rebuilds `browser-extension/dist/`; then press Reload on
   the extension in `chrome://extensions`.
 
+### Changed
+
+- **Meeting page: playing a segment while another is still loading** no longer
+  leaves the first play button disabled until the page re-renders; it returns to
+  play at once.
+
 ## 2026-11-08
 
 ### Action required
