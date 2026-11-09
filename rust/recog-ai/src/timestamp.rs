@@ -135,4 +135,52 @@ mod tests {
         assert_eq!(parse_aware_isoformat("2026-03-21"), None);
         assert_eq!(parse_aware_isoformat("garbage"), None);
     }
+
+    const INSTANT: i64 = 1_774_103_100_000_000;
+
+    #[test]
+    fn fractions_and_offsets_given_parser_when_read_then_instant_in_utc() {
+        let cases = [
+            ("2026-03-21T14:25:00.5Z", INSTANT + 500_000),
+            ("2026-03-21T14:25:00.1234567+00:00", INSTANT + 123_456),
+            ("2026-03-21T14:25:00z", INSTANT),
+            ("2026-03-21T09:25:00-05:00", INSTANT),
+            ("2026-03-21T20:00:00+0535", INSTANT),
+            ("2026-03-21T19:25+05", INSTANT),
+            ("2026-03-21T14:25:10+00:00:10", INSTANT),
+            ("2026-03-21T14:25:00+00:00:00.5", INSTANT - 500_000),
+            ("2026-03-21 14Z", INSTANT - 25 * 60 * 1_000_000),
+        ];
+        for (text, micros) in cases {
+            assert_eq!(parse_aware_isoformat(text), Some(micros), "{text}");
+        }
+    }
+
+    #[test]
+    fn malformed_date_clock_or_zone_given_parser_when_read_then_none() {
+        let cases = [
+            "2026-03-0é1T14:25Z",
+            "20x6-03-21T14:25Z",
+            "2026/03/21T14:25Z",
+            "2026-03/21T14:25Z",
+            "2026-13-21T14:25Z",
+            "2026-03-00T14:25Z",
+            "2026-03-21T",
+            "2026-03-21TZ",
+            "2026-03-21T1:25Z",
+            "2026-03-21T14:25:00:00Z",
+            "2026-03-21Taa:25Z",
+            "2026-03-21T14:25:00.Z",
+            "2026-03-21T14:25.5Z",
+            "2026-03-21T14:25:00.5xZ",
+            "2026-03-21T24:00Z",
+            "2026-03-21T14:60Z",
+            "2026-03-21T14:25:60Z",
+            "2026-03-21T14:25+5",
+            "2026-03-21T14:25Zulu",
+        ];
+        for text in cases {
+            assert_eq!(parse_aware_isoformat(text), None, "{text}");
+        }
+    }
 }

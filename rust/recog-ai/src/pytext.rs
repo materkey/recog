@@ -183,4 +183,12 @@ mod tests {
         assert_eq!(py_repr_str("a\"b'c"), "'a\"b\\'c'");
         assert_eq!(py_repr_str("\u{7}\u{a0}é\u{2028}😀"), "'\\x07\\xa0é\\u2028😀'");
     }
+
+    #[test]
+    fn backslashes_and_unprintables_given_repr_when_called_then_python_escapes() {
+        assert_eq!(py_repr_str("a\\b\t\n\r\u{7f}~"), "'a\\\\b\\t\\n\\r\\x7f~'");
+        assert_eq!(py_repr_str("\u{85}\u{e000}\u{e0001}"), "'\\x85\\ue000\\U000e0001'");
+        assert_eq!(py_repr_str("\"'"), "'\"\\''");
+        assert_eq!(py_repr_str(""), "''");
+    }
 }

@@ -452,6 +452,67 @@ mod tests {
     }
 
     #[test]
+    fn loaded_values_given_repr_when_printed_then_python_text() {
+        let value = Json::parse(
+            r#"{"n": null, "t": true, "f": false, "i": -7, "x": 0.5, "s": "it's", "a": [1, "b"], "o": {}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            value.py_repr(),
+            r#"{'n': None, 't': True, 'f': False, 'i': -7, 'x': 0.5, 's': "it's", 'a': [1, 'b'], 'o': {}}"#
+        );
+        assert_eq!(Json::Array(Vec::new()).py_repr(), "[]");
+        assert_eq!(Json::from("plain").py_str(), "plain");
+        assert_eq!(Json::Null.py_str(), "None");
+    }
+
+    #[test]
+    fn every_variant_given_type_name_when_asked_then_python_type() {
+        let value = Json::parse(r#"[null, true, 1, 1.5, "s", [], {}]"#).unwrap();
+        let names: Vec<&str> = value.as_array().unwrap().iter().map(Json::type_name).collect();
+        assert_eq!(names, ["NoneType", "bool", "int", "float", "str", "list", "dict"]);
+    }
+
+    #[test]
+    fn escapes_given_every_short_form_when_dumped_then_python_escapes() {
+        let text = "q\"b\\n\nr\rt\tb\u{8}f\u{c}c\u{1}é";
+        assert_eq!(Json::from(text).dumps(None), r#""q\"b\\n\nr\rt\tb\bf\fc\u0001é""#);
+    }
+
+    #[test]
+    fn special_and_signed_floats_given_repr_when_printed_then_python_text() {
+        let cases = [
+            (f64::NAN, "NaN"),
+            (f64::INFINITY, "Infinity"),
+            (f64::NEG_INFINITY, "-Infinity"),
+            (-0.5, "-0.5"),
+            (-1.5e-7, "-1.5e-07"),
+            (2.5e300, "2.5e+300"),
+            (0.00012, "0.00012"),
+        ];
+        for (value, text) in cases {
+            assert_eq!(py_float_repr(value), text, "{value}");
+        }
+    }
+
+    #[test]
+    fn mixed_kinds_given_python_equality_when_compared_then_only_equal_values_match() {
+        assert_eq!(Json::Null, Json::Null);
+        assert_eq!(Json::from("a"), Json::from("a"));
+        assert_ne!(Json::from("a"), Json::from("b"));
+        assert_eq!(Json::parse("[1, 2]").unwrap(), Json::parse("[1.0, 2]").unwrap());
+        assert_ne!(Json::parse("[1, 2]").unwrap(), Json::parse("[2, 1]").unwrap());
+        assert_eq!(Json::Float(0.5), Json::Float(0.5));
+        assert_ne!(Json::Float(0.5), Json::Float(1.5));
+        assert_eq!(Json::Bool(true), Json::Float(1.0));
+        assert_ne!(Json::Float(1.5), Json::Int(1));
+        assert_ne!(Json::Float(0.0), Json::Null);
+        assert_ne!(Json::Null, Json::Bool(false));
+        assert_ne!(Json::Array(Vec::new()), Json::Object(Map::new()));
+        assert_eq!(Json::Bool(false), Json::Int(0));
+    }
+
+    #[test]
     fn numbers_given_python_equality_when_compared_then_int_float_and_bool_mix() {
         assert_eq!(Json::Int(1), Json::Float(1.0));
         assert_eq!(Json::Bool(true), Json::Int(1));
