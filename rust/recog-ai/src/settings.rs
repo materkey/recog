@@ -8,6 +8,7 @@
 //! Model precedence: scenario > saved global > legacy `CLAUDE_MODEL`/`CODEX_MODEL` >
 //! shipped default.
 
+use std::borrow::Cow;
 use std::fs::{File, OpenOptions, Permissions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -97,69 +98,91 @@ fn valid_task_id(task_id: &str) -> Result<()> {
 pub fn task_values(task_id: &str, values: &Json) -> Result<Map> {
     valid_task_id(task_id)?;
     let values = known_fields(values, &TASK_FIELDS, "task")?;
-    let copilot = task_id == "copilot";
     let mut normalized = Map::new();
-    if let Some(enabled) = values.get("enabled") {
-        let Json::Bool(enabled) = enabled else {
-            return Err(value_error("Enabled must be a boolean for Copilot"));
-        };
-        if !copilot {
-            return Err(value_error("Enabled must be a boolean for Copilot"));
+    for (field, check) in TASK_FIELD_CHECKS {
+        if let Some(value) = values.get(field)
+            && let Some(value) = check(task_id, value)?
+        {
+            normalized.insert(field.into(), value);
         }
-        normalized.insert("enabled".into(), Json::Bool(*enabled));
-    }
-    if let Some(prompt) = values.get("prompt") {
-        let valid = prompt.as_str().filter(|prompt| {
-            !pytext::strip(prompt).is_empty() && pytext::char_len(prompt) <= MAX_PROMPT_CHARS && !prompt.contains('\0')
-        });
-        let Some(prompt) = valid else {
-            return Err(value_error(format!("Prompt must be nonempty text of at most {MAX_PROMPT_CHARS} characters")));
-        };
-        if !copilot && !template_variables(prompt)?.contains("transcript") {
-            return Err(value_error("Prompt must include {transcript}"));
-        }
-        normalized.insert("prompt".into(), Json::from(prompt));
-    }
-    if let Some(providers) = values.get("providers") {
-        let allowed: &[&str] = if copilot { &["claude"] } else { &PROVIDERS };
-        let limit = if task_id.starts_with("analysis.") { allowed.len() } else { 1 };
-        let names: Option<Vec<&str>> = providers.as_array().and_then(|items| items.iter().map(Json::as_str).collect());
-        let valid = names.filter(|names| {
-            (1..=limit).contains(&names.len())
-                && names.iter().all(|name| allowed.contains(name))
-                && names.iter().enumerate().all(|(index, name)| !names[..index].contains(name))
-        });
-        let Some(names) = valid else {
-            return Err(value_error("Invalid provider selection"));
-        };
-        normalized
-            .insert("providers".into(), Json::from(names.iter().map(|name| name.to_string()).collect::<Vec<_>>()));
-    }
-    if let Some(models) = values.get("models") {
-        let models = validate_models(models)?;
-        if copilot && models.keys().any(|provider| provider != "claude") {
-            return Err(value_error("Copilot supports only Claude"));
-        }
-        if !models.is_empty() {
-            normalized.insert("models".into(), json::string_map(&models));
-        }
-    }
-    if let Some(effort) = values.get("reasoning_effort") {
-        let Some(effort) = effort.as_str().filter(|effort| REASONING_EFFORTS.contains(effort)) else {
-            return Err(value_error("Invalid Codex reasoning effort"));
-        };
-        if copilot {
-            return Err(value_error("Copilot does not support Codex reasoning effort"));
-        }
-        normalized.insert("reasoning_effort".into(), Json::from(effort));
-    }
-    if let Some(effort) = values.get("claude_effort") {
-        let Some(effort) = effort.as_str().filter(|effort| CLAUDE_EFFORTS.contains(effort)) else {
-            return Err(value_error("Invalid Claude effort"));
-        };
-        normalized.insert("claude_effort".into(), Json::from(effort));
     }
     Ok(normalized)
+}
+
+/// The canonical value of one field of a scenario's override; `None` leaves it out.
+type FieldCheck = fn(&str, &Json) -> Result<Option<Json>>;
+
+/// The fields of an override in the order they are checked and written.
+const TASK_FIELD_CHECKS: [(&str, FieldCheck); 6] = [
+    ("enabled", enabled_value),
+    ("prompt", prompt_value),
+    ("providers", providers_value),
+    ("models", models_value),
+    ("reasoning_effort", reasoning_effort_value),
+    ("claude_effort", claude_effort_value),
+];
+
+fn enabled_value(task_id: &str, enabled: &Json) -> Result<Option<Json>> {
+    let Json::Bool(enabled) = enabled else {
+        return Err(value_error("Enabled must be a boolean for Copilot"));
+    };
+    if task_id != "copilot" {
+        return Err(value_error("Enabled must be a boolean for Copilot"));
+    }
+    Ok(Some(Json::Bool(*enabled)))
+}
+
+fn prompt_value(task_id: &str, prompt: &Json) -> Result<Option<Json>> {
+    let valid = prompt.as_str().filter(|prompt| {
+        !pytext::strip(prompt).is_empty() && pytext::char_len(prompt) <= MAX_PROMPT_CHARS && !prompt.contains('\0')
+    });
+    let Some(prompt) = valid else {
+        return Err(value_error(format!("Prompt must be nonempty text of at most {MAX_PROMPT_CHARS} characters")));
+    };
+    if task_id != "copilot" && !template_variables(prompt)?.contains("transcript") {
+        return Err(value_error("Prompt must include {transcript}"));
+    }
+    Ok(Some(Json::from(prompt)))
+}
+
+fn providers_value(task_id: &str, providers: &Json) -> Result<Option<Json>> {
+    let allowed: &[&str] = if task_id == "copilot" { &["claude"] } else { &PROVIDERS };
+    let limit = if task_id.starts_with("analysis.") { allowed.len() } else { 1 };
+    let names: Option<Vec<&str>> = providers.as_array().and_then(|items| items.iter().map(Json::as_str).collect());
+    let valid = names.filter(|names| {
+        (1..=limit).contains(&names.len())
+            && names.iter().all(|name| allowed.contains(name))
+            && names.iter().enumerate().all(|(index, name)| !names[..index].contains(name))
+    });
+    let Some(names) = valid else {
+        return Err(value_error("Invalid provider selection"));
+    };
+    Ok(Some(Json::from(names.iter().map(|name| name.to_string()).collect::<Vec<_>>())))
+}
+
+fn models_value(task_id: &str, models: &Json) -> Result<Option<Json>> {
+    let models = validate_models(models)?;
+    if task_id == "copilot" && models.keys().any(|provider| provider != "claude") {
+        return Err(value_error("Copilot supports only Claude"));
+    }
+    Ok((!models.is_empty()).then(|| json::string_map(&models)))
+}
+
+fn reasoning_effort_value(task_id: &str, effort: &Json) -> Result<Option<Json>> {
+    let Some(effort) = effort.as_str().filter(|effort| REASONING_EFFORTS.contains(effort)) else {
+        return Err(value_error("Invalid Codex reasoning effort"));
+    };
+    if task_id == "copilot" {
+        return Err(value_error("Copilot does not support Codex reasoning effort"));
+    }
+    Ok(Some(Json::from(effort)))
+}
+
+fn claude_effort_value(_task_id: &str, effort: &Json) -> Result<Option<Json>> {
+    let Some(effort) = effort.as_str().filter(|effort| CLAUDE_EFFORTS.contains(effort)) else {
+        return Err(value_error("Invalid Claude effort"));
+    };
+    Ok(Some(Json::from(effort)))
 }
 
 /// A scenario after precedence is applied (`resolve_task`).
@@ -302,39 +325,22 @@ impl AiSettingsStore {
     /// The saved settings, or the defaults when there is no file (nothing is created).
     /// Retired features of older versions are dropped from the result, not the file.
     pub fn read(&self) -> Result<Snapshot> {
-        let data = match File::open(&self.path) {
-            Ok(file) => {
-                let mut data = Vec::new();
-                file.take(MAX_SETTINGS_BYTES as u64 + 1).read_to_end(&mut data)?;
-                data
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(
-                    match json::object([
-                        ("version", Json::Int(1)),
-                        ("revision", Json::from("defaults")),
-                        ("models", Json::Object(Map::new())),
-                        ("tasks", Json::Object(Map::new())),
-                    ]) {
-                        Json::Object(map) => map,
-                        _ => unreachable!(),
-                    },
-                );
-            }
+        match self.read_bytes()? {
+            Some(data) => parse_snapshot(&data),
+            None => Ok(default_snapshot()),
+        }
+    }
+
+    /// The file's bytes, one past the size limit at most; `None` when there is no file.
+    fn read_bytes(&self) -> Result<Option<Vec<u8>>> {
+        let file = match File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         };
-        if data.len() > MAX_SETTINGS_BYTES {
-            return Err(AiError::SettingsRead("AI settings file exceeds size limit".to_owned()));
-        }
-        let invalid = || AiError::SettingsRead("Invalid AI settings JSON".to_owned());
-        let text = decode_json_bytes(&data).ok_or_else(invalid)?;
-        let mut raw = Json::parse(&text).map_err(|_| invalid())?;
-        drop_retired_features(&mut raw);
-        validate_raw(&raw).map_err(|error| AiError::SettingsRead(error.to_string()))?;
-        match raw {
-            Json::Object(map) => Ok(map),
-            _ => unreachable!("validated as an object"),
-        }
+        let mut data = Vec::new();
+        file.take(MAX_SETTINGS_BYTES as u64 + 1).read_to_end(&mut data)?;
+        Ok(Some(data))
     }
 
     fn effective_models(&self, snapshot: &Snapshot) -> Result<IndexMap<String, String>> {
@@ -405,59 +411,23 @@ impl AiSettingsStore {
         snapshot: Option<&Snapshot>,
         fallback: Fallback<'_>,
     ) -> Result<ResolvedTask> {
-        let read;
         let snapshot = match snapshot {
-            Some(snapshot) => snapshot,
-            None => {
-                read = self.read()?;
-                &read
-            }
+            Some(snapshot) => Cow::Borrowed(snapshot),
+            None => Cow::Owned(self.read()?),
         };
         let definition = self.definition(task_id, fallback)?;
-        let tasks = snapshot.get("tasks").and_then(Json::as_object);
-        let task_override = |id: &str| tasks.and_then(|tasks| tasks.get(id)).and_then(Json::as_object).cloned();
-        let override_values = if task_id == INCREMENT_TASK || task_id == SAVED_INCREMENT_TASK {
-            // Both historical IDs are read without rewriting the file; the visible
-            // scenario wins on a field customized twice.
-            let mut merged = task_override(SAVED_INCREMENT_TASK).unwrap_or_default();
-            merged.extend(task_override(INCREMENT_TASK).unwrap_or_default());
-            merged
-        } else {
-            task_override(task_id).unwrap_or_default()
-        };
+        let override_values = task_override(&snapshot, task_id);
         let text = |key: &str| override_values.get(key).and_then(Json::as_str).map(str::to_owned);
-        let copilot = task_id == "copilot";
-        let mut providers: Vec<String> = if task_id.starts_with("analysis.") {
-            vec!["claude".into(), "codex".into()]
-        } else if copilot {
-            vec!["claude".into()]
-        } else {
-            definition.providers.clone().unwrap_or_else(|| vec!["codex".into()])
-        };
-        let legacy_effort = self.legacy().codex_reasoning_effort.filter(|effort| !effort.is_empty());
-        let effort = text("reasoning_effort").unwrap_or_else(|| legacy_effort.unwrap_or_else(|| "xhigh".into()));
+        let effort = text("reasoning_effort").unwrap_or_else(|| self.legacy_reasoning_effort());
         if !REASONING_EFFORTS.contains(&effort.as_str()) {
             return Err(value_error("Invalid legacy CODEX_REASONING_EFFORT"));
         }
-        let model_overrides: IndexMap<String, String> = override_values
-            .get("models")
-            .and_then(Json::as_object)
-            .map(|models| {
-                models.iter().map(|(key, value)| (key.clone(), value.as_str().unwrap_or_default().to_owned())).collect()
-            })
-            .unwrap_or_default();
-        let mut models = self.effective_models(snapshot)?;
+        let model_overrides = text_values(override_values.get("models"));
+        let mut models = self.effective_models(&snapshot)?;
         models.extend(model_overrides.clone());
-        if let Some(Json::Array(items)) = override_values.get("providers") {
-            providers = items.iter().filter_map(Json::as_str).map(str::to_owned).collect();
-        }
-        if task_id == SAVED_INCREMENT_TASK {
-            // A saved version holds one result: Codex when comparison selects both.
-            let codex = providers.iter().any(|provider| provider == "codex");
-            providers = vec![if codex { "codex".into() } else { providers[0].clone() }];
-        }
-        let placeholders: Vec<String> =
-            if copilot { Vec::new() } else { PLACEHOLDERS.iter().map(|name| name.to_string()).collect() };
+        let providers = task_providers(task_id, definition.providers.as_deref(), &override_values);
+        let copilot = task_id == "copilot";
+        let shape = TaskShape::of(copilot);
         Ok(ResolvedTask {
             id: task_id.to_owned(),
             label: definition.label,
@@ -465,18 +435,23 @@ impl AiSettingsStore {
             prompt: text("prompt").unwrap_or_else(|| definition.prompt.clone()),
             default_prompt: definition.prompt,
             providers,
-            allowed_providers: if copilot { vec!["claude".into()] } else { PROVIDERS.map(str::to_owned).to_vec() },
+            allowed_providers: shape.allowed_providers,
             multiple: definition.multiple,
             models,
             model_overrides,
             reasoning_effort: effort,
             claude_effort: text("claude_effort").unwrap_or_default(),
-            placeholders,
-            required_placeholders: if copilot { Vec::new() } else { vec!["transcript".into()] },
-            apply_mode: if copilot { "next_event_model_next_session" } else { "next_request" }.to_owned(),
+            placeholders: shape.placeholders,
+            required_placeholders: shape.required_placeholders,
+            apply_mode: shape.apply_mode,
             customized: !override_values.is_empty(),
             revision: snapshot.get("revision").and_then(Json::as_str).unwrap_or_default().to_owned(),
         })
+    }
+
+    /// `CODEX_REASONING_EFFORT` when set and not empty, else `xhigh`.
+    fn legacy_reasoning_effort(&self) -> String {
+        self.legacy().codex_reasoning_effort.filter(|effort| !effort.is_empty()).unwrap_or_else(|| "xhigh".into())
     }
 
     fn view_of(&self, snapshot: &Snapshot) -> Result<View> {
@@ -534,10 +509,7 @@ impl AiSettingsStore {
     fn mutate(&self, expected_revision: Option<&str>, update: impl FnOnce(&mut Snapshot)) -> Result<View> {
         let _lock = self.write_lock()?;
         let mut snapshot = self.read()?;
-        let current = snapshot.get("revision").and_then(Json::as_str).unwrap_or_default();
-        if expected_revision.is_some_and(|expected| expected != current) {
-            return Err(AiError::Conflict("AI settings changed; reload before saving".to_owned()));
-        }
+        check_revision(&snapshot, expected_revision)?;
         update(&mut snapshot);
         snapshot.insert("revision".into(), Json::from(uuid::Uuid::new_v4().to_string()));
         let raw = Json::Object(snapshot);
@@ -546,20 +518,23 @@ impl AiSettingsStore {
         // Resolve before committing so that a failing view cannot report an error after
         // the user's settings have changed.
         let view = self.view_of(&snapshot)?;
-        let data = Json::Object(snapshot).dumps(Some(2)) + "\n";
+        self.replace_file(&(Json::Object(snapshot).dumps(Some(2)) + "\n"))?;
+        Ok(view)
+    }
+
+    /// Replaces the settings file with `data` atomically: a private temporary file in
+    /// the same directory, fsync, rename.
+    fn replace_file(&self, data: &str) -> Result<()> {
         if data.len() > MAX_SETTINGS_BYTES {
             return Err(value_error("AI settings exceed size limit"));
         }
         let parent = self.path.parent().unwrap_or(Path::new("."));
-        let mut temporary = tempfile::Builder::new().prefix(".ai-settings-").suffix(".tmp").tempfile_in(parent)?;
-        temporary.as_file().set_permissions(Permissions::from_mode(0o600))?;
-        temporary.write_all(data.as_bytes())?;
-        temporary.flush()?;
+        let temporary = private_temporary(parent, data)?;
         injected_failure("fsync")?;
         temporary.as_file().sync_all()?;
         injected_failure("replace")?;
         temporary.persist(&self.path).map_err(|error| error.error)?;
-        Ok(view)
+        Ok(())
     }
 
     /// Replace the given global model overrides; a blank value removes one.
@@ -630,6 +605,123 @@ fn object_entry<'a>(snapshot: &'a mut Snapshot, key: &str) -> &'a mut Map {
         .expect("validated object")
 }
 
+/// A conflict when the caller's draft was based on another revision than the file's.
+fn check_revision(snapshot: &Snapshot, expected_revision: Option<&str>) -> Result<()> {
+    let current = snapshot.get("revision").and_then(Json::as_str).unwrap_or_default();
+    if expected_revision.is_some_and(|expected| expected != current) {
+        return Err(AiError::Conflict("AI settings changed; reload before saving".to_owned()));
+    }
+    Ok(())
+}
+
+/// `data` in a new file readable only by the user, next to the settings.
+fn private_temporary(parent: &Path, data: &str) -> Result<tempfile::NamedTempFile> {
+    let mut temporary = tempfile::Builder::new().prefix(".ai-settings-").suffix(".tmp").tempfile_in(parent)?;
+    temporary.as_file().set_permissions(Permissions::from_mode(0o600))?;
+    temporary.write_all(data.as_bytes())?;
+    temporary.flush()?;
+    Ok(temporary)
+}
+
+/// The saved override of a scenario, empty without one.
+fn task_override(snapshot: &Snapshot, task_id: &str) -> Map {
+    let tasks = snapshot.get("tasks").and_then(Json::as_object);
+    let saved = |id: &str| tasks.and_then(|tasks| tasks.get(id)).and_then(Json::as_object).cloned().unwrap_or_default();
+    if task_id == INCREMENT_TASK || task_id == SAVED_INCREMENT_TASK {
+        // Both historical IDs are read without rewriting the file; the visible
+        // scenario wins on a field customized twice.
+        let mut merged = saved(SAVED_INCREMENT_TASK);
+        merged.extend(saved(INCREMENT_TASK));
+        return merged;
+    }
+    saved(task_id)
+}
+
+/// The text values of an object of model names, empty for anything else.
+fn text_values(models: Option<&Json>) -> IndexMap<String, String> {
+    models
+        .and_then(Json::as_object)
+        .map(|models| {
+            models.iter().map(|(key, value)| (key.clone(), value.as_str().unwrap_or_default().to_owned())).collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The selected providers: the override's, else the scenario's default.
+fn task_providers(task_id: &str, defined: Option<&[String]>, override_values: &Map) -> Vec<String> {
+    let mut providers: Vec<String> = if task_id.starts_with("analysis.") {
+        vec!["claude".into(), "codex".into()]
+    } else if task_id == "copilot" {
+        vec!["claude".into()]
+    } else {
+        defined.map_or_else(|| vec!["codex".into()], <[String]>::to_vec)
+    };
+    if let Some(Json::Array(items)) = override_values.get("providers") {
+        providers = items.iter().filter_map(Json::as_str).map(str::to_owned).collect();
+    }
+    if task_id == SAVED_INCREMENT_TASK {
+        // A saved version holds one result: Codex when comparison selects both.
+        let codex = providers.iter().any(|provider| provider == "codex");
+        providers = vec![if codex { "codex".into() } else { providers[0].clone() }];
+    }
+    providers
+}
+
+/// What a scenario offers by kind: Copilot takes only Claude and no placeholders, and
+/// applies a model change at the next session.
+struct TaskShape {
+    allowed_providers: Vec<String>,
+    placeholders: Vec<String>,
+    required_placeholders: Vec<String>,
+    apply_mode: String,
+}
+
+impl TaskShape {
+    fn of(copilot: bool) -> TaskShape {
+        if copilot {
+            return TaskShape {
+                allowed_providers: vec!["claude".into()],
+                placeholders: Vec::new(),
+                required_placeholders: Vec::new(),
+                apply_mode: "next_event_model_next_session".into(),
+            };
+        }
+        TaskShape {
+            allowed_providers: PROVIDERS.map(str::to_owned).to_vec(),
+            placeholders: PLACEHOLDERS.iter().map(|name| name.to_string()).collect(),
+            required_placeholders: vec!["transcript".into()],
+            apply_mode: "next_request".into(),
+        }
+    }
+}
+
+/// What `read` gives without a settings file.
+fn default_snapshot() -> Snapshot {
+    let mut snapshot = Map::new();
+    snapshot.insert("version".into(), Json::Int(1));
+    snapshot.insert("revision".into(), Json::from("defaults"));
+    snapshot.insert("models".into(), Json::Object(Map::new()));
+    snapshot.insert("tasks".into(), Json::Object(Map::new()));
+    snapshot
+}
+
+/// The settings in a file's bytes, retired features dropped; `SettingsRead` for a file
+/// too large, undecodable or invalid.
+fn parse_snapshot(data: &[u8]) -> Result<Snapshot> {
+    if data.len() > MAX_SETTINGS_BYTES {
+        return Err(AiError::SettingsRead("AI settings file exceeds size limit".to_owned()));
+    }
+    let invalid = || AiError::SettingsRead("Invalid AI settings JSON".to_owned());
+    let text = decode_json_bytes(data).ok_or_else(invalid)?;
+    let mut raw = Json::parse(&text).map_err(|_| invalid())?;
+    drop_retired_features(&mut raw);
+    validate_raw(&raw).map_err(|error| AiError::SettingsRead(error.to_string()))?;
+    match raw {
+        Json::Object(map) => Ok(map),
+        _ => unreachable!("validated as an object"),
+    }
+}
+
 /// Settings saved by an earlier version may still hold retired features.
 fn drop_retired_features(raw: &mut Json) {
     let Some(raw) = raw.as_object_mut() else {
@@ -670,6 +762,16 @@ fn drop_retired_features(raw: &mut Json) {
 /// `_validate_raw`.
 fn validate_raw(raw: &Json) -> Result<()> {
     let map = known_fields(raw, &["version", "revision", "models", "tasks"], "settings")?;
+    validate_header(map)?;
+    let models = &map["models"];
+    if json::string_map(&validate_models(models)?) != *models {
+        return Err(value_error("Noncanonical model overrides"));
+    }
+    validate_tasks(&map["tasks"])
+}
+
+/// Every field present, version 1, a canonical UUID revision.
+fn validate_header(map: &Map) -> Result<()> {
     if map.len() != 4 {
         return Err(value_error("Incomplete AI settings"));
     }
@@ -679,11 +781,12 @@ fn validate_raw(raw: &Json) -> Result<()> {
     if !map.get("revision").and_then(Json::as_str).is_some_and(is_canonical_uuid) {
         return Err(value_error("Invalid settings revision"));
     }
-    let models = &map["models"];
-    if json::string_map(&validate_models(models)?) != *models {
-        return Err(value_error("Noncanonical model overrides"));
-    }
-    let tasks = match &map["tasks"] {
+    Ok(())
+}
+
+/// At most [`MAX_TASKS`] overrides, each already in its canonical form.
+fn validate_tasks(tasks: &Json) -> Result<()> {
+    let tasks = match tasks {
         Json::Object(tasks) if tasks.len() <= MAX_TASKS => tasks,
         _ => return Err(value_error("Invalid task overrides")),
     };
@@ -707,58 +810,74 @@ fn is_canonical_uuid(text: &str) -> bool {
 /// `json.loads(bytes)`: the encoding detected from a BOM or the zero bytes of the first
 /// four, as `json.detect_encoding` does; `None` when the bytes do not decode.
 fn decode_json_bytes(data: &[u8]) -> Option<String> {
-    fn utf16(data: &[u8], big: bool) -> Option<String> {
-        if !data.len().is_multiple_of(2) {
-            return None;
-        }
-        let units = data.chunks(2).map(|pair| {
-            if big { u16::from_be_bytes([pair[0], pair[1]]) } else { u16::from_le_bytes([pair[0], pair[1]]) }
-        });
-        char::decode_utf16(units).collect::<Result<String, _>>().ok()
+    let (encoding, bom) = detect_encoding(data);
+    let data = &data[bom..];
+    match encoding {
+        Encoding::Utf8 => String::from_utf8(data.to_vec()).ok(),
+        Encoding::Utf16 { big } => decode_utf16(data, big),
+        Encoding::Utf32 { big } => decode_utf32(data, big),
     }
-    fn utf32(data: &[u8], big: bool) -> Option<String> {
-        if !data.len().is_multiple_of(4) {
-            return None;
-        }
-        data.chunks(4)
-            .map(|quad| {
-                let bytes = [quad[0], quad[1], quad[2], quad[3]];
-                char::from_u32(if big { u32::from_be_bytes(bytes) } else { u32::from_le_bytes(bytes) })
-            })
-            .collect()
-    }
-    let starts = |prefix: &[u8]| data.starts_with(prefix);
-    if starts(&[0, 0, 0xfe, 0xff]) {
-        return utf32(&data[4..], true);
-    }
-    if starts(&[0xff, 0xfe, 0, 0]) {
-        return utf32(&data[4..], false);
-    }
-    if starts(&[0xfe, 0xff]) {
-        return utf16(&data[2..], true);
-    }
-    if starts(&[0xff, 0xfe]) {
-        return utf16(&data[2..], false);
-    }
-    if starts(&[0xef, 0xbb, 0xbf]) {
-        return String::from_utf8(data[3..].to_vec()).ok();
-    }
-    if data.len() >= 4 {
-        if data[0] == 0 {
-            return if data[1] != 0 { utf16(data, true) } else { utf32(data, true) };
-        }
-        if data[1] == 0 {
-            return if data[2] != 0 || data[3] != 0 { utf16(data, false) } else { utf32(data, false) };
-        }
-    } else if data.len() == 2 {
-        if data[0] == 0 {
-            return utf16(data, true);
-        }
-        if data[1] == 0 {
-            return utf16(data, false);
+}
+
+#[derive(Clone, Copy)]
+enum Encoding {
+    Utf8,
+    Utf16 { big: bool },
+    Utf32 { big: bool },
+}
+
+/// The byte order marks `json.detect_encoding` looks for, in its order.
+const BOMS: [(&[u8], Encoding); 5] = [
+    (&[0, 0, 0xfe, 0xff], Encoding::Utf32 { big: true }),
+    (&[0xff, 0xfe, 0, 0], Encoding::Utf32 { big: false }),
+    (&[0xfe, 0xff], Encoding::Utf16 { big: true }),
+    (&[0xff, 0xfe], Encoding::Utf16 { big: false }),
+    (&[0xef, 0xbb, 0xbf], Encoding::Utf8),
+];
+
+/// `json.detect_encoding`: the encoding and the length of the BOM to skip.
+fn detect_encoding(data: &[u8]) -> (Encoding, usize) {
+    for (bom, encoding) in BOMS {
+        if data.starts_with(bom) {
+            return (encoding, bom.len());
         }
     }
-    String::from_utf8(data.to_vec()).ok()
+    (encoding_by_zeros(data), 0)
+}
+
+/// Without a BOM: the zero bytes among the first four (or of exactly two bytes).
+fn encoding_by_zeros(data: &[u8]) -> Encoding {
+    match data {
+        [0, 0, _, _, ..] => Encoding::Utf32 { big: true },
+        [0, _, _, _, ..] => Encoding::Utf16 { big: true },
+        [_, 0, 0, 0, ..] => Encoding::Utf32 { big: false },
+        [_, 0, _, _, ..] => Encoding::Utf16 { big: false },
+        [0, _] => Encoding::Utf16 { big: true },
+        [_, 0] => Encoding::Utf16 { big: false },
+        _ => Encoding::Utf8,
+    }
+}
+
+fn decode_utf16(data: &[u8], big: bool) -> Option<String> {
+    if !data.len().is_multiple_of(2) {
+        return None;
+    }
+    let units = data
+        .chunks(2)
+        .map(|pair| if big { u16::from_be_bytes([pair[0], pair[1]]) } else { u16::from_le_bytes([pair[0], pair[1]]) });
+    char::decode_utf16(units).collect::<Result<String, _>>().ok()
+}
+
+fn decode_utf32(data: &[u8], big: bool) -> Option<String> {
+    if !data.len().is_multiple_of(4) {
+        return None;
+    }
+    data.chunks(4)
+        .map(|quad| {
+            let bytes = [quad[0], quad[1], quad[2], quad[3]];
+            char::from_u32(if big { u32::from_be_bytes(bytes) } else { u32::from_le_bytes(bytes) })
+        })
+        .collect()
 }
 
 #[cfg(test)]
