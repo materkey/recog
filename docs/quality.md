@@ -48,6 +48,13 @@ reports and logs, never the temporary source tree. The normal test suite runs
 policy tests without the optional quality tools; real analyzer integration tests
 require them (the Rust ones also `cargo llvm-cov`, on a one-function crate).
 
+The coverage builds ask cargo for incremental compilation (`CARGO_INCREMENTAL=1`),
+which it leaves out when `CI` is set. Without it rustc inlines a small function into
+the crates that call it, such as an integration test, and keeps no copy of its own;
+every test binary then carries a record of that function, llvm-cov takes the first
+one it reads, and whether the function counts as covered follows the order of the
+object files, which changes with the paths of a build.
+
 Both revisions build into one target directory, `CARGO_TARGET_DIR` (relative to
 the checkout) or else `target`, under its `llvm-cov-target/`: the dependencies are
 compiled once, and only the workspace's own crates again for each tree. On a

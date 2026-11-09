@@ -226,7 +226,11 @@ def present_targets(crate):
 def rust_coverage(root, output, label):
     """{production file: (line hits, branch hits)} of the workspace's tests from cargo llvm-cov."""
     artifact = output / f"{label}-rust.lcov"
-    env = {**os.environ, "CARGO_TARGET_DIR": str(cargo_target_dir())}
+    # Incremental compilation, which cargo leaves out when CI is set: without it rustc
+    # inlines a small function into the crates that call it and keeps no copy of its own,
+    # every test binary carries a record of it, and llvm-cov takes the first one it reads,
+    # counted or not, in an order that follows the build's paths.
+    env = {**os.environ, "CARGO_TARGET_DIR": str(cargo_target_dir()), "CARGO_INCREMENTAL": "1"}
     restricted = [name for name in RUST_RESTRICTED_TESTS if (root / CRATES / name).is_dir()]
     steps = [
         ("clean", ["clean", "--workspace"]),

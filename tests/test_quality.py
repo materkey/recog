@@ -572,6 +572,30 @@ def test_coverage_report_when_paths_join_then_production_files_are_returned(
 
 
 @needs_tree_sitter_rust
+def test_coverage_build_when_cargo_would_skip_incremental_then_it_is_asked_for(
+    repository, tmp_path, monkeypatch
+):
+    """given: CI, where cargo builds without incremental compilation
+    when: the workspace's coverage is measured
+    then: every cargo call asks for it; without it rustc inlines small functions into
+    the crates that call them, and their coverage follows the order of the object files"""
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.delenv("CARGO_INCREMENTAL", raising=False)
+    lcov = f"SF:{repository}/crates/demo/src/lib.rs\nDA:1,1\nend_of_record\n"
+    asked = []
+    cargo = fake_cargo(lcov, [])
+
+    def run(command, cwd, **kwargs):
+        if command[0] == "cargo":
+            asked.append(kwargs["env"].get("CARGO_INCREMENTAL"))
+        return cargo(command, cwd, **kwargs)
+
+    monkeypatch.setattr(quality, "run", run)
+    quality.rust_coverage(repository, tmp_path, "head")
+    assert asked == ["1", "1", "1"]
+
+
+@needs_tree_sitter_rust
 def test_listed_test_target_absent_from_a_tree_when_measured_then_left_out(
     repository, tmp_path, monkeypatch
 ):
