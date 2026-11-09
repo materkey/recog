@@ -248,9 +248,16 @@ function loadPage({
         return element;
     };
     const text = node => (node.textContent || '').replace(/\s+/g, ' ').trim();
+    // Text as read across element boundaries: each element's text a separate word.
+    const words = node => {
+        const parts = [];
+        const walk = at => (at.nodeType === 3 ? parts.push(at.data) : at.childNodes.forEach(walk));
+        walk(node);
+        return parts.join(' ').replace(/\s+/g, ' ').trim();
+    };
     return {
         context, document, window: context, evaluate, timers, requests, sockets, eventSources, audios,
-        clipboard, downloads, alerts, confirms, errors, $, text, flush,
+        clipboard, downloads, alerts, confirms, errors, $, text, words, flush,
         setHash(next) {
             context.location.hash = next;
             context.dispatchEvent({ type: 'hashchange' });
