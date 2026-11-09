@@ -563,6 +563,71 @@ async fn given_transport_diagnostics_when_pcm_transport_stats_arrive_then_kept_a
 }
 
 #[tokio::test]
+async fn given_a_participant_and_a_failing_live_side_when_debug_state_written_then_every_section_in_pythons_order() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ktalk_debug.json");
+    let debug_file = path.clone();
+    let h = Harness::with(move |c| c.debug_file = Some(debug_file));
+    let live = RecordingLive::new();
+    *live.stats.lock().unwrap() = Some(Err("stats unavailable".to_owned()));
+    h.bridge.set_live_events(Some(live));
+    let (_sink, _ws) = h.add(Role::Extension);
+    h.process(
+        r#"{"type": "participants_update", "participants": [{"id": "p1", "name": "Alice", "isLocal": false, "micMuted": true}]}"#,
+        None,
+    )
+    .await
+    .unwrap();
+    // when
+    h.bridge.reset_debug_throttle();
+    h.bridge.write_debug_state();
+    // then
+    let state = pyjson::loads(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let keys: Vec<&str> = state.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        [
+            "timestamp",
+            "timestamp_iso",
+            "bridge",
+            "conference",
+            "speaker",
+            "segments",
+            "meeting",
+            "recording",
+            "pcm",
+            "pcm_transport"
+        ]
+    );
+    assert_eq!(field(&state, "timestamp"), &Value::Float(NOW));
+    let dump = |key: &str| pyjson::dumps(field(&state, key), None);
+    assert_eq!(dump("bridge"), r#"{"running": false, "connected_clients": 1, "port": 0}"#);
+    assert_eq!(
+        dump("conference"),
+        concat!(
+            r#"{"participants": [{"id": "p1", "name": "Alice", "is_local": false, "mic_muted": true}], "#,
+            r#""participant_count": 1, "local_mic_muted": null, "all_mics_muted": true}"#
+        )
+    );
+    assert_eq!(
+        dump("speaker"),
+        concat!(
+            r#"{"current": null, "current_id": null, "is_speaking": false, "is_local": false, "#,
+            r#""last_speaker": null, "last_speaker_time": 0}"#
+        )
+    );
+    assert_eq!(
+        dump("segments"),
+        r#"{"active_start": null, "active_speaker": null, "completed_queue": 0, "history_count": 0}"#
+    );
+    assert_eq!(dump("meeting"), r#"{"id": null}"#);
+    assert_eq!(dump("recording"), r#"{"policy": "continuous", "active": true}"#);
+    assert_eq!(dump("pcm"), r#"{"error": "stats unavailable"}"#);
+    assert_eq!(dump("pcm_transport"), "{}");
+}
+
+#[tokio::test]
 async fn given_pcm_callback_when_malformed_chunks_arrive_then_logged_and_not_dispatched() {
     // given
     let (h, _storage, live) = pcm_harness("ktalk");

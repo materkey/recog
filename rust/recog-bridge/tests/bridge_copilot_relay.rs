@@ -643,6 +643,81 @@ async fn given_default_source_id_when_send_transcript_then_payload_omits_it() {
     assert!(!frames[0].as_object().unwrap().contains_key("source_id"));
 }
 
+#[tokio::test]
+async fn given_every_field_set_when_send_transcript_then_extension_gets_them_in_pythons_order() {
+    // given
+    let h = Harness::new();
+    h.attach();
+    h.bridge.set_meeting_storage(storage_for_meeting("m-1"));
+    let (extension, _e) = h.add(Role::Extension);
+    let full = TranscriptLine {
+        is_continuation: true,
+        is_local: true,
+        uncertain: true,
+        uncertain_reason: "mics_off".into(),
+        correction: true,
+        source_id: "pid-a".into(),
+        ..line("Alice", "hello", "10:00:00", 42)
+    };
+    // when
+    h.bridge.send_transcript(&full);
+    settle().await;
+    // then
+    let sent = extension.sent.lock().unwrap().clone();
+    assert_eq!(
+        sent,
+        [concat!(
+            r#"{"type": "transcript", "speaker": "Alice", "text": "hello", "timestamp": "10:00:00", "#,
+            r#""is_continuation": true, "is_local": true, "uncertain": true, "uncertain_reason": "mics_off", "#,
+            r#""correction": true, "meeting_id": "m-1", "segment_id": 42, "source_id": "pid-a"}"#
+        )]
+    );
+}
+
+#[tokio::test]
+async fn given_no_loop_when_send_transcript_then_nothing_sent_but_buffer_records() {
+    // given
+    let h = Harness::new();
+    h.bridge.set_meeting_storage(storage_for_meeting("m-1"));
+    let (extension, _e) = h.add(Role::Extension);
+    // when
+    h.bridge.send_transcript(&line("Alice", "offline", "10:00:00", 3));
+    settle().await;
+    // then
+    assert!(extension.frames().is_empty());
+    assert_eq!(buffer_ids(&h), [3]);
+}
+
+#[tokio::test]
+async fn given_due_ticks_when_segments_sent_then_recent_context_lists_speaker_and_text_with_unknown_as_question_mark() {
+    // given
+    let h = Harness::new();
+    h.attach();
+    h.bridge.set_meeting_storage(storage_for_meeting("m-1"));
+    activate_tick_state(&h, "m-1", "");
+    let (channel, _c) = h.add(Role::Channel);
+    let make_due = || {
+        let mut tick = h.bridge.tick_state().unwrap();
+        tick.last_emit_ts = h.bridge.now() - COPILOT_TICK_INTERVAL_SECONDS - 1.0;
+        h.bridge.set_tick_state(Some(tick));
+    };
+    // when
+    make_due();
+    h.bridge.send_transcript(&line("", "без имени", "10:00:00", 1));
+    make_due();
+    h.bridge.send_transcript(&line("Bob", "второй", "10:00:01", 2));
+    settle().await;
+    // then
+    let ticks = channel.of_type("transcript_tick");
+    assert_eq!(ticks.len(), 2);
+    assert_eq!(field(&ticks[0], "recent_context").as_str(), Some("?: без имени"));
+    assert_eq!(field(&ticks[1], "recent_context").as_str(), Some("?: без имени\nBob: второй"));
+    assert_eq!(field(&ticks[1], "meeting_title").as_str(), Some(""));
+    let new_ids: Vec<_> =
+        array(field(&ticks[1], "new_segments")).iter().map(|s| field(s, "segment_id").clone()).collect();
+    assert_eq!(new_ids, [Value::Int(2)]);
+}
+
 // ---- Recent transcript buffer + get_recent_transcript snapshot ----
 
 #[test]
