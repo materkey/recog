@@ -715,6 +715,81 @@ mod tests {
     }
 
     #[test]
+    fn every_character_json_escapes_when_written_then_escaped_as_python_does() {
+        // given
+        let value = Value::from("\"\\\n\r\t\u{8}\u{c}\u{1f}é/");
+        // when / then
+        assert_eq!(dumps(&value, None), "\"\\\"\\\\\\n\\r\\t\\b\\f\\u001fé/\"");
+    }
+
+    #[test]
+    fn escapes_when_read_then_decoded_and_broken_ones_fail_with_python_messages() {
+        // given / when / then
+        assert_eq!(loads(r#""\"\\\/\b\f\n\r\t\u00e9""#), Ok(Value::from("\"\\/\u{8}\u{c}\n\r\té")));
+        assert_eq!(loads(r#""\ud83d\u0041""#), Ok(Value::from("\u{fffd}A")));
+        assert_eq!(loads(r#""\ud83d""#), Ok(Value::from("\u{fffd}")));
+        for (text, message) in [
+            (r#""\x""#, "Invalid \\escape: line 1 column 2 (char 1)"),
+            ("\"\\", "Unterminated string starting at: line 1 column 1 (char 0)"),
+            (r#""\ud83d\u12""#, "Invalid \\uXXXX escape: line 1 column 9 (char 8)"),
+        ] {
+            assert_eq!(loads(text).unwrap_err().0, message, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn numbers_and_literals_when_read_then_ints_floats_and_python_constants() {
+        // given
+        let text = "[NaN, Infinity, -Infinity, -0, 0.5e+3, 1E2, 2e-1, 12, -7, 0]";
+        // when
+        let value = loads(text).unwrap();
+        // then
+        assert_eq!(dumps(&value, None), "[NaN, Infinity, -Infinity, 0, 500.0, 100.0, 0.2, 12, -7, 0]");
+        for (text, message) in [
+            ("[1.]", "Expecting ',' delimiter: line 1 column 3 (char 2)"),
+            ("1e", "Extra data: line 1 column 2 (char 1)"),
+            ("-", "Expecting value: line 1 column 1 (char 0)"),
+            ("nul", "Expecting value: line 1 column 1 (char 0)"),
+            ("-Inf", "Expecting value: line 1 column 1 (char 0)"),
+            ("[1 2]", "Expecting ',' delimiter: line 1 column 4 (char 3)"),
+            ("123456789012345678901234567890123456789012", "Integer out of range: line 1 column 1 (char 0)"),
+        ] {
+            assert_eq!(loads(text).unwrap_err().0, message, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn values_when_shown_with_repr_then_python_literals() {
+        // given
+        let value = loads(r#"{"a": [null, true, false, 1, 2.5, "it's"], "b": {}}"#).unwrap();
+        // when / then
+        assert_eq!(value.py_repr(), "{'a': [None, True, False, 1, 2.5, \"it's\"], 'b': {}}");
+        assert_eq!(value.py_str(), value.py_repr());
+        assert_eq!(Value::from("x").py_str(), "x");
+    }
+
+    #[test]
+    fn values_when_compared_then_numbers_by_value_and_containers_item_by_item() {
+        // given
+        let v = |text: &str| loads(text).unwrap();
+        // when / then
+        for (a, b, equal) in [
+            ("1", "1.0", true),
+            ("true", "1", true),
+            ("[1, 2]", "[1.0, 2]", true),
+            ("[1]", "[1, 2]", false),
+            (r#"{"a": 1}"#, r#"{"a": 1.0}"#, true),
+            (r#"{"a": 1}"#, r#"{"b": 1}"#, false),
+            (r#"{"a": 1}"#, r#"{"a": 1, "b": 2}"#, false),
+            (r#""1""#, "1", false),
+            ("null", "null", true),
+            (r#""a""#, r#""a""#, true),
+        ] {
+            assert_eq!(v(a).py_eq(&v(b)), equal, "{a} == {b}");
+        }
+    }
+
+    #[test]
     fn surrogate_pairs_and_control_characters_round_trip() {
         // given / when
         let value = loads(r#""\ud83d\ude00\u0001""#).unwrap();
