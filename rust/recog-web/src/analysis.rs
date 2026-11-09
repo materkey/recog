@@ -8,6 +8,8 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
 use recog_ai::AiError;
 use recog_ai::provider::AiProvider;
+use recog_ai::settings::ResolvedTask;
+use recog_core::meeting_storage::MeetingStorage;
 use recog_core::pyjson::{Map, Value};
 use tokio::sync::mpsc;
 
@@ -30,7 +32,7 @@ fn prepare(
     meeting_id: &str,
     question: &str,
     debug: bool,
-) -> Result<Result<(recog_ai::settings::ResolvedTask, String), Response>, PyError> {
+) -> Result<Result<(ResolvedTask, String), Response>, PyError> {
     let storage = state.config.storage().map_err(|e| e.to_string())?;
     let (segments, local) = match resolve_ai_context(state, meeting_id, &storage, debug)? {
         Ok(found) => found,
@@ -38,15 +40,27 @@ fn prepare(
     };
     let transcript = transcript::build_ai_transcript(&segments, ANALYSIS_MAX_CHARS)?;
     let settings = state.ai.task_settings(question).map_err(|e| e.to_string())?;
-    let meeting =
-        if meeting_id.is_empty() { None } else { storage.get_meeting(meeting_id).map_err(|e| e.to_string())? };
-    let (title, participants) = transcript::analysis_prompt_metadata(meeting.as_ref())?;
-    let prompt = build_prompt(&settings, &transcript, &local, &participants, &title).map_err(|e| e.to_string())?;
+    let prompt = analysis_prompt(&storage, meeting_id, &settings, &transcript, &local)?;
     Ok(Ok((settings, prompt)))
 }
 
-/// `POST /api/meetings/{id}/analyze` and `/analyze-multi`.
-pub async fn analyze(state: &Arc<AppState>, req: &Req, multi: bool) -> Reply {
+/// The scenario's prompt over the transcript, with the meeting's title and
+/// participants (none for the debug context without a meeting).
+fn analysis_prompt(
+    storage: &MeetingStorage,
+    meeting_id: &str,
+    settings: &ResolvedTask,
+    transcript: &str,
+    local: &str,
+) -> Result<String, PyError> {
+    let meeting =
+        if meeting_id.is_empty() { None } else { storage.get_meeting(meeting_id).map_err(|e| e.to_string())? };
+    let (title, participants) = transcript::analysis_prompt_metadata(meeting.as_ref())?;
+    build_prompt(settings, transcript, local, &participants, &title).map_err(|e| e.to_string())
+}
+
+/// The question and the debug flag of an analysis body, or the 422.
+fn analysis_body(req: &Req) -> Result<(String, bool), Response> {
     let mut errors = Vec::new();
     let fields = [field("question", Ty::Literal(QUESTIONS), false), field("debug", Ty::Bool, false)];
     let body = body_model(req, &fields, true, &mut errors)?;
@@ -55,30 +69,40 @@ pub async fn analyze(state: &Arc<AppState>, req: &Req, multi: bool) -> Reply {
     }
     let body = body.unwrap_or_default();
     let question = body.get("question").map_or_else(|| "increment".to_owned(), Value::py_str);
-    let debug = matches!(body.get("debug"), Some(Value::Bool(true)));
+    Ok((question, matches!(body.get("debug"), Some(Value::Bool(true)))))
+}
+
+/// `POST /api/meetings/{id}/analyze` and `/analyze-multi`.
+pub async fn analyze(state: &Arc<AppState>, req: &Req, multi: bool) -> Reply {
+    let (question, debug) = analysis_body(req)?;
     let (settings, prompt) = prepare(state, req.param("meeting_id"), &question, debug).map_err(fail)??;
-    if !multi {
-        let provider = state.ai.provider(&question, &settings).map_err(fail)?;
-        let answer = provider.complete(&prompt).await.map_err(fail)?;
-        return Ok(responses::json(&json::object([
-            ("answer", Value::from(answer)),
-            ("provider", Value::from(provider.name())),
-        ])));
+    if multi {
+        every_answer(state, &question, &settings, &prompt).await
+    } else {
+        one_answer(state, &question, &settings, &prompt).await
     }
-    let providers = state.ai.all_providers(&question, &settings).map_err(fail)?;
-    let calls = providers.iter().map(|provider| {
-        let prompt = prompt.as_str();
-        async move {
-            let result = provider.complete(prompt).await;
-            let (answer, error) = match result {
-                Ok(answer) => (Value::from(answer), Value::Null),
-                Err(e) => (Value::Null, Value::from(e.to_string())),
-            };
-            (
-                provider.key().to_owned(),
-                json::object([("answer", answer), ("name", Value::from(provider.name())), ("error", error)]),
-            )
-        }
+}
+
+/// The selected provider's answer.
+async fn one_answer(state: &AppState, question: &str, settings: &ResolvedTask, prompt: &str) -> Reply {
+    let provider = state.ai.provider(question, settings).map_err(fail)?;
+    let answer = provider.complete(prompt).await.map_err(fail)?;
+    Ok(responses::json(&json::object([("answer", Value::from(answer)), ("provider", Value::from(provider.name()))])))
+}
+
+/// Every selected provider's answer or error, by provider key.
+async fn every_answer(state: &AppState, question: &str, settings: &ResolvedTask, prompt: &str) -> Reply {
+    let providers = state.ai.all_providers(question, settings).map_err(fail)?;
+    let calls = providers.iter().map(|provider| async move {
+        let result = provider.complete(prompt).await;
+        let (answer, error) = match result {
+            Ok(answer) => (Value::from(answer), Value::Null),
+            Err(e) => (Value::Null, Value::from(e.to_string())),
+        };
+        (
+            provider.key().to_owned(),
+            json::object([("answer", answer), ("name", Value::from(provider.name())), ("error", error)]),
+        )
     });
     let mut responses_map = Map::new();
     for (key, value) in futures_util::future::join_all(calls).await {
@@ -120,47 +144,64 @@ async fn stream_events(
     debug: bool,
     out: mpsc::Sender<String>,
 ) {
-    let error =
-        |message: String| event(&json::object([("type", Value::from("error")), ("message", Value::from(message))]));
-    let prepared = tokio::task::spawn_blocking({
-        let state = Arc::clone(&state);
-        let (meeting_id, question) = (meeting_id.clone(), question.clone());
-        move || prepare(&state, &meeting_id, &question, debug)
-    })
-    .await;
-    let (settings, prompt) = match prepared {
-        Ok(Ok(Ok(ready))) => ready,
-        Ok(Ok(Err(response))) => {
-            let detail = response_detail(response).await;
-            let _ = out.send(event(&json::object([("type", Value::from("error")), ("message", detail)]))).await;
-            return;
-        }
-        Ok(Err(message)) => {
-            let _ = out.send(error(message)).await;
-            return;
-        }
-        Err(e) => {
-            let _ = out.send(error(e.to_string())).await;
-            return;
-        }
-    };
+    let Some((settings, prompt)) = prepared(&state, meeting_id, question.clone(), debug, &out).await else { return };
     let providers = match state.ai.all_providers(&question, &settings) {
         Ok(providers) => providers,
         Err(e) => {
-            let _ = out.send(error(e.to_string())).await;
+            let _ = out.send(error_event(Value::from(e.to_string()))).await;
             return;
         }
     };
-    for provider in &providers {
+    if !send_starts(&providers, &out).await {
+        return;
+    }
+    if relay(providers, prompt, &out).await {
+        let _ = out.send(event(&json::object([("type", Value::from("complete"))]))).await;
+    }
+}
+
+fn error_event(message: Value) -> String {
+    event(&json::object([("type", Value::from("error")), ("message", message)]))
+}
+
+/// The settings and prompt of the stream, or `None` once the error event is sent.
+async fn prepared(
+    state: &Arc<AppState>,
+    meeting_id: String,
+    question: String,
+    debug: bool,
+    out: &mpsc::Sender<String>,
+) -> Option<(ResolvedTask, String)> {
+    let state = Arc::clone(state);
+    let prepared = tokio::task::spawn_blocking(move || prepare(&state, &meeting_id, &question, debug)).await;
+    let message = match prepared {
+        Ok(Ok(Ok(ready))) => return Some(ready),
+        Ok(Ok(Err(response))) => response_detail(response).await,
+        Ok(Err(message)) => Value::from(message),
+        Err(e) => Value::from(e.to_string()),
+    };
+    let _ = out.send(error_event(message)).await;
+    None
+}
+
+/// The `start` event of every provider; false when the client went away.
+async fn send_starts(providers: &[Box<dyn AiProvider>], out: &mpsc::Sender<String>) -> bool {
+    for provider in providers {
         let start = json::object([
             ("type", Value::from("start")),
             ("provider", Value::from(provider.key())),
             ("name", Value::from(provider.name())),
         ]);
         if out.send(event(&start)).await.is_err() {
-            return;
+            return false;
         }
     }
+    true
+}
+
+/// Streams every provider concurrently and forwards their events until each is done;
+/// false when the client went away.
+async fn relay(providers: Vec<Box<dyn AiProvider>>, prompt: String, out: &mpsc::Sender<String>) -> bool {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let prompt = Arc::new(prompt);
     let mut pending = providers.len();
@@ -185,9 +226,7 @@ async fn stream_events(
     for task in &tasks {
         task.abort();
     }
-    if !client_gone {
-        let _ = out.send(event(&json::object([("type", Value::from("complete"))]))).await;
-    }
+    !client_gone
 }
 
 /// The `detail` of an `HTTPException` response, for the SSE error event.
