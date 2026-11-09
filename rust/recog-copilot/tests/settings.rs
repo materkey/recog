@@ -1,12 +1,13 @@
 //! The installation settings and the Copilot task of `ai-settings.json`
 //! (`test_autospawn_from_installation_config`, `test_grace_from_installation_config`,
-//! `test_mcp_url_from_installation_config`, and the reading side of the AI settings
-//! store; the differential test compares the store against Python on many more files).
+//! `test_mcp_url_from_installation_config`, and what the supervisor gets from the AI
+//! settings store; the file's rules are recog-ai's, tested in recog-ai/tests/settings.rs).
 #![forbid(unsafe_code)]
 
 use std::path::Path;
 
-use recog_copilot::ai_settings::{AiSettingsFile, CopilotSettings, CopilotTask, LegacyEnv};
+use recog_ai::install::LegacyEnv;
+use recog_copilot::ai_settings::{AiSettingsFile, CopilotSettings, CopilotTask};
 use recog_copilot::config::{self, Env};
 use recog_copilot::log;
 
@@ -90,7 +91,7 @@ fn dotenv_fills_unset_variables_with_quotes_stripped_and_never_overrides_the_env
     // then
     assert!(!from_file.autospawn);
     assert_eq!(from_file.mcp_url, "http://x/mcp");
-    assert_eq!(from_file.legacy.claude_model, "legacy");
+    assert_eq!(from_file.legacy.claude_model.as_deref(), Some("legacy"));
     assert!(from_file.from_dotenv.contains(&("CLAUDE_MODEL".to_owned(), "legacy".to_owned())));
     assert!(overridden.autospawn);
 }
@@ -203,10 +204,10 @@ fn saved_switch_model_and_effort_are_read_back() {
 #[test]
 fn legacy_model_applies_only_where_the_file_sets_none_and_a_bad_legacy_effort_is_an_error() {
     // given
-    let legacy = LegacyEnv { claude_model: "legacy".into(), ..LegacyEnv::default() };
+    let legacy = LegacyEnv { claude_model: Some("legacy".into()), ..LegacyEnv::default() };
     let global =
         format!(r#"{{"version": 1, "revision": "{REVISION}", "models": {{"claude": "global"}}, "tasks": {{}}}}"#);
-    let bad_effort = LegacyEnv { codex_reasoning_effort: "turbo".into(), ..LegacyEnv::default() };
+    let bad_effort = LegacyEnv { codex_reasoning_effort: Some("turbo".into()), ..LegacyEnv::default() };
     // when / then
     assert_eq!(resolve(None, legacy.clone()).unwrap().model, "legacy");
     assert_eq!(resolve(Some(&global), legacy).unwrap().model, "global");
@@ -244,4 +245,31 @@ fn retired_openrouter_entries_are_ignored_without_failing_the_read() {
     );
     // when / then
     assert_eq!(resolve(Some(&body), LegacyEnv::default()), Ok(task(true, "claude-opus-5-5", "")));
+}
+
+#[test]
+fn utf16_settings_given_copilot_off_when_resolved_then_switch_is_read_as_the_web_store_reads_it() {
+    // given: json.loads detects UTF-16 by its BOM, and so does recog-ai's store
+    let body = format!(
+        r#"{{"version": 1, "revision": "{REVISION}", "models": {{}}, "tasks": {{"copilot": {{"enabled": false}}}}}}"#
+    );
+    let mut bytes = vec![0xff, 0xfe];
+    bytes.extend(body.encode_utf16().flat_map(u16::to_le_bytes));
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ai-settings.json"), bytes).unwrap();
+    // when
+    let resolved = AiSettingsFile::new(dir.path(), LegacyEnv::default()).resolve();
+    // then
+    assert_eq!(resolved, Ok(task(false, "claude-opus-5-5", "")));
+}
+
+#[test]
+fn unreadable_settings_given_directory_in_its_place_when_resolved_then_error_names_the_file() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("ai-settings.json")).unwrap();
+    // when
+    let error = AiSettingsFile::new(dir.path(), LegacyEnv::default()).resolve().unwrap_err();
+    // then
+    assert!(error.contains("ai-settings.json"), "{error}");
 }

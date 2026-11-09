@@ -22,6 +22,8 @@ http-body-util = "0.1"
 # The channel's HTTP transport: HTTP/1.1, as uvicorn serves the Python channel.
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+# The owner of `ai-settings.json`: the supervisor reads the Copilot scenario through its store.
+recog-ai = { path = "../recog-ai" }
 recog-core = { path = "../recog-core" }
 # The official MCP SDK: the protocol model, the handshake and the request dispatch of the
 # channel.
@@ -31,8 +33,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1.49", features = ["macros", "net", "rt", "signal", "sync", "time"] }
 tokio-tungstenite = "0.29"
 tokio-util = "0.7"
-# Unicode 15.0, the tables of Python 3.12's unicodedata: model names and saved prompt ids
-# are validated by general category, as the Python settings store does.
+# Unicode 15.0, the tables of Python 3.12's unicodedata: `repr()` of a string escapes the
+# characters `str.isprintable()` refuses, by general category.
 unicode-general-category = "0.6"
 uuid = { version = "1", features = ["v4"] }
 

@@ -7,7 +7,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::rc::Rc;
 
-use recog_copilot::ai_settings::{CopilotSettings, CopilotTask, DEFAULT_CLAUDE_MODEL};
+use recog_ai::defaults::DEFAULT_CLAUDE_MODEL;
+use recog_copilot::ai_settings::{CopilotSettings, CopilotTask};
 use recog_copilot::supervisor::{CommandRunner, Error, Runner, Supervisor, TmuxRunner, Tunables};
 
 /// Runs `f` on a `LocalSet`, where the supervisor spawns its tasks.

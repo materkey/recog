@@ -9,7 +9,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::*;
-use recog_copilot::ai_settings::{AiSettingsFile, LegacyEnv};
+use recog_ai::install::LegacyEnv;
+use recog_copilot::ai_settings::AiSettingsFile;
 use recog_copilot::log;
 use recog_copilot::supervisor::tmux::{KILL_RETRIES, KILL_RETRY_DELAY, SYSTEMD_SESSION_UNIT, session_manager_for};
 use recog_copilot::supervisor::{MANUAL_MEETING_ID, Runner, TMUX_SESSION, TMUX_SESSION_MANUAL, TmuxRunner};

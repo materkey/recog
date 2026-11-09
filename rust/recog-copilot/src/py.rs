@@ -141,23 +141,6 @@ pub fn is_other_category(c: char) -> bool {
     )
 }
 
-/// A character of Python's Unicode `\w`: `str.isalnum()` or the underscore, i.e. a
-/// letter or a number of any kind.
-pub fn is_word(c: char) -> bool {
-    c == '_'
-        || matches!(
-            get_general_category(c),
-            GeneralCategory::UppercaseLetter
-                | GeneralCategory::LowercaseLetter
-                | GeneralCategory::TitlecaseLetter
-                | GeneralCategory::ModifierLetter
-                | GeneralCategory::OtherLetter
-                | GeneralCategory::DecimalNumber
-                | GeneralCategory::LetterNumber
-                | GeneralCategory::OtherNumber
-        )
-}
-
 /// `str.isspace()` of one character: Rust's White_Space plus the information
 /// separators U+001C..U+001F, which Python counts as whitespace too.
 pub fn is_space(c: char) -> bool {

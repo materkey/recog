@@ -1875,6 +1875,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "recog-ai",
  "recog-core",
  "rmcp",
  "serde_json",

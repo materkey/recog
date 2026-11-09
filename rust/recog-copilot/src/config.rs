@@ -7,9 +7,9 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use recog_ai::install::LegacyEnv;
 use recog_core::{data_dir, install_config};
 
-use crate::ai_settings::LegacyEnv;
 use crate::log;
 
 pub const DEFAULT_BRIDGE_URL: &str = "ws://127.0.0.1:8766";
@@ -70,7 +70,7 @@ pub fn load(repo_root: &Path, env: Env) -> Result<Settings, String> {
     let mut from_dotenv: Vec<(String, String)> =
         environ.iter().filter(|(k, _)| !env.vars.contains_key(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
     from_dotenv.sort();
-    let get = |key: &str| environ.get(key).map_or("", String::as_str).to_owned();
+    let get = |key: &str| environ.get(key).cloned();
     let legacy = LegacyEnv {
         claude_model: get("CLAUDE_MODEL"),
         codex_model: get("CODEX_MODEL"),
