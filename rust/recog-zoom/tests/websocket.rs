@@ -87,6 +87,49 @@ async fn given_a_bridge_that_stops_answering_when_pings_go_unanswered_then_the_l
 }
 
 #[tokio::test]
+async fn given_a_bridge_answering_pings_when_it_sends_binary_and_drops_then_data_arrives_and_the_link_is_lost() {
+    let (listener, url) = listener().await;
+    let (received, mut source_has_data) = tokio::sync::oneshot::channel::<()>();
+    let bridge = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        // Reading answers the source's pings for several of its ping timeouts.
+        let answering = tokio::time::sleep(Duration::from_millis(500));
+        tokio::pin!(answering);
+        loop {
+            tokio::select! {
+                message = socket.next() => if message.is_none() { return },
+                () = &mut answering => break,
+            }
+        }
+        socket.send(Message::Ping(Vec::new().into())).await.unwrap();
+        socket.send(Message::Binary(b"{\"type\": \"x\"}".to_vec().into())).await.unwrap();
+        loop {
+            tokio::select! {
+                message = socket.next() => if message.is_none() { return },
+                _ = &mut source_has_data => break,
+            }
+        }
+        // Gone without a closing handshake.
+        drop(socket);
+    });
+    let keepalive = WsConnector {
+        open_timeout: Duration::from_secs(5),
+        ping_interval: Duration::from_millis(50),
+        ping_timeout: Duration::from_millis(100),
+    };
+
+    let mut link = keepalive.connect(&url).await.unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(3), link.incoming.recv()).await.unwrap();
+    received.send(()).unwrap();
+    let second = tokio::time::timeout(Duration::from_secs(3), link.incoming.recv()).await.unwrap();
+
+    assert_eq!(first, Some(Incoming::Message(b"{\"type\": \"x\"}".to_vec())));
+    assert!(matches!(second, Some(Incoming::Lost(_))), "{second:?}");
+    bridge.await.unwrap();
+}
+
+#[tokio::test]
 async fn given_a_bridge_when_the_source_is_done_then_it_closes_the_link() {
     let (listener, url) = listener().await;
     let bridge = tokio::spawn(async move {

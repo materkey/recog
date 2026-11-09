@@ -328,6 +328,29 @@ async fn given_bridge_stops_reading_and_closes_without_a_reason_when_a_frame_is_
     assert_eq!(ended, PumpError::Link("connection closed".into()));
 }
 
+#[tokio::test]
+async fn given_an_idle_helper_when_the_bridge_link_is_lost_then_its_reason_ends_the_pump() {
+    let root = tempfile::tempdir().unwrap();
+    let (helper, rx) = mpsc::unbounded_channel::<String>();
+    let stand_ins = StandIns::new([Script::Lines(rx)]);
+    let mut lines = connect(&stand_ins, root.path()).await;
+    let (mut link, bridge_end) = link();
+    let (logger, _) = Logger::buffer();
+    bridge_end.incoming.send(Incoming::Lost("keepalive ping timeout".into())).await.unwrap();
+
+    let ended = bridge::pump(
+        &mut link,
+        &mut lines,
+        &mut ZoomAppSession::default(),
+        &mut StatusLog::new(logger.clone()),
+        &logger,
+    )
+    .await;
+
+    assert_eq!(ended, PumpError::Link("keepalive ping timeout".into()));
+    drop(helper);
+}
+
 // --- status log -------------------------------------------------------------------
 
 #[test]
