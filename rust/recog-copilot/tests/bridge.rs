@@ -387,3 +387,62 @@ async fn bridge_closing_the_socket_cleanly_is_reconnected_with_a_fresh_hello() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn binary_frame_then_close_with_an_error_code_spawns_and_logs_the_close_as_a_failure() {
+    local(async {
+        // given: the first connection sends its frame as binary, then closes with 1011
+        let url = mock_bridge(|mut socket: Socket| async move {
+            if recv_json(&mut socket).await.is_some() {
+                let frame = json!({"type": "meeting_started", "meeting_id": "mtg-b"}).to_string();
+                socket.send(Message::Binary(frame.into_bytes().into())).await.unwrap();
+                socket.send(Message::Pong(Vec::new().into())).await.unwrap();
+                let close = tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                    code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Error,
+                    reason: "boom".into(),
+                };
+                let _ = socket.close(Some(close)).await;
+            }
+        })
+        .await;
+        let (sup, runner) = fake_at(&url, true);
+        let capture = recog_copilot::log::Capture::start();
+        // when
+        sup.start();
+        // then
+        assert!(wait(|| capture.text().contains("bridge unavailable")).await, "{}", capture.text());
+        assert_eq!(runner.spawned(), ids(&["mtg-b"]));
+        let text = capture.text();
+        assert!(
+            text.contains(
+                "[copilot-supervisor] bridge unavailable (ConnectionClosedError: received 1011 (boom)); retry in 1.0s"
+            ),
+            "{text}"
+        );
+        sup.stop();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn bridge_dropping_the_connection_without_a_close_logs_a_failure() {
+    local(async {
+        // given: the first connection is dropped after the hello, no close frame
+        let url = mock_bridge(|mut socket: Socket| async move {
+            let _ = recv_json(&mut socket).await;
+            drop(socket);
+        })
+        .await;
+        let (sup, _runner) = fake_at(&url, true);
+        let capture = recog_copilot::log::Capture::start();
+        // when
+        sup.start();
+        // then
+        assert!(wait(|| capture.text().contains("bridge unavailable")).await, "{}", capture.text());
+        let text = capture.text();
+        assert!(text.contains("[copilot-supervisor] bridge unavailable (ConnectionClosedError: "), "{text}");
+        assert!(text.contains("); retry in 1.0s"), "{text}");
+        sup.stop();
+    })
+    .await;
+}
