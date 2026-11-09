@@ -2523,6 +2523,13 @@ let incrementPollTimer = null;
 let _incrementState = null;  // Stored increment modal state, including participant selection
 const SYSTEM_PARTICIPANT_ID = '__system__';
 
+function stopIncrementPoll() {
+    if (incrementPollTimer) {
+        clearInterval(incrementPollTimer);
+        incrementPollTimer = null;
+    }
+}
+
 async function analyzeIncrement() {
     const meeting = views.meeting;
     if (!meeting.id) return;
@@ -2549,20 +2556,16 @@ async function loadAiHistory(selectEmpty = false) {
     saved.querySelector('.modal-tabs').innerHTML = '';
     saved.querySelector('.modal-body').innerHTML = '<div class="loading">Загрузка сохранённых результатов...</div>';
     saved.querySelector('.modal-footer').innerHTML = '<button class="btn" onclick="closeAiModal()">Close</button>';
+    const isLatestHistory = () => aiModalSession === session && session.historyRequest === request;
     try {
         const [prompts, increments] = await Promise.all([
             api.getPrompts(), api.getIncrements(session.meetingId)
         ]);
-        if (aiModalSession !== session || session.historyRequest !== request) return;
+        if (!isLatestHistory()) return;
         session.historyStatus = 'ready';
-        if (Object.keys(increments).length) {
-            showStoredIncrements(session.meetingId, increments, prompts);
-        } else {
-            saved.querySelector('.modal-body').innerHTML = '<div class="empty">Сохранённых результатов пока нет.</div>';
-            if (selectEmpty && session.mode === 'saved') switchAiMode('new');
-        }
+        showAiHistory(session, saved, increments, prompts, selectEmpty);
     } catch (e) {
-        if (aiModalSession !== session || session.historyRequest !== request) return;
+        if (!isLatestHistory()) return;
         session.historyStatus = 'error';
         saved.querySelector('.modal-body').innerHTML =
             '<div class="error">Не удалось загрузить сохранённые результаты: ' + escapeHtml(e.message) + '</div>' +
@@ -2570,14 +2573,20 @@ async function loadAiHistory(selectEmpty = false) {
     }
 }
 
+function showAiHistory(session, saved, increments, prompts, selectEmpty) {
+    if (Object.keys(increments).length) {
+        showStoredIncrements(session.meetingId, increments, prompts);
+    } else {
+        saved.querySelector('.modal-body').innerHTML = '<div class="empty">Сохранённых результатов пока нет.</div>';
+        if (selectEmpty && session.mode === 'saved') switchAiMode('new');
+    }
+}
+
 function switchAiMode(mode) {
     if (!aiModalSession || !['saved', 'new'].includes(mode)) return;
     aiModalSession.mode = mode;
     aiContentRequest++;
-    if (incrementPollTimer) {
-        clearInterval(incrementPollTimer);
-        incrementPollTimer = null;
-    }
+    stopIncrementPoll();
     document.querySelectorAll('#ai-modal [data-ai-mode]').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.aiMode === mode);
         btn.setAttribute('aria-pressed', String(btn.dataset.aiMode === mode));
@@ -2671,10 +2680,7 @@ function finishAiStream() {
 }
 
 function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
-    if (incrementPollTimer) {
-        clearInterval(incrementPollTimer);
-        incrementPollTimer = null;
-    }
+    stopIncrementPoll();
     if (!aiModalSession || aiModalSession.meetingId !== meetingId) return;
     const previous = _incrementState;
 
@@ -2685,25 +2691,7 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
     const promptIds = Object.keys(incrementsByPrompt);
     if (promptIds.length === 0) return;
 
-    const meetingParticipants = Object.entries(views.meeting.meta?.participants || {});
-    const localNames = meetingParticipants
-        .filter(function(entry) {
-            return entry[0] !== SYSTEM_PARTICIPANT_ID && entry[1].is_local;
-        })
-        .map(function(entry) { return entry[1].name || entry[0]; });
-    const seenParticipantNames = new Set(localNames);
-    const otherParticipants = [];
-    meetingParticipants.forEach(function(entry) {
-        if (entry[0] === SYSTEM_PARTICIPANT_ID || entry[1].is_local) return;
-        const name = entry[1].name || entry[0];
-        if (seenParticipantNames.has(name)) return;
-        seenParticipantNames.add(name);
-        otherParticipants.push({ id: entry[0], name: name });
-    });
-    const incrementParticipants = [{
-        id: null,
-        name: localNames.length > 0 ? localNames.join(', ') : 'Me'
-    }].concat(otherParticipants);
+    const incrementParticipants = incrementParticipantsOf(views.meeting.meta?.participants);
 
     const modal = document.getElementById('ai-saved-view');
 
@@ -2732,19 +2720,7 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
         '<button class="btn" onclick="closeAiModal()">Close</button>';
 
     // Store state
-    _incrementState = {
-        meetingId: meetingId,
-        incrementsByPrompt: incrementsByPrompt,
-        promptNames: promptNames,
-        currentPromptId: previous && promptIds.includes(previous.currentPromptId) ? previous.currentPromptId : promptIds[0],
-        currentVersion: null,
-        currentParticipantId: previous ? previous.currentParticipantId : null,
-        participants: incrementParticipants,
-        pendingGenerations: previous ? previous.pendingGenerations : new Set(),
-        generationErrors: previous ? previous.generationErrors : {},
-        content: '',
-        selectionRevision: 0
-    };
+    _incrementState = incrementStateFor(meetingId, incrementsByPrompt, promptNames, incrementParticipants, previous);
 
     const participantSelect = document.getElementById('increment-participant-select');
     incrementParticipants.forEach(function(participant) {
@@ -2758,36 +2734,63 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
     switchPromptTab(meetingId, _incrementState.currentPromptId);
 }
 
+// The participant choices of my-increment: the user (every local name) first,
+// then each other participant once by name, the system participant left out.
+function incrementParticipantsOf(meetingParticipantMap) {
+    const meetingParticipants = Object.entries(meetingParticipantMap || {});
+    const localNames = meetingParticipants
+        .filter(function(entry) {
+            return entry[0] !== SYSTEM_PARTICIPANT_ID && entry[1].is_local;
+        })
+        .map(function(entry) { return entry[1].name || entry[0]; });
+    const seenParticipantNames = new Set(localNames);
+    const otherParticipants = [];
+    meetingParticipants.forEach(function(entry) {
+        if (entry[0] === SYSTEM_PARTICIPANT_ID || entry[1].is_local) return;
+        const name = entry[1].name || entry[0];
+        if (seenParticipantNames.has(name)) return;
+        seenParticipantNames.add(name);
+        otherParticipants.push({ id: entry[0], name: name });
+    });
+    return [{
+        id: null,
+        name: localNames.length > 0 ? localNames.join(', ') : 'Me'
+    }].concat(otherParticipants);
+}
+
+function incrementStateFor(meetingId, incrementsByPrompt, promptNames, participants, previous) {
+    const promptIds = Object.keys(incrementsByPrompt);
+    return {
+        meetingId: meetingId,
+        incrementsByPrompt: incrementsByPrompt,
+        promptNames: promptNames,
+        currentPromptId: previous && promptIds.includes(previous.currentPromptId) ? previous.currentPromptId : promptIds[0],
+        currentVersion: null,
+        currentParticipantId: previous ? previous.currentParticipantId : null,
+        participants: participants,
+        pendingGenerations: previous ? previous.pendingGenerations : new Set(),
+        generationErrors: previous ? previous.generationErrors : {},
+        content: '',
+        selectionRevision: 0
+    };
+}
+
 function switchPromptTab(meetingId, promptId) {
     if (!_incrementState || _incrementState.meetingId !== meetingId) return;
     _incrementState.needsRefresh = false;
     aiContentRequest++;
     _incrementState.selectionRevision++;
     _incrementState.content = '';
-    if (incrementPollTimer) {
-        clearInterval(incrementPollTimer);
-        incrementPollTimer = null;
-    }
+    stopIncrementPoll();
     // Update Level 1 prompt tab active state
     document.querySelectorAll('#ai-saved-view .modal-tabs .tab-btn').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.promptId === promptId);
     });
 
-    if (_incrementState) {
-        _incrementState.currentPromptId = promptId;
-    }
+    _incrementState.currentPromptId = promptId;
 
-    var metas = (_incrementState && _incrementState.incrementsByPrompt[promptId]) || [];
-    var isParticipantIncrement = promptId === 'my-increment';
-    var participantToolbar = document.getElementById('increment-participant-toolbar');
-    if (participantToolbar) {
-        participantToolbar.style.display = isParticipantIncrement ? '' : 'none';
-    }
-    if (isParticipantIncrement && _incrementState) {
-        metas = metas.filter(function(meta) {
-            return (meta.participant_id || null) === _incrementState.currentParticipantId;
-        });
-    }
+    showIncrementParticipantToolbar(promptId === 'my-increment');
+    var metas = promptVersions(_incrementState, promptId);
     var versionTabsContainer = document.getElementById('version-tabs');
 
     if (metas.length === 0) {
@@ -2799,24 +2802,42 @@ function switchPromptTab(meetingId, promptId) {
 
     // Build Level 2 version tabs
     var latestVersion = metas[metas.length - 1].version;
-    if (_incrementState) {
-        _incrementState.currentVersion = latestVersion;
-    }
+    _incrementState.currentVersion = latestVersion;
 
     if (versionTabsContainer) {
-        versionTabsContainer.innerHTML = metas.map(function(inc) {
-            var date = new Date(inc.generated_at);
-            var timeStr = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-            var isActive = inc.version === latestVersion ? ' active' : '';
-            var statusIcon = inc.status === 'failed' ? ' !' : inc.status === 'generating' ? ' ...' : '';
-            return '<button class="version-tab-btn' + isActive + '" data-version="' + inc.version +
-                '" onclick="switchIncrementVersion(\'' + escapeJsString(meetingId) + '\', \'' + escapeJsString(promptId) + '\', ' + inc.version +
-                ')">v' + inc.version + ' <small style="opacity:.6">' + timeStr + '</small>' +
-                statusIcon + '</button>';
-        }).join('');
+        versionTabsContainer.innerHTML = versionTabsHtml(metas, latestVersion, meetingId, promptId);
     }
 
     loadIncrementContent(meetingId, promptId, latestVersion);
+}
+
+function showIncrementParticipantToolbar(shown) {
+    var participantToolbar = document.getElementById('increment-participant-toolbar');
+    if (participantToolbar) {
+        participantToolbar.style.display = shown ? '' : 'none';
+    }
+}
+
+// The saved versions of a prompt; for my-increment only the chosen participant's.
+function promptVersions(state, promptId) {
+    var metas = state.incrementsByPrompt[promptId] || [];
+    if (promptId !== 'my-increment') return metas;
+    return metas.filter(function(meta) {
+        return (meta.participant_id || null) === state.currentParticipantId;
+    });
+}
+
+function versionTabsHtml(metas, latestVersion, meetingId, promptId) {
+    return metas.map(function(inc) {
+        var date = new Date(inc.generated_at);
+        var timeStr = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        var isActive = inc.version === latestVersion ? ' active' : '';
+        var statusIcon = inc.status === 'failed' ? ' !' : inc.status === 'generating' ? ' ...' : '';
+        return '<button class="version-tab-btn' + isActive + '" data-version="' + inc.version +
+            '" onclick="switchIncrementVersion(\'' + escapeJsString(meetingId) + '\', \'' + escapeJsString(promptId) + '\', ' + inc.version +
+            ')">v' + inc.version + ' <small style="opacity:.6">' + timeStr + '</small>' +
+            statusIcon + '</button>';
+    }).join('');
 }
 
 function renderMissingIncrement() {
@@ -2841,7 +2862,7 @@ function switchIncrementParticipant(participantId) {
 }
 
 async function generateParticipantIncrement() {
-    if (aiModalSession?.mode !== 'saved' || !_incrementState || _incrementState.currentPromptId !== 'my-increment') return;
+    if (!participantIncrementShown(_incrementState)) return;
 
     const state = _incrementState;
     const meetingId = state.meetingId;
@@ -2850,54 +2871,68 @@ async function generateParticipantIncrement() {
     const container = document.getElementById('increment-content');
 
     if (state.pendingGenerations.has(pendingKey)) {
-        if (container) container.innerHTML = '<div class="loading">Generating increment...</div>';
+        showGeneratingIncrement(container);
         return;
     }
 
     state.pendingGenerations.add(pendingKey);
     delete state.generationErrors[pendingKey];
-    if (container) container.innerHTML = '<div class="loading">Generating increment...</div>';
+    showGeneratingIncrement(container);
 
     try {
-        const params = new URLSearchParams();
-        if (participantId) params.set('participant_id', participantId);
-        const query = params.toString();
-        const res = await fetch('/api/meetings/' + encodeURIComponent(meetingId) +
-            '/increments/my-increment/generate' + (query ? '?' + query : ''), { method: 'POST' });
-        if (!res.ok) {
-            const err = await res.json().catch(function() { return {}; });
-            throw new Error(err.detail || 'Generation failed');
-        }
-        const generation = await res.json();
-        if (generation.status === 'skipped') {
-            throw new Error(generation.message || 'No new segments to process');
-        }
+        await requestParticipantIncrement(meetingId, participantId);
 
         const increments = await api.getIncrements(meetingId);
         if (_incrementState !== state) return;
         state.incrementsByPrompt = increments;
         state.needsRefresh = true;
 
-        if (aiModalSession?.mode === 'saved' && state.currentPromptId === 'my-increment' && state.currentParticipantId === participantId) {
+        if (participantIncrementShown(state, participantId)) {
             switchPromptTab(meetingId, 'my-increment');
         }
     } catch (e) {
         if (_incrementState === state) state.generationErrors[pendingKey] = e.message;
     } finally {
-        state.pendingGenerations.delete(pendingKey);
-        if (_incrementState === state && aiModalSession?.mode === 'saved' &&
-            state.currentPromptId === 'my-increment' && state.currentParticipantId === participantId &&
-            state.currentVersion == null) renderMissingIncrement();
+        finishParticipantGeneration(state, pendingKey, participantId);
+    }
+}
+
+function finishParticipantGeneration(state, pendingKey, participantId) {
+    state.pendingGenerations.delete(pendingKey);
+    if (_incrementState === state && participantIncrementShown(state, participantId) &&
+        state.currentVersion == null) renderMissingIncrement();
+}
+
+// The saved view shows the my-increment prompt (of that participant, when given).
+function participantIncrementShown(state, participantId = state?.currentParticipantId) {
+    return aiModalSession?.mode === 'saved' && !!state && state.currentPromptId === 'my-increment' &&
+        state.currentParticipantId === participantId;
+}
+
+function showGeneratingIncrement(container) {
+    if (container) container.innerHTML = '<div class="loading">Generating increment...</div>';
+}
+
+async function requestParticipantIncrement(meetingId, participantId) {
+    const params = new URLSearchParams();
+    if (participantId) params.set('participant_id', participantId);
+    const query = params.toString();
+    const res = await fetch('/api/meetings/' + encodeURIComponent(meetingId) +
+        '/increments/my-increment/generate' + (query ? '?' + query : ''), { method: 'POST' });
+    if (!res.ok) {
+        const err = await res.json().catch(function() { return {}; });
+        throw new Error(err.detail || 'Generation failed');
+    }
+    const generation = await res.json();
+    if (generation.status === 'skipped') {
+        throw new Error(generation.message || 'No new segments to process');
     }
 }
 
 function switchIncrementVersion(meetingId, promptId, version) {
     if (!_incrementState) return;
     _incrementState.selectionRevision++;
-    if (incrementPollTimer) {
-        clearInterval(incrementPollTimer);
-        incrementPollTimer = null;
-    }
+    stopIncrementPoll();
 
     if (_incrementState) {
         _incrementState.currentVersion = version;
@@ -2924,10 +2959,7 @@ async function loadIncrementContent(meetingId, promptId, version) {
     const request = ++aiContentRequest;
     const isCurrent = () => aiModalSession === session && session.mode === 'saved' &&
         _incrementState === state && request === aiContentRequest;
-    if (incrementPollTimer) {
-        clearInterval(incrementPollTimer);
-        incrementPollTimer = null;
-    }
+    stopIncrementPoll();
 
     const container = document.getElementById('increment-content');
     if (!container) return;
@@ -2938,58 +2970,69 @@ async function loadIncrementContent(meetingId, promptId, version) {
     try {
         const result = await api.getIncrement(meetingId, promptId, version);
         if (!isCurrent()) return;
-        if (!result) {
-            container.innerHTML = '<div class="error">Version not found</div>';
-            return;
-        }
-
-        const { meta, content } = result;
-
-        if (meta.status === 'failed') {
-            const errorMsg = meta.error || 'Generation failed';
-            container.innerHTML = '<div class="error">Generation failed: ' + escapeHtml(errorMsg) + '</div>';
-            state.content = '';
-            return;
-        }
-
-        if (meta.status === 'generating') {
-            container.innerHTML = '<div class="loading">Generation in progress...</div>';
+        if (showIncrementResult(container, state, promptId, result)) {
             // The placeholder resolves to completed/failed once the backend
             // finishes. Poll until then — otherwise this view stays on this
-            // message until a manual page refresh. The clearInterval at the
+            // message until a manual page refresh. The stopIncrementPoll at the
             // top of this function makes each re-entry cancel the previous
             // tick, so no timers stack. (incrementPollTimer was declared and
             // cleared everywhere but never actually started.)
             incrementPollTimer = setInterval(function() {
                 loadIncrementContent(meetingId, promptId, version);
             }, 2000);
-            return;
         }
-
-        // status === 'completed'
-        const strippedContent = stripYamlFrontmatter(content);
-        const rendered = renderMarkdown(strippedContent);
-        const durationStr = meta.duration_seconds != null ? meta.duration_seconds.toFixed(1) + 's' : '';
-        const promptName = (_incrementState && _incrementState.promptNames[promptId]) || promptId;
-        const participantStr = meta.participant_name ? ' · ' + meta.participant_name : '';
-        const infoStr = promptName + participantStr + ' · v' + meta.version + ' · ' + meta.segment_count + ' segments' +
-            (durationStr ? ' · ' + durationStr : '');
-        const providerName = meta.provider === 'codex' ? 'Codex' : meta.provider === 'claude' ? 'Claude' : (meta.provider || '');
-        const modelStr = [providerName, meta.model || 'Model unavailable', meta.reasoning_effort || meta.effort]
-            .filter(Boolean).join(' · ');
-
-        container.innerHTML =
-            '<div class="increment-result-meta">' +
-                '<span class="increment-model-badge">Model: ' + escapeHtml(modelStr) + '</span>' +
-                '<span class="increment-result-details">' + escapeHtml(infoStr) + '</span>' +
-            '</div>' +
-            '<div class="ai-answer">' + rendered + '</div>';
-
-        state.content = strippedContent;
     } catch (e) {
         if (!isCurrent()) return;
         container.innerHTML = '<div class="error">Failed to load: ' + escapeHtml(e.message) + '</div>';
     }
+}
+
+// Shows a loaded version; true while it is still generating.
+function showIncrementResult(container, state, promptId, result) {
+    if (!result) {
+        container.innerHTML = '<div class="error">Version not found</div>';
+        return false;
+    }
+
+    const { meta, content } = result;
+
+    if (meta.status === 'failed') {
+        const errorMsg = meta.error || 'Generation failed';
+        container.innerHTML = '<div class="error">Generation failed: ' + escapeHtml(errorMsg) + '</div>';
+        state.content = '';
+        return false;
+    }
+
+    if (meta.status === 'generating') {
+        container.innerHTML = '<div class="loading">Generation in progress...</div>';
+        return true;
+    }
+
+    // status === 'completed'
+    const strippedContent = stripYamlFrontmatter(content);
+    const promptName = (_incrementState && _incrementState.promptNames[promptId]) || promptId;
+    container.innerHTML =
+        '<div class="increment-result-meta">' +
+            '<span class="increment-model-badge">Model: ' + escapeHtml(incrementModelLabel(meta)) + '</span>' +
+            '<span class="increment-result-details">' + escapeHtml(incrementDetailsLabel(meta, promptName)) + '</span>' +
+        '</div>' +
+        '<div class="ai-answer">' + renderMarkdown(strippedContent) + '</div>';
+
+    state.content = strippedContent;
+    return false;
+}
+
+function incrementModelLabel(meta) {
+    const providerName = meta.provider === 'codex' ? 'Codex' : meta.provider === 'claude' ? 'Claude' : (meta.provider || '');
+    return [providerName, meta.model || 'Model unavailable', meta.reasoning_effort || meta.effort]
+        .filter(Boolean).join(' · ');
+}
+
+function incrementDetailsLabel(meta, promptName) {
+    const durationStr = meta.duration_seconds != null ? meta.duration_seconds.toFixed(1) + 's' : '';
+    const participantStr = meta.participant_name ? ' · ' + meta.participant_name : '';
+    return promptName + participantStr + ' · v' + meta.version + ' · ' + meta.segment_count + ' segments' +
+        (durationStr ? ' · ' + durationStr : '');
 }
 
 async function regeneratePrompt() {
@@ -2998,17 +3041,11 @@ async function regeneratePrompt() {
     if (!session || session.mode !== 'saved' || !state) return;
     aiContentRequest++;
     const selectionRevision = state.selectionRevision;
-    const isCurrent = () => aiModalSession === session && _incrementState === state &&
-        session.mode === 'saved' && selectionRevision === state.selectionRevision;
-    if (incrementPollTimer) {
-        clearInterval(incrementPollTimer);
-        incrementPollTimer = null;
-    }
-    var meetingId = _incrementState ? _incrementState.meetingId : (views.meeting && views.meeting.id);
-    var promptId = _incrementState ? _incrementState.currentPromptId : null;
-    var participantId = _incrementState && promptId === 'my-increment'
-        ? _incrementState.currentParticipantId
-        : null;
+    stopIncrementPoll();
+    // _incrementState is the state checked above: nothing awaited yet.
+    var meetingId = state.meetingId;
+    var promptId = state.currentPromptId;
+    var participantId = promptId === 'my-increment' ? state.currentParticipantId : null;
 
     if (!meetingId || !promptId) return;
 
@@ -3017,63 +3054,113 @@ async function regeneratePrompt() {
     var container = document.getElementById('increment-content');
     if (container) container.innerHTML = '<div class="loading">Generating...</div>';
 
+    await runRegeneration({ session, state, selectionRevision, container, meetingId, promptId, participantId });
+}
+
+// The modal and the saved increments a regeneration started from are still shown.
+function regenerationOpen(job) {
+    return aiModalSession === job.session && _incrementState === job.state;
+}
+
+// ...and the user has not moved to another mode, prompt, participant or version.
+function regenerationCurrent(job) {
+    return regenerationOpen(job) && job.session.mode === 'saved' &&
+        job.selectionRevision === job.state.selectionRevision;
+}
+
+function showRegenerationNote(job, html) {
+    if (regenerationCurrent(job) && job.container) job.container.innerHTML = html;
+}
+
+async function runRegeneration(job) {
     try {
-        // force=true: regenerate over the full transcript. Without it a finished
-        // meeting (last version already covers every segment) skips with
-        // "No new segments to process".
-        var params = new URLSearchParams({ force: 'true' });
-        if (participantId) params.set('participant_id', participantId);
-        var res = await fetch('/api/meetings/' + encodeURIComponent(meetingId) +
-            '/increments/' + encodeURIComponent(promptId) + '/generate?' + params.toString(), { method: 'POST' });
-        if (!res.ok) {
-            var err = await res.json().catch(function() { return {}; });
-            throw new Error(err.detail || 'Generation failed');
-        }
-        var result = await res.json();
-        if (aiModalSession !== session || _incrementState !== state) return;
+        var result = await requestRegeneration(job.meetingId, job.promptId, job.participantId);
+        if (!regenerationOpen(job)) return;
         if (result.status === 'skipped') {
-            if (isCurrent() && container) container.innerHTML = '<div class="empty">' + escapeHtml(result.message || 'No new segments') + '</div>';
+            showRegenerationNote(job, '<div class="empty">' + escapeHtml(result.message || 'No new segments') + '</div>');
             return;
         }
-        // Refresh the stored increments view
-        var [prompts, increments] = await Promise.all([
-            api.getPrompts(),
-            api.getIncrements(meetingId)
-        ]);
-        if (aiModalSession !== session || _incrementState !== state) return;
-        state.incrementsByPrompt = increments;
-        state.needsRefresh = selectionRevision === state.selectionRevision;
-        if (isCurrent()) showStoredIncrements(meetingId, increments, prompts);
+        await refreshRegeneratedIncrements(job);
     } catch (e) {
-        if (isCurrent() && container) container.innerHTML = '<div class="error">Regeneration failed: ' + escapeHtml(e.message) + '</div>';
+        showRegenerationNote(job, '<div class="error">Regeneration failed: ' + escapeHtml(e.message) + '</div>');
     }
 }
 
+async function requestRegeneration(meetingId, promptId, participantId) {
+    // force=true: regenerate over the full transcript. Without it a finished
+    // meeting (last version already covers every segment) skips with
+    // "No new segments to process".
+    var params = new URLSearchParams({ force: 'true' });
+    if (participantId) params.set('participant_id', participantId);
+    var res = await fetch('/api/meetings/' + encodeURIComponent(meetingId) +
+        '/increments/' + encodeURIComponent(promptId) + '/generate?' + params.toString(), { method: 'POST' });
+    if (!res.ok) {
+        var err = await res.json().catch(function() { return {}; });
+        throw new Error(err.detail || 'Generation failed');
+    }
+    return res.json();
+}
+
+// Refresh the stored increments view
+async function refreshRegeneratedIncrements(job) {
+    var [prompts, increments] = await Promise.all([
+        api.getPrompts(),
+        api.getIncrements(job.meetingId)
+    ]);
+    if (!regenerationOpen(job)) return;
+    job.state.incrementsByPrompt = increments;
+    job.state.needsRefresh = job.selectionRevision === job.state.selectionRevision;
+    if (regenerationCurrent(job)) showStoredIncrements(job.meetingId, increments, prompts);
+}
+
+// Each returns true when it ended the stream, which renders on its own.
+function onAiStreamStart(data, states) {
+    const { provider, name } = data;
+    if (!provider) return false;
+    aiProviderNames[provider] = name || provider;
+    states[provider] = { status: 'running', error: '' };
+    if (!activeAiTab) activeAiTab = provider;
+    return false;
+}
+
+function onAiStreamText(data, states) {
+    const { type, provider, text } = data;
+    if (!states[provider]) return false;
+    aiResponses[provider] = text;
+    states[provider].status = type === 'done' ? 'done' : 'running';
+    return false;
+}
+
+function onAiStreamError(data, states) {
+    const { provider, message } = data;
+    if (states[provider]) {
+        states[provider].error = message || 'Анализ завершился с ошибкой';
+        states[provider].status = 'done';
+        return false;
+    }
+    aiModalSession.runError = message || 'Не удалось запустить анализ';
+    finishAiStream();
+    return true;
+}
+
+function onAiStreamComplete(_data, states) {
+    if (!Object.keys(states).length) aiModalSession.runError = 'Нет доступных провайдеров для анализа.';
+    finishAiStream();
+    return true;
+}
+
+const AI_STREAM_HANDLERS = new Map([
+    ['start', onAiStreamStart],
+    ['chunk', onAiStreamText],
+    ['done', onAiStreamText],
+    ['error', onAiStreamError],
+    ['complete', onAiStreamComplete]
+]);
+
 function handleAiStreamEvent(data) {
     if (!aiModalSession) return;
-    const { type, provider, name, text, message } = data;
-    const states = aiModalSession.providerStates;
-    if (type === 'start' && provider) {
-        aiProviderNames[provider] = name || provider;
-        states[provider] = { status: 'running', error: '' };
-        if (!activeAiTab) activeAiTab = provider;
-    } else if ((type === 'chunk' || type === 'done') && states[provider]) {
-        aiResponses[provider] = text;
-        states[provider].status = type === 'done' ? 'done' : 'running';
-    } else if (type === 'error') {
-        if (states[provider]) {
-            states[provider].error = message || 'Анализ завершился с ошибкой';
-            states[provider].status = 'done';
-        } else {
-            aiModalSession.runError = message || 'Не удалось запустить анализ';
-            finishAiStream();
-            return;
-        }
-    } else if (type === 'complete') {
-        if (!Object.keys(states).length) aiModalSession.runError = 'Нет доступных провайдеров для анализа.';
-        finishAiStream();
-        return;
-    }
+    const handler = AI_STREAM_HANDLERS.get(data.type);
+    if (handler && handler(data, aiModalSession.providerStates)) return;
     renderNewAnalysis();
 }
 
@@ -3131,10 +3218,7 @@ function closeAiModal() {
         aiEventSource.close();
         aiEventSource = null;
     }
-    if (incrementPollTimer) {
-        clearInterval(incrementPollTimer);
-        incrementPollTimer = null;
-    }
+    stopIncrementPoll();
     aiModalSession = null;
     _incrementState = null;
     aiContentRequest++;
