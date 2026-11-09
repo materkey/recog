@@ -24,8 +24,8 @@ serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 # Unicode 15.0, the version of Python 3.12's unicodedata: model names and saved prompt
-# IDs are validated by general category, which tests/parity.rs compares code point by
-# code point with Python.
+# IDs are validated by general category, which the deleted tests/parity.rs compared code
+# point by code point with Python.
 unicode-general-category = "0.6"
 uuid = { version = "1", features = ["v4"] }
 

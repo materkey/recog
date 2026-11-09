@@ -1,6 +1,6 @@
 //! Canonical editable AI prompts and task defaults (`recog/ai_defaults.py`); no
 //! provider code. The prompt texts are byte-identical to the Python constants, which
-//! tests/parity.rs checks.
+//! the deleted tests/parity.rs checked.
 
 pub const DEFAULT_CLAUDE_MODEL: &str = "claude-opus-5-5";
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-6-astra";
