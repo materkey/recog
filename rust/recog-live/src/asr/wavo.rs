@@ -289,3 +289,21 @@ impl std::fmt::Debug for WavoAsr {
         f.debug_struct("WavoAsr").field("device", &self.device()).finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_too_long_or_another_wavo_error_when_mapped_then_an_input_error_or_a_failure() {
+        // given
+        let too_long = wavo::Error::AudioTooLong { ms: 40_000, max_ms: 30_000 };
+        let model = wavo::Error::Model("no gigaam".into());
+        // when / then
+        assert_eq!(
+            engine_error(&too_long),
+            AsrError::InvalidInput("audio is 40000 ms, longer than the model's 30000 ms: split it at pauses".into())
+        );
+        assert_eq!(engine_error(&model), AsrError::Failed("invalid model: no gigaam".into()));
+    }
+}

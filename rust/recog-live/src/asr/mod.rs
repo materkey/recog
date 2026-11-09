@@ -36,21 +36,6 @@ impl Clip<'_> {
             Clip::I16(s) => s.iter().map(|&v| f32::from(v) / 32768.0).collect(),
         }
     }
-
-    /// The number of samples.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        match self {
-            Clip::F32(s) => s.len(),
-            Clip::I16(s) => s.len(),
-        }
-    }
-
-    /// Whether the clip has no samples.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 /// Why an ASR call gave no answer.

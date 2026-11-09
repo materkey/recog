@@ -123,3 +123,28 @@ fn source_only_without_swiftc_find_or_build_names_swiftc() {
     assert!(m.contains("swiftc not found"));
     assert!(m.contains("no prebuilt helper to fall back on"));
 }
+
+#[test]
+fn a_program_that_fails_when_the_os_toolchain_runs_it_then_its_exit_code_and_stderr() {
+    // given
+    let argv: Vec<String> = ["sh", "-c", "echo broken SDK >&2; exit 3"].map(str::to_owned).to_vec();
+    // when
+    let failed = crate::capture::sck::OsToolchain.run(&argv);
+    let nothing = crate::capture::sck::OsToolchain.run(&[]);
+    let missing = crate::capture::sck::OsToolchain.run(&["/nonexistent/swiftc".to_owned()]);
+    // then
+    assert_eq!(failed, (3, "broken SDK\n".to_owned()));
+    assert_eq!(nothing, (-1, String::new()));
+    assert_eq!(missing.0, -1);
+    assert!(!missing.1.is_empty());
+}
+
+#[test]
+fn programs_on_path_and_off_it_when_the_os_toolchain_looks_them_up_then_found_or_none() {
+    // given / when
+    let sh = crate::capture::sck::OsToolchain.which("sh");
+    let none = crate::capture::sck::OsToolchain.which("no-such-program-of-recog");
+    // then
+    assert!(sh.as_ref().is_some_and(|p| p.ends_with("sh") && p.is_absolute()), "{sh:?}");
+    assert_eq!(none, None);
+}
