@@ -133,6 +133,97 @@ fn validate_entry(row: &Value) -> Result<(), Unusable> {
     Ok(())
 }
 
+/// The `stats` and conference sections of a meeting's metadata and its
+/// participants' names, with the errors in the order Python meets them.
+fn entry_sections(meta: &Value) -> Result<(Value, Value, Vec<Value>), Unusable> {
+    let empty = Value::Object(Map::new());
+    let stats = get_or(meta, "stats", &empty)?.clone();
+    let ktalk = get_or(meta, "ktalk", &empty)?;
+    let conference = get_or(meta, "conference", ktalk)?.clone();
+    let participants = get_or(meta, "participants", &empty)?;
+    let Value::Object(participants) = participants else {
+        return Err(Unusable(format!("'{}' object has no attribute 'items'", participants.type_name())));
+    };
+    let names = participants
+        .iter()
+        .map(|(key, p)| Ok(get_or(p, "name", &Value::from(key.as_str()))?.clone()))
+        .collect::<Result<Vec<Value>, Unusable>>()?;
+    Ok((stats, conference, names))
+}
+
+/// The end reason of an ended meeting.
+fn end_reason(map: &Map, active: bool) -> Value {
+    if active { Value::Null } else { map.get("end_reason").cloned().unwrap_or(Value::Null) }
+}
+
+fn live_url_key(external: bool) -> &'static str {
+    if external { "conference_url" } else { "ktalk_live_url" }
+}
+
+/// `meta.get("callrec", {}).get("recorder")`.
+fn recorder(meta: &Value) -> Result<Value, Unusable> {
+    let empty = Value::Object(Map::new());
+    Ok(get_or(get_or(meta, "callrec", &empty)?, "recorder", &Value::Null)?.clone())
+}
+
+/// Marks an active meeting, and a meeting of an external directory with its root.
+fn mark_origin(entry: &mut Map, active: bool, external_root: Option<&Path>) {
+    if active {
+        entry.insert("is_active", Value::Bool(true));
+    }
+    if let Some(root) = external_root {
+        entry.insert("_external", Value::Bool(true));
+        entry.insert("_external_path", Value::from(root.to_string_lossy().into_owned()));
+    }
+}
+
+/// The error of a file whose signature changed while it was read.
+fn unchanged(path: &Path, sig: Signature) -> Result<(), Unusable> {
+    match signature(path) {
+        Ok(after) if after == sig => Ok(()),
+        Ok(_) => Err(Unusable("file changed during read".into())),
+        Err(e) => Err(Unusable(e.to_string())),
+    }
+}
+
+/// Adds the metadata file of every directory under `root`; a root that does not
+/// exist adds nothing.
+fn scan_root(root: &Path, paths: &mut BTreeSet<PathBuf>) -> std::io::Result<()> {
+    let children = match std::fs::read_dir(root) {
+        Ok(children) => children,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for child in children.flatten() {
+        if child.path().is_dir() {
+            paths.insert(child.path().join("meta.json"));
+        }
+    }
+    Ok(())
+}
+
+/// One meeting's metadata into the list: an external meeting is added, a local
+/// one replaces its index row while active or with segments, else removes it.
+fn merge_meta(entry: &Map, local: &mut Map, external: &mut Vec<Map>) {
+    let id = entry.get("id").map(Value::py_str).unwrap_or_default();
+    if entry.get("_external").is_some_and(Value::truthy) {
+        external.push(entry.clone());
+    } else if entry.get("is_active").is_some_and(Value::truthy) || entry.get("segment_count").is_some_and(Value::truthy)
+    {
+        local.insert(id, Value::Object(entry.clone()));
+    } else {
+        local.remove(&id);
+    }
+}
+
+/// The sort key of a listed meeting: its creation time, empty without one.
+fn created_key(row: &Map) -> String {
+    match row.get("created_at") {
+        Some(Value::Str(s)) if !s.is_empty() => s.clone(),
+        _ => String::new(),
+    }
+}
+
 fn read_text(path: &Path) -> Result<String, Unusable> {
     let raw = std::fs::read(path).map_err(|e| Unusable(e.to_string()))?;
     let text = std::str::from_utf8(&raw).map_err(|e| Unusable(pyjson::utf8_error_message(&raw, &e)))?;
@@ -142,6 +233,21 @@ fn read_text(path: &Path) -> Result<String, Unusable> {
 impl Inner {
     fn index_path(&self) -> PathBuf {
         self.base_path.join("index.json")
+    }
+
+    fn is_root(&self, dir: Option<&Path>) -> bool {
+        dir.is_some_and(|p| self.roots.iter().any(|r| r == p))
+    }
+
+    /// The catalog file an event's path touched: a meeting directory created, deleted
+    /// or moved under a root, the index, or a meeting's metadata.
+    fn touched(&self, kind: EventKind, is_directory: bool, path: &Path) -> Option<PathBuf> {
+        if is_directory {
+            return (kind != EventKind::Modified && self.is_root(path.parent())).then(|| path.join("meta.json"));
+        }
+        let metadata = path.file_name().and_then(|n| n.to_str()) == Some("meta.json")
+            && self.is_root(path.parent().and_then(Path::parent));
+        (path == self.index_path() || metadata).then(|| path.to_path_buf())
     }
 
     fn canonical(&self, source: &Value) -> Result<Value, Unusable> {
@@ -157,7 +263,6 @@ impl Inner {
     }
 
     fn metadata_entry(&self, path: &Path, meta: &Value) -> Result<Map, Unusable> {
-        let empty = Value::Object(Map::new());
         let null = Value::Null;
         let zero = Value::Int(0);
         let map = meta.as_object().ok_or_else(|| no_get(meta))?;
@@ -166,55 +271,40 @@ impl Inner {
         };
         let root = path.parent().and_then(Path::parent).unwrap_or(Path::new(""));
         let external = root != self.base_path;
-        let mut source = map.get("source").cloned().unwrap_or(Value::Null);
-        if external {
-            let Some((_, override_source)) = self.external_paths.iter().find(|(p, _)| p == root) else {
-                return Err(Unusable("StopIteration".into()));
-            };
-            source = match override_source.as_deref().filter(|s| !s.is_empty()) {
-                Some(s) => Value::from(s),
-                None if source.truthy() => source,
-                None => Value::from("unknown"),
-            };
-        }
+        let source = self.entry_source(root, external, map)?;
         let active = !external && map.get("ended_at").is_none_or(Value::is_null);
-        let stats = get_or(meta, "stats", &empty)?;
-        let ktalk = get_or(meta, "ktalk", &empty)?;
-        let conference = get_or(meta, "conference", ktalk)?;
-        let participants = get_or(meta, "participants", &empty)?;
-        let Value::Object(participants) = participants else {
-            return Err(Unusable(format!("'{}' object has no attribute 'items'", participants.type_name())));
-        };
-        let names = participants
-            .iter()
-            .map(|(key, p)| Ok(get_or(p, "name", &Value::from(key.as_str()))?.clone()))
-            .collect::<Result<Vec<Value>, Unusable>>()?;
+        let (stats, conference, names) = entry_sections(meta)?;
         let mut entry = Map::new();
         entry.insert("id", Value::from(id.as_str()));
         entry.insert("created_at", Value::from(created_at.as_str()));
         entry.insert("ended_at", map.get("ended_at").cloned().unwrap_or(Value::Null));
-        entry.insert("duration_seconds", get_or(stats, "duration_seconds", &zero)?.clone());
+        entry.insert("duration_seconds", get_or(&stats, "duration_seconds", &zero)?.clone());
         entry.insert("title", map.get("title").cloned().unwrap_or(Value::Null));
         entry.insert("source", self.canonical(&source)?);
-        entry.insert(
-            "end_reason",
-            if active { Value::Null } else { map.get("end_reason").cloned().unwrap_or(Value::Null) },
-        );
-        entry.insert(
-            if external { "conference_url" } else { "ktalk_live_url" },
-            get_or(conference, "live_url", &null)?.clone(),
-        );
-        entry.insert("segment_count", get_or(stats, "segment_count", &zero)?.clone());
+        entry.insert("end_reason", end_reason(map, active));
+        entry.insert(live_url_key(external), get_or(&conference, "live_url", &null)?.clone());
+        entry.insert("segment_count", get_or(&stats, "segment_count", &zero)?.clone());
         entry.insert("participants", Value::Array(names));
-        entry.insert("recorder", get_or(get_or(meta, "callrec", &empty)?, "recorder", &null)?.clone());
-        if active {
-            entry.insert("is_active", Value::Bool(true));
-        }
-        if external {
-            entry.insert("_external", Value::Bool(true));
-            entry.insert("_external_path", Value::from(root.to_string_lossy().into_owned()));
-        }
+        entry.insert("recorder", recorder(meta)?);
+        mark_origin(&mut entry, active, external.then_some(root));
         Ok(entry)
+    }
+
+    /// The meeting's source; an external directory's override, else its own source
+    /// or `unknown`.
+    fn entry_source(&self, root: &Path, external: bool, map: &Map) -> Result<Value, Unusable> {
+        let source = map.get("source").cloned().unwrap_or(Value::Null);
+        if !external {
+            return Ok(source);
+        }
+        let Some((_, override_source)) = self.external_paths.iter().find(|(p, _)| p == root) else {
+            return Err(Unusable("StopIteration".into()));
+        };
+        Ok(match override_source.as_deref().filter(|s| !s.is_empty()) {
+            Some(s) => Value::from(s),
+            None if source.truthy() => source,
+            None => Value::from("unknown"),
+        })
     }
 
     fn parse_file(&self, path: &Path) -> Result<Entry, Unusable> {
@@ -253,11 +343,13 @@ impl Inner {
             files.retry_paths.remove(path);
             return;
         }
-        let parsed = self.parse_file(path).and_then(|entry| match signature(path) {
-            Ok(after) if after == sig => Ok(entry),
-            Ok(_) => Err(Unusable("file changed during read".into())),
-            Err(e) => Err(Unusable(e.to_string())),
-        });
+        let parsed = self.parse_file(path).and_then(|entry| unchanged(path, sig).map(|()| entry));
+        self.store(files, path, sig, parsed);
+    }
+
+    /// A parsed file cached under its signature; a failure retried, unless the file is
+    /// gone.
+    fn store(&self, files: &mut Files, path: &Path, sig: Signature, parsed: Result<Entry, Unusable>) {
         match parsed {
             Ok(entry) => {
                 files.entries.insert(path.to_path_buf(), (sig, entry));
@@ -285,33 +377,8 @@ impl Inner {
         let paths = match paths {
             Some(paths) if !files.rescan_needed => paths,
             _ => {
-                let mut paths = BTreeSet::from([self.index_path()]);
-                for root in &self.roots {
-                    match std::fs::read_dir(root) {
-                        Ok(children) => {
-                            for child in children.flatten() {
-                                if child.path().is_dir() {
-                                    paths.insert(child.path().join("meta.json"));
-                                }
-                            }
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => {
-                            eprintln!("Cannot scan {}; retaining catalog entries: {e}", root.display());
-                            let kept: Vec<PathBuf> = files
-                                .entries
-                                .keys()
-                                .filter(|p| p.parent().and_then(Path::parent) == Some(root.as_path()))
-                                .cloned()
-                                .collect();
-                            paths.extend(kept);
-                            scan_failed = true;
-                        }
-                    }
-                }
-                files.entries.retain(|p, _| paths.contains(p));
-                files.retry_paths.retain(|p| paths.contains(p));
-                files.rescan_needed = scan_failed;
+                let (paths, failed) = self.scan(&mut files);
+                scan_failed = failed;
                 paths
             }
         };
@@ -320,6 +387,40 @@ impl Inner {
         for path in &all {
             self.read_file(&mut files, path);
         }
+        let meetings = self.merged(&files);
+        let needs_retry = !files.retry_paths.is_empty() || scan_failed;
+        *self.meetings.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(meetings);
+        self.needs_retry.store(needs_retry, Ordering::SeqCst);
+    }
+
+    /// Every file of the catalog: the index and each meeting directory's metadata,
+    /// the cached files of a root that cannot be listed kept; whether a root failed.
+    /// Entries of files no longer found are dropped.
+    fn scan(&self, files: &mut Files) -> (BTreeSet<PathBuf>, bool) {
+        let mut paths = BTreeSet::from([self.index_path()]);
+        let mut scan_failed = false;
+        for root in &self.roots {
+            if let Err(e) = scan_root(root, &mut paths) {
+                eprintln!("Cannot scan {}; retaining catalog entries: {e}", root.display());
+                let kept: Vec<PathBuf> = files
+                    .entries
+                    .keys()
+                    .filter(|p| p.parent().and_then(Path::parent) == Some(root.as_path()))
+                    .cloned()
+                    .collect();
+                paths.extend(kept);
+                scan_failed = true;
+            }
+        }
+        files.entries.retain(|p, _| paths.contains(p));
+        files.retry_paths.retain(|p| paths.contains(p));
+        files.rescan_needed = scan_failed;
+        (paths, scan_failed)
+    }
+
+    /// The listed meetings, newest first: the index's rows replaced or removed by the
+    /// local metadata, then the external meetings.
+    fn merged(&self, files: &Files) -> Vec<Map> {
         let mut local: Map = Map::new();
         if let Some((_, Entry::Index(rows))) = files.entries.get(&self.index_path()) {
             for row in rows {
@@ -331,30 +432,14 @@ impl Inner {
         let mut external = Vec::new();
         for (path, (_, entry)) in &files.entries {
             let Entry::Meta(entry) = entry else { continue };
-            if path.file_name().and_then(|n| n.to_str()) != Some("meta.json") {
-                continue;
-            }
-            let id = entry.get("id").map(Value::py_str).unwrap_or_default();
-            if entry.get("_external").is_some_and(Value::truthy) {
-                external.push(entry.clone());
-            } else if entry.get("is_active").is_some_and(Value::truthy)
-                || entry.get("segment_count").is_some_and(Value::truthy)
-            {
-                local.insert(id, Value::Object(entry.clone()));
-            } else {
-                local.remove(&id);
+            if path.file_name().and_then(|n| n.to_str()) == Some("meta.json") {
+                merge_meta(entry, &mut local, &mut external);
             }
         }
         let mut meetings: Vec<Map> = local.values().filter_map(|v| v.as_object().cloned()).collect();
         meetings.extend(external);
-        let key = |row: &Map| match row.get("created_at") {
-            Some(Value::Str(s)) if !s.is_empty() => s.clone(),
-            _ => String::new(),
-        };
-        meetings.sort_by_key(|row| std::cmp::Reverse(key(row)));
-        let needs_retry = !files.retry_paths.is_empty() || scan_failed;
-        *self.meetings.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(meetings);
-        self.needs_retry.store(needs_retry, Ordering::SeqCst);
+        meetings.sort_by_key(|row| std::cmp::Reverse(created_key(row)));
+        meetings
     }
 }
 
@@ -439,22 +524,11 @@ impl MeetingCatalog {
     /// `on_any_event`: mark what an event touched dirty and wake the loop.
     pub fn on_any_event(&self, kind: EventKind, is_directory: bool, src: &Path, dest: Option<&Path>) {
         let inner = &self.inner;
-        let mut paths = BTreeSet::new();
-        for path in std::iter::once(src).chain(dest) {
-            if path.as_os_str().is_empty() {
-                continue;
-            }
-            if is_directory {
-                if kind != EventKind::Modified && path.parent().is_some_and(|p| inner.roots.iter().any(|r| r == p)) {
-                    paths.insert(path.join("meta.json"));
-                }
-            } else if path == inner.index_path()
-                || (path.file_name().and_then(|n| n.to_str()) == Some("meta.json")
-                    && path.parent().and_then(Path::parent).is_some_and(|p| inner.roots.iter().any(|r| r == p)))
-            {
-                paths.insert(path.to_path_buf());
-            }
-        }
+        let paths: BTreeSet<PathBuf> = std::iter::once(src)
+            .chain(dest)
+            .filter(|path| !path.as_os_str().is_empty())
+            .filter_map(|path| inner.touched(kind, is_directory, path))
+            .collect();
         if !paths.is_empty() && inner.started.load(Ordering::SeqCst) && !inner.stopping.load(Ordering::SeqCst) {
             inner.dirty.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(paths);
             inner.wake.set();
