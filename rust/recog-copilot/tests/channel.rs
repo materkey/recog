@@ -20,6 +20,7 @@ use recog_copilot::log::Capture;
 use recog_core::privacy::{PrivacySource as _, PrivacyStore};
 use recog_core::pyjson::{Map, Value};
 use serde_json::json;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 /// A link and the `_ws_loop` connected to `bridge`.
 async fn start_link(dir: &tempfile::TempDir, bridge: &FakeBridge) -> (Arc<BridgeLink>, tokio::task::JoinHandle<()>) {
@@ -651,6 +652,86 @@ async fn frame_over_one_mebibyte_when_received_then_link_reconnects_like_websock
     assert_eq!(hello.get("type"), Some(&Value::from("copilot_channel_hello")));
     assert!(link.events.is_empty());
     assert!(capture.text().contains("[copilot-channel] bridge unavailable ("), "{}", capture.text());
+    task.abort();
+}
+
+/// A bridge that plays `script` on its first connection (after reading the hello) and
+/// then closes it with a close frame; later connections only read their hello. Every
+/// hello read is counted.
+async fn scripted_bridge(script: Vec<WsMessage>) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    use futures_util::{SinkExt as _, StreamExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let hellos = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = hellos.clone();
+    tokio::spawn(async move {
+        let mut script = Some(script);
+        while let Ok((stream, _)) = listener.accept().await {
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            if let Some(Ok(WsMessage::Text(_))) = socket.next().await {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            let Some(script) = script.take() else {
+                tokio::spawn(async move { while socket.next().await.is_some() {} });
+                continue;
+            };
+            for message in script {
+                socket.send(message).await.unwrap();
+            }
+            socket.close(None).await.unwrap();
+        }
+    });
+    (url, hellos)
+}
+
+#[tokio::test]
+async fn bridge_closing_cleanly_when_link_reconnects_then_reconnected_and_no_failure_logged() {
+    // given
+    let (url, hellos) = scripted_bridge(vec![
+        WsMessage::Ping(b"p".to_vec().into()),
+        WsMessage::Binary(br#"{"type": "meeting_started", "meeting_id": "m-1"}"#.to_vec().into()),
+        WsMessage::Text(r#"{"type": "meeting_ended"}"#.into()),
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let link = link_in(&dir);
+    let server = Arc::new(McpServer::new(link.clone(), "127.0.0.1"));
+    let capture = Capture::start();
+    // when
+    let task = tokio::spawn(channel::ws_loop(url.clone(), server, false));
+    // then
+    assert!(wait_for(|| hellos.load(std::sync::atomic::Ordering::SeqCst) == 2).await);
+    let log = capture.text();
+    assert!(log.contains(&format!("[copilot-channel] connected to {url}")), "{log}");
+    assert!(log.contains(&format!("[copilot-channel] reconnected to {url}")), "{log}");
+    assert!(!log.contains("bridge unavailable"), "{log}");
+    assert_eq!(
+        queued(&link).iter().map(dumps).collect::<Vec<_>>(),
+        [r#"{"type": "meeting_started", "meeting_id": "m-1"}"#, r#"{"type": "meeting_ended"}"#]
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn bridge_unreachable_when_link_retries_then_failure_logged_once_per_minute() {
+    // given
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let dir = tempfile::tempdir().unwrap();
+    let link = link_in(&dir);
+    let server = Arc::new(McpServer::new(link.clone(), "127.0.0.1"));
+    let capture = Capture::start();
+    // when
+    let task = tokio::spawn(channel::ws_loop(url, server, false));
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // then
+    let log = capture.text();
+    let failures: Vec<&str> = log.lines().filter(|l| l.contains("bridge unavailable")).collect();
+    assert_eq!(failures.len(), 1, "{log}");
+    assert!(failures[0].starts_with("[copilot-channel] bridge unavailable (OSError: "), "{log}");
+    assert!(failures[0].ends_with("); retry in 1.0s"), "{log}");
+    assert!(!link.is_connected());
     task.abort();
 }
 
