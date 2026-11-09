@@ -104,56 +104,96 @@ async fn pump(
     let mut awaiting_pong = false;
     loop {
         tokio::select! {
-            message = stream.next() => match message {
-                Some(Ok(Message::Text(text))) => {
-                    let _ = inbound.send(Ok(Inbound::Text(text.as_str().to_owned())));
-                }
-                Some(Ok(Message::Binary(bytes))) => {
-                    let _ = inbound.send(Ok(Inbound::Binary(bytes.to_vec())));
-                }
-                Some(Ok(Message::Ping(_))) => {
-                    // The pong is queued by the read; a flush sends it.
-                    let _ = sink.lock().await.flush().await;
-                }
-                Some(Ok(Message::Pong(_))) => awaiting_pong = false,
-                Some(Ok(Message::Close(frame))) => {
-                    if let Some(text) = peer_close_text(frame.as_ref()) {
-                        let _ = inbound.send(Err(text));
-                    }
-                    let _ = sink.lock().await.flush().await;
-                    return;
-                }
-                Some(Ok(Message::Frame(_))) => {}
-                Some(Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed)) | None => return,
-                Some(Err(tungstenite::Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake))) => {
-                    let _ = inbound.send(Err("no close frame received or sent".to_owned()));
-                    return;
-                }
-                Some(Err(tungstenite::Error::Capacity(_))) => {
-                    let frame = CloseFrame { code: CloseCode::Size, reason: "".into() };
-                    let _ = sink.lock().await.send(Message::Close(Some(frame))).await;
-                    let _ = inbound.send(Err("sent 1009 (message too big); no close frame received".to_owned()));
-                    return;
-                }
-                Some(Err(e)) => {
-                    let _ = inbound.send(Err(e.to_string()));
-                    return;
-                }
+            message = stream.next() => if !on_read(message, &sink, &inbound, &mut awaiting_pong).await {
+                return;
             },
-            _ = ticker.tick() => {
-                if awaiting_pong {
-                    let frame = CloseFrame { code: CloseCode::Error, reason: "keepalive ping timeout".into() };
-                    let _ = sink.lock().await.send(Message::Close(Some(frame))).await;
-                    let _ = inbound.send(Err("sent 1011 (internal error) keepalive ping timeout; no close frame received".to_owned()));
-                    return;
-                }
-                awaiting_pong = true;
-                if sink.lock().await.send(Message::Ping(Vec::new().into())).await.is_err() {
-                    return;
-                }
+            _ = ticker.tick() => if !keepalive(&sink, &inbound, &mut awaiting_pong).await {
+                return;
             }
         }
     }
+}
+
+type InboundTx = mpsc::UnboundedSender<Result<Inbound, String>>;
+
+/// One read of the socket; false ends the reading.
+async fn on_read(
+    message: Option<Result<Message, tungstenite::Error>>,
+    sink: &tokio::sync::Mutex<WsSink>,
+    inbound: &InboundTx,
+    awaiting_pong: &mut bool,
+) -> bool {
+    match message {
+        Some(Ok(message)) => on_message(message, sink, inbound, awaiting_pong).await,
+        Some(Err(error)) => {
+            on_read_error(error, sink, inbound).await;
+            false
+        }
+        None => false,
+    }
+}
+
+/// A message the peer sent; false after its close.
+async fn on_message(
+    message: Message,
+    sink: &tokio::sync::Mutex<WsSink>,
+    inbound: &InboundTx,
+    awaiting_pong: &mut bool,
+) -> bool {
+    match message {
+        Message::Text(text) => {
+            let _ = inbound.send(Ok(Inbound::Text(text.as_str().to_owned())));
+        }
+        Message::Binary(bytes) => {
+            let _ = inbound.send(Ok(Inbound::Binary(bytes.to_vec())));
+        }
+        Message::Ping(_) => {
+            // The pong is queued by the read; a flush sends it.
+            let _ = sink.lock().await.flush().await;
+        }
+        Message::Pong(_) => *awaiting_pong = false,
+        Message::Close(frame) => {
+            if let Some(text) = peer_close_text(frame.as_ref()) {
+                let _ = inbound.send(Err(text));
+            }
+            let _ = sink.lock().await.flush().await;
+            return false;
+        }
+        Message::Frame(_) => {}
+    }
+    true
+}
+
+/// A read that failed: what the handler logs as the connection error, and the
+/// close a too-big message gets.
+async fn on_read_error(error: tungstenite::Error, sink: &tokio::sync::Mutex<WsSink>, inbound: &InboundTx) {
+    let text = match error {
+        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => return,
+        tungstenite::Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake) => {
+            "no close frame received or sent".to_owned()
+        }
+        tungstenite::Error::Capacity(_) => {
+            let frame = CloseFrame { code: CloseCode::Size, reason: "".into() };
+            let _ = sink.lock().await.send(Message::Close(Some(frame))).await;
+            "sent 1009 (message too big); no close frame received".to_owned()
+        }
+        e => e.to_string(),
+    };
+    let _ = inbound.send(Err(text));
+}
+
+/// A keepalive tick: a ping, or a 1011 close when the last one got no pong; false
+/// ends the reading.
+async fn keepalive(sink: &tokio::sync::Mutex<WsSink>, inbound: &InboundTx, awaiting_pong: &mut bool) -> bool {
+    if *awaiting_pong {
+        let frame = CloseFrame { code: CloseCode::Error, reason: "keepalive ping timeout".into() };
+        let _ = sink.lock().await.send(Message::Close(Some(frame))).await;
+        let _ =
+            inbound.send(Err("sent 1011 (internal error) keepalive ping timeout; no close frame received".to_owned()));
+        return false;
+    }
+    *awaiting_pong = true;
+    sink.lock().await.send(Message::Ping(Vec::new().into())).await.is_ok()
 }
 
 async fn serve_connection(bridge: Arc<Bridge>, tcp: TcpStream, peer: SocketAddr) {
