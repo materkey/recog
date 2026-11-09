@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use recog_core::py;
-use recog_core::pyjson::Value;
+use recog_core::pyjson::{Map, Value};
 
 /// The body, or `None` where `allow_nan=False` makes Python raise (a NaN or an
 /// infinite float), which the server answers with a 500.
@@ -14,21 +14,29 @@ pub fn render(value: &Value) -> Option<String> {
     write_value(&mut out, value).then_some(out)
 }
 
+/// The two-character escape `json.dumps` writes for a character, if it has one.
+fn short_escape(c: char) -> Option<&'static str> {
+    Some(match c {
+        '"' => "\\\"",
+        '\\' => "\\\\",
+        '\n' => "\\n",
+        '\r' => "\\r",
+        '\t' => "\\t",
+        '\u{8}' => "\\b",
+        '\u{c}' => "\\f",
+        _ => return None,
+    })
+}
+
 fn write_string(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if u32::from(c) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", u32::from(c));
-            }
-            c => out.push(c),
+        if let Some(escape) = short_escape(c) {
+            out.push_str(escape);
+        } else if u32::from(c) < 0x20 {
+            let _ = write!(out, "\\u{:04x}", u32::from(c));
+        } else {
+            out.push(c);
         }
     }
     out.push('"');
@@ -41,40 +49,49 @@ fn write_value(out: &mut String, value: &Value) -> bool {
         Value::Int(n) => {
             let _ = write!(out, "{n}");
         }
-        Value::Float(x) => {
-            if !x.is_finite() {
-                return false;
-            }
-            out.push_str(&py::float_repr(*x));
-        }
+        Value::Float(x) => return write_float(out, *x),
         Value::Str(s) => write_string(out, s),
-        Value::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                if !write_value(out, item) {
-                    return false;
-                }
-            }
-            out.push(']');
+        Value::Array(items) => return write_array(out, items),
+        Value::Object(map) => return write_object(out, map),
+    }
+    true
+}
+
+fn write_float(out: &mut String, x: f64) -> bool {
+    if !x.is_finite() {
+        return false;
+    }
+    out.push_str(&py::float_repr(x));
+    true
+}
+
+fn write_array(out: &mut String, items: &[Value]) -> bool {
+    out.push('[');
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
         }
-        Value::Object(map) => {
-            out.push('{');
-            for (i, (k, v)) in map.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_string(out, k);
-                out.push(':');
-                if !write_value(out, v) {
-                    return false;
-                }
-            }
-            out.push('}');
+        if !write_value(out, item) {
+            return false;
         }
     }
+    out.push(']');
+    true
+}
+
+fn write_object(out: &mut String, map: &Map) -> bool {
+    out.push('{');
+    for (i, (k, v)) in map.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_string(out, k);
+        out.push(':');
+        if !write_value(out, v) {
+            return false;
+        }
+    }
+    out.push('}');
     true
 }
 
