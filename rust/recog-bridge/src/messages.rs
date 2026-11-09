@@ -460,6 +460,35 @@ impl Bridge {
 mod tests {
     use super::*;
 
+    fn int_of(value: Value) -> Result<i128, (&'static str, String)> {
+        py_int(&value).map_err(|e| match e {
+            IntError::Malformed(e) => ("malformed", e),
+            IntError::Overflow(e) => ("overflow", e),
+        })
+    }
+
+    #[test]
+    fn given_frame_values_when_converted_with_int_then_python_values_and_errors() {
+        assert_eq!(int_of(Value::Int(-7)), Ok(-7));
+        assert_eq!(int_of(Value::Bool(true)), Ok(1));
+        assert_eq!(int_of(Value::Float(16000.9)), Ok(16000));
+        assert_eq!(int_of(Value::Float(-2.7)), Ok(-2));
+        assert_eq!(int_of(Value::from(" 3 ")), Ok(3));
+        assert_eq!(int_of(Value::Float(f64::NAN)), Err(("malformed", "cannot convert float NaN to integer".into())));
+        assert_eq!(
+            int_of(Value::Float(f64::NEG_INFINITY)),
+            Err(("overflow", "cannot convert float infinity to integer".into()))
+        );
+        assert_eq!(int_of(Value::from("x")), Err(("malformed", "invalid literal for int() with base 10: 'x'".into())));
+        assert_eq!(
+            int_of(Value::Array(Vec::new())),
+            Err((
+                "malformed",
+                "int() argument must be a string, a bytes-like object or a real number, not 'list'".into()
+            ))
+        );
+    }
+
     #[test]
     fn given_python_cases_when_decoded_then_same_bytes_and_errors() {
         let cases: &[(&str, Result<&[u8], &str>)] = &[
