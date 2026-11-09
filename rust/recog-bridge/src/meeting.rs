@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 
 use crate::bridge::Bridge;
@@ -40,7 +41,7 @@ impl Bridge {
     }
 
     fn meeting_ended_frame(&self, meeting_id: Option<&str>) -> Value {
-        obj! {"type" => "meeting_ended", "meeting_id" => meeting_id, "created_at" => Value::Float(self.now() * 1000.0)}
+        obj! {"type" => protocol::MEETING_ENDED, "meeting_id" => meeting_id, "created_at" => Value::Float(self.now() * 1000.0)}
     }
 
     pub(crate) async fn on_meeting_join(
@@ -53,7 +54,7 @@ impl Bridge {
         let platform = data.get("platform").map_or_else(|| "ktalk".to_owned(), text_of);
         if self.config.ktalk_only && platform != "ktalk" {
             if let Some(client) = client {
-                let frame = obj! {"type" => "meeting_join_rejected", "reason" => "ktalk_only"};
+                let frame = obj! {"type" => protocol::MEETING_JOIN_REJECTED, "reason" => "ktalk_only"};
                 client.sink.send(dumps_ascii(&frame)).await.map_err(|e| e.0)?;
             }
             return Ok(());
@@ -81,7 +82,7 @@ impl Bridge {
             ));
             if let Some(client) = client {
                 let frame = obj! {
-                    "type" => "meeting_join_rejected",
+                    "type" => protocol::MEETING_JOIN_REJECTED,
                     "reason" => "another_tab_active",
                     "active_meeting_id" => storage.current_meeting_id(),
                 };
@@ -133,7 +134,7 @@ impl Bridge {
                 }
                 self.log(&format!("[KTalk Bridge] Capture start failed: {e}"));
                 if let Some(client) = client {
-                    let frame = obj! {"type" => "meeting_join_rejected", "reason" => "capture_unavailable"};
+                    let frame = obj! {"type" => protocol::MEETING_JOIN_REJECTED, "reason" => "capture_unavailable"};
                     self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
                 }
                 return Ok(());
@@ -160,7 +161,7 @@ impl Bridge {
             // Segment ids restart at 1 per meeting.
             self.clear_transcript_buffer();
             let started = obj! {
-                "type" => "meeting_started",
+                "type" => protocol::MEETING_STARTED,
                 "meeting_id" => meeting_id.as_deref(),
                 "meeting_title" => title.clone(),
                 "created_at" => Value::Float(self.now() * 1000.0),
@@ -337,9 +338,9 @@ impl Bridge {
     /// `_notify_manual_copilot_preempted`: the webapp only.
     pub async fn notify_manual_copilot_preempted(&self) {
         let frame = obj! {
-            "type" => "copilot_status",
+            "type" => protocol::COPILOT_STATUS,
             "request_id" => "",
-            "status" => "manual_preempted",
+            "status" => protocol::STATUS_MANUAL_PREEMPTED,
             "message" => "Manual copilot session preempted by a conference meeting",
         };
         self.broadcast_to_subscribers(&frame).await;

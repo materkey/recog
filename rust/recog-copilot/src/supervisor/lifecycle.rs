@@ -16,10 +16,12 @@
 
 use std::fmt;
 
+use recog_core::protocol;
+
 /// Synthetic lifecycle id of a webapp-driven (manual) session. Twin of
 /// `ktalk_bridge.MANUAL_MEETING_ID`: the bridge keys its manual mirror and its
 /// `meeting_state` reply off the very same string.
-pub const MANUAL_MEETING_ID: &str = "manual";
+pub const MANUAL_MEETING_ID: &str = protocol::MANUAL_MEETING_ID;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {

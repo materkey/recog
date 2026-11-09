@@ -1985,6 +1985,7 @@ name = "recog-zoom"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "recog-core",
  "regex",
  "serde",
  "serde_json",

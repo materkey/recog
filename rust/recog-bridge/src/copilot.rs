@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 
 /// A `transcript_tick` fires after this many new segments…
@@ -24,7 +25,7 @@ pub const AGENT_SESSIONS_ZERO_DEBOUNCE_S: f64 = 10.0;
 /// A TUI without its MCP session this long is replaced (`copilot_channel_unavailable`).
 pub const AGENT_CHANNEL_RECOVERY_S: f64 = 60.0;
 /// The lifecycle id of a manual Copilot session.
-pub const MANUAL_MEETING_ID: &str = "manual";
+pub const MANUAL_MEETING_ID: &str = protocol::MANUAL_MEETING_ID;
 
 /// Recent segments by id, in insertion order, bounded.
 #[derive(Debug, Default)]
@@ -164,7 +165,7 @@ impl Default for AgentMerge {
             channel_recovery_sent_at: None,
             claude_sessions: None,
             sessions_zero_since: None,
-            last_effective: "offline".to_owned(),
+            last_effective: protocol::AGENT_OFFLINE.to_owned(),
         }
     }
 }
@@ -174,7 +175,10 @@ impl AgentMerge {
     /// a supervisor past `spawning` and a session that should be alive.
     pub fn update_zero_anchor(&mut self, now: f64, should_be_alive: bool) {
         let eligible = self.claude_sessions == Some(0)
-            && self.supervisor_status.as_deref().is_some_and(|s| s != "offline" && s != "spawning")
+            && self
+                .supervisor_status
+                .as_deref()
+                .is_some_and(|s| s != protocol::AGENT_OFFLINE && s != protocol::AGENT_SPAWNING)
             && should_be_alive;
         if !eligible {
             self.sessions_zero_since = None;
@@ -186,16 +190,16 @@ impl AgentMerge {
     /// `_effective_agent_state`.
     #[must_use]
     pub fn effective(&self, now: f64, should_be_alive: bool) -> String {
-        let Some(status) = self.supervisor_status.as_deref() else { return "offline".to_owned() };
-        if status == "offline" || now - self.supervisor_status_ts > AGENT_SILENCE_THRESHOLD_S {
-            return "offline".to_owned();
+        let Some(status) = self.supervisor_status.as_deref() else { return protocol::AGENT_OFFLINE.to_owned() };
+        if status == protocol::AGENT_OFFLINE || now - self.supervisor_status_ts > AGENT_SILENCE_THRESHOLD_S {
+            return protocol::AGENT_OFFLINE.to_owned();
         }
         if self.claude_sessions == Some(0)
-            && status != "spawning"
+            && status != protocol::AGENT_SPAWNING
             && self.sessions_zero_since.is_some_and(|since| now - since >= AGENT_SESSIONS_ZERO_DEBOUNCE_S)
             && should_be_alive
         {
-            return "offline".to_owned();
+            return protocol::AGENT_OFFLINE.to_owned();
         }
         status.to_owned()
     }
@@ -205,7 +209,7 @@ impl AgentMerge {
     pub fn take_recovery(&mut self, now: f64) -> bool {
         let Some(since) = self.sessions_zero_since else { return false };
         if now - since < AGENT_CHANNEL_RECOVERY_S
-            || !matches!(self.supervisor_status.as_deref(), Some("online" | "working"))
+            || !matches!(self.supervisor_status.as_deref(), Some(protocol::AGENT_ONLINE | protocol::AGENT_WORKING))
             || now - self.supervisor_status_ts > AGENT_SILENCE_THRESHOLD_S
         {
             return false;

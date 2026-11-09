@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
+use recog_core::protocol;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::{JoinHandle, spawn_local};
@@ -279,13 +280,13 @@ impl<R: Runner + 'static> Supervisor<R> {
     pub async fn handle_frame(&self, data: &Value) {
         let Some(frame) = data.as_object() else { return };
         let ftype = frame.get("type").and_then(Value::as_str);
-        if let Some(kind @ ("meeting_state" | "meeting_started" | "meeting_ended")) = ftype {
-            let active = frame.get("active").cloned().unwrap_or(Value::Bool(kind == "meeting_started"));
+        if let Some(kind @ (protocol::MEETING_STATE | protocol::MEETING_STARTED | protocol::MEETING_ENDED)) = ftype {
+            let active = frame.get("active").cloned().unwrap_or(Value::Bool(kind == protocol::MEETING_STARTED));
             let meeting_id = frame.get("meeting_id").cloned().unwrap_or(Value::Null);
             self.st.borrow_mut().latest_meeting_state =
-                Some(json!({"type": "meeting_state", "meeting_id": meeting_id, "active": active}));
+                Some(json!({"type": protocol::MEETING_STATE, "meeting_id": meeting_id, "active": active}));
         }
-        if ftype == Some("copilot_settings_changed") {
+        if ftype == Some(protocol::COPILOT_SETTINGS_CHANGED) {
             self.refresh_enabled().await;
             return;
         }
@@ -295,7 +296,7 @@ impl<R: Runner + 'static> Supervisor<R> {
         }
         self.st.borrow_mut().enabled = true;
         match ftype {
-            Some("meeting_state") => {
+            Some(protocol::MEETING_STATE) => {
                 if !self.autospawn {
                     return;
                 }
@@ -306,7 +307,7 @@ impl<R: Runner + 'static> Supervisor<R> {
                     reconcile(&mut self.st.borrow_mut().lifecycle, active, meeting_id.as_deref(), session_alive);
                 self.apply(commands).await;
             }
-            Some("meeting_started") => {
+            Some(protocol::MEETING_STARTED) => {
                 if !self.autospawn {
                     return;
                 }
@@ -315,7 +316,7 @@ impl<R: Runner + 'static> Supervisor<R> {
                     self.apply(commands).await;
                 }
             }
-            Some("meeting_ended") => {
+            Some(protocol::MEETING_ENDED) => {
                 if !self.autospawn {
                     return;
                 }
@@ -323,10 +324,10 @@ impl<R: Runner + 'static> Supervisor<R> {
                 let commands = self.st.borrow_mut().lifecycle.meeting_ended(meeting_id);
                 self.apply(commands).await;
             }
-            Some("copilot_channel_unavailable") => {
+            Some(protocol::COPILOT_CHANNEL_UNAVAILABLE) => {
                 self.recover_channel_session(frame.get("meeting_id")).await;
             }
-            Some("copilot_spawn_request") => {
+            Some(protocol::COPILOT_SPAWN_REQUEST) => {
                 // An explicit click is fresh intent, not a flap: reset the budget. A
                 // session that spent every attempt parks in SPAWNING("manual"), where
                 // the same-id flap emits no Spawn, so `apply` would never reset it and
@@ -338,7 +339,7 @@ impl<R: Runner + 'static> Supervisor<R> {
                 let commands = self.st.borrow_mut().lifecycle.meeting_started(MANUAL_MEETING_ID);
                 self.apply(commands).await;
             }
-            Some("copilot_stop_request") => {
+            Some(protocol::COPILOT_STOP_REQUEST) => {
                 // Immediate kill, no grace. Logged: the stuck "останавливается…"
                 // incident of 2026-08-06 was undiagnosable because this path was silent.
                 let commands = self.st.borrow_mut().lifecycle.stop_now(Some(MANUAL_MEETING_ID));
@@ -558,7 +559,7 @@ impl<R: Runner + 'static> Supervisor<R> {
         let st = self.st.borrow();
         let Some(ws) = &st.ws else { return };
         let frame = json!({
-            "type": "copilot_agent_status",
+            "type": protocol::COPILOT_AGENT_STATUS,
             "status": status.as_str(),
             "meeting_id": st.lifecycle.meeting_id,
         });

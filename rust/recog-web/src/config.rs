@@ -12,6 +12,7 @@ use recog_ai::install::LegacyEnv;
 use recog_ai::provider::{CliEnv, which};
 use recog_core::install_config::{self, Environ, InstallConfig};
 use recog_core::meeting_storage::{MeetingStorage, StorageError, StorageOptions, external_paths};
+use recog_core::protocol;
 use recog_core::{data_dir, py, ws_origin};
 
 /// The host and port the Python module declares (`HOST`, `PORT`).
@@ -19,7 +20,7 @@ pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 9080;
 
 /// The file the live process's bridge rewrites every second.
-pub const KTALK_DEBUG_FILE: &str = "/tmp/ktalk_debug.json";
+pub const KTALK_DEBUG_FILE: &str = protocol::KTALK_DEBUG_FILE;
 
 #[derive(Clone, Debug)]
 pub struct Config {

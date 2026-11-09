@@ -12,6 +12,7 @@ use std::sync::Arc;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::http::HeaderMap;
 use futures_util::{SinkExt as _, StreamExt as _};
+use recog_core::protocol;
 use recog_core::pyjson::Value;
 use recog_core::ws_origin::origin_allowed;
 use tokio::sync::{mpsc, oneshot};
@@ -65,8 +66,8 @@ pub async fn handle_client_frame(state: &AppState, raw: &str, reply: &(dyn Fn(St
         return;
     }
     let frame = json::object([
-        ("type", Value::from("copilot_status")),
-        ("status", Value::from("bridge_disconnected")),
+        ("type", Value::from(protocol::COPILOT_STATUS)),
+        ("status", Value::from(protocol::STATUS_BRIDGE_DISCONNECTED)),
         ("request_id", data.get("request_id").cloned().unwrap_or(Value::Null)),
     ]);
     if !reply(json::ascii(&frame)) {

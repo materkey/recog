@@ -11,6 +11,7 @@ use std::time::Duration;
 use recog_ai::AiError;
 use recog_ai::json::Json;
 use recog_ai::settings::AiSettingsStore;
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -175,8 +176,10 @@ impl AiSettingsCoordinator {
     async fn refresh(&self, revision: &Value) -> bool {
         self.changed.clear();
         let Some(send) = self.lock().send.clone() else { return false };
-        let frame =
-            json::ascii(&json::object([("type", Value::from("ai_settings_refresh")), ("revision", revision.clone())]));
+        let frame = json::ascii(&json::object([
+            ("type", Value::from(protocol::AI_SETTINGS_REFRESH)),
+            ("revision", revision.clone()),
+        ]));
         let sent = send.send(frame).await;
         if !sent {
             self.lock().applied_revision = None;
@@ -215,7 +218,7 @@ impl AiSettingsCoordinator {
     /// # Errors
     /// Unreadable or malformed settings.
     pub async fn handle_frame(&self, frame: &Map) -> Result<(), AiError> {
-        if frame.get("type").and_then(Value::as_str) == Some("ai_settings_applied") {
+        if frame.get("type").and_then(Value::as_str) == Some(protocol::AI_SETTINGS_APPLIED) {
             let generation = self.lock().connection_generation;
             let _guard = self.write_lock.lock().await;
             let snapshot = self.read().await?;

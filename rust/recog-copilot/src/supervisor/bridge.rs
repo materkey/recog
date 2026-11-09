@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use recog_core::protocol;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
@@ -71,7 +72,7 @@ pub async fn serve<R: Runner + 'static>(sup: &Supervisor<R>, delay: &mut f64) ->
     // Announce ourselves: the bridge moves this socket into its supervisor set and
     // replies with `meeting_state`. `current_meeting_id` lets a restarted bridge re-arm
     // its manual mirror from the one runtime owner of that truth, us (D5).
-    let hello = json!({"type": "supervisor_hello", "current_meeting_id": sup.live_meeting_id()});
+    let hello = json!({"type": protocol::SUPERVISOR_HELLO, "current_meeting_id": sup.live_meeting_id()});
     sink.send(Message::text(py::json_dumps(&hello))).await.map_err(BridgeError::of)?;
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     sup.set_ws(Some(tx.clone()));

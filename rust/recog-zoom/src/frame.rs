@@ -1,5 +1,6 @@
 //! The frames the session sends to the bridge, the ones the Chrome extension sends.
 
+use recog_core::protocol;
 use serde::Serialize;
 
 /// The application exposes no meeting number. One URL for all of them keeps a rejoin
@@ -66,15 +67,35 @@ impl Frame {
     /// The `type` field.
     pub fn kind(&self) -> &'static str {
         match self {
-            Self::MeetingJoin { .. } => "meeting_join",
-            Self::ParticipantsUpdate { .. } => "participants_update",
-            Self::SpeakerUpdate { .. } => "speaker_update",
-            Self::MeetingLeave { .. } => "meeting_leave",
+            Self::MeetingJoin { .. } => protocol::MEETING_JOIN,
+            Self::ParticipantsUpdate { .. } => protocol::PARTICIPANTS_UPDATE,
+            Self::SpeakerUpdate { .. } => protocol::SPEAKER_UPDATE,
+            Self::MeetingLeave { .. } => protocol::MEETING_LEAVE,
         }
     }
 
     /// The frame as the bridge receives it.
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("a frame always serializes")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_frame_when_serialized_then_its_type_is_the_bridge_protocol_word() {
+        let frames = [
+            (Frame::meeting_join(), protocol::MEETING_JOIN),
+            (Frame::ParticipantsUpdate { participants: vec![], local_mic_muted: None }, protocol::PARTICIPANTS_UPDATE),
+            (Frame::SpeakerUpdate { speaker: None, timestamp: 0 }, protocol::SPEAKER_UPDATE),
+            (Frame::meeting_leave(), protocol::MEETING_LEAVE),
+        ];
+        for (frame, word) in frames {
+            let value: serde_json::Value = serde_json::from_str(&frame.to_json()).unwrap();
+            assert_eq!(value["type"], word, "{frame:?}");
+            assert_eq!(frame.kind(), word, "{frame:?}");
+        }
     }
 }

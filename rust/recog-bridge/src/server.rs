@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, StreamExt};
 use futures_util::{SinkExt, future};
+use recog_core::protocol;
 use recog_core::pyjson::{self, Value};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -263,14 +264,14 @@ impl Bridge {
             n
         });
         if channels_present {
-            let frame = obj! {"type" => "copilot_status", "request_id" => "", "status" => "channel_connected", "message" => "Copilot channel server connected"};
+            let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => "channel_connected", "message" => "Copilot channel server connected"};
             if let Err(e) = client.sink.send(crate::json::dumps(&frame)).await {
                 self.log(&format!("[KTalk Bridge] Failed to send channel_connected primer to new client: {e}"));
             }
         }
         // The chip broadcast is change-only: a reloaded tab learns the current state here.
         let agent_state = self.st().agent.last_effective.clone();
-        let frame = obj! {"type" => "copilot_status", "request_id" => "", "status" => "agent_state", "agent_state" => agent_state};
+        let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => protocol::STATUS_AGENT_STATE, protocol::STATUS_AGENT_STATE => agent_state};
         if let Err(e) = client.sink.send(crate::json::dumps(&frame)).await {
             self.log(&format!("[KTalk Bridge] Failed to send agent_state primer to new client: {e}"));
         }
@@ -309,7 +310,7 @@ impl Bridge {
                 ));
                 continue;
             };
-            if map.get("type") == Some(&Value::from("subscriber_hello")) {
+            if map.get("type") == Some(&Value::from(protocol::SUBSCRIBER_HELLO)) {
                 let no_extensions = {
                     let mut st = self.st();
                     st.clients.connected.remove(&client.id);
@@ -383,7 +384,7 @@ impl Bridge {
                     "[KTalk Bridge] Channel disconnected with {stranded} in-flight request(s); dropped bookkeeping"
                 ));
             }
-            let frame = obj! {"type" => "copilot_status", "request_id" => "", "status" => "channel_disconnected", "message" => "Copilot channel server disconnected"};
+            let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => "channel_disconnected", "message" => "Copilot channel server disconnected"};
             self.broadcast_copilot_frame(&frame).await;
         }
         if was_supervisor && no_supervisors {

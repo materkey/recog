@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::stream::{SplitSink, StreamExt as _};
 use futures_util::{SinkExt as _, stream::SplitStream};
+use recog_core::protocol;
 use recog_core::pyjson::{self, Value};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex as AsyncMutex, watch};
@@ -31,14 +32,14 @@ use crate::util::BoxFuture;
 
 /// Frame types relayed from the bridge.
 pub const FORWARD_TYPES: [&str; 8] = [
-    "transcript_refine",
-    "copilot_reply",
-    "copilot_chat_echo",
-    "copilot_status",
-    "user_profile_applied",
-    "user_profile_error",
-    "ai_settings_applied",
-    "ai_settings_error",
+    protocol::TRANSCRIPT_REFINE,
+    protocol::COPILOT_REPLY,
+    protocol::COPILOT_CHAT_ECHO,
+    protocol::COPILOT_STATUS,
+    protocol::USER_PROFILE_APPLIED,
+    protocol::USER_PROFILE_ERROR,
+    protocol::AI_SETTINGS_APPLIED,
+    protocol::AI_SETTINGS_ERROR,
 ];
 
 pub const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -283,7 +284,7 @@ async fn run(shared: Arc<Shared>, handler: Arc<dyn BridgeHandler>, initial: Dura
             Err(e) => Some(e.to_string()),
             Ok((socket, _)) => {
                 let (mut sink, stream) = socket.split();
-                let hello = sink.send(Message::text(r#"{"type": "subscriber_hello"}"#)).await;
+                let hello = sink.send(Message::text(format!(r#"{{"type": "{}"}}"#, protocol::SUBSCRIBER_HELLO))).await;
                 if let Err(e) = hello {
                     eprintln!("{} subscriber_hello send failed: {e}", shared.prefix);
                 }

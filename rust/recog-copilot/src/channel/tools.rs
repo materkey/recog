@@ -4,6 +4,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use recog_core::privacy::PrivacyError;
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -141,7 +142,7 @@ async fn send_copilot_message(link: &BridgeLink, args: &Map) -> Map {
     let request_id =
         non_empty_str(args.get("request_id")).map_or_else(|| format!("proactive_{}", short_id()), str::to_owned);
     let mut frame = Map::new();
-    frame.insert("type", Value::from("copilot_channel_reply"));
+    frame.insert("type", Value::from(protocol::COPILOT_CHANNEL_REPLY));
     frame.insert("request_id", Value::from(request_id));
     frame.insert("kind", kind.clone());
     frame.insert("text", text.clone());
@@ -161,7 +162,7 @@ async fn set_copilot_status(link: &BridgeLink, args: &Map) -> Map {
         return result(false, Some("status must be a non-empty string"));
     }
     let mut frame = Map::new();
-    frame.insert("type", Value::from("copilot_channel_status"));
+    frame.insert("type", Value::from(protocol::COPILOT_CHANNEL_STATUS));
     frame.insert("request_id", request_id.clone());
     frame.insert("status", status.clone());
     frame.insert("message", args.get("message").cloned().unwrap_or(Value::from("")));
@@ -193,7 +194,7 @@ async fn get_recent_transcript(
     let answer = link.register_pending(&request_id);
     let _guard = PendingGuard { link, request_id: request_id.clone() };
     let mut frame = Map::new();
-    frame.insert("type", Value::from("get_recent_transcript_request"));
+    frame.insert("type", Value::from(protocol::GET_RECENT_TRANSCRIPT_REQUEST));
     frame.insert("request_id", Value::from(request_id.as_str()));
     for key in ["window_seconds", "since_segment_id", "include_refined"] {
         frame.insert(key, args.get(key).cloned().unwrap_or(Value::Null));

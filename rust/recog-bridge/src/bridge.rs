@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use futures_util::future::join_all;
 use indexmap::IndexMap;
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 use recog_core::user_profile::{Profile, resolve_identity};
 use tokio::runtime::Handle;
@@ -63,7 +64,7 @@ impl Default for BridgeConfig {
             port: 8766,
             ktalk_only: false,
             extra_origins: Vec::new(),
-            debug_file: Some(PathBuf::from("/tmp/ktalk_debug.json")),
+            debug_file: Some(PathBuf::from(protocol::KTALK_DEBUG_FILE)),
             send_timeout: Duration::from_secs(5),
             legacy_mic_name: "Me".to_owned(),
         }
@@ -512,7 +513,7 @@ impl Bridge {
             active = true;
             meeting_id = Value::from(crate::copilot::MANUAL_MEETING_ID);
         }
-        obj! {"type" => "meeting_state", "active" => active, "meeting_id" => meeting_id, "meeting_title" => meeting_title}
+        obj! {"type" => protocol::MEETING_STATE, "active" => active, "meeting_id" => meeting_id, "meeting_title" => meeting_title}
     }
 
     pub(crate) fn current_meeting_id(&self) -> Option<String> {
@@ -617,7 +618,7 @@ impl Bridge {
                 .collect::<Vec<_>>()
                 .join("\n");
             let frame = obj! {
-                "type" => "transcript_tick",
+                "type" => protocol::TRANSCRIPT_TICK,
                 "meeting_id" => meeting_id.as_deref(),
                 "meeting_title" => title,
                 "new_segments" => Value::Array(new_segments.into_iter().map(Value::Object).collect()),
@@ -652,7 +653,7 @@ impl Bridge {
         let refined_at = local_isoformat(self.clock.as_ref(), self.now());
         let payload_updates: Vec<Value> =
             updates.iter().map(|u| obj! {"segment_id" => u.segment_id, "text" => u.text.as_str()}).collect();
-        let mut envelope = obj! {"type" => "transcript_refine", "updates" => Value::Array(payload_updates), "refined_at" => refined_at};
+        let mut envelope = obj! {"type" => protocol::TRANSCRIPT_REFINE, "updates" => Value::Array(payload_updates), "refined_at" => refined_at};
         if let (Some(mid), Some(map)) = (meeting_id.filter(|m| !m.is_empty()), envelope.as_object_mut()) {
             map.insert("meeting_id", Value::from(mid));
         }
@@ -793,7 +794,7 @@ impl Bridge {
     /// Copilot is on), the extensions and the supervisor, one fan-out point so no
     /// emit site can skip the supervisor.
     pub async fn emit_lifecycle(&self, frame: Value) {
-        let frame = if Self::frame_type(&frame) == "meeting_started" {
+        let frame = if Self::frame_type(&frame) == protocol::MEETING_STARTED {
             let base = frame.as_object().cloned().unwrap_or_default();
             Value::Object(json::merged(
                 &json::merged(&base, &self.user_identity_snapshot()),
@@ -834,7 +835,7 @@ impl Bridge {
         let kind = Self::frame_type(frame);
         let mut delivered = false;
         for client in supervisors {
-            if kind == "copilot_spawn_request" && self.is_conference_active() {
+            if kind == protocol::COPILOT_SPAWN_REQUEST && self.is_conference_active() {
                 break;
             }
             match self.send_bounded(&client, &message).await {
@@ -860,8 +861,7 @@ impl Bridge {
             ));
             return;
         };
-        let frame =
-            obj! {"type" => "copilot_status", "request_id" => request_id, "status" => status, "message" => message};
+        let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => request_id, "status" => status, "message" => message};
         if let Err(e) = client.sink.send(dumps(&frame)).await {
             self.log(&format!("[KTalk Bridge] Failed to send {status} status: {e}"));
         }

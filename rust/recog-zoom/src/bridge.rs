@@ -9,6 +9,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use recog_core::protocol;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -179,7 +180,7 @@ pub fn on_line(
 pub fn on_message(raw: &[u8], session: &mut ZoomAppSession, logger: &Logger, at: f64) -> Result<(), PumpError> {
     let message: Value = serde_json::from_slice(raw).map_err(|error| PumpError::Fatal(error.to_string()))?;
     let message = message.as_object().ok_or_else(|| PumpError::Fatal("a bridge message is not an object".into()))?;
-    if message.get("type").and_then(Value::as_str) == Some("meeting_join_rejected") {
+    if message.get("type").and_then(Value::as_str) == Some(protocol::MEETING_JOIN_REJECTED) {
         logger.line(&format!("join rejected: {}", py::display_opt(message.get("reason"))));
         session.on_rejected(at);
     }

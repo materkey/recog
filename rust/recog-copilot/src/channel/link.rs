@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use recog_core::privacy::{CopilotPrivacy, PrivacyError, PrivacyStore};
+use recog_core::protocol;
 use recog_core::pyjson::{self, Map, Value};
 use tokio::sync::{Notify, oneshot};
 
@@ -66,7 +67,7 @@ impl EventQueue {
         let dropped = {
             let mut items = self.items();
             let dropped = if items.len() >= self.capacity {
-                let tick = items.iter().position(|e| e.get("type") == Some(&Value::from("transcript_tick")));
+                let tick = items.iter().position(|e| e.get("type") == Some(&Value::from(protocol::TRANSCRIPT_TICK)));
                 match tick {
                     Some(at) => items.remove(at),
                     None => items.pop_front(),

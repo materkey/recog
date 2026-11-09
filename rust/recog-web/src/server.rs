@@ -14,6 +14,7 @@ use axum::response::Response;
 use recog_ai::provider::{CliProviderFactory, ProviderFactory};
 use recog_ai::settings::AiSettingsStore;
 use recog_core::privacy::PrivacyStore;
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 use recog_core::user_profile::UserProfileStore;
 
@@ -33,9 +34,10 @@ use crate::watch::FsWatcher;
 use crate::{json, live_stream, routes, static_files};
 
 /// Frames a browser may send upstream through the live stream.
-pub const INBOUND_COPILOT_TYPES: [&str; 3] = ["copilot_chat_message", "copilot_spawn_request", "copilot_stop_request"];
+pub const INBOUND_COPILOT_TYPES: [&str; 3] =
+    [protocol::COPILOT_CHAT_MESSAGE, protocol::COPILOT_SPAWN_REQUEST, protocol::COPILOT_STOP_REQUEST];
 /// Bridge frames kept for tabs that connect later.
-pub const COPILOT_DIALOG_TYPES: [&str; 2] = ["copilot_chat_echo", "copilot_reply"];
+pub const COPILOT_DIALOG_TYPES: [&str; 2] = [protocol::COPILOT_CHAT_ECHO, protocol::COPILOT_REPLY];
 pub const COPILOT_DIALOG_LIMIT: usize = 200;
 
 /// What a new live-stream client gets after `init`: the last agent-state frame and
@@ -155,8 +157,8 @@ impl AppState {
     /// `_cache_agent_state_frame`.
     pub fn cache_agent_state_frame(&self, raw: &str) {
         let Ok(Value::Object(data)) = loads_untrusted(raw) else { return };
-        if data.get("type").and_then(Value::as_str) == Some("copilot_status")
-            && data.get("status").and_then(Value::as_str) == Some("agent_state")
+        if data.get("type").and_then(Value::as_str) == Some(protocol::COPILOT_STATUS)
+            && data.get("status").and_then(Value::as_str) == Some(protocol::STATUS_AGENT_STATE)
         {
             self.relay().primer = Some(raw.to_owned());
         }
@@ -192,10 +194,10 @@ impl AppState {
         let kind = frame.as_ref().and_then(|f| f.get("type")).and_then(Value::as_str).map(str::to_owned);
         let mut raw = raw;
         match (kind.as_deref(), &frame) {
-            (Some("user_profile_applied" | "user_profile_error"), Some(frame)) => {
+            (Some(protocol::USER_PROFILE_APPLIED | protocol::USER_PROFILE_ERROR), Some(frame)) => {
                 return self.profile.handle_frame(frame).await.map_err(|e| e.to_string());
             }
-            (Some("ai_settings_applied" | "ai_settings_error"), Some(frame)) => {
+            (Some(protocol::AI_SETTINGS_APPLIED | protocol::AI_SETTINGS_ERROR), Some(frame)) => {
                 return self.ai_settings.handle_frame(frame).await.map_err(|e| e.to_string());
             }
             (Some(kind), Some(frame)) if COPILOT_DIALOG_TYPES.contains(&kind) => {

@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 
 use crate::bridge::{Bridge, copy_identity};
@@ -13,7 +14,7 @@ use crate::json::{self, dumps, dumps_ascii};
 use crate::obj;
 
 fn status_frame(request_id: &str, status: &str, message: &str) -> Value {
-    obj! {"type" => "copilot_status", "request_id" => request_id, "status" => status, "message" => message}
+    obj! {"type" => protocol::COPILOT_STATUS, "request_id" => request_id, "status" => status, "message" => message}
 }
 
 fn with_identity(bridge: &Bridge, kind: &str, rest: &[(&str, Value)]) -> Value {
@@ -43,7 +44,8 @@ impl Bridge {
         let policy = match read {
             Ok(Ok(policy)) => policy,
             _ => {
-                let frame = obj! {"type" => "ai_settings_error", "message" => "Could not apply the saved AI settings"};
+                let frame =
+                    obj! {"type" => protocol::AI_SETTINGS_ERROR, "message" => "Could not apply the saved AI settings"};
                 self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
                 return Ok(());
             }
@@ -61,7 +63,7 @@ impl Bridge {
                 for request_id in pending {
                     // Python builds this one with `status` before `request_id`.
                     let frame = obj! {
-                        "type" => "copilot_status",
+                        "type" => protocol::COPILOT_STATUS,
                         "status" => "error",
                         "request_id" => request_id.as_str(),
                         "message" => "Copilot выключен в настройках.",
@@ -70,11 +72,11 @@ impl Bridge {
                 }
                 self.st().pending.clear();
             }
-            self.relay_to_supervisors(&obj! {"type" => "copilot_settings_changed"}).await;
-            let updated = with_identity(self, "copilot_policy_updated", &[]);
+            self.relay_to_supervisors(&obj! {"type" => protocol::COPILOT_SETTINGS_CHANGED}).await;
+            let updated = with_identity(self, protocol::COPILOT_POLICY_UPDATED, &[]);
             self.broadcast_to_channel_clients(&updated).await;
         }
-        let applied = obj! {"type" => "ai_settings_applied", "revision" => policy.revision, "model_application" => "next_session"};
+        let applied = obj! {"type" => protocol::AI_SETTINGS_APPLIED, "revision" => policy.revision, "model_application" => "next_session"};
         self.send_bounded(client, &dumps(&applied)).await.map_err(|e| e.0)?;
         Ok(())
     }
@@ -96,8 +98,7 @@ impl Bridge {
         let (identity, changed) = match applied {
             Ok(result) => result,
             Err(_) => {
-                let frame =
-                    obj! {"type" => "user_profile_error", "message" => "Could not apply the saved user profile"};
+                let frame = obj! {"type" => protocol::USER_PROFILE_ERROR, "message" => "Could not apply the saved user profile"};
                 self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
                 return Ok(());
             }
@@ -105,11 +106,11 @@ impl Bridge {
         let fields = identity.as_object().cloned().unwrap_or_default();
         if changed {
             let mut frame = Map::new();
-            frame.insert("type", Value::from("user_profile_updated"));
+            frame.insert("type", Value::from(protocol::USER_PROFILE_UPDATED));
             self.broadcast_to_channel_clients(&Value::Object(json::merged(&frame, &fields))).await;
         }
         let revision = fields.get("local_user_profile_revision").cloned().ok_or("'local_user_profile_revision'")?;
-        let frame = obj! {"type" => "user_profile_applied", "revision" => revision, "identity" => identity};
+        let frame = obj! {"type" => protocol::USER_PROFILE_APPLIED, "revision" => revision, "identity" => identity};
         self.send_bounded(client, &dumps(&frame)).await.map_err(|e| e.0)?;
         Ok(())
     }
@@ -129,7 +130,7 @@ impl Bridge {
             (first, st.clients.connected.is_empty())
         };
         self.log(&format!("[KTalk Bridge] Copilot channel client registered from {}", client.remote_address));
-        let policy = with_identity(self, "copilot_policy_updated", &[]);
+        let policy = with_identity(self, protocol::COPILOT_POLICY_UPDATED, &[]);
         self.send_bounded(client, &dumps(&policy)).await.map_err(|e| e.0)?;
         // The socket sat among the extensions until now: an extension that left
         // meanwhile saw one still there and kept the meeting open.
@@ -183,7 +184,7 @@ impl Bridge {
         }
         let outbound = with_identity(
             self,
-            "copilot_user_message",
+            protocol::COPILOT_USER_MESSAGE,
             &[
                 ("request_id", Value::from(request_id)),
                 ("text", Value::from(text)),
@@ -196,7 +197,7 @@ impl Bridge {
         // Published before the first send, so a join re-entering meanwhile can mark it.
         self.st().pending.insert(request_id.to_owned(), meeting_id.clone().unwrap_or_default());
         let message = dumps(&outbound);
-        let echo = obj! {"type" => "copilot_chat_echo", "request_id" => request_id, "text" => text, "created_at" => created_at};
+        let echo = obj! {"type" => protocol::COPILOT_CHAT_ECHO, "request_id" => request_id, "text" => text, "created_at" => created_at};
         let forwards = channels.iter().map(|channel| async {
             if let Err(e) = self.send_bounded(channel, &message).await {
                 self.log(&format!("[KTalk Bridge] Failed to forward copilot_chat_message to channel client: {e}"));
@@ -266,7 +267,7 @@ impl Bridge {
             _ => Value::Float(self.now() * 1000.0),
         };
         let reply = obj! {
-            "type" => "copilot_reply",
+            "type" => protocol::COPILOT_REPLY,
             "request_id" => request_id,
             "kind" => kind,
             "text" => text.as_str(),
@@ -346,7 +347,7 @@ impl Bridge {
             .collect();
         let response = with_identity(
             self,
-            "get_recent_transcript_response",
+            protocol::GET_RECENT_TRANSCRIPT_RESPONSE,
             &[("request_id", Value::from(request_id)), ("segments", Value::Array(segments))],
         );
         match client {
@@ -370,7 +371,7 @@ impl Bridge {
         let _guard = self.manual_lock.lock().await;
         let conference = "A conference meeting owns the copilot session";
         if self.is_conference_active() {
-            self.reply_copilot_status(client, request_id, "conference_active", conference).await;
+            self.reply_copilot_status(client, request_id, protocol::STATUS_CONFERENCE_ACTIVE, conference).await;
             return Ok(());
         }
         let delivered = self.relay_to_supervisors(&Value::Object(data.clone())).await;
@@ -379,14 +380,14 @@ impl Bridge {
             self.log(&format!(
                 "[KTalk Bridge] Conference started while relaying copilot_spawn_request request_id={request_id} — manual mirror not armed"
             ));
-            self.reply_copilot_status(client, request_id, "conference_active", conference).await;
+            self.reply_copilot_status(client, request_id, protocol::STATUS_CONFERENCE_ACTIVE, conference).await;
             return Ok(());
         }
         if !delivered {
             self.reply_copilot_status(
                 client,
                 request_id,
-                "supervisor_disconnected",
+                protocol::STATUS_SUPERVISOR_DISCONNECTED,
                 "Copilot supervisor is not connected",
             )
             .await;
@@ -409,7 +410,7 @@ impl Bridge {
             self.reply_copilot_status(
                 client,
                 request_id,
-                "supervisor_disconnected",
+                protocol::STATUS_SUPERVISOR_DISCONNECTED,
                 "Copilot supervisor is not connected",
             )
             .await;
@@ -492,30 +493,36 @@ impl Bridge {
         // lines.
         let mut agent = std::mem::take(&mut self.st().agent);
         let eligible = agent.claude_sessions == Some(0)
-            && agent.supervisor_status.as_deref().is_some_and(|s| s != "offline" && s != "spawning");
+            && agent
+                .supervisor_status
+                .as_deref()
+                .is_some_and(|s| s != protocol::AGENT_OFFLINE && s != protocol::AGENT_SPAWNING);
         let alive = eligible && self.copilot_should_be_alive();
         agent.update_zero_anchor(now, alive);
         let status = agent.supervisor_status.clone();
         let effective = match status.as_deref() {
-            None | Some("offline") => "offline".to_owned(),
+            None | Some(protocol::AGENT_OFFLINE) => protocol::AGENT_OFFLINE.to_owned(),
             Some(_) if now - agent.supervisor_status_ts > crate::copilot::AGENT_SILENCE_THRESHOLD_S => {
-                "offline".to_owned()
+                protocol::AGENT_OFFLINE.to_owned()
             }
             Some(s) => {
                 let zero_long = agent.claude_sessions == Some(0)
-                    && s != "spawning"
+                    && s != protocol::AGENT_SPAWNING
                     && agent
                         .sessions_zero_since
                         .is_some_and(|since| now - since >= crate::copilot::AGENT_SESSIONS_ZERO_DEBOUNCE_S);
-                if zero_long && self.copilot_should_be_alive() { "offline".to_owned() } else { s.to_owned() }
+                if zero_long && self.copilot_should_be_alive() {
+                    protocol::AGENT_OFFLINE.to_owned()
+                } else {
+                    s.to_owned()
+                }
             }
         };
         let recover = agent.take_recovery(now);
         self.st().agent = agent;
         if recover {
             let meeting_id = self.compute_meeting_state().as_object().and_then(|m| m.get("meeting_id").cloned());
-            let frame =
-                obj! {"type" => "copilot_channel_unavailable", "meeting_id" => meeting_id.unwrap_or(Value::Null)};
+            let frame = obj! {"type" => protocol::COPILOT_CHANNEL_UNAVAILABLE, "meeting_id" => meeting_id.unwrap_or(Value::Null)};
             self.relay_to_supervisors(&frame).await;
         }
         let changed = {
@@ -527,7 +534,7 @@ impl Bridge {
             changed
         };
         if changed {
-            let frame = obj! {"type" => "copilot_status", "request_id" => "", "status" => "agent_state", "agent_state" => effective};
+            let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => protocol::STATUS_AGENT_STATE, protocol::STATUS_AGENT_STATE => effective};
             self.broadcast_copilot_frame(&frame).await;
         }
     }

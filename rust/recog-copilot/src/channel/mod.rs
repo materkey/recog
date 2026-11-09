@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use recog_core::privacy::PrivacyError;
+use recog_core::protocol;
 use recog_core::pyjson::{self, Map, Value};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -71,12 +72,12 @@ pub const ZOMBIE_REAP_STRIKES: u32 = 3;
 
 /// The bridge events relayed to Claude.
 pub const EVENT_TYPES: [&str; 6] = [
-    "copilot_user_message",
-    "transcript_tick",
-    "meeting_started",
-    "meeting_ended",
-    "user_profile_updated",
-    "copilot_policy_updated",
+    protocol::COPILOT_USER_MESSAGE,
+    protocol::TRANSCRIPT_TICK,
+    protocol::MEETING_STARTED,
+    protocol::MEETING_ENDED,
+    protocol::USER_PROFILE_UPDATED,
+    protocol::COPILOT_POLICY_UPDATED,
 ];
 
 /// The Python exception class of a privacy failure, for the log line.
@@ -99,7 +100,7 @@ pub async fn handle_inbound(raw: &[u8], link: &BridgeLink, server: Option<&McpSe
     let Ok(text) = std::str::from_utf8(raw) else { return };
     let Ok(Value::Object(data)) = pyjson::loads(text) else { return };
     let msg_type = data.get("type").cloned().unwrap_or(Value::Null);
-    if msg_type == Value::from("get_recent_transcript_response") {
+    if msg_type == Value::from(protocol::GET_RECENT_TRANSCRIPT_RESPONSE) {
         if let Some(request_id) = data.get("request_id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
             link.resolve_pending(request_id, data.clone());
         }
@@ -152,7 +153,7 @@ impl SessionCountReporter {
             return None;
         }
         let mut frame = Map::new();
-        frame.insert("type", Value::from("claude_sessions"));
+        frame.insert("type", Value::from(protocol::CLAUDE_SESSIONS));
         frame.insert("count", Value::Int(i128::try_from(count).unwrap_or(i128::MAX)));
         let result = link.send(&frame).await;
         self.last_count = Some(count);
@@ -249,7 +250,9 @@ pub async fn ws_loop(bridge_url: String, server: Arc<McpServer>, push: bool) {
         match connected {
             Ok((ws, _)) => {
                 let (mut sink, mut stream) = ws.split();
-                if let Err(e) = sink.send(WsMessage::text(r#"{"type": "copilot_channel_hello"}"#)).await {
+                if let Err(e) =
+                    sink.send(WsMessage::text(format!(r#"{{"type": "{}"}}"#, protocol::COPILOT_CHANNEL_HELLO))).await
+                {
                     log::line(&format!("{} copilot_channel_hello send failed: {}", log::PREFIX, ws_error(&e)));
                 }
                 let sink = Arc::new(AsyncMutex::new(sink));

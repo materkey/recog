@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 
 use crate::bridge::Bridge;
@@ -146,41 +147,45 @@ impl Bridge {
     /// The exception text where Python's handler would raise.
     pub async fn process_message(self: &Arc<Self>, data: &Map, client: Option<&Arc<Client>>) -> Result<(), String> {
         let msg_type = data.get("type").and_then(Value::as_str).unwrap_or("");
-        if matches!(msg_type, "copilot_spawn_request" | "copilot_chat_message") && !self.policy_enabled() {
+        if matches!(msg_type, protocol::COPILOT_SPAWN_REQUEST | protocol::COPILOT_CHAT_MESSAGE)
+            && !self.policy_enabled()
+        {
             if let Some(request_id) = json::nonempty_str(data.get("request_id")) {
                 self.reply_copilot_status(client, request_id, "error", "Copilot выключен в настройках.").await;
             }
             return Ok(());
         }
-        if matches!(msg_type, "copilot_channel_reply" | "copilot_channel_status") && !self.policy_enabled() {
+        if matches!(msg_type, protocol::COPILOT_CHANNEL_REPLY | protocol::COPILOT_CHANNEL_STATUS)
+            && !self.policy_enabled()
+        {
             return Ok(());
         }
         match msg_type {
-            "ai_settings_refresh" => self.refresh_ai_settings(client).await,
-            "user_profile_refresh" => self.refresh_user_profile(client).await,
-            "speaker_update" => self.on_speaker_update(data, client),
-            "participants_update" => self.on_participants_update(data, client),
+            protocol::AI_SETTINGS_REFRESH => self.refresh_ai_settings(client).await,
+            protocol::USER_PROFILE_REFRESH => self.refresh_user_profile(client).await,
+            protocol::SPEAKER_UPDATE => self.on_speaker_update(data, client),
+            protocol::PARTICIPANTS_UPDATE => self.on_participants_update(data, client),
             "pcm_transport_stats" => {
                 self.on_pcm_transport_stats(data);
                 Ok(())
             }
             "connection_status" => self.on_connection_status(data, client).await,
-            "meeting_join" => self.on_meeting_join(data, client).await,
-            "meeting_leave" => self.on_meeting_leave(data, client).await,
+            protocol::MEETING_JOIN => self.on_meeting_join(data, client).await,
+            protocol::MEETING_LEAVE => self.on_meeting_leave(data, client).await,
             "meeting_title_update" => self.on_meeting_title_update(data),
             "request_transcript" => self.send_transcript_history(client).await,
             "clock_sync" => self.on_clock_sync(data),
             "pcm_chunk" => self.on_pcm_chunk(data, client),
-            "copilot_channel_hello" => self.on_channel_hello(client).await,
-            "copilot_chat_message" => self.on_chat_message(data, client).await,
-            "copilot_channel_reply" => self.on_channel_reply(data).await,
-            "copilot_channel_status" => self.on_channel_status(data).await,
-            "get_recent_transcript_request" => self.on_recent_transcript_request(data, client).await,
-            "copilot_spawn_request" => self.on_spawn_request(data, client).await,
-            "copilot_stop_request" => self.on_stop_request(data, client).await,
-            "supervisor_hello" => self.on_supervisor_hello(data, client).await,
-            "copilot_agent_status" => self.on_agent_status(data).await,
-            "claude_sessions" => self.on_claude_sessions(data).await,
+            protocol::COPILOT_CHANNEL_HELLO => self.on_channel_hello(client).await,
+            protocol::COPILOT_CHAT_MESSAGE => self.on_chat_message(data, client).await,
+            protocol::COPILOT_CHANNEL_REPLY => self.on_channel_reply(data).await,
+            protocol::COPILOT_CHANNEL_STATUS => self.on_channel_status(data).await,
+            protocol::GET_RECENT_TRANSCRIPT_REQUEST => self.on_recent_transcript_request(data, client).await,
+            protocol::COPILOT_SPAWN_REQUEST => self.on_spawn_request(data, client).await,
+            protocol::COPILOT_STOP_REQUEST => self.on_stop_request(data, client).await,
+            protocol::SUPERVISOR_HELLO => self.on_supervisor_hello(data, client).await,
+            protocol::COPILOT_AGENT_STATUS => self.on_agent_status(data).await,
+            protocol::CLAUDE_SESSIONS => self.on_claude_sessions(data).await,
             // `ping` (heartbeat) and unknown types do nothing.
             _ => Ok(()),
         }

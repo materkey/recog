@@ -4,6 +4,8 @@
 //! Markers frozen on claude 2.1.197 rendered screens (the spike fixtures); after a
 //! claude update re-capture the fixtures and re-run the classify tests.
 
+use recog_core::protocol;
+
 use crate::py;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,11 +21,11 @@ impl AgentState {
     /// The `status` of a `copilot_agent_status` frame.
     pub fn as_str(self) -> &'static str {
         match self {
-            AgentState::Spawning => "spawning",
-            AgentState::Online => "online",
-            AgentState::Working => "working",
-            AgentState::Blocked => "blocked",
-            AgentState::Offline => "offline",
+            AgentState::Spawning => protocol::AGENT_SPAWNING,
+            AgentState::Online => protocol::AGENT_ONLINE,
+            AgentState::Working => protocol::AGENT_WORKING,
+            AgentState::Blocked => protocol::AGENT_BLOCKED,
+            AgentState::Offline => protocol::AGENT_OFFLINE,
         }
     }
 }

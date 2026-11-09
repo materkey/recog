@@ -10,6 +10,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use recog_core::protocol;
 use recog_core::pyjson::{Map, Value};
 use recog_core::user_profile::{Profile, ProfileError, UserProfileStore, resolve_identity};
 use tokio::sync::Mutex as AsyncMutex;
@@ -180,7 +181,7 @@ impl ProfileCoordinator {
         self.changed.clear();
         let Some(send) = self.lock().send.clone() else { return false };
         let frame = json::ascii(&json::object([
-            ("type", Value::from("user_profile_refresh")),
+            ("type", Value::from(protocol::USER_PROFILE_REFRESH)),
             ("revision", Value::from(profile.revision.as_str())),
         ]));
         let sent = send.send(frame).await;
@@ -235,7 +236,7 @@ impl ProfileCoordinator {
     /// The profile cannot be read.
     pub async fn handle_frame(&self, frame: &Map) -> Result<(), ProfileError> {
         match frame.get("type").and_then(Value::as_str) {
-            Some("user_profile_applied") => {
+            Some(protocol::USER_PROFILE_APPLIED) => {
                 let identity = frame.get("identity").cloned();
                 let connection = self.lock().connection_generation;
                 {
@@ -261,7 +262,7 @@ impl ProfileCoordinator {
                 }
                 self.publish().await
             }
-            Some("user_profile_error") => {
+            Some(protocol::USER_PROFILE_ERROR) => {
                 {
                     let mut state = self.lock();
                     state.applied_identity = None;

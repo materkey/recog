@@ -18,6 +18,7 @@ pub mod meeting_storage;
 pub mod paths;
 pub mod platforms;
 pub mod privacy;
+pub mod protocol;
 pub mod py;
 pub mod pyjson;
 pub mod time;

@@ -7,6 +7,7 @@
 //! reached it. Values are written with `json.dumps(..., ensure_ascii=False)`, so a name
 //! or a policy holding braces, quotes or `$` arrives literally.
 
+use recog_core::protocol;
 use recog_core::pyjson::{self, Map, Value};
 
 /// Event keys of the profile, with the labels the block gives them.
@@ -76,12 +77,12 @@ fn get_or(event: &Map, key: &str, default: &str) -> String {
 pub fn format_channel_event(event: &Map) -> Result<(String, Map), String> {
     let msg_type = get_or(event, "type", "unknown");
     let mut content = match msg_type.as_str() {
-        "copilot_user_message" => format!(
+        protocol::COPILOT_USER_MESSAGE => format!(
             "User typed in the Copilot tab. Reply with send_copilot_message kind='reply' carrying the original \
              request_id.\n\nText: {}",
             event.get("text").map_or_else(String::new, Value::py_str)
         ),
-        "transcript_tick" => {
+        protocol::TRANSCRIPT_TICK => {
             let new_segments =
                 event.get("new_segments").filter(|v| v.truthy()).cloned().unwrap_or(Value::Array(vec![]));
             format!(
@@ -91,20 +92,24 @@ pub fn format_channel_event(event: &Map) -> Result<(String, Map), String> {
                 get_or(event, "recent_context", "")
             )
         }
-        "meeting_started" => {
+        protocol::MEETING_STARTED => {
             format!(
                 "Meeting started: {}. Reset internal proactive state.",
                 get_or(event, "meeting_title", "(untitled)")
             )
         }
-        "user_profile_updated" => "Local user profile updated. Replace the previous profile with the current user \
+        protocol::USER_PROFILE_UPDATED => {
+            "Local user profile updated. Replace the previous profile with the current user \
                                    context. Do not send a reply for this event."
-            .to_owned(),
-        "copilot_policy_updated" => "Copilot instructions updated. Replace the previous policy with the current \
+                .to_owned()
+        }
+        protocol::COPILOT_POLICY_UPDATED => {
+            "Copilot instructions updated. Replace the previous policy with the current \
                                      user configuration, including cleared instructions. Apply it from this event \
                                      onward. Do not send a reply for this event."
-            .to_owned(),
-        "meeting_ended" => "Meeting ended. Stop polling and exit the copilot loop.".to_owned(),
+                .to_owned()
+        }
+        protocol::MEETING_ENDED => "Meeting ended. Stop polling and exit the copilot loop.".to_owned(),
         _ => pyjson::dumps(&Value::Object(event.clone()), None),
     };
     let context = build_copilot_context(event);
