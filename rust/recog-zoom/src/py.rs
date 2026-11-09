@@ -273,6 +273,18 @@ mod tests {
     }
 
     #[test]
+    fn given_strings_with_escapes_when_displayed_in_a_container_then_python_repr() {
+        assert_eq!(
+            display(&json!(["a\\b", "x\ny\rz\tw", "\u{1}\u{7f}", "é"])),
+            r"['a\\b', 'x\ny\rz\tw', '\x01\x7f', 'é']"
+        );
+        assert_eq!(display(&json!(["it's"])), "[\"it's\"]");
+        assert_eq!(display(&json!(["it's \"q\""])), r#"['it\'s "q"']"#);
+        assert_eq!(display(&json!(["say \"hi\""])), r#"['say "hi"']"#);
+        assert_eq!(display(&json!({"k": [null, true, 1.5, 2]})), "{'k': [None, True, 1.5, 2]}");
+    }
+
+    #[test]
     fn given_a_value_when_dumped_then_python_separators_and_raw_unicode() {
         assert_eq!(json_dumps(&json!({"b": [1, "Иван\n"], "a": 0.5})), "{\"b\": [1, \"Иван\\n\"], \"a\": 0.5}");
     }

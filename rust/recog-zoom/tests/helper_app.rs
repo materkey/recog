@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use recog_zoom::helper_app::{
-    CommandOutcome, HELPER_SOURCE, HELPER_STAMP, Toolchain, find_or_build_helper, helper_info, info_plist,
+    CommandOutcome, HELPER_SOURCE, HELPER_STAMP, Toolchain, find_or_build_helper, helper_info, info_plist, which,
 };
 use recog_zoom::log::Logger;
 
@@ -233,4 +233,34 @@ const PYTHON_INFO_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 #[test]
 fn given_the_helper_info_when_written_then_the_bytes_are_plistlibs() {
     assert_eq!(info_plist(&helper_info()), PYTHON_INFO_PLIST);
+}
+
+fn tool_file(directory: &Path, mode: u32) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(directory).unwrap();
+    let path = directory.join("tool");
+    std::fs::write(&path, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    path
+}
+
+#[test]
+fn given_path_directories_when_a_tool_is_looked_up_then_the_first_executable_file_wins() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("a/tool")).unwrap(); // a directory, not a tool
+    tool_file(&root.path().join("b"), 0o644); // not executable
+    let found = tool_file(&root.path().join("c"), 0o755);
+    tool_file(&root.path().join("d"), 0o755);
+    let dir = |name: &str| root.path().join(name).display().to_string();
+    // The empty entry is the current directory, which holds no `tool`.
+    let path = OsString::from(format!("{}:{}::{}:{}", dir("a"), dir("b"), dir("c"), dir("d")));
+
+    assert_eq!(which("tool", Some(&path)), Some(found));
+    assert_eq!(which("absent-tool", Some(&path)), None);
+}
+
+#[test]
+fn given_no_path_when_a_tool_is_looked_up_then_bin_and_usr_bin_are_searched() {
+    assert_eq!(which("sh", None), Some(PathBuf::from("/bin/sh")));
+    assert_eq!(which("recog-no-such-tool", None), None);
 }

@@ -282,6 +282,49 @@ async fn given_a_line_python_cannot_read_when_pumped_then_the_run_fails() {
     assert!(matches!(ended, PumpError::Fatal(_)), "{ended:?}");
 }
 
+/// Pump one helper line into a bridge that stopped reading frames; `then` is what the
+/// bridge end does once the frames could not be sent.
+async fn pump_into_closed_bridge(then: Option<Incoming>) -> PumpError {
+    let root = tempfile::tempdir().unwrap();
+    let (helper, rx) = mpsc::unbounded_channel();
+    let stand_ins = StandIns::new([Script::Lines(rx)]);
+    let mut lines = connect(&stand_ins, root.path()).await;
+    let (mut link, bridge_end) = link();
+    let BridgeEnd { incoming, sent } = bridge_end;
+    drop(sent); // the bridge's writer is gone, its reader is not yet
+    let (logger, _) = Logger::buffer();
+    let mut session = ZoomAppSession::default();
+    let mut log = StatusLog::new(logger.clone());
+    helper.send(format!("{}\n", meeting(&[tile("Host", &[])]))).unwrap();
+
+    let pumping = bridge::pump(&mut link, &mut lines, &mut session, &mut log, &logger);
+    let driving = async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        match then {
+            Some(message) => incoming.send(message).await.unwrap(),
+            None => drop(incoming),
+        }
+    };
+    let (ended, ()) = tokio::join!(pumping, driving);
+    drop(helper);
+    ended
+}
+
+#[tokio::test]
+async fn given_bridge_stops_reading_when_a_frame_is_sent_then_the_reason_it_reports_ends_the_pump() {
+    let ended = pump_into_closed_bridge(Some(Incoming::Lost("received 1001 (going away)".into()))).await;
+
+    assert_eq!(ended, PumpError::Link("received 1001 (going away)".into()));
+    assert_eq!(ended.to_string(), "bridge link lost: received 1001 (going away)");
+}
+
+#[tokio::test]
+async fn given_bridge_stops_reading_and_closes_without_a_reason_when_a_frame_is_sent_then_connection_closed() {
+    let ended = pump_into_closed_bridge(None).await;
+
+    assert_eq!(ended, PumpError::Link("connection closed".into()));
+}
+
 // --- status log -------------------------------------------------------------------
 
 #[test]

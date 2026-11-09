@@ -121,4 +121,43 @@ mod tests {
         let lookup = move |name: &str| (name == "RECOG_CONFIG_FILE").then(|| missing.clone());
         assert_eq!(codesign_identity(root.path(), &lookup).unwrap(), AD_HOC);
     }
+
+    fn with_config(text: &str) -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.toml");
+        std::fs::write(&config, text).unwrap();
+        (root, config)
+    }
+
+    fn identity_with(root: &Path, config: &Path) -> Result<String, String> {
+        let file = config.display().to_string();
+        codesign_identity(root, &move |name: &str| (name == "RECOG_CONFIG_FILE").then(|| file.clone()))
+    }
+
+    #[test]
+    fn given_config_without_an_identity_or_with_an_empty_one_when_resolved_then_ad_hoc() {
+        for text in ["[web]\nport = 1\n", "[macos]\n", "[macos]\ncodesign_identity = \"\"\n"] {
+            let (root, config) = with_config(text);
+            assert_eq!(identity_with(root.path(), &config).unwrap(), AD_HOC, "{text}");
+        }
+    }
+
+    #[test]
+    fn given_identity_that_is_not_a_string_when_resolved_then_error_names_the_file_and_key() {
+        let (root, config) = with_config("[macos]\ncodesign_identity = 5\n");
+
+        let error = identity_with(root.path(), &config).unwrap_err();
+
+        assert_eq!(error, format!("{}: macos.codesign_identity must be a string", config.display()));
+    }
+
+    #[test]
+    fn given_config_that_is_not_toml_when_resolved_then_error_names_the_file() {
+        let (root, config) = with_config("[macos\n");
+
+        let error = identity_with(root.path(), &config).unwrap_err();
+
+        assert!(error.starts_with(&format!("{}: ", config.display())), "{error}");
+        assert!(error.len() > config.display().to_string().len() + 2, "{error}");
+    }
 }
