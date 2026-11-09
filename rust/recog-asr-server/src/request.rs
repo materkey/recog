@@ -6,11 +6,29 @@
 //! number is expected holds only the file's name and size; Python serialises the
 //! whole `UploadFile` object there.
 
+use axum::body::Body;
+use axum::extract::Request;
+use axum::http::header;
+use axum::response::Response;
 use recog_core::py;
 use recog_core::pyjson::Value;
 
-use crate::form::{FormData, FormValue, UploadFile};
-use crate::http::object;
+use crate::form::{self, FormData, FormValue, UploadFile};
+use crate::http::{self, object};
+
+/// The parameters from a request's body, or FastAPI's answer before the handler runs:
+/// the 400 of a body that cannot be read or parsed, the 422 of the validation.
+///
+/// # Errors
+/// That answer (boxed: a response is large).
+pub async fn read(request: Request, default_model: &str) -> Result<Transcription, Box<Response>> {
+    let content_type = request.headers().get(header::CONTENT_TYPE).map(|v| v.as_bytes().to_vec());
+    let Ok(body) = axum::body::to_bytes(Body::new(request.into_body()), usize::MAX).await else {
+        return Err(Box::new(http::detail(400, form::PARSE_ERROR)));
+    };
+    let form = form::parse(content_type.as_deref(), &body).map_err(|detail| Box::new(http::detail(400, &detail)))?;
+    transcription(&form, default_model).map_err(|errors| Box::new(http::validation_error(errors)))
+}
 
 /// The parameters both handlers declare.
 #[derive(Debug, Clone)]

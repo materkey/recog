@@ -22,7 +22,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::header;
 use axum::response::Response;
@@ -30,7 +29,7 @@ use recog_core::py;
 use recog_core::pyjson::{self, Map, Value};
 
 use crate::config::GatewayConfig;
-use crate::form::{self, latin1};
+use crate::form::latin1;
 use crate::http::{self, Routed, object};
 use crate::log;
 use crate::request::{self, Transcription};
@@ -299,17 +298,9 @@ fn fields(t: &Transcription) -> Vec<(&'static str, String)> {
 }
 
 async fn transcribe(gateway: Arc<Gateway>, request: Request) -> Response {
-    let content_type = request.headers().get(header::CONTENT_TYPE).map(|v| v.as_bytes().to_vec());
-    let Ok(body) = axum::body::to_bytes(Body::new(request.into_body()), usize::MAX).await else {
-        return http::detail(400, form::PARSE_ERROR);
-    };
-    let form = match form::parse(content_type.as_deref(), &body) {
-        Ok(form) => form,
-        Err(detail) => return http::detail(400, &detail),
-    };
-    let t = match request::transcription(&form, "whisper-1") {
+    let t = match request::read(request, "whisper-1").await {
         Ok(t) => t,
-        Err(errors) => return http::validation_error(errors),
+        Err(answer) => return *answer,
     };
     let lowered = t.model.to_lowercase();
     let Some(target) = MODEL_MAP.iter().find(|(name, _)| *name == lowered).map(|(_, target)| *target) else {

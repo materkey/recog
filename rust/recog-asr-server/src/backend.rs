@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::header;
 use axum::response::Response;
@@ -29,7 +28,7 @@ use recog_core::pyjson::Value;
 
 use crate::config::BackendConfig;
 use crate::engine::{Longform, Transcriber};
-use crate::form::{self, latin1};
+use crate::form::latin1;
 use crate::format;
 use crate::http::{self, Routed, object};
 use crate::log;
@@ -213,17 +212,9 @@ fn run(job: &Job) -> Result<Longform, Failure> {
 }
 
 async fn transcribe(backend: Arc<Backend>, request: Request) -> Response {
-    let content_type = request.headers().get(header::CONTENT_TYPE).map(|v| v.as_bytes().to_vec());
-    let Ok(body) = axum::body::to_bytes(Body::new(request.into_body()), usize::MAX).await else {
-        return http::detail(400, form::PARSE_ERROR);
-    };
-    let form = match form::parse(content_type.as_deref(), &body) {
-        Ok(form) => form,
-        Err(detail) => return http::detail(400, &detail),
-    };
-    let t: Transcription = match request::transcription(&form, "gigaam") {
+    let t: Transcription = match request::read(request, "gigaam").await {
         Ok(t) => t,
-        Err(errors) => return http::validation_error(errors),
+        Err(answer) => return *answer,
     };
     let Some(engine) = backend.engine.clone() else {
         return http::detail(503, "model loading");
@@ -242,17 +233,30 @@ async fn transcribe(backend: Arc<Backend>, request: Request) -> Response {
     };
     let outcome =
         tokio::task::spawn_blocking(move || run(&job)).await.unwrap_or_else(|e| Err(Failure::Internal(e.to_string())));
-    let longform = match outcome {
-        Ok(longform) => longform,
-        Err(Failure::Http(status, detail)) => return http::detail(status, detail),
-        Err(Failure::Internal(message)) => {
-            log::error(&format!("Exception in ASGI application: {message}"));
-            return http::internal_error();
+    match outcome {
+        Ok(longform) => formatted(&fmt, &longform, t.language.as_deref().unwrap_or("ru"), want_words),
+        Err(failure) => failure.answer(),
+    }
+}
+
+impl Failure {
+    /// The `HTTPException`'s answer, or the 500 of an unhandled exception.
+    fn answer(self) -> Response {
+        match self {
+            Failure::Http(status, detail) => http::detail(status, detail),
+            Failure::Internal(message) => {
+                log::error(&format!("Exception in ASGI application: {message}"));
+                http::internal_error()
+            }
         }
-    };
-    let language = t.language.as_deref().unwrap_or("ru");
+    }
+}
+
+/// The transcription in the requested format; a time that is not a finite number is
+/// the 500 of the exception Python raises there.
+fn formatted(fmt: &str, longform: &Longform, language: &str, want_words: bool) -> Response {
     let words = want_words.then_some(longform.words.as_slice());
-    match format::format_response(&fmt, &longform.segments, language, words) {
+    match format::format_response(fmt, &longform.segments, language, words) {
         Some(formatted) => http::text(200, formatted.body, formatted.media_type),
         None => {
             log::error("Exception in ASGI application: a time is not a finite number");
