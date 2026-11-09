@@ -6,9 +6,11 @@
 //! system dialog again; any other end of the helper's stream is a failure.
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::bridge::{self, Connector, PumpError};
+use crate::helper_app::Toolchain;
 use crate::helper_link::{self, LaunchError, Launcher};
 use crate::log::{Logger, StatusLog};
 use crate::session::ZoomAppSession;
@@ -119,22 +121,72 @@ pub fn default_repo_root() -> PathBuf {
     std::fs::canonicalize(&root).unwrap_or(root)
 }
 
+/// What a run needs before the first launch: a session that reads the installed
+/// Zoom's wording, and the helper application signed with the configured identity,
+/// built when needed. `environment` is the process environment.
+pub fn prepare(
+    options: &Options,
+    environment: &dyn Fn(&str) -> Option<String>,
+    toolchain: &impl Toolchain,
+    logger: &Logger,
+) -> Result<(PathBuf, ZoomAppSession), RunError> {
+    let session = ZoomAppSession::new(crate::vocabulary::load_vocabulary(&options.zoom_apps));
+    let identity = crate::settings::codesign_identity(&options.repo_root, environment).map_err(RunError::Build)?;
+    let app = crate::helper_app::find_or_build_helper(&options.repo_root, &identity, toolchain, logger)
+        .map_err(|error| RunError::Build(error.0))?;
+    Ok((app, session))
+}
+
+/// [`prepare`], then serve the helper with [`run_with`] until a failure.
+pub async fn run_from(
+    options: &Options,
+    environment: &dyn Fn(&str) -> Option<String>,
+    toolchain: &impl Toolchain,
+    launcher: &impl Launcher,
+    connector: &impl Connector,
+    logger: &Logger,
+) -> RunError {
+    match prepare(options, environment, toolchain, logger) {
+        Ok((app, session)) => {
+            run_with(app, session, launcher, connector, &options.bridge_url, &options.timing, logger).await
+        }
+        Err(error) => error,
+    }
+}
+
 /// `run()` of the Python module: the installed Zoom's wording, the helper built when
 /// needed, `open` for the launch and the WebSocket to the bridge.
 #[cfg(target_os = "macos")]
 pub async fn run(options: &Options, logger: &Logger) -> RunError {
-    let session = ZoomAppSession::new(crate::vocabulary::load_vocabulary(&options.zoom_apps));
-    let identity = match crate::settings::codesign_identity_from_env(&options.repo_root) {
-        Ok(identity) => identity,
-        Err(reason) => return RunError::Build(reason),
-    };
-    let toolchain = crate::helper_app::SystemToolchain;
-    let app = match crate::helper_app::find_or_build_helper(&options.repo_root, &identity, &toolchain, logger) {
-        Ok(app) => app,
-        Err(error) => return RunError::Build(error.0),
-    };
+    let environment = &crate::settings::process_environment;
     let connector = bridge::WsConnector::default();
-    run_with(app, session, &helper_link::OpenLauncher, &connector, &options.bridge_url, &options.timing, logger).await
+    run_from(options, environment, &crate::helper_app::SystemToolchain, &helper_link::OpenLauncher, &connector, logger)
+        .await
+}
+
+/// Run `source` on a runtime of its own until it fails (exit 1, the reason logged) or
+/// `interrupt` completes (exit 0): the standalone command's life.
+pub fn run_until_interrupted<I>(
+    source: impl std::future::Future<Output = RunError>,
+    interrupt: impl std::future::Future<Output = I>,
+    logger: &Logger,
+) -> ExitCode {
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("recog-zoom-app: cannot start a runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(async {
+        tokio::select! {
+            error = source => {
+                logger.line(&format!("stopped: {error}"));
+                ExitCode::FAILURE
+            }
+            _ = interrupt => ExitCode::SUCCESS,
+        }
+    })
 }
 
 /// Keep a source running: log why a run ended and start over after `timing.restart`,
@@ -175,23 +227,25 @@ pub fn spawn_in_background(options: Options) -> Option<std::thread::JoinHandle<(
     #[cfg(target_os = "macos")]
     {
         let thread = std::thread::Builder::new().name("zoom-app".into()).spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build();
-            match runtime {
-                Ok(runtime) => runtime.block_on(supervise(
-                    || run(&options, &logger),
-                    options.timing.restart,
-                    &logger,
-                    std::future::pending(),
-                )),
-                Err(error) => logger.line(&format!("stopped: cannot start a runtime: {error}")),
-            }
+            supervise_blocking(|| run(&options, &logger), options.timing.restart, &logger, std::future::pending())
         });
-        match thread {
-            Ok(thread) => Some(thread),
-            Err(error) => {
-                Logger::stderr().line(&format!("cannot start the source thread: {error}"));
-                None
-            }
-        }
+        thread.inspect_err(|error| Logger::stderr().line(&format!("cannot start the source thread: {error}"))).ok()
+    }
+}
+
+/// [`supervise`] on a runtime of its own, blocking the calling thread until `stop`
+/// completes; the source thread's life.
+pub fn supervise_blocking<F, R>(
+    start: F,
+    restart: Duration,
+    logger: &Logger,
+    stop: impl std::future::Future<Output = ()>,
+) where
+    F: Fn() -> R,
+    R: std::future::Future<Output = RunError>,
+{
+    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime.block_on(supervise(start, restart, logger, stop)),
+        Err(error) => logger.line(&format!("stopped: cannot start a runtime: {error}")),
     }
 }

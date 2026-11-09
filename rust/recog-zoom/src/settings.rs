@@ -51,33 +51,41 @@ pub fn config_path(repo_root: &Path, environment: &dyn Fn(&str) -> Option<String
 
 /// The identity to sign the helper with, `"-"` for ad hoc.
 pub fn codesign_identity(repo_root: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
-    let from_environment = match environment(CODESIGN_IDENTITY_VARIABLE) {
+    let from_environment = identity_from_environment(repo_root, environment);
+    if let Some(value) = from_environment.as_deref().map(crate::py::strip).filter(|value| !value.is_empty()) {
+        return Ok(value.to_owned());
+    }
+    let identity = identity_from_config(&config_path(repo_root, environment))?;
+    Ok(if identity.is_empty() { AD_HOC.into() } else { identity })
+}
+
+/// A variable of the process environment, for [`codesign_identity`].
+pub fn process_environment(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// The variable from the process environment, else from the checkout's `.env`.
+fn identity_from_environment(repo_root: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    match environment(CODESIGN_IDENTITY_VARIABLE) {
         Some(value) => Some(value),
         None => std::fs::read_to_string(repo_root.join(".env"))
             .ok()
             .and_then(|text| read_dotenv(&text).remove(CODESIGN_IDENTITY_VARIABLE)),
-    };
-    if let Some(value) = from_environment.as_deref().map(crate::py::strip).filter(|value| !value.is_empty()) {
-        return Ok(value.to_owned());
     }
-    let path = config_path(repo_root, environment);
-    let identity = match std::fs::read_to_string(&path) {
-        Err(_) => String::new(),
-        Ok(text) => {
-            let document: toml::Table = text.parse().map_err(|error| format!("{}: {error}", path.display()))?;
-            match document.get("macos").and_then(|macos| macos.get("codesign_identity")) {
-                None => String::new(),
-                Some(toml::Value::String(identity)) => identity.clone(),
-                Some(_) => return Err(format!("{}: macos.codesign_identity must be a string", path.display())),
-            }
-        }
-    };
-    Ok(if identity.is_empty() { AD_HOC.into() } else { identity })
 }
 
-/// `codesign_identity` from the process environment.
-pub fn codesign_identity_from_env(repo_root: &Path) -> Result<String, String> {
-    codesign_identity(repo_root, &|name| std::env::var(name).ok())
+/// `[macos] codesign_identity` of the configuration at `path`; empty when the file or
+/// the key is absent.
+fn identity_from_config(path: &Path) -> Result<String, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(String::new());
+    };
+    let document: toml::Table = text.parse().map_err(|error| format!("{}: {error}", path.display()))?;
+    match document.get("macos").and_then(|macos| macos.get("codesign_identity")) {
+        None => Ok(String::new()),
+        Some(toml::Value::String(identity)) => Ok(identity.clone()),
+        Some(_) => Err(format!("{}: macos.codesign_identity must be a string", path.display())),
+    }
 }
 
 #[cfg(test)]

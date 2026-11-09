@@ -2,14 +2,18 @@
 //! from the helper-application part of `tests/test_zoom_app.py`.
 #![forbid(unsafe_code)]
 
+mod common;
+
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use common::{RUSSIAN, meeting, participants, tile, zoom_app};
 use recog_zoom::helper_app::{
     CommandOutcome, HELPER_SOURCE, HELPER_STAMP, Toolchain, find_or_build_helper, helper_info, info_plist, which,
 };
 use recog_zoom::log::Logger;
+use recog_zoom::run::{Options, RunError, prepare};
 
 /// swiftc and codesign that write what the real ones would, and record their calls.
 #[derive(Default)]
@@ -233,6 +237,67 @@ const PYTHON_INFO_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 #[test]
 fn given_the_helper_info_when_written_then_the_bytes_are_plistlibs() {
     assert_eq!(info_plist(&helper_info()), PYTHON_INFO_PLIST);
+}
+
+// --- prepare: what a run needs before the first launch ----------------------------
+
+fn options(root: &Path, zoom_apps: Vec<PathBuf>) -> Options {
+    Options { zoom_apps, ..Options::new(root.to_path_buf()) }
+}
+
+/// The process environment of a run: the configuration file at `config`, and the
+/// signing identity when set.
+fn environment(config: PathBuf, identity: Option<&'static str>) -> impl Fn(&str) -> Option<String> {
+    move |name| match name {
+        "RECOG_CONFIG_FILE" => Some(config.display().to_string()),
+        "RECOG_CODESIGN_IDENTITY" => identity.map(String::from),
+        _ => None,
+    }
+}
+
+#[test]
+fn given_a_checkout_and_a_russian_zoom_when_prepared_then_the_helper_is_signed_as_configured_and_the_wording_read() {
+    let root = repo("// source");
+    let zoom = zoom_app(root.path(), &[("ru", RUSSIAN)]);
+    let toolchain = FakeToolchain::default();
+    let env = environment(root.path().join("absent.toml"), Some("Developer ID Application: Example"));
+
+    let (app, mut session) = prepare(&options(root.path(), vec![zoom]), &env, &toolchain, &Logger::buffer().0).unwrap();
+
+    assert_eq!(app, root.path().join("RecogZoomHelper.app"));
+    assert_eq!(toolchain.argument_after(1, "--sign"), "Developer ID Application: Example");
+    session.frames(&meeting(&[tile("Host", &[])]), 100.0).unwrap();
+    let sent = session.frames(&meeting(&[tile("Анна", &["Звук компьютера выключен"])]), 101.0).unwrap();
+    let muted: Vec<_> = participants(&sent).iter().map(|p| p["micMuted"].clone()).collect();
+    assert_eq!(muted, [true]); // the English wording alone would leave her open
+}
+
+#[test]
+fn given_a_config_with_an_identity_that_is_not_a_string_when_prepared_then_nothing_is_built() {
+    let root = repo("// source");
+    let config = root.path().join("config.toml");
+    std::fs::write(&config, "[macos]\ncodesign_identity = 5\n").unwrap();
+    let toolchain = FakeToolchain::default();
+
+    let error =
+        prepare(&options(root.path(), vec![]), &environment(config.clone(), None), &toolchain, &Logger::buffer().0)
+            .err()
+            .unwrap();
+
+    assert_eq!(error, RunError::Build(format!("{}: macos.codesign_identity must be a string", config.display())));
+    assert!(toolchain.calls.borrow().is_empty());
+}
+
+#[test]
+fn given_no_helper_and_no_compiler_when_prepared_then_the_build_error_ends_the_run() {
+    let root = repo("// source");
+    let env = environment(root.path().join("absent.toml"), None);
+
+    let error = prepare(&options(root.path(), vec![]), &env, &FakeToolchain::without_compiler(), &Logger::buffer().0)
+        .err()
+        .unwrap();
+
+    assert_eq!(error.to_string(), "swiftc not found — cannot build RecogZoomHelper.app (xcode-select --install)");
 }
 
 fn tool_file(directory: &Path, mode: u32) -> PathBuf {

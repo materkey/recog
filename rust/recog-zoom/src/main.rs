@@ -47,24 +47,9 @@ fn start(_repo_root: PathBuf) -> ExitCode {
 #[cfg(target_os = "macos")]
 fn start(repo_root: PathBuf) -> ExitCode {
     use recog_zoom::log::Logger;
-    use recog_zoom::run::{Options, run};
+    use recog_zoom::run::{Options, run, run_until_interrupted};
 
-    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("recog-zoom-app: cannot start a runtime: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
     let options = Options::new(repo_root);
     let logger = Logger::stderr();
-    runtime.block_on(async {
-        tokio::select! {
-            error = run(&options, &logger) => {
-                logger.line(&format!("stopped: {error}"));
-                ExitCode::FAILURE
-            }
-            _ = tokio::signal::ctrl_c() => ExitCode::SUCCESS,
-        }
-    })
+    run_until_interrupted(run(&options, &logger), tokio::signal::ctrl_c(), &logger)
 }

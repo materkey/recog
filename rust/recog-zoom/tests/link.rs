@@ -7,16 +7,19 @@ mod common;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::*;
 use recog_zoom::ZoomAppSession;
 use recog_zoom::bridge::{self, BridgeLink, Connector, Incoming, PumpError};
-use recog_zoom::helper_app::CommandOutcome;
+use recog_zoom::helper_app::{CommandOutcome, HELPER_SOURCE, Toolchain};
 use recog_zoom::helper_link::{HelperLines, Launcher, helper_lines};
 use recog_zoom::log::{Logger, StatusLog};
-use recog_zoom::run::{RunError, Timing, run_with, supervise};
+use recog_zoom::run::{
+    Options, RunError, Timing, run_from, run_until_interrupted, run_with, supervise, supervise_blocking,
+};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -520,6 +523,120 @@ async fn given_source_fails_when_supervised_then_it_is_logged_and_started_over()
 
     assert_eq!(*attempts.lock().unwrap(), 2);
     assert!(lines_of(&buffer)[0].contains("stopped: the Zoom helper disconnected; starting over in 0 s"));
+}
+
+/// A machine without the compiler and the signing tool.
+struct NoTools;
+
+impl Toolchain for NoTools {
+    fn which(&self, _name: &str) -> Option<PathBuf> {
+        None
+    }
+
+    fn run(&self, command: &[std::ffi::OsString]) -> std::io::Result<CommandOutcome> {
+        panic!("nothing may be built here: {command:?}")
+    }
+}
+
+fn checkout(built: bool) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join(HELPER_SOURCE);
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(source, "// source").unwrap();
+    if built {
+        let signature = app(root.path()).join("Contents/_CodeSignature");
+        std::fs::create_dir_all(&signature).unwrap();
+        std::fs::write(signature.join("CodeResources"), "seal").unwrap();
+    }
+    root
+}
+
+fn run_options(root: &Path) -> Options {
+    Options {
+        zoom_apps: Vec::new(),
+        bridge_url: "ws://bridge.test".into(),
+        timing: timing(),
+        ..Options::new(root.into())
+    }
+}
+
+/// An environment that sets nothing but an absent configuration file in the checkout.
+fn bare_environment(name: &str) -> Option<String> {
+    (name == "RECOG_CONFIG_FILE").then(|| "absent-config.toml".into())
+}
+
+#[tokio::test]
+async fn given_a_built_helper_when_run_from_options_then_it_is_launched_and_its_end_surfaces() {
+    let root = checkout(true);
+    let stand_ins = StandIns::new([lines_script(&[meeting(&[tile("Host", &[])])])]);
+    let links = Links::default();
+    let (logger, _) = Logger::buffer();
+
+    let ended = run_from(&run_options(root.path()), &bare_environment, &NoTools, &stand_ins, &links, &logger).await;
+
+    assert_eq!(ended, RunError::Helper(PumpError::HelperGone));
+    assert_eq!(stand_ins.launched()[0][4], app(root.path()).display().to_string());
+    assert_eq!(*links.attempts.lock().unwrap(), ["ws://bridge.test"]);
+}
+
+#[tokio::test]
+async fn given_no_helper_and_no_compiler_when_run_from_options_then_nothing_is_launched() {
+    let root = checkout(false);
+    let stand_ins = StandIns::new([]);
+    let (logger, _) = Logger::buffer();
+
+    let ended =
+        run_from(&run_options(root.path()), &bare_environment, &NoTools, &stand_ins, &Links::default(), &logger).await;
+
+    assert_eq!(ended.to_string(), "swiftc not found — cannot build RecogZoomHelper.app (xcode-select --install)");
+    assert!(stand_ins.launched().is_empty());
+}
+
+#[test]
+fn given_source_fails_when_run_until_interrupted_then_the_reason_is_logged_and_it_exits_1() {
+    let (logger, buffer) = Logger::buffer();
+
+    let code = run_until_interrupted(
+        async { RunError::Build("cannot read the source".into()) },
+        std::future::pending::<()>(),
+        &logger,
+    );
+
+    assert_eq!(code, ExitCode::FAILURE);
+    assert_eq!(lines_of(&buffer), ["[zoom-app] stopped: cannot read the source"]);
+}
+
+#[test]
+fn given_interrupt_when_running_until_interrupted_then_it_exits_0_quietly() {
+    let (logger, buffer) = Logger::buffer();
+
+    let code = run_until_interrupted(std::future::pending::<RunError>(), async {}, &logger);
+
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert!(lines_of(&buffer).is_empty());
+}
+
+#[test]
+fn given_source_fails_when_supervised_on_a_runtime_of_its_own_then_it_starts_over_until_stopped() {
+    let attempts = Arc::new(Mutex::new(0));
+    let stop = Arc::new(tokio::sync::Notify::new());
+    let (logger, buffer) = Logger::buffer();
+    let start = || {
+        let attempts = Arc::clone(&attempts);
+        let stop = Arc::clone(&stop);
+        async move {
+            *attempts.lock().unwrap() += 1;
+            if *attempts.lock().unwrap() == 3 {
+                stop.notify_one();
+            }
+            RunError::Build("no compiler".into())
+        }
+    };
+
+    supervise_blocking(start, Duration::ZERO, &logger, stop.notified());
+
+    assert_eq!(*attempts.lock().unwrap(), 3);
+    assert_eq!(lines_of(&buffer)[1], "[zoom-app] stopped: no compiler; starting over in 0 s");
 }
 
 #[cfg(not(target_os = "macos"))]
