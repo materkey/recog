@@ -13,7 +13,8 @@
 
 const hosts = { jitsi: ['https://meet.example.org'], matrix: ['https://element.example.org'] };
 globalThis.__RECOG_CONFERENCE_HOSTS__ = hosts;
-const { detectPlatform, getPlatform, getPlatformDisplayName, isJitsiPlatform, resetAdapter } = await import('./index.js');
+const { detectPlatform, getPlatform, getPlatformAdapter, getPlatformDisplayName, isJitsiPlatform, resetAdapter } = await import('./index.js');
+const { ElementCallAdapter } = await import('./matrix.js');
 afterAll(() => { delete globalThis.__RECOG_CONFERENCE_HOSTS__; });
 
 const loc = (hostname, pathname = '/') => new URL(`https://${hostname}${pathname}`);
@@ -126,5 +127,38 @@ describe('isJitsiPlatform / display name per platform', () => {
 
   test('zoom platform - getting display name - returns Zoom', () => {
     expect(getPlatformDisplayName('zoom')).toBe('Zoom');
+  });
+});
+
+describe('detectPlatform with an explicit default port', () => {
+  test('location with port 443 spelled out - detecting platform - accepts it', () => {
+    const location = { hostname: 'meet.ktalk.ru', pathname: '/room', protocol: 'https:', port: '443', origin: 'https://meet.ktalk.ru' };
+
+    expect(detectPlatform(location)).toBe('ktalk');
+  });
+
+  test('location without a path - detecting the Element iframe - gets no adapter', () => {
+    const location = { hostname: 'element.example.org', protocol: 'https:', port: '', origin: 'https://element.example.org' };
+
+    expect(detectPlatform(location, hosts)).toBeNull();
+  });
+});
+
+describe('getPlatformAdapter', () => {
+  beforeEach(() => resetAdapter());
+
+  test('Element Call iframe page - getting the adapter twice - creates one ElementCallAdapter', () => {
+    const adapter = getPlatformAdapter();
+
+    expect(adapter).toBeInstanceOf(ElementCallAdapter);
+    expect(getPlatformAdapter()).toBe(adapter);
+  });
+
+  test('a created adapter - reset - the next call creates a fresh one', () => {
+    const first = getPlatformAdapter();
+
+    resetAdapter();
+
+    expect(getPlatformAdapter()).not.toBe(first);
   });
 });

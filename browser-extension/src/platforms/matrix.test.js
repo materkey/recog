@@ -590,3 +590,67 @@ describe('ElementCallAdapter', () => {
     expect(adapter._roomRetryTimer).toBeNull();
   });
 });
+
+describe('parseRtcIdentity edge input', () => {
+  test('identity starting with @ but without colons - parsing - falls back to the memberships', () => {
+    const memberships = [{ userId: '@a:s', deviceId: 'D', rtcBackendIdentity: '@nocolon' }];
+
+    expect(parseRtcIdentity('@nocolon', memberships)).toEqual({ userId: '@a:s', deviceId: 'D' });
+  });
+
+  test('null memberships or null entries - parsing a hash identity - skips them', () => {
+    const memberships = [null, { userId: '@b:s', deviceId: 'E', rtcBackendIdentity: 'hash' }];
+
+    expect(parseRtcIdentity('hash', null)).toBeNull();
+    expect(parseRtcIdentity('hash', memberships)).toEqual({ userId: '@b:s', deviceId: 'E' });
+  });
+
+  test('non-string identity - parsing - returns null', () => {
+    expect(parseRtcIdentity(42, [{ rtcBackendIdentity: 42, userId: '@c:s', deviceId: 'F' }])).toBeNull();
+  });
+});
+
+describe('ElementCallAdapter.waitForConference', () => {
+  let adapter;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    adapter = new ElementCallAdapter(window, document);
+  });
+
+  afterEach(() => {
+    adapter.dispose();
+    delete window.matrixclient;
+    delete window.rtcSession;
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  function joinCall() {
+    window.matrixclient = { getUserId: () => '@me:s', getDeviceId: () => 'D', getRoom: () => null };
+    window.rtcSession = { room: { roomId: '!r:s' }, memberships: [] };
+  }
+
+  test('a call already joined - waiting - resolves with the rtcSession at once', async () => {
+    joinCall();
+
+    await expect(adapter.waitForConference(3)).resolves.toBe(window.rtcSession);
+  });
+
+  test('the call joins on the third check - waiting - resolves then', async () => {
+    const waiting = adapter.waitForConference(5);
+    jest.advanceTimersByTime(500);
+    joinCall();
+    jest.advanceTimersByTime(500);
+
+    await expect(waiting).resolves.toBe(window.rtcSession);
+  });
+
+  test('no call - waiting the given checks - rejects', async () => {
+    const waiting = adapter.waitForConference(3);
+    jest.advanceTimersByTime(1000);
+
+    await expect(waiting).rejects.toThrow('Conference not found');
+  });
+});
