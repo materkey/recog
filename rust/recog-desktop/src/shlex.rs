@@ -110,4 +110,17 @@ mod tests {
         assert_eq!(split("\"unterminated").unwrap_err().message, "No closing quotation");
         assert_eq!(split("trailing\\").unwrap_err().message, "No escaped character");
     }
+
+    #[test]
+    fn blanks_escapes_and_joined_quotes_when_split_then_like_python() {
+        // given / when / then
+        assert_eq!(split(" a  b\t").unwrap(), ["a", "b"]);
+        assert_eq!(split("'' x \"\"").unwrap(), ["", "x", ""]);
+        assert_eq!(split("a\\ b").unwrap(), ["a b"]);
+        assert_eq!(split(r#""a\\b" "a\$b""#).unwrap(), [r"a\b", r"a\$b"]);
+        assert_eq!(split("'it''s'").unwrap(), ["its"]);
+        assert_eq!(split("x=\"1 2\"y").unwrap(), ["x=1 2y"]);
+        assert_eq!(split("\"a\\").unwrap_err().message, "No escaped character");
+        assert_eq!(split("'a\\").unwrap_err().message, "No closing quotation");
+    }
 }
