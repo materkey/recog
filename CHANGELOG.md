@@ -21,6 +21,12 @@ reasoning.
   `LLVM_PROFDATA` at its own `llvm-cov` and `llvm-profdata`), then `python3 -m pip
   install -r deploy/python/requirements-quality.txt` again: `pytest-cov` and
   `coverage` left it, `pytest` and `tree-sitter-rust` are pinned in it.
+- **Rebuild and reload the browser extension.** Its debug panel put the current
+  speaker's name and the meeting URL into the conference page as markup, so a
+  participant whose display name held HTML could run script on that page; the
+  popup did the same with names, times and transcript text. Both now insert them
+  as text. `./setup.sh` rebuilds `browser-extension/dist/`; then press Reload on
+  the extension in `chrome://extensions`.
 
 ## 2026-11-08
 

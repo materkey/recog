@@ -192,4 +192,23 @@ describe('popup', () => {
 
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
   });
+
+  test('names, times and text holding markup - storage changes - shown as text, no element created', () => {
+    show({
+      connected: true,
+      participants: [{ name: '<img src=x onerror="window.pwned=1">', isLocal: false }],
+      speakerHistory: [{ name: '<b>Bob</b>', time: '<i>12:00</i>' }],
+      transcriptLines: [{ speaker: '<u>Carol</u>', time: '<s>12:01</s>', text: '<em>hello</em> & bye' }],
+    });
+
+    for (const id of ['participantsList', 'historyList', 'transcriptList']) {
+      expect($(id).querySelector('img, b, i, u, s, em')).toBeNull();
+    }
+    expect($('participantsList').textContent).toContain('<img src=x onerror="window.pwned=1">');
+    expect($('historyList').textContent).toContain('<b>Bob</b>');
+    expect($('historyList').textContent).toContain('<i>12:00</i>');
+    expect($('transcriptList').textContent).toContain('<u>Carol</u>');
+    expect($('transcriptList').textContent).toContain('<s>12:01</s>');
+    expect($('transcriptList').textContent).toContain('<em>hello</em> & bye');
+  });
 });

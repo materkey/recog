@@ -91,7 +91,9 @@ function debugRows(activeSpeaker, participants, pcm) {
 function formatValue(value) {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
-  return String(value);
+  // Speaker names and the meeting URL come from the conference page, which other
+  // participants control: never let them become markup on that page.
+  return escapeHtml(String(value));
 }
 
 function copyDebug(payload, btn) {

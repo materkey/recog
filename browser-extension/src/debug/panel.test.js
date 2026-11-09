@@ -151,3 +151,19 @@ describe('updateDebugPanel', () => {
     }
   });
 });
+
+describe('updateDebugPanel with markup in page-supplied values', () => {
+  test('a speaker name and meeting URL holding markup - rendered - shown as text, no element created', () => {
+    ensureDebugPanel();
+    state.lastActiveSpeaker = { name: '<img src=x onerror="window.pwned=1">', id: '<b>id</b>' };
+    state.currentMeetingUrl = 'https://example.test/<script>x</script>';
+    updateDebugPanel();
+    const panel = document.querySelector('.ktalk-debug-panel');
+    expect(panel.querySelector('img')).toBeNull();
+    expect(panel.querySelector('.ktalk-debug-row b')).toBeNull();
+    expect(panel.querySelector('.ktalk-debug-row script')).toBeNull();
+    expect(rows().activeSpeaker).toBe('<img src=x onerror="window.pwned=1">');
+    expect(rows().activeSpeakerId).toBe('<b>id</b>');
+    expect(rows().meetingUrl).toBe('https://example.test/<script>x</script>');
+  });
+});

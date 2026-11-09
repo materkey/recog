@@ -2,6 +2,14 @@
 
 let transcriptLines = [];
 
+// Participant names, times and transcript text come from the conference and the
+// recognizer: they are inserted as text, never as markup.
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text == null ? '' : String(text);
+  return div.innerHTML;
+}
+
 function getInitials(name) {
   if (!name) return '?';
   return name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
@@ -46,8 +54,8 @@ function updateParticipants(participants) {
     participantsList.innerHTML = participants.map(p => `
       <li>
         <div class="participant-name">
-          <div class="participant-avatar">${getInitials(p.name)}</div>
-          <span>${p.name}</span>
+          <div class="participant-avatar">${escapeHtml(getInitials(p.name))}</div>
+          <span>${escapeHtml(p.name)}</span>
         </div>
         ${p.isLocal ? '<span class="participant-local">You</span>' : ''}
       </li>
@@ -64,8 +72,8 @@ function updateHistory(speakerHistory) {
   if (speakerHistory && speakerHistory.length > 0) {
     historyList.innerHTML = speakerHistory.slice(0, 10).map(h => `
       <li>
-        <span>${h.name}</span>
-        <span class="history-time">${h.time}</span>
+        <span>${escapeHtml(h.name)}</span>
+        <span class="history-time">${escapeHtml(h.time)}</span>
       </li>
     `).join('');
   } else {
@@ -106,9 +114,9 @@ function updateTranscriptUI() {
       const speakerDisplay = line.speaker + getUncertainSuffix(line);
 
       return `<li class="${classes}">
-        <span class="transcript-speaker">${speakerDisplay}</span>
-        <span class="transcript-time">${line.time}</span>
-        <div class="transcript-text">${line.text}</div>
+        <span class="transcript-speaker">${escapeHtml(speakerDisplay)}</span>
+        <span class="transcript-time">${escapeHtml(line.time)}</span>
+        <div class="transcript-text">${escapeHtml(line.text)}</div>
       </li>`;
     }).join('');
 
