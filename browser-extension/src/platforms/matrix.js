@@ -42,7 +42,10 @@ const ROOM_RETRY_INTERVAL_MS = 2000;
  */
 export function parseRtcIdentity(identity, memberships = []) {
   if (typeof identity !== 'string' || !identity) return null;
+  return parseLegacyRtcIdentity(identity) || membershipForIdentity(identity, memberships);
+}
 
+function parseLegacyRtcIdentity(identity) {
   if (identity.startsWith('@')) {
     const firstColon = identity.indexOf(':');
     const lastColon = identity.lastIndexOf(':');
@@ -54,7 +57,10 @@ export function parseRtcIdentity(identity, memberships = []) {
       };
     }
   }
+  return null;
+}
 
+function membershipForIdentity(identity, memberships) {
   for (const m of memberships || []) {
     if (m && m.rtcBackendIdentity === identity) {
       return { userId: m.userId, deviceId: m.deviceId };
