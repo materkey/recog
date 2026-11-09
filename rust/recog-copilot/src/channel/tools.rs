@@ -193,31 +193,64 @@ async fn get_recent_transcript(
     let request_id = format!("snapshot_{}", short_id());
     let answer = link.register_pending(&request_id);
     let _guard = PendingGuard { link, request_id: request_id.clone() };
+    let frame = snapshot_request(&request_id, args);
+    let response = match exchange_snapshot(link, &frame, answer, cancel).await {
+        Ok(response) => response,
+        Err(outcome) => return Ok(outcome),
+    };
+    Ok(Outcome::Value(snapshot_result(&link.apply_privacy(&response)?)))
+}
+
+/// The `get_recent_transcript_request` frame: the call's window arguments, None
+/// for those left out.
+fn snapshot_request(request_id: &str, args: &Map) -> Map {
     let mut frame = Map::new();
     frame.insert("type", Value::from(protocol::GET_RECENT_TRANSCRIPT_REQUEST));
-    frame.insert("request_id", Value::from(request_id.as_str()));
+    frame.insert("request_id", Value::from(request_id));
     for key in ["window_seconds", "since_segment_id", "include_refined"] {
         frame.insert(key, args.get(key).cloned().unwrap_or(Value::Null));
     }
+    frame
+}
+
+/// Sends the request and waits for the bridge's snapshot; the outcome to answer
+/// instead when the send fails, the wait times out or the call is cancelled.
+async fn exchange_snapshot<E: std::fmt::Display>(
+    link: &BridgeLink,
+    frame: &Map,
+    answer: tokio::sync::oneshot::Receiver<Result<Map, E>>,
+    cancel: &CancellationToken,
+) -> Result<Map, Outcome> {
     let sent = tokio::select! {
-        sent = link.send(&frame) => sent,
-        () = cancel.cancelled() => return Ok(Outcome::Cancelled),
+        sent = link.send(frame) => sent,
+        () = cancel.cancelled() => return Err(Outcome::Cancelled),
     };
     if sent.get("ok") != Some(&Value::Bool(true)) {
-        return Ok(Outcome::Value(sent));
+        return Err(Outcome::Value(sent));
     }
-    let response = tokio::select! {
-        answer = tokio::time::timeout(SNAPSHOT_TIMEOUT, answer) => match answer {
-            Err(_) => return Ok(Outcome::Value(result(false, Some("timeout waiting for transcript snapshot")))),
-            Ok(Ok(Ok(response))) => response,
-            Ok(Ok(Err(dropped))) => return Ok(Outcome::Value(result(false, Some(&dropped.to_string())))),
-            // The waiter was dropped without an answer: the link lost the socket.
-            Ok(Err(_)) => return Ok(Outcome::Value(result(false, Some("bridge connection dropped")))),
-        },
-        () = cancel.cancelled() => return Ok(Outcome::Cancelled),
-    };
-    let response = link.apply_privacy(&response)?;
-    let context = build_copilot_context(&response);
+    tokio::select! {
+        answer = tokio::time::timeout(SNAPSHOT_TIMEOUT, answer) => snapshot_answer(answer).map_err(Outcome::Value),
+        () = cancel.cancelled() => Err(Outcome::Cancelled),
+    }
+}
+
+/// The snapshot the waiter got, or the failure dict for a timeout or a lost socket.
+fn snapshot_answer<E: std::fmt::Display>(
+    answer: Result<Result<Result<Map, E>, tokio::sync::oneshot::error::RecvError>, tokio::time::error::Elapsed>,
+) -> Result<Map, Map> {
+    match answer {
+        Err(_) => Err(result(false, Some("timeout waiting for transcript snapshot"))),
+        Ok(Ok(Ok(response))) => Ok(response),
+        Ok(Ok(Err(dropped))) => Err(result(false, Some(&dropped.to_string()))),
+        // The waiter was dropped without an answer: the link lost the socket.
+        Ok(Err(_)) => Err(result(false, Some("bridge connection dropped"))),
+    }
+}
+
+/// The tool's dict for a delivered snapshot: its segments, the identity and policy
+/// fields it carries, and the rendered user context when there is one.
+fn snapshot_result(response: &Map) -> Map {
+    let context = build_copilot_context(response);
     let mut out = result(true, None);
     out.insert("segments", response.get("segments").cloned().unwrap_or(Value::Array(Vec::new())));
     let keys = USER_CONTEXT_FIELDS.iter().map(|(key, _)| *key).chain(COPILOT_POLICY_FIELDS).chain(["privacy_mode"]);
@@ -229,7 +262,7 @@ async fn get_recent_transcript(
     if !context.is_empty() {
         out.insert("user_context", Value::from(context));
     }
-    Ok(Outcome::Value(out))
+    out
 }
 
 async fn await_copilot_event(
@@ -259,4 +292,49 @@ async fn await_copilot_event(
         out.insert("user_context", Value::from(context));
     }
     Ok(Outcome::Value(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::oneshot;
+
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_snapshot_that_never_comes_when_the_wait_times_out_then_the_timeout_failure() {
+        // given
+        let (_tx, rx) = oneshot::channel::<Result<Map, String>>();
+        let answer = tokio::time::timeout(SNAPSHOT_TIMEOUT, rx).await;
+        // when
+        let outcome = snapshot_answer(answer);
+        // then
+        assert_eq!(outcome, Err(result(false, Some("timeout waiting for transcript snapshot"))));
+    }
+
+    #[tokio::test]
+    async fn a_waiter_dropped_without_an_answer_when_awaited_then_the_connection_dropped_failure() {
+        // given
+        let (tx, rx) = oneshot::channel::<Result<Map, String>>();
+        drop(tx);
+        let answer = tokio::time::timeout(SNAPSHOT_TIMEOUT, rx).await;
+        // when
+        let outcome = snapshot_answer(answer);
+        // then
+        assert_eq!(outcome, Err(result(false, Some("bridge connection dropped"))));
+    }
+
+    #[test]
+    fn window_arguments_left_out_when_the_request_is_built_then_they_are_sent_as_none() {
+        // given
+        let mut args = Map::new();
+        args.insert("window_seconds", Value::Int(30));
+        // when
+        let frame = snapshot_request("snapshot_1", &args);
+        // then
+        let keys: Vec<&str> = frame.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["type", "request_id", "window_seconds", "since_segment_id", "include_refined"]);
+        assert_eq!(frame.get("type"), Some(&Value::from(protocol::GET_RECENT_TRANSCRIPT_REQUEST)));
+        assert_eq!(frame.get("window_seconds"), Some(&Value::Int(30)));
+        assert_eq!(frame.get("since_segment_id"), Some(&Value::Null));
+    }
 }

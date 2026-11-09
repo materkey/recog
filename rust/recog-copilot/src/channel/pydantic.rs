@@ -327,25 +327,36 @@ pub fn validate_arguments(model: &str, fields: &[Field], arguments: &Map) -> Res
     let mut out = Map::new();
     let mut failures = Vec::new();
     for field in fields {
-        match data.get(field.name) {
-            Some(value) => match validate(field, value) {
-                Ok(value) => out.insert(field.name, value),
-                Err(failure) => failures.push(failure),
-            },
-            None => match field.default {
-                Some(default) => out.insert(field.name, pyjson::loads(default).unwrap_or(Value::Null)),
-                None => failures.push(Failure {
-                    field: field.name,
-                    kind: "missing",
-                    message: "Field required",
-                    input: Value::Object(data.clone()),
-                }),
-            },
+        let validated = match data.get(field.name) {
+            Some(value) => validate(field, value),
+            None => default_or_missing(field, &data),
+        };
+        match validated {
+            Ok(value) => out.insert(field.name, value),
+            Err(failure) => failures.push(failure),
         }
     }
     if failures.is_empty() {
         return Ok(out);
     }
+    Err(validation_error_text(model, failures))
+}
+
+/// The value of a parameter the arguments leave out: its default, or `missing`.
+fn default_or_missing(field: &Field, data: &Map) -> Result<Value, Failure> {
+    match field.default {
+        Some(default) => Ok(pyjson::loads(default).unwrap_or(Value::Null)),
+        None => Err(Failure {
+            field: field.name,
+            kind: "missing",
+            message: "Field required",
+            input: Value::Object(data.clone()),
+        }),
+    }
+}
+
+/// `str(ValidationError)`: the count line, then each failure with its pydantic link.
+fn validation_error_text(model: &str, failures: Vec<Failure>) -> String {
     let count = failures.len();
     let mut text = format!("{count} validation error{} for {model}", if count == 1 { "" } else { "s" });
     for failure in failures {
@@ -361,7 +372,7 @@ pub fn validate_arguments(model: &str, fields: &[Field], arguments: &Map) -> Res
             failure.kind
         );
     }
-    Err(text)
+    text
 }
 
 #[cfg(test)]
