@@ -111,90 +111,133 @@ fn option<'a>(arg: &str, options: &[&'a str]) -> Result<Option<(&'a str, Option<
 /// # Errors
 /// The help or the error argparse prints, with its exit status.
 pub fn parse(args: &[String]) -> Result<Command, Exit> {
-    let mut extras: Vec<String> = Vec::new();
-    let mut iter = args.iter().cloned();
-    let mut subcommand = None;
-    for arg in iter.by_ref() {
-        if looks_like_option(&arg) {
-            match option(&arg, &["-h", "--help"]).map_err(|m| error(DESKTOP_USAGE, "recog desktop", &m))? {
-                Some(_) => return Err(help(DESKTOP_HELP)),
-                None => extras.push(arg),
-            }
-        } else {
-            subcommand = Some(arg);
-            break;
-        }
-    }
-    let Some(subcommand) = subcommand else {
-        return Err(error(DESKTOP_USAGE, "recog desktop", "the following arguments are required: desktop_command"));
-    };
-    let (usage_help, options): (String, &[&str]) = match subcommand.as_str() {
-        "enable" => (ENABLE_HELP.to_owned(), &["-h", "--help", "--app"]),
-        "status" => (STATUS_HELP.to_owned(), &["-h", "--help", "--json"]),
-        "disable" | "attach" => (plain_help(&subcommand), &["-h", "--help"]),
-        other => {
-            return Err(error(
-                DESKTOP_USAGE,
-                "recog desktop",
-                &format!(
-                    "argument desktop_command: invalid choice: {} (choose from enable, disable, attach, status)",
-                    recog_core::py::repr(other)
-                ),
-            ));
-        }
-    };
+    let (subcommand, mut extras, rest) = split_subcommand(args)?;
+    let (usage_help, options) = subcommand_options(&subcommand)?;
     let usage = usage_of(&usage_help);
     let prog = format!("recog desktop {subcommand}");
     let fail = |message: &str| error(&usage, &prog, message);
-    let rest: Vec<String> = iter.collect();
-    let mut app = None;
-    let mut json = false;
-    let mut at = 0;
-    while at < rest.len() {
-        let arg = &rest[at];
-        at += 1;
-        if !looks_like_option(arg) {
-            extras.push(arg.clone());
-            continue;
-        }
-        match option(arg, options).map_err(|m| fail(&m))? {
-            None => extras.push(arg.clone()),
-            Some(("-h" | "--help", _)) => return Err(help(&usage_help)),
-            Some(("--json", inline)) => {
-                if let Some(value) = inline {
-                    return Err(fail(&format!(
-                        "argument --json: ignored explicit argument {}",
-                        recog_core::py::repr(&value)
-                    )));
-                }
-                json = true;
-            }
-            Some(("--app", inline)) => match inline {
-                Some(value) => app = Some(value),
-                None => match rest.get(at) {
-                    Some(value) if !looks_like_option(value) => {
-                        app = Some(value.clone());
-                        at += 1;
-                    }
-                    _ => return Err(fail("argument --app: expected one argument")),
-                },
-            },
-            Some(_) => extras.push(arg.clone()),
-        }
-    }
-    let command = match subcommand.as_str() {
-        "enable" => match app {
-            Some(app) => Command::Enable { app },
-            None => return Err(fail("the following arguments are required: --app")),
-        },
-        "status" => Command::Status { json },
-        "disable" => Command::Disable,
-        _ => Command::Attach,
-    };
+    let read = read_options(&rest, options, &usage_help, &fail, &mut extras)?;
+    let command = command_of(&subcommand, read).map_err(|m| fail(&m))?;
     if !extras.is_empty() {
         return Err(error(TOP_USAGE, "recog", &format!("unrecognized arguments: {}", extras.join(" "))));
     }
     Ok(command)
+}
+
+/// The subcommand, the unrecognized options before it and the arguments after it.
+fn split_subcommand(args: &[String]) -> Result<(String, Vec<String>, Vec<String>), Exit> {
+    let mut extras = Vec::new();
+    for (at, arg) in args.iter().enumerate() {
+        if !looks_like_option(arg) {
+            return Ok((arg.clone(), extras, args[at + 1..].to_vec()));
+        }
+        if option(arg, &["-h", "--help"]).map_err(|m| error(DESKTOP_USAGE, "recog desktop", &m))?.is_some() {
+            return Err(help(DESKTOP_HELP));
+        }
+        extras.push(arg.clone());
+    }
+    Err(error(DESKTOP_USAGE, "recog desktop", "the following arguments are required: desktop_command"))
+}
+
+/// The subcommand's help and its options.
+fn subcommand_options(subcommand: &str) -> Result<(String, &'static [&'static str]), Exit> {
+    match subcommand {
+        "enable" => Ok((ENABLE_HELP.to_owned(), &["-h", "--help", "--app"])),
+        "status" => Ok((STATUS_HELP.to_owned(), &["-h", "--help", "--json"])),
+        "disable" | "attach" => Ok((plain_help(subcommand), &["-h", "--help"])),
+        other => Err(error(
+            DESKTOP_USAGE,
+            "recog desktop",
+            &format!(
+                "argument desktop_command: invalid choice: {} (choose from enable, disable, attach, status)",
+                recog_core::py::repr(other)
+            ),
+        )),
+    }
+}
+
+/// What the options after the subcommand set.
+#[derive(Default)]
+struct Options {
+    app: Option<String>,
+    json: bool,
+}
+
+/// One argument after the subcommand.
+enum Arg {
+    Extra,
+    Help,
+    Json(Option<String>),
+    App(Option<String>),
+}
+
+fn classify(arg: &str, options: &[&str]) -> Result<Arg, String> {
+    if !looks_like_option(arg) {
+        return Ok(Arg::Extra);
+    }
+    Ok(match option(arg, options)? {
+        Some(("-h" | "--help", _)) => Arg::Help,
+        Some(("--json", inline)) => Arg::Json(inline),
+        Some(("--app", inline)) => Arg::App(inline),
+        _ => Arg::Extra,
+    })
+}
+
+/// The options after the subcommand; what it does not know goes to `extras`.
+fn read_options(
+    rest: &[String],
+    options: &[&str],
+    usage_help: &str,
+    fail: &dyn Fn(&str) -> Exit,
+    extras: &mut Vec<String>,
+) -> Result<Options, Exit> {
+    let mut read = Options::default();
+    let mut at = 0;
+    while at < rest.len() {
+        let arg = &rest[at];
+        at += 1;
+        match classify(arg, options).map_err(|m| fail(&m))? {
+            Arg::Extra => extras.push(arg.clone()),
+            Arg::Help => return Err(help(usage_help)),
+            Arg::Json(inline) => read.json = json_flag(inline).map_err(|m| fail(&m))?,
+            Arg::App(inline) => read.app = Some(app_value(inline, rest, &mut at).map_err(|m| fail(&m))?),
+        }
+    }
+    Ok(read)
+}
+
+/// `--json`, which takes no value.
+fn json_flag(inline: Option<String>) -> Result<bool, String> {
+    match inline {
+        Some(value) => Err(format!("argument --json: ignored explicit argument {}", recog_core::py::repr(&value))),
+        None => Ok(true),
+    }
+}
+
+/// `--app`'s value: `--app=VALUE`, or the next argument unless it is an option.
+fn app_value(inline: Option<String>, rest: &[String], at: &mut usize) -> Result<String, String> {
+    if let Some(value) = inline {
+        return Ok(value);
+    }
+    match rest.get(*at) {
+        Some(value) if !looks_like_option(value) => {
+            *at += 1;
+            Ok(value.clone())
+        }
+        _ => Err("argument --app: expected one argument".to_owned()),
+    }
+}
+
+fn command_of(subcommand: &str, read: Options) -> Result<Command, String> {
+    match subcommand {
+        "enable" => read
+            .app
+            .map(|app| Command::Enable { app })
+            .ok_or_else(|| "the following arguments are required: --app".to_owned()),
+        "status" => Ok(Command::Status { json: read.json }),
+        "disable" => Ok(Command::Disable),
+        _ => Ok(Command::Attach),
+    }
 }
 
 /// `result["state"] + (": " + result["reason"] if result.get("reason") else "")`.
@@ -233,52 +276,64 @@ async fn execute(
     out: &mut String,
 ) -> Result<i32, PyErr> {
     match command {
-        Command::Enable { app } => {
-            let app = processes::application_path(host, app)?;
-            let source = repo_root.join("browser-extension/dist");
-            let (digest, _) = storage::prepare_bundle(&source, root)?;
-            storage::write_json(
-                &root.join("config.json"),
-                &py::obj([
-                    ("enabled", Value::Bool(true)),
-                    ("app", Value::from(app.to_string_lossy().as_ref())),
-                    ("bundle", Value::from(digest)),
-                ]),
-            )?;
-            out.push_str("Автоподключение включено. Оно работает, пока запущен web-сервер Recog.\n");
-        }
-        Command::Disable => {
-            let config = storage::read(&root.join("config.json"))?;
-            storage::write_json(
-                &root.join("config.json"),
-                &py::spread(&config, &py::obj([("enabled", Value::Bool(false))]))?,
-            )?;
-            out.push_str("Автоподключение выключено. Уже загруженное расширение действует до выхода из Толка.\n");
-        }
-        Command::Attach => {
-            let config = storage::read(&root.join("config.json"))?;
-            let raw = worker::path_arg(py::index(&config, "app")?)?;
-            let app = processes::application_path(host, raw)?;
-            let targets = processes::find_targets(host, &app)?;
-            if targets.len() != 1 {
-                return Err(PyErr::value("Нужен ровно один работающий основной процесс выбранного Толка"));
-            }
-            let result = worker::run(host, root, Some(&targets[0]), false).await?;
-            out.push_str(&py::dumps(&result));
-            out.push('\n');
-            let attached = py::index(&result, "state")?.as_str() == Some("attached");
-            return Ok(i32::from(!attached));
-        }
-        Command::Status { json } => {
-            let result = service::status_at(root, host.clock.time());
-            if *json {
-                out.push_str(&py::dumps(&result));
-            } else {
-                out.push_str(&human_status(&result)?);
-            }
-            out.push('\n');
-        }
+        Command::Enable { app } => enable(host, app, root, repo_root, out),
+        Command::Disable => disable(root, out),
+        Command::Attach => attach(host, root, out).await,
+        Command::Status { json } => status(host, root, *json, out),
     }
+}
+
+/// `enable --app APP`: the application checked, the extension snapshotted, both
+/// configured.
+fn enable(host: &Host, app: &str, root: &Path, repo_root: &Path, out: &mut String) -> Result<i32, PyErr> {
+    let app = processes::application_path(host, app)?;
+    let source = repo_root.join("browser-extension/dist");
+    let (digest, _) = storage::prepare_bundle(&source, root)?;
+    storage::write_json(
+        &root.join("config.json"),
+        &py::obj([
+            ("enabled", Value::Bool(true)),
+            ("app", Value::from(app.to_string_lossy().as_ref())),
+            ("bundle", Value::from(digest)),
+        ]),
+    )?;
+    out.push_str("Автоподключение включено. Оно работает, пока запущен web-сервер Recog.\n");
+    Ok(0)
+}
+
+/// `disable`: the rest of the configuration kept.
+fn disable(root: &Path, out: &mut String) -> Result<i32, PyErr> {
+    let config = storage::read(&root.join("config.json"))?;
+    storage::write_json(&root.join("config.json"), &py::spread(&config, &py::obj([("enabled", Value::Bool(false))]))?)?;
+    out.push_str("Автоподключение выключено. Уже загруженное расширение действует до выхода из Толка.\n");
+    Ok(0)
+}
+
+/// `attach`: one worker run on the one main process, 0 when it attached.
+async fn attach(host: &Host, root: &Path, out: &mut String) -> Result<i32, PyErr> {
+    let config = storage::read(&root.join("config.json"))?;
+    let raw = worker::path_arg(py::index(&config, "app")?)?;
+    let app = processes::application_path(host, raw)?;
+    let targets = processes::find_targets(host, &app)?;
+    if targets.len() != 1 {
+        return Err(PyErr::value("Нужен ровно один работающий основной процесс выбранного Толка"));
+    }
+    let result = worker::run(host, root, Some(&targets[0]), false).await?;
+    out.push_str(&py::dumps(&result));
+    out.push('\n');
+    let attached = py::index(&result, "state")?.as_str() == Some("attached");
+    Ok(i32::from(!attached))
+}
+
+/// `status [--json]`.
+fn status(host: &Host, root: &Path, json: bool, out: &mut String) -> Result<i32, PyErr> {
+    let result = service::status_at(root, host.clock.time());
+    if json {
+        out.push_str(&py::dumps(&result));
+    } else {
+        out.push_str(&human_status(&result)?);
+    }
+    out.push('\n');
     Ok(0)
 }
 
