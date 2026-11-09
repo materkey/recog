@@ -16,7 +16,7 @@ interpreter that has pyaec 1.0.1.
 ## Tests
 
 ```bash
-cargo test -p speexdsp-aec --lib --test properties --test cli   # no data needed
+cargo test -p speexdsp-aec --lib --test properties --test cli --test adapted_golden   # no data needed
 cargo test -p speexdsp-aec --doc
 SPEEXDSP_AEC_GOLDEN=/path/to/golden cargo test -p speexdsp-aec --test parity --test fft_parity
 ```
@@ -24,6 +24,10 @@ SPEEXDSP_AEC_GOLDEN=/path/to/golden cargo test -p speexdsp-aec --test parity --t
 The parity tests compare the port with pyaec's own output over 80 generated cases and
 610 resets, and the FFT with `spx_fft`/`spx_ifft` over 4200 frames of 14 sizes. They
 fail when the golden data is missing, so a test that checked nothing cannot pass.
+
+`adapted_golden` is the part of that comparison CI can run: seven cases generated in
+the test, long enough for the filter to adapt, against SHA-256 digests of pyaec's
+output kept in `tests/fixtures/`; the test's documentation says how they were made.
 
 ## Licence
 
