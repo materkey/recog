@@ -21,6 +21,93 @@ enum Back {
     Quote(char),
 }
 
+/// The token being read: its text, and whether a quote was part of it (so that
+/// `''` is a word).
+#[derive(Default)]
+struct Token {
+    text: String,
+    quoted: bool,
+}
+
+impl Token {
+    fn is_word(&self) -> bool {
+        !self.text.is_empty() || self.quoted
+    }
+}
+
+/// What one character does: the next state, or the token is complete.
+enum Step {
+    Next(State),
+    Done,
+}
+
+/// Whitespace ends a word, or keeps the lexer between words.
+fn whitespace(token: &Token) -> Step {
+    if token.is_word() { Step::Done } else { Step::Next(State::Space) }
+}
+
+/// Between words and in a word alike (this lexer has no comments or word
+/// characters to tell them apart).
+fn unquoted(next: Option<char>, token: &mut Token) -> Step {
+    match next {
+        None => Step::Done,
+        Some(c) if WHITESPACE.contains(&c) => whitespace(token),
+        Some(c @ ('\'' | '"')) => Step::Next(State::Quote(c)),
+        Some('\\') => Step::Next(State::Escape { back: Back::Word }),
+        Some(c) => {
+            token.text.push(c);
+            Step::Next(State::Word)
+        }
+    }
+}
+
+fn in_quotes(quote: char, next: Option<char>, token: &mut Token) -> Result<Step, PyErr> {
+    token.quoted = true;
+    match next {
+        None => Err(PyErr::value("No closing quotation")),
+        Some(c) if c == quote => Ok(Step::Next(State::Word)),
+        Some('\\') if quote == '"' => Ok(Step::Next(State::Escape { back: Back::Quote(quote) })),
+        Some(c) => {
+            token.text.push(c);
+            Ok(Step::Next(State::Quote(quote)))
+        }
+    }
+}
+
+fn escaped(back: Back, next: Option<char>, token: &mut Token) -> Result<Step, PyErr> {
+    let Some(c) = next else { return Err(PyErr::value("No escaped character")) };
+    // Within quotes only the quote itself or the escape may be escaped.
+    if let Back::Quote(quote) = back
+        && c != '\\'
+        && c != quote
+    {
+        token.text.push('\\');
+    }
+    token.text.push(c);
+    Ok(Step::Next(match back {
+        Back::Word => State::Word,
+        Back::Quote(quote) => State::Quote(quote),
+    }))
+}
+
+/// `read_token()`: the next word, None at the end of the text.
+fn read_token(chars: &mut std::str::Chars<'_>) -> Result<Option<String>, PyErr> {
+    let mut state = State::Space;
+    let mut token = Token::default();
+    loop {
+        let next = chars.next();
+        let step = match state {
+            State::Space | State::Word => unquoted(next, &mut token),
+            State::Quote(quote) => in_quotes(quote, next, &mut token)?,
+            State::Escape { back } => escaped(back, next, &mut token)?,
+        };
+        match step {
+            Step::Next(next) => state = next,
+            Step::Done => return Ok(token.is_word().then_some(token.text)),
+        }
+    }
+}
+
 /// The words of `text`.
 ///
 /// # Errors
@@ -28,70 +115,10 @@ enum Back {
 pub fn split(text: &str) -> Result<Vec<String>, PyErr> {
     let mut words = Vec::new();
     let mut chars = text.chars();
-    loop {
-        let mut state = State::Space;
-        let mut token = String::new();
-        let mut quoted = false;
-        loop {
-            let next = chars.next();
-            match state {
-                State::Space => match next {
-                    None => break,
-                    Some(c) if WHITESPACE.contains(&c) => {
-                        if !token.is_empty() || quoted {
-                            break;
-                        }
-                    }
-                    Some('\\') => state = State::Escape { back: Back::Word },
-                    Some(c @ ('\'' | '"')) => state = State::Quote(c),
-                    Some(c) => {
-                        token.push(c);
-                        state = State::Word;
-                    }
-                },
-                State::Quote(quote) => {
-                    quoted = true;
-                    match next {
-                        None => return Err(PyErr::value("No closing quotation")),
-                        Some(c) if c == quote => state = State::Word,
-                        Some('\\') if quote == '"' => state = State::Escape { back: Back::Quote(quote) },
-                        Some(c) => token.push(c),
-                    }
-                }
-                State::Escape { back } => {
-                    let Some(c) = next else { return Err(PyErr::value("No escaped character")) };
-                    // Within quotes only the quote itself or the escape may be escaped.
-                    if let Back::Quote(quote) = back
-                        && c != '\\'
-                        && c != quote
-                    {
-                        token.push('\\');
-                    }
-                    token.push(c);
-                    state = match back {
-                        Back::Word => State::Word,
-                        Back::Quote(quote) => State::Quote(quote),
-                    };
-                }
-                State::Word => match next {
-                    None => break,
-                    Some(c) if WHITESPACE.contains(&c) => {
-                        if !token.is_empty() || quoted {
-                            break;
-                        }
-                        state = State::Space;
-                    }
-                    Some(c @ ('\'' | '"')) => state = State::Quote(c),
-                    Some('\\') => state = State::Escape { back: Back::Word },
-                    Some(c) => token.push(c),
-                },
-            }
-        }
-        if token.is_empty() && !quoted {
-            return Ok(words);
-        }
-        words.push(token);
+    while let Some(word) = read_token(&mut chars)? {
+        words.push(word);
     }
+    Ok(words)
 }
 
 #[cfg(test)]
