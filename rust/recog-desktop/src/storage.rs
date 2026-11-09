@@ -68,17 +68,25 @@ pub fn write_json(path: &Path, value: &Value) -> Result<(), PyErr> {
 /// What reading the current files or writing the new one raises.
 pub fn write_status(root: &Path, result: &Value) -> Result<Value, PyErr> {
     let existing = read(&root.join("status.json"))?;
-    if py::get(&existing, "state")?.and_then(Value::as_str) == Some("inspector_unclosed")
-        && py::get(result, "state")?.and_then(Value::as_str) != Some("inspector_unclosed")
-        && py::get(result, "inspector_closed")? != Some(&Value::Bool(true))
-    {
-        let operation = read(&root.join("operation.json"))?;
-        if py::get(&operation, "phase")?.and_then(Value::as_str) != Some("closed") {
-            return Ok(existing);
-        }
+    if replaces_unclosed_warning(&existing, result)? && !operation_closed(root)? {
+        return Ok(existing);
     }
     write_json(&root.join("status.json"), result)?;
     Ok(result.clone())
+}
+
+/// `existing` warns of an unclosed inspector and `result` neither does nor
+/// establishes closure.
+fn replaces_unclosed_warning(existing: &Value, result: &Value) -> Result<bool, PyErr> {
+    Ok(py::get(existing, "state")?.and_then(Value::as_str) == Some("inspector_unclosed")
+        && py::get(result, "state")?.and_then(Value::as_str) != Some("inspector_unclosed")
+        && py::get(result, "inspector_closed")? != Some(&Value::Bool(true)))
+}
+
+/// `operation.json` records its operation closed.
+fn operation_closed(root: &Path) -> Result<bool, PyErr> {
+    let operation = read(&root.join("operation.json"))?;
+    Ok(py::get(&operation, "phase")?.and_then(Value::as_str) == Some("closed"))
 }
 
 fn symlink_error() -> PyErr {
@@ -192,33 +200,47 @@ fn mkdtemp(parent: &Path, prefix: &str) -> Result<PathBuf, PyErr> {
 /// `ValueError` for an unbuilt extension, a build changing meanwhile or a damaged
 /// snapshot; `OSError` for the copy.
 pub fn prepare_bundle(source: &Path, root: &Path) -> Result<(String, PathBuf), PyErr> {
-    for name in ["manifest.json", "injected.js", "src/audio-worklet/downsampler.js"] {
-        if !source.join(name).is_file() {
-            return Err(PyErr::value("Build browser-extension before enabling desktop integration"));
-        }
+    let built = ["manifest.json", "injected.js", "src/audio-worklet/downsampler.js"];
+    if !built.iter().all(|name| source.join(name).is_file()) {
+        return Err(PyErr::value("Build browser-extension before enabling desktop integration"));
     }
     let digest = bundle_digest(source)?;
     let parent = root.join("extensions");
     paths::mkdir_parents(&parent, 0o700).map_err(|e| PyErr::os(&e, Some(&parent)))?;
     let target = parent.join(&digest);
     if !target.exists() {
-        let temporary = mkdtemp(&parent, "stage-")?;
-        let result = (|| {
-            copy_tree(source, &temporary)?;
-            if bundle_digest(&temporary)? != digest {
-                return Err(PyErr::value("Extension build changed while taking snapshot"));
-            }
-            fs::rename(&temporary, &target).map_err(|e| PyErr::os(&e, Some(&temporary)))
-        })();
-        if temporary.exists() {
-            let _ = fs::remove_dir_all(&temporary);
-        }
-        result?;
+        snapshot(source, &parent, &target, &digest)?;
     }
     if bundle_digest(&target)? != digest {
         return Err(PyErr::value("Extension snapshot integrity check failed"));
     }
     Ok((digest, target))
+}
+
+/// The copy of `source` staged under `parent` and renamed to `target` once it has
+/// `digest`; the stage is removed whatever happens.
+fn snapshot(source: &Path, parent: &Path, target: &Path, digest: &str) -> Result<(), PyErr> {
+    let temporary = mkdtemp(parent, "stage-")?;
+    let result = (|| {
+        copy_tree(source, &temporary)?;
+        if bundle_digest(&temporary)? != digest {
+            return Err(PyErr::value("Extension build changed while taking snapshot"));
+        }
+        fs::rename(&temporary, target).map_err(|e| PyErr::os(&e, Some(&temporary)))
+    })();
+    if temporary.exists() {
+        let _ = fs::remove_dir_all(&temporary);
+    }
+    result
+}
+
+/// `config.get("bundle", "")`, as `len()` takes it.
+fn configured_digest(config: &Value) -> Result<&str, PyErr> {
+    match py::get(config, "bundle")? {
+        None => Ok(""),
+        Some(Value::Str(s)) => Ok(s.as_str()),
+        Some(other) => Err(PyErr::type_error(format!("object of type '{}' has no len()", other.type_name()))),
+    }
 }
 
 /// `validate_bundle(root, config)`: the snapshot `config["bundle"]` names, intact.
@@ -227,13 +249,7 @@ pub fn prepare_bundle(source: &Path, root: &Path) -> Result<(String, PathBuf), P
 /// `ValueError` for a malformed identifier or a damaged snapshot, the Python error of
 /// a malformed configuration.
 pub fn validate_bundle(root: &Path, config: &Value) -> Result<PathBuf, PyErr> {
-    let digest = match py::get(config, "bundle")? {
-        None => "",
-        Some(Value::Str(s)) => s.as_str(),
-        Some(other) => {
-            return Err(PyErr::type_error(format!("object of type '{}' has no len()", other.type_name())));
-        }
-    };
+    let digest = configured_digest(config)?;
     if digest.chars().count() != 64 || digest.chars().any(|c| !"0123456789abcdef".contains(c)) {
         return Err(PyErr::value("Invalid extension snapshot identifier"));
     }
@@ -245,4 +261,29 @@ pub fn validate_bundle(root: &Path, config: &Value) -> Result<PathBuf, PyErr> {
         return Err(PyErr::value("Extension snapshot integrity check failed"));
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_changing_during_the_copy_when_snapshotted_then_refused_and_stage_removed() {
+        // given: a digest the copy cannot have, as when the build changed meanwhile
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("dist");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("injected.js"), "built").unwrap();
+        let parent = dir.path().join("extensions");
+        fs::create_dir_all(&parent).unwrap();
+        let target = parent.join("digest");
+        // when
+        let error = snapshot(&source, &parent, &target, "digest").unwrap_err();
+        // then
+        assert_eq!(error.described(), "ValueError: Extension build changed while taking snapshot");
+        assert_eq!(fs::read_dir(&parent).unwrap().count(), 0);
+        snapshot(&source, &parent, &target, &bundle_digest(&source).unwrap()).unwrap();
+        assert_eq!(fs::read_to_string(target.join("injected.js")).unwrap(), "built");
+        assert_eq!(fs::read_dir(&parent).unwrap().count(), 1);
+    }
 }
