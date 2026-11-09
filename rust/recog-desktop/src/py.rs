@@ -48,6 +48,45 @@ const VALUE_ERRORS: [&str; 5] =
     ["ValueError", "JSONDecodeError", "UnicodeDecodeError", "UnicodeEncodeError", "InvalidFileException"];
 const PSUTIL_ERRORS: [&str; 3] = ["NoSuchProcess", "AccessDenied", "ZombieProcess"];
 
+/// The `OSError` subclass of each errno Python maps to one; any other is `OSError`.
+const ERRNO_CLASSES: [(Errno, &str); 18] = [
+    (Errno::ENOENT, "FileNotFoundError"),
+    (Errno::EACCES, "PermissionError"),
+    (Errno::EPERM, "PermissionError"),
+    (Errno::ENOTDIR, "NotADirectoryError"),
+    (Errno::EISDIR, "IsADirectoryError"),
+    (Errno::EEXIST, "FileExistsError"),
+    (Errno::ESRCH, "ProcessLookupError"),
+    (Errno::EAGAIN, "BlockingIOError"),
+    (Errno::EALREADY, "BlockingIOError"),
+    (Errno::EINPROGRESS, "BlockingIOError"),
+    (Errno::ETIMEDOUT, "TimeoutError"),
+    (Errno::ECONNREFUSED, "ConnectionRefusedError"),
+    (Errno::ECONNRESET, "ConnectionResetError"),
+    (Errno::ECONNABORTED, "ConnectionAbortedError"),
+    (Errno::EINTR, "InterruptedError"),
+    (Errno::ECHILD, "ChildProcessError"),
+    (Errno::EPIPE, "BrokenPipeError"),
+    (Errno::ESHUTDOWN, "BrokenPipeError"),
+];
+
+fn os_error_class(code: i32) -> &'static str {
+    let errno = Errno::from_raw(code);
+    ERRNO_CLASSES.iter().find(|(known, _)| *known == errno).map_or("OSError", |(_, class)| class)
+}
+
+/// `str(exc)`: `[Errno N] text`, with `: 'path'` when the error is about one.
+fn os_error_text(error: &io::Error, code: i32, path: Option<&Path>) -> String {
+    match path {
+        Some(path) => recog_core::paths::os_error_message(error, path),
+        None => {
+            let text = error.to_string();
+            let strerror = text.strip_suffix(&format!(" (os error {code})")).unwrap_or(&text).to_owned();
+            format!("[Errno {code}] {strerror}")
+        }
+    }
+}
+
 impl PyErr {
     #[must_use]
     pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
@@ -100,32 +139,7 @@ impl PyErr {
         let Some(code) = error.raw_os_error() else {
             return Self::new("OSError", error.to_string());
         };
-        let kind = match Errno::from_raw(code) {
-            Errno::ENOENT => "FileNotFoundError",
-            Errno::EACCES | Errno::EPERM => "PermissionError",
-            Errno::ENOTDIR => "NotADirectoryError",
-            Errno::EISDIR => "IsADirectoryError",
-            Errno::EEXIST => "FileExistsError",
-            Errno::ESRCH => "ProcessLookupError",
-            Errno::EAGAIN | Errno::EALREADY | Errno::EINPROGRESS => "BlockingIOError",
-            Errno::ETIMEDOUT => "TimeoutError",
-            Errno::ECONNREFUSED => "ConnectionRefusedError",
-            Errno::ECONNRESET => "ConnectionResetError",
-            Errno::ECONNABORTED => "ConnectionAbortedError",
-            Errno::EINTR => "InterruptedError",
-            Errno::ECHILD => "ChildProcessError",
-            Errno::EPIPE | Errno::ESHUTDOWN => "BrokenPipeError",
-            _ => "OSError",
-        };
-        let message = match path {
-            Some(path) => recog_core::paths::os_error_message(error, path),
-            None => {
-                let text = error.to_string();
-                let strerror = text.strip_suffix(&format!(" (os error {code})")).unwrap_or(&text).to_owned();
-                format!("[Errno {code}] {strerror}")
-            }
-        };
-        Self::new(kind, message)
+        Self::new(os_error_class(code), os_error_text(error, code, path))
     }
 
     /// `isinstance(exc, OSError)`.
