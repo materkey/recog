@@ -6,6 +6,7 @@
 //! the pump's wait on "a helper line or a bridge message" cancel-safe.
 
 use std::future::Future;
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -85,46 +86,88 @@ async fn drive(
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut awaiting_pong: Option<tokio::time::Instant> = None;
     let lost = loop {
-        let pong_deadline = async {
-            match awaiting_pong {
-                Some(sent) => tokio::time::sleep_until(sent + keepalive.ping_timeout).await,
-                None => std::future::pending().await,
-            }
+        let pong_deadline = pong_due(awaiting_pong, keepalive.ping_timeout);
+        let flow = tokio::select! {
+            message = socket.next() => on_socket_message(message, &incoming, &mut awaiting_pong).await,
+            frame = outgoing.recv() => on_outgoing(frame, &mut socket).await,
+            _ = ping.tick(), if awaiting_pong.is_none() => send_ping(&mut socket, &mut awaiting_pong).await,
+            () = pong_deadline => ControlFlow::Break(Some("keepalive ping timeout".into())),
         };
-        tokio::select! {
-            message = socket.next() => match message {
-                Some(Ok(Message::Text(text))) => {
-                    if incoming.send(Incoming::Message(text.as_bytes().to_vec())).await.is_err() { break None; }
-                }
-                Some(Ok(Message::Binary(bytes))) => {
-                    if incoming.send(Incoming::Message(bytes.to_vec())).await.is_err() { break None; }
-                }
-                Some(Ok(Message::Pong(_))) => awaiting_pong = None,
-                Some(Ok(Message::Close(frame))) => {
-                    break Some(frame.map_or_else(|| "connection closed".into(), |f| format!("received {} ({})", u16::from(f.code), f.reason)));
-                }
-                Some(Ok(_)) => {}
-                Some(Err(error)) => break Some(error.to_string()),
-                None => break Some("connection closed".into()),
-            },
-            frame = outgoing.recv() => match frame {
-                Some(text) => if let Err(error) = socket.send(Message::text(text)).await { break Some(error.to_string()); },
-                // The pump is done with the link: close it.
-                None => {
-                    let _ = socket.close(None).await;
-                    break None;
-                }
-            },
-            _ = ping.tick(), if awaiting_pong.is_none() => {
-                if let Err(error) = socket.send(Message::Ping(Vec::new().into())).await { break Some(error.to_string()); }
-                awaiting_pong = Some(tokio::time::Instant::now());
-            }
-            () = pong_deadline => break Some("keepalive ping timeout".into()),
+        if let ControlFlow::Break(reason) = flow {
+            break reason;
         }
     };
     if let Some(reason) = lost {
         let _ = incoming.send(Incoming::Lost(reason)).await;
     }
+}
+
+/// What a turn of [`drive`] decided: go on, or stop with the reason the link is lost
+/// (None when the other end of the channels is gone).
+type Flow = ControlFlow<Option<String>>;
+
+/// Resolves when the ping sent at `awaiting` has gone unanswered for `timeout`.
+async fn pong_due(awaiting: Option<tokio::time::Instant>, timeout: Duration) {
+    match awaiting {
+        Some(sent) => tokio::time::sleep_until(sent + timeout).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// A message from the bridge: data to `incoming`, a pong ends the wait for one.
+async fn on_socket_message(
+    message: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+    incoming: &mpsc::Sender<Incoming>,
+    awaiting_pong: &mut Option<tokio::time::Instant>,
+) -> Flow {
+    match message {
+        Some(Ok(Message::Text(text))) => forward(incoming, text.as_bytes().to_vec()).await,
+        Some(Ok(Message::Binary(bytes))) => forward(incoming, bytes.to_vec()).await,
+        Some(Ok(Message::Pong(_))) => {
+            *awaiting_pong = None;
+            ControlFlow::Continue(())
+        }
+        Some(Ok(Message::Close(frame))) => {
+            ControlFlow::Break(Some(frame.map_or_else(
+                || "connection closed".into(),
+                |f| format!("received {} ({})", u16::from(f.code), f.reason),
+            )))
+        }
+        Some(Ok(_)) => ControlFlow::Continue(()),
+        Some(Err(error)) => ControlFlow::Break(Some(error.to_string())),
+        None => ControlFlow::Break(Some("connection closed".into())),
+    }
+}
+
+/// Data for the pump; a pump that is gone stops the link quietly.
+async fn forward(incoming: &mpsc::Sender<Incoming>, bytes: Vec<u8>) -> Flow {
+    match incoming.send(Incoming::Message(bytes)).await {
+        Ok(()) => ControlFlow::Continue(()),
+        Err(_) => ControlFlow::Break(None),
+    }
+}
+
+/// A frame from the pump to the bridge; the pump done with the link closes it.
+async fn on_outgoing(frame: Option<String>, socket: &mut Socket) -> Flow {
+    match frame {
+        Some(text) => match socket.send(Message::text(text)).await {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(error) => ControlFlow::Break(Some(error.to_string())),
+        },
+        None => {
+            let _ = socket.close(None).await;
+            ControlFlow::Break(None)
+        }
+    }
+}
+
+/// The keepalive ping; its pong is awaited from now.
+async fn send_ping(socket: &mut Socket, awaiting_pong: &mut Option<tokio::time::Instant>) -> Flow {
+    if let Err(error) = socket.send(Message::Ping(Vec::new().into())).await {
+        return ControlFlow::Break(Some(error.to_string()));
+    }
+    *awaiting_pong = Some(tokio::time::Instant::now());
+    ControlFlow::Continue(())
 }
 
 /// Why the pump stopped.
@@ -196,33 +239,61 @@ pub async fn pump(
     logger: &Logger,
 ) -> PumpError {
     loop {
-        tokio::select! {
+        let stopped = tokio::select! {
             // A message that arrived with a line is handled first, as in Python.
             biased;
-            message = link.incoming.recv() => match message {
-                Some(Incoming::Message(raw)) => {
-                    if let Err(error) = on_message(&raw, session, logger, now()) { return error; }
-                }
-                Some(Incoming::Lost(reason)) => return PumpError::Link(reason),
-                None => return PumpError::Link("connection closed".into()),
-            },
-            line = lines.next_line() => match line {
-                Ok(Some(raw)) => match on_line(&raw, session, log, now()) {
-                    Ok(frames) => {
-                        for frame in frames {
-                            if link.outgoing.send(frame).await.is_err() {
-                                return lost_reason(link).await;
-                            }
-                        }
-                    }
-                    Err(error) => return error,
-                },
-                Ok(None) => return PumpError::HelperGone,
-                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => return PumpError::Fatal(error.to_string()),
-                Err(error) => return PumpError::Link(error.to_string()),
-            },
+            message = link.incoming.recv() => on_incoming(message, session, logger),
+            line = lines.next_line() => on_helper_line(line, link, session, log).await,
+        };
+        if let Some(error) = stopped {
+            return error;
         }
     }
+}
+
+/// A bridge message, or the end of the link; Some stops the pump.
+fn on_incoming(message: Option<Incoming>, session: &mut ZoomAppSession, logger: &Logger) -> Option<PumpError> {
+    match message {
+        Some(Incoming::Message(raw)) => on_message(&raw, session, logger, now()).err(),
+        Some(Incoming::Lost(reason)) => Some(PumpError::Link(reason)),
+        None => Some(PumpError::Link("connection closed".into())),
+    }
+}
+
+/// A helper line, the helper's end, or a failed read; Some stops the pump.
+async fn on_helper_line(
+    line: std::io::Result<Option<Vec<u8>>>,
+    link: &mut BridgeLink,
+    session: &mut ZoomAppSession,
+    log: &mut StatusLog,
+) -> Option<PumpError> {
+    match line {
+        Ok(Some(raw)) => match on_line(&raw, session, log, now()) {
+            Ok(frames) => send_frames(link, frames).await,
+            Err(error) => Some(error),
+        },
+        Ok(None) => Some(PumpError::HelperGone),
+        Err(error) => Some(read_error(&error)),
+    }
+}
+
+/// An oversized line is one Python raises on; any other read error is a lost link.
+fn read_error(error: &std::io::Error) -> PumpError {
+    if error.kind() == std::io::ErrorKind::InvalidData {
+        PumpError::Fatal(error.to_string())
+    } else {
+        PumpError::Link(error.to_string())
+    }
+}
+
+/// The frames to the bridge; a bridge that stopped reading reports why.
+async fn send_frames(link: &mut BridgeLink, frames: Vec<String>) -> Option<PumpError> {
+    for frame in frames {
+        if link.outgoing.send(frame).await.is_err() {
+            return Some(lost_reason(link).await);
+        }
+    }
+    None
 }
 
 async fn lost_reason(link: &mut BridgeLink) -> PumpError {

@@ -166,19 +166,26 @@ fn str_repr(text: &str) -> String {
 
 /// One character of `repr(str)` quoted with `quote`.
 fn push_escaped(out: &mut String, c: char, quote: char) {
+    if let Some(escape) = named_escape(c) {
+        out.push_str(escape);
+    } else if c == quote {
+        out.push('\\');
+        out.push(c);
+    } else if (c as u32) < 0x20 || c as u32 == 0x7f {
+        let _ = write!(out, "\\x{:02x}", c as u32);
+    } else {
+        out.push(c);
+    }
+}
+
+/// The backslash escapes `repr(str)` writes by name.
+fn named_escape(c: char) -> Option<&'static str> {
     match c {
-        '\\' => out.push_str("\\\\"),
-        '\n' => out.push_str("\\n"),
-        '\r' => out.push_str("\\r"),
-        '\t' => out.push_str("\\t"),
-        c if c == quote => {
-            out.push('\\');
-            out.push(c);
-        }
-        c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-            let _ = write!(out, "\\x{:02x}", c as u32);
-        }
-        c => out.push(c),
+        '\\' => Some("\\\\"),
+        '\n' => Some("\\n"),
+        '\r' => Some("\\r"),
+        '\t' => Some("\\t"),
+        _ => None,
     }
 }
 
@@ -287,6 +294,19 @@ mod tests {
         assert_eq!(display(&json!(["it's \"q\""])), r#"['it\'s "q"']"#);
         assert_eq!(display(&json!(["say \"hi\""])), r#"['say "hi"']"#);
         assert_eq!(display(&json!({"k": [null, true, 1.5, 2]})), "{'k': [None, True, 1.5, 2]}");
+    }
+
+    #[test]
+    fn given_each_json_type_when_iterated_or_read_as_text_then_python_names_its_type() {
+        assert_eq!(items(&json!(true)).unwrap_err().0, "'bool' object is not iterable");
+        assert_eq!(items(&json!(null)).unwrap_err().0, "'NoneType' object is not iterable");
+        assert_eq!(items(&json!(2.5)).unwrap_err().0, "'float' object is not iterable");
+        assert_eq!(items(&json!(2)).unwrap_err().0, "'int' object is not iterable");
+        assert_eq!(text(&json!("a"), "lower"), Ok("a"));
+        assert_eq!(text(&json!([]), "lower").unwrap_err().0, "'list' object has no attribute 'lower'");
+        assert_eq!(text(&json!({}), "lower").unwrap_err().0, "'dict' object has no attribute 'lower'");
+        assert_eq!(len(&json!(7)).unwrap_err().0, "object of type 'int' has no len()");
+        assert_eq!(index(&json!(false), 0).unwrap_err().0, "'bool' object is not subscriptable");
     }
 
     #[test]
