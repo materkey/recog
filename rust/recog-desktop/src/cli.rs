@@ -337,6 +337,16 @@ mod tests {
     }
 
     #[test]
+    fn shared_prefix_when_option_looked_up_then_ambiguous_like_argparse() {
+        // given
+        let options = ["-h", "--json", "--jump"];
+        // when / then
+        assert_eq!(option("--j", &options), Err("ambiguous option: --j could match --json, --jump".to_owned()));
+        assert_eq!(option("--ju=1", &options), Ok(Some(("--jump", Some("1".to_owned())))));
+        assert_eq!(option("-x", &options), Ok(None));
+    }
+
+    #[test]
     fn reason_present_or_not_when_status_rendered_then_human_line() {
         // given
         let with = py::obj([("state", Value::from("waiting")), ("reason", Value::from("cleanup_failed"))]);
