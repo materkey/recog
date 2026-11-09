@@ -18,7 +18,8 @@ use recog_zoom::helper_app::{CommandOutcome, HELPER_SOURCE, Toolchain};
 use recog_zoom::helper_link::{HelperLines, Launcher, helper_lines};
 use recog_zoom::log::{Logger, StatusLog};
 use recog_zoom::run::{
-    Options, RunError, Timing, run_from, run_until_interrupted, run_with, supervise, supervise_blocking,
+    Options, RunError, Timing, run_from, run_until_interrupted, run_with, spawn_source_thread, supervise,
+    supervise_blocking,
 };
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
@@ -660,6 +661,18 @@ fn given_source_fails_when_supervised_on_a_runtime_of_its_own_then_it_starts_ove
 
     assert_eq!(*attempts.lock().unwrap(), 3);
     assert_eq!(lines_of(&buffer)[1], "[zoom-app] stopped: no compiler; starting over in 0 s");
+}
+
+#[test]
+fn given_a_body_when_started_in_the_source_thread_then_it_runs_there_with_the_logger() {
+    let (logger, buffer) = Logger::buffer();
+
+    let thread = spawn_source_thread(logger, |logger| {
+        logger.line(&format!("running in {}", std::thread::current().name().unwrap_or("an unnamed thread")));
+    });
+
+    thread.expect("the source thread starts").join().unwrap();
+    assert_eq!(lines_of(&buffer), ["[zoom-app] running in zoom-app"]);
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -226,11 +226,23 @@ pub fn spawn_in_background(options: Options) -> Option<std::thread::JoinHandle<(
     }
     #[cfg(target_os = "macos")]
     {
-        let thread = std::thread::Builder::new().name("zoom-app".into()).spawn(move || {
-            supervise_blocking(|| run(&options, &logger), options.timing.restart, &logger, std::future::pending())
-        });
-        thread.inspect_err(|error| Logger::stderr().line(&format!("cannot start the source thread: {error}"))).ok()
+        spawn_source_thread(logger, move |logger| {
+            supervise_blocking(|| run(&options, logger), options.timing.restart, logger, std::future::pending());
+        })
     }
+}
+
+/// Run `body` with `logger` in the source thread (`zoom-app`); `None`, the reason
+/// logged, when the thread cannot be started.
+pub fn spawn_source_thread(
+    logger: Logger,
+    body: impl FnOnce(&Logger) + Send + 'static,
+) -> Option<std::thread::JoinHandle<()>> {
+    let thread = std::thread::Builder::new().name("zoom-app".into()).spawn({
+        let logger = logger.clone();
+        move || body(&logger)
+    });
+    thread.inspect_err(|error| logger.line(&format!("cannot start the source thread: {error}"))).ok()
 }
 
 /// [`supervise`] on a runtime of its own, blocking the calling thread until `stop`
