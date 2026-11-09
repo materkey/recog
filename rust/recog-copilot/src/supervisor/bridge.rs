@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use recog_core::protocol;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc};
@@ -98,8 +98,8 @@ async fn connect(url: &str) -> Result<Socket, BridgeError> {
 /// The writing half: the statuses queued by the supervisor, and a keepalive ping
 /// every 20 s; a pong not back within 20 s, or a ping that cannot be sent, wakes
 /// `broken`.
-async fn write_frames(
-    mut sink: futures_util::stream::SplitSink<Socket, Message>,
+async fn write_frames<S: Sink<Message, Error = tungstenite::Error> + Unpin>(
+    mut sink: S,
     mut rx: mpsc::UnboundedReceiver<Message>,
     ping_sent: Rc<Cell<Option<Instant>>>,
     broken: Rc<Notify>,
@@ -114,20 +114,29 @@ async fn write_frames(
                 }
             }
             _ = ping.tick() => {
-                if ping_sent.get().is_some_and(|sent| sent.elapsed() >= PING_TIMEOUT) {
+                if !keepalive_tick(&mut sink, &ping_sent).await {
                     broken.notify_one();
                     break;
-                }
-                if ping_sent.get().is_none() {
-                    ping_sent.set(Some(Instant::now()));
-                    if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
-                        broken.notify_one();
-                        break;
-                    }
                 }
             }
         }
     }
+}
+
+/// One keepalive tick: a ping when none is awaited. False when the awaited pong is
+/// overdue or the ping cannot be sent.
+async fn keepalive_tick<S: Sink<Message, Error = tungstenite::Error> + Unpin>(
+    sink: &mut S,
+    ping_sent: &Cell<Option<Instant>>,
+) -> bool {
+    if ping_sent.get().is_some_and(|sent| sent.elapsed() >= PING_TIMEOUT) {
+        return false;
+    }
+    if ping_sent.get().is_none() {
+        ping_sent.set(Some(Instant::now()));
+        return sink.send(Message::Ping(Vec::new().into())).await.is_ok();
+    }
+    true
 }
 
 /// The reading half: frames to the supervisor until the connection ends.
@@ -167,4 +176,148 @@ fn close_result(frame: Option<tungstenite::protocol::CloseFrame>) -> Result<(), 
     }
     let frame = frame.map(|f| format!("received {} ({})", u16::from(f.code), f.reason)).unwrap_or_default();
     Err(BridgeError { kind: "ConnectionClosedError", message: frame })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    type Sent = Rc<RefCell<Vec<Message>>>;
+
+    /// A sink that records what it is sent, or refuses every message.
+    struct TestSink {
+        sent: Sent,
+        fails: bool,
+    }
+
+    impl Sink<Message> for TestSink {
+        type Error = tungstenite::Error;
+
+        fn poll_ready(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: std::pin::Pin<&mut Self>, message: Message) -> Result<(), Self::Error> {
+            if self.fails {
+                return Err(tungstenite::Error::ConnectionClosed);
+            }
+            self.sent.borrow_mut().push(message);
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    fn sink(fails: bool) -> (TestSink, Sent) {
+        let sent: Sent = Rc::default();
+        (TestSink { sent: sent.clone(), fails }, sent)
+    }
+
+    fn was_woken(broken: &Notify) -> bool {
+        futures_util::FutureExt::now_or_never(broken.notified()).is_some()
+    }
+
+    fn ping() -> Message {
+        Message::Ping(Vec::new().into())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_queued_status_when_the_writer_runs_then_it_is_sent_and_a_closed_queue_ends_it() {
+        // given
+        let (sink, sent) = sink(false);
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(Message::text("status")).unwrap();
+        drop(tx);
+        let broken = Rc::new(Notify::new());
+        let start = Instant::now();
+        // when
+        write_frames(sink, rx, Rc::default(), broken.clone()).await;
+        // then
+        assert_eq!(*sent.borrow(), [Message::text("status")]);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        assert!(!was_woken(&broken));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_status_the_sink_refuses_when_the_writer_runs_then_it_carries_on_to_the_queue_end() {
+        // given
+        let (sink, _sent) = sink(true);
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(Message::text("status")).unwrap();
+        tx.send(Message::text("next")).unwrap();
+        drop(tx);
+        let broken = Rc::new(Notify::new());
+        let start = Instant::now();
+        // when
+        write_frames(sink, rx, Rc::default(), broken.clone()).await;
+        // then: ended by the closed queue, not by a keepalive failure
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        assert!(!was_woken(&broken));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_pong_when_two_ping_intervals_pass_then_one_ping_was_sent_and_broken_is_woken() {
+        // given
+        let (sink, sent) = sink(false);
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let broken = Rc::new(Notify::new());
+        let start = Instant::now();
+        // when
+        write_frames(sink, rx, Rc::default(), broken.clone()).await;
+        // then
+        assert_eq!(*sent.borrow(), [ping()]);
+        assert_eq!(start.elapsed(), PING_INTERVAL * 2);
+        assert!(was_woken(&broken));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pong_before_the_next_tick_when_the_writer_runs_then_it_pings_again() {
+        // given
+        let (sink, sent) = sink(false);
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let ping_sent: Rc<Cell<Option<Instant>>> = Rc::default();
+        let broken = Rc::new(Notify::new());
+        let start = Instant::now();
+        let reader = async {
+            tokio::time::sleep(PING_INTERVAL + PING_INTERVAL / 2).await;
+            ping_sent.set(None);
+        };
+        // when
+        tokio::join!(write_frames(sink, rx, ping_sent.clone(), broken.clone()), reader);
+        // then: pings at 20 s and 40 s, the second pong never came by 60 s
+        assert_eq!(*sent.borrow(), [ping(), ping()]);
+        assert_eq!(start.elapsed(), PING_INTERVAL * 3);
+        assert!(was_woken(&broken));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_ping_the_sink_refuses_when_the_first_tick_comes_then_broken_is_woken_at_once() {
+        // given
+        let (sink, _sent) = sink(true);
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let broken = Rc::new(Notify::new());
+        let start = Instant::now();
+        // when
+        write_frames(sink, rx, Rc::default(), broken.clone()).await;
+        // then
+        assert_eq!(start.elapsed(), PING_INTERVAL);
+        assert!(was_woken(&broken));
+    }
 }
