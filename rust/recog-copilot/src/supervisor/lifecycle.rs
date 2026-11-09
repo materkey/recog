@@ -31,18 +31,6 @@ pub enum State {
     Grace,
 }
 
-impl State {
-    /// The Python enum value.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            State::Idle => "idle",
-            State::Spawning => "spawning",
-            State::Running => "running",
-            State::Grace => "grace",
-        }
-    }
-}
-
 /// An output of the machine, executed by the supervisor glue.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
