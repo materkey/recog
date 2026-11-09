@@ -78,6 +78,8 @@ pub struct FakeFactory {
     pub settings: Arc<Mutex<Vec<ResolvedTask>>>,
     /// Runs before each answer (e.g. deleting the meeting meanwhile).
     pub before_answer: Arc<Mutex<Option<Hook>>>,
+    /// Providers whose CLI is "not installed": creating them fails with `NotFound`.
+    pub missing: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeFactory {
@@ -87,6 +89,7 @@ impl FakeFactory {
             prompts: Arc::new(Mutex::new(Vec::new())),
             settings: Arc::new(Mutex::new(Vec::new())),
             before_answer: Arc::new(Mutex::new(None)),
+            missing: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -142,6 +145,9 @@ impl ProviderFactory for FakeFactory {
     ) -> Result<Box<dyn AiProvider>, AiError> {
         self.settings.lock().unwrap().push(settings.clone());
         let key = provider.unwrap_or(settings.provider()).to_owned();
+        if self.missing.lock().unwrap().contains(&key) {
+            return Err(AiError::NotFound(format!("{key} CLI not found")));
+        }
         let model =
             if key == "claude" { "model-x".to_owned() } else { settings.models.get(&key).cloned().unwrap_or_default() };
         Ok(Box::new(FakeProvider { key, model, factory: self.clone() }))
