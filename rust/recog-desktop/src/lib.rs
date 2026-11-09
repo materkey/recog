@@ -7,10 +7,10 @@
 //! `recog-desktop` binary). `recog/desktop/bootstrap.js` stays JavaScript and is
 //! embedded unchanged.
 //!
-//! The files under `<data dir>/desktop/` are Python's byte for byte, so either side
-//! can take over from the other: `tests/differential.rs` runs the Python modules on
-//! the same scripted processes and fake inspector and compares the files, results,
-//! messages and the conversation with the inspector. Every OS query goes through
+//! The files under `<data dir>/desktop/` are Python's byte for byte, so an installation
+//! moved from the Python modules keeps its state; `tests/ported.rs` holds the answers
+//! the Python modules gave on scripted processes and a fake inspector, kept since the
+//! Python side was deleted. Every OS query goes through
 //! [`host::Host`], which tests replace as the Python tests monkeypatch psutil.
 //!
 //! Known differences from Python:
