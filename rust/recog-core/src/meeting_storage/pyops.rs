@@ -225,6 +225,34 @@ mod tests {
     }
 
     #[test]
+    fn stored_counts_of_each_type_when_read_as_int_then_converted_or_failed_as_python_int() {
+        // given / when / then
+        assert_eq!(to_int(&Value::Int(7)), Ok(7));
+        assert_eq!(to_int(&Value::Bool(true)), Ok(1));
+        assert_eq!(to_int(&Value::Float(-2.9)), Ok(-2));
+        assert_eq!(to_int(&Value::from(" 12 ")), Ok(12));
+        assert_eq!(to_int(&Value::Int(i128::MAX)), Err(StorageError::Value("integer out of range".into())));
+        assert_eq!(
+            to_int(&Value::Float(f64::NAN)),
+            Err(StorageError::Value("cannot convert float NaN to integer".into()))
+        );
+        assert_eq!(
+            to_int(&Value::Float(f64::INFINITY)),
+            Err(StorageError::Value("cannot convert float infinity to integer".into()))
+        );
+        assert_eq!(
+            to_int(&Value::from("many")),
+            Err(StorageError::Value("invalid literal for int() with base 10: 'many'".into()))
+        );
+        assert_eq!(
+            to_int(&Value::Null),
+            Err(StorageError::Type(
+                "int() argument must be a string, a bytes-like object or a real number, not 'NoneType'".into()
+            ))
+        );
+    }
+
+    #[test]
     fn descending_sort_is_stable_and_refuses_mixed_keys() {
         // given
         let mut items = vec![("b", 1), ("a", 2), ("b", 3)];
