@@ -9,7 +9,7 @@
 use crate::install_config::InstallConfig;
 use crate::platforms::{BUILTIN_HOSTS, in_builtin_wildcard_domain};
 use crate::py;
-use crate::url::urlsplit;
+use crate::url::{SplitResult, urlsplit};
 
 /// The web UI on port 9080, admitted beside the built-in conference hosts.
 pub const WEBAPP_ORIGINS: [&str; 2] = ["http://127.0.0.1:9080", "http://localhost:9080"];
@@ -38,32 +38,41 @@ pub fn origin_allowed(origin: Option<&str>, extra: &[String]) -> bool {
     }
     // Wildcard domains: parse the hostname — a raw suffix check on the origin string
     // would admit https://evil-ktalk.ru.
-    let Ok(parts) = urlsplit(origin) else { return false };
-    let Ok(port) = parts.port() else { return false };
-    let hostname = parts.hostname();
-    if parts.scheme != "https" {
-        return false;
+    wildcard_candidate(origin).is_some_and(|hostname| in_builtin_wildcard_domain(&hostname))
+}
+
+/// The hostname of a bare `https://host[:443]` origin made of DNS labels, the only
+/// shape a wildcard domain admits.
+fn wildcard_candidate(origin: &str) -> Option<String> {
+    let parts = urlsplit(origin).ok()?;
+    let port = parts.port().ok()?;
+    if !is_bare_https(&parts, port) {
+        return None;
     }
-    if parts.username().is_some()
-        || parts.password().is_some()
-        || !parts.path.is_empty()
-        || !parts.query.is_empty()
-        || !parts.fragment.is_empty()
-        || !matches!(port, None | Some(443))
-    {
-        return false;
-    }
-    let Some(hostname) = hostname.filter(|h| !h.is_empty() && h.chars().count() <= 253) else { return false };
-    let label_ok = |label: &str| {
-        let b = label.as_bytes();
-        !b.is_empty()
-            && label.chars().count() <= 63
-            && label.is_ascii()
-            && b[0].is_ascii_alphanumeric()
-            && b[b.len() - 1].is_ascii_alphanumeric()
-            && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-')
-    };
-    hostname.split('.').all(label_ok) && in_builtin_wildcard_domain(&hostname)
+    let hostname = parts.hostname().filter(|h| !h.is_empty() && h.chars().count() <= 253)?;
+    hostname.split('.').all(is_dns_label).then_some(hostname)
+}
+
+/// `https`, on the default port, with no user, path, query or fragment.
+fn is_bare_https(parts: &SplitResult, port: Option<u32>) -> bool {
+    parts.scheme == "https"
+        && parts.username().is_none()
+        && parts.password().is_none()
+        && parts.path.is_empty()
+        && parts.query.is_empty()
+        && parts.fragment.is_empty()
+        && matches!(port, None | Some(443))
+}
+
+/// A hostname label: 1 to 63 ASCII letters, digits and inner hyphens.
+fn is_dns_label(label: &str) -> bool {
+    let b = label.as_bytes();
+    !b.is_empty()
+        && label.chars().count() <= 63
+        && label.is_ascii()
+        && b[0].is_ascii_alphanumeric()
+        && b[b.len() - 1].is_ascii_alphanumeric()
+        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-')
 }
 
 #[cfg(test)]
