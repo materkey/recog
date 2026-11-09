@@ -181,6 +181,24 @@ async fn given_stale_refresh_hint_when_subscriber_refreshes_then_saved_identity_
     }
 }
 
+#[tokio::test]
+async fn given_saved_profile_equal_to_current_when_subscriber_refreshes_then_acked_without_channel_update() {
+    // given
+    let current = identity("Александр", &["Александр", "Саша"], "rev-1", true);
+    let (h, _source) = profile_runtime(current.clone());
+    let (channel, _c) = h.add(Role::Channel);
+    let (subscriber, sub) = h.add(Role::Subscriber);
+    // when
+    h.process(r#"{"type": "user_profile_refresh"}"#, Some(&sub)).await.unwrap();
+    // then
+    assert!(channel.frames().is_empty());
+    let acks = subscriber.frames();
+    assert_eq!(acks.len(), 1);
+    assert_eq!(frame_type(&acks[0]), Some("user_profile_applied"));
+    assert_eq!(str_of(&acks[0], "revision"), "rev-1");
+    assert_eq!(field(&acks[0], "identity"), &current);
+}
+
 fn field_opt<'a>(frame: &'a Value, key: &str) -> Option<&'a Value> {
     frame.as_object().and_then(|m| m.get(key))
 }

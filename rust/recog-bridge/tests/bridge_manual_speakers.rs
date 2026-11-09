@@ -860,6 +860,30 @@ async fn given_tracked_request_of_previous_meeting_when_reply_carries_it_then_on
 }
 
 #[tokio::test]
+async fn given_tracked_manual_request_when_reply_carries_another_meeting_then_manual_session_error_each() {
+    // given
+    let (h, ext, sub) = bridge_with_extension_and_subscriber();
+    h.bridge.set_meeting_storage(ktalk_storage("m-new", "Standup", "orphan"));
+    h.bridge.set_pending_request("req-m", "");
+    // when
+    h.process(
+        r#"{"type": "copilot_channel_reply", "request_id": "req-m", "kind": "manual", "text": "ответ", "meeting_id": "m-prev"}"#,
+        None,
+    )
+    .await
+    .unwrap();
+    // then
+    for client in [&ext, &sub] {
+        assert!(copilot_frames(client, "copilot_reply", None).is_empty());
+        let errors = copilot_frames(client, "copilot_status", Some("error"));
+        assert_eq!(errors.len(), 1);
+        assert_eq!(str_field(&errors[0], "request_id"), Some("req-m"));
+        assert_eq!(str_field(&errors[0], "message"), Some(MSG_MANUAL_PREEMPTED));
+    }
+    assert_eq!(pending(&h, "req-m"), None);
+}
+
+#[tokio::test]
 async fn given_untracked_proactive_reply_of_another_meeting_when_it_arrives_then_nothing_broadcast() {
     // given
     let (h, ext, sub) = bridge_with_extension_and_subscriber();
