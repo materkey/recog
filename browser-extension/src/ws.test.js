@@ -98,3 +98,174 @@ test('outside a meeting - bridge connection opens - neither join nor participant
 
   expect(sent).toEqual(['clock_sync']);
 });
+
+describe('bridge frames', () => {
+  let ui;
+  let meeting;
+
+  beforeAll(async () => {
+    ui = await import('./ui.js');
+    meeting = await import('./meeting.js');
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    state.currentMeetingId = 'm1';
+    connectWebSocket();
+  });
+
+  afterEach(() => {
+    state.currentMeetingId = null;
+  });
+
+  function receive(frame) {
+    state.wsConnection.onmessage({ data: JSON.stringify(frame) });
+  }
+
+  test.each([
+    ['transcript', 'handleTranscript'],
+    ['transcript_history', 'handleTranscriptHistory'],
+    ['transcript_refine', 'handleTranscriptRefine'],
+    ['new_meeting', 'handleNewMeeting'],
+    ['copilot_reply', 'handleCopilotReply'],
+    ['copilot_status', 'handleCopilotStatus'],
+  ])('a %s frame - received - goes to %s', (type, handler) => {
+    const frame = { type, meeting_id: 'm1', text: 'x' };
+
+    receive(frame);
+
+    expect(ui[handler]).toHaveBeenCalledWith(frame);
+    const others = ['handleTranscript', 'handleTranscriptHistory', 'handleTranscriptRefine',
+      'handleNewMeeting', 'handleCopilotReply', 'handleCopilotStatus'].filter((name) => name !== handler);
+    for (const other of others) expect(ui[other]).not.toHaveBeenCalled();
+  });
+
+  test('a meeting_started frame with a title - received - announces the meeting with its title', () => {
+    receive({ type: 'meeting_started', meeting_id: 'm2', meeting_title: 'Planning' });
+
+    expect(ui.appendCopilotSystemMessage).toHaveBeenCalledWith('Встреча началась — Planning');
+  });
+
+  test('a meeting_started frame without a title - received - announces the meeting alone', () => {
+    receive({ type: 'meeting_started', meeting_id: 'm2' });
+
+    expect(ui.appendCopilotSystemMessage).toHaveBeenCalledWith('Встреча началась');
+  });
+
+  test('a meeting_ended frame of this tab\'s meeting - received - announces the end', () => {
+    receive({ type: 'meeting_ended', meeting_id: 'm1' });
+
+    expect(ui.appendCopilotSystemMessage).toHaveBeenCalledWith('Встреча закончилась');
+  });
+
+  test('a meeting_ended frame of another meeting - received - stays quiet', () => {
+    receive({ type: 'meeting_ended', meeting_id: 'other' });
+
+    expect(ui.appendCopilotSystemMessage).not.toHaveBeenCalled();
+  });
+
+  test('a meeting_join_rejected frame with a notice - received - shows the notice', () => {
+    meeting.handleMeetingJoinRejected.mockReturnValueOnce('refused');
+    const frame = { type: 'meeting_join_rejected', reason: 'another_tab_active' };
+
+    receive(frame);
+
+    expect(meeting.handleMeetingJoinRejected).toHaveBeenCalledWith(frame);
+    expect(ui.appendCopilotSystemMessage).toHaveBeenCalledWith('refused');
+  });
+
+  test('a repeated meeting_join_rejected frame - received - shows nothing', () => {
+    meeting.handleMeetingJoinRejected.mockReturnValueOnce(null);
+
+    receive({ type: 'meeting_join_rejected', reason: 'another_tab_active' });
+
+    expect(ui.appendCopilotSystemMessage).not.toHaveBeenCalled();
+  });
+
+  test('an unknown frame or broken JSON - received - reaches no handler', () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    receive({ type: 'something_else' });
+    state.wsConnection.onmessage({ data: '{not json' });
+
+    for (const handler of ['handleTranscript', 'handleCopilotReply', 'appendCopilotSystemMessage']) {
+      expect(ui[handler]).not.toHaveBeenCalled();
+    }
+    expect(logSpy).toHaveBeenCalledWith('[KTalk Transcript] Parse error:', expect.any(SyntaxError));
+    logSpy.mockRestore();
+  });
+});
+
+describe('bridge connection closing', () => {
+  let ui;
+
+  beforeAll(async () => {
+    ui = await import('./ui.js');
+  });
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.clearAllMocks();
+    state.wsReconnectTimer = null;
+  });
+
+  afterEach(() => {
+    clearTimeout(state.wsReconnectTimer);
+    state.wsReconnectTimer = null;
+    jest.useRealTimers();
+  });
+
+  test('an open connection - it closes - reports the drop and reconnects after 5 s', () => {
+    connectWebSocket();
+    const first = state.wsConnection;
+    first.onopen();
+    state.wsConnected = true;
+
+    first.onclose();
+
+    expect(state.wsConnected).toBe(false);
+    expect(ui.updateWsIndicatorPlatform).toHaveBeenLastCalledWith(false);
+    expect(ui.handleCopilotBridgeDisconnect).toHaveBeenCalled();
+    expect(state.clockSyncTimer).toBeNull();
+    jest.advanceTimersByTime(4999);
+    expect(state.wsConnection).toBe(first);
+    jest.advanceTimersByTime(1);
+    expect(state.wsConnection).not.toBe(first);
+    expect(state.wsReconnectTimer).toBeNull();
+  });
+
+  test('a reconnect already pending - the connection closes again - schedules no second one', () => {
+    connectWebSocket();
+    const first = state.wsConnection;
+    first.onclose();
+    const pending = state.wsReconnectTimer;
+
+    first.onclose();
+
+    expect(state.wsReconnectTimer).toBe(pending);
+    expect(jest.getTimerCount()).toBe(1);
+  });
+
+  test('a failing Copilot disconnect handler - the connection closes - still reconnects', () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    ui.handleCopilotBridgeDisconnect.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    connectWebSocket();
+
+    state.wsConnection.onclose();
+
+    expect(logSpy).toHaveBeenCalledWith('[KTalk Copilot] bridge-disconnect handler failed:', expect.any(Error));
+    expect(state.wsReconnectTimer).not.toBeNull();
+    logSpy.mockRestore();
+  });
+
+  test('a connection error - reported - marks the bridge disconnected', () => {
+    connectWebSocket();
+    state.wsConnected = true;
+
+    state.wsConnection.onerror();
+
+    expect(state.wsConnected).toBe(false);
+  });
+});
