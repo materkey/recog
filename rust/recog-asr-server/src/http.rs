@@ -190,6 +190,16 @@ mod tests {
     }
 
     #[test]
+    fn no_host_header_when_a_trailing_slash_is_routed_then_redirect_to_the_bare_path() {
+        assert_eq!(route(&ROUTES, "GET", "/healthz/", None, Some("")), Routed::Redirect("/healthz".to_owned()));
+    }
+
+    #[test]
+    fn the_root_without_a_route_when_routed_then_not_found_without_a_slash_redirect() {
+        assert_eq!(route(&ROUTES, "GET", "/", Some("h:1"), None), Routed::NotFound);
+    }
+
+    #[test]
     fn a_text_media_type_when_sent_then_charset_added_once() {
         assert_eq!(media_type("text/vtt"), "text/vtt; charset=utf-8");
         assert_eq!(media_type("text/plain; charset=latin-1"), "text/plain; charset=latin-1");

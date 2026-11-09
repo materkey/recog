@@ -137,13 +137,15 @@ impl Drop for Process {
 }
 
 impl Process {
-    /// Starts `command` (its environment cleared but for `env`, PATH and HOME) with
-    /// its output in `log`, and waits for `ready_path`.
+    /// Starts `command` (its environment cleared but for `env`, PATH and HOME, and a
+    /// coverage run's profile path) with its output in `log`, and waits for `ready_path`.
     pub fn start(mut command: Command, env: &[(&str, String)], port: u16, log: PathBuf, ready_path: &str) -> Self {
         let file = std::fs::File::create(&log).unwrap();
         command.env_clear().env("PATH", "/usr/bin:/bin").env("LANG", "C.UTF-8");
-        if let Some(home) = std::env::var_os("HOME") {
-            command.env("HOME", home);
+        for kept in ["HOME", "LLVM_PROFILE_FILE"] {
+            if let Some(value) = std::env::var_os(kept) {
+                command.env(kept, value);
+            }
         }
         for (k, v) in env {
             command.env(k, v);
