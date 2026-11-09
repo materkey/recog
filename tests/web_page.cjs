@@ -16,7 +16,8 @@ const ALL_SCRIPTS = ['datepicker.js', 'user-profile.js', 'ai-settings.js', 'desk
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function json(data, { status = 200 } = {}) {
-    return { ok: status >= 200 && status < 300, status, json: async () => data, text: async () => JSON.stringify(data) };
+    // A fresh copy per read, as a parsed response body is.
+    return { ok: status >= 200 && status < 300, status, json: async () => structuredClone(data), text: async () => JSON.stringify(data) };
 }
 
 function fakeTimers() {
