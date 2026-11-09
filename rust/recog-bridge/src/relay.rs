@@ -499,25 +499,7 @@ impl Bridge {
                 .is_some_and(|s| s != protocol::AGENT_OFFLINE && s != protocol::AGENT_SPAWNING);
         let alive = eligible && self.copilot_should_be_alive();
         agent.update_zero_anchor(now, alive);
-        let status = agent.supervisor_status.clone();
-        let effective = match status.as_deref() {
-            None | Some(protocol::AGENT_OFFLINE) => protocol::AGENT_OFFLINE.to_owned(),
-            Some(_) if now - agent.supervisor_status_ts > crate::copilot::AGENT_SILENCE_THRESHOLD_S => {
-                protocol::AGENT_OFFLINE.to_owned()
-            }
-            Some(s) => {
-                let zero_long = agent.claude_sessions == Some(0)
-                    && s != protocol::AGENT_SPAWNING
-                    && agent
-                        .sessions_zero_since
-                        .is_some_and(|since| now - since >= crate::copilot::AGENT_SESSIONS_ZERO_DEBOUNCE_S);
-                if zero_long && self.copilot_should_be_alive() {
-                    protocol::AGENT_OFFLINE.to_owned()
-                } else {
-                    s.to_owned()
-                }
-            }
-        };
+        let effective = agent.effective(now, || self.copilot_should_be_alive());
         let recover = agent.take_recovery(now);
         self.st().agent = agent;
         if recover {

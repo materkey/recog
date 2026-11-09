@@ -187,9 +187,10 @@ impl AgentMerge {
         }
     }
 
-    /// `_effective_agent_state`.
+    /// `_effective_agent_state`. `should_be_alive` is asked last, as Python evaluates
+    /// it lazily after the cheaper conditions (it reads meta.json and may log).
     #[must_use]
-    pub fn effective(&self, now: f64, should_be_alive: bool) -> String {
+    pub fn effective(&self, now: f64, should_be_alive: impl FnOnce() -> bool) -> String {
         let Some(status) = self.supervisor_status.as_deref() else { return protocol::AGENT_OFFLINE.to_owned() };
         if status == protocol::AGENT_OFFLINE || now - self.supervisor_status_ts > AGENT_SILENCE_THRESHOLD_S {
             return protocol::AGENT_OFFLINE.to_owned();
@@ -197,7 +198,7 @@ impl AgentMerge {
         if self.claude_sessions == Some(0)
             && status != protocol::AGENT_SPAWNING
             && self.sessions_zero_since.is_some_and(|since| now - since >= AGENT_SESSIONS_ZERO_DEBOUNCE_S)
-            && should_be_alive
+            && should_be_alive()
         {
             return protocol::AGENT_OFFLINE.to_owned();
         }
