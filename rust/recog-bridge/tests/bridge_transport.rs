@@ -109,9 +109,12 @@ async fn given_a_connection_when_a_message_over_one_mib_arrives_then_closed_with
     let h = Harness::new();
     let mut ws = connect(&h).await;
     // when
-    ws.send(Message::text("x".repeat((1 << 20) + 1))).await.unwrap();
-    // then
-    assert_eq!(next_matching(&mut ws, close_of).await.0, 1009);
+    let sent = ws.send(Message::text("x".repeat((1 << 20) + 1))).await;
+    // then: the bridge refuses once it has read the frame's length, so where socket
+    // buffers are small (macOS) the rest of the write meets a closed socket
+    if sent.is_ok() {
+        assert_eq!(next_matching(&mut ws, close_of).await.0, 1009);
+    }
     let expected = "[KTalk Bridge] Connection error: sent 1009 (message too big); no close frame received";
     assert!(wait_for(|| h.logged(expected)).await, "{:?}", h.logs());
 }
