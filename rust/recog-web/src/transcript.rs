@@ -411,6 +411,156 @@ mod tests {
         assert_eq!(compute_segment_duration_ms(&rows, 0, false), 12000.0);
     }
 
+    fn meta(text: &str) -> Value {
+        pyjson::loads(text).unwrap()
+    }
+
+    #[test]
+    fn meeting_with_title_and_participants_when_described_then_title_and_names_or_keys() {
+        let meeting =
+            meta(r#"{"meta": {"title": "Sync", "participants": {"a": {"name": "Ann"}, "b": {}, "c": {"name": ""}}}}"#);
+
+        assert_eq!(analysis_prompt_metadata(Some(&meeting)).unwrap(), ("Sync".to_owned(), "Ann, b, c".to_owned()));
+        assert_eq!(analysis_prompt_metadata(None).unwrap(), (String::new(), String::new()));
+        assert_eq!(analysis_prompt_metadata(Some(&meta("{}"))).unwrap(), (String::new(), String::new()));
+        assert_eq!(analysis_prompt_metadata(Some(&meta(r#"{"meta": {"title": 5}}"#))).unwrap().0, "5");
+    }
+
+    #[test]
+    fn metadata_of_the_wrong_shape_when_described_then_the_python_error() {
+        for (meeting, error) in [
+            (r#"{"meta": []}"#, "'list' object has no attribute 'get'"),
+            (r#"{"meta": {"participants": []}}"#, "'list' object has no attribute 'items'"),
+            (r#"{"meta": {"participants": {"a": 1}}}"#, "'int' object has no attribute 'get'"),
+            (r#"{"meta": {"participants": {"a": {"name": 2}}}}"#, "sequence item 0: expected str instance, int found"),
+            ("[]", "'list' object has no attribute 'get'"),
+        ] {
+            assert_eq!(analysis_prompt_metadata(Some(&meta(meeting))).unwrap_err(), error, "{meeting}");
+        }
+    }
+
+    #[test]
+    fn file_longer_than_a_chunk_when_its_tail_is_read_then_the_last_lines_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let text: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&path, &text).unwrap();
+
+        assert_eq!(tail_lines(&path, 3), ["line 1997", "line 1998", "line 1999"]);
+        assert_eq!(tail_lines(&path, 5000).len(), 2000);
+        assert_eq!(tail_lines(&path, 5000)[0], "line 0");
+        assert!(tail_lines(&path, 0).is_empty());
+        assert!(tail_lines(&dir.path().join("absent"), 3).is_empty());
+    }
+
+    #[test]
+    fn last_line_without_newline_and_blank_lines_when_the_tail_is_read_then_blanks_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        std::fs::write(&path, "a\n\n\nb\nc").unwrap();
+
+        assert_eq!(tail_lines(&path, 10), ["a", "b", "c"]);
+        assert_eq!(tail_lines(&path, 2), ["b", "c"]);
+        assert!(tail_lines(dir.path(), 2).is_empty());
+    }
+
+    #[test]
+    fn undecodable_bytes_when_the_tail_is_read_then_they_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        std::fs::write(&path, b"ok\xff\xfeyes\n\xd0\x9f\xd1\n\xe2\x82").unwrap();
+
+        assert_eq!(tail_lines(&path, 10), ["okyes", "П", ""]);
+    }
+
+    #[test]
+    fn rows_with_and_without_times_when_the_recent_window_is_chosen_then_window_applies_to_timed_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let meeting = dir.path().join("m");
+        std::fs::create_dir_all(&meeting).unwrap();
+        std::fs::write(
+            meeting.join("transcript.jsonl"),
+            concat!(
+                "{\"id\": 1, \"ts\": \"2026-01-01T10:00:00+00:00\"}\n",
+                "not json\n",
+                "{\"id\": 2}\n",
+                "{\"id\": 3, \"ts\": \"2026-01-01T10:04:00+00:00\"}\n",
+                "{\"id\": 4, \"ts\": \"2026-01-01T10:05:00+00:00\"}\n",
+            ),
+        )
+        .unwrap();
+        let ids = |rows: Vec<Value>| -> Vec<String> {
+            rows.iter().map(|r| get(r, "id").unwrap().unwrap().py_str()).collect()
+        };
+
+        assert_eq!(ids(select_recent_segments(dir.path(), "m", 120, 10).unwrap()), ["3", "4"]);
+        assert_eq!(ids(select_recent_segments(dir.path(), "m", 900, 10).unwrap()), ["1", "3", "4"]);
+        assert_eq!(ids(select_recent_segments(dir.path(), "m", 900, 2).unwrap()), ["3", "4"]);
+        assert!(select_recent_segments(dir.path(), "absent", 900, 2).unwrap().is_empty());
+    }
+
+    #[test]
+    fn last_row_without_a_time_or_rows_not_dicts_when_the_recent_window_is_chosen_then_last_rows_or_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let meeting = dir.path().join("m");
+        std::fs::create_dir_all(&meeting).unwrap();
+        std::fs::write(
+            meeting.join("transcript.jsonl"),
+            "{\"id\": 1, \"ts\": \"2026-01-01T10:00:00+00:00\"}\n{\"id\": 2}\n",
+        )
+        .unwrap();
+        assert_eq!(select_recent_segments(dir.path(), "m", 30, 10).unwrap().len(), 2);
+
+        std::fs::write(meeting.join("transcript.jsonl"), "\n  \n").unwrap();
+        assert!(select_recent_segments(dir.path(), "m", 30, 10).unwrap().is_empty());
+
+        std::fs::write(meeting.join("transcript.jsonl"), "[1]\n").unwrap();
+        assert_eq!(
+            select_recent_segments(dir.path(), "m", 30, 10).unwrap_err(),
+            "'list' object has no attribute 'get'"
+        );
+
+        std::fs::write(
+            meeting.join("transcript.jsonl"),
+            "{\"ts\": \"2026-01-01T10:00:00\"}\n{\"ts\": \"2026-01-01T10:00:00+00:00\"}\n",
+        )
+        .unwrap();
+        assert!(select_recent_segments(dir.path(), "m", 30, 10).is_err());
+    }
+
+    #[test]
+    fn ids_of_other_numeric_types_when_sliced_by_id_then_compared_as_numbers() {
+        let rows = rows(r#"[{"id": 1.5}, {"id": true}, {"id": null}, {"text": "no id"}, {"id": 3}]"#);
+
+        assert_eq!(slice_segments_by_id(&rows, Some(1), None, 10).unwrap().len(), 3);
+        assert_eq!(slice_segments_by_id(&rows, None, Some(1), 10).unwrap().len(), 1);
+        assert_eq!(slice_segments_by_id(&rows, Some(0), Some(5), 2).unwrap().len(), 2);
+        let error = slice_segments_by_id(&self::rows(r#"[{"id": "x"}]"#), Some(1), None, 10).unwrap_err();
+        assert_eq!(error, "'<' not supported between instances of 'str' and 'int' (1)");
+    }
+
+    #[test]
+    fn start_time_when_sliced_by_time_then_rows_from_its_first_match() {
+        let rows = rows(r#"[{"ts_display": "1"}, {"ts_display": "2"}, {"ts_display": "3"}]"#);
+
+        assert_eq!(slice_segments_by_ts_display(&rows, "2", 10).unwrap().len(), 2);
+        assert_eq!(slice_segments_by_ts_display(&rows, "1", 2).unwrap().len(), 2);
+        assert!(slice_segments_by_ts_display(&rows, "", 2).unwrap().is_empty());
+        assert!(slice_segments_by_ts_display(&[], "1", 2).unwrap().is_empty());
+        assert!(slice_segments_by_ts_display(&rows, "9", 2).unwrap().is_empty());
+        assert!(slice_segments_by_ts_display(&self::rows("[1]"), "9", 2).is_err());
+    }
+
+    #[test]
+    fn rows_with_events_and_empty_texts_when_joined_then_only_spoken_lines() {
+        let rows = rows(
+            r#"[{"ts_display": "1", "speaker": "A", "text": "hi"}, {"text": ""}, {"event_type": "gap", "text": "x"}, {"text": "bare"}]"#,
+        );
+
+        assert_eq!(segments_to_transcript(&rows).unwrap(), "[1] A: hi\n[] : bare");
+        assert!(segments_to_transcript(&self::rows("[1]")).is_err());
+    }
+
     #[test]
     fn long_transcript_when_built_for_ai_then_tail_kept_behind_truncation_marker() {
         // given
