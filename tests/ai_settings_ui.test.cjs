@@ -370,3 +370,29 @@ test('pending settings - hidden tab, draft, conflict and closed dialog - no back
     await h.click('close');
     assert.equal(h.timers.size, 0);
 });
+
+test('customized scenario with an unknown provider and a Claude effort - opened - known providers only and the saved effort', async () => {
+    const data = payload();
+    data.tasks[0] = task('analysis.increment', {
+        customized: true, allowed_providers: ['gemini', 'claude', 'codex'], claude_effort: 'max',
+        model_overrides: { codex: 'gpt-x' }, required_placeholders: undefined,
+    });
+    const h = harness(async () => response(data));
+    await h.boot(); await h.click('open');
+    assert.deepEqual(h.get('providers').children.map((label) => label.children[0].value), ['claude', 'codex']);
+    assert.equal(h.get('provenance').textContent, 'Сценарий настроен вручную.');
+    assert.equal(h.get('claude-effort').value, 'max');
+    assert.equal(h.get('model-codex').value, 'gpt-x');
+    assert.equal(h.get('placeholders').textContent, 'Подстановки: {transcript}, {user_name}. Обязательные: .');
+});
+
+test('no scenarios on the server - opened - empty form without providers or prompt', async () => {
+    const h = harness(async () => response({ ...payload(), tasks: [] }));
+    await h.boot(); await h.click('open');
+    assert.equal(h.get('task').value, '');
+    assert.equal(h.get('prompt').value, '');
+    assert.deepEqual(h.get('providers').children, []);
+    assert.equal(h.get('enabled-row').hidden, true);
+    assert.equal(h.get('provenance').textContent, 'Сценарий использует настройки по умолчанию.');
+    assert.equal(h.get('save-task').disabled, true);
+});
