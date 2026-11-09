@@ -356,10 +356,35 @@ mod tests {
     }
 
     #[test]
+    fn backslashes_returns_and_astral_unprintables_when_repr_then_escaped_like_python() {
+        // given / when / then
+        assert_eq!(repr("a\\b\rc\u{10ffff}"), "'a\\\\b\\rc\\U0010ffff'");
+        assert_eq!(float_repr(f64::NAN), "nan");
+        assert_eq!(float_repr(f64::INFINITY), "inf");
+        assert_eq!(float_repr(f64::NEG_INFINITY), "-inf");
+        assert_eq!(float_repr(0.0), "0.0");
+        assert_eq!(float_repr(-1e22), "-1e+22");
+    }
+
+    #[test]
+    fn numbers_with_letters_python_rejects_when_parsed_then_its_error_text() {
+        // given / when / then
+        assert_eq!(parse_int("é"), Err("invalid literal for int() with base 10: 'é'".into()));
+        assert_eq!(parse_int("-"), Err("invalid literal for int() with base 10: '-'".into()));
+        assert_eq!(parse_float("é"), Err("could not convert string to float: 'é'".into()));
+        assert_eq!(parse_float("1e"), Err("could not convert string to float: '1e'".into()));
+        assert_eq!(parse_float("."), Err("could not convert string to float: '.'".into()));
+        assert_eq!(parse_float("1e+5"), Ok(100_000.0));
+        assert_eq!(parse_float("-2.5E-1"), Ok(-0.25));
+        assert_eq!(parse_float("1_0e1_0"), Ok(1e11));
+    }
+
+    #[test]
     fn casefold_and_splitlines_follow_python() {
         // given / when / then
         assert_eq!(casefold("Straße ME"), "strasse me");
         assert_eq!(splitlines("a\r\nb\rc\u{2028}d\n"), vec!["a", "b", "c", "d"]);
         assert_eq!(splitlines(""), Vec::<&str>::new());
+        assert_eq!(splitlines("a\nb"), vec!["a", "b"]);
     }
 }
