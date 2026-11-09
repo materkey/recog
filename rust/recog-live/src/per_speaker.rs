@@ -334,10 +334,8 @@ impl PerSpeakerIngest {
         let inner = &self.inner;
         let now = inner.clock.wall();
         let generation = (inner.generation)();
-        let mut wake = false;
-        let mut dropped_overflow = 0;
         let label = if chunk.speaker_name.is_empty() { chunk.pid.clone() } else { chunk.speaker_name.clone() };
-        {
+        let (dropped_overflow, wake) = {
             let mut state = inner.lock();
             let state = &mut *state;
             // The generation was read before the lock: a switch in between makes this
@@ -345,37 +343,10 @@ impl PerSpeakerIngest {
             if generation != (inner.generation)() {
                 return;
             }
-            let samples = decode_pcm_int16(&chunk.pcm);
+            let mut samples = decode_pcm_int16(&chunk.pcm);
             let pid = chunk.pid.clone();
-            let buf = state.buffers.entry(pid.clone()).or_default();
-            let idx = buf.partition_point(|b| b.chunk.seq < chunk.seq);
-            let stats = state.stats.entry(pid.clone()).or_insert_with(|| RawStats {
-                speaker_name: chunk.speaker_name.clone(),
-                is_local: chunk.is_local,
-                chunks_seen: 0,
-                first_seen_ts: now,
-                last_seen_ts: now,
-                last_seq: None,
-                gaps_count: 0,
-                out_of_order_count: 0,
-            });
-            if !chunk.speaker_name.is_empty() {
-                stats.speaker_name.clone_from(&chunk.speaker_name);
-            }
-            stats.chunks_seen += 1;
-            stats.last_seen_ts = now;
-            let prev_seq = stats.last_seq;
-            if let Some(prev) = prev_seq {
-                if chunk.seq > prev + 1 {
-                    stats.gaps_count += chunk.seq - prev - 1;
-                } else if chunk.seq <= prev {
-                    stats.out_of_order_count += 1;
-                }
-            }
-            if prev_seq.is_none_or(|prev| chunk.seq > prev) {
-                stats.last_seq = Some(chunk.seq);
-            }
-
+            let idx = state.buffers.entry(pid.clone()).or_default().partition_point(|b| b.chunk.seq < chunk.seq);
+            update_stats(state, &chunk, now);
             if state.degraded {
                 inner.logger.line("[PerSpeakerIngest] pcm recovered; exiting degraded mode");
                 state.degraded = false;
@@ -384,57 +355,18 @@ impl PerSpeakerIngest {
             state.pcm_ever_seen = true;
 
             let sample_rate = if chunk.sample_rate == 0 { DEFAULT_SAMPLE_RATE } else { chunk.sample_rate };
-            let sr = f64::from(sample_rate);
-            let mut samples = samples;
-            // Strip the worklet's 600 ms overlap from every chunk after the first, when
-            // the payload has the production shape (3.6 s); other sizes are left alone.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let expected_payload_samples = (PCM_CHUNK_PAYLOAD_S * sr) as usize;
-            let first_chunk_for_pid = !state.pid_audio_ms.contains_key(&pid);
-            if !first_chunk_for_pid && samples.len() == expected_payload_samples {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
-                let overlap_samples = ((PCM_CHUNK_OVERLAP_MS * u64::from(sample_rate)) as f64 / 1000.0) as usize;
-                if 0 < overlap_samples && overlap_samples < samples.len() {
-                    samples.drain(..overlap_samples);
-                }
-            }
-            let chunk_ms = (as_f64(samples.len()) / sr) * 1000.0;
-            let mut bounds = (0.0, 0.0);
-            if !samples.is_empty() && chunk_ms > 0.0 {
-                let prev_pid_audio_ms = state.pid_audio_ms.get(&pid).copied().unwrap_or(0.0);
-                let end = prev_pid_audio_ms + chunk_ms;
-                if state.pid_audio_ms.insert(pid.clone(), end).is_none() {
-                    state.pid_audio_order.push(pid.clone());
-                }
-                state.pcm_rings.entry(pid.clone()).or_default().push_back((samples, end));
-                state.refine_watermark_ms.entry(pid.clone()).or_insert(0.0);
-                state.silence_ms.insert(pid.clone(), 0.0);
-                let continuous = state.continuous_speech_ms.get(&pid).copied().unwrap_or(0.0) + chunk_ms;
-                state.continuous_speech_ms.insert(pid.clone(), continuous);
-                state.pid_sample_rate.insert(pid.clone(), sample_rate);
-                enforce_ring_capacity(state, inner.ring_capacity_ms, &pid, sample_rate);
-                state.pids_had_chunk_since_last_tick.insert(pid.clone());
-                bounds = (prev_pid_audio_ms, end);
-            }
-
+            strip_overlap(&mut samples, !state.pid_audio_ms.contains_key(&pid), sample_rate);
+            let bounds = append_to_ring(state, inner.ring_capacity_ms, &pid, samples, sample_rate);
             let buffered = BufferedChunk {
                 chunk,
                 meeting_generation: generation,
                 pid_audio_ms_start: bounds.0,
                 pid_audio_ms_end: bounds.1,
             };
-            let buf = state.buffers.entry(pid).or_default();
-            buf.insert(idx, buffered);
-            while buf.len() > inner.max_chunks_per_pid {
-                buf.remove(0);
-                dropped_overflow += 1;
-            }
-
+            let dropped = buffer_chunk(state, pid, idx, buffered, inner.max_chunks_per_pid);
             let total: usize = state.buffers.values().map(Vec::len).sum();
-            if total >= inner.max_batch_size {
-                wake = true;
-            }
-        }
+            (dropped, total >= inner.max_batch_size)
+        };
         if dropped_overflow > 0 {
             inner.logger.rate_limited(
                 "per-speaker-overflow",
@@ -458,51 +390,69 @@ impl PerSpeakerIngest {
     /// One step: watchdog, at most one batch to the callback, refine candidates to the
     /// submit callback. Returns the dispatched batch. `now` defaults to the clock.
     pub fn tick(&self, now: Option<f64>) -> Vec<BatchedChunk> {
+        let now = now.unwrap_or_else(|| self.inner.clock.wall());
+        let (batch, batch_generation, active_pids) = self.collect_tick(now);
+        if !batch.is_empty() && !self.dispatch(&batch, batch_generation) {
+            return Vec::new();
+        }
+        self.submit_refines(&active_pids);
+        batch
+    }
+
+    /// Under the lock: the watchdog, the batch (the held one first) while ASR can
+    /// serve, the silence counters, and the pids refine looks at.
+    fn collect_tick(&self, now: f64) -> (Vec<BatchedChunk>, Option<i64>, Vec<String>) {
         let inner = &self.inner;
-        let now = now.unwrap_or_else(|| inner.clock.wall());
         let mut batch = Vec::new();
         let mut batch_generation = None;
         let mut active_pids = Vec::new();
-        {
-            let mut state = inner.lock();
-            inner.check_watchdog(&mut state, now);
-            if (inner.asr_available)() {
-                batch = match state.pending_retry_batch.take() {
-                    Some(held) => held,
-                    None => inner.drain_batch(&mut state),
-                };
-                batch_generation = state.last_drain_generation;
-            }
-            // While ASR is unavailable the gate stays shut: draining is destructive.
-            update_per_pid_silence(&mut state);
-            if state.refine_submit_callback.is_some() {
-                active_pids = state.pid_audio_order.clone();
-            }
+        let mut state = inner.lock();
+        inner.check_watchdog(&mut state, now);
+        if (inner.asr_available)() {
+            batch = match state.pending_retry_batch.take() {
+                Some(held) => held,
+                None => inner.drain_batch(&mut state),
+            };
+            batch_generation = state.last_drain_generation;
         }
-        if !batch.is_empty() {
-            match (inner.transcribe_callback)(&batch) {
-                Ok(()) => {}
-                Err(AsrError::TemporarilyUnavailable) => {
-                    {
-                        let mut state = inner.lock();
-                        if batch_generation != Some((inner.generation)()) {
-                            return Vec::new();
-                        }
-                        state.pending_retry_batch = Some(batch.clone());
+        // While ASR is unavailable the gate stays shut: draining is destructive.
+        update_per_pid_silence(&mut state);
+        if state.refine_submit_callback.is_some() {
+            active_pids = state.pid_audio_order.clone();
+        }
+        (batch, batch_generation, active_pids)
+    }
+
+    /// The batch to the transcribe callback, held for a retry when ASR is temporarily
+    /// unavailable; false when the meeting changed meanwhile (the tick ends there).
+    fn dispatch(&self, batch: &[BatchedChunk], batch_generation: Option<i64>) -> bool {
+        let inner = &self.inner;
+        match (inner.transcribe_callback)(batch) {
+            Ok(()) => {}
+            Err(AsrError::TemporarilyUnavailable) => {
+                {
+                    let mut state = inner.lock();
+                    if batch_generation != Some((inner.generation)()) {
+                        return false;
                     }
-                    inner.logger.line("[PerSpeakerIngest] ASR unavailable — holding batch for retry");
+                    state.pending_retry_batch = Some(batch.to_vec());
                 }
-                Err(e) => inner.logger.line(&format!("[PerSpeakerIngest] transcribe callback raised: {e}")),
+                inner.logger.line("[PerSpeakerIngest] ASR unavailable — holding batch for retry");
             }
+            Err(e) => inner.logger.line(&format!("[PerSpeakerIngest] transcribe callback raised: {e}")),
         }
-        for pid in &active_pids {
-            let Some(callback) = inner.lock().refine_submit_callback.clone() else { break };
+        true
+    }
+
+    /// Each active pid's refine candidate to the submit callback.
+    fn submit_refines(&self, active_pids: &[String]) {
+        for pid in active_pids {
+            let Some(callback) = self.inner.lock().refine_submit_callback.clone() else { break };
             let Some(task) = self.get_refine_candidate(pid) else { continue };
             if let Err(e) = callback(task) {
-                inner.logger.line(&format!("[PerSpeakerIngest] refine submit raised: {e}"));
+                self.inner.logger.line(&format!("[PerSpeakerIngest] refine submit raised: {e}"));
             }
         }
-        batch
     }
 
     /// Attaches or detaches the per-tick refine submit callback.
@@ -607,62 +557,22 @@ impl PerSpeakerIngest {
     pub fn get_refine_candidate(&self, pid: &str) -> Option<RefineTask> {
         let inner = &self.inner;
         let mut state = inner.lock();
-        let drained_ms = state.pid_drained_ms.get(pid).copied().unwrap_or(0.0);
-        let watermark = state.refine_watermark_ms.get(pid).copied().unwrap_or(0.0);
-        let unrefined_ms = drained_ms - watermark;
-        if unrefined_ms <= 0.0 {
-            return None;
-        }
-        let silence_ms = state.silence_ms.get(pid).copied().unwrap_or(0.0);
-        let continuous_ms = state.continuous_speech_ms.get(pid).copied().unwrap_or(0.0);
-        let gap_triggered = silence_ms >= SPEAKER_TURN_GAP * 1000.0;
-        let monolog_triggered = continuous_ms >= PCM_REFINE_MONOLOG_CAP_S * 1000.0;
-        if !(gap_triggered || monolog_triggered) {
-            return None;
-        }
+        let trigger = refine_trigger(&state, pid)?;
         let ring = state.pcm_rings.get(pid).filter(|r| !r.is_empty())?;
-        let sample_rate = match state.pid_sample_rate.get(pid).copied().unwrap_or(DEFAULT_SAMPLE_RATE) {
-            0 => DEFAULT_SAMPLE_RATE,
-            sr => sr,
-        };
-        let sr = f64::from(sample_rate);
+        let sr = f64::from(pid_sample_rate(&state, pid));
         let window_ms = PCM_REFINE_WINDOW_S * 1000.0;
-        let target_ms = unrefined_ms.min(window_ms);
+        let target_ms = trigger.unrefined_ms.min(window_ms);
         #[allow(clippy::cast_possible_truncation)]
         let target_samples = (target_ms * sr / 1000.0).round_ties_even() as i64;
         if target_samples <= 0 {
             return None;
         }
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let target_samples = target_samples as usize;
-        let mut pulled: Vec<&[i16]> = Vec::new();
-        let mut total = 0;
-        for (samples, entry_end_ms) in ring.iter().rev() {
-            // Audio not yet drained to live has no live segment to refine.
-            if *entry_end_ms > drained_ms {
-                continue;
-            }
-            // Older entries were covered by a previous refine.
-            if *entry_end_ms <= watermark {
-                break;
-            }
-            pulled.push(samples);
-            total += samples.len();
-            if total >= target_samples {
-                break;
-            }
-        }
-        if pulled.is_empty() {
-            return None;
-        }
-        let mut pcm: Vec<i16> = pulled.iter().rev().flat_map(|s| s.iter().copied()).collect();
-        if pcm.len() > target_samples {
-            pcm.drain(..pcm.len() - target_samples);
-        }
+        let pcm = pull_window(ring, trigger.drained_ms, trigger.watermark, target_samples as usize)?;
         let actual_samples_ms = (as_f64(pcm.len()) / sr) * 1000.0;
-        let offset_base_ms = max_zero(drained_ms - actual_samples_ms);
-        state.refine_watermark_ms.insert(pid.to_owned(), drained_ms);
-        if monolog_triggered {
+        let offset_base_ms = max_zero(trigger.drained_ms - actual_samples_ms);
+        state.refine_watermark_ms.insert(pid.to_owned(), trigger.drained_ms);
+        if trigger.monolog {
             state.continuous_speech_ms.insert(pid.to_owned(), 0.0);
         }
         Some(RefineTask {
@@ -697,6 +607,158 @@ impl Drop for PerSpeakerIngest {
 
 /// Drops the oldest ring entries of `pid` while it holds more than the capacity,
 /// whole chunks at a time, keeping at least one.
+/// Why a pid's audio is due for refine.
+struct RefineTrigger {
+    drained_ms: f64,
+    watermark: f64,
+    unrefined_ms: f64,
+    /// The continuous-speech cap fired (not only the turn gap).
+    monolog: bool,
+}
+
+/// The pid's drained audio after its watermark, when a turn gap or the monolog cap
+/// makes it due.
+fn refine_trigger(state: &State, pid: &str) -> Option<RefineTrigger> {
+    let drained_ms = state.pid_drained_ms.get(pid).copied().unwrap_or(0.0);
+    let watermark = state.refine_watermark_ms.get(pid).copied().unwrap_or(0.0);
+    let unrefined_ms = drained_ms - watermark;
+    if unrefined_ms <= 0.0 {
+        return None;
+    }
+    let silence_ms = state.silence_ms.get(pid).copied().unwrap_or(0.0);
+    let continuous_ms = state.continuous_speech_ms.get(pid).copied().unwrap_or(0.0);
+    let gap_triggered = silence_ms >= SPEAKER_TURN_GAP * 1000.0;
+    let monolog = continuous_ms >= PCM_REFINE_MONOLOG_CAP_S * 1000.0;
+    if !(gap_triggered || monolog) {
+        return None;
+    }
+    Some(RefineTrigger { drained_ms, watermark, unrefined_ms, monolog })
+}
+
+fn pid_sample_rate(state: &State, pid: &str) -> u32 {
+    match state.pid_sample_rate.get(pid).copied().unwrap_or(DEFAULT_SAMPLE_RATE) {
+        0 => DEFAULT_SAMPLE_RATE,
+        sr => sr,
+    }
+}
+
+/// The ring's newest drained audio after the watermark, up to `target_samples` (its
+/// oldest samples cut); None when there is none.
+fn pull_window(
+    ring: &VecDeque<(Vec<i16>, f64)>,
+    drained_ms: f64,
+    watermark: f64,
+    target_samples: usize,
+) -> Option<Vec<i16>> {
+    let mut pulled: Vec<&[i16]> = Vec::new();
+    let mut total = 0;
+    for (samples, entry_end_ms) in ring.iter().rev() {
+        // Audio not yet drained to live has no live segment to refine.
+        if *entry_end_ms > drained_ms {
+            continue;
+        }
+        // Older entries were covered by a previous refine.
+        if *entry_end_ms <= watermark {
+            break;
+        }
+        pulled.push(samples);
+        total += samples.len();
+        if total >= target_samples {
+            break;
+        }
+    }
+    if pulled.is_empty() {
+        return None;
+    }
+    let mut pcm: Vec<i16> = pulled.iter().rev().flat_map(|s| s.iter().copied()).collect();
+    if pcm.len() > target_samples {
+        pcm.drain(..pcm.len() - target_samples);
+    }
+    Some(pcm)
+}
+
+/// A chunk's pid counters: name, count, time, sequence gaps and reorders.
+fn update_stats(state: &mut State, chunk: &PcmChunk, now: f64) {
+    let stats = state.stats.entry(chunk.pid.clone()).or_insert_with(|| RawStats {
+        speaker_name: chunk.speaker_name.clone(),
+        is_local: chunk.is_local,
+        chunks_seen: 0,
+        first_seen_ts: now,
+        last_seen_ts: now,
+        last_seq: None,
+        gaps_count: 0,
+        out_of_order_count: 0,
+    });
+    if !chunk.speaker_name.is_empty() {
+        stats.speaker_name.clone_from(&chunk.speaker_name);
+    }
+    stats.chunks_seen += 1;
+    stats.last_seen_ts = now;
+    let prev_seq = stats.last_seq;
+    if let Some(prev) = prev_seq {
+        if chunk.seq > prev + 1 {
+            stats.gaps_count += chunk.seq - prev - 1;
+        } else if chunk.seq <= prev {
+            stats.out_of_order_count += 1;
+        }
+    }
+    if prev_seq.is_none_or(|prev| chunk.seq > prev) {
+        stats.last_seq = Some(chunk.seq);
+    }
+}
+
+/// Strips the worklet's 600 ms overlap from every chunk after the pid's first, when
+/// the payload has the production shape (3.6 s); other sizes are left alone.
+fn strip_overlap(samples: &mut Vec<i16>, first_chunk_for_pid: bool, sample_rate: u32) {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let expected_payload_samples = (PCM_CHUNK_PAYLOAD_S * f64::from(sample_rate)) as usize;
+    if first_chunk_for_pid || samples.len() != expected_payload_samples {
+        return;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    let overlap_samples = ((PCM_CHUNK_OVERLAP_MS * u64::from(sample_rate)) as f64 / 1000.0) as usize;
+    if 0 < overlap_samples && overlap_samples < samples.len() {
+        samples.drain(..overlap_samples);
+    }
+}
+
+/// The samples onto the pid's audio timeline and refine ring, its silence reset and
+/// its continuous speech grown; the chunk's (start, end) on that timeline, (0, 0) for
+/// no audio.
+fn append_to_ring(state: &mut State, capacity_ms: f64, pid: &str, samples: Vec<i16>, sample_rate: u32) -> (f64, f64) {
+    let chunk_ms = (as_f64(samples.len()) / f64::from(sample_rate)) * 1000.0;
+    if samples.is_empty() || chunk_ms <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let prev_pid_audio_ms = state.pid_audio_ms.get(pid).copied().unwrap_or(0.0);
+    let end = prev_pid_audio_ms + chunk_ms;
+    if state.pid_audio_ms.insert(pid.to_owned(), end).is_none() {
+        state.pid_audio_order.push(pid.to_owned());
+    }
+    state.pcm_rings.entry(pid.to_owned()).or_default().push_back((samples, end));
+    state.refine_watermark_ms.entry(pid.to_owned()).or_insert(0.0);
+    state.silence_ms.insert(pid.to_owned(), 0.0);
+    let continuous = state.continuous_speech_ms.get(pid).copied().unwrap_or(0.0) + chunk_ms;
+    state.continuous_speech_ms.insert(pid.to_owned(), continuous);
+    state.pid_sample_rate.insert(pid.to_owned(), sample_rate);
+    enforce_ring_capacity(state, capacity_ms, pid, sample_rate);
+    state.pids_had_chunk_since_last_tick.insert(pid.to_owned());
+    (prev_pid_audio_ms, end)
+}
+
+/// The chunk into the pid's buffer at its sequence's place, the oldest dropped past
+/// `max_chunks`; how many were dropped.
+fn buffer_chunk(state: &mut State, pid: String, idx: usize, buffered: BufferedChunk, max_chunks: usize) -> usize {
+    let buf = state.buffers.entry(pid).or_default();
+    buf.insert(idx, buffered);
+    let mut dropped = 0;
+    while buf.len() > max_chunks {
+        buf.remove(0);
+        dropped += 1;
+    }
+    dropped
+}
+
 fn enforce_ring_capacity(state: &mut State, capacity_ms: f64, pid: &str, sample_rate: u32) {
     let Some(ring) = state.pcm_rings.get_mut(pid) else { return };
     if ring.is_empty() || sample_rate == 0 {
