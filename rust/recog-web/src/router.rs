@@ -208,15 +208,19 @@ pub fn route(method: &str, path: &str) -> Match {
     if let Some(allow) = partial {
         return Match::MethodNotAllowed(allow);
     }
-    if path != "/" {
-        let twin = if path.ends_with('/') { path.trim_end_matches('/').to_owned() } else { format!("{path}/") };
-        if HTTP_ROUTES.iter().any(|(_, template, _)| match_template(template, &twin).is_some())
-            || match_static(&twin).is_some()
-        {
-            return Match::Redirect(twin);
-        }
+    redirect_twin(path).map_or(Match::NotFound, Match::Redirect)
+}
+
+/// The path with its trailing slash added or removed, when a route serves that
+/// twin; never for `/`.
+fn redirect_twin(path: &str) -> Option<String> {
+    if path == "/" {
+        return None;
     }
-    Match::NotFound
+    let twin = if path.ends_with('/') { path.trim_end_matches('/').to_owned() } else { format!("{path}/") };
+    let served = HTTP_ROUTES.iter().any(|(_, template, _)| match_template(template, &twin).is_some())
+        || match_static(&twin).is_some();
+    served.then_some(twin)
 }
 
 /// Which WebSocket route serves the decoded `path`.

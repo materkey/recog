@@ -88,13 +88,18 @@ pub fn analysis_prompt_metadata(meeting: Option<&Value>) -> Result<(String, Stri
         Some(m) => get(m, "meta")?.unwrap_or(&empty),
         None => &empty,
     };
-    let title = get(meta, "title")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(""));
+    let title = title_text(meta)?;
     let names = participant_names(get(meta, "participants")?.unwrap_or(&empty))?;
-    let title = match title {
+    Ok((title, join_names(&names)?))
+}
+
+/// `meta.get("title") or ""` as the prompt prints it.
+fn title_text(meta: &Value) -> Result<String, PyError> {
+    let title = get(meta, "title")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(""));
+    Ok(match title {
         Value::Str(s) => s,
         other => other.py_str(),
-    };
-    Ok((title, join_names(&names)?))
+    })
 }
 
 /// `[info.get("name") or key for key, info in participants.items()]`.

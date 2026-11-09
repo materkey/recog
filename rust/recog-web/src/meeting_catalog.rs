@@ -151,6 +151,40 @@ fn entry_sections(meta: &Value) -> Result<(Value, Value, Vec<Value>), Unusable> 
     Ok((stats, conference, names))
 }
 
+/// The rows of the meetings index, each a valid entry.
+fn parse_index(data: &Value) -> Result<Entry, Unusable> {
+    let empty = Value::Array(Vec::new());
+    let Value::Array(rows) = get_or(data, "meetings", &empty)? else {
+        return Err(Unusable("invalid meetings index".into()));
+    };
+    for row in rows {
+        validate_entry(row)?;
+    }
+    Ok(Entry::Index(rows.clone()))
+}
+
+/// An entry's fields read from the metadata's sections and its canonical source,
+/// read in the order Python reads them, so the first error is the one it raises.
+struct SectionFields {
+    duration_seconds: Value,
+    source: Value,
+    live_url: Value,
+    segment_count: Value,
+    participants: Vec<Value>,
+}
+
+impl SectionFields {
+    fn read(meta: &Value, canonical_source: impl FnOnce() -> Result<Value, Unusable>) -> Result<Self, Unusable> {
+        let (null, zero) = (Value::Null, Value::Int(0));
+        let (stats, conference, participants) = entry_sections(meta)?;
+        let duration_seconds = get_or(&stats, "duration_seconds", &zero)?.clone();
+        let source = canonical_source()?;
+        let live_url = get_or(&conference, "live_url", &null)?.clone();
+        let segment_count = get_or(&stats, "segment_count", &zero)?.clone();
+        Ok(SectionFields { duration_seconds, source, live_url, segment_count, participants })
+    }
+}
+
 /// The end reason of an ended meeting.
 fn end_reason(map: &Map, active: bool) -> Value {
     if active { Value::Null } else { map.get("end_reason").cloned().unwrap_or(Value::Null) }
@@ -263,8 +297,6 @@ impl Inner {
     }
 
     fn metadata_entry(&self, path: &Path, meta: &Value) -> Result<Map, Unusable> {
-        let null = Value::Null;
-        let zero = Value::Int(0);
         let map = meta.as_object().ok_or_else(|| no_get(meta))?;
         let (Some(Value::Str(id)), Some(Value::Str(created_at))) = (map.get("id"), map.get("created_at")) else {
             return Err(Unusable("metadata requires id and created_at".into()));
@@ -273,18 +305,18 @@ impl Inner {
         let external = root != self.base_path;
         let source = self.entry_source(root, external, map)?;
         let active = !external && map.get("ended_at").is_none_or(Value::is_null);
-        let (stats, conference, names) = entry_sections(meta)?;
+        let sections = SectionFields::read(meta, || self.canonical(&source))?;
         let mut entry = Map::new();
         entry.insert("id", Value::from(id.as_str()));
         entry.insert("created_at", Value::from(created_at.as_str()));
         entry.insert("ended_at", map.get("ended_at").cloned().unwrap_or(Value::Null));
-        entry.insert("duration_seconds", get_or(&stats, "duration_seconds", &zero)?.clone());
+        entry.insert("duration_seconds", sections.duration_seconds);
         entry.insert("title", map.get("title").cloned().unwrap_or(Value::Null));
-        entry.insert("source", self.canonical(&source)?);
+        entry.insert("source", sections.source);
         entry.insert("end_reason", end_reason(map, active));
-        entry.insert(live_url_key(external), get_or(&conference, "live_url", &null)?.clone());
-        entry.insert("segment_count", get_or(&stats, "segment_count", &zero)?.clone());
-        entry.insert("participants", Value::Array(names));
+        entry.insert(live_url_key(external), sections.live_url);
+        entry.insert("segment_count", sections.segment_count);
+        entry.insert("participants", Value::Array(sections.participants));
         entry.insert("recorder", recorder(meta)?);
         mark_origin(&mut entry, active, external.then_some(root));
         Ok(entry)
@@ -314,14 +346,7 @@ impl Inner {
             return Err(Unusable("expected a JSON object".into()));
         }
         if path == self.index_path() {
-            let empty = Value::Array(Vec::new());
-            let Value::Array(rows) = get_or(&data, "meetings", &empty)? else {
-                return Err(Unusable("invalid meetings index".into()));
-            };
-            for row in rows {
-                validate_entry(row)?;
-            }
-            Ok(Entry::Index(rows.clone()))
+            parse_index(&data)
         } else {
             let entry = self.metadata_entry(path, &data)?;
             validate_entry(&Value::Object(entry.clone()))?;

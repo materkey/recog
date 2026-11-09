@@ -46,13 +46,8 @@ pub fn resolve_ai_context(
     storage: &MeetingStorage,
     debug: bool,
 ) -> Result<Result<(Vec<Value>, String), axum::response::Response>, PyError> {
-    if debug {
-        let context = state.debug_ai.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-        if !context.segments.is_empty() {
-            let user =
-                context.user_name.filter(|n| !recog_core::py::strip(n).is_empty()).unwrap_or_else(|| "User".to_owned());
-            return Ok(Ok((context.segments, user)));
-        }
+    if debug && let Some(context) = debug_context(state) {
+        return Ok(Ok(context));
     }
     if meeting_id.is_empty() {
         return Ok(Err(not_found("Meeting not found")));
@@ -67,6 +62,16 @@ pub fn resolve_ai_context(
         return Ok(Err(bad_request("Meeting has no transcript")));
     }
     Ok(Ok((segments, local)))
+}
+
+/// The debug page's context, when it holds segments; its user defaults to `User`.
+fn debug_context(state: &AppState) -> Option<(Vec<Value>, String)> {
+    let context = state.debug_ai.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    if context.segments.is_empty() {
+        return None;
+    }
+    let user = context.user_name.filter(|n| !recog_core::py::strip(n).is_empty()).unwrap_or_else(|| "User".to_owned());
+    Some((context.segments, user))
 }
 
 /// The validated question of `POST /chat`, or the 422.

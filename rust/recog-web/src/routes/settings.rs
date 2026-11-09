@@ -66,7 +66,20 @@ pub(super) async fn save_ai_task(state: &AppState, req: &Req) -> Reply {
     let body = body_model(req, &fields, true, &mut errors)?;
     check(&errors)?;
     let body = body.unwrap_or_default();
-    // model_dump(exclude={"revision"}, exclude_none=True): models defaults to {}.
+    let revision = body.get("revision").map(Value::py_str);
+    let task_id = req.param("task_id").to_owned();
+    let values = Value::Object(task_values(&body));
+    let result = state
+        .ai_settings
+        .write(move |store| store.write_task(&task_id, &values, revision.as_deref()))
+        .await
+        .map_err(ai_write_error)?;
+    Ok(responses::json(&result))
+}
+
+/// The task's settings as `model_dump(exclude={"revision"}, exclude_none=True)`
+/// gives them: None values left out, models defaulting to {}.
+fn task_values(body: &Map) -> Map {
     let mut values = Map::new();
     for name in ["enabled", "prompt", "providers", "models", "reasoning_effort", "claude_effort"] {
         match body.get(name) {
@@ -76,15 +89,7 @@ pub(super) async fn save_ai_task(state: &AppState, req: &Req) -> Reply {
             None => {}
         }
     }
-    let revision = body.get("revision").map(Value::py_str);
-    let task_id = req.param("task_id").to_owned();
-    let values = Value::Object(values);
-    let result = state
-        .ai_settings
-        .write(move |store| store.write_task(&task_id, &values, revision.as_deref()))
-        .await
-        .map_err(ai_write_error)?;
-    Ok(responses::json(&result))
+    values
 }
 
 pub(super) async fn reset_ai_task(state: &AppState, req: &Req) -> Reply {
