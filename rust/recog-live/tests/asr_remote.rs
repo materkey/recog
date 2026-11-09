@@ -1,7 +1,6 @@
-//! The remote backend's threaded paths, which tests/asr_remote_parity.rs drives one
-//! call at a time: the lone recovery probe among concurrent callers, a late success
-//! not closing a circuit reopened after it started, and the local refine path's abort
-//! check after a remote failure.
+//! The remote backend's threaded paths: the lone recovery probe among concurrent
+//! callers, a late success not closing a circuit reopened after it started, and the
+//! local refine path's abort check after a remote failure.
 
 use std::net::TcpListener;
 use std::sync::{Arc, Barrier};

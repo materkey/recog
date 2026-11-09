@@ -10,16 +10,6 @@ use std::rc::Rc;
 use recog_copilot::ai_settings::{CopilotSettings, CopilotTask, DEFAULT_CLAUDE_MODEL};
 use recog_copilot::supervisor::{CommandRunner, Error, Runner, Supervisor, TmuxRunner, Tunables};
 
-/// The interpreter that runs the Python supervisor for comparison: `RECOG_ORACLE_PYTHON`
-/// (scripts/check.sh sets it), else the checkout's `venv-gigaam/bin/python`.
-pub fn oracle_python() -> Option<std::path::PathBuf> {
-    if let Some(python) = std::env::var_os("RECOG_ORACLE_PYTHON").filter(|p| !p.is_empty()) {
-        return Some(python.into());
-    }
-    let venv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../venv-gigaam/bin/python");
-    venv.exists().then_some(venv)
-}
-
 /// Runs `f` on a `LocalSet`, where the supervisor spawns its tasks.
 pub async fn local<F: Future>(f: F) -> F::Output {
     tokio::task::LocalSet::new().run_until(f).await

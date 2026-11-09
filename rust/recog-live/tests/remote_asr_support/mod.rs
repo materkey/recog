@@ -1,7 +1,7 @@
-//! The remote backend's scenarios over one fake gateway, shared by
-//! tests/asr_remote_parity.rs (against `recog/remote_asr.py`) and
-//! tests/asr_remote_frozen.rs (against the Python answers recorded into
-//! tests/fixtures/remote_asr_python.json).
+//! The remote backend's scenarios over one fake gateway, which
+//! tests/asr_remote_frozen.rs replays against the answers `recog/remote_asr.py` gave
+//! to them, recorded into tests/fixtures/remote_asr_python.json by the parity test
+//! the Python side went with.
 //!
 //! The gateway is an HTTP server on an ephemeral port that answers every request from
 //! a plan: the clip's first sample names it, and each name has a queue of answers
@@ -488,8 +488,9 @@ pub fn scenarios_sha256(scenarios: &[Json]) -> String {
     Sha256::digest(Json::from(scenarios.to_vec()).to_string().as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The Python answers recorded by `RECOG_RECORD_REMOTE_ASR_FIXTURE=1 cargo test -p
-/// recog-live --test asr_remote_parity` with the Python side installed.
+/// The Python answers, recorded by `RECOG_RECORD_REMOTE_ASR_FIXTURE=1 cargo test -p
+/// recog-live --test asr_remote_parity` on a checkout that still has the Python side
+/// (the commit "Freeze the Python answers of the remote ASR parity test").
 pub fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/remote_asr_python.json")
 }

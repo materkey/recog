@@ -25,20 +25,6 @@ pub fn repo_root() -> PathBuf {
     std::fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap()
 }
 
-/// The interpreter of the Python side: `RECOG_WEB_PARITY_PYTHON` (scripts/check.sh
-/// sets it, and then the tests must run), else the repository's venv; none skips.
-pub fn python() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("RECOG_WEB_PARITY_PYTHON") {
-        return Some(PathBuf::from(path));
-    }
-    let venv = repo_root().join("venv-gigaam/bin/python");
-    if venv.exists() {
-        return Some(venv);
-    }
-    eprintln!("differential test skipped: no venv-gigaam/bin/python and RECOG_WEB_PARITY_PYTHON is not set");
-    None
-}
-
 pub fn free_port() -> u16 {
     loop {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

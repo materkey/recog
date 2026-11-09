@@ -121,33 +121,15 @@ if [ -f rust/Cargo.toml ]; then
         cargo test -p speexdsp-aec --lib --test properties --test cli
         cargo test -p speexdsp-aec --doc
         cargo test -p recog-mic
-        # Its differential and protocol tests run the Python supervisor with this
-        # interpreter and compare.
-        RECOG_ORACLE_PYTHON="$PYTHON" cargo test -p recog-copilot
-        # Its differential tests run recog/zoom_app.py on the same input: with this
-        # interpreter, which has the repo's dependencies.
-        RECOG_ZOOM_PARITY_PYTHON="$PYTHON" cargo test -p recog-zoom
-        # Parity with Python: the tests run the Python modules with this interpreter
-        # (rust/recog-core/tests/parity/harness.py) and fail if it cannot run them.
-        RECOG_PARITY_PYTHON="$PYTHON" cargo test -p recog-core
-        # recog-ai's parity tests run the Python modules it replaces with this interpreter.
-        RECOG_AI_PARITY_PYTHON="$PYTHON" cargo test -p recog-ai
-        # Its differential tests run the Python capture, echo, per-speaker, refine and
-        # golden modules on the same input, with this interpreter (numpy, speexdsp_aec).
-        RECOG_LIVE_PARITY_PYTHON="$PYTHON" cargo test -p recog-live
-        # Its differential tests run recog/ktalk_bridge.py on the same scenarios with
-        # this interpreter (rust/recog-bridge/tests/parity/bridge_driver.py).
-        RECOG_BRIDGE_PARITY_PYTHON="$PYTHON" cargo test -p recog-bridge
-        # recog-web's differential tests run recog/web/server.py under uvicorn with this
-        # interpreter, beside the Rust server on the same data, and compare.
-        RECOG_WEB_PARITY_PYTHON="$PYTHON" cargo test -p recog-web
-        # Its differential tests run recog/desktop/ on scripted processes and a fake
-        # inspector with this interpreter (rust/recog-desktop/tests/parity/desktop_driver.py).
-        RECOG_DESKTOP_PARITY_PYTHON="$PYTHON" cargo test -p recog-desktop
-        # Its differential tests run recog/asr_server/ under uvicorn with this
-        # interpreter (fastapi, httpx, python-multipart) beside the Rust gateway and
-        # backend, against one fake backend and one fake model, and compare.
-        RECOG_ASR_SERVER_PARITY_PYTHON="$PYTHON" cargo test -p recog-asr-server
+        cargo test -p recog-copilot
+        cargo test -p recog-zoom
+        cargo test -p recog-core
+        cargo test -p recog-ai
+        cargo test -p recog-live
+        cargo test -p recog-bridge
+        cargo test -p recog-web
+        cargo test -p recog-desktop
+        cargo test -p recog-asr-server
         if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
             cargo test -p speexdsp-aec --test parity --test fft_parity
         fi

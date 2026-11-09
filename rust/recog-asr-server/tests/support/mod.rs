@@ -1,7 +1,6 @@
-//! What the differential and frozen tests share: the interpreter of the Python side,
-//! free ports, a raw HTTP/1.1 client, multipart and WAV builders, a server process, an
-//! answer as it is compared and recorded, and the comparison of two runs. Nothing here
-//! uses the ports of installed services.
+//! What the frozen tests share: free ports, a raw HTTP/1.1 client, multipart and WAV
+//! builders, a server process, an answer as it is compared and recorded, and the
+//! comparison of two runs. Nothing here uses the ports of installed services.
 
 #![allow(dead_code)]
 
@@ -16,25 +15,6 @@ use sha2::{Digest as _, Sha256};
 
 /// Ports of the user's services and of a production ASR stack, never used by a test.
 const RESERVED: [u16; 8] = [8765, 8766, 8767, 9080, 8770, 9001, 9002, 9003];
-
-pub fn repo_root() -> PathBuf {
-    std::fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap()
-}
-
-/// The interpreter of the Python side: `RECOG_ASR_SERVER_PARITY_PYTHON`
-/// (scripts/check.sh sets it), else the checkout's venv; without either the
-/// differential tests are skipped with a note.
-pub fn python() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("RECOG_ASR_SERVER_PARITY_PYTHON") {
-        return Some(PathBuf::from(path));
-    }
-    let venv = repo_root().join("venv-gigaam/bin/python");
-    if venv.exists() {
-        return Some(venv);
-    }
-    eprintln!("differential test skipped: no venv-gigaam/bin/python and RECOG_ASR_SERVER_PARITY_PYTHON is not set");
-    None
-}
 
 /// An ephemeral port nothing listens on any more.
 pub fn free_port() -> u16 {
@@ -284,12 +264,6 @@ pub fn answer(response: &HttpResponse, masks: &[(u16, &str)]) -> Json {
     json!({"status": response.status, "headers": headers, "body": body})
 }
 
-/// Writes a fixture as pretty JSON with a final newline.
-pub fn write_fixture(path: &Path, fixture: &Json) {
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(fixture).unwrap())).unwrap();
-}
-
 /// Reads a fixture of recorded Python answers, checking that it was recorded for the
 /// steps whose SHA-256 is `steps_sha256`.
 pub fn read_fixture(path: &Path, steps_sha256: &str, how_to_record: &str) -> Json {
@@ -298,13 +272,13 @@ pub fn read_fixture(path: &Path, steps_sha256: &str, how_to_record: &str) -> Jso
         fixture["steps_sha256"].as_str().unwrap(),
         steps_sha256,
         "the steps changed since the answers were recorded: record them again on a checkout with the Python side \
-         ({how_to_record})"
+         (the commit \"Freeze the Python answers of recog-asr-server's differential tests\", {how_to_record})"
     );
     fixture
 }
 
 /// Collects the differences between two runs of the same steps: the answers the Rust
-/// ones are held to (Python's, live or recorded) and the Rust ones.
+/// ones are held to (Python's, as recorded) and the Rust ones.
 pub struct Diff {
     expected: &'static str,
     failures: Vec<String>,

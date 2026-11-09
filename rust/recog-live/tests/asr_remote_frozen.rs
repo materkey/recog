@@ -1,7 +1,8 @@
 //! The Rust remote backend against the answers `recog/remote_asr.py` gave to the same
 //! scenarios over the same fake gateway, recorded into
 //! tests/fixtures/remote_asr_python.json by tests/asr_remote_parity.rs
-//! (`RECOG_RECORD_REMOTE_ASR_FIXTURE=1`), so the comparison holds without Python.
+//! (`RECOG_RECORD_REMOTE_ASR_FIXTURE=1`) before the Python side went, so the
+//! comparison holds without Python.
 //! Every step's answer, `available` after it, the `[FallbackASR]` log lines and the
 //! requests the gateway saw must be equal to the recorded ones.
 
@@ -20,7 +21,8 @@ fn recorded_python_answers_when_the_rust_backend_replays_the_scenarios_then_step
         fixture["scenarios_sha256"].as_str().unwrap(),
         scenarios_sha256(&scenarios),
         "the scenarios changed since the answers were recorded: record them again on a checkout with the Python side \
-         (RECOG_RECORD_REMOTE_ASR_FIXTURE=1 cargo test -p recog-live --test asr_remote_parity)"
+         (the commit \"Freeze the Python answers of the remote ASR parity test\", \
+         RECOG_RECORD_REMOTE_ASR_FIXTURE=1 cargo test -p recog-live --test asr_remote_parity)"
     );
     let expected = fixture["answers"].as_array().unwrap();
     let python_requests: Vec<String> =

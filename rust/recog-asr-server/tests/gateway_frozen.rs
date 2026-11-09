@@ -1,7 +1,8 @@
 //! `recog-asr-gateway` against the answers `python -m recog.asr_server.gateway` gave
 //! to the same steps over the same fake backend, recorded into
 //! tests/fixtures/gateway_python.json by tests/gateway_differential.rs
-//! (`RECOG_RECORD_ASR_SERVER_FIXTURE=1`), so the comparison holds without Python.
+//! (`RECOG_RECORD_ASR_SERVER_FIXTURE=1`) before the Python side went, so the
+//! comparison holds without Python.
 //! Every step's answer and the requests the fake received during it must be equal to
 //! the recorded ones.
 

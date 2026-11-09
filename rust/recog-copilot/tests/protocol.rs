@@ -4,10 +4,9 @@
 //! commands it runs for a conference meeting, a manual session, a bridge restart and a
 //! supervisor restart mid-meeting, and a dead session.
 //!
-//! Every scenario runs twice at once, against the Rust binary and against
-//! `python -m recog.copilot_supervisor` (with the interpreter the differential test
-//! uses), with the same assertions, and the tmux commands that create and kill
-//! sessions must come out the same from both.
+//! Every scenario runs against the Rust binary. They ran against
+//! `python -m recog.copilot_supervisor` too, with the same assertions and the same
+//! tmux commands, until the Python supervisor was deleted.
 //!
 //! The environment is cleared for the child, its data directory is temporary, and
 //! `systemd-run`/`systemctl` are stubs too, so neither a real Claude session nor the
@@ -83,31 +82,15 @@ const WAIT: Duration = Duration::from_secs(12);
 #[derive(Clone, Debug)]
 enum Implementation {
     Rust,
-    Python(PathBuf),
 }
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
-}
-
-/// Runs `scenario` against the Rust binary and, when an interpreter is there, against
-/// the Python module at the same time; their session commands must be the same.
+/// Runs `scenario` against the Rust binary.
 async fn both<F, Fut>(scenario: F)
 where
     F: Fn(Implementation) -> Fut,
     Fut: std::future::Future<Output = Vec<Vec<String>>>,
 {
-    match common::oracle_python() {
-        Some(python) => {
-            let (rust, python) = tokio::join!(scenario(Implementation::Rust), scenario(Implementation::Python(python)));
-            assert_eq!(rust, python, "the Rust and Python supervisors created or killed different sessions");
-            eprintln!("Rust and Python: the same {} session commands: {rust:?}", rust.len());
-        }
-        None => {
-            eprintln!("no Python interpreter (set RECOG_ORACLE_PYTHON): the Rust binary only");
-            scenario(Implementation::Rust).await;
-        }
-    }
+    scenario(Implementation::Rust).await;
 }
 
 struct Rig {
@@ -195,11 +178,10 @@ impl Rig {
         let _ = std::fs::remove_file(self.path("state/sessions").join(name));
     }
 
-    /// The checkout the supervisor runs Claude in: the Python module's own.
+    /// The checkout the supervisor runs Claude in.
     fn repo(&self) -> String {
         match &self.implementation {
             Implementation::Rust => self.path("repo").display().to_string(),
-            Implementation::Python(_) => repo_root().display().to_string(),
         }
     }
 
@@ -209,11 +191,6 @@ impl Rig {
             Implementation::Rust => {
                 let mut command = Command::new(env!("CARGO_BIN_EXE_recog-copilot-supervisor"));
                 command.args(["--bridge-url", &self.url, "--repo-root"]).arg(self.path("repo"));
-                command
-            }
-            Implementation::Python(python) => {
-                let mut command = Command::new(python);
-                command.args(["-m", "recog.copilot_supervisor", "--bridge-url", &self.url]).current_dir(repo_root());
                 command
             }
         };

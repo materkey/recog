@@ -195,16 +195,12 @@ What differs from the Python backend:
 The gateway's differences are limited to error texts httpx would word
 differently (a host that does not resolve, for example); a refused
 connection, a timeout and a URL without an `http(s)://` scheme read as in
-Python. The differential tests run both implementations of each service side
-by side, against one fake backend and a fake model, and compare every answer:
+Python. The frozen tests (`gateway_frozen`, `backend_frozen`) hold the Rust
+services to the answers the Python ones gave to the same steps, against one
+fake backend and a fake model, recorded in
+`rust/recog-asr-server/tests/fixtures/` while both implementations existed;
+they need no Python:
 
 ```bash
-cd rust && RECOG_ASR_SERVER_PARITY_PYTHON=../venv-gigaam/bin/python cargo test -p recog-asr-server
+cd rust && cargo test -p recog-asr-server
 ```
-
-The frozen tests (`gateway_frozen`, `backend_frozen`) hold the Rust services to
-the answers Python gave to the same steps, recorded in
-`rust/recog-asr-server/tests/fixtures/`, and need no Python. The fixtures carry
-the SHA-256 of the steps; after a change of the steps record them again with
-`RECOG_ASR_SERVER_PARITY_PYTHON` and `RECOG_RECORD_ASR_SERVER_FIXTURE=1` on
-`--test gateway_differential --test backend_differential`.

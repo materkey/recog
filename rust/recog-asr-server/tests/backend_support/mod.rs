@@ -1,7 +1,7 @@
-//! The GigaAM backend's steps over one fake model and one fake ffmpeg, shared by
-//! tests/backend_differential.rs (against `recog/asr_server/gigaam_backend.py`) and
-//! tests/backend_frozen.rs (against the Python answers recorded into
-//! tests/fixtures/backend_python.json).
+//! The GigaAM backend's steps over one fake model and one fake ffmpeg, which
+//! tests/backend_frozen.rs replays against the answers the Python backend gave to
+//! them, recorded into tests/fixtures/backend_python.json by the differential test the
+//! Python side went with.
 //!
 //! The model answers from one scenarios file by the number of frames of the WAV ffmpeg
 //! wrote; ffmpeg is a script that copies its input (or fails on input starting with
@@ -22,10 +22,6 @@ use recog_core::pyjson::{self, Value};
 use serde_json::{Value as Json, json};
 
 use crate::support::{self, Part, field, file, multipart, try_request};
-
-/// The environment variable that makes tests/backend_differential.rs write Python's
-/// answers to the fixture.
-pub const RECORD: &str = "RECOG_RECORD_ASR_SERVER_FIXTURE";
 
 pub const FFMPEG: &str = r#"#!/bin/sh
 # ffmpeg -y -i SRC -ar 16000 -ac 1 -c:a pcm_s16le DST, as the backend calls it.
@@ -104,16 +100,13 @@ pub fn start_rust(dir: &Path, with_model: bool) -> u16 {
     port
 }
 
-/// The fake ffmpeg, the scenarios file the Python fake reads, and a temporary
-/// directory per side.
+/// The fake ffmpeg and the backend's temporary directory.
 pub fn prepare(dir: &Path) {
     std::fs::create_dir_all(dir.join("bin")).unwrap();
-    std::fs::create_dir_all(dir.join("py-tmp")).unwrap();
     std::fs::create_dir_all(dir.join("rs-tmp")).unwrap();
     let ffmpeg = dir.join("bin/ffmpeg");
     std::fs::write(&ffmpeg, FFMPEG).unwrap();
     std::fs::set_permissions(&ffmpeg, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(dir.join("scenarios.json"), SCENARIOS).unwrap();
 }
 
 /// One request of the steps.
@@ -277,8 +270,10 @@ pub fn steps_sha256() -> String {
     support::sha256_hex(all.to_string().as_bytes())
 }
 
-/// The Python answers recorded by `RECOG_RECORD_ASR_SERVER_FIXTURE=1 cargo test -p
-/// recog-asr-server --test backend_differential` with the Python side installed.
+/// The Python answers, recorded by `RECOG_RECORD_ASR_SERVER_FIXTURE=1 cargo test -p
+/// recog-asr-server --test backend_differential` on a checkout that still has the
+/// Python side (the commit "Freeze the Python answers of recog-asr-server's
+/// differential tests").
 pub fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/backend_python.json")
 }

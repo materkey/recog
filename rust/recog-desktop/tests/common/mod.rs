@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -22,20 +21,6 @@ use recog_desktop::py::{self, PyErr};
 
 pub fn repo_root() -> PathBuf {
     recog_desktop::default_repo_root()
-}
-
-/// The interpreter of the Python side: `RECOG_DESKTOP_PARITY_PYTHON` (scripts/check.sh
-/// sets it, and then the tests must run), else the repository's venv; none skips.
-pub fn python() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("RECOG_DESKTOP_PARITY_PYTHON").filter(|p| !p.is_empty()) {
-        return Some(PathBuf::from(path));
-    }
-    let venv = repo_root().join("venv-gigaam/bin/python");
-    if venv.exists() {
-        return Some(venv);
-    }
-    eprintln!("differential test skipped: no venv-gigaam/bin/python and RECOG_DESKTOP_PARITY_PYTHON is not set");
-    None
 }
 
 /// Ports the tests must never take: the services' and the real inspector's.
@@ -698,35 +683,6 @@ pub fn ktalk_process(pid: i64, app: &FakeApp, app_ready_port: u16) -> Value {
 
 pub fn world_of(processes: Vec<Value>) -> Value {
     py::obj([("processes", Value::Array(processes))])
-}
-
-/// Asks the Python driver; panics with its stderr when it fails.
-pub fn ask_python(python: &Path, request: &Value, env: &[(String, String)]) -> Value {
-    let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity/desktop_driver.py");
-    let mut command = Command::new(python);
-    command.arg("-I").arg(&driver);
-    command.env_remove("RECOG_DATA_DIR");
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("cannot start {}: {e}", python.display()));
-    let input = py::dumps(request);
-    let mut stdin = child.stdin.take().unwrap();
-    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
-    let output = child.wait_with_output().unwrap();
-    writer.join().unwrap().unwrap();
-    assert!(
-        output.status.success(),
-        "the Python driver failed ({}): {}",
-        python.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    obj(&String::from_utf8(output.stdout).unwrap())
 }
 
 /// `{"value": ...}` or `{"error": {"kind", "message"}}`, as the driver reports a call.

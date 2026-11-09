@@ -1,76 +1,36 @@
-//! Shared by the differential tests: running the Python implementation through one of
-//! the scripts under `tests/parity/`, and moving sample arrays across as base64.
+//! Shared by the integration tests: the interpreter of stub children, sample arrays
+//! as base64.
 #![allow(dead_code)]
 
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use serde_json::Value as Json;
 
 pub fn repo_root() -> PathBuf {
     fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap()
 }
 
-/// The interpreter of the Python side: `RECOG_LIVE_PARITY_PYTHON` (scripts/check.sh
-/// sets it, and then the tests must run), else the repository's venv. None skips.
+/// An interpreter for the stub children of the process tests (plain stdlib
+/// scripts): the executable behind `python3` on PATH, so that a version manager's
+/// shim does not slow every child's start past the tests' timing. None skips them.
 pub fn python() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("RECOG_LIVE_PARITY_PYTHON") {
-        return Some(PathBuf::from(path));
-    }
-    let venv = repo_root().join("venv-gigaam/bin/python");
-    if venv.exists() {
-        return Some(venv);
-    }
-    eprintln!("differential test skipped: no venv-gigaam/bin/python and RECOG_LIVE_PARITY_PYTHON is not set");
-    None
-}
-
-/// Runs `tests/parity/<script>` with the repository root as its first argument and
-/// `request` as JSON on stdin, and returns the JSON it prints.
-///
-/// HOME, the installation configuration and the data directory point into `sandbox`
-/// (a temp directory), so nothing reads or writes the user's real settings or data.
-pub fn run_python(python: &Path, script: &str, request: &Json, sandbox: &Path) -> Json {
-    let output = run_python_raw(python, script, &[], request, sandbox);
-    serde_json::from_slice(&output)
-        .unwrap_or_else(|e| panic!("{script} printed no JSON ({e}):\n{}", String::from_utf8_lossy(&output)))
-}
-
-/// As [`run_python`] with extra arguments after the repository root, returning stdout.
-pub fn run_python_raw(python: &Path, script: &str, args: &[&str], request: &Json, sandbox: &Path) -> Vec<u8> {
-    fs::create_dir_all(sandbox.join("home")).unwrap();
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity").join(script);
-    let mut child = Command::new(python)
-        .arg(&path)
-        .arg(repo_root())
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("HOME", sandbox.join("home"))
-        .env("RECOG_CONFIG_FILE", sandbox.join("no-config.toml"))
-        .env("RECOG_CONFERENCE_HOSTS_FILE", sandbox.join("no-hosts.json"))
-        .env("RECOG_DATA_DIR", sandbox.join("data"))
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("PYTHONUTF8", "1")
-        .env("TZ", "UTC")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("cannot run {}: {e}", python.display()));
-    child.stdin.take().unwrap().write_all(request.to_string().as_bytes()).unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{script} failed ({}):\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output.stdout
+    static FOUND: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            let found = std::process::Command::new("python3")
+                .args(["-c", "import sys; print(sys.executable)"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()));
+            if found.is_none() {
+                eprintln!("process test skipped: no python3 on PATH for its stub children");
+            }
+            found
+        })
+        .clone()
 }
 
 pub fn b64(bytes: &[u8]) -> String {

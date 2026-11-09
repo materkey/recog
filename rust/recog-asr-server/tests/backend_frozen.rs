@@ -1,7 +1,8 @@
 //! The Rust GigaAM backend against the answers `recog/asr_server/gigaam_backend.py`
 //! gave to the same steps with the same fake model and fake ffmpeg, recorded into
 //! tests/fixtures/backend_python.json by tests/backend_differential.rs
-//! (`RECOG_RECORD_ASR_SERVER_FIXTURE=1`), so the comparison holds without Python.
+//! (`RECOG_RECORD_ASR_SERVER_FIXTURE=1`) before the Python side went, so the
+//! comparison holds without Python.
 //! Every step's answer, of a backend with its model and of one still loading, and
 //! ffmpeg's command lines must be equal to the recorded ones, and the temporary
 //! directory must end empty.

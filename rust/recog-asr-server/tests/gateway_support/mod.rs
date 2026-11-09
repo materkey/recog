@@ -1,6 +1,7 @@
-//! The gateway's steps over one fake backend, shared by tests/gateway_differential.rs
-//! (against `python -m recog.asr_server.gateway`) and tests/gateway_frozen.rs (against
-//! the Python answers recorded into tests/fixtures/gateway_python.json).
+//! The gateway's steps over one fake backend, which tests/gateway_frozen.rs replays
+//! against the answers the Python gateway gave to them, recorded into
+//! tests/fixtures/gateway_python.json by the differential test the Python side went
+//! with.
 //!
 //! The fake answers `/healthz` in the shape the step sets and every other request by
 //! its `prompt` field (other content types, statuses, a redirect, a body that is not
@@ -19,10 +20,6 @@ use std::time::Duration;
 use serde_json::{Value as Json, json};
 
 use crate::support::{self, HttpResponse, Part, field, file, multipart, try_request};
-
-/// The environment variable that makes tests/gateway_differential.rs write Python's
-/// answers to the fixture.
-pub const RECORD: &str = "RECOG_RECORD_ASR_SERVER_FIXTURE";
 
 /// What the fake answers at `/healthz`.
 #[derive(Clone, Copy, Debug)]
@@ -462,8 +459,10 @@ pub fn steps_sha256(steps: &[Step]) -> String {
     support::sha256_hex(Json::from(steps).to_string().as_bytes())
 }
 
-/// The Python answers recorded by `RECOG_RECORD_ASR_SERVER_FIXTURE=1 cargo test -p
-/// recog-asr-server --test gateway_differential` with the Python side installed.
+/// The Python answers, recorded by `RECOG_RECORD_ASR_SERVER_FIXTURE=1 cargo test -p
+/// recog-asr-server --test gateway_differential` on a checkout that still has the
+/// Python side (the commit "Freeze the Python answers of recog-asr-server's
+/// differential tests").
 pub fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gateway_python.json")
 }
