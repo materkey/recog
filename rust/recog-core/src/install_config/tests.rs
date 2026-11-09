@@ -332,3 +332,66 @@ fn a_file_value_the_environment_changes_when_loading_then_a_notice_names_both() 
         ]
     );
 }
+
+#[test]
+fn a_positive_integer_in_the_environment_when_overlaid_then_it_replaces_the_default() {
+    // given
+    let environ = environ(&[("RECOG_TORCH_THREADS", " 4 "), ("RECOG_ASR_CIRCUIT_FAILS", "+7")]);
+    // when
+    let (config, overridden) = with_environment(&InstallConfig::default(), &environ).unwrap();
+    // then
+    assert_eq!(config.get("asr", "torch_threads"), SettingValue::Integer(Some(4)));
+    assert_eq!(config.get("asr", "circuit_fails"), SettingValue::Integer(Some(7)));
+    assert!(overridden.is_empty());
+}
+
+#[test]
+fn a_config_file_that_cannot_be_read_or_decoded_when_loading_then_the_os_error_or_the_path_and_reason() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    let (path, legacy) = (dir.path().join("config.toml"), dir.path().join("hosts.json"));
+    std::fs::create_dir(&path).unwrap();
+    // when / then: a directory is the OSError Python lets escape, without the path in front
+    let error = load_install_config(&path, &legacy, &mut quiet()).unwrap_err();
+    assert_eq!(error, format!("[Errno 21] Is a directory: '{}'", path.display()));
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::write(&path, b"\xff").unwrap();
+    assert_eq!(
+        load_install_config(&path, &legacy, &mut quiet()).unwrap_err(),
+        format!("{}: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte", path.display())
+    );
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&legacy, b"\xfe").unwrap();
+    assert_eq!(
+        load_install_config(&path, &legacy, &mut quiet()).unwrap_err(),
+        format!("{}: 'utf-8' codec can't decode byte 0xfe in position 0: invalid start byte", legacy.display())
+    );
+    std::fs::write(&legacy, "[").unwrap();
+    assert_eq!(
+        load_install_config(&path, &legacy, &mut quiet()).unwrap_err(),
+        format!("{}: Expecting value: line 1 column 2 (char 1)", legacy.display())
+    );
+    std::fs::write(&legacy, r#"{"other": 1}"#).unwrap();
+    assert_eq!(
+        load_install_config(&path, &legacy, &mut quiet()).unwrap_err(),
+        format!("{}: Conference hosts must be a table with only jitsi, matrix, source_aliases", legacy.display())
+    );
+}
+
+#[test]
+fn a_legacy_json_document_when_converted_then_each_json_type_has_its_toml_counterpart() {
+    // given
+    let json = pyjson::loads(r#"[null, true, 7, 1.5, "s", {"k": []}]"#).unwrap();
+    // when / then
+    assert_eq!(
+        Doc::from(json),
+        Doc::Array(vec![
+            Doc::Null,
+            Doc::Bool(true),
+            Doc::Int(7),
+            Doc::Float(1.5),
+            Doc::Str("s".into()),
+            Doc::Table(vec![("k".into(), Doc::Array(Vec::new()))]),
+        ])
+    );
+}
