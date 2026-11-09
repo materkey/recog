@@ -307,6 +307,65 @@ mod tests {
     }
 
     #[test]
+    fn broken_profile_files_when_read_then_each_fails_with_its_python_message() {
+        let big =
+            format!("{{\"version\": 1, \"revision\": \"r\", \"name\": \"{}\", \"aliases\": []}}", "x".repeat(16384));
+        for (payload, message) in [
+            (&b"{"[..], "Profile file is not valid JSON"),
+            (b"\xff", "Profile file is not valid JSON"),
+            (big.as_bytes(), "Profile file is too large"),
+            (b"[]", "Unsupported profile version"),
+            (b"{\"version\": 1.0}", "Unsupported profile version"),
+            (b"{\"version\": 1}", "Invalid profile revision"),
+            (b"{\"version\": 1, \"revision\": \"r\\u0001\"}", "Invalid profile revision"),
+            (b"{\"version\": 1, \"revision\": 5}", "Invalid profile revision"),
+            (b"{\"version\": 1, \"revision\": \"r\", \"name\": 5, \"aliases\": []}", "Profile names must be strings"),
+            (
+                b"{\"version\": 1, \"revision\": \"r\", \"name\": \"A\"}",
+                "Profile aliases must be a list of at most 16 names",
+            ),
+            (b"{\"version\": 1, \"revision\": \"r\", \"name\": \"mE\", \"aliases\": []}", "Profile name cannot be Me"),
+            (
+                b"{\"version\": 1, \"revision\": \"r\", \"name\": \" \", \"aliases\": [\"A\"]}",
+                "An empty profile cannot have aliases",
+            ),
+        ] {
+            // given
+            let dir = tempfile::tempdir().unwrap();
+            let store = UserProfileStore::new(dir.path());
+            fs::write(&store.path, payload).unwrap();
+            // when / then
+            assert_eq!(
+                store.read(),
+                Err(ProfileError::Invalid(message.into())),
+                "{:?}",
+                String::from_utf8_lossy(payload)
+            );
+        }
+        // a revision of 128 characters is the longest kept, and a BOM is skipped
+        let dir = tempfile::tempdir().unwrap();
+        let store = UserProfileStore::new(dir.path());
+        let revision = "r".repeat(128);
+        let text =
+            format!("\u{feff}{{\"version\": 1, \"revision\": \"{revision}\", \"name\": \"A\", \"aliases\": [\"me\"]}}");
+        fs::write(&store.path, text).unwrap();
+        assert_eq!(store.read(), Ok(Profile::new("A".into(), Vec::new(), revision)));
+    }
+
+    #[test]
+    fn a_profile_that_cannot_be_opened_when_read_then_the_os_error() {
+        // given
+        let dir = tempfile::tempdir().unwrap();
+        let store = UserProfileStore::new(dir.path());
+        fs::create_dir(&store.path).unwrap();
+        // when / then: a directory opens on Linux but cannot be read
+        assert!(matches!(store.read(), Err(ProfileError::Io(_))));
+        let missing = UserProfileStore::new(&dir.path().join("file-not-dir").join("x"));
+        fs::write(dir.path().join("file-not-dir"), "").unwrap();
+        assert!(matches!(missing.read(), Err(ProfileError::Io(m)) if m.contains("Not a directory")));
+    }
+
+    #[test]
     fn corrupt_profile_when_read_or_saved_then_error_preserves_bytes() {
         for payload in [
             &b"{"[..],
