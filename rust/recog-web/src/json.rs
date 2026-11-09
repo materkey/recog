@@ -54,28 +54,35 @@ fn has_non_finite(value: &Value) -> bool {
 fn write_string(out: &mut String, s: &str, ensure_ascii: bool) {
     out.push('"');
     for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if u32::from(c) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", u32::from(c));
-            }
+        if let Some(escape) = named_escape(c) {
+            out.push_str(escape);
+        } else if u32::from(c) < 0x20 {
+            let _ = write!(out, "\\u{:04x}", u32::from(c));
+        } else if ensure_ascii && u32::from(c) > 0x7e {
             // ESCAPE_ASCII is `[^\ -~]`: DEL and everything above ASCII.
-            c if ensure_ascii && u32::from(c) > 0x7e => {
-                let mut units = [0u16; 2];
-                for unit in c.encode_utf16(&mut units) {
-                    let _ = write!(out, "\\u{unit:04x}");
-                }
+            let mut units = [0u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                let _ = write!(out, "\\u{unit:04x}");
             }
-            c => out.push(c),
+        } else {
+            out.push(c);
         }
     }
     out.push('"');
+}
+
+/// The two-character escape of a character that has one.
+fn named_escape(c: char) -> Option<&'static str> {
+    match c {
+        '"' => Some("\\\""),
+        '\\' => Some("\\\\"),
+        '\n' => Some("\\n"),
+        '\r' => Some("\\r"),
+        '\t' => Some("\\t"),
+        '\u{8}' => Some("\\b"),
+        '\u{c}' => Some("\\f"),
+        _ => None,
+    }
 }
 
 fn write_value(out: &mut String, value: &Value, ensure_ascii: bool, separators: (&str, &str)) {

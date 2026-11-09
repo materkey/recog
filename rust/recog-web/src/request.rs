@@ -30,19 +30,14 @@ pub enum BodyError {
 pub const MAX_JSON_DEPTH: usize = 9997;
 
 fn nesting(text: &str) -> usize {
-    let (mut depth, mut deepest, mut in_string, mut escaped) = (0usize, 0usize, false, false);
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    let mut string = JsonString::default();
     for c in text.chars() {
-        if in_string {
-            match (escaped, c) {
-                (true, _) => escaped = false,
-                (false, '\\') => escaped = true,
-                (false, '"') => in_string = false,
-                _ => {}
-            }
+        if string.consume(c) {
             continue;
         }
         match c {
-            '"' => in_string = true,
+            '"' => string.inside = true,
             '[' | '{' => {
                 depth += 1;
                 deepest = deepest.max(depth);
@@ -52,6 +47,30 @@ fn nesting(text: &str) -> usize {
         }
     }
     deepest
+}
+
+/// Whether the scan of [`nesting`] is inside a JSON string.
+#[derive(Default)]
+struct JsonString {
+    inside: bool,
+    escaped: bool,
+}
+
+impl JsonString {
+    /// Takes a character inside a string (an escape, the closing quote); false
+    /// outside one.
+    fn consume(&mut self, c: char) -> bool {
+        if !self.inside {
+            return false;
+        }
+        match (self.escaped, c) {
+            (true, _) => self.escaped = false,
+            (false, '\\') => self.escaped = true,
+            (false, '"') => self.inside = false,
+            _ => {}
+        }
+        true
+    }
 }
 
 /// Why untrusted JSON was refused.
