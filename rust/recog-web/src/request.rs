@@ -151,6 +151,74 @@ mod tests {
         assert!(matches!(loads_untrusted(r#"{"a": "[[[["}"#), Ok(Value::Object(_))));
     }
 
+    fn request(content_type: Option<&str>, body: &[u8]) -> Req {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = content_type {
+            headers.insert("content-type", value.parse().unwrap());
+        }
+        Req {
+            method: "PUT".into(),
+            path: "/".into(),
+            params: Params::default(),
+            query: vec![("a".into(), "1".into()), ("a".into(), "2".into())],
+            headers,
+            body: Bytes::copy_from_slice(body),
+        }
+    }
+
+    fn read(content_type: Option<&str>, body: &[u8]) -> Result<Option<String>, String> {
+        match request(content_type, body).body() {
+            Ok(value) => Ok(value.map(|v| pyjson::dumps(&v, None))),
+            Err(BodyError::Unparsable) => Err("unparsable".into()),
+            Err(BodyError::Invalid(item)) => Err(pyjson::dumps(&item.to_json(), None)),
+        }
+    }
+
+    #[test]
+    fn bodies_of_each_content_type_when_read_then_json_text_or_nothing() {
+        for (content_type, body, expected) in [
+            (Some("application/json"), &b"{\"a\": 1}"[..], Ok(Some(r#"{"a": 1}"#.to_owned()))),
+            (Some("Application/JSON; charset=utf-8"), b"[1]", Ok(Some("[1]".to_owned()))),
+            (Some("application/merge-patch+json"), b"2", Ok(Some("2".to_owned()))),
+            (Some("application/json"), b"\xef\xbb\xbf{}", Ok(Some("{}".to_owned()))),
+            (Some("application/json"), b"null", Ok(None)),
+            (Some("application/json"), b"", Ok(None)),
+            (Some("text/plain"), b"{\"a\": 1}", Ok(Some(r#""{\"a\": 1}""#.to_owned()))),
+            (Some("json"), b"x", Ok(Some(r#""x""#.to_owned()))),
+            (Some("application/xml"), b"x", Ok(Some(r#""x""#.to_owned()))),
+            (None, b"x\xff", Ok(Some("\"x\u{fffd}\"".to_owned()))),
+            (Some("application/json"), b"{\xff}", Err("unparsable".to_owned())),
+        ] {
+            assert_eq!(read(content_type, body), expected, "{content_type:?} {body:?}");
+        }
+    }
+
+    #[test]
+    fn json_that_does_not_parse_or_nests_too_deep_when_read_then_422_or_400() {
+        let deep = format!("{}{}", "[".repeat(MAX_JSON_DEPTH + 1), "]".repeat(MAX_JSON_DEPTH + 1));
+
+        assert_eq!(
+            read(Some("application/json"), b"{\"a\": 1,}"),
+            Err(r#"{"type": "json_invalid", "loc": ["body", 8], "msg": "JSON decode error", "input": {}, "ctx": {"error": "Expecting property name enclosed in double quotes"}}"#.to_owned())
+        );
+        assert_eq!(read(Some("application/json"), deep.as_bytes()), Err("unparsable".to_owned()));
+    }
+
+    #[test]
+    fn repeated_query_parameter_when_read_then_the_last_value() {
+        let req = request(None, b"");
+
+        assert_eq!((req.query("a"), req.query("b"), req.param("x")), (Some("2"), None, ""));
+    }
+
+    #[test]
+    fn strings_and_escapes_when_nesting_is_measured_then_brackets_inside_strings_do_not_count() {
+        assert_eq!(nesting(r#"[{"a": "[[\"{{"}, [1]]"#), 2);
+        assert_eq!(nesting(r#""\\" [ ]"#), 1);
+        assert_eq!(nesting("]]][["), 2);
+        assert_eq!(nesting("plain"), 0);
+    }
+
     #[test]
     fn decode_error_text_given_message_when_split_then_position_and_bare_message() {
         // given / when / then
