@@ -22,14 +22,10 @@ use crate::transcript::{self, get};
 use crate::util::invalid_id;
 use crate::validation::{self, ErrorItem, Ty};
 
-fn generator(state: &AppState, with_prompts: bool) -> IncrementGenerator {
-    let prompts = with_prompts.then(|| state.config.prompts_dir.clone());
-    IncrementGenerator::new(
-        &state.config.meetings_dir,
-        Some(prompts.unwrap_or_else(|| state.config.prompts_dir.clone())),
-    )
-    .with_factory(Arc::clone(&state.ai.factory))
-    .with_legacy_env(state.config.legacy_env.clone())
+fn generator(state: &AppState) -> IncrementGenerator {
+    IncrementGenerator::new(&state.config.meetings_dir, Some(state.config.prompts_dir.clone()))
+        .with_factory(Arc::clone(&state.ai.factory))
+        .with_legacy_env(state.config.legacy_env.clone())
 }
 
 fn increment_json((meta, content): (recog_ai::json::Json, Option<String>)) -> Value {
@@ -62,7 +58,7 @@ pub(super) fn increments(state: &AppState, route: Route, req: &Req) -> Reply {
     let prompt_id = req.param("prompt_id");
     let storage = storage(state)?;
     meeting(&storage, meeting_id)?;
-    let generator = generator(state, false);
+    let generator = generator(state);
     match route {
         Route::ListIncrements => list_all(&generator, meeting_id),
         Route::ListPromptIncrements => {
@@ -147,7 +143,7 @@ pub(super) async fn generate_increment(state: &AppState, req: &Req) -> Reply {
     let found = meeting(&storage, meeting_id)?;
     check_participant(&found, participant_id.as_deref())?;
     let (meeting_path, prompt) = directory_and_prompt(state, meeting_id, prompt_id)?;
-    let generator = generator(state, true);
+    let generator = generator(state);
     generator.migrate_flat_increments(&meeting_path, "my-increment").map_err(fail)?;
     let version =
         generator.generate(meeting_id, &meeting_path, &prompt, force, participant_id.as_deref()).await.map_err(fail)?;
