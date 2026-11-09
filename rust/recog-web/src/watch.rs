@@ -79,6 +79,22 @@ fn watch(path: &Path, tx: mpsc::UnboundedSender<FsEvent>, meetings: bool) -> not
     Ok(watcher)
 }
 
+/// A watcher of the meetings directory or an external one; a failure is logged as
+/// the observer or the catalog logs it.
+fn watch_logged(path: &Path, tx: &mpsc::UnboundedSender<FsEvent>, meetings: bool) -> Option<RecommendedWatcher> {
+    match watch(path, tx.clone(), meetings) {
+        Ok(w) => Some(w),
+        Err(e) if meetings => {
+            eprintln!("[observer] cannot watch {}: {e}", path.display());
+            None
+        }
+        Err(e) => {
+            eprintln!("[Catalog] Cannot watch {}; using periodic reconciliation: {e}", path.display());
+            None
+        }
+    }
+}
+
 /// Hands one event to the watchers.
 pub fn dispatch(state: &Arc<AppState>, catalog: &MeetingCatalog, event: &FsEvent) {
     catalog.on_any_event(event.kind, event.is_directory, &event.src, event.dest.as_deref());
@@ -95,22 +111,10 @@ impl FsWatcher {
     /// failure leaves the catalog to its periodic reconciliation.
     pub fn start(state: &Arc<AppState>, catalog: &MeetingCatalog) -> Option<FsWatcher> {
         let (tx, mut rx) = mpsc::unbounded_channel::<FsEvent>();
-        let mut watchers = Vec::new();
-        match watch(&state.config.meetings_dir, tx.clone(), true) {
-            Ok(w) => watchers.push(w),
-            Err(e) => eprintln!("[observer] cannot watch {}: {e}", state.config.meetings_dir.display()),
-        }
-        for root in catalog.roots().iter().skip(1) {
-            if !root.is_dir() {
-                continue;
-            }
-            match watch(root, tx.clone(), false) {
-                Ok(w) => watchers.push(w),
-                Err(e) => {
-                    eprintln!("[Catalog] Cannot watch {}; using periodic reconciliation: {e}", root.display());
-                }
-            }
-        }
+        let mut watchers: Vec<RecommendedWatcher> =
+            watch_logged(&state.config.meetings_dir, &tx, true).into_iter().collect();
+        let external = catalog.roots().iter().skip(1).filter(|root| root.is_dir());
+        watchers.extend(external.filter_map(|root| watch_logged(root, &tx, false)));
         let state = Arc::clone(state);
         let catalog = catalog.clone();
         tokio::spawn(async move {
