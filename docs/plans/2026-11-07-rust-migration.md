@@ -220,8 +220,15 @@ where they can.
      bundle builder with plistlib's bytes and the same stamp; `recog prefetch`
      downloads the model. Stub runs of `setup.sh` in that mode make no Python or pip
      call; the units of the Python mode render byte for byte as before.
-   - Still to do, after a real meeting on Rust: delete the Python modules with a Rust
-     replacement and make this the only installation (prepared on a branch).
+   - **After a real meeting on Rust**: the Python modules with a Rust replacement are
+     deleted with the tests that ran them, the parity tests too, and this is the only
+     installation. `recog/asr_server/` goes too: recog-asr-server's differential
+     tests were frozen into fixtures first, as asr_remote_parity's were, and the
+     frozen tests hold the binaries to Python's recorded answers; diarization goes
+     with pyannote. So do the benchmarks that ran recog's PyTorch ASR and rust_asr's
+     PyTorch reference. Python stays for the quality gate and two maintenance
+     scripts; `tests/e2e/` already drives the Rust live process, and its glue test
+     replays a golden session frozen before the Python recorder went.
 
 ## Target layout
 

@@ -12,19 +12,18 @@ Install the test/runtime dependencies first. Quality tools are separate from the
 runtime setup and require Python 3.12 or newer:
 
 ```bash
-# macOS: preserve the verified ML dependency constraints.
-venv-gigaam/bin/python -m pip install -c deploy/python/constraints/macos.txt \
-  -r deploy/python/requirements-quality.txt
-# Linux: omit the macOS constraint file.
+# Into the interpreter scripts/check.sh uses (RECOG_CHECK_PYTHON, else python3),
+# with PyYAML for the workflow's tests, as in CI.
+python3 -m pip install -r deploy/python/requirements-quality.txt pyyaml
 # ESLint and c8 with monocart for the JavaScript part (Node 22.13 or newer), both systems,
 # and the extension's jest for its coverage:
 npm ci --prefix deploy/node
 npm ci --prefix browser-extension
-venv-gigaam/bin/python scripts/quality.py --base origin/main --output .local/quality
+python3 scripts/quality.py --base origin/main --output .local/quality
 # The same gate as part of the regular checks (what CI runs):
 RECOG_QUALITY_BASE=origin/main ./scripts/check.sh
 # Only the Ruff lint and format check of changed lines, in seconds:
-venv-gigaam/bin/python scripts/quality.py --style-only --base origin/main
+python3 scripts/quality.py --style-only --base origin/main
 ```
 
 A plain `./scripts/check.sh` runs that `--style-only` check against the local

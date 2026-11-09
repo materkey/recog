@@ -7,59 +7,19 @@ Commands below run from the repository root.
 
 | | macOS | Linux |
 |---|---|---|
-| OS | 13+, Apple Silicon (Intel is not supported: no macOS x86_64 torch wheels past 2.2.2) | any distro with systemd (Ubuntu/Debian, Arch/Manjaro tested) |
-| Python | 3.12 | 3.12 — see [Python on Linux](#python-on-linux) |
+| OS | 13+, Apple Silicon | any distro with systemd (Ubuntu/Debian, Arch/Manjaro tested) |
+| Build | `cargo` from [rustup](https://rustup.rs) | the same |
 | System audio | ScreenCaptureKit — built in, needs `swiftc` (`xcode-select --install`) to build the helper | PulseAudio **or** PipeWire with `pipewire-pulse`, plus `parec`/`pactl` (`pulseaudio-utils` / `libpulse`) |
-| Microphone | built in (PortAudio ships with the wheel) | PortAudio (`libportaudio2` / `portaudio`) |
+| Microphone | built in (`recog-mic`) | `parec` on the default source |
 | Required | `ffmpeg`, `tmux`+`claude` (Copilot) | same |
 | Optional | `node`+`npm` (extension build, AI summaries), `jq` (`debug` output) | same |
-| Disk | ~4 GB for models | ~4 GB for models |
-| GPU | Apple Silicon → MPS automatically | NVIDIA → CUDA automatically; CPU works too (measured RTF 0.05–0.2) |
+| Disk | ~0.3 GB for the model, ~3 GB for the Rust build | same |
+| GPU | Metal | Vulkan |
 
 `./setup.sh` prints a found/missing table for all of the above with the install
 command for your package manager (apt / pacman / brew), so you do not have to
 pre-install anything by hand — run it first and let it tell you what is
-missing.
-
-### Python on Linux
-
-Use **Python 3.12**, the version used in CI. Setup tries `python3.12`,
-`python3.13`, then `python3`; it rejects versions below 3.12 and warns above
-3.13. Acceptance by the installer is not a dependency compatibility guarantee.
-
-**Arch Linux:** the stock Python 3.14.7, tested on 2026-09-19, fails during GigaAM installation
-with `No matching distribution found for onnxruntime==1.23.*`. Use Python 3.12
-via uv below; upgrading the system `python` package does not solve this pin.
-
-On Ubuntu 22.04, the stock Python is 3.10 and the default repositories do not
-provide `python3.12` / `python3.12-venv`. If the required Python is unavailable,
-install it for your user with [uv](https://docs.astral.sh/uv/guides/install-python/)
-and rerun setup from the repository root (Bash):
-
-```bash
-# Requires curl and CA certificates; skip the first line if uv is installed.
-curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="$HOME/.local/bin" sh
-export PATH="$HOME/.local/bin:$PATH"
-uv python install 3.12
-python3.12 --version
-./setup.sh
-```
-
-Repeat the `PATH` line in a new shell if `~/.local/bin` is not already on your
-PATH. The system `python3` stays unchanged.
-
-If a failed attempt already created `venv-gigaam` with another Python version,
-setup will reuse it. With services and manual Recog processes stopped, preserve
-that environment and let setup create a new one (choose an unused backup name):
-
-```bash
-mv venv-gigaam venv-gigaam.previous
-./setup.sh
-```
-
-The Python 3.12.14 dependency installation, `pip check`, CLI and ASR/web/MCP
-imports passed in clean Ubuntu 22.04 and Arch containers on 2026-09-19; audio
-capture and service activation were not part of these checks.
+missing. There is no Python to install.
 
 ## Quick start
 
@@ -71,10 +31,9 @@ git clone https://github.com/materkey/recog.git && cd recog
 # → open http://127.0.0.1:9080
 ```
 
-`./setup.sh` creates `venv-gigaam`, installs torch/torchaudio and GigaAM (from
-a pinned git commit — no sibling checkout needed), copies `.env.example` →
-`.env`, builds the Chrome extension, prepares the GigaAM weight cache, renders
-the service units and starts them. It is idempotent: re-running it is how you
+`./setup.sh` builds the programs with cargo into `bin/`, copies `.env.example` →
+`.env`, builds the Chrome extension, downloads the ASR model, renders the service
+units and starts them. It is idempotent: re-running it is how you
 update after a `git pull`. Existing environment files are preserved.
 
 If something required is missing, setup renders the units but **does not
@@ -83,42 +42,23 @@ running). Install what it lists and run `./setup.sh` again.
 
 Flags: `--dry-run` (show the plan without changes; does not verify readiness),
 `--no-services` (prepare only, do not touch launchd/systemd),
-`--no-prefetch` (skip the weight-cache preparation), `--no-extension`,
+`--no-prefetch` (skip the model download), `--no-extension`,
 `--no-env` (keep existing environment files, do not create them from the examples).
 
 ### Install-time environment variables
 
-These are read from the calling shell, not from `.env` (`.env` is a Python-side
-file created by setup itself, later than these are needed):
+These are read from the calling shell, not from `.env` (`.env` is created by
+setup itself, later than these are needed):
 
-```bash
-RECOG_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 ./setup.sh
-```
-
-- `RECOG_TORCH_INDEX_URL` — pip index for torch/torchaudio. On Linux without an
-  NVIDIA GPU setup defaults to the CPU index (plain PyPI torch drags in ~2–3 GB
-  of CUDA runtime). Set it to your CUDA index for a GPU box, or to an empty
-  string to force plain PyPI.
-- `RECOG_GIGAAM_URL` / `RECOG_GIGAAM_REF` — git source and commit of GigaAM
-  (defaults: upstream at the pinned commit the ASR code is written against).
-- `RECOG_GIGAAM_EDITABLE` — path to a local GigaAM checkout to install with
-  `pip install -e`, for hacking on the ASR library itself.
-- `RECOG_INSTALL_RUNTIME` — `python` or `rust`, the `[install] runtime` below for
-  one run.
+- `CARGO_TARGET_DIR` — where cargo builds (default `rust/target`); setup takes
+  the programs from its `release/`.
+- `RECOG_SKIP_COPILOT_CHECK=1` — skip the tmux/claude checks when Copilot is not
+  needed.
+- `RECOG_INSTALL_RUNTIME` — `[install] runtime` for one run; only `rust` is left.
 
 ### Installing without Python
 
-Every service has a Rust implementation in `rust/`. With
-
-```toml
-# ~/.config/recog/config.toml
-[install]
-runtime = "rust"
-```
-
-`./setup.sh` installs without Python: no venv, pip, torch, GigaAM or weight cache.
-It needs `cargo` ([rustup](https://rustup.rs)) instead of Python 3.12, and on Linux
-no PortAudio (the microphone is recorded with `parec`). It:
+Every service is a program of `rust/`, and recog has no Python. `./setup.sh`:
 
 1. builds `recog`, `recog-web`, `recog-copilot-supervisor`, `recog-copilot-channel`,
    `recog-desktop` and, on macOS, `recog-mic` with `cargo build --release` (the first
@@ -143,44 +83,41 @@ on macOS, the web server as `bin/recog-web --host 127.0.0.1 --port 9080 --repo
 asked Python (`recog check`, `recog config data-dir`, `recog config copilot-launch`),
 and `recog desktop …` runs `bin/recog-desktop`.
 
-In this mode `[live] runtime`, `[web] runtime`, `[copilot] runtime` and
-`[live] mic_worker` do nothing, and ASR runs on wavo, or on the gateway with wavo as
-the fallback for `[asr] backend = "remote"`: `local` is ignored with a line in the
-live log. `setup.sh`,
-`recog-service.sh` and `scripts/deps.sh` read `[install] runtime` themselves, from
-the calling shell or a plain `runtime = "rust"` line under `[install]`, never from
-`.env`; the readiness check refuses to start the services when the parser reads
-something else.
+`[live] runtime`, `[web] runtime`, `[copilot] runtime` and `[live] mic_worker` are
+still accepted from older configurations and do nothing, and ASR runs on wavo, or on
+the gateway with wavo as the fallback for `[asr] backend = "remote"`: `local` is
+ignored with a line in the live log. `[install] runtime` is `"rust"`; `setup.sh`,
+`recog-service.sh` and `scripts/deps.sh` read it themselves, from the calling shell
+or a plain `runtime = "..."` line under `[install]`, never from `.env`. `"python"`,
+the removed installation, stops setup, and the readiness check refuses to start the
+services when the parser reads something else.
 
-To switch an installation over: add the two lines, run `./setup.sh`, and check the
-services with `./recog-service.sh status`. To go back: delete them (or set
-`"python"`) and run `./setup.sh` again; it recreates the venv when it is missing,
-and `bin/` can be deleted.
+An installation that ran on Python: install Rust, delete `[install] runtime =
+"python"` if you set it, run `./setup.sh` and check `./recog-service.sh status`;
+`venv-gigaam` can then be deleted.
 
 ## Usage
 
 ```bash
-source venv-gigaam/bin/activate
-
 # Live: mic + system audio + speaker names from the conference extension.
 # The mic is on by default (--mic-device auto); --mic-device none turns it off.
-python -m recog live --ktalk --system-audio auto
+bin/recog live --ktalk --system-audio auto
 
 # Capture only while joined to a KTalk meeting (implies --ktalk)
-python -m recog live --ktalk-only --system-audio auto
+bin/recog live --ktalk-only --system-audio auto
 
 # System audio only
-python -m recog live --ktalk --system-audio auto --mic-device none
+bin/recog live --ktalk --system-audio auto --mic-device none
 
 # Microphone only, labelled with your profile name
-python -m recog live --system-audio none
+bin/recog live --system-audio none
 
 # What audio devices do I have?
-python -m recog live --list-devices
+bin/recog live --list-devices
 
 
 # Browse stored meetings
-python -m recog meetings
+bin/recog meetings
 ```
 
 `--system-audio` takes `auto` (per OS), `screencapture` (macOS,
@@ -232,7 +169,7 @@ use a `systemctl --user edit recog-live.service` override (replace the paths):
 ```ini
 [Service]
 ExecStart=
-ExecStart=/absolute/path/recog/venv-gigaam/bin/python -m recog live --ktalk-only --system-audio auto
+ExecStart=/absolute/path/recog/bin/recog live --ktalk-only --system-audio auto
 ```
 
 Then run `systemctl --user daemon-reload` and
@@ -298,7 +235,7 @@ With the override set, the automatic follow-the-default-sink behaviour is off.
 `./recog-service.sh` manages four permanent services — live transcription, the
 web UI, the copilot MCP channel and the copilot supervisor — through launchd on
 macOS and `systemd --user` on Linux. The units are rendered from the templates
-in `deploy/{macos,linux}/` with your repo path, interpreter and log
+in `deploy/{macos,linux}/` with your repo path, the programs in `bin/` and log
 directory substituted in.
 
 ```bash
@@ -320,8 +257,8 @@ On Linux, add `loginctl enable-linger $USER` so the user services survive
 logout — `status` prints the reminder. After rebuilding the extension, reload
 it in `chrome://extensions`.
 
-After editing backend code (`recog/web/server.py`, `recog/*.py`) run
-`./recog-service.sh restart`; for `recog/copilot_supervisor.py` alone,
+After changing code in `rust/` run `./setup.sh --no-extension` (it rebuilds and
+reinstalls `bin/`) and `./recog-service.sh restart`; for the supervisor alone,
 `./recog-service.sh restart-supervisor` is enough.
 
 ## Questions about a meeting
@@ -380,9 +317,9 @@ restarted supervisor re-adopts it. An explicit Stop in the web UI (or
 
 ## Remote ASR
 
-Instead of running GigaAM locally you can point recog at your own
-OpenAI-Whisper-compatible ASR gateway. The optional server implementation lives
-in `recog/asr_server/`; see the [ASR server guide](asr-server.md) for
+Instead of running GigaAM locally the live process can send speech to your own
+OpenAI-Whisper-compatible ASR gateway. The optional server implementation is
+the crate `rust/recog-asr-server`; see the [ASR server guide](asr-server.md) for
 installation and configuration:
 
 ```dotenv
@@ -391,22 +328,17 @@ RECOG_ASR_REMOTE_URL=https://<asr-gateway>/asr
 ```
 
 There is no default URL: `remote` without a URL fails at startup instead of
-silently running on-device with different RAM and latency. The local model
-stays unloaded while the gateway is healthy and loads lazily on the first
+silently running on-device with different RAM and latency. The local model,
+wavo, stays unloaded while the gateway is healthy and loads lazily on the first
 failure; a circuit breaker routes around a dead gateway. Only worth it on a
-real LAN (`ping` RTT < 5 ms). The Rust live process (`[live] runtime = "rust"`)
-does the same, with wavo as the local model.
+real LAN (`ping` RTT < 5 ms).
 
 ## ASR on wavo
 
-`RECOG_ASR_BACKEND=wavo` (`[asr] backend = "wavo"`) runs the same GigaAM v3
-e2e_rnnt on [wavo](https://crates.io/crates/wavo), a Rust runtime, on the GPU:
-Metal on macOS, Vulkan on Linux. On macOS it is also what the default `"auto"` runs.
-`./setup.sh` builds its Python module from `rust/wavo-asr-py` when this backend is
-set, or on macOS for `"auto"`, and cargo is on `PATH` (install Rust with rustup).
-Without the module, `"wavo"` makes the services refuse to start and say so, while
-`"auto"` runs on PyTorch and says so in the log; `"local"` always runs on PyTorch.
-The first start downloads the model (274 MB, Q8_0 GGUF) into the Hugging Face cache.
+The live process runs GigaAM v3 e2e_rnnt on [wavo](https://crates.io/crates/wavo),
+a Rust runtime, on the GPU: Metal on macOS, Vulkan on Linux, for every `[asr]
+backend` but `remote`, where it is the gateway's fallback. `./setup.sh` downloads the model (274 MB, Q8_0 GGUF) into the
+Hugging Face cache (`bin/recog prefetch`); without it the first start does.
 
 Measured against the PyTorch model (`docs/experiments/2026-11-07-rust-asr-runtimes.md`):
 the same WER within 0.06 points and the same word timings, 6-12 times faster on an
@@ -451,7 +383,7 @@ still overrides it. The ones you are most likely to touch:
 - `RECOG_PULSE_MONITOR_SOURCE` — pin one PulseAudio monitor (Linux).
 - `RECOG_EXTRA_WS_ORIGINS` — comma-separated extra origins allowed to open the
   bridge / live-stream WebSockets. The shipped conference hosts are built in
-  (`recog/ws_origin.py`, mirroring the extension's `manifest.json`); if your
+  (`rust/recog-core/src/ws_origin.rs`, mirroring the extension's `manifest.json`); if your
   conferences live on another host, add it **both** here and to the extension's
   `manifest.json` (that is a separate rebuild).
 - `RECOG_ASR_BACKEND`, `RECOG_ASR_REMOTE_URL` — see [Remote ASR](#remote-asr) and
@@ -559,9 +491,9 @@ To migrate an existing install, finish the current recording and stop any
 manually launched recording or speaker-enrollment commands, then run:
 
 ```bash
-./venv-gigaam/bin/python scripts/migrate-data.py  # inspect the proposed moves
+python3 scripts/migrate-data.py  # inspect the proposed moves
 ./recog-service.sh stop
-./venv-gigaam/bin/python scripts/migrate-data.py --apply
+python3 scripts/migrate-data.py --apply
 ./recog-service.sh install
 ./recog-service.sh restart
 ```
@@ -582,12 +514,9 @@ data root, the [installation configuration](configuration.md) `config.toml`
    Its **Action required** items say what each update asks of an existing
    installation: moved settings or files, a new dependency, a setup or service
    step.
-2. `git pull && ./setup.sh` — the venv and the weight cache are reused; macOS
-   pip steps run under `deploy/python/constraints/macos.txt`, which pins the verified
-   torch/torchaudio/numpy/pyobjc set, so an update does not silently bump
-   your ML stack. Weight-cache preparation streams and hashes files without
-   deserializing them, so no temporary model is created in RAM. Setup also
-   rebuilds the extension: reload it in `chrome://extensions`.
+2. `git pull && ./setup.sh` — cargo rebuilds the programs into `bin/` (a running
+   service keeps its file until it is restarted) and the model cache is reused.
+   Setup also rebuilds the extension: reload it in `chrome://extensions`.
 3. Do the changelog's steps, then `./recog-service.sh restart`. If you skipped
    services during setup, run `./recog-service.sh install` first: the units are
    rendered from the templates. Startup reports a malformed setting or a
@@ -599,18 +528,18 @@ data root, the [installation configuration](configuration.md) `config.toml`
 ./scripts/check.sh                    # everything below, in one go
 ```
 
-`scripts/check.sh` is what CI runs on macOS and Linux: `compileall`, `bash -n`
-and shellcheck over the shell scripts, actionlint over the CI workflow, a
-gitleaks secret scan, the CLI smoke test, a dry-run render of the service
-units, and the unit suite. The linters come from the quality tools in
+`scripts/check.sh` is what CI runs on macOS and Linux: `compileall` of what is
+left in Python, `bash -n` and shellcheck over the shell scripts, actionlint over
+the CI workflow, a gitleaks secret scan, `cargo fmt`, clippy and the tests of
+`rust/`, the CLI smoke test (`recog --help`), a dry-run render of the service
+units, and the Python suite (the shell scripts' and the quality tools' tests). The linters come from the quality tools in
 [docs/quality.md](quality.md). It starts no service, captures no audio and loads no
 model weights — those belong to manual acceptance on a real host.
 
 The individual steps:
 
 ```bash
-source venv-gigaam/bin/activate
-python -m pytest tests/ -v -m "not e2e"  # unit tests
-python -m compileall recog               # syntax check
-python -m recog --help                   # CLI smoke test
+(cd rust && cargo test --workspace)      # the Rust tests
+python -m pytest tests/ -v -m "not e2e"  # the Python tests
+(cd rust && cargo run -q -p recog-live --bin recog -- --help)  # CLI smoke test
 ```

@@ -23,9 +23,8 @@
   Google Meet и Zoom (веб-клиент; приложение для macOS
   [включается отдельно](docs/zoom-app.md)).
 
-Работает на macOS и Linux. Linux покрыт автотестами на Ubuntu и
-[проверками при установке](docs/usage.md#python-on-linux); полный прогон захвата
-звука и запуска сервисов на нём пока не зафиксирован.
+Работает на macOS и Linux. Linux покрыт автотестами на Ubuntu; полный прогон
+сборки, захвата звука и запуска сервисов на нём пока не зафиксирован.
 
 ## Как это работает
 
@@ -62,10 +61,9 @@ AI-анализ. Copilot запускается из веб-интерфейса
 Перед установкой подготовьте:
 
 - **macOS 13+ на Apple Silicon** (нужен `swiftc`, чтобы собрать аудиохелпер) или
-  **Linux** (PulseAudio либо PipeWire с `pipewire-pulse`, `parec`, `pactl` и
-  PortAudio).
-- **Python 3.12**. Если на Linux его нет, сначала выполните шаги из раздела
-  [Python on Linux](docs/usage.md#python-on-linux).
+  **Linux** (PulseAudio либо PipeWire с `pipewire-pulse`, `parec` и `pactl`).
+- **Rust** (`cargo`): установка собирает им программы recog. Поставьте его через
+  [rustup](https://rustup.rs), если его нет; Python не нужен.
 - **ffmpeg**, **Node.js + npm** для сборки расширения Chrome и примерно
   **4 ГБ под модели**.
 - Для Copilot, необязательной сессии Claude Code, которая следит за встречей и
@@ -83,10 +81,8 @@ git clone https://github.com/materkey/recog.git && cd recog
 их и запустите её снова. Подробнее в разделе
 [требования и варианты установки](docs/usage.md#requirements).
 
-Установка без Python: добавьте в `~/.config/recog/config.toml` строки `[install]` и
-`runtime = "rust"` и запустите `./setup.sh`. Вместо Python 3.12 нужен `cargo`:
-установка соберёт программы из `rust/` в `bin/` и запустит сервисы на них
-([установка без Python](docs/usage.md#installing-without-python)).
+Установка соберёт программы из `rust/` в `bin/` и запустит сервисы на них
+([как устроена установка](docs/usage.md#installing-without-python)).
 
 1. Откройте `chrome://extensions`, включите **Режим разработчика** (Developer mode),
    нажмите **Загрузить распакованное расширение** (Load unpacked) и выберите

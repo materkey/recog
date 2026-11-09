@@ -9,6 +9,30 @@ reasoning.
 
 ## 2026-11-08
 
+### Action required
+
+- **recog no longer installs or runs Python.** The Python modules that had a Rust
+  replacement are gone, and so is the Python installation: `./setup.sh` always
+  builds the programs of `rust/` with cargo into `bin/` and the units run them (what
+  `[install] runtime = "rust"` did). After `git pull`: install Rust with
+  [rustup](https://rustup.rs) if `cargo` is missing, delete `[install] runtime =
+  "python"` from `~/.config/recog/config.toml` if you set it (setup stops on it),
+  run `./setup.sh`, then check `./recog-service.sh status`. `venv-gigaam` is no
+  longer used and can be deleted once the services run on the new units. The
+  `runtime` keys of `[live]`, `[web]` and `[copilot]` and `[live] mic_worker` are
+  still accepted and do nothing; ASR runs on wavo, or with `[asr] backend =
+  "remote"` on the gateway with wavo as its fallback, and `"local"` is ignored with
+  a line in the live log. What stays in
+  Python is not part of the installation: the quality gate's tools and the
+  maintenance scripts under `scripts/`.
+- **The optional ASR server is Rust only.** `recog/asr_server/` is gone with its
+  requirements file (`deploy/python/asr-server.txt`), and with it speaker
+  diarization. A server still started as `python -m recog.asr_server.gateway` or
+  `python -m recog.asr_server.gigaam_backend` stops starting after `git pull`: build
+  `cd rust && cargo build --release -p recog-asr-server` and start
+  `rust/target/release/recog-asr-gigaam` and `recog-asr-gateway` instead, with the
+  same environment (docs/asr-server.md); its venv can then be deleted.
+
 ### Changed
 
 - **The optional ASR server without Python (opt-in).** `rust/recog-asr-server`
@@ -20,7 +44,7 @@ reasoning.
   get 503, as from the Python backend without pyannote. Nothing changes for an
   existing server until you switch: `cd rust && cargo build --release -p
   recog-asr-server`, then start the binaries from `rust/target/release/` instead of
-  the Python modules (docs/asr-server.md, "Rust binaries").
+  the Python modules (docs/asr-server.md).
 
 - **The Rust live process runs remote ASR.** With `[asr] backend = "remote"` the
   Rust live process now sends speech to the gateway of `[asr] remote_url`, falling

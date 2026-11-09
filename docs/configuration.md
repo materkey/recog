@@ -43,11 +43,10 @@ reported on stderr at every start (`recog: RECOG_COPILOT_AUTOSPAWN from the
 environment or .env overrides [copilot] autospawn of config.toml`): delete
 the line from `.env`, since the file's value does nothing until then.
 
-`recog/install_config.py` loads `.env`, reads the file, lays the environment
-over it once at import and exposes the typed result as `INSTALL_CONFIG`
-(`INSTALL_CONFIG.asr.backend`, `INSTALL_CONFIG.copilot.grace_s`, ...): code
-reads that, never the environment. Each field declares its variable, type and
-default there. `RECOG_CONFIG_FILE` may be set in `.env` too.
+`recog_core::install_config` loads `.env`, reads the file, lays the environment
+over it once at startup and gives the typed result (`config.asr.backend`,
+`config.copilot.grace_s`, ...): code reads that, never the environment. Each field
+declares its variable, type and default there. `RECOG_CONFIG_FILE` may be set in `.env` too.
 
 `[install] runtime` (`RECOG_INSTALL_RUNTIME`) is the one setting the shell
 scripts read themselves, before any program exists: `setup.sh`, `recog-service.sh`
@@ -67,11 +66,11 @@ State the web UI writes (`ai-settings.json`,
 `user-profile.json`, `privacy.json` under the data directory) is not
 configuration and stays where it is.
 
-One parser reads the file, `recog/install_config.py`, and its Rust port in
-`rust/recog-core`, held to it by parity tests. The extension build takes the
-conference hosts from `python -m recog.install_config`, using `RECOG_PYTHON`, else
-`bin/recog config conferences` when the installation runs without Python, else
-`venv-gigaam/bin/python`, else `python3` (3.11 or newer).
+One parser reads the file, `rust/recog-core` (the port of the former
+`recog/install_config.py`). The extension build takes the conference hosts from
+`bin/recog config conferences`; in a checkout setup.sh has not built, it builds
+with the built-in hosts when there is no configuration file and fails when there
+is one.
 
 `scripts/backup-data.sh` copies the file into its snapshot as `config.toml`.
 

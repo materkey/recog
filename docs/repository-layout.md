@@ -1,25 +1,24 @@
 # Repository layout
 
-Application code lives under one Python package, `recog/`, so its CLI, web UI,
-bridge and storage import each other through package paths. Browser code has
-its own top-level directory. Installation inputs, development tools and design
-records are grouped separately, making it clear where a new file belongs.
+The programs are the Rust workspace `rust/`, one crate per responsibility
+([the move to Rust](plans/2026-11-07-rust-migration.md)). `recog/` keeps the parts
+that are not Rust: the static web UI, prompts, Swift sources and the desktop
+bootstrap script. Browser code has its own
+top-level directory. Installation inputs, development tools and design records
+are grouped separately, making it clear where a new file belongs.
 
 | Path | Responsibility |
 | --- | --- |
-| `recog/__main__.py`, `recog/cli.py` | `python -m recog` command entry point and argument handling |
-| `recog/` | Live capture, ASR, speakers, meeting storage, conference bridge and Copilot |
-| `recog/web/` | FastAPI server, live watchers and static SPA; `python -m recog.web.server` |
-| `recog/desktop/` | Optional KTalk desktop attachment: observer, inspector worker, bootstrap script and `python -m recog desktop` |
-| `recog/asr_server/` | Optional gateway and GigaAM server, launched independently of the client services |
+| `rust/` | `recog-live` (the `recog` binary: live process with the bridge, `meetings`, `replay`, the installation helpers), `recog-web`, `recog-copilot` (supervisor and MCP channel), `recog-desktop`, `recog-mic`, `recog-asr-server` (the optional ASR server's gateway and GigaAM backend, launched independently of the client services), and the libraries `recog-core`, `recog-ai`, `recog-bridge`, `recog-zoom`, `speexdsp-aec` |
+| `bin/` | Gitignored: the programs `setup.sh` installs from `rust/target/release` and the units run |
+| `recog/web/static/` | The web UI the `recog-web` binary serves |
+| `recog/desktop/bootstrap.js` | The script the KTalk desktop integration evaluates in the application |
 | `recog/prompts/` | Shared AI summary templates |
-| `recog/native/macos/` | ScreenCaptureKit Swift helper source |
-| `rust/` | Rust workspace ([the move to Rust](plans/2026-11-07-rust-migration.md)): the echo canceller `speexdsp-aec`, `wavo-asr-py`, the module of the ASR backend `wavo`, `recog-mic`, the microphone worker of `[live] mic_worker = "rust"`, `recog-live` (the live process of `[live] runtime = "rust"`: capture, echo stage, ASR on `wavo`, per-speaker ingest, refine, golden recorder and replay, the main loop and the `recog` command line, with the bridge in the same process, which runs on the libraries below), `recog-web` (the web server of `[web] runtime = "rust"`, hosting `recog-desktop`, the KTalk desktop integration), `recog-copilot` (the Copilot supervisor and MCP channel of `[copilot] runtime = "rust"`), `recog-asr-server` (the optional ASR server's gateway and GigaAM backend as programs, started by hand like the Python ones); not yet wired on their own: `recog-core` (settings, data directory, profile and meeting storage), `recog-ai` (Claude and Codex, AI settings, prompts, summaries, titles, the meeting dialog), `recog-bridge` (the conference bridge) and `recog-zoom` (the Zoom application source) |
+| `recog/native/macos/` | Swift sources: ScreenCaptureKit helper, Recog.app launcher, Zoom helper |
 | `browser-extension/` | Chrome extension source, platform adapters, build and tests |
-| `deploy/python/` | Client/server requirements and verified macOS dependency constraints |
+| `deploy/python/` | Requirements of the quality tools |
 | `deploy/node/` | Pinned JavaScript quality tools (ESLint) for `scripts/quality.py` |
 | `deploy/macos/`, `deploy/linux/` | launchd and systemd service templates |
-| `deploy/examples/` | Non-personal seed data for setup |
 | `scripts/` | Setup/service helpers, data migration, enrollment and checks |
 | `scripts/benchmarks/` | Manually run benchmark and experiment programs |
 | `tests/` | Unit tests and E2E tools/fixtures |
@@ -34,11 +33,10 @@ configuration, environment examples and the main README/agent instructions.
 `_bmad-output`; the latter is a relative symlink to `docs/bmad/`. Other agent
 configuration directories retain their tool-required locations.
 
-The generated `sck_audio_capture` binary and local `venv-gigaam` remain at the
-root to preserve installed paths. Existing `.env` and `recog/web/.env` files
-remain local configuration. Meetings, logs and speaker databases belong in the
-data root resolved by `recog.config.get_data_dir()` (normally `~/.recog`, or
-`RECOG_DATA_DIR`). Moving code does not migrate that data; the separate
+The generated `sck_audio_capture` binary remains at the root to preserve
+installed paths. Existing `.env` and `recog/web/.env` files remain local
+configuration. Meetings, logs and speaker databases belong in the data root
+`bin/recog config data-dir` prints (normally `~/.recog`, or `RECOG_DATA_DIR`). Moving code does not migrate that data; the separate
 [data migration procedure](usage.md#personal-data-outside-the-checkout)
 handles legacy installations.
 
@@ -58,19 +56,17 @@ dependency readiness checks before activation. These steps reuse the current
 venv and model cache. The directory reorganization itself does not install or
 upgrade dependencies, change the ML stack, or enable the optional ASR server.
 For a full dependency/setup update, use `./setup.sh` as described in the main
-README; macOS pip operations retain the committed dependency constraints.
+README.
 
-Run manual commands from the repository root with `venv-gigaam` activated:
+Run manual commands from the repository root:
 
 ```bash
-source venv-gigaam/bin/activate
-python -m recog live --ktalk --system-audio auto
-python -m recog.web.server
+bin/recog live --ktalk --system-audio auto
+bin/recog-web --port 9080
 ```
 
 Update shortcuts or custom service definitions that used `mp4_notes.py` or
-`frontend/server.py` to those module commands. The bridge and storage modules
-are now imported as `recog.ktalk_bridge` and `recog.meeting_storage`.
+`frontend/server.py` to those commands.
 
 In Chrome, reload the unpacked extension from `browser-extension/dist/`. If the
 registration still points to the old `kontur-diarize/ktalk-speaker-extension/`
@@ -83,10 +79,8 @@ After source changes, rebuild with `npm run build` in `browser-extension/`
 before reloading.
 
 Existing optional ASR server deployments also need their launch commands
-updated to `python -m recog.asr_server.gateway` and
-`python -m recog.asr_server.gigaam_backend`, with the repository root as their
-working directory. See the [ASR server guide](asr-server.md) for their separate
-environment and dependencies.
+replaced by the `recog-asr-gateway` and `recog-asr-gigaam` binaries; see the
+[ASR server guide](asr-server.md).
 
 ## Checking the layout
 
