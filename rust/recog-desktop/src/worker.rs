@@ -150,13 +150,18 @@ fn check_bracketed_netloc(netloc: &str) -> Result<(), PyErr> {
     check_bracketed_host(hostname)
 }
 
+/// `re.match(r"\Av[a-fA-F0-9]+\..+\Z", hostname)` after its `v`.
+fn check_ipv_future(future: &str) -> Result<(), PyErr> {
+    let hex = future.chars().take_while(char::is_ascii_hexdigit).count();
+    let rest = &future[hex..];
+    let valid = hex > 0 && rest.len() > 1 && rest.starts_with('.') && !rest.contains('\n');
+    if valid { Ok(()) } else { Err(PyErr::value("IPvFuture address is invalid")) }
+}
+
 /// `_check_bracketed_host`: an IPvFuture literal or an IPv6 address (with a zone).
 fn check_bracketed_host(hostname: &str) -> Result<(), PyErr> {
     if let Some(future) = hostname.strip_prefix('v') {
-        let hex = future.chars().take_while(char::is_ascii_hexdigit).count();
-        let rest = &future[hex..];
-        let valid = hex > 0 && rest.len() > 1 && rest.starts_with('.') && !rest.contains('\n');
-        return if valid { Ok(()) } else { Err(PyErr::value("IPvFuture address is invalid")) };
+        return check_ipv_future(future);
     }
     if hostname.parse::<std::net::Ipv4Addr>().is_ok() {
         return Err(PyErr::value("An IPv4 address cannot be in brackets"));
@@ -225,28 +230,36 @@ impl Split {
 /// `ambiguous_inspector`, `invalid_inspector_endpoint`, or `Other` for a malformed
 /// list.
 pub fn inspector_url(host: &Host, targets: &Value) -> Result<String, Failure> {
+    let url = debugger_url(targets)?;
+    if !plain_endpoint(&urlsplit(&url)?, host.inspector_port)? {
+        return Err(Failure::attach("invalid_inspector_endpoint"));
+    }
+    Ok(url)
+}
+
+/// The `webSocketDebuggerUrl` of the one target listed.
+fn debugger_url(targets: &Value) -> Result<String, Failure> {
     let Value::Array(items) = targets else { return Err(Failure::attach("ambiguous_inspector")) };
     if items.len() != 1 {
         return Err(Failure::attach("ambiguous_inspector"));
     }
-    let url = match py::get(&items[0], "webSocketDebuggerUrl")? {
-        None => String::new(),
-        Some(Value::Str(s)) => s.clone(),
-        Some(other) => return Err(Failure::Other(format!("cannot split a {}", other.type_name()))),
-    };
-    let parsed = urlsplit(&url)?;
-    let (username, password) = parsed.userinfo();
-    let invalid = parsed.scheme != "ws"
-        || parsed.hostname().as_deref() != Some("127.0.0.1")
-        || parsed.port()? != Some(u32::from(host.inspector_port))
-        || username.is_some_and(|u| !u.is_empty())
-        || password.is_some_and(|p| !p.is_empty())
-        || !parsed.query.is_empty()
-        || !parsed.fragment.is_empty();
-    if invalid {
-        return Err(Failure::attach("invalid_inspector_endpoint"));
+    match py::get(&items[0], "webSocketDebuggerUrl")? {
+        None => Ok(String::new()),
+        Some(Value::Str(s)) => Ok(s.clone()),
+        Some(other) => Err(Failure::Other(format!("cannot split a {}", other.type_name()))),
     }
-    Ok(url)
+}
+
+/// `ws://127.0.0.1:<port>/...` with neither credentials, a query nor a fragment.
+fn plain_endpoint(parsed: &Split, port: u16) -> Result<bool, PyErr> {
+    let (username, password) = parsed.userinfo();
+    Ok(parsed.scheme == "ws"
+        && parsed.hostname().as_deref() == Some("127.0.0.1")
+        && parsed.port()? == Some(u32::from(port))
+        && username.is_none_or(|u| u.is_empty())
+        && password.is_none_or(|p| p.is_empty())
+        && parsed.query.is_empty()
+        && parsed.fragment.is_empty())
 }
 
 /// `endpoint(target, expected)`: the inspector's URL, discovered only while the
@@ -291,27 +304,28 @@ pub async fn close_owned(host: &Host, operation: &Value) -> Result<bool, PyErr> 
     };
     let deadline = host.clock.monotonic() + CLEANUP_TIMEOUT;
     while host.clock.monotonic() < deadline {
-        let attempt = async {
-            if !processes::owns_inspector(host, &target)? {
-                // A disappeared listener is success; an unexpected listener on this
-                // PID must not be treated as closed.
-                let listening = processes::listeners(host, &target)?;
-                return Ok(Some(!listening.iter().any(|(_, port)| *port == host.inspector_port)));
-            }
-            let url = endpoint(host, &target, Some(&recorded)).await?;
-            match tokio::time::timeout(Duration::from_millis(1500), inspector::evaluate(&url, &close_expression()))
-                .await
-            {
-                Ok(result) => result.map(|_| None),
-                Err(_) => Err(Failure::Timeout),
-            }
-        };
-        if let Ok(Some(closed)) = attempt.await {
+        if let Ok(Some(closed)) = close_attempt(host, &target, &recorded).await {
             return Ok(closed);
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     Ok(false)
+}
+
+/// One try of [`close_owned`]: whether the inspector is gone (None while it is
+/// still to be closed, after asking it to close).
+async fn close_attempt(host: &Host, target: &Target, recorded: &Value) -> Result<Option<bool>, Failure> {
+    if !processes::owns_inspector(host, target)? {
+        // A disappeared listener is success; an unexpected listener on this
+        // PID must not be treated as closed.
+        let listening = processes::listeners(host, target)?;
+        return Ok(Some(!listening.iter().any(|(_, port)| *port == host.inspector_port)));
+    }
+    let url = endpoint(host, target, Some(recorded)).await?;
+    match tokio::time::timeout(Duration::from_millis(1500), inspector::evaluate(&url, &close_expression())).await {
+        Ok(result) => result.map(|_| None),
+        Err(_) => Err(Failure::Timeout),
+    }
 }
 
 /// `bootstrap(url, root, target, bundle, digest)`: confirm the inspector is the
@@ -388,84 +402,151 @@ pub fn path_arg(value: &Value) -> Result<&str, PyErr> {
 /// `Failure::Attach` for the checks before the signal, `Other` for a broken
 /// installation; after the signal everything ends in the returned result.
 pub async fn attach(host: &Host, root: &Path, target: &Target) -> Result<Value, Failure> {
-    let config = storage::read(&root.join("config.json"))?;
-    let bundle = storage::validate_bundle(root, &config)?;
-    let app = recog_core::paths::normalize(path_arg(py::index(&config, "app")?)?);
-    if !processes::same_process(host, target, Some(&app))? {
-        return Err(Failure::attach("process_changed"));
-    }
-    let previous = storage::read(&root.join("operation.json"))?;
-    let phase = py::get(&previous, "phase")?;
-    if !(phase.is_none_or(Value::is_null) || phase.and_then(Value::as_str) == Some("closed")) {
-        if !close_owned(host, &previous).await? {
-            return Ok(py::obj([
-                ("state", Value::from("inspector_unclosed")),
-                ("reason", Value::from("cleanup_failed")),
-                ("inspector_closed", Value::Bool(false)),
-                ("target", py::index(&previous, "target")?.clone()),
-            ]));
-        }
-        storage::write_json(&root.join("operation.json"), &closed_journal(&previous)?)?;
+    let attempt = Attempt::checked(host, root, target)?;
+    if let Some(unclosed) = attempt.close_previous().await? {
+        return Ok(unclosed);
     }
     check_attachment_ready(host, target)?;
-    let mut operation = py::obj([
-        ("target", target.to_value()),
-        ("phase", Value::from("opening")),
-        ("token", Value::from(uuid::Uuid::new_v4().simple().to_string())),
-        ("opened_at", Value::Float(host.clock.time())),
-    ]);
-    storage::write_json(&root.join("operation.json"), &operation)?;
+    let mut operation = attempt.open()?;
     let mut result = py::obj([
         ("state", Value::from("error")),
         ("reason", Value::from("attachment_failed")),
         ("target", target.to_value()),
     ]);
     let mut signalled = false;
-    let digest = py::str_at(&config, "bundle").unwrap_or_default();
-    let steps = async {
+    let outcome = tokio::time::timeout(ATTACH_TIMEOUT, attempt.steps(&mut operation, &mut signalled)).await;
+    record_outcome(&mut result, outcome);
+    attempt.close(&operation, &mut result, signalled).await?;
+    Ok(result)
+}
+
+/// `phase` of a journal entry with nothing left to close.
+pub(crate) fn journal_closed(phase: Option<&Value>) -> bool {
+    phase.is_none_or(Value::is_null) || phase.and_then(Value::as_str) == Some("closed")
+}
+
+/// `operation.json` rewritten with the operation closed.
+fn close_journal(root: &Path, operation: &Value) -> Result<(), PyErr> {
+    storage::write_json(&root.join("operation.json"), &closed_journal(operation)?)
+}
+
+/// One attachment once the installation and the process are checked.
+struct Attempt<'a> {
+    host: &'a Host,
+    root: &'a Path,
+    target: &'a Target,
+    app: PathBuf,
+    bundle: PathBuf,
+    digest: String,
+}
+
+impl<'a> Attempt<'a> {
+    /// The configured snapshot and application, `target` still its main process.
+    fn checked(host: &'a Host, root: &'a Path, target: &'a Target) -> Result<Self, Failure> {
+        let config = storage::read(&root.join("config.json"))?;
+        let bundle = storage::validate_bundle(root, &config)?;
+        let app = recog_core::paths::normalize(path_arg(py::index(&config, "app")?)?);
         if !processes::same_process(host, target, Some(&app))? {
             return Err(Failure::attach("process_changed"));
         }
-        (host.signal_usr1)(target.pid)?;
-        signalled = true;
-        while !processes::owns_inspector(host, target)? {
-            if !processes::same_process(host, target, None)? {
+        let digest = py::str_at(&config, "bundle").unwrap_or_default();
+        Ok(Self { host, root, target, app, bundle, digest })
+    }
+
+    /// The previous operation's inspector closed, or the result saying it could not
+    /// be.
+    async fn close_previous(&self) -> Result<Option<Value>, Failure> {
+        let previous = storage::read(&self.root.join("operation.json"))?;
+        if journal_closed(py::get(&previous, "phase")?) {
+            return Ok(None);
+        }
+        if !close_owned(self.host, &previous).await? {
+            return Ok(Some(py::obj([
+                ("state", Value::from("inspector_unclosed")),
+                ("reason", Value::from("cleanup_failed")),
+                ("inspector_closed", Value::Bool(false)),
+                ("target", py::index(&previous, "target")?.clone()),
+            ])));
+        }
+        close_journal(self.root, &previous)?;
+        Ok(None)
+    }
+
+    /// The journal entry of this operation, written before the signal.
+    fn open(&self) -> Result<Value, PyErr> {
+        let operation = py::obj([
+            ("target", self.target.to_value()),
+            ("phase", Value::from("opening")),
+            ("token", Value::from(uuid::Uuid::new_v4().simple().to_string())),
+            ("opened_at", Value::Float(self.host.clock.time())),
+        ]);
+        storage::write_json(&self.root.join("operation.json"), &operation)?;
+        Ok(operation)
+    }
+
+    /// Signal, wait for the inspector, journal its endpoint, bootstrap.
+    async fn steps(&self, operation: &mut Value, signalled: &mut bool) -> Result<Value, Failure> {
+        if !processes::same_process(self.host, self.target, Some(&self.app))? {
+            return Err(Failure::attach("process_changed"));
+        }
+        (self.host.signal_usr1)(self.target.pid)?;
+        *signalled = true;
+        self.await_inspector().await?;
+        let url = endpoint(self.host, self.target, None).await?;
+        set(operation, "endpoint", Value::from(url.as_str()));
+        set(operation, "phase", Value::from("opened"));
+        storage::write_json(&self.root.join("operation.json"), operation)?;
+        bootstrap(&url, self.root, self.target, &self.bundle, &self.digest).await
+    }
+
+    /// Until the target listens on the inspector port, while it runs.
+    async fn await_inspector(&self) -> Result<(), Failure> {
+        while !processes::owns_inspector(self.host, self.target)? {
+            if !processes::same_process(self.host, self.target, None)? {
                 return Err(Failure::attach("process_exited"));
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let url = endpoint(host, target, None).await?;
-        set(&mut operation, "endpoint", Value::from(url.as_str()));
-        set(&mut operation, "phase", Value::from("opened"));
-        storage::write_json(&root.join("operation.json"), &operation)?;
-        bootstrap(&url, root, target, &bundle, &digest).await
-    };
-    match tokio::time::timeout(ATTACH_TIMEOUT, steps).await {
-        Err(_) | Ok(Err(Failure::Timeout)) => set(&mut result, "reason", Value::from("attachment_timeout")),
-        Ok(Err(Failure::Attach(reason))) => set(&mut result, "reason", Value::from(reason)),
-        Ok(Err(Failure::Other(_))) => {}
-        Ok(Ok(response)) => {
-            let keys = response.as_object().map(|m| m.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
-            // dict.update(state=..., reason=None, **response) refuses a response that
-            // names state or reason itself.
-            if !keys.iter().any(|k| k == "state" || k == "reason") {
-                set(&mut result, "state", Value::from("attached"));
-                set(&mut result, "reason", Value::Null);
-                for (key, value) in response.as_object().into_iter().flat_map(|m| m.iter()) {
-                    set(&mut result, key, value.clone());
-                }
-            }
+        Ok(())
+    }
+
+    /// The inspector closed when this operation opened it, the result saying so.
+    async fn close(&self, operation: &Value, result: &mut Value, signalled: bool) -> Result<(), Failure> {
+        let closed = if signalled { close_owned(self.host, operation).await? } else { true };
+        set(result, "inspector_closed", Value::Bool(closed));
+        if closed {
+            close_journal(self.root, operation)?;
+        } else {
+            set(result, "state", Value::from("inspector_unclosed"));
+            set(result, "reason", Value::from("cleanup_failed"));
         }
+        Ok(())
     }
-    let closed = if signalled { close_owned(host, &operation).await? } else { true };
-    set(&mut result, "inspector_closed", Value::Bool(closed));
-    if closed {
-        storage::write_json(&root.join("operation.json"), &closed_journal(&operation)?)?;
-    } else {
-        set(&mut result, "state", Value::from("inspector_unclosed"));
-        set(&mut result, "reason", Value::from("cleanup_failed"));
+}
+
+/// The result as the steps left it, the deadline elapsing as a timeout.
+fn record_outcome(result: &mut Value, outcome: Result<Result<Value, Failure>, tokio::time::error::Elapsed>) {
+    match outcome {
+        Err(_) | Ok(Err(Failure::Timeout)) => set(result, "reason", Value::from("attachment_timeout")),
+        Ok(Err(Failure::Attach(reason))) => set(result, "reason", Value::from(reason)),
+        Ok(Err(Failure::Other(_))) => {}
+        Ok(Ok(response)) => record_response(result, &response),
     }
-    Ok(result)
+}
+
+/// `result.update(state="attached", reason=None, **response)`.
+fn record_response(result: &mut Value, response: &Value) {
+    let fields = response.as_object();
+    // dict.update(state=..., reason=None, **response) refuses a response that
+    // names state or reason itself.
+    if fields.is_some_and(|m| m.keys().any(|k| k == "state" || k == "reason")) {
+        return;
+    }
+    set(result, "state", Value::from("attached"));
+    set(result, "reason", Value::Null);
+    for (key, value) in fields.into_iter().flat_map(|m| m.iter()) {
+        set(result, key, value.clone());
+    }
 }
 
 fn error_result(state: &str, reason: &str) -> Value {
@@ -488,42 +569,59 @@ pub async fn run(host: &Host, root: &Path, target: Option<&Target>, recover: boo
         }
         Err(LockError::Failed(_)) => error_result("error", "invalid_installation"),
         Ok(lock) => {
-            let outcome = if recover {
-                match recover_operation(host, root).await {
-                    Ok(Recovered::Nothing) => {
-                        drop(lock);
-                        return Ok(py::obj([
-                            ("state", Value::from("waiting")),
-                            ("inspector_closed", Value::Bool(true)),
-                        ]));
-                    }
-                    Ok(Recovered::Result(result)) => Ok(result),
-                    Err(e) => Err(Failure::from(e)),
-                }
-            } else {
-                match target {
-                    Some(target) => attach(host, root, target).await,
-                    None => Err(Failure::Other("AttributeError: 'NoneType' object has no attribute 'pid'".into())),
-                }
-            };
+            let outcome = under_lock(host, root, target, recover).await;
             drop(lock);
-            match outcome {
-                Ok(result) => result,
-                Err(Failure::Attach(reason)) => {
-                    let state = if reason == "inspector_disabled_or_unverified" { "incompatible" } else { "error" };
-                    error_result(state, &reason)
-                }
-                Err(_) => error_result("error", "invalid_installation"),
-            }
+            let Some(outcome) = outcome else {
+                return Ok(py::obj([("state", Value::from("waiting")), ("inspector_closed", Value::Bool(true))]));
+            };
+            outcome_result(outcome)
         }
     };
-    set(&mut result, "updated_at", Value::Float(host.clock.time()));
+    stamp(host, &mut result, target);
+    storage::write_status(root, &result)
+}
+
+/// The attachment or the recovery the lock was taken for; None when there was
+/// nothing to recover.
+async fn under_lock(
+    host: &Host,
+    root: &Path,
+    target: Option<&Target>,
+    recover: bool,
+) -> Option<Result<Value, Failure>> {
+    if !recover {
+        return Some(match target {
+            Some(target) => attach(host, root, target).await,
+            None => Err(Failure::Other("AttributeError: 'NoneType' object has no attribute 'pid'".into())),
+        });
+    }
+    match recover_operation(host, root).await {
+        Ok(Recovered::Nothing) => None,
+        Ok(Recovered::Result(result)) => Some(Ok(result)),
+        Err(e) => Some(Err(Failure::from(e))),
+    }
+}
+
+/// The status of a finished attachment or recovery.
+fn outcome_result(outcome: Result<Value, Failure>) -> Value {
+    match outcome {
+        Ok(result) => result,
+        Err(Failure::Attach(reason)) => {
+            let state = if reason == "inspector_disabled_or_unverified" { "incompatible" } else { "error" };
+            error_result(state, &reason)
+        }
+        Err(_) => error_result("error", "invalid_installation"),
+    }
+}
+
+/// `updated_at`, and the target unless the result names one.
+fn stamp(host: &Host, result: &mut Value, target: Option<&Target>) {
+    set(result, "updated_at", Value::Float(host.clock.time()));
     if let Some(target) = target
         && let Some(map) = result.as_object_mut()
     {
         map.setdefault("target", target.to_value());
     }
-    storage::write_status(root, &result)
 }
 
 enum Recovered {
@@ -538,14 +636,19 @@ async fn recover_operation(host: &Host, root: &Path) -> Result<Recovered, PyErr>
     }
     let closed = close_owned(host, &operation).await?;
     if closed {
-        storage::write_json(&root.join("operation.json"), &closed_journal(&operation)?)?;
+        close_journal(root, &operation)?;
     }
-    Ok(Recovered::Result(py::obj([
+    Ok(Recovered::Result(recovery_result(closed, py::index(&operation, "target")?.clone())))
+}
+
+/// What the recovery of an interrupted worker's operation reports.
+fn recovery_result(closed: bool, target: Value) -> Value {
+    py::obj([
         ("state", Value::from(if closed { "error" } else { "inspector_unclosed" })),
         ("reason", Value::from(if closed { "worker_interrupted" } else { "cleanup_failed" })),
         ("inspector_closed", Value::Bool(closed)),
-        ("target", py::index(&operation, "target")?.clone()),
-    ])))
+        ("target", target),
+    ])
 }
 
 /// The worker's arguments: `--root ROOT [--target JSON] [--recover]`.
@@ -570,19 +673,19 @@ pub fn parse_args(args: &[String]) -> Result<WorkerArgs, String> {
             || inline.clone().or_else(|| iter.next().cloned()).ok_or(format!("argument {name}: expected one argument"));
         match name {
             "--root" => root = Some(PathBuf::from(value()?)),
-            "--target" => {
-                let raw = value()?;
-                target =
-                    Some(recog_core::pyjson::loads(&raw).map_err(|_| {
-                        format!("argument --target: invalid loads value: {}", recog_core::py::repr(&raw))
-                    })?);
-            }
+            "--target" => target = Some(value().and_then(|raw| target_arg(&raw))?),
             "--recover" => recover = true,
             other => return Err(format!("unrecognized arguments: {other}")),
         }
     }
     let root = root.ok_or("the following arguments are required: --root")?;
     Ok(WorkerArgs { root, target, recover })
+}
+
+/// `--target`'s `type=json.loads`.
+fn target_arg(raw: &str) -> Result<Value, String> {
+    recog_core::pyjson::loads(raw)
+        .map_err(|_| format!("argument --target: invalid loads value: {}", recog_core::py::repr(raw)))
 }
 
 /// `python -m recog.desktop.worker`: exit 0 when attached or nothing was left to
