@@ -959,6 +959,16 @@ fn mtime_of(path: &Path) -> Option<f64> {
     mtime_seconds(&fs::metadata(path).ok()?)
 }
 
+/// The first index row of `meeting_id` takes `title`.
+fn retitle_row(rows: &mut [Value], meeting_id: &str, title: Value) -> Result<()> {
+    for row in rows.iter_mut() {
+        if get(row, "id")? == Some(&Value::from(meeting_id)) {
+            return set(row, "title", title);
+        }
+    }
+    Ok(())
+}
+
 impl MeetingStorage {
     /// `MeetingStorage(base_path, external_paths)`: the directory is created.
     ///
@@ -1927,21 +1937,21 @@ impl MeetingStorage {
         if !get(&meta, "ended_at")?.is_some_and(Value::truthy) {
             return Ok(());
         }
+        self.title_into_index(meeting_id, fields.get("title").cloned().unwrap_or(Value::Null))
+    }
+
+    /// The stored title copied into the meeting's `index.json` row, when there is an
+    /// index.
+    fn title_into_index(&self, meeting_id: &str, title: Value) -> Result<()> {
         let index_path = self.shared.base_path.join("index.json");
         if !index_path.exists() {
             return Ok(());
         }
         let mut index = read_json(&index_path)?;
-        let title = fields.get("title").cloned().unwrap_or(Value::Null);
         if let Some(Value::Array(rows)) = index.as_object_mut().and_then(|m| m.get_mut("meetings")) {
-            for row in rows.iter_mut() {
-                if get(row, "id")? == Some(&Value::from(meeting_id)) {
-                    set(row, "title", title)?;
-                    break;
-                }
-            }
+            retitle_row(rows, meeting_id, title)?;
         } else if let Some(other) = get(&index, "meetings")? {
-            return Err(StorageError::Type(format!("'{}' object is not iterable", other.type_name())));
+            return Err(not_iterable(other));
         }
         save_json(&index_path, &index)
     }
