@@ -487,17 +487,6 @@ impl IdentitySource for StaticIdentity {
     }
 }
 
-/// An identity value as `resolve_identity` returns it.
-#[must_use]
-pub fn identity(name: &str, aliases: &[&str], revision: &str) -> Value {
-    obj! {
-        "local_user_name" => name,
-        "local_user_aliases" => Value::Array(aliases.iter().map(|a| Value::from(*a)).collect()),
-        "local_user_profile_revision" => revision,
-        "local_user_identity_known" => !aliases.is_empty(),
-    }
-}
-
 /// Records increment runs; each completes at once unless told to fail.
 #[derive(Default)]
 pub struct RecordingIncrements {
