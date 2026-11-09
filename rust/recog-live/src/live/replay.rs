@@ -152,25 +152,34 @@ impl LiveAsr for ReplayAsr {
         let Some(Value::Object(answer)) = self.answer(Audio::I16(pcm), "transcribe_with_timestamps") else {
             return Ok(Transcription::default());
         };
-        let words = match answer.get("words") {
-            Some(Value::Array(words)) => words
-                .iter()
-                .filter_map(|w| match w {
-                    Value::Array(parts) if parts.len() == 3 => {
-                        let int = |v: &Value| match v {
-                            Value::Int(n) => i64::try_from(*n).ok(),
-                            #[allow(clippy::cast_possible_truncation)]
-                            Value::Float(x) => Some(*x as i64),
-                            _ => None,
-                        };
-                        Some(Word { text: parts[0].as_str()?.to_owned(), start: int(&parts[1])?, end: int(&parts[2])? })
-                    }
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        Ok(Transcription { text: text_of(answer.get("text")), words })
+        Ok(Transcription { text: text_of(answer.get("text")), words: timed_words(answer.get("words")) })
+    }
+}
+
+/// The recorded `words` of a refine: each `[text, start, end]`, others left out.
+fn timed_words(words: Option<&Value>) -> Vec<Word> {
+    match words {
+        Some(Value::Array(words)) => words.iter().filter_map(timed_word).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn timed_word(word: &Value) -> Option<Word> {
+    match word {
+        Value::Array(parts) if parts.len() == 3 => {
+            Some(Word { text: parts[0].as_str()?.to_owned(), start: whole_ms(&parts[1])?, end: whole_ms(&parts[2])? })
+        }
+        _ => None,
+    }
+}
+
+/// A recorded time in ms as an integer; int() truncates a float toward zero.
+fn whole_ms(value: &Value) -> Option<i64> {
+    match value {
+        Value::Int(n) => i64::try_from(*n).ok(),
+        #[allow(clippy::cast_possible_truncation)]
+        Value::Float(x) => Some(*x as i64),
+        _ => None,
     }
 }
 
@@ -291,37 +300,54 @@ async fn drive(
         if delay > 0.0 {
             tokio::time::sleep(Duration::from_secs_f64(delay)).await;
         }
-        match event.get("kind").and_then(Value::as_str) {
-            Some("connect") => {
-                let connection = connect(&url).await.map_err(|e| e.to_string())?;
-                clients.insert(client_of(&event), connection);
-            }
-            Some("disconnect") => {
-                if let Some(connection) = clients.remove(&client_of(&event)) {
-                    close(connection).await;
-                }
-            }
-            Some("frame") => {
-                if let Some(connection) = clients.get_mut(&client_of(&event)) {
-                    let data = event.get("data").cloned().unwrap_or(Value::Null);
-                    let text = pyjson::dumps(&data, None);
-                    let _ = connection.sink.send(tokio_tungstenite::tungstenite::Message::text(text)).await;
-                }
-            }
-            Some("capture") => {
-                let source = event.get("source").and_then(Value::as_str).unwrap_or("");
-                if let (Some(capture), Some(AudioData::F32(samples))) = (captures.get(source), event.audio.clone()) {
-                    capture.feed(samples, number(&event, "start_ts") + shift);
-                }
-            }
-            _ => {}
-        }
+        play(&event, &mut clients, &captures, &url, shift).await?;
     }
     tokio::time::sleep(Duration::from_secs_f64(tail_s.max(0.0))).await;
     for (_, connection) in clients.drain() {
         close(connection).await;
     }
     Ok(())
+}
+
+/// One recorded event: a client connects or leaves, sends its frame, or a capture
+/// gets its chunk (its capture time moved by `shift`).
+async fn play(
+    event: &Event,
+    clients: &mut HashMap<i128, Connection>,
+    captures: &HashMap<&'static str, Arc<ReplayCapture>>,
+    url: &str,
+    shift: f64,
+) -> Result<(), String> {
+    match event.get("kind").and_then(Value::as_str) {
+        Some("connect") => {
+            let connection = connect(url).await.map_err(|e| e.to_string())?;
+            clients.insert(client_of(event), connection);
+        }
+        Some("disconnect") => {
+            if let Some(connection) = clients.remove(&client_of(event)) {
+                close(connection).await;
+            }
+        }
+        Some("frame") => send_frame(event, clients).await,
+        Some("capture") => feed_capture(event, captures, shift),
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn send_frame(event: &Event, clients: &mut HashMap<i128, Connection>) {
+    if let Some(connection) = clients.get_mut(&client_of(event)) {
+        let data = event.get("data").cloned().unwrap_or(Value::Null);
+        let text = pyjson::dumps(&data, None);
+        let _ = connection.sink.send(tokio_tungstenite::tungstenite::Message::text(text)).await;
+    }
+}
+
+fn feed_capture(event: &Event, captures: &HashMap<&'static str, Arc<ReplayCapture>>, shift: f64) {
+    let source = event.get("source").and_then(Value::as_str).unwrap_or("");
+    if let (Some(capture), Some(AudioData::F32(samples))) = (captures.get(source), event.audio.clone()) {
+        capture.feed(samples, number(event, "start_ts") + shift);
+    }
 }
 
 /// `replay(session, out, profile)`: the session into a live process whose data goes
@@ -335,12 +361,7 @@ pub fn replay(session: &Path, out: &Path, settings: ReplaySettings) -> Result<Va
     if events.is_empty() {
         return Err(format!("{} holds no events", session.display()));
     }
-    let data_dir = out.join("data");
-    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-    if let Some(profile) = settings.profile.as_ref().filter(|p| p.exists()) {
-        let name = profile.file_name().unwrap_or_default();
-        std::fs::copy(profile, data_dir.join(name)).map_err(|e| e.to_string())?;
-    }
+    let data_dir = prepare_data_dir(out, settings.profile.as_deref())?;
     let mic = Arc::new(ReplayCapture::default());
     let system = Arc::new(ReplayCapture::default());
     let asr = Arc::new(ReplayAsr::from_events(&events));
@@ -348,9 +369,50 @@ pub fn replay(session: &Path, out: &Path, settings: ReplaySettings) -> Result<Va
     let mut config = settings.config.clone();
     config.live.golden_record = false;
     config.live.echo_cancel = false;
+    let live = replay_live(&config, &data_dir, &settings, asr.clone(), &mic, &system)?;
+    let session_config = replay_session_config(&config, &data_dir, out, port, &settings);
+    let start = settings.clock.wall();
+    let recorded_start_wall = number(&events[0], "wall");
+    let event_count = events.len();
+    let captures: HashMap<&'static str, Arc<ReplayCapture>> = [("mic", mic), ("system", system)].into();
+    let driver = spawn_driver(events, captures, port, start, &live, &settings)?;
+    session::run(&live, session_config)?;
+    let _ = driver.join();
+    let mut summary = Map::new();
+    summary.insert("session", Value::from(session.display().to_string()));
+    summary.insert("start_wall", Value::Float(start));
+    summary.insert("recorded_start_wall", Value::Float(recorded_start_wall));
+    summary.insert("events", Value::Int(event_count as i128));
+    summary.insert("asr_misses", Value::Int(asr.misses().len() as i128));
+    let summary = Value::Object(summary);
+    std::fs::write(out.join("replay.json"), pyjson::dumps(&summary, Some(1))).map_err(|e| e.to_string())?;
+    Ok(summary)
+}
+
+/// `<out>/data`, with the profile to replay with copied in when it exists.
+fn prepare_data_dir(out: &Path, profile: Option<&Path>) -> Result<PathBuf, String> {
+    let data_dir = out.join("data");
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    if let Some(profile) = profile.filter(|p| p.exists()) {
+        let name = profile.file_name().unwrap_or_default();
+        std::fs::copy(profile, data_dir.join(name)).map_err(|e| e.to_string())?;
+    }
+    Ok(data_dir)
+}
+
+/// The transcriber of a replay: the recorded captures and ASR, the conference on, no
+/// audio saved.
+fn replay_live(
+    config: &InstallConfig,
+    data_dir: &Path,
+    settings: &ReplaySettings,
+    asr: Arc<ReplayAsr>,
+    mic: &Arc<ReplayCapture>,
+    system: &Arc<ReplayCapture>,
+) -> Result<Arc<Live>, String> {
     let backend = if crate::capture::backend::current_platform() == "darwin" { "screencapture" } else { "pulse" };
     let env = LiveEnv {
-        data_dir: data_dir.clone(),
+        data_dir: data_dir.to_path_buf(),
         dedup_max_gap_s: config.live.dedup_max_gap_s,
         legacy_mic_name: settings.legacy_mic_name.clone(),
         clock: settings.clock.clone(),
@@ -365,17 +427,28 @@ pub fn replay(session: &Path, out: &Path, settings: ReplaySettings) -> Result<Va
         save_audio: false,
         ..LiveOptions::default()
     };
-    let live = Live::new(
+    Live::new(
         options,
         env,
-        asr.clone(),
+        asr,
         Some(mic.clone() as Arc<dyn LiveCapture>),
         Some(system.clone() as Arc<dyn LiveCapture>),
-    )?;
+    )
+}
+
+/// The session of a replay: the bridge on `port` with its debug file in `out`, no
+/// titles, no increments, no golden recording.
+fn replay_session_config(
+    config: &InstallConfig,
+    data_dir: &Path,
+    out: &Path,
+    port: u16,
+    settings: &ReplaySettings,
+) -> SessionConfig {
     let mut storage = StorageOptions::new(&home_dir());
     storage.source_aliases = config.source_aliases.clone();
     storage.title_generator = Some(Arc::new(NoTitles));
-    let session_config = SessionConfig {
+    SessionConfig {
         bridge: BridgeConfig {
             port,
             extra_origins: config.web.extra_ws_origins.clone(),
@@ -386,46 +459,50 @@ pub fn replay(session: &Path, out: &Path, settings: ReplaySettings) -> Result<Va
         policy: settings
             .policy
             .clone()
-            .unwrap_or_else(|| Arc::new(recog_bridge::ai::AiSettingsPolicy::new(&data_dir)) as Arc<dyn PolicySource>),
+            .unwrap_or_else(|| Arc::new(recog_bridge::ai::AiSettingsPolicy::new(data_dir)) as Arc<dyn PolicySource>),
         increments: Some(Box::new(|_: &Path| Arc::new(NoIncrements) as Arc<dyn IncrementGenerator>)),
         storage,
         golden_record: false,
-    };
-    let start = settings.clock.wall();
-    let recorded_start_wall = number(&events[0], "wall");
-    let event_count = events.len();
-    let captures: HashMap<&'static str, Arc<ReplayCapture>> = [("mic", mic), ("system", system)].into();
-    let driver_live = Arc::downgrade(&live);
+    }
+}
+
+/// The thread that drives the recording into the live process and ends its main loop
+/// once the recording and the tail are over.
+fn spawn_driver(
+    events: Vec<Event>,
+    captures: HashMap<&'static str, Arc<ReplayCapture>>,
+    port: u16,
+    start: f64,
+    live: &Arc<Live>,
+    settings: &ReplaySettings,
+) -> Result<std::thread::JoinHandle<()>, String> {
+    let driver_live = Arc::downgrade(live);
     let clock = settings.clock.clone();
     let log = settings.log.clone();
     let tail = settings.tail_s;
-    let driver = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("golden-replay".into())
         .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build();
-            let result = match runtime {
-                Ok(runtime) => runtime.block_on(drive(events, captures, port, start, tail, clock)),
-                Err(e) => Err(e.to_string()),
-            };
-            if let Err(e) = result {
+            if let Err(e) = run_driver(events, captures, port, start, tail, clock) {
                 log.line(&format!("[golden] replay driver failed: {e}"));
             }
             if let Some(live) = driver_live.upgrade() {
                 live.set_running(false);
             }
         })
-        .map_err(|e| e.to_string())?;
-    session::run(&live, session_config)?;
-    let _ = driver.join();
-    let mut summary = Map::new();
-    summary.insert("session", Value::from(session.display().to_string()));
-    summary.insert("start_wall", Value::Float(start));
-    summary.insert("recorded_start_wall", Value::Float(recorded_start_wall));
-    summary.insert("events", Value::Int(event_count as i128));
-    summary.insert("asr_misses", Value::Int(asr.misses().len() as i128));
-    let summary = Value::Object(summary);
-    std::fs::write(out.join("replay.json"), pyjson::dumps(&summary, Some(1))).map_err(|e| e.to_string())?;
-    Ok(summary)
+        .map_err(|e| e.to_string())
+}
+
+fn run_driver(
+    events: Vec<Event>,
+    captures: HashMap<&'static str, Arc<ReplayCapture>>,
+    port: u16,
+    start: f64,
+    tail: f64,
+    clock: SharedClock,
+) -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    runtime.block_on(drive(events, captures, port, start, tail, clock))
 }
 
 fn home_dir() -> PathBuf {
