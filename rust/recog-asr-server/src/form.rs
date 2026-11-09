@@ -893,6 +893,224 @@ mod tests {
         assert_eq!(text_of(&form, "c").as_deref(), Some("а"));
     }
 
+    fn names(form: &FormData) -> Vec<&str> {
+        form.items().iter().map(|(name, _)| name.as_str()).collect()
+    }
+
+    const PART_A: &str = "--b\r\nContent-Disposition: form-data; name=a\r\n\r\n";
+
+    #[test]
+    fn newlines_before_the_first_boundary_when_parsed_then_skipped() {
+        let body = format!("\r\n\n\r\n{PART_A}1\r\n--b--");
+        assert_eq!(text_of(&multipart("b", &body).unwrap(), "a").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn only_newlines_or_nothing_when_parsed_then_an_empty_form() {
+        assert_eq!(multipart("b", "\r\n\r\n"), Ok(FormData::default()));
+        assert_eq!(multipart("b", ""), Ok(FormData::default()));
+    }
+
+    #[test]
+    fn a_body_shorter_than_the_boundary_when_parsed_then_an_empty_form() {
+        assert_eq!(multipart("b", "--"), Ok(FormData::default()));
+        assert_eq!(multipart("b", "-x"), Err(PARSE_ERROR.to_owned()));
+    }
+
+    #[test]
+    fn a_boundary_of_256_bytes_when_parsed_then_read_and_of_257_refused() {
+        let ok = "x".repeat(MAX_BOUNDARY_LENGTH);
+        let body = format!("--{ok}\r\nContent-Disposition: form-data; name=a\r\n\r\n1\r\n--{ok}--");
+        assert_eq!(text_of(&multipart(&ok, &body).unwrap(), "a").as_deref(), Some("1"));
+        let long = "x".repeat(MAX_BOUNDARY_LENGTH + 1);
+        let body = format!("--{long}\r\nContent-Disposition: form-data; name=a\r\n\r\n1\r\n--{long}--");
+        assert_eq!(multipart(&long, &body), Err(PARSE_ERROR.to_owned()));
+    }
+
+    #[test]
+    fn the_closing_boundary_first_when_parsed_then_an_empty_form_and_what_follows_ignored() {
+        assert_eq!(multipart("b", "--b--\r\nanything"), Ok(FormData::default()));
+        assert_eq!(multipart("b", "--b-x"), Err(PARSE_ERROR.to_owned()));
+    }
+
+    #[test]
+    fn the_first_boundary_followed_by_neither_cr_nor_hyphen_when_parsed_then_the_parse_error() {
+        assert_eq!(multipart("b", "--bx\r\n"), Err(PARSE_ERROR.to_owned()));
+        assert_eq!(multipart("b", "--b\rx"), Err(PARSE_ERROR.to_owned()));
+    }
+
+    #[test]
+    fn data_after_the_closing_boundary_when_parsed_then_ignored() {
+        let body = format!("{PART_A}1\r\n--b--\r\n--b\r\nContent-Disposition: form-data; name=c\r\n\r\n2\r\n--b--");
+        assert_eq!(names(&multipart("b", &body).unwrap()), ["a"]);
+    }
+
+    #[test]
+    fn a_header_name_with_a_space_or_without_a_name_when_parsed_then_the_parse_error() {
+        let space = "--b\r\nContent Disposition: form-data; name=a\r\n\r\n1\r\n--b--";
+        assert_eq!(multipart("b", space), Err(PARSE_ERROR.to_owned()));
+        let empty = "--b\r\n: form-data; name=a\r\n\r\n1\r\n--b--";
+        assert_eq!(multipart("b", empty), Err(PARSE_ERROR.to_owned()));
+    }
+
+    #[test]
+    fn a_body_cut_inside_a_header_when_parsed_then_an_empty_form() {
+        assert_eq!(multipart("b", "--b\r\nContent-Dispo"), Ok(FormData::default()));
+        assert_eq!(multipart("b", "--b\r\nContent-Disposition:"), Ok(FormData::default()));
+        assert_eq!(multipart("b", "--b\r\nContent-Disposition:  form-data; na"), Ok(FormData::default()));
+    }
+
+    #[test]
+    fn header_values_with_no_or_several_leading_spaces_when_parsed_then_the_same_parameters() {
+        let none = "--b\r\ncontent-DISPOSITION:form-data; name=a\r\n\r\n1\r\n--b--";
+        assert_eq!(text_of(&multipart("b", none).unwrap(), "a").as_deref(), Some("1"));
+        let three = "--b\r\nContent-Disposition:   form-data; name=a\r\n\r\n1\r\n--b--";
+        assert_eq!(text_of(&multipart("b", three).unwrap(), "a").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn a_header_line_or_the_header_block_ended_by_cr_without_lf_when_parsed_then_the_parse_error() {
+        let line = "--b\r\nContent-Disposition: form-data; name=a\rx";
+        assert_eq!(multipart("b", line), Err(PARSE_ERROR.to_owned()));
+        let block = PART_A.replacen("\r\n\r\n", "\r\n\rx", 1);
+        assert_eq!(multipart("b", &block), Err(PARSE_ERROR.to_owned()));
+    }
+
+    #[test]
+    fn eight_headers_in_a_part_when_parsed_then_accepted() {
+        let headers = "X-A: 1\r\n".repeat(7);
+        let body = format!("--b\r\nContent-Disposition: form-data; name=a\r\n{headers}\r\n1\r\n--b--");
+        assert_eq!(text_of(&multipart("b", &body).unwrap(), "a").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn a_header_of_4224_bytes_when_parsed_then_accepted_and_of_4225_refused() {
+        // `X-A:` counts with its colon, then the space and the value.
+        let header = |value_len: usize| {
+            format!("--b\r\nX-A: {}\r\nContent-Disposition: form-data; name=a\r\n\r\n1\r\n--b--", "v".repeat(value_len))
+        };
+        assert_eq!(text_of(&multipart("b", &header(MAX_HEADER_SIZE - 5)).unwrap(), "a").as_deref(), Some("1"));
+        assert_eq!(multipart("b", &header(MAX_HEADER_SIZE - 4)), Err(PARSE_ERROR.to_owned()));
+        let name = format!("--b\r\n{}: 1\r\n\r\n1\r\n--b--", "N".repeat(MAX_HEADER_SIZE));
+        assert_eq!(multipart("b", &name), Err(PARSE_ERROR.to_owned()));
+    }
+
+    #[test]
+    fn an_empty_part_when_parsed_then_an_empty_value() {
+        let body = format!("{PART_A}\r\n--b--");
+        assert_eq!(text_of(&multipart("b", &body).unwrap(), "a").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn the_boundary_followed_by_other_bytes_inside_a_part_when_parsed_then_kept_in_the_value() {
+        for inside in ["\r\n--bc", "\r\n--b\rx", "\r\n--b-x", "\r\n--x", "\r\n-"] {
+            let body = format!("{PART_A}1{inside}2\r\n--b--");
+            assert_eq!(text_of(&multipart("b", &body).unwrap(), "a"), Some(format!("1{inside}2")), "{inside:?}");
+        }
+    }
+
+    #[test]
+    fn three_parts_when_parsed_then_in_order() {
+        let body = format!(
+            "{PART_A}1\r\n--b\r\nContent-Disposition: form-data; name=c\r\n\r\n2\r\n\
+             --b\r\nContent-Disposition: form-data; name=a\r\n\r\n3\r\n--b--\r\n"
+        );
+        let form = multipart("b", &body).unwrap();
+        assert_eq!(names(&form), ["a", "c", "a"]);
+        assert_eq!(text_of(&form, "a").as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn a_field_cut_inside_the_closing_boundary_when_at_the_size_limit_then_the_partial_boundary_not_counted() {
+        let big = "x".repeat(MAX_PART_SIZE);
+        let cut = format!("{PART_A}{big}\r\n--");
+        assert_eq!(multipart("b", &cut), Ok(FormData::default()));
+        let not_a_boundary = format!("{PART_A}{big}\r\n-x");
+        assert_eq!(multipart("b", &not_a_boundary), Err("Part exceeded maximum size of 1024KB.".to_owned()));
+    }
+
+    #[test]
+    fn a_file_over_one_mebibyte_when_parsed_then_whole() {
+        let big = "x".repeat(MAX_PART_SIZE + 1);
+        let body = format!("--b\r\nContent-Disposition: form-data; name=f; filename=a.wav\r\n\r\n{big}\r\n--b--");
+        let Some(FormValue::File(file)) = multipart("b", &body).unwrap().get("f").cloned() else { panic!() };
+        assert_eq!(file.data.len(), MAX_PART_SIZE + 1);
+        assert_eq!(file.content_type, None);
+    }
+
+    #[test]
+    fn a_thousand_and_one_fields_or_files_when_parsed_then_starlettes_limits() {
+        let fields = format!("{PART_A}1\r\n").repeat(MAX_FIELDS + 1) + "--b--";
+        assert_eq!(multipart("b", &fields), Err("Too many fields. Maximum number of fields is 1000.".to_owned()));
+        let file = "--b\r\nContent-Disposition: form-data; name=f; filename=a\r\n\r\n1\r\n";
+        let files = file.repeat(MAX_FILES + 1) + "--b--";
+        assert_eq!(multipart("b", &files), Err("Too many files. Maximum number of files is 1000.".to_owned()));
+        let at_limit = format!("{PART_A}1\r\n").repeat(MAX_FIELDS) + &file.repeat(MAX_FILES) + "--b--";
+        assert_eq!(multipart("b", &at_limit).unwrap().items().len(), MAX_FIELDS + MAX_FILES);
+    }
+
+    #[test]
+    fn values_not_in_utf8_or_a_latin1_charset_when_parsed_then_latin1() {
+        let body = b"--b\r\nContent-Disposition: form-data; name=a\r\n\r\n\xd0\xb0\xff\r\n--b--";
+        let utf8 = parse(Some(b"multipart/form-data; boundary=b"), body).unwrap();
+        assert_eq!(text_of(&utf8, "a").as_deref(), Some("\u{d0}\u{b0}\u{ff}"));
+        let body = b"--b\r\nContent-Disposition: form-data; name=a\r\n\r\n\xd0\xb0\r\n--b--";
+        let utf8 = parse(Some(b"multipart/form-data; boundary=b"), body).unwrap();
+        assert_eq!(text_of(&utf8, "a").as_deref(), Some("а"));
+        let latin = parse(Some(b"multipart/form-data; boundary=b; charset=latin-1"), body).unwrap();
+        assert_eq!(text_of(&latin, "a").as_deref(), Some("\u{d0}\u{b0}"));
+    }
+
+    #[test]
+    fn other_content_types_when_parsed_then_an_empty_form() {
+        assert_eq!(parse(Some(b"application/json"), b"{\"a\": 1}"), Ok(FormData::default()));
+        assert_eq!(parse(None, b"a=1"), Ok(FormData::default()));
+    }
+
+    #[test]
+    fn urlencoded_edge_cases_when_parsed_then_pythons_pairs() {
+        let pairs = |body: &[u8]| -> Vec<(String, String)> {
+            let form = parse(Some(b"application/x-www-form-urlencoded"), body).unwrap();
+            form.items()
+                .iter()
+                .map(|(k, v)| match v {
+                    FormValue::Text(t) => (k.clone(), t.clone()),
+                    FormValue::File(_) => panic!("a file from a query string"),
+                })
+                .collect()
+        };
+        let owned = |list: &[(&str, &str)]| -> Vec<(String, String)> {
+            list.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
+        };
+        assert_eq!(pairs(b""), owned(&[]));
+        assert_eq!(pairs(b"&&x=1&tail"), owned(&[("x", "1"), ("tail", "")]));
+        assert_eq!(pairs(b"=v&a=1=2&e=&z"), owned(&[("", "v"), ("a", "1=2"), ("e", ""), ("z", "")]));
+        assert_eq!(pairs(b"a="), owned(&[("a", "")]));
+        assert_eq!(pairs(b"%ff+%41=%zz"), owned(&[("\u{fffd} A", "%zz")]));
+    }
+
+    #[test]
+    fn parameters_without_a_value_repeated_or_extended_when_split_then_pythons_options() {
+        let (ctype, options) = parse_options_header(" Form-Data ; flag; name=a; NAME=\"b\"; name*=x; filename*0=y");
+        assert_eq!(ctype, "form-data");
+        assert_eq!(options, vec![("flag".to_owned(), String::new()), ("name".to_owned(), "b".to_owned())]);
+        assert_eq!(parse_options_header(""), (String::new(), Vec::new()));
+        assert_eq!(parse_options_header("  Text/Plain  "), ("text/plain".to_owned(), Vec::new()));
+    }
+
+    #[test]
+    fn quoted_escapes_and_windows_paths_when_split_then_unescaped_and_the_last_component() {
+        let (_, options) = parse_options_header(r#"form-data; name="a\"b\\c"; filename="\\\\server\\x.wav""#);
+        assert_eq!(
+            options,
+            vec![("name".to_owned(), r#"a"b\c"#.to_owned()), ("filename".to_owned(), "x.wav".to_owned())]
+        );
+        let (_, options) = parse_options_header(r"form-data; filename=dir\a.wav");
+        assert_eq!(options, vec![("filename".to_owned(), r"dir\a.wav".to_owned())]);
+        let (_, options) = parse_options_header(r#"form-data; filename="""#);
+        assert_eq!(options, vec![("filename".to_owned(), String::new())]);
+    }
+
     #[test]
     fn quoted_semicolons_given_parameters_when_split_then_kept_inside_the_value() {
         let (ctype, options) = parse_options_header("Form-Data; name=\"a;b\"; filename=x");
