@@ -110,14 +110,11 @@
         readPromise = (async () => {
             try {
                 const data = await request();
-                if (readGeneration !== generation || stopped) return;
+                if (readOutdated(readGeneration)) return;
                 render(data);
-                if (firstRead) {
-                    firstRead = false;
-                    if (!data.profile.configured && !dismissed && !el('dialog').open) open(true);
-                }
+                offerWelcome(data);
             } catch (_) {
-                if (readGeneration !== generation || stopped) return;
+                if (readOutdated(readGeneration)) return;
                 if (el('dialog').open) showError('Не удалось обновить профиль. Проверьте подключение и откройте настройки снова.');
             } finally {
                 readPromise = null;
@@ -125,6 +122,19 @@
             }
         })();
         return readPromise;
+    }
+
+    // A save or a stop came after this read started.
+    function readOutdated(readGeneration) {
+        return readGeneration !== generation || stopped;
+    }
+
+    // The first successful read opens the welcome for a profile never set up.
+    function offerWelcome(data) {
+        if (firstRead) {
+            firstRead = false;
+            if (!data.profile.configured && !dismissed && !el('dialog').open) open(true);
+        }
     }
 
     function open(isWelcome = false) {
@@ -153,16 +163,8 @@
 
     async function mutate(method) {
         if (busy) return;
-        if (method === 'DELETE' && !window.confirm('Очистить имя и все варианты обращения? Live и Copilot вернутся к имени по умолчанию. Прошлые записи сохранятся.')) return;
-        const body = method === 'PUT' ? {
-            name: el('name').value.trim(),
-            aliases: el('aliases').value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
-        } : null;
-        if (body && (!body.name || /^me$/i.test(body.name))) {
-            showError('Укажите ваше имя вместо «Me».');
-            el('name').focus();
-            return;
-        }
+        const body = mutationBody(method);
+        if (body === undefined) return;
         busy = true;
         generation += 1;
         clearTimeout(pollTimer);
@@ -177,19 +179,39 @@
             render(data, true);
             if (el('dialog').open) close();
         } catch (error) {
-            const message = error.name === 'AbortError'
-                ? 'Сервер не ответил вовремя. Проверьте профиль перед повторным сохранением.'
-                : (error instanceof TypeError ? 'Не удалось сохранить профиль. Проверьте подключение и попробуйте ещё раз.'
-                    : (error.message || 'Не удалось сохранить профиль. Попробуйте ещё раз.'));
-            showError(message);
-            if (!el('dialog').open) {
-                el('notice').textContent = message;
-                el('notice').hidden = false;
-            }
+            showSaveFailure(error);
         } finally {
             busy = false;
             updateControls();
             schedulePoll();
+        }
+    }
+
+    // What a Save (PUT) or Clear (DELETE) sends: the form's profile, or null
+    // for a Clear; undefined when it must not be sent (Clear declined, no name).
+    function mutationBody(method) {
+        if (method === 'DELETE' && !window.confirm('Очистить имя и все варианты обращения? Live и Copilot вернутся к имени по умолчанию. Прошлые записи сохранятся.')) return undefined;
+        const body = method === 'PUT' ? {
+            name: el('name').value.trim(),
+            aliases: el('aliases').value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+        } : null;
+        if (body && (!body.name || /^me$/i.test(body.name))) {
+            showError('Укажите ваше имя вместо «Me».');
+            el('name').focus();
+            return undefined;
+        }
+        return body;
+    }
+
+    function showSaveFailure(error) {
+        const message = error.name === 'AbortError'
+            ? 'Сервер не ответил вовремя. Проверьте профиль перед повторным сохранением.'
+            : (error instanceof TypeError ? 'Не удалось сохранить профиль. Проверьте подключение и попробуйте ещё раз.'
+                : (error.message || 'Не удалось сохранить профиль. Попробуйте ещё раз.'));
+        showError(message);
+        if (!el('dialog').open) {
+            el('notice').textContent = message;
+            el('notice').hidden = false;
         }
     }
 
