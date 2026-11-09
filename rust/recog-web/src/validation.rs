@@ -198,19 +198,27 @@ fn validate_scalar(ty: &Ty, input: &Value) -> Result<Value, Failure> {
     match ty {
         Ty::Str => string(input).map(|_| input.clone()),
         Ty::ConStr { strip, min, max } => constrained(input, *strip, *min, *max),
-        Ty::StrictBool => match input {
-            Value::Bool(_) => Ok(input.clone()),
-            _ => Err(Failure::new("bool_type", "Input should be a valid boolean")),
-        },
+        Ty::StrictBool => strict_bool(input),
         Ty::Bool => lax_bool(input).map(Value::Bool),
         Ty::Int => lax_int(input).map(Value::Int),
         Ty::Literal(options) => literal(options, input),
         // A null `Optional`; lists and dictionaries of a type are validated by item.
         Ty::Optional(_) | Ty::List(_) | Ty::Dict(_) => Ok(Value::Null),
-        Ty::AnyDict => match input {
-            Value::Object(_) => Ok(input.clone()),
-            _ => Err(Failure::new("dict_type", "Input should be a valid dictionary")),
-        },
+        Ty::AnyDict => any_dict(input),
+    }
+}
+
+fn strict_bool(input: &Value) -> Result<Value, Failure> {
+    match input {
+        Value::Bool(_) => Ok(input.clone()),
+        _ => Err(Failure::new("bool_type", "Input should be a valid boolean")),
+    }
+}
+
+fn any_dict(input: &Value) -> Result<Value, Failure> {
+    match input {
+        Value::Object(_) => Ok(input.clone()),
+        _ => Err(Failure::new("dict_type", "Input should be a valid dictionary")),
     }
 }
 
