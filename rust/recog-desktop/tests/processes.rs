@@ -75,7 +75,7 @@ fn selected_paths_when_resolved_on_linux_then_python_answers() {
     let fixture = Fixture::new();
     let base = fixture.path();
     let host = fixture.host(Platform::Linux);
-    let app = fake_app(&base, "FakeTalk").app;
+    let app = fake_app_for(&base, "FakeTalk", &Platform::Linux).app;
     std::os::unix::fs::symlink(&app, base.join("link")).unwrap();
     std::fs::write(base.join("plain-file"), "").unwrap();
     std::os::unix::fs::symlink(base.join("loop-b"), base.join("loop-a")).unwrap();
@@ -371,7 +371,7 @@ fn candidate_processes_when_searched_then_only_the_selected_main_processes() {
     let fixture = Fixture::new();
     let base = fixture.path();
     let host = fixture.host(Platform::Linux);
-    let app = fake_app(&base, "FakeTalk");
+    let app = fake_app_for(&base, "FakeTalk", &Platform::Linux);
     let unpackaged = base.join("unpackaged/ktalk");
     std::fs::create_dir_all(unpackaged.parent().unwrap()).unwrap();
     std::fs::write(&unpackaged, "").unwrap();
@@ -401,7 +401,7 @@ fn ktalk_process_with_a_malformed_package_when_searched_then_the_error_raised() 
     let fixture = Fixture::new();
     let base = fixture.path();
     let host = fixture.host(Platform::Linux);
-    let app = fake_app(&base, "FakeTalk");
+    let app = fake_app_for(&base, "FakeTalk", &Platform::Linux);
     std::fs::write(base.join("FakeTalk/resources/app.asar"), asar("[1]")).unwrap();
     fixture.world.set(&world_of(vec![process(41, "ktalk", &app.executable)]));
     // when / then
@@ -510,7 +510,7 @@ fn appimage_process_without_a_source_when_matched_then_by_its_fuse_runtime_only(
     let mut host = fixture.host(Platform::Linux);
     let app = base.join("KTalk.AppImage");
     std::fs::write(&app, "").unwrap();
-    let mounted = fake_app(&base.join("mount"), "ktalk");
+    let mounted = fake_app_for(&base.join("mount"), "ktalk", &Platform::Linux);
     let entry = with(process(42, "ktalk", &mounted.executable), "environ", obj(r#"{"APPIMAGE": "/elsewhere"}"#));
     fixture.world.set(&world_of(vec![entry]));
     host.device = Arc::new(|_| Ok(processes::makedev(0, 17)));

@@ -108,7 +108,8 @@ impl Side {
 
     fn host(&self) -> Host {
         let mut host = host(&self.world, free_port(), free_port(), &self.path().join("home"));
-        host.platform = Platform::Linux;
+        // The fake application is built for this platform (a bundle on macOS).
+        host.platform = Platform::current();
         host.clock = ScriptedClock::new(4e9 + 1.0, &[0.0]);
         host
     }
@@ -257,11 +258,15 @@ async fn selected_applications_when_enabled_then_snapshot_configured_or_refused(
     assert_eq!(field(&config, "enabled"), &Value::Bool(true));
     assert_eq!(text(&config, "app"), Some(app.app.to_string_lossy().into_owned()));
     assert!(side.root().join("extensions").join(&digest).is_dir());
-    // a directory, an unbuilt checkout, a build with a link
-    assert_eq!(
-        side.run_with("enable --app", &side.path()).await,
-        refused("Select an executable KTalk AppImage or binary")
-    );
+    // a directory, an unbuilt checkout, a build with a link; on macOS a directory is
+    // read as an application bundle
+    let directory_refused = if cfg!(target_os = "macos") {
+        let plist = std::fs::canonicalize(side.path()).unwrap().join("Contents/Info.plist");
+        format!("[Errno 2] No such file or directory: '{}'", plist.display())
+    } else {
+        "Select an executable KTalk AppImage or binary".to_owned()
+    };
+    assert_eq!(side.run_with("enable --app", &side.path()).await, refused(&directory_refused));
     let unbuilt = Side::new();
     let unbuilt_app = fake_app(&unbuilt.path(), "FakeTalk");
     assert_eq!(

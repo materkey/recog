@@ -16,7 +16,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use recog_core::pyjson::{self, Map, Value};
-use recog_desktop::host::{Host, ProcessTable};
+use recog_desktop::host::{Host, Platform, ProcessTable};
 use recog_desktop::py::{self, PyErr};
 
 pub fn repo_root() -> PathBuf {
@@ -624,10 +624,17 @@ pub fn plist(identifier: &str, executable: &str) -> String {
     )
 }
 
+/// The fake application of the platform the tests run on.
 pub fn fake_app(dir: &Path, name: &str) -> FakeApp {
+    fake_app_for(dir, name, &Platform::current())
+}
+
+/// The fake application laid out as `platform` lays it out, on any system: a test
+/// of a host set to another platform needs that platform's application.
+pub fn fake_app_for(dir: &Path, name: &str, platform: &Platform) -> FakeApp {
     use std::os::unix::fs::PermissionsExt as _;
     let package = r#"{"name": "ktalk", "main": "build/main.js"}"#;
-    if cfg!(target_os = "macos") {
+    if *platform == Platform::Darwin {
         let app = dir.join(format!("{name}.app"));
         let contents = app.join("Contents");
         std::fs::create_dir_all(contents.join("MacOS")).unwrap();

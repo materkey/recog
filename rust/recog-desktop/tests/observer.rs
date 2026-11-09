@@ -151,7 +151,7 @@ async fn no_or_several_main_processes_when_observed_then_waiting_for_one() {
     // given
     let fixture = Fixture::new();
     let host = fixture.host();
-    let app = fake_app(fixture.path(), "FakeTalk");
+    let app = fake_app_for(fixture.path(), "FakeTalk", &Platform::Linux);
     fixture.configure(&app, true);
     let observed = observer(&fixture, host.clone(), "{}");
     // when: none
@@ -178,7 +178,7 @@ async fn no_or_several_main_processes_when_observed_then_waiting_for_one() {
 async fn disabled_configuration_when_observed_then_only_the_heartbeat() {
     // given
     let fixture = Fixture::new();
-    let app = fake_app(fixture.path(), "FakeTalk");
+    let app = fake_app_for(fixture.path(), "FakeTalk", &Platform::Linux);
     fixture.configure(&app, false);
     let observed = observer(&fixture, fixture.host(), "{}");
     // when
@@ -193,7 +193,7 @@ async fn disabled_configuration_when_observed_then_only_the_heartbeat() {
 async fn second_observer_of_a_directory_when_ticked_then_does_nothing() {
     // given
     let fixture = Fixture::new();
-    let app = fake_app(fixture.path(), "FakeTalk");
+    let app = fake_app_for(fixture.path(), "FakeTalk", &Platform::Linux);
     fixture.configure(&app, true);
     let first = observer(&fixture, fixture.host(), "{}");
     let second = observer(&fixture, fixture.host(), "{}");
@@ -211,7 +211,7 @@ async fn application_still_starting_when_observed_then_waiting_without_a_worker(
     // given: no URL-handler listener yet
     let fixture = Fixture::new();
     let host = fixture.host();
-    let app = fake_app(fixture.path(), "FakeTalk");
+    let app = fake_app_for(fixture.path(), "FakeTalk", &Platform::Linux);
     fixture.configure(&app, true);
     let mut process = ktalk_process(42, &app, host.app_ready_port);
     process.as_object_mut().unwrap().insert("listeners", Value::Array(vec![]));
@@ -229,7 +229,7 @@ async fn inspector_fuse_disabled_when_observed_then_incompatible_once_and_notifi
     // given
     let fixture = Fixture::new();
     let host = fixture.host();
-    let app = fake_app(fixture.path(), "FakeTalk");
+    let app = fake_app_for(fixture.path(), "FakeTalk", &Platform::Linux);
     std::fs::write(&app.fuses, fuse_wire(false, 1, 8)).unwrap();
     fixture.configure(&app, true);
     let process = ktalk_process(42, &app, host.app_ready_port);
