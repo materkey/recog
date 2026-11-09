@@ -149,6 +149,31 @@ pub struct TranscriptLine {
     pub source_id: String,
 }
 
+impl TranscriptLine {
+    /// The `transcript` frame, tagged with `meeting_id`; the segment and source ids
+    /// only when set.
+    fn frame(&self, meeting_id: Option<&str>) -> Value {
+        let mut map = Map::new();
+        map.insert("type", Value::from("transcript"));
+        map.insert("speaker", Value::from(self.speaker.as_str()));
+        map.insert("text", Value::from(self.text.as_str()));
+        map.insert("timestamp", Value::from(self.timestamp.as_str()));
+        map.insert("is_continuation", Value::from(self.is_continuation));
+        map.insert("is_local", Value::from(self.is_local));
+        map.insert("uncertain", Value::from(self.uncertain));
+        map.insert("uncertain_reason", Value::from(self.uncertain_reason.as_str()));
+        map.insert("correction", Value::from(self.correction));
+        map.insert("meeting_id", Value::from(meeting_id));
+        if self.segment_id > 0 {
+            map.insert("segment_id", Value::from(self.segment_id));
+        }
+        if !self.source_id.is_empty() {
+            map.insert("source_id", Value::from(self.source_id.as_str()));
+        }
+        Value::Object(map)
+    }
+}
+
 /// One refined segment (`send_refine`'s `updates`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefineUpdate {
@@ -542,39 +567,8 @@ impl Bridge {
     /// enters the recent-transcript buffer and may fire a `transcript_tick`.
     pub fn send_transcript(self: &Arc<Self>, line: &TranscriptLine) {
         let meeting_id = self.current_meeting_id();
-        let mut payload = obj! {
-            "type" => "transcript",
-            "speaker" => line.speaker.as_str(),
-            "text" => line.text.as_str(),
-            "timestamp" => line.timestamp.as_str(),
-            "is_continuation" => line.is_continuation,
-            "is_local" => line.is_local,
-            "uncertain" => line.uncertain,
-            "uncertain_reason" => line.uncertain_reason.as_str(),
-            "correction" => line.correction,
-            "meeting_id" => meeting_id.as_deref(),
-        };
-        if let Some(map) = payload.as_object_mut() {
-            if line.segment_id > 0 {
-                map.insert("segment_id", Value::from(line.segment_id));
-            }
-            if !line.source_id.is_empty() {
-                map.insert("source_id", Value::from(line.source_id.as_str()));
-            }
-        }
-        let message = dumps_ascii(&payload);
-        if lock(&self.runtime).is_some() {
-            let recipients = {
-                let st = self.st();
-                st.clients.list(&st.clients.connected)
-            };
-            for client in recipients {
-                let message = message.clone();
-                self.spawn_on_loop(async move {
-                    let _ = client.sink.send(message).await;
-                });
-            }
-        }
+        let message = dumps_ascii(&line.frame(meeting_id.as_deref()));
+        self.send_on_loop(&message, |st| st.clients.list(&st.clients.connected));
         if line.segment_id > 0 {
             let meeting_id = self.current_meeting_id();
             let now_ms = self.now() * 1000.0;
@@ -583,48 +577,27 @@ impl Bridge {
         }
     }
 
+    /// Sends `message` to the clients `recipients` picks, each on the loop; nothing
+    /// without a running loop.
+    fn send_on_loop(&self, message: &str, recipients: impl FnOnce(&State) -> Vec<Arc<Client>>) {
+        if lock(&self.runtime).is_none() {
+            return;
+        }
+        let recipients = recipients(&self.st());
+        for client in recipients {
+            let message = message.to_owned();
+            self.spawn_on_loop(async move {
+                let _ = client.sink.send(message).await;
+            });
+        }
+    }
+
     /// `_maybe_emit_transcript_tick`: to channel clients after enough new segments or
     /// time, while a conference runs and the Copilot is on.
     fn maybe_emit_transcript_tick(self: &Arc<Self>) {
         let (frame, recipients) = {
             let mut st = self.st();
-            if !st.policy.enabled.truthy() || st.tick.is_none() || st.clients.channels.is_empty() {
-                return;
-            }
-            let now = self.clock.time();
-            let tick = st.tick.as_mut().expect("checked above");
-            tick.seg_count += 1;
-            let new_segs = tick.seg_count - tick.last_seg_count;
-            let time_trigger = now - tick.last_emit_ts >= COPILOT_TICK_INTERVAL_SECONDS;
-            if !(new_segs >= COPILOT_TICK_NEW_SEGMENTS || time_trigger) {
-                return;
-            }
-            let meeting_id = tick.meeting_id.clone();
-            let title = if tick.meeting_title.truthy() { tick.meeting_title.clone() } else { Value::from("") };
-            tick.last_seg_count = tick.seg_count;
-            tick.last_emit_ts = now;
-            let new_segments = st.transcript.tail(usize::try_from(new_segs).unwrap_or(0), meeting_id.as_deref());
-            let recent = st.transcript.tail(COPILOT_TICK_RECENT_SEGMENTS, meeting_id.as_deref());
-            let context = recent
-                .iter()
-                .map(|e| {
-                    let field = |k: &str| e.get(k).filter(|v| v.truthy()).map(json::py_str);
-                    format!(
-                        "{}: {}",
-                        field("speaker").unwrap_or_else(|| "?".to_owned()),
-                        field("text").unwrap_or_default()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let frame = obj! {
-                "type" => protocol::TRANSCRIPT_TICK,
-                "meeting_id" => meeting_id.as_deref(),
-                "meeting_title" => title,
-                "new_segments" => Value::Array(new_segments.into_iter().map(Value::Object).collect()),
-                "recent_context" => context,
-                "recent_segments" => Value::Array(recent.into_iter().map(Value::Object).collect()),
-            };
+            let Some(frame) = self.next_tick_frame(&mut st) else { return };
             (frame, st.clients.list(&st.clients.channels))
         };
         let Some(handle) = lock(&self.runtime).clone() else { return };
@@ -644,6 +617,29 @@ impl Bridge {
         }
     }
 
+    /// Counts one more segment and answers the `transcript_tick` frame when one is
+    /// due; None while the Copilot is off, no meeting ticks or no channel listens.
+    fn next_tick_frame(&self, st: &mut State) -> Option<Value> {
+        if !st.policy.enabled.truthy() || st.tick.is_none() || st.clients.channels.is_empty() {
+            return None;
+        }
+        let now = self.clock.time();
+        let tick = st.tick.as_mut().expect("checked above");
+        tick.seg_count += 1;
+        let new_segs = tick.seg_count - tick.last_seg_count;
+        let time_trigger = now - tick.last_emit_ts >= COPILOT_TICK_INTERVAL_SECONDS;
+        if !(new_segs >= COPILOT_TICK_NEW_SEGMENTS || time_trigger) {
+            return None;
+        }
+        let meeting_id = tick.meeting_id.clone();
+        let title = if tick.meeting_title.truthy() { tick.meeting_title.clone() } else { Value::from("") };
+        tick.last_seg_count = tick.seg_count;
+        tick.last_emit_ts = now;
+        let new_segments = st.transcript.tail(usize::try_from(new_segs).unwrap_or(0), meeting_id.as_deref());
+        let recent = st.transcript.tail(COPILOT_TICK_RECENT_SEGMENTS, meeting_id.as_deref());
+        Some(tick_frame(meeting_id.as_deref(), title, new_segments, recent))
+    }
+
     /// `send_refine(updates, meeting_id)`: tier-2 text to the extensions and the
     /// subscribers; the buffer takes it for entries of that meeting.
     pub fn send_refine(&self, updates: &[RefineUpdate], meeting_id: Option<&str>) {
@@ -651,27 +647,12 @@ impl Bridge {
             return;
         }
         let refined_at = local_isoformat(self.clock.as_ref(), self.now());
-        let payload_updates: Vec<Value> =
-            updates.iter().map(|u| obj! {"segment_id" => u.segment_id, "text" => u.text.as_str()}).collect();
-        let mut envelope = obj! {"type" => protocol::TRANSCRIPT_REFINE, "updates" => Value::Array(payload_updates), "refined_at" => refined_at};
-        if let (Some(mid), Some(map)) = (meeting_id.filter(|m| !m.is_empty()), envelope.as_object_mut()) {
-            map.insert("meeting_id", Value::from(mid));
-        }
-        let message = dumps(&envelope);
-        if lock(&self.runtime).is_some() {
-            let recipients = {
-                let st = self.st();
-                let mut list = st.clients.list(&st.clients.connected);
-                list.extend(st.clients.list(&st.clients.subscribers));
-                list
-            };
-            for client in recipients {
-                let message = message.clone();
-                self.spawn_on_loop(async move {
-                    let _ = client.sink.send(message).await;
-                });
-            }
-        }
+        let message = dumps(&refine_envelope(updates, refined_at, meeting_id));
+        self.send_on_loop(&message, |st| {
+            let mut list = st.clients.list(&st.clients.connected);
+            list.extend(st.clients.list(&st.clients.subscribers));
+            list
+        });
         let mut st = self.st();
         for u in updates {
             st.transcript.refine(u.segment_id, &u.text, meeting_id);
@@ -926,4 +907,41 @@ pub(crate) fn copy_identity(identity: &Value) -> Result<Value, String> {
     let mut copy = map.clone();
     copy.insert("local_user_aliases", Value::Array(json::iterate(aliases)?));
     Ok(Value::Object(copy))
+}
+
+/// The `transcript_tick` frame of a meeting: the new segments, the recent ones and
+/// those as `speaker: text` lines.
+fn tick_frame(meeting_id: Option<&str>, title: Value, new_segments: Vec<Map>, recent: Vec<Map>) -> Value {
+    let context = recent_context(&recent);
+    obj! {
+        "type" => protocol::TRANSCRIPT_TICK,
+        "meeting_id" => meeting_id,
+        "meeting_title" => title,
+        "new_segments" => Value::Array(new_segments.into_iter().map(Value::Object).collect()),
+        "recent_context" => context,
+        "recent_segments" => Value::Array(recent.into_iter().map(Value::Object).collect()),
+    }
+}
+
+/// `speaker: text` per entry, `?` for a missing speaker.
+fn recent_context(recent: &[Map]) -> String {
+    recent
+        .iter()
+        .map(|e| {
+            let field = |k: &str| e.get(k).filter(|v| v.truthy()).map(json::py_str);
+            format!("{}: {}", field("speaker").unwrap_or_else(|| "?".to_owned()), field("text").unwrap_or_default())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The `transcript_refine` frame; `meeting_id` only when one is given.
+fn refine_envelope(updates: &[RefineUpdate], refined_at: String, meeting_id: Option<&str>) -> Value {
+    let payload_updates: Vec<Value> =
+        updates.iter().map(|u| obj! {"segment_id" => u.segment_id, "text" => u.text.as_str()}).collect();
+    let mut envelope = obj! {"type" => protocol::TRANSCRIPT_REFINE, "updates" => Value::Array(payload_updates), "refined_at" => refined_at};
+    if let (Some(mid), Some(map)) = (meeting_id.filter(|m| !m.is_empty()), envelope.as_object_mut()) {
+        map.insert("meeting_id", Value::from(mid));
+    }
+    envelope
 }
