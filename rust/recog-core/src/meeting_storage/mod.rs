@@ -881,6 +881,84 @@ fn copy2(from: &Path, to: &Path) -> Result<()> {
     file.set_times(times).map_err(|e| StorageError::os(&e, to))
 }
 
+/// Python's `TypeError` for iterating over a value that is not a list.
+fn not_iterable(value: &Value) -> StorageError {
+    StorageError::Type(format!("'{}' object is not iterable", value.type_name()))
+}
+
+/// `index.get("meetings", [])`, which must be a list.
+fn index_rows(index: &Value) -> Result<Vec<Value>> {
+    match get(index, "meetings")? {
+        Some(Value::Array(list)) => Ok(list.clone()),
+        None => Ok(Vec::new()),
+        Some(other) => Err(not_iterable(other)),
+    }
+}
+
+/// The sort key of a listing: `created_at`, or `""` without one.
+fn created_or_empty(meeting: &Value) -> Result<Value> {
+    Ok(get(meeting, "created_at")?.cloned().unwrap_or_else(|| Value::from("")))
+}
+
+/// `meta.get("conference", meta.get("ktalk", {}))`: the legacy key of old meetings.
+fn conference_of<'a>(meta: &'a Value, empty: &'a Value) -> Result<&'a Value> {
+    match get(meta, "conference")? {
+        Some(conference) => Ok(conference),
+        None => get_or_empty(meta, "ktalk", empty),
+    }
+}
+
+/// `[p["name"] for p in participants.values()]`.
+fn participant_names(participants: &Value) -> Result<Vec<Value>> {
+    items(participants, "values")?.values().map(|p| item(p, "name").cloned()).collect()
+}
+
+/// `[p.get("name", pid) for pid, p in participants.items()]`.
+fn names_or_ids(participants: &Value) -> Result<Vec<Value>> {
+    items(participants, "items")?
+        .iter()
+        .map(|(pid, p)| Ok(get(p, "name")?.cloned().unwrap_or_else(|| Value::from(pid.as_str()))))
+        .collect()
+}
+
+/// Whether `list_active_meetings` lists a meeting: not ended, and recording when the
+/// session only follows a conference.
+fn listed_as_active(meta: &Value) -> Result<bool> {
+    if get(meta, "ended_at")?.is_some_and(|v| !v.is_null()) {
+        return Ok(false);
+    }
+    let empty = Value::Object(Map::new());
+    // Live owns the capture state; a joined room alone does not mean its
+    // devices started.
+    let ktalk_only = get(get_or_empty(meta, "mode", &empty)?, "ktalk_only")?.is_some_and(Value::truthy);
+    Ok(!(ktalk_only && !get(meta, "recording_active")?.is_some_and(Value::truthy)))
+}
+
+/// `md5(f"{ext_path}:{source_override}")`'s first eight hex digits: the name of an
+/// external directory's cached index.
+fn external_cache_key(ext_path: &Path, source_override: Option<&str>) -> String {
+    let key_text = format!("{}:{}", ext_path.display(), source_override.unwrap_or("None"));
+    let digest = Md5::digest(key_text.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect::<String>()[..8].to_owned()
+}
+
+/// The cached index of an external directory, None when the directory changed after
+/// it was written or it cannot be read; a cache without a list of meetings lists none.
+fn fresh_external_cache(cache_file: &Path, ext_path: &Path) -> Option<Vec<Value>> {
+    if mtime_of(cache_file)? < mtime_of(ext_path)? {
+        return None;
+    }
+    let data = read_json(cache_file).ok()?;
+    match get(&data, "meetings").ok()? {
+        Some(Value::Array(list)) => Some(list.clone()),
+        _ => Some(Vec::new()),
+    }
+}
+
+fn mtime_of(path: &Path) -> Option<f64> {
+    mtime_seconds(&fs::metadata(path).ok()?)
+}
+
 impl MeetingStorage {
     /// `MeetingStorage(base_path, external_paths)`: the directory is created.
     ///
@@ -1367,62 +1445,47 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn list_meetings(&self, include_active: bool, refresh_cache: bool) -> Result<Vec<Value>> {
+        let mut meetings = self.ended_meetings(refresh_cache)?;
+        if include_active {
+            let mut active = self.list_active_meetings()?;
+            active.extend(meetings);
+            meetings = active;
+        }
+        sort_desc(&mut meetings, created_or_empty)?;
+        meetings.into_iter().map(|meeting| self.with_canonical_source(&meeting)).collect()
+    }
+
+    /// The index's meetings, then each external directory's.
+    fn ended_meetings(&self, refresh_cache: bool) -> Result<Vec<Value>> {
         let index_path = self.shared.base_path.join("index.json");
         let mut meetings: Vec<Value> = Vec::new();
         if index_path.exists() {
-            let data = read_json(&index_path)?;
-            meetings = match get(&data, "meetings")? {
-                Some(Value::Array(list)) => list.clone(),
-                None => Vec::new(),
-                Some(other) => {
-                    return Err(StorageError::Type(format!("'{}' object is not iterable", other.type_name())));
-                }
-            };
+            meetings = index_rows(&read_json(&index_path)?)?;
         }
         for (ext_path, source_override) in &self.shared.options.external_paths {
             if ext_path.exists() {
                 meetings.extend(self.external_index(ext_path, source_override.as_deref(), refresh_cache)?);
             }
         }
-        if include_active {
-            let mut active = self.list_active_meetings()?;
-            active.extend(meetings);
-            meetings = active;
-        }
-        sort_desc(&mut meetings, |m| Ok(get(m, "created_at")?.cloned().unwrap_or_else(|| Value::from(""))))?;
-        meetings
-            .into_iter()
-            .map(|meeting| {
-                let source = self.shared.canonical(get(&meeting, "source")?.unwrap_or(&Value::Null));
-                let mut copy = items(&meeting, "items")?.clone();
-                copy.insert("source", source);
-                Ok(Value::Object(copy))
-            })
-            .collect()
+        Ok(meetings)
+    }
+
+    /// A copy of a listed meeting with its source canonical.
+    fn with_canonical_source(&self, meeting: &Value) -> Result<Value> {
+        let source = self.shared.canonical(get(meeting, "source")?.unwrap_or(&Value::Null));
+        let mut copy = items(meeting, "items")?.clone();
+        copy.insert("source", source);
+        Ok(Value::Object(copy))
     }
 
     fn external_index(&self, ext_path: &Path, source_override: Option<&str>, refresh: bool) -> Result<Vec<Value>> {
-        let key_text = format!("{}:{}", ext_path.display(), source_override.unwrap_or("None"));
-        let digest = Md5::digest(key_text.as_bytes());
-        let cache_key: String = digest.iter().map(|b| format!("{b:02x}")).collect::<String>()[..8].to_owned();
         let cache_dir = &self.shared.options.external_index_cache_dir;
-        let cache_file = cache_dir.join(format!("{cache_key}.json"));
-        if !refresh && cache_file.exists() {
-            let cached = (|| -> Option<Vec<Value>> {
-                let cache_mtime = mtime_seconds(&fs::metadata(&cache_file).ok()?)?;
-                let dir_mtime = mtime_seconds(&fs::metadata(ext_path).ok()?)?;
-                if cache_mtime < dir_mtime {
-                    return None;
-                }
-                let data = read_json(&cache_file).ok()?;
-                match get(&data, "meetings").ok()? {
-                    Some(Value::Array(list)) => Some(list.clone()),
-                    _ => Some(Vec::new()),
-                }
-            })();
-            if let Some(meetings) = cached {
-                return Ok(meetings);
-            }
+        let cache_file = cache_dir.join(format!("{}.json", external_cache_key(ext_path, source_override)));
+        if !refresh
+            && cache_file.exists()
+            && let Some(meetings) = fresh_external_cache(&cache_file, ext_path)
+        {
+            return Ok(meetings);
         }
         let meetings = self.scan_external_meetings(ext_path, source_override)?;
         fs::create_dir_all(cache_dir).map_err(|e| StorageError::os(&e, cache_dir))?;
@@ -1438,43 +1501,12 @@ impl MeetingStorage {
 
     fn scan_external_meetings(&self, path: &Path, source_override: Option<&str>) -> Result<Vec<Value>> {
         let mut meetings = Vec::new();
-        let empty = Value::Object(Map::new());
         for meeting_dir in is_dir_entries(path)? {
             let meta_path = meeting_dir.join("meta.json");
             if !meta_path.exists() {
                 continue;
             }
-            let attempt = (|| -> Result<Value> {
-                let meta = read_json(&meta_path)?;
-                let source = match source_override.filter(|s| !s.is_empty()) {
-                    Some(s) => Value::from(s),
-                    None => get(&meta, "source")?.cloned().unwrap_or_else(|| Value::from("unknown")),
-                };
-                let stats = get_or_empty(&meta, "stats", &empty)?;
-                let conference = match get(&meta, "conference")? {
-                    Some(c) => c,
-                    None => get_or_empty(&meta, "ktalk", &empty)?,
-                };
-                let names = items(get_or_empty(&meta, "participants", &empty)?, "items")?
-                    .iter()
-                    .map(|(k, p)| Ok(get(p, "name")?.cloned().unwrap_or_else(|| Value::from(k.as_str()))))
-                    .collect::<Result<Vec<_>>>()?;
-                let mut entry = Map::new();
-                entry.insert("id", item(&meta, "id")?.clone());
-                entry.insert("created_at", get(&meta, "created_at")?.cloned().unwrap_or(Value::Null));
-                entry.insert("ended_at", get(&meta, "ended_at")?.cloned().unwrap_or(Value::Null));
-                entry.insert("duration_seconds", get(stats, "duration_seconds")?.cloned().unwrap_or(Value::Int(0)));
-                entry.insert("title", get(&meta, "title")?.cloned().unwrap_or(Value::Null));
-                entry.insert("source", self.shared.canonical(&source));
-                entry.insert("end_reason", get(&meta, "end_reason")?.cloned().unwrap_or(Value::Null));
-                entry.insert("conference_url", get(conference, "live_url")?.cloned().unwrap_or(Value::Null));
-                entry.insert("segment_count", get(stats, "segment_count")?.cloned().unwrap_or(Value::Int(0)));
-                entry.insert("participants", Value::Array(names));
-                entry.insert("_external", Value::Bool(true));
-                entry.insert("_external_path", Value::from(path.to_string_lossy().into_owned()));
-                Ok(Value::Object(entry))
-            })();
-            match attempt {
+            match read_json(&meta_path).and_then(|meta| self.external_entry(&meta, path, source_override)) {
                 Ok(entry) => meetings.push(entry),
                 Err(e @ (StorageError::Json(_) | StorageError::Key(_))) => {
                     self.shared.eprint(&format!("Warning: Failed to load {}: {e}", meta_path.display()));
@@ -1485,55 +1517,51 @@ impl MeetingStorage {
         Ok(meetings)
     }
 
+    /// The listing of a meeting in an external directory.
+    fn external_entry(&self, meta: &Value, path: &Path, source_override: Option<&str>) -> Result<Value> {
+        let empty = Value::Object(Map::new());
+        let source = match source_override.filter(|s| !s.is_empty()) {
+            Some(s) => Value::from(s),
+            None => get(meta, "source")?.cloned().unwrap_or_else(|| Value::from("unknown")),
+        };
+        let stats = get_or_empty(meta, "stats", &empty)?;
+        let conference = conference_of(meta, &empty)?;
+        let names = names_or_ids(get_or_empty(meta, "participants", &empty)?)?;
+        let mut entry = self.external_fields(meta, stats, conference, &source)?;
+        entry.insert("participants", Value::Array(names));
+        entry.insert("_external", Value::Bool(true));
+        entry.insert("_external_path", Value::from(path.to_string_lossy().into_owned()));
+        Ok(Value::Object(entry))
+    }
+
+    /// An external listing's fields from `id` to `segment_count`, missing ones null
+    /// (counts 0).
+    fn external_fields(&self, meta: &Value, stats: &Value, conference: &Value, source: &Value) -> Result<Map> {
+        let mut entry = Map::new();
+        entry.insert("id", item(meta, "id")?.clone());
+        entry.insert("created_at", get(meta, "created_at")?.cloned().unwrap_or(Value::Null));
+        entry.insert("ended_at", get(meta, "ended_at")?.cloned().unwrap_or(Value::Null));
+        entry.insert("duration_seconds", get(stats, "duration_seconds")?.cloned().unwrap_or(Value::Int(0)));
+        entry.insert("title", get(meta, "title")?.cloned().unwrap_or(Value::Null));
+        entry.insert("source", self.shared.canonical(source));
+        entry.insert("end_reason", get(meta, "end_reason")?.cloned().unwrap_or(Value::Null));
+        entry.insert("conference_url", get(conference, "live_url")?.cloned().unwrap_or(Value::Null));
+        entry.insert("segment_count", get(stats, "segment_count")?.cloned().unwrap_or(Value::Int(0)));
+        Ok(entry)
+    }
+
     /// `list_active_meetings()`: meetings not ended, newest first.
     ///
     /// # Errors
     /// As Python raises.
     pub fn list_active_meetings(&self) -> Result<Vec<Value>> {
         let mut active = Vec::new();
-        let empty = Value::Object(Map::new());
         for meeting_dir in is_dir_entries(&self.shared.base_path)? {
             let meta_path = meeting_dir.join("meta.json");
             if !meta_path.exists() {
                 continue;
             }
-            let attempt = (|| -> Result<Option<Value>> {
-                let meta = read_json(&meta_path)?;
-                if get(&meta, "ended_at")?.is_some_and(|v| !v.is_null()) {
-                    return Ok(None);
-                }
-                // Live owns the capture state; a joined room alone does not mean its
-                // devices started.
-                if get(get_or_empty(&meta, "mode", &empty)?, "ktalk_only")?.is_some_and(Value::truthy)
-                    && !get(&meta, "recording_active")?.is_some_and(Value::truthy)
-                {
-                    return Ok(None);
-                }
-                let created_at = item(&meta, "created_at")?.clone();
-                let conference = match get(&meta, "conference")? {
-                    Some(c) => c,
-                    None => get_or_empty(&meta, "ktalk", &empty)?,
-                };
-                let stats = get_or_empty(&meta, "stats", &empty)?;
-                let names = items(get_or_empty(&meta, "participants", &empty)?, "values")?
-                    .values()
-                    .map(|p| item(p, "name").cloned())
-                    .collect::<Result<Vec<_>>>()?;
-                let mut entry = Map::new();
-                entry.insert("id", item(&meta, "id")?.clone());
-                entry.insert("created_at", created_at.clone());
-                entry.insert("ended_at", Value::Null);
-                entry.insert("duration_seconds", Value::from(self.calc_duration(&created_at)));
-                entry.insert("title", get(&meta, "title")?.cloned().unwrap_or(Value::Null));
-                entry.insert("source", self.shared.canonical(get(&meta, "source")?.unwrap_or(&Value::Null)));
-                entry.insert("end_reason", Value::Null);
-                entry.insert("ktalk_live_url", get(conference, "live_url")?.cloned().unwrap_or(Value::Null));
-                entry.insert("segment_count", get(stats, "segment_count")?.cloned().unwrap_or(Value::Int(0)));
-                entry.insert("participants", Value::Array(names));
-                entry.insert("is_active", Value::Bool(true));
-                Ok(Some(Value::Object(entry)))
-            })();
-            match attempt {
+            match read_json(&meta_path).and_then(|meta| self.active_entry(&meta)) {
                 Ok(Some(entry)) => active.push(entry),
                 Ok(None) | Err(StorageError::Json(_) | StorageError::Key(_)) => {}
                 Err(e) => return Err(e),
@@ -1541,6 +1569,41 @@ impl MeetingStorage {
         }
         sort_desc(&mut active, |m| item(m, "created_at").cloned())?;
         Ok(active)
+    }
+
+    /// The listing of a meeting not ended, None for one not listed.
+    fn active_entry(&self, meta: &Value) -> Result<Option<Value>> {
+        if !listed_as_active(meta)? {
+            return Ok(None);
+        }
+        Ok(Some(self.active_listing(meta)?))
+    }
+
+    fn active_listing(&self, meta: &Value) -> Result<Value> {
+        let empty = Value::Object(Map::new());
+        let created_at = item(meta, "created_at")?.clone();
+        let conference = conference_of(meta, &empty)?;
+        let stats = get_or_empty(meta, "stats", &empty)?;
+        let names = participant_names(get_or_empty(meta, "participants", &empty)?)?;
+        let mut entry = Map::new();
+        entry.insert("id", item(meta, "id")?.clone());
+        entry.insert("created_at", created_at.clone());
+        entry.insert("ended_at", Value::Null);
+        entry.insert("duration_seconds", Value::from(self.calc_duration(&created_at)));
+        self.active_fields(&mut entry, meta, conference, stats)?;
+        entry.insert("participants", Value::Array(names));
+        entry.insert("is_active", Value::Bool(true));
+        Ok(Value::Object(entry))
+    }
+
+    /// An active listing's fields from `title` to `segment_count`.
+    fn active_fields(&self, entry: &mut Map, meta: &Value, conference: &Value, stats: &Value) -> Result<()> {
+        entry.insert("title", get(meta, "title")?.cloned().unwrap_or(Value::Null));
+        entry.insert("source", self.shared.canonical(get(meta, "source")?.unwrap_or(&Value::Null)));
+        entry.insert("end_reason", Value::Null);
+        entry.insert("ktalk_live_url", get(conference, "live_url")?.cloned().unwrap_or(Value::Null));
+        entry.insert("segment_count", get(stats, "segment_count")?.cloned().unwrap_or(Value::Int(0)));
+        Ok(())
     }
 
     fn calc_duration(&self, created_at: &Value) -> i64 {
