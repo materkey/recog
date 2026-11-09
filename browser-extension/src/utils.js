@@ -10,45 +10,6 @@ export function isScreenShareTrack(jitsiTrack) {
     || (jitsiTrack?.audioType == null && jitsiTrack?.getSourceName?.()?.endsWith('-a1') === true);
 }
 
-export function getFullName(participant, info, fallback) {
-  const userInfo = participant?._userInfo$?.value;
-  if (userInfo) {
-    const firstName = userInfo.firstName || '';
-    const lastName = userInfo.lastName || '';
-    if (firstName && lastName) return `${firstName} ${lastName}`;
-    if (firstName) return firstName;
-  }
-
-  if (info) {
-    const firstName = info.firstName || '';
-    const lastName = info.lastName || '';
-    if (firstName && lastName) return `${firstName} ${lastName}`;
-    if (firstName) return firstName;
-  }
-
-  return fallback || 'Unknown';
-}
-
-export function getParticipantName(conf, participantId) {
-  if (!participantId) return 'Unknown';
-
-  if (conf.localParticipant && conf.localParticipant.id === participantId) {
-    const p = conf.localParticipant;
-    const info = p._participantInfo$?.value || p._userInfo$?.value;
-    return getFullName(p, info, p.name || p.displayName || 'You');
-  }
-
-  if (conf._participantsMap) {
-    const participant = conf._participantsMap.get(participantId);
-    if (participant) {
-      const info = participant._participantInfo$?.value || participant._userInfo$?.value;
-      return getFullName(participant, info, participant.name || participant.displayName || participantId);
-    }
-  }
-
-  return participantId;
-}
-
 export function getUncertainSuffix(line) {
   if (!line.uncertain) return '';
   if (line.uncertain_reason === 'mics_off') return ' (🔇?)';
