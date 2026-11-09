@@ -45,6 +45,14 @@ pub fn sample_transcript(transcript: &str, max_chars: usize, blocks: usize) -> S
     out.join("\n[...]\n")
 }
 
+/// The given snapshot of the `title` scenario, else the one saved in the data directory.
+fn title_settings(settings: Option<&ResolvedTask>) -> Result<ResolvedTask> {
+    match settings {
+        Some(settings) => Ok(settings.clone()),
+        None => AiSettingsStore::new(install::data_dir()?, None).resolve_task("title", None, Fallback::default()),
+    }
+}
+
 async fn try_generate(
     transcript: &str,
     model: Option<&str>,
@@ -52,10 +60,7 @@ async fn try_generate(
     variables: &Variables,
     factory: &dyn ProviderFactory,
 ) -> Result<Option<String>> {
-    let mut settings = match settings {
-        Some(settings) => settings.clone(),
-        None => AiSettingsStore::new(install::data_dir()?, None).resolve_task("title", None, Fallback::default())?,
-    };
+    let mut settings = title_settings(settings)?;
     if let Some(model) = model {
         let provider = settings.provider().to_owned();
         settings.models.insert(provider, model.to_owned());
@@ -191,6 +196,33 @@ fn names(meta: &Json, local_only: bool) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// The meeting's `meta.json`, which must hold an object.
+fn read_meta(meeting_path: &Path) -> Result<Json> {
+    let meta = Json::parse(&pytext::read_text(&meeting_path.join("meta.json"))?)
+        .map_err(|error| AiError::Value(format!("Invalid meta.json: {error}")))?;
+    if meta.as_object().is_none() {
+        return Err(AiError::no_get(meta.type_name()));
+    }
+    Ok(meta)
+}
+
+/// The title prompt's variables from a meeting's metadata: the local participants, all
+/// participants and the current title.
+fn meeting_variables(meta: &Json) -> Result<Variables> {
+    let title = match meta.get("title").filter(|title| title.truthy()) {
+        None => String::new(),
+        Some(Json::Str(title)) => title.clone(),
+        Some(other) => return Err(AiError::Type(format!("meeting title is a {}", other.type_name()))),
+    };
+    Ok([
+        ("user_name".to_owned(), names(meta, true)?.join(", ")),
+        ("participants".to_owned(), names(meta, false)?.join(", ")),
+        ("meeting_title".to_owned(), title),
+    ]
+    .into_iter()
+    .collect())
+}
+
 async fn try_meeting_title(
     data_dir: &Path,
     meeting_path: &Path,
@@ -201,23 +233,8 @@ async fn try_meeting_title(
         return Ok(None);
     }
     let settings = AiSettingsStore::new(data_dir, None).resolve_task("title", None, Fallback::default())?;
-    let meta = Json::parse(&pytext::read_text(&meeting_path.join("meta.json"))?)
-        .map_err(|error| AiError::Value(format!("Invalid meta.json: {error}")))?;
-    if meta.as_object().is_none() {
-        return Err(AiError::no_get(meta.type_name()));
-    }
-    let title = match meta.get("title").filter(|title| title.truthy()) {
-        None => String::new(),
-        Some(Json::Str(title)) => title.clone(),
-        Some(other) => return Err(AiError::Type(format!("meeting title is a {}", other.type_name()))),
-    };
-    let variables: Variables = [
-        ("user_name".to_owned(), names(&meta, true)?.join(", ")),
-        ("participants".to_owned(), names(&meta, false)?.join(", ")),
-        ("meeting_title".to_owned(), title),
-    ]
-    .into_iter()
-    .collect();
+    let meta = read_meta(meeting_path)?;
+    let variables = meeting_variables(&meta)?;
     let Some(title) = generate_title(&transcript, None, Some(&settings), &variables, factory).await else {
         return Ok(None);
     };
