@@ -267,7 +267,7 @@ pub fn steps_sha256() -> String {
     let list = |steps: Vec<Step>| Json::from(steps.iter().map(Step::to_json).collect::<Vec<_>>());
     let all =
         json!({"steps": list(steps()), "loading": list(loading_steps()), "scenarios": SCENARIOS, "ffmpeg": FFMPEG});
-    support::sha256_hex(all.to_string().as_bytes())
+    support::json_sha256(&all)
 }
 
 /// The Python answers, recorded by `RECOG_RECORD_ASR_SERVER_FIXTURE=1 cargo test -p

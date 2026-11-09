@@ -456,7 +456,7 @@ pub fn steps() -> Vec<Step> {
 /// The SHA-256 of the steps: the recorded answers hold only for these.
 pub fn steps_sha256(steps: &[Step]) -> String {
     let steps: Vec<Json> = steps.iter().map(Step::to_json).collect();
-    support::sha256_hex(Json::from(steps).to_string().as_bytes())
+    support::json_sha256(&Json::from(steps))
 }
 
 /// The Python answers, recorded by `RECOG_RECORD_ASR_SERVER_FIXTURE=1 cargo test -p

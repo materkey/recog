@@ -238,6 +238,27 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
+/// The lowercase hex SHA-256 of `value` written with every object's keys sorted. The
+/// text `serde_json` writes depends on its `preserve_order` feature, which a build of
+/// several packages at once turns on for all of them (recog-copilot and recog-zoom ask
+/// for it), so hashing that text gave one answer under `cargo test -p` and another under
+/// `cargo test --workspace`.
+pub fn json_sha256(value: &Json) -> String {
+    sha256_hex(sorted(value).to_string().as_bytes())
+}
+
+fn sorted(value: &Json) -> Json {
+    match value {
+        Json::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            Json::Object(keys.into_iter().map(|key| (key.clone(), sorted(&map[key]))).collect())
+        }
+        Json::Array(items) => Json::Array(items.iter().map(sorted).collect()),
+        other => other.clone(),
+    }
+}
+
 /// A response as the tests compare and record it: the status, the compared headers and
 /// the body, the ports of `masks` (the server's own, the backends it is pointed at)
 /// replaced by their names, so that runs on different ports compare. A
