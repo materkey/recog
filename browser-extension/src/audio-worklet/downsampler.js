@@ -24,6 +24,21 @@ const DECIMATION = SOURCE_SAMPLE_RATE / TARGET_SAMPLE_RATE; // 3
 const PAYLOAD_SAMPLES = Math.round((TARGET_SAMPLE_RATE * 3600) / 1000); // 57600
 const STRIDE_SAMPLES = Math.round((TARGET_SAMPLE_RATE * 3000) / 1000);  // 48000
 
+// The first channel of the node's first input, or null while it has no samples.
+function firstChannel(input) {
+  if (!input || input.length === 0) return null;
+  const ch = input[0];
+  return ch && ch.length > 0 ? ch : null;
+}
+
+function toInt16(y) {
+  // Clamp to Int16 range.
+  let s = y * 32767;
+  if (s > 32767) s = 32767;
+  else if (s < -32768) s = -32768;
+  return s | 0;
+}
+
 class PcmDownsamplerProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -70,26 +85,28 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
     if (this._disabled) return true;
 
     const input = inputs[0];
-    if (this._processDebugLeft > 0) {
-      this._processDebugLeft--;
-      const ch0 = input && input[0];
-      console.log(
-        '[PcmDownsampler] process tick, input.channels=', input ? input.length : 0,
-        'ch0.len=', ch0 ? ch0.length : 0,
-        'ringFill=', this._ringFill
-      );
-    }
-    if (!input || input.length === 0) return true;
-    const ch = input[0];
-    if (!ch || ch.length === 0) return true;
+    this._logProcessTick(input);
+    const ch = firstChannel(input);
+    if (ch) this._consume(ch);
+    return true;
+  }
 
+  _logProcessTick(input) {
+    if (this._processDebugLeft <= 0) return;
+    this._processDebugLeft--;
+    const ch0 = input && input[0];
+    console.log(
+      '[PcmDownsampler] process tick, input.channels=', input ? input.length : 0,
+      'ch0.len=', ch0 ? ch0.length : 0,
+      'ringFill=', this._ringFill
+    );
+  }
+
+  _consume(ch) {
     const n = ch.length;
     let x1 = this._x1;
     let x2 = this._x2;
     let phase = this._phase;
-    let ringWrite = this._ringWrite;
-    let ringFill = this._ringFill;
-    let sinceEmit = this._samplesSinceLastEmit;
 
     for (let i = 0; i < n; i++) {
       const x0 = ch[i];
@@ -100,21 +117,7 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
       x2 = x1;
       x1 = x0;
 
-      if (phase === 0) {
-        // Clamp to Int16 range.
-        let s = y * 32767;
-        if (s > 32767) s = 32767;
-        else if (s < -32768) s = -32768;
-        this._ring[ringWrite] = s | 0;
-        ringWrite = (ringWrite + 1) % PAYLOAD_SAMPLES;
-        if (ringFill < PAYLOAD_SAMPLES) ringFill++;
-        sinceEmit++;
-
-        if (sinceEmit >= STRIDE_SAMPLES && ringFill >= PAYLOAD_SAMPLES) {
-          this._emit(ringWrite);
-          sinceEmit = 0;
-        }
-      }
+      if (phase === 0) this._pushSample(y);
 
       phase++;
       if (phase >= DECIMATION) phase = 0;
@@ -123,11 +126,18 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
     this._x1 = x1;
     this._x2 = x2;
     this._phase = phase;
-    this._ringWrite = ringWrite;
-    this._ringFill = ringFill;
-    this._samplesSinceLastEmit = sinceEmit;
+  }
 
-    return true;
+  _pushSample(y) {
+    this._ring[this._ringWrite] = toInt16(y);
+    this._ringWrite = (this._ringWrite + 1) % PAYLOAD_SAMPLES;
+    if (this._ringFill < PAYLOAD_SAMPLES) this._ringFill++;
+    this._samplesSinceLastEmit++;
+
+    if (this._samplesSinceLastEmit >= STRIDE_SAMPLES && this._ringFill >= PAYLOAD_SAMPLES) {
+      this._emit(this._ringWrite);
+      this._samplesSinceLastEmit = 0;
+    }
   }
 
   _emit(ringWriteIdx) {
