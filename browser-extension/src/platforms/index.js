@@ -34,6 +34,14 @@ export function detectPlatform(loc = window.location, hosts = conferenceHosts) {
   const { hostname, pathname = '', protocol, port, origin } = loc;
   if (protocol !== 'https:' || (port && port !== '443')) return null;
 
+  const builtIn = builtInPlatform(hostname, pathname);
+  if (builtIn !== undefined) return builtIn;
+  return configuredPlatform(origin, pathname, hosts);
+}
+
+// Platforms on their public hosts: the platform, null for a page of such a
+// host that has no meeting, undefined for any other host.
+function builtInPlatform(hostname, pathname) {
   if (hostname === 'ktalk.ru' || hostname.endsWith('.ktalk.ru')) {
     return 'ktalk';
   }
@@ -50,6 +58,11 @@ export function detectPlatform(loc = window.location, hosts = conferenceHosts) {
   if (hostname === 'zoom.us' || hostname.endsWith('.zoom.us')) {
     return pathname.startsWith('/wc/') ? 'zoom' : null;
   }
+  return undefined;
+}
+
+// Hosts this installation's configuration adds.
+function configuredPlatform(origin, pathname, hosts) {
   // Only the bundled call iframe gets an adapter; the Element top frame
   // must not open a second WebSocket that outlives the call.
   if (hosts.matrix.includes(origin)) {
