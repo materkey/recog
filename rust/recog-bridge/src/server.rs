@@ -214,6 +214,41 @@ async fn serve_connection(bridge: Arc<Bridge>, tcp: TcpStream, peer: SocketAddr)
     let _ = tokio::time::timeout(Duration::from_secs(10), reader).await;
 }
 
+/// The head of a message that is not JSON, as the log shows it.
+fn message_head(message: &Inbound) -> String {
+    match message {
+        Inbound::Text(text) => text.chars().take(100).collect::<String>(),
+        Inbound::Binary(bytes) => format!("{:?}", String::from_utf8_lossy(&bytes[..bytes.len().min(100)])),
+    }
+}
+
+/// What a socket that left the sets was, and what it left behind.
+#[derive(Default)]
+struct Departure {
+    was_subscriber: bool,
+    was_channel: bool,
+    was_supervisor: bool,
+    was_owner: bool,
+    no_extensions: bool,
+    no_channels: bool,
+    no_supervisors: bool,
+}
+
+impl Departure {
+    /// The role the disconnect log names.
+    fn role(&self) -> &'static str {
+        if self.was_supervisor {
+            "Copilot supervisor"
+        } else if self.was_channel {
+            "Copilot channel"
+        } else if self.was_subscriber {
+            "Subscriber"
+        } else {
+            "Client"
+        }
+    }
+}
+
 impl Bridge {
     /// `_handle_client(websocket)`: one connection from accept to cleanup.
     pub async fn handle_client(self: &Arc<Self>, connection: Connection) {
@@ -221,20 +256,7 @@ impl Bridge {
         // WebSockets bypass CORS: refuse pages that are neither a conference host nor
         // the webapp before the socket is registered or a frame is read. The Python
         // clients send no Origin and pass.
-        let mut rejected = None;
-        let mut origin = None;
-        if let Some(values) = &origins {
-            match values.as_slice() {
-                [] => {}
-                [one] => origin = Some(one.as_str()),
-                _ => rejected = Some("duplicate Origin headers".to_owned()),
-            }
-        }
-        if rejected.is_none() && !recog_core::ws_origin::origin_allowed(origin, &self.config.extra_origins) {
-            let shown = origin.map_or_else(|| "None".to_owned(), recog_core::py::repr);
-            rejected = Some(format!("disallowed origin {shown}"));
-        }
-        if let Some(reason) = rejected {
+        if let Some(reason) = self.origin_rejection(origins.as_deref()) {
             self.log_rate_limited(
                 "bridge-ws-origin-reject",
                 &format!("[KTalk Bridge] Rejected WS connection: {reason} ({remote_address})"),
@@ -242,6 +264,59 @@ impl Bridge {
             let _ = sink.close(1008, "origin not allowed".to_owned()).await;
             return;
         }
+        let (client, channels_present) = self.register_client(sink, remote_address);
+        let golden = self.wired().golden;
+        let golden_client = golden.as_ref().map(|tap| {
+            let n = {
+                let mut st = self.st();
+                st.golden_clients += 1;
+                st.golden_clients
+            };
+            tap.client_connected(n);
+            n
+        });
+        self.send_primers(&client, channels_present).await;
+        while let Some(message) = inbound.next().await {
+            let message = match message {
+                Ok(message) => message,
+                Err(e) => {
+                    self.log(&format!("[KTalk Bridge] Connection error: {e}"));
+                    break;
+                }
+            };
+            let Some(data) = self.parse_inbound(&message) else { continue };
+            if let (Some(tap), Some(n)) = (&golden, golden_client) {
+                tap.frame(n, &data);
+            }
+            self.handle_frame(&client, &data).await;
+        }
+        if let (Some(tap), Some(n)) = (&golden, golden_client) {
+            tap.client_disconnected(n);
+        }
+        self.disconnect(&client).await;
+    }
+
+    /// Why a handshake's Origin headers refuse the connection, if they do: more than
+    /// one value, or one the allowlist does not have (none passes).
+    fn origin_rejection(&self, origins: Option<&[String]>) -> Option<String> {
+        let mut origin = None;
+        if let Some(values) = origins {
+            match values {
+                [] => {}
+                [one] => origin = Some(one.as_str()),
+                _ => return Some("duplicate Origin headers".to_owned()),
+            }
+        }
+        if recog_core::ws_origin::origin_allowed(origin, &self.config.extra_origins) {
+            return None;
+        }
+        let shown = origin.map_or_else(|| "None".to_owned(), recog_core::py::repr);
+        Some(format!("disallowed origin {shown}"))
+    }
+
+    /// The new socket counts as an extension until its hello; true when a Copilot
+    /// channel is connected.
+    fn register_client(&self, sink: Arc<dyn ClientSink>, remote_address: String) -> (Arc<Client>, bool) {
         let client = Client::new(self.next_client_id(), sink, remote_address);
         let channels_present = {
             let mut st = self.st();
@@ -253,16 +328,12 @@ impl Bridge {
             !st.clients.channels.is_empty()
         };
         self.log(&format!("[KTalk Bridge] Client connected from {}", client.remote_address));
-        let golden = self.wired().golden;
-        let golden_client = golden.as_ref().map(|tap| {
-            let n = {
-                let mut st = self.st();
-                st.golden_clients += 1;
-                st.golden_clients
-            };
-            tap.client_connected(n);
-            n
-        });
+        (client, channels_present)
+    }
+
+    /// The Copilot state a new socket must know: the channel when one is connected,
+    /// and the agent chip.
+    async fn send_primers(&self, client: &Arc<Client>, channels_present: bool) {
         if channels_present {
             let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => "channel_connected", "message" => "Copilot channel server connected"};
             if let Err(e) = client.sink.send(crate::json::dumps(&frame)).await {
@@ -275,127 +346,117 @@ impl Bridge {
         if let Err(e) = client.sink.send(crate::json::dumps(&frame)).await {
             self.log(&format!("[KTalk Bridge] Failed to send agent_state primer to new client: {e}"));
         }
-        while let Some(message) = inbound.next().await {
-            let message = match message {
-                Ok(message) => message,
-                Err(e) => {
-                    self.log(&format!("[KTalk Bridge] Connection error: {e}"));
-                    break;
-                }
-            };
-            let parsed = match &message {
-                Inbound::Text(text) => pyjson::loads(text),
-                Inbound::Binary(bytes) => pyjson::loads_bytes(bytes),
-            };
-            let data = match parsed {
-                Ok(data) => data,
-                Err(_) => {
-                    let head = match &message {
-                        Inbound::Text(text) => text.chars().take(100).collect::<String>(),
-                        Inbound::Binary(bytes) => {
-                            format!("{:?}", String::from_utf8_lossy(&bytes[..bytes.len().min(100)]))
-                        }
-                    };
-                    self.log(&format!("[KTalk Bridge] Invalid JSON: {head}"));
-                    continue;
-                }
-            };
-            if let (Some(tap), Some(n)) = (&golden, golden_client) {
-                tap.frame(n, &data);
-            }
-            let Value::Object(map) = &data else {
-                self.log(&format!(
-                    "[KTalk Bridge] Error processing message: {}",
-                    crate::json::attribute_error(&data, "get")
-                ));
-                continue;
-            };
-            if map.get("type") == Some(&Value::from(protocol::SUBSCRIBER_HELLO)) {
-                let no_extensions = {
-                    let mut st = self.st();
-                    st.clients.connected.remove(&client.id);
-                    st.clients.subscribers.insert(client.id);
-                    st.clients.connected.is_empty()
-                };
-                self.log(&format!("[KTalk Bridge] Subscriber registered from {}", client.remote_address));
-                // The socket counted as an extension until now: one that left meanwhile
-                // kept the meeting open.
-                if no_extensions && let Err(e) = self.end_meeting_on_extension_gone().await {
-                    self.log(&format!("[KTalk Bridge] Error processing message: {e}"));
-                }
-                continue;
-            }
-            if let Err(e) = self.process_message(map, Some(&client)).await {
-                self.log(&format!("[KTalk Bridge] Error processing message: {e}"));
-            }
+    }
+
+    /// `json.loads(message)`, or None with the message's head logged.
+    fn parse_inbound(&self, message: &Inbound) -> Option<Value> {
+        let parsed = match message {
+            Inbound::Text(text) => pyjson::loads(text),
+            Inbound::Binary(bytes) => pyjson::loads_bytes(bytes),
+        };
+        if let Ok(data) = parsed {
+            return Some(data);
         }
-        if let (Some(tap), Some(n)) = (&golden, golden_client) {
-            tap.client_disconnected(n);
+        self.log(&format!("[KTalk Bridge] Invalid JSON: {}", message_head(message)));
+        None
+    }
+
+    /// One parsed frame: a subscriber's hello moves the socket, any other object goes
+    /// to [`Bridge::process_message`]; an error is logged as Python's handler does.
+    async fn handle_frame(self: &Arc<Self>, client: &Arc<Client>, data: &Value) {
+        let Value::Object(map) = data else {
+            self.log(&format!(
+                "[KTalk Bridge] Error processing message: {}",
+                crate::json::attribute_error(data, "get")
+            ));
+            return;
+        };
+        if map.get("type") == Some(&Value::from(protocol::SUBSCRIBER_HELLO)) {
+            self.register_subscriber(client).await;
+            return;
         }
-        self.disconnect(&client).await;
+        if let Err(e) = self.process_message(map, Some(client)).await {
+            self.log(&format!("[KTalk Bridge] Error processing message: {e}"));
+        }
+    }
+
+    /// `subscriber_hello`: the socket leaves the extensions for the subscribers.
+    async fn register_subscriber(self: &Arc<Self>, client: &Arc<Client>) {
+        let no_extensions = {
+            let mut st = self.st();
+            st.clients.connected.remove(&client.id);
+            st.clients.subscribers.insert(client.id);
+            st.clients.connected.is_empty()
+        };
+        self.log(&format!("[KTalk Bridge] Subscriber registered from {}", client.remote_address));
+        // The socket counted as an extension until now: one that left meanwhile
+        // kept the meeting open.
+        if no_extensions && let Err(e) = self.end_meeting_on_extension_gone().await {
+            self.log(&format!("[KTalk Bridge] Error processing message: {e}"));
+        }
     }
 
     /// The `finally` of `_handle_client`: the socket leaves every set, its role's
     /// cleanup runs, and the meeting ends when its owner or the last extension left.
     async fn disconnect(self: &Arc<Self>, client: &Arc<Client>) {
-        let (was_subscriber, was_channel, was_supervisor, was_owner, no_extensions, no_channels, no_supervisors) = {
-            let mut st = self.st();
-            let c = &mut st.clients;
-            let was = (
-                c.subscribers.contains(&client.id),
-                c.channels.contains(&client.id),
-                c.supervisors.contains(&client.id),
-            );
-            c.connected.remove(&client.id);
-            c.subscribers.remove(&client.id);
-            c.channels.remove(&client.id);
-            c.supervisors.remove(&client.id);
-            c.timed_out.remove(&client.id);
-            c.all.remove(&client.id);
-            let left = (c.connected.is_empty(), c.channels.is_empty(), c.supervisors.is_empty());
-            let was_owner = st.meeting_owner == Some(client.id);
-            if was_owner {
-                st.meeting_owner = None;
-            }
-            (was.0, was.1, was.2, was_owner, left.0, left.1, left.2)
-        };
-        let role = if was_supervisor {
-            "Copilot supervisor"
-        } else if was_channel {
-            "Copilot channel"
-        } else if was_subscriber {
-            "Subscriber"
-        } else {
-            "Client"
-        };
-        self.log(&format!("[KTalk Bridge] {role} disconnected"));
-        // The last channel gone strands every in-flight request: drop them and tell
-        // the UIs, or they wait forever for Claude.
-        if was_channel && no_channels {
-            let stranded = {
-                let mut st = self.st();
-                st.agent.claude_sessions = None;
-                let before = st.pending.len();
-                st.pending.retain(|_, mid| mid.starts_with("stale:"));
-                before - st.pending.len()
-            };
-            if stranded > 0 {
-                self.log(&format!(
-                    "[KTalk Bridge] Channel disconnected with {stranded} in-flight request(s); dropped bookkeeping"
-                ));
-            }
-            let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => "channel_disconnected", "message" => "Copilot channel server disconnected"};
-            self.broadcast_copilot_frame(&frame).await;
+        let gone = self.leave_client_sets(client);
+        self.log(&format!("[KTalk Bridge] {} disconnected", gone.role()));
+        if gone.was_channel && gone.no_channels {
+            self.on_last_channel_gone().await;
         }
-        if was_supervisor && no_supervisors {
+        if gone.was_supervisor && gone.no_supervisors {
             self.st().agent.supervisor_status = None;
             self.recompute_agent_state(None).await;
         }
-        if (no_extensions || was_owner)
+        if (gone.no_extensions || gone.was_owner)
             && let Err(e) = self.end_meeting_on_extension_gone().await
         {
             self.log(&format!("[KTalk Bridge] Connection error: {e}"));
         }
+    }
+
+    /// Takes the socket out of every set (and the meeting's ownership).
+    fn leave_client_sets(&self, client: &Arc<Client>) -> Departure {
+        let mut st = self.st();
+        let c = &mut st.clients;
+        let mut gone = Departure {
+            was_subscriber: c.subscribers.contains(&client.id),
+            was_channel: c.channels.contains(&client.id),
+            was_supervisor: c.supervisors.contains(&client.id),
+            ..Departure::default()
+        };
+        c.connected.remove(&client.id);
+        c.subscribers.remove(&client.id);
+        c.channels.remove(&client.id);
+        c.supervisors.remove(&client.id);
+        c.timed_out.remove(&client.id);
+        c.all.remove(&client.id);
+        (gone.no_extensions, gone.no_channels, gone.no_supervisors) =
+            (c.connected.is_empty(), c.channels.is_empty(), c.supervisors.is_empty());
+        gone.was_owner = st.meeting_owner == Some(client.id);
+        if gone.was_owner {
+            st.meeting_owner = None;
+        }
+        gone
+    }
+
+    /// The last channel gone strands every in-flight request: drop them and tell the
+    /// UIs, or they wait forever for Claude.
+    async fn on_last_channel_gone(&self) {
+        let stranded = {
+            let mut st = self.st();
+            st.agent.claude_sessions = None;
+            let before = st.pending.len();
+            st.pending.retain(|_, mid| mid.starts_with("stale:"));
+            before - st.pending.len()
+        };
+        if stranded > 0 {
+            self.log(&format!(
+                "[KTalk Bridge] Channel disconnected with {stranded} in-flight request(s); dropped bookkeeping"
+            ));
+        }
+        let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => "channel_disconnected", "message" => "Copilot channel server disconnected"};
+        self.broadcast_copilot_frame(&frame).await;
     }
 
     /// Binds the configured host and port: every address the host resolves to.
