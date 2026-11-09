@@ -557,32 +557,10 @@ impl SubprocessCapture {
 
     /// `_reader_loop`, run on the calling thread until the capture stops.
     pub fn run_reader_loop(&self) {
-        let name = self.inner.name.clone();
         let bytes_per_chunk = self.inner.sample_rate as usize * BYTES_PER_SAMPLE / 10;
         let mut restart_count: u32 = 0;
         while self.running() {
-            let switch = locked(&self.inner.switch).clone();
-            if let Some(switch) = switch
-                && let Some(source) = switch.take_pending()
-            {
-                match switch.apply(self, &source) {
-                    Ok(()) => restart_count = 0,
-                    Err(e) => self.inner.log.rate_limited(
-                        &format!("capture-switch-{name}"),
-                        &format!("[{name}] source switch to {source} failed: {e}"),
-                    ),
-                }
-                continue;
-            }
-            if let Some(reason) = self.take_restart_request() {
-                self.inner.log.line(&format!("[{name}] {reason}, restarting the capture process"));
-                match self.restart_process() {
-                    Ok(()) => restart_count = 0,
-                    Err(e) => self
-                        .inner
-                        .log
-                        .rate_limited(&format!("capture-restart-{name}"), &format!("[{name}] Restart failed: {e}")),
-                }
+            if self.apply_pending_switch(&mut restart_count) || self.apply_restart_request(&mut restart_count) {
                 continue;
             }
             let process = match self.process() {
@@ -595,30 +573,75 @@ impl SubprocessCapture {
                     continue;
                 }
             };
-            match process.read(bytes_per_chunk, self.inner.policy.read_wait_timeout_s) {
-                ReadOutcome::Timeout => {}
-                ReadOutcome::Eof => self.inner.clock.sleep(self.inner.policy.read_idle_sleep_s),
-                ReadOutcome::Data(data) => {
-                    restart_count = 0;
-                    if self.dead() {
-                        self.set_dead(false);
-                        self.inner.log.line(&format!("[{name}] Audio recovered"));
-                    }
-                    for (samples, captured_at) in self.decode_read(&data) {
-                        if samples.iter().any(|&s| s != 0.0) {
-                            self.set_last_signal_at(self.inner.clock.monotonic());
-                        }
-                        let dropped = self.inner.buffer.append(&samples, captured_at);
-                        if dropped > 0 {
-                            #[allow(clippy::cast_precision_loss)]
-                            let lost = dropped as f64 / f64::from(self.inner.sample_rate);
-                            self.inner.log.rate_limited(
-                                &format!("capture-overflow-{name}"),
-                                &format!("[{name}] ASR unavailable too long — dropped {lost:.1}s of oldest audio"),
-                            );
-                        }
-                    }
+            self.read_once(process.as_ref(), bytes_per_chunk, &mut restart_count);
+        }
+    }
+
+    /// A source switch the sound server asked for, applied; whether there was one.
+    fn apply_pending_switch(&self, restart_count: &mut u32) -> bool {
+        let name = &self.inner.name;
+        let switch = locked(&self.inner.switch).clone();
+        let Some(switch) = switch else { return false };
+        let Some(source) = switch.take_pending() else { return false };
+        match switch.apply(self, &source) {
+            Ok(()) => *restart_count = 0,
+            Err(e) => self.inner.log.rate_limited(
+                &format!("capture-switch-{name}"),
+                &format!("[{name}] source switch to {source} failed: {e}"),
+            ),
+        }
+        true
+    }
+
+    /// A planned restart (`request_restart`), carried out; whether there was one.
+    fn apply_restart_request(&self, restart_count: &mut u32) -> bool {
+        let name = &self.inner.name;
+        let Some(reason) = self.take_restart_request() else { return false };
+        self.inner.log.line(&format!("[{name}] {reason}, restarting the capture process"));
+        match self.restart_process() {
+            Ok(()) => *restart_count = 0,
+            Err(e) => {
+                self.inner
+                    .log
+                    .rate_limited(&format!("capture-restart-{name}"), &format!("[{name}] Restart failed: {e}"));
+            }
+        }
+        true
+    }
+
+    /// One read of the live child: its audio into the buffer (a lost capture
+    /// recovered), a pause after EOF, nothing on a timeout.
+    fn read_once(&self, process: &dyn ChildProcess, bytes_per_chunk: usize, restart_count: &mut u32) {
+        match process.read(bytes_per_chunk, self.inner.policy.read_wait_timeout_s) {
+            ReadOutcome::Timeout => {}
+            ReadOutcome::Eof => self.inner.clock.sleep(self.inner.policy.read_idle_sleep_s),
+            ReadOutcome::Data(data) => {
+                *restart_count = 0;
+                if self.dead() {
+                    self.set_dead(false);
+                    self.inner.log.line(&format!("[{}] Audio recovered", self.inner.name));
                 }
+                self.buffer_read(&data);
+            }
+        }
+    }
+
+    /// A read's samples into the buffer, the last signal time moved on by any non-zero
+    /// sample, an overflow logged.
+    fn buffer_read(&self, data: &[u8]) {
+        let name = &self.inner.name;
+        for (samples, captured_at) in self.decode_read(data) {
+            if samples.iter().any(|&s| s != 0.0) {
+                self.set_last_signal_at(self.inner.clock.monotonic());
+            }
+            let dropped = self.inner.buffer.append(&samples, captured_at);
+            if dropped > 0 {
+                #[allow(clippy::cast_precision_loss)]
+                let lost = dropped as f64 / f64::from(self.inner.sample_rate);
+                self.inner.log.rate_limited(
+                    &format!("capture-overflow-{name}"),
+                    &format!("[{name}] ASR unavailable too long — dropped {lost:.1}s of oldest audio"),
+                );
             }
         }
     }

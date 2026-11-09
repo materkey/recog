@@ -155,28 +155,28 @@ fn parse_words(payload: &Value) -> Result<Transcription, AsrError> {
         Some(Value::Str(s)) => s.clone(),
         Some(other) => return Err(AsrError::Failed(format!("text is {}, not a string", other.type_name()))),
     };
-    let mut words = Vec::new();
-    match map.get("words") {
-        Some(Value::Array(items)) => {
-            for item in items {
-                let Value::Object(w) = item else {
-                    return Err(AsrError::Failed(format!("a word is {}, not an object", item.type_name())));
-                };
-                let field = |key: &str| w.get(key).ok_or_else(|| AsrError::Failed(format!("KeyError: '{key}'")));
-                let Value::Str(word) = field("word")? else {
-                    return Err(AsrError::Failed("a word's text is not a string".into()));
-                };
-                let start = seconds_to_ms(field("start")?).map_err(AsrError::Failed)?;
-                let end = seconds_to_ms(field("end")?).map_err(AsrError::Failed)?;
-                words.push(Word { text: word.clone(), start, end });
-            }
-        }
+    let words = match map.get("words") {
+        Some(Value::Array(items)) => items.iter().map(parse_word).collect::<Result<Vec<_>, _>>()?,
         Some(value) if value.truthy() => {
             return Err(AsrError::Failed(format!("words is {}, not a list", value.type_name())));
         }
-        _ => {}
-    }
+        _ => Vec::new(),
+    };
     Ok(Transcription { text, words })
+}
+
+/// One word of a `verbose_json` answer: its text and its start and end in ms.
+fn parse_word(item: &Value) -> Result<Word, AsrError> {
+    let Value::Object(w) = item else {
+        return Err(AsrError::Failed(format!("a word is {}, not an object", item.type_name())));
+    };
+    let field = |key: &str| w.get(key).ok_or_else(|| AsrError::Failed(format!("KeyError: '{key}'")));
+    let Value::Str(word) = field("word")? else {
+        return Err(AsrError::Failed("a word's text is not a string".into()));
+    };
+    let start = seconds_to_ms(field("start")?).map_err(AsrError::Failed)?;
+    let end = seconds_to_ms(field("end")?).map_err(AsrError::Failed)?;
+    Ok(Word { text: word.clone(), start, end })
 }
 
 /// `_to_float32_mono` of a clip and `_wav_bytes`.
