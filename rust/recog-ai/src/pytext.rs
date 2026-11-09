@@ -127,23 +127,43 @@ pub fn py_repr_str(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push(quote);
     for ch in text.chars() {
-        match ch {
-            ch if ch == quote || ch == '\\' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            ch if (ch as u32) < 0x20 || ch as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", ch as u32)),
-            ch if ch.is_ascii() || is_printable(ch) => out.push(ch),
-            ch if (ch as u32) <= 0xff => out.push_str(&format!("\\x{:02x}", ch as u32)),
-            ch if (ch as u32) <= 0xffff => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push_str(&format!("\\U{:08x}", ch as u32)),
+        match repr_escape(ch, quote) {
+            Some(escape) => out.push_str(&escape),
+            None => out.push(ch),
         }
     }
     out.push(quote);
     out
+}
+
+/// How `repr` writes one character between `quote`s; `None` for the character itself.
+fn repr_escape(ch: char, quote: char) -> Option<String> {
+    match ch {
+        ch if ch == quote || ch == '\\' => Some(format!("\\{ch}")),
+        '\t' => Some("\\t".to_owned()),
+        '\n' => Some("\\n".to_owned()),
+        '\r' => Some("\\r".to_owned()),
+        ch if repr_keeps(ch) => None,
+        ch => Some(hex_escape(ch)),
+    }
+}
+
+/// Whether `repr` writes the character as it is: ASCII but no control character, or
+/// printable outside ASCII.
+fn repr_keeps(ch: char) -> bool {
+    if ch.is_ascii() { !ch.is_ascii_control() } else { is_printable(ch) }
+}
+
+/// `\xhh`, `\uhhhh` or `\Uhhhhhhhh`, the shortest that holds the code point.
+fn hex_escape(ch: char) -> String {
+    let code = ch as u32;
+    if code <= 0xff {
+        format!("\\x{code:02x}")
+    } else if code <= 0xffff {
+        format!("\\u{code:04x}")
+    } else {
+        format!("\\U{code:08x}")
+    }
 }
 
 /// Code point count, Python's `len(str)`.

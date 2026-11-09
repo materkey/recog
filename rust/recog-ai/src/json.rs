@@ -149,36 +149,40 @@ impl Json {
             Json::Int(value) => out.push_str(&value.to_string()),
             Json::Float(value) => out.push_str(&py_float_repr(*value)),
             Json::Str(text) => write_string(out, text),
-            Json::Array(items) => {
-                if items.is_empty() {
-                    out.push_str("[]");
-                    return;
-                }
-                out.push('[');
-                for (index, item) in items.iter().enumerate() {
-                    separate(out, indent, level + 1, index == 0);
-                    item.write(out, indent, level + 1);
-                }
-                close(out, indent, level);
-                out.push(']');
-            }
-            Json::Object(map) => {
-                if map.is_empty() {
-                    out.push_str("{}");
-                    return;
-                }
-                out.push('{');
-                for (index, (key, value)) in map.iter().enumerate() {
-                    separate(out, indent, level + 1, index == 0);
-                    write_string(out, key);
-                    out.push_str(": ");
-                    value.write(out, indent, level + 1);
-                }
-                close(out, indent, level);
-                out.push('}');
-            }
+            Json::Array(items) => write_array(out, items, indent, level),
+            Json::Object(map) => write_object(out, map, indent, level),
         }
     }
+}
+
+fn write_array(out: &mut String, items: &[Json], indent: Option<usize>, level: usize) {
+    if items.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push('[');
+    for (index, item) in items.iter().enumerate() {
+        separate(out, indent, level + 1, index == 0);
+        item.write(out, indent, level + 1);
+    }
+    close(out, indent, level);
+    out.push(']');
+}
+
+fn write_object(out: &mut String, map: &Map, indent: Option<usize>, level: usize) {
+    if map.is_empty() {
+        out.push_str("{}");
+        return;
+    }
+    out.push('{');
+    for (index, (key, value)) in map.iter().enumerate() {
+        separate(out, indent, level + 1, index == 0);
+        write_string(out, key);
+        out.push_str(": ");
+        value.write(out, indent, level + 1);
+    }
+    close(out, indent, level);
+    out.push('}');
 }
 
 /// The separator before an item: `", "` without indent, `",\n" + spaces` with it.
@@ -210,29 +214,34 @@ fn close(out: &mut String, indent: Option<usize>, level: usize) {
 fn write_string(out: &mut String, text: &str) {
     out.push('"');
     for ch in text.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            ch if (ch as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push(ch),
+        match short_escape(ch) {
+            Some(escape) => out.push_str(escape),
+            None if (ch as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", ch as u32)),
+            None => out.push(ch),
         }
     }
     out.push('"');
 }
 
+/// The two-character escapes of `py_encode_basestring`.
+fn short_escape(ch: char) -> Option<&'static str> {
+    match ch {
+        '"' => Some("\\\""),
+        '\\' => Some("\\\\"),
+        '\n' => Some("\\n"),
+        '\r' => Some("\\r"),
+        '\t' => Some("\\t"),
+        '\u{8}' => Some("\\b"),
+        '\u{c}' => Some("\\f"),
+        _ => None,
+    }
+}
+
 /// `float.__repr__`: the shortest digits that round-trip, in exponent notation when the
 /// decimal exponent is below -4 or at least 16.
 pub fn py_float_repr(value: f64) -> String {
-    if value.is_nan() {
-        return "NaN".to_owned();
-    }
-    if value.is_infinite() {
-        return if value > 0.0 { "Infinity".to_owned() } else { "-Infinity".to_owned() };
+    if let Some(text) = non_finite_repr(value) {
+        return text;
     }
     // `{:e}` prints the shortest round-trip digits: "1.5e16", "-5e-1", "0e0".
     let formatted = format!("{value:e}");
@@ -244,11 +253,32 @@ pub fn py_float_repr(value: f64) -> String {
     };
     let digits: String = mantissa.chars().filter(|ch| *ch != '.').collect();
     if !(-4..16).contains(&exponent) {
-        let (head, tail) = digits.split_at(1);
-        let fraction = if tail.is_empty() { String::new() } else { format!(".{tail}") };
-        let exponent_sign = if exponent < 0 { '-' } else { '+' };
-        return format!("{sign}{head}{fraction}e{exponent_sign}{:02}", exponent.abs());
+        return exponent_repr(sign, &digits, exponent);
     }
+    positional_repr(sign, &digits, exponent)
+}
+
+/// What `json.dumps` writes for a NaN or an infinity; `None` for a finite value.
+fn non_finite_repr(value: f64) -> Option<String> {
+    if value.is_nan() {
+        return Some("NaN".to_owned());
+    }
+    if value.is_infinite() {
+        return Some(if value > 0.0 { "Infinity".to_owned() } else { "-Infinity".to_owned() });
+    }
+    None
+}
+
+/// `1.5e+16`, `1e-05`: the digits with one before the point and a two-digit exponent.
+fn exponent_repr(sign: &str, digits: &str, exponent: i32) -> String {
+    let (head, tail) = digits.split_at(1);
+    let fraction = if tail.is_empty() { String::new() } else { format!(".{tail}") };
+    let exponent_sign = if exponent < 0 { '-' } else { '+' };
+    format!("{sign}{head}{fraction}e{exponent_sign}{:02}", exponent.abs())
+}
+
+/// `0.0001`, `5.0`, `1234.5`: the digits placed by a decimal exponent in `-4..16`.
+fn positional_repr(sign: &str, digits: &str, exponent: i32) -> String {
     if exponent < 0 {
         let zeros = "0".repeat((-exponent - 1) as usize);
         return format!("{sign}0.{zeros}{digits}");

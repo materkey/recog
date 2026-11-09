@@ -59,58 +59,83 @@ fn number(text: &str, start: usize, len: usize) -> Option<i64> {
 /// variants: `YYYY-MM-DD`, any one separator character, `HH[:MM[:SS[.fraction]]]`,
 /// then `Z` or `±HH[:MM[:SS[.ffffff]]]` or `±HHMM`.
 pub fn parse_aware_isoformat(text: &str) -> Option<i64> {
-    if text.len() < 11 || !text.is_char_boundary(10) {
-        return None;
-    }
-    let (year, month, day) = (number(text, 0, 4)?, number(text, 5, 2)?, number(text, 8, 2)?);
-    if &text[4..5] != "-" || &text[7..8] != "-" || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
+    let days = date_days(text)?;
     let mut rest = text[10..].chars();
     rest.next()?;
     let time = rest.as_str();
     let zone_at = time.find(['Z', 'z', '+', '-'])?;
     let (clock, zone) = time.split_at(zone_at);
-    let clock_seconds = |clock: &str| -> Option<(i64, i64)> {
-        let (main, fraction) = clock.split_once('.').map_or((clock, None), |(main, fraction)| (main, Some(fraction)));
-        let parts: Vec<&str> = main.split(':').collect();
-        if parts.is_empty() || parts.len() > 3 || parts.iter().any(|part| part.len() != 2) {
-            return None;
-        }
-        let values: Vec<i64> = parts.iter().map(|part| number(part, 0, 2)).collect::<Option<_>>()?;
-        let micros = match fraction {
-            None => 0,
-            Some(fraction) if !fraction.is_empty() && parts.len() == 3 => {
-                let digits: String = fraction.chars().take(6).collect();
-                if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
-                    return None;
-                }
-                format!("{digits:0<6}").parse().ok()?
-            }
-            Some(_) => return None,
-        };
-        let (hour, minute, second) = (values[0], *values.get(1).unwrap_or(&0), *values.get(2).unwrap_or(&0));
-        if hour > 23 || minute > 59 || second > 59 {
-            return None;
-        }
-        Some((hour * 3600 + minute * 60 + second, micros))
-    };
     let (seconds, micros) = clock_seconds(clock)?;
-    let offset = if zone.eq_ignore_ascii_case("z") {
-        0
-    } else {
-        let sign = if zone.starts_with('-') { -1 } else { 1 };
-        let body = &zone[1..];
-        let body = if body.len() == 4 && !body.contains(':') {
-            format!("{}:{}", &body[..2], &body[2..])
-        } else {
-            body.to_owned()
-        };
-        let (offset_seconds, offset_micros) = clock_seconds(&body)?;
-        sign * (offset_seconds * 1_000_000 + offset_micros)
-    };
-    let days = days_from_civil(year, month as u32, day as u32);
+    let offset = zone_offset(zone)?;
     Some((days * 86_400 + seconds) * 1_000_000 + micros - offset)
+}
+
+/// Days since the epoch of the `YYYY-MM-DD` a text starts with; the text must go on
+/// past it.
+fn date_days(text: &str) -> Option<i64> {
+    if text.len() < 11 || !text.is_char_boundary(10) {
+        return None;
+    }
+    let (year, month, day) = (number(text, 0, 4)?, number(text, 5, 2)?, number(text, 8, 2)?);
+    if !date_fields_valid(text, month, day) {
+        return None;
+    }
+    Some(days_from_civil(year, month as u32, day as u32))
+}
+
+/// Dashes between the fields, a month and a day in range.
+fn date_fields_valid(text: &str, month: i64, day: i64) -> bool {
+    &text[4..5] == "-" && &text[7..8] == "-" && (1..=12).contains(&month) && (1..=31).contains(&day)
+}
+
+/// `HH[:MM[:SS[.fraction]]]` → (seconds of the day, microseconds).
+fn clock_seconds(clock: &str) -> Option<(i64, i64)> {
+    let (main, fraction) = clock.split_once('.').map_or((clock, None), |(main, fraction)| (main, Some(fraction)));
+    let values = clock_fields(main)?;
+    let micros = fraction_micros(fraction, values.len())?;
+    let (hour, minute, second) = (values[0], *values.get(1).unwrap_or(&0), *values.get(2).unwrap_or(&0));
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some((hour * 3600 + minute * 60 + second, micros))
+}
+
+/// One to three two-digit fields separated by colons.
+fn clock_fields(main: &str) -> Option<Vec<i64>> {
+    let parts: Vec<&str> = main.split(':').collect();
+    if parts.is_empty() || parts.len() > 3 || parts.iter().any(|part| part.len() != 2) {
+        return None;
+    }
+    parts.iter().map(|part| number(part, 0, 2)).collect()
+}
+
+/// The microseconds of a fraction, allowed only after seconds; digits past the sixth
+/// are dropped.
+fn fraction_micros(fraction: Option<&str>, fields: usize) -> Option<i64> {
+    match fraction {
+        None => Some(0),
+        Some(fraction) if !fraction.is_empty() && fields == 3 => {
+            let digits: String = fraction.chars().take(6).collect();
+            if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            format!("{digits:0<6}").parse().ok()
+        }
+        Some(_) => None,
+    }
+}
+
+/// The offset in microseconds of `Z` or `±HH[:MM[:SS[.ffffff]]]` or `±HHMM`.
+fn zone_offset(zone: &str) -> Option<i64> {
+    if zone.eq_ignore_ascii_case("z") {
+        return Some(0);
+    }
+    let sign = if zone.starts_with('-') { -1 } else { 1 };
+    let body = &zone[1..];
+    let body =
+        if body.len() == 4 && !body.contains(':') { format!("{}:{}", &body[..2], &body[2..]) } else { body.to_owned() };
+    let (offset_seconds, offset_micros) = clock_seconds(&body)?;
+    Some(sign * (offset_seconds * 1_000_000 + offset_micros))
 }
 
 #[cfg(test)]
