@@ -3,17 +3,19 @@
 use std::path::Path;
 
 use axum::http::StatusCode;
-use recog_core::meeting_storage::{UnnamedLocal, local_participant_names};
+use recog_core::meeting_storage::{MeetingStorage, UnnamedLocal, local_participant_names};
 use recog_core::pyjson::{self, Map, Value};
+use recog_core::time::PyDateTime;
 
 use super::{bad_request, body_model, check, fail, meta_of, not_found, segments_of, storage};
 use crate::json;
+use crate::meeting_catalog::MeetingCatalog;
 use crate::request::Req;
 use crate::responses::{self, Reply};
 use crate::server::AppState;
 use crate::transcript::{self, PyError, get};
 use crate::util::{local_now_isoformat, py_round, unix_time};
-use crate::validation::{self, Ty, field};
+use crate::validation::{self, Field, Ty, field};
 
 fn read_json(path: &Path) -> Result<Value, PyError> {
     let raw = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -77,63 +79,64 @@ pub(super) fn pcm_diagnostics(state: &AppState) -> Reply {
     ])))
 }
 
+/// The bridge's debug file as `/api/debug` shows it, and whether it is stale.
+fn bridge_state(path: &Path) -> (Value, bool) {
+    if !path.exists() {
+        return (Value::Null, true);
+    }
+    match read_json(path) {
+        Ok(value) => with_age(value),
+        Err(e) => (json::object([("error", Value::from(e))]), true),
+    }
+}
+
+/// The debug file's contents with their `age_seconds` when they carry a timestamp,
+/// and whether that is more than five seconds ago.
+fn with_age(mut value: Value) -> (Value, bool) {
+    let timestamp = match value.as_object() {
+        Some(map) if map.contains_key("timestamp") => number(map.get("timestamp")),
+        _ => return (value, true),
+    };
+    let Ok(timestamp) = timestamp else {
+        return (json::object([("error", Value::from("unsupported operand type(s) for -: 'float' and 'str'"))]), true);
+    };
+    let age = unix_time() - timestamp;
+    if let Some(map) = value.as_object_mut() {
+        map.insert("age_seconds", Value::Float(py_round(age, 1)));
+    }
+    (value, age > 5.0)
+}
+
+/// The active meetings and the number of all meetings; none when the storage fails.
+async fn meeting_counts(state: &AppState) -> (Vec<Value>, usize) {
+    let Ok(storage) = storage(state) else { return (Vec::new(), 0) };
+    let catalog = state.catalog();
+    tokio::task::spawn_blocking(move || active_and_total(&storage, catalog.as_ref()))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+fn active_and_total(storage: &MeetingStorage, catalog: Option<&MeetingCatalog>) -> Option<(Vec<Value>, usize)> {
+    let active = storage.list_active_meetings().ok()?;
+    let all = match catalog {
+        Some(catalog) => catalog.list_meetings().len(),
+        None => storage.list_meetings(true, false).ok()?.len(),
+    };
+    Some((active, all))
+}
+
 pub(super) async fn debug(state: &AppState) -> Reply {
     let path = state.config.ktalk_debug_file.clone();
-    let mut ktalk_state = Value::Null;
-    let mut stale = true;
-    if path.exists() {
-        match read_json(&path) {
-            Ok(mut value) => {
-                if let Value::Object(map) = &mut value
-                    && map.contains_key("timestamp")
-                {
-                    match number(map.get("timestamp")) {
-                        Ok(timestamp) => {
-                            let age = unix_time() - timestamp;
-                            stale = age > 5.0;
-                            map.insert("age_seconds", Value::Float(py_round(age, 1)));
-                        }
-                        Err(()) => {
-                            value = json::object([(
-                                "error",
-                                Value::from("unsupported operand type(s) for -: 'float' and 'str'"),
-                            )]);
-                        }
-                    }
-                }
-                ktalk_state = value;
-            }
-            Err(e) => ktalk_state = json::object([("error", Value::from(e))]),
-        }
-    }
-    let (active, all_count) = match storage(state) {
-        Ok(storage) => {
-            let catalog = state.catalog();
-            tokio::task::spawn_blocking(move || {
-                let active = storage.list_active_meetings().ok()?;
-                let all = match catalog {
-                    Some(catalog) => catalog.list_meetings().len(),
-                    None => storage.list_meetings(true, false).ok()?.len(),
-                };
-                Some((active, all))
-            })
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default()
-        }
-        Err(_) => (Vec::new(), 0),
-    };
-    let counts = json::object([
-        ("active_count", Value::Int(active.len() as i128)),
+    let (ktalk_state, stale) = bridge_state(&path);
+    let (active, all_count) = meeting_counts(state).await;
+    let active_count = Value::Int(active.len() as i128);
+    let meetings = json::object([
+        ("active", Value::Array(active)),
+        ("active_count", active_count),
         ("total_count", Value::Int(all_count as i128)),
     ]);
-    let mut meetings = json::object([("active", Value::Array(active))]);
-    if let (Value::Object(meetings), Value::Object(counts)) = (&mut meetings, counts) {
-        for (k, v) in counts.iter() {
-            meetings.insert(k.clone(), v.clone());
-        }
-    }
     Ok(responses::json(&json::object([
         ("timestamp", Value::Float(unix_time())),
         ("timestamp_iso", Value::from(local_now_isoformat())),
@@ -195,53 +198,67 @@ fn find_meeting_by_title(meetings_dir: &Path, title: &str) -> Result<Option<Valu
         return Ok(None);
     }
     let wanted = title.to_lowercase();
-    let mut best: (Option<Value>, Option<recog_core::time::PyDateTime>) = (None, None);
-    let mut fallback: (Option<Value>, Option<recog_core::time::PyDateTime>) = (None, None);
-    let entries = std::fs::read_dir(meetings_dir).map_err(|e| e.to_string())?;
-    let newer = |created: Option<recog_core::time::PyDateTime>,
-                 than: Option<recog_core::time::PyDateTime>|
-     -> Result<bool, PyError> {
-        match (created, than) {
-            (_, None) => Ok(true),
-            (Some(c), Some(t)) => Ok(c.minus(&t).map_err(|e| e.to_string())? > 0),
-            (None, Some(_)) => Ok(false),
-        }
-    };
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let meta_path = dir.join("meta.json");
-        if !meta_path.exists() {
-            continue;
-        }
-        let Ok(meta) = read_json(&meta_path) else { continue };
-        let title_value = get(&meta, "title")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(""));
-        let Value::Str(meeting_title) = title_value else { return Err("'int' object has no attribute 'strip'".into()) };
-        let meeting_title = recog_core::py::strip(&meeting_title).to_lowercase();
-        if meeting_title.is_empty() {
-            continue;
-        }
-        let created = transcript::parse_iso_ts(get(&meta, "created_at")?);
-        let id = get(&meta, "id")?.cloned();
+    let (mut best, mut fallback) = (Pick::default(), Pick::default());
+    for entry in std::fs::read_dir(meetings_dir).map_err(|e| e.to_string())?.flatten() {
+        let Some(meta) = meeting_meta(&entry.path()) else { continue };
+        let Some((meeting_title, candidate)) = titled(&meta)? else { continue };
         if meeting_title == wanted {
-            if best.1.is_none() || newer(created, best.1)? && created.is_some() {
-                best = (id, created);
-            }
-        } else if meeting_title.contains(&wanted)
-            && (fallback.1.is_none() || newer(created, fallback.1)? && created.is_some())
-        {
-            fallback = (id, created);
+            best.offer(candidate)?;
+        } else if meeting_title.contains(&wanted) {
+            fallback.offer(candidate)?;
         }
     }
-    Ok(best.0.filter(Value::truthy).or(fallback.0))
+    Ok(best.id.filter(Value::truthy).or(fallback.id))
 }
 
-pub(super) fn set_debug_ai_context(state: &AppState, req: &Req) -> Reply {
-    let mut errors = Vec::new();
+/// The metadata of a meeting directory; `None` for anything else or unreadable.
+fn meeting_meta(dir: &Path) -> Option<Value> {
+    let meta_path = dir.join("meta.json");
+    if !dir.is_dir() || !meta_path.exists() {
+        return None;
+    }
+    read_json(&meta_path).ok()
+}
+
+/// A titled meeting's lower-cased, stripped title with its ID and creation time;
+/// `None` without a title.
+fn titled(meta: &Value) -> Result<Option<(String, Pick)>, PyError> {
+    let title = get(meta, "title")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(""));
+    let Value::Str(title) = title else { return Err("'int' object has no attribute 'strip'".into()) };
+    let title = recog_core::py::strip(&title).to_lowercase();
+    if title.is_empty() {
+        return Ok(None);
+    }
+    let created = transcript::parse_iso_ts(get(meta, "created_at")?);
+    Ok(Some((title, Pick { id: get(meta, "id")?.cloned(), created })))
+}
+
+/// A meeting of a title search: the one picked so far, or a candidate.
+#[derive(Default)]
+struct Pick {
+    id: Option<Value>,
+    created: Option<PyDateTime>,
+}
+
+impl Pick {
+    /// Takes the candidate while nothing dated is picked, or when it is newer than the
+    /// picked one.
+    fn offer(&mut self, candidate: Pick) -> Result<(), PyError> {
+        let newer = match (candidate.created, self.created) {
+            (_, None) => true,
+            (Some(c), Some(t)) => c.minus(&t).map_err(|e| e.to_string())? > 0,
+            (None, Some(_)) => false,
+        };
+        if newer {
+            *self = candidate;
+        }
+        Ok(())
+    }
+}
+
+fn debug_context_fields() -> [Field; 9] {
     let opt = |ty: Ty| Ty::Optional(Box::new(ty));
-    let fields = [
+    [
         field("meeting_id", opt(Ty::Str), false),
         field("meeting_title", opt(Ty::Str), false),
         field("from_id", opt(Ty::Int), false),
@@ -251,70 +268,131 @@ pub(super) fn set_debug_ai_context(state: &AppState, req: &Req) -> Reply {
         field("max_segments", Ty::Int, false),
         field("segments", opt(Ty::List(Box::new(Ty::AnyDict))), false),
         field("user_name", opt(Ty::Str), false),
-    ];
-    let body = body_model(req, &fields, false, &mut errors)?;
-    check(&errors)?;
-    let body = body.unwrap_or_default();
-    let text = |name: &str| body.get(name).filter(|v| !v.is_null()).map(Value::py_str);
-    let int = |name: &str| match body.get(name) {
+    ]
+}
+
+/// A text field of the body, `None` when absent or null.
+fn body_text(body: &Map, name: &str) -> Option<String> {
+    body.get(name).filter(|v| !v.is_null()).map(Value::py_str)
+}
+
+/// An integer field of the body.
+fn body_int(body: &Map, name: &str) -> Option<i128> {
+    match body.get(name) {
         Some(Value::Int(n)) => Some(*n),
         _ => None,
+    }
+}
+
+/// What a debug context is set from: its segments, the meeting's title and local
+/// participants' names.
+struct Selected {
+    segments: Vec<Value>,
+    meeting_title: Value,
+    local_names: Vec<Value>,
+}
+
+/// The given segments, or those chosen from a stored meeting (by ID or title).
+fn selected_segments(
+    state: &AppState,
+    body: &Map,
+    meeting_id: &mut Option<String>,
+    max_segments: usize,
+) -> Result<Selected, axum::response::Response> {
+    match body.get("segments") {
+        Some(Value::Array(rows)) if !rows.is_empty() => Ok(Selected {
+            segments: rows.iter().take(max_segments).cloned().collect(),
+            meeting_title: body.get("meeting_title").cloned().unwrap_or(Value::Null),
+            local_names: Vec::new(),
+        }),
+        _ => stored_segments(state, body, meeting_id, max_segments),
+    }
+}
+
+/// The segments of a stored meeting, found by its ID or else by its title.
+fn stored_segments(
+    state: &AppState,
+    body: &Map,
+    meeting_id: &mut Option<String>,
+    max_segments: usize,
+) -> Result<Selected, axum::response::Response> {
+    if meeting_id.as_deref().is_none_or(str::is_empty)
+        && let Some(title) = body_text(body, "meeting_title").filter(|t| !t.is_empty())
+    {
+        *meeting_id = find_meeting_by_title(&state.config.meetings_dir, &title)
+            .map_err(|_| responses::internal_error())?
+            .map(|v| v.py_str());
+    }
+    let Some(id) = meeting_id.clone().filter(|id| !id.is_empty()) else {
+        return Err(bad_request("meeting_id or segments required"));
     };
-    let max_segments = usize::try_from(int("max_segments").unwrap_or(35).clamp(5, 200)).unwrap_or(5);
-    let window_seconds = int("window_seconds").unwrap_or(240).clamp(30, 900);
-    let mut meeting_id = text("meeting_id");
-    let mut meeting_title = body.get("meeting_title").cloned().unwrap_or(Value::Null);
-    let mut local_names: Vec<Value> = Vec::new();
-    let given: Vec<Value> = match body.get("segments") {
-        Some(Value::Array(rows)) => rows.clone(),
-        _ => Vec::new(),
-    };
-    let segments = if given.is_empty() {
-        if meeting_id.as_deref().is_none_or(str::is_empty)
-            && let Some(title) = text("meeting_title").filter(|t| !t.is_empty())
-        {
-            meeting_id = find_meeting_by_title(&state.config.meetings_dir, &title)
-                .map_err(|_| responses::internal_error())?
-                .map(|v| v.py_str());
-        }
-        let Some(id) = meeting_id.clone().filter(|id| !id.is_empty()) else {
-            return Err(bad_request("meeting_id or segments required"));
-        };
-        let storage = storage(state)?;
-        let found = match storage.get_meeting(&id) {
-            Ok(Some(found)) => found,
-            Ok(None) => return Err(not_found("Meeting not found")),
-            Err(_) => return Err(responses::internal_error()),
-        };
-        let meta = meta_of(&found);
-        meeting_title = get(&meta, "title").map_err(|_| responses::internal_error())?.cloned().unwrap_or(Value::Null);
-        local_names = local_participant_names(&meta, UnnamedLocal::Empty).map_err(|_| responses::internal_error())?;
-        let rows = segments_of(&found);
-        if int("from_id").is_some() || int("to_id").is_some() {
-            transcript::slice_segments_by_id(&rows, int("from_id"), int("to_id"), max_segments)
-                .map_err(|_| responses::internal_error())?
-        } else if let Some(start) = text("start_ts_display").filter(|s| !s.is_empty()) {
-            transcript::slice_segments_by_ts_display(&rows, &start, max_segments)
-                .map_err(|_| responses::internal_error())?
-        } else {
-            transcript::select_recent_segments(&state.config.meetings_dir, &id, window_seconds, max_segments)
-                .map_err(|_| responses::internal_error())?
-        }
-    } else {
-        given.into_iter().take(max_segments).collect()
-    };
+    let found = stored_meeting(state, &id)?;
+    let meta = meta_of(&found);
+    let meeting_title = get(&meta, "title").map_err(|_| responses::internal_error())?.cloned().unwrap_or(Value::Null);
+    let local_names = local_participant_names(&meta, UnnamedLocal::Empty).map_err(|_| responses::internal_error())?;
+    let segments = select_segments(&state.config.meetings_dir, &id, &segments_of(&found), body, max_segments)
+        .map_err(|_| responses::internal_error())?;
+    Ok(Selected { segments, meeting_title, local_names })
+}
+
+/// `storage.get_meeting(id)`, the 404 without it.
+fn stored_meeting(state: &AppState, id: &str) -> Result<Value, axum::response::Response> {
+    let storage = storage(state)?;
+    match storage.get_meeting(id) {
+        Ok(Some(found)) => Ok(found),
+        Ok(None) => Err(not_found("Meeting not found")),
+        Err(_) => Err(responses::internal_error()),
+    }
+}
+
+/// The rows of a meeting between two IDs, from a start time, or within a window of
+/// the last one.
+fn select_segments(
+    meetings_dir: &Path,
+    id: &str,
+    rows: &[Value],
+    body: &Map,
+    max_segments: usize,
+) -> Result<Vec<Value>, PyError> {
+    let (from_id, to_id) = (body_int(body, "from_id"), body_int(body, "to_id"));
+    if from_id.is_some() || to_id.is_some() {
+        return transcript::slice_segments_by_id(rows, from_id, to_id, max_segments);
+    }
+    if let Some(start) = body_text(body, "start_ts_display").filter(|s| !s.is_empty()) {
+        return transcript::slice_segments_by_ts_display(rows, &start, max_segments);
+    }
+    let window_seconds = body_int(body, "window_seconds").unwrap_or(240).clamp(30, 900);
+    transcript::select_recent_segments(meetings_dir, id, window_seconds, max_segments)
+}
+
+/// The user of a debug context: the given name, the meeting's named local
+/// participants, the previous context's name, else `User`.
+fn debug_user_name(given: Option<String>, local_names: Vec<Value>, previous: Option<&str>) -> Result<String, PyError> {
+    if let Some(name) = given.filter(|n| !n.is_empty()) {
+        return Ok(name);
+    }
+    if !local_names.is_empty() {
+        let named: Vec<Value> = local_names.into_iter().filter(Value::truthy).collect();
+        return transcript::join_names(&named);
+    }
+    Ok(previous.filter(|n| !n.is_empty()).unwrap_or("User").to_owned())
+}
+
+pub(super) fn set_debug_ai_context(state: &AppState, req: &Req) -> Reply {
+    let mut errors = Vec::new();
+    let body = body_model(req, &debug_context_fields(), false, &mut errors)?;
+    check(&errors)?;
+    let body = body.unwrap_or_default();
+    let max_segments = usize::try_from(body_int(&body, "max_segments").unwrap_or(35).clamp(5, 200)).unwrap_or(5);
+    let mut meeting_id = body_text(&body, "meeting_id");
+    let Selected { segments, meeting_title, local_names } =
+        selected_segments(state, &body, &mut meeting_id, max_segments)?;
     if segments.is_empty() {
         return Err(bad_request("No segments selected for debug context"));
     }
     let mut context = state.debug_ai.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let user_name = match text("user_name").filter(|n| !n.is_empty()) {
-        Some(name) => name,
-        None if !local_names.is_empty() => {
-            let named: Vec<Value> = local_names.into_iter().filter(Value::truthy).collect();
-            transcript::join_names(&named).map_err(|_| responses::internal_error())?
-        }
-        None => context.user_name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "User".to_owned()),
-    };
+    let user_name = debug_user_name(body_text(&body, "user_name"), local_names, context.user_name.as_deref())
+        .map_err(|_| responses::internal_error())?;
     *context = crate::server::DebugAiContext {
         segments: segments.clone(),
         user_name: Some(user_name.clone()),

@@ -172,6 +172,8 @@ async fn no_debug_file_when_debug_is_asked_then_bridge_state_null_and_stale_with
     assert_eq!(text(bridge, "debug_file"), app.state.config.ktalk_debug_file.to_string_lossy());
     let meetings = get(&body, "meetings");
     assert_eq!((get(meetings, "active_count"), get(meetings, "total_count")), (&Value::Int(1), &Value::Int(3)));
+    let keys: Vec<&String> = meetings.as_object().unwrap().keys().collect();
+    assert_eq!(keys, ["active", "active_count", "total_count"]);
     assert_eq!(pyjson::dumps(get(&body, "server"), None), r#"{"host": "127.0.0.1", "port": 0}"#);
     assert!(matches!(get(&body, "timestamp"), Value::Float(t) if *t > 1.0e9));
 }
