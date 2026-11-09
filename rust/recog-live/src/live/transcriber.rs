@@ -624,53 +624,13 @@ impl Live {
                 (st.recent_system_segments.iter().cloned().collect(), self.generation(), path)
             }
         };
-        let mut to_correct = Vec::new();
-        if segments.len() >= 2 {
-            for seg in segments[..segments.len() - 1].iter().rev() {
-                if seg.speaker != "Unknown" || seg.is_local || current_time - seg.chunk_time > RETROACTIVE_MAX_SECONDS {
-                    break;
-                }
-                to_correct.push(seg.clone());
-            }
-        }
+        let to_correct = unknown_run(&segments, current_time);
         if to_correct.is_empty() {
             return Ok(());
         }
-        {
-            let mut lines = lock(&self.transcript_lines);
-            for seg in &to_correct {
-                if let Some(line) = lines.get_mut(seg.line_idx) {
-                    *line = line.replacen("**Unknown**", &format!("**{identified}**"), 1);
-                }
-            }
-        }
-        let corrected: HashSet<usize> = to_correct.iter().map(|s| s.line_idx).collect();
-        let meeting_switched = {
-            let mut st = lock(&self.state);
-            // Python updates the segment objects themselves, which the deque holds.
-            for seg in &mut st.recent_system_segments {
-                if corrected.contains(&seg.line_idx) {
-                    seg.speaker = identified.to_owned();
-                }
-            }
-            self.generation() != snapshot_gen
-        };
-        if let Some(storage) = self.storage() {
-            let updates: Vec<SegmentUpdate> = to_correct
-                .iter()
-                .filter(|s| s.meeting_segment_id > 0)
-                .map(|s| SegmentUpdate {
-                    segment_id: s.meeting_segment_id,
-                    speaker: Some(identified.to_owned()),
-                    uncertain: Some(false),
-                    uncertain_reason: Some(String::new()),
-                    text: None,
-                })
-                .collect();
-            if !updates.is_empty() {
-                storage.update_segments(&updates, snapshot_path.as_deref()).map_err(storage_error)?;
-            }
-        }
+        self.relabel_lines(&to_correct, identified);
+        let meeting_switched = self.relabel_recent(&to_correct, identified, snapshot_gen);
+        self.store_correction(&to_correct, identified, snapshot_path.as_deref())?;
         if let Some(conference) = self.conference()
             && !meeting_switched
         {
@@ -684,6 +644,55 @@ impl Live {
                     ..TranscriptLine::default()
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// The printed lines of the corrected run, Unknown replaced by `identified`.
+    fn relabel_lines(&self, to_correct: &[RecentSegment], identified: &str) {
+        let mut lines = lock(&self.transcript_lines);
+        for seg in to_correct {
+            if let Some(line) = lines.get_mut(seg.line_idx) {
+                *line = line.replacen("**Unknown**", &format!("**{identified}**"), 1);
+            }
+        }
+    }
+
+    /// The recent segments of the corrected run relabelled; whether the meeting
+    /// switched since the snapshot.
+    fn relabel_recent(&self, to_correct: &[RecentSegment], identified: &str, snapshot_gen: i64) -> bool {
+        let corrected: HashSet<usize> = to_correct.iter().map(|s| s.line_idx).collect();
+        let mut st = lock(&self.state);
+        // Python updates the segment objects themselves, which the deque holds.
+        for seg in &mut st.recent_system_segments {
+            if corrected.contains(&seg.line_idx) {
+                seg.speaker = identified.to_owned();
+            }
+        }
+        self.generation() != snapshot_gen
+    }
+
+    /// The stored rows of the corrected run rewritten in the snapshot's meeting.
+    fn store_correction(
+        &self,
+        to_correct: &[RecentSegment],
+        identified: &str,
+        snapshot_path: Option<&Path>,
+    ) -> Result<(), String> {
+        let Some(storage) = self.storage() else { return Ok(()) };
+        let updates: Vec<SegmentUpdate> = to_correct
+            .iter()
+            .filter(|s| s.meeting_segment_id > 0)
+            .map(|s| SegmentUpdate {
+                segment_id: s.meeting_segment_id,
+                speaker: Some(identified.to_owned()),
+                uncertain: Some(false),
+                uncertain_reason: Some(String::new()),
+                text: None,
+            })
+            .collect();
+        if !updates.is_empty() {
+            storage.update_segments(&updates, snapshot_path).map_err(storage_error)?;
         }
         Ok(())
     }
@@ -1164,81 +1173,14 @@ impl Live {
         fallback_mixed: bool,
     ) -> Result<(), String> {
         let conference = self.conference();
-        let ktalk_speaker = match &conference {
-            Some(c) => c
-                .get_dominant_speaker_for_period(chunk_start_time, chunk_end_time)
-                .filter(|s| !s.is_empty())
-                .or_else(|| c.get_current_speaker()),
-            None => lock(&self.ktalk_current_speaker).clone(),
-        };
-        let (last_speaker, last_speech_time) = {
-            let mut st = lock(&self.state);
-            let s = st.source(false);
-            (s.last_speaker.clone(), s.last_speech_time)
-        };
-        let mut sole_unmuted_fallback = false;
-        let no_speaker_yet;
-        let speaker = if let Some(speaker) = ktalk_speaker.filter(|s| !s.is_empty()) {
-            no_speaker_yet = false;
-            speaker
-        } else if let Some(last) = last_speaker.clone().filter(|l| {
-            !l.is_empty()
-                && chunk_time - last_speech_time < LAST_SPEAKER_TTL
-                && !conference.as_ref().is_some_and(|c| c.is_speaker_muted(l))
-        }) {
-            no_speaker_yet = false;
-            last
-        } else if let Some(sole) =
-            conference.as_ref().and_then(|c| c.get_sole_unmuted_remote_participant()).filter(|s| !s.is_empty())
-        {
-            no_speaker_yet = false;
-            sole_unmuted_fallback = true;
-            sole
-        } else if conference.as_ref().is_some_and(|c| !c.has_remote_participants()) {
-            no_speaker_yet = false;
-            SYSTEM_AUDIO_SPEAKER.to_owned()
-        } else {
-            no_speaker_yet = true;
-            "Unknown".to_owned()
-        };
-        let (is_continuation, audio_offset) = {
-            let mut st = lock(&self.state);
-            let s = st.source(false);
-            let gap = chunk_time - s.last_speech_time;
-            let duration = chunk_time - s.segment_start_time;
-            let continuation = s.last_speaker.as_deref() == Some(speaker.as_str())
-                && gap < SPEAKER_TURN_GAP
-                && duration < MAX_SEGMENT_DURATION;
-            if speaker != "Unknown" && speaker != SYSTEM_AUDIO_SPEAKER && !sole_unmuted_fallback {
-                s.last_speaker = Some(speaker.clone());
-            }
-            s.last_speech_time = chunk_time;
-            if !continuation {
-                s.segment_start_time = chunk_time;
-            }
-            (continuation, s.audio_offset)
-        };
+        let ktalk_speaker = self.ktalk_speaker(conference.as_ref(), chunk_start_time, chunk_end_time);
+        let attribution = self.attribute_system_chunk(conference.as_ref(), ktalk_speaker, chunk_time);
+        let speaker = attribution.speaker.clone();
+        let (is_continuation, audio_offset) = self.system_segment_state(&attribution, chunk_time);
         let line_idx = self.push_line(format!("\n**{speaker}** *[{timestamp}]*: {text}\n"));
         let Some(conference) = conference else { return Ok(()) };
-        let all_mics_muted = conference.are_all_mics_muted();
-        let (uncertain, uncertain_reason) = if no_speaker_yet {
-            (true, "no_speaker")
-        } else if sole_unmuted_fallback {
-            (true, "sole_unmuted_fallback")
-        } else if all_mics_muted {
-            (true, "mics_off")
-        } else {
-            (false, "")
-        };
-        let persisted_reason = if fallback_mixed {
-            if uncertain_reason.is_empty() {
-                "fallback_mixed".to_owned()
-            } else {
-                format!("fallback_mixed/{uncertain_reason}")
-            }
-        } else {
-            uncertain_reason.to_owned()
-        };
+        let (uncertain, uncertain_reason) =
+            uncertainty(attribution.no_speaker_yet, attribution.sole_unmuted_fallback, conference.are_all_mics_muted());
         let mut meeting_seg_id = 0;
         let storage = self.storage();
         if let Some(storage) = &storage
@@ -1252,7 +1194,7 @@ impl Live {
                     is_local: false,
                     is_continuation,
                     uncertain,
-                    uncertain_reason: persisted_reason,
+                    uncertain_reason: persisted_reason(fallback_mixed, uncertain_reason),
                     audio_offset_ms: audio_offset,
                     captured_at: Some(chunk_time),
                 })
@@ -1269,41 +1211,122 @@ impl Live {
             segment_id: meeting_seg_id,
             ..TranscriptLine::default()
         });
-        let snapshot = {
-            let mut st = lock(&self.state);
-            if self.generation() == chunk_gen {
-                st.recent_system_segments.push_back(RecentSegment {
-                    speaker: speaker.clone(),
-                    chunk_time,
-                    line_idx,
-                    meeting_segment_id: meeting_seg_id,
-                    is_local: false,
-                    timestamp_display: timestamp.to_owned(),
-                    text: text.to_owned(),
-                });
-                while st.recent_system_segments.len() > RETROACTIVE_MAX_SEGMENTS {
-                    st.recent_system_segments.pop_front();
-                }
-                let len = st.recent_system_segments.len();
-                let needs = speaker != "Unknown"
-                    && speaker != SYSTEM_AUDIO_SPEAKER
-                    && len >= 2
-                    && st.recent_system_segments[len - 2].speaker == "Unknown";
-                needs.then(|| {
-                    (
-                        st.recent_system_segments.iter().cloned().collect::<Vec<_>>(),
-                        self.generation(),
-                        storage.as_ref().and_then(|s| s.current_meeting_path()),
-                    )
-                })
-            } else {
-                None
-            }
+        let recent = RecentSegment {
+            speaker: speaker.clone(),
+            chunk_time,
+            line_idx,
+            meeting_segment_id: meeting_seg_id,
+            is_local: false,
+            timestamp_display: timestamp.to_owned(),
+            text: text.to_owned(),
         };
-        if let Some(snapshot) = snapshot {
+        if let Some(snapshot) = self.remember_system_segment(recent, chunk_gen, storage.as_deref()) {
             self.retroactive_correct_unknown_run(&speaker, chunk_time, Some(snapshot))?;
         }
         Ok(())
+    }
+
+    /// The conference's speaker of the chunk's period (else its current speaker), or
+    /// the last speaker the extension reported without a conference.
+    fn ktalk_speaker(&self, conference: Option<&Arc<dyn Conference>>, start: f64, end: f64) -> Option<String> {
+        match conference {
+            Some(c) => c
+                .get_dominant_speaker_for_period(start, end)
+                .filter(|s| !s.is_empty())
+                .or_else(|| c.get_current_speaker()),
+            None => lock(&self.ktalk_current_speaker).clone(),
+        }
+    }
+
+    /// The attribution chain of a system chunk: the conference's speaker, the last
+    /// speaker within its TTL and unmuted, the sole unmuted remote participant,
+    /// "Системный звук" with nobody remote, else Unknown.
+    fn attribute_system_chunk(
+        &self,
+        conference: Option<&Arc<dyn Conference>>,
+        ktalk_speaker: Option<String>,
+        chunk_time: f64,
+    ) -> Attribution {
+        let found = |speaker: String| Attribution { speaker, no_speaker_yet: false, sole_unmuted_fallback: false };
+        if let Some(speaker) = ktalk_speaker.filter(|s| !s.is_empty()) {
+            return found(speaker);
+        }
+        if let Some(last) = self.recent_unmuted_last_speaker(conference, chunk_time) {
+            return found(last);
+        }
+        if let Some(sole) = conference.and_then(|c| c.get_sole_unmuted_remote_participant()).filter(|s| !s.is_empty()) {
+            return Attribution { speaker: sole, no_speaker_yet: false, sole_unmuted_fallback: true };
+        }
+        if conference.is_some_and(|c| !c.has_remote_participants()) {
+            return found(SYSTEM_AUDIO_SPEAKER.to_owned());
+        }
+        Attribution { speaker: "Unknown".to_owned(), no_speaker_yet: true, sole_unmuted_fallback: false }
+    }
+
+    /// The system source's last speaker while within `LAST_SPEAKER_TTL` and not muted.
+    fn recent_unmuted_last_speaker(&self, conference: Option<&Arc<dyn Conference>>, chunk_time: f64) -> Option<String> {
+        let (last_speaker, last_speech_time) = {
+            let mut st = lock(&self.state);
+            let s = st.source(false);
+            (s.last_speaker.clone(), s.last_speech_time)
+        };
+        last_speaker.filter(|l| {
+            !l.is_empty()
+                && chunk_time - last_speech_time < LAST_SPEAKER_TTL
+                && !conference.is_some_and(|c| c.is_speaker_muted(l))
+        })
+    }
+
+    /// Whether the chunk continues the system source's segment (same speaker, within
+    /// the turn gap and the segment's length), the state moved on, and the audio offset.
+    fn system_segment_state(&self, attribution: &Attribution, chunk_time: f64) -> (bool, i64) {
+        let speaker = &attribution.speaker;
+        let mut st = lock(&self.state);
+        let s = st.source(false);
+        let gap = chunk_time - s.last_speech_time;
+        let duration = chunk_time - s.segment_start_time;
+        let continuation = s.last_speaker.as_deref() == Some(speaker.as_str())
+            && gap < SPEAKER_TURN_GAP
+            && duration < MAX_SEGMENT_DURATION;
+        if speaker != "Unknown" && speaker != SYSTEM_AUDIO_SPEAKER && !attribution.sole_unmuted_fallback {
+            s.last_speaker = Some(speaker.clone());
+        }
+        s.last_speech_time = chunk_time;
+        if !continuation {
+            s.segment_start_time = chunk_time;
+        }
+        (continuation, s.audio_offset)
+    }
+
+    /// The segment kept for the retroactive correction (of this recording only); the
+    /// snapshot to correct from when it identifies a speaker right after an Unknown.
+    fn remember_system_segment(
+        &self,
+        recent: RecentSegment,
+        chunk_gen: i64,
+        storage: Option<&MeetingStorage>,
+    ) -> Option<(Vec<RecentSegment>, i64, Option<PathBuf>)> {
+        let mut st = lock(&self.state);
+        if self.generation() != chunk_gen {
+            return None;
+        }
+        let speaker = recent.speaker.clone();
+        st.recent_system_segments.push_back(recent);
+        while st.recent_system_segments.len() > RETROACTIVE_MAX_SEGMENTS {
+            st.recent_system_segments.pop_front();
+        }
+        let len = st.recent_system_segments.len();
+        let needs = speaker != "Unknown"
+            && speaker != SYSTEM_AUDIO_SPEAKER
+            && len >= 2
+            && st.recent_system_segments[len - 2].speaker == "Unknown";
+        needs.then(|| {
+            (
+                st.recent_system_segments.iter().cloned().collect::<Vec<_>>(),
+                self.generation(),
+                storage.and_then(MeetingStorage::current_meeting_path),
+            )
+        })
     }
 
     /// `_handle_unattributed_chunk`: system speech without conference identity.
@@ -1358,136 +1381,174 @@ impl Live {
     ///
     /// # Errors
     /// A WAV or storage write failed (fatal in Python).
-    #[allow(clippy::too_many_lines)]
     pub fn process_chunk(&self, is_mic: bool) -> Result<(), String> {
-        let capture = if is_mic { &self.mic_capture } else { &self.system_capture };
-        let Some(capture) = capture else { return Ok(()) };
+        let Some(capture) = self.capture_of(is_mic) else { return Ok(()) };
         if !self.asr.available() || !self.is_recording_active() {
             return Ok(());
         }
         let chunk_gen = self.generation();
-        let retry = lock(&self.state).source(is_mic).pending_chunk.take().filter(|(_, _, g)| *g == chunk_gen);
-        let is_retry = retry.is_some();
-        let (chunk, capture_start_ts, capture_epoch) = if let Some((chunk, ts, _)) = retry {
-            (chunk, ts, lock(&self.wav).system_source_epoch)
-        } else {
-            let Some((chunk, ts)) = capture.get_chunk(self.opts.chunk_duration) else { return Ok(()) };
-            if chunk.len() < 1000 {
-                return Ok(());
-            }
-            if let Some(golden) = self.golden_now() {
-                golden.capture(if is_mic { "mic" } else { "system" }, Audio::F32(&chunk), ts);
-            }
-            (chunk, ts, capture.chunk_epoch())
-        };
-        let chunk_start_time = capture_start_ts;
-        let chunk_end_time = capture_start_ts + self.opts.chunk_duration;
-        let rms = rms_f32(&chunk);
+        let Some(next) = self.next_chunk(capture, is_mic, chunk_gen) else { return Ok(()) };
+        let rms = rms_f32(&next.chunk);
         let ingest = self.ingest();
-        let pcm_primary = !is_mic && ingest.as_ref().is_some_and(|i| i.pcm_ever_seen() && !i.degraded());
-        let skip_wav_write = rms < VAD_RMS_THRESHOLD && !pcm_primary;
-        {
-            let mut wav = lock(&self.wav);
-            if !self.is_current_recording(chunk_gen) {
-                return Ok(());
-            }
-            let mut offset = None;
-            // A retried chunk is in the WAV already (with its offset and anchor); a
-            // silent one makes no segment, so nothing reads its offset.
-            let write = !(is_retry || skip_wav_write);
-            if write && is_mic {
-                if let Some(writer) = wav.mic.as_mut() {
-                    offset = Some(writer.offset_ms());
-                    writer.write_chunk(&chunk).map_err(|e| e.to_string())?;
-                }
-            } else if write && wav.system.is_some() {
-                if capture_epoch != wav.system_source_epoch {
-                    wav.system_source_epoch = capture_epoch;
-                    if let Some(writer) = wav.system.as_mut() {
-                        writer.mark_discontinuity();
-                    }
-                }
-                if let Some(writer) = wav.system.as_mut() {
-                    let before = writer.offset_ms();
-                    offset = Some(before);
-                    let skipped = writer.write_chunk(&chunk).map_err(|e| e.to_string())?;
-                    if let Some(skipped) = skipped {
-                        #[allow(clippy::cast_precision_loss)]
-                        let first = (capture_start_ts + skipped as f64 / f64::from(SAMPLE_RATE)) * 1000.0;
-                        wav.system_anchor = Some((first, before));
-                    }
-                }
-            }
-            if let Some(offset) = offset {
-                lock(&self.state).source(is_mic).audio_offset = offset;
-            }
-        }
-        let mut fallback_mixed = false;
-        if !is_mic && let Some(ingest) = ingest.as_ref().filter(|i| i.pcm_ever_seen()) {
-            let degraded_now = ingest.degraded();
-            let (should_emit, marker_gen) = {
-                let mut st = lock(&self.state);
-                let emit = degraded_now != st.last_pcm_degraded;
-                if emit {
-                    st.last_pcm_degraded = degraded_now;
-                }
-                (emit, self.generation())
-            };
-            if should_emit {
-                self.emit_pcm_transition_marker(degraded_now, marker_gen)?;
-            }
-            if !degraded_now {
-                return Ok(());
-            }
-            fallback_mixed = true;
-        }
-        if is_mic && self.conference().is_some_and(|c| c.is_local_mic_muted()) {
+        if !self.write_chunk_audio(is_mic, &next, rms, ingest.as_ref(), chunk_gen)? {
             return Ok(());
         }
-        if rms < VAD_RMS_THRESHOLD || !self.is_recording_active() {
+        let Some(fallback_mixed) = self.pcm_transport_gate(is_mic, ingest.as_ref())? else { return Ok(()) };
+        if !self.speech_wanted(is_mic, rms) {
             return Ok(());
         }
-        let text = match self.transcribe_direct(&chunk) {
-            Ok(text) => text,
-            Err(_) => {
-                let mut st = lock(&self.state);
-                if self.is_current_recording(chunk_gen) {
-                    st.source(is_mic).pending_chunk = Some((chunk, capture_start_ts, chunk_gen));
-                }
-                return Ok(());
-            }
-        };
-        let Some(text) = text.filter(|t| !t.is_empty()) else { return Ok(()) };
-        let deduped = {
-            let mut st = lock(&self.state);
-            let s = st.source(is_mic);
-            if chunk_start_time - s.last_words_capture_end > self.env.dedup_max_gap_s {
-                s.last_words.clear();
-            }
-            deduplicate(&text, &s.last_words)
-        };
-        let Some(text) = deduped.filter(|t| !t.is_empty()) else { return Ok(()) };
+        let Some(text) = self.chunk_text(is_mic, &next, chunk_gen) else { return Ok(()) };
+        self.handle_chunk_text(is_mic, &text, &next, chunk_gen, fallback_mixed)
+    }
+
+    fn capture_of(&self, is_mic: bool) -> Option<&Arc<dyn LiveCapture>> {
+        if is_mic { self.mic_capture.as_ref() } else { self.system_capture.as_ref() }
+    }
+
+    /// The chunk ASR could not serve before (of this recording), else the capture's
+    /// next one of at least 1000 samples, which the golden recorder records.
+    fn next_chunk(&self, capture: &Arc<dyn LiveCapture>, is_mic: bool, chunk_gen: i64) -> Option<NextChunk> {
+        let retry = lock(&self.state).source(is_mic).pending_chunk.take().filter(|(_, _, g)| *g == chunk_gen);
+        if let Some((chunk, start_ts, _)) = retry {
+            return Some(NextChunk { chunk, start_ts, epoch: lock(&self.wav).system_source_epoch, is_retry: true });
+        }
+        let (chunk, start_ts) = capture.get_chunk(self.opts.chunk_duration)?;
+        if chunk.len() < 1000 {
+            return None;
+        }
+        if let Some(golden) = self.golden_now() {
+            golden.capture(if is_mic { "mic" } else { "system" }, Audio::F32(&chunk), start_ts);
+        }
+        Some(NextChunk { chunk, start_ts, epoch: capture.chunk_epoch(), is_retry: false })
+    }
+
+    /// The chunk into its WAV (unless it is a retry, or silent while the system audio
+    /// is not the PCM path's timeline), its offset kept for the segment; false when the
+    /// recording changed meanwhile.
+    fn write_chunk_audio(
+        &self,
+        is_mic: bool,
+        next: &NextChunk,
+        rms: f64,
+        ingest: Option<&Arc<PerSpeakerIngest>>,
+        chunk_gen: i64,
+    ) -> Result<bool, String> {
+        let skip_wav_write = rms < VAD_RMS_THRESHOLD && !pcm_primary(is_mic, ingest);
+        let mut wav = lock(&self.wav);
         if !self.is_current_recording(chunk_gen) {
-            return Ok(());
+            return Ok(false);
         }
-        {
+        // A retried chunk is in the WAV already (with its offset and anchor); a
+        // silent one makes no segment, so nothing reads its offset.
+        let write = !(next.is_retry || skip_wav_write);
+        let offset = if write { write_wav(&mut wav, is_mic, next)? } else { None };
+        if let Some(offset) = offset {
+            lock(&self.state).source(is_mic).audio_offset = offset;
+        }
+        Ok(true)
+    }
+
+    /// The per-speaker path's say over a system chunk: the transition marker when PCM
+    /// degraded or recovered; None while PCM is primary (the chunk is not
+    /// transcribed), else whether the chunk is the fallback mixed path.
+    fn pcm_transport_gate(&self, is_mic: bool, ingest: Option<&Arc<PerSpeakerIngest>>) -> Result<Option<bool>, String> {
+        if is_mic {
+            return Ok(Some(false));
+        }
+        let Some(ingest) = ingest.filter(|i| i.pcm_ever_seen()) else { return Ok(Some(false)) };
+        let degraded_now = ingest.degraded();
+        let (should_emit, marker_gen) = {
             let mut st = lock(&self.state);
-            let s = st.source(is_mic);
-            s.last_words = last_words(&text, 5);
-            s.last_words_capture_end = chunk_end_time;
+            let emit = degraded_now != st.last_pcm_degraded;
+            if emit {
+                st.last_pcm_degraded = degraded_now;
+            }
+            (emit, self.generation())
+        };
+        if should_emit {
+            self.emit_pcm_transition_marker(degraded_now, marker_gen)?;
         }
+        Ok(degraded_now.then_some(true))
+    }
+
+    /// Whether the chunk goes to ASR: not the muted microphone, not below the VAD
+    /// threshold, recording still allowed.
+    fn speech_wanted(&self, is_mic: bool, rms: f64) -> bool {
+        if is_mic && self.conference().is_some_and(|c| c.is_local_mic_muted()) {
+            return false;
+        }
+        if rms < VAD_RMS_THRESHOLD {
+            return false;
+        }
+        self.is_recording_active()
+    }
+
+    /// The chunk's text after dedup against the source's last words, which it then
+    /// replaces; None for no text or a changed recording. A chunk ASR could not serve
+    /// is held for a retry.
+    fn chunk_text(&self, is_mic: bool, next: &NextChunk, chunk_gen: i64) -> Option<String> {
+        let text = match self.transcribe_direct(&next.chunk) {
+            Ok(text) => text?,
+            Err(_) => {
+                self.hold_for_retry(is_mic, next, chunk_gen);
+                return None;
+            }
+        };
+        if text.is_empty() {
+            return None;
+        }
+        let text = self.deduplicated(is_mic, &text, next.start_ts).filter(|t| !t.is_empty())?;
+        if !self.is_current_recording(chunk_gen) {
+            return None;
+        }
+        let mut st = lock(&self.state);
+        let s = st.source(is_mic);
+        s.last_words = last_words(&text, 5);
+        s.last_words_capture_end = next.start_ts + self.opts.chunk_duration;
+        Some(text)
+    }
+
+    fn hold_for_retry(&self, is_mic: bool, next: &NextChunk, chunk_gen: i64) {
+        let mut st = lock(&self.state);
+        if self.is_current_recording(chunk_gen) {
+            st.source(is_mic).pending_chunk = Some((next.chunk.clone(), next.start_ts, chunk_gen));
+        }
+    }
+
+    /// `text` without the words the source's last segment ended with, those words
+    /// forgotten after a gap longer than `dedup_max_gap_s`.
+    fn deduplicated(&self, is_mic: bool, text: &str, chunk_start_time: f64) -> Option<String> {
+        let mut st = lock(&self.state);
+        let s = st.source(is_mic);
+        if chunk_start_time - s.last_words_capture_end > self.env.dedup_max_gap_s {
+            s.last_words.clear();
+        }
+        deduplicate(text, &s.last_words)
+    }
+
+    /// A chunk's text through the silence split to its source's handler.
+    fn handle_chunk_text(
+        &self,
+        is_mic: bool,
+        text: &str,
+        next: &NextChunk,
+        chunk_gen: i64,
+        fallback_mixed: bool,
+    ) -> Result<(), String> {
+        let chunk_start_time = next.start_ts;
+        let chunk_end_time = next.start_ts + self.opts.chunk_duration;
         let current_time = chunk_end_time;
-        self.check_silence_split(is_mic, current_time, Some(&chunk))?;
+        self.check_silence_split(is_mic, current_time, Some(&next.chunk))?;
         let timestamp = self.hms(chunk_end_time);
         let chunk_time = current_time;
         if !lock(&self.transcript_lines).is_empty() {
             self.write_out("\n");
         }
         if is_mic {
-            self.handle_mic_chunk(&text, &timestamp, chunk_time, chunk_gen)
+            self.handle_mic_chunk(text, &timestamp, chunk_time, chunk_gen)
         } else if self.use_ktalk() {
             self.handle_ktalk_chunk(
-                &text,
+                text,
                 &timestamp,
                 chunk_start_time,
                 chunk_end_time,
@@ -1496,7 +1557,7 @@ impl Live {
                 fallback_mixed,
             )
         } else {
-            self.handle_unattributed_chunk(&text, &timestamp, chunk_time, chunk_gen)
+            self.handle_unattributed_chunk(text, &timestamp, chunk_time, chunk_gen)
         }
     }
 
@@ -1824,6 +1885,101 @@ fn register_pcm_live_segment(st: &mut State, has_ingest: bool, pid: &str, segmen
     for id in pruned {
         st.pcm_segment_texts.remove(&id);
     }
+}
+
+/// Who a system chunk is attributed to, and how sure.
+struct Attribution {
+    speaker: String,
+    /// Nobody could be named: Unknown.
+    no_speaker_yet: bool,
+    /// The sole unmuted remote participant, a guess.
+    sole_unmuted_fallback: bool,
+}
+
+/// `uncertain` and its reason for a conference's system segment.
+fn uncertainty(no_speaker_yet: bool, sole_unmuted_fallback: bool, all_mics_muted: bool) -> (bool, &'static str) {
+    if no_speaker_yet {
+        (true, "no_speaker")
+    } else if sole_unmuted_fallback {
+        (true, "sole_unmuted_fallback")
+    } else if all_mics_muted {
+        (true, "mics_off")
+    } else {
+        (false, "")
+    }
+}
+
+/// The stored reason: the fallback mixed path prefixes it.
+fn persisted_reason(fallback_mixed: bool, uncertain_reason: &str) -> String {
+    if !fallback_mixed {
+        return uncertain_reason.to_owned();
+    }
+    if uncertain_reason.is_empty() { "fallback_mixed".to_owned() } else { format!("fallback_mixed/{uncertain_reason}") }
+}
+
+/// A chunk on its way through `_process_chunk`.
+struct NextChunk {
+    chunk: Vec<f32>,
+    start_ts: f64,
+    /// The capture's source epoch (the WAV's, for a retry).
+    epoch: u64,
+    /// The chunk ASR could not serve before: already in the WAV.
+    is_retry: bool,
+}
+
+/// Whether the per-speaker PCM is the system audio's path, so its WAV must keep a
+/// real-time timeline.
+fn pcm_primary(is_mic: bool, ingest: Option<&Arc<PerSpeakerIngest>>) -> bool {
+    !is_mic && ingest.is_some_and(|i| i.pcm_ever_seen() && !i.degraded())
+}
+
+/// The chunk into its source's WAV: the offset it starts at, None without a writer.
+fn write_wav(wav: &mut Wav, is_mic: bool, next: &NextChunk) -> Result<Option<i64>, String> {
+    if is_mic { write_mic_wav(wav, &next.chunk) } else { write_system_wav(wav, next) }
+}
+
+fn write_mic_wav(wav: &mut Wav, chunk: &[f32]) -> Result<Option<i64>, String> {
+    let Some(writer) = wav.mic.as_mut() else { return Ok(None) };
+    let offset = writer.offset_ms();
+    writer.write_chunk(chunk).map_err(|e| e.to_string())?;
+    Ok(Some(offset))
+}
+
+/// A system chunk into its WAV: a discontinuity marked when the capture's source
+/// changed, the wall-clock anchor moved to its first written sample.
+fn write_system_wav(wav: &mut Wav, next: &NextChunk) -> Result<Option<i64>, String> {
+    if wav.system.is_none() {
+        return Ok(None);
+    }
+    if next.epoch != wav.system_source_epoch {
+        wav.system_source_epoch = next.epoch;
+        if let Some(writer) = wav.system.as_mut() {
+            writer.mark_discontinuity();
+        }
+    }
+    let Some(writer) = wav.system.as_mut() else { return Ok(None) };
+    let before = writer.offset_ms();
+    let skipped = writer.write_chunk(&next.chunk).map_err(|e| e.to_string())?;
+    if let Some(skipped) = skipped {
+        #[allow(clippy::cast_precision_loss)]
+        let first = (next.start_ts + skipped as f64 / f64::from(SAMPLE_RATE)) * 1000.0;
+        wav.system_anchor = Some((first, before));
+    }
+    Ok(Some(before))
+}
+
+/// The Unknown run right before the last segment, newest first: remote segments
+/// within `RETROACTIVE_MAX_SECONDS` of `current_time`.
+fn unknown_run(segments: &[RecentSegment], current_time: f64) -> Vec<RecentSegment> {
+    let mut run = Vec::new();
+    let Some((_, before)) = segments.split_last() else { return run };
+    for seg in before.iter().rev() {
+        if seg.speaker != "Unknown" || seg.is_local || current_time - seg.chunk_time > RETROACTIVE_MAX_SECONDS {
+            break;
+        }
+        run.push(seg.clone());
+    }
+    run
 }
 
 fn marker(msg: &str, reason: &str) -> NewSegment {
