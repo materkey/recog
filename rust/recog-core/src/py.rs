@@ -94,30 +94,38 @@ pub fn repr(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push(quote);
     for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if is_printable(c) => out.push(c),
-            c => {
-                let code = u32::from(c);
-                if code < 0x100 {
-                    out.push_str(&format!("\\x{code:02x}"));
-                } else if code < 0x10000 {
-                    out.push_str(&format!("\\u{code:04x}"));
-                } else {
-                    out.push_str(&format!("\\U{code:08x}"));
-                }
-            }
-        }
+        push_repr_char(&mut out, c, quote);
     }
     out.push(quote);
     out
+}
+
+/// One character of a string's `repr()` inside `quote`.
+fn push_repr_char(out: &mut String, c: char, quote: char) {
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        c if c == quote => {
+            out.push('\\');
+            out.push(c);
+        }
+        c if is_printable(c) => out.push(c),
+        c => out.push_str(&hex_escape(c)),
+    }
+}
+
+/// `\xhh`, `\uhhhh` or `\Uhhhhhhhh`, the shortest that holds the character.
+fn hex_escape(c: char) -> String {
+    let code = u32::from(c);
+    if code < 0x100 {
+        format!("\\x{code:02x}")
+    } else if code < 0x10000 {
+        format!("\\u{code:04x}")
+    } else {
+        format!("\\U{code:08x}")
+    }
 }
 
 /// The digits of a Python numeric literal with its single underscores between digits
@@ -206,15 +214,7 @@ pub fn parse_float(raw: &str) -> Result<f64, String> {
 /// Python's grammar of an unsigned float literal: `digits [. [digits]] [exponent]` or
 /// `. digits [exponent]`, digits with single underscores between them.
 fn is_decimal_literal(s: &str) -> bool {
-    fn digits(s: &[u8]) -> usize {
-        let mut i = 0;
-        while i < s.len()
-            && (s[i].is_ascii_digit() || s[i] == b'_' && i > 0 && s.get(i + 1).is_some_and(u8::is_ascii_digit))
-        {
-            i += 1;
-        }
-        i
-    }
+    let digits = literal_digits;
     let s = s.as_bytes();
     let whole = digits(s);
     let mut i = whole;
@@ -241,48 +241,79 @@ fn is_decimal_literal(s: &str) -> bool {
     i == s.len()
 }
 
+/// How many bytes of `s` are digits with single underscores between them.
+fn literal_digits(s: &[u8]) -> usize {
+    let mut i = 0;
+    while i < s.len()
+        && (s[i].is_ascii_digit() || s[i] == b'_' && i > 0 && s.get(i + 1).is_some_and(u8::is_ascii_digit))
+    {
+        i += 1;
+    }
+    i
+}
+
 /// `repr(x)` of a float: the shortest digits that round-trip, in fixed notation
 /// for exponents from -4 to 15 and in Python's exponent notation otherwise.
 #[must_use]
 pub fn float_repr(x: f64) -> String {
+    if let Some(special) = special_float_repr(x) {
+        return special;
+    }
+    let (digits, exponent) = shortest_digits(x.abs());
+    let sign = if x < 0.0 { "-" } else { "" };
+    let text =
+        if (-4..16).contains(&exponent) { fixed_repr(&digits, exponent) } else { exponent_repr(&digits, exponent) };
+    format!("{sign}{text}")
+}
+
+/// `repr()` of nan, the infinities and the zeros.
+fn special_float_repr(x: f64) -> Option<String> {
     if x.is_nan() {
-        return "nan".into();
+        return Some("nan".into());
     }
     if x.is_infinite() {
-        return if x > 0.0 { "inf".into() } else { "-inf".into() };
+        return Some(if x > 0.0 { "inf".into() } else { "-inf".into() });
     }
     if x == 0.0 {
-        return if x.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
+        return Some(if x.is_sign_negative() { "-0.0".into() } else { "0.0".into() });
     }
+    None
+}
+
+/// The shortest round-trip digits of a positive finite float and the exponent of the
+/// first one.
+fn shortest_digits(x: f64) -> (String, i32) {
     // `{:e}` gives how many digits the shortest round-trip needs: d[.ddd]e<exp>. Of two
     // such strings equally near the value Rust may take the upper one, where Python
     // takes the even one (967816371417934.25 is "…934.2" there): the value correctly
     // rounded to that many digits, as `{:.N$e}` rounds it, is the one Python prints.
-    let shortest = format!("{:e}", x.abs());
+    let shortest = format!("{x:e}");
     let precision = shortest.split_once('e').map_or(0, |(m, _)| m.chars().filter(char::is_ascii_digit).count() - 1);
-    let formatted = format!("{:.precision$e}", x.abs());
+    let formatted = format!("{x:.precision$e}");
     let (mantissa, exponent) = formatted.split_once('e').unwrap_or((&formatted, "0"));
     let exponent: i32 = exponent.parse().unwrap_or(0);
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let sign = if x < 0.0 { "-" } else { "" };
-    if (-4..16).contains(&exponent) {
-        let point = exponent + 1;
-        let text = if point <= 0 {
-            format!("0.{}{digits}", "0".repeat(usize::try_from(-point).unwrap_or(0)))
-        } else {
-            let point = usize::try_from(point).unwrap_or(0);
-            if digits.len() <= point {
-                format!("{digits}{}.0", "0".repeat(point - digits.len()))
-            } else {
-                format!("{}.{}", &digits[..point], &digits[point..])
-            }
-        };
-        format!("{sign}{text}")
-    } else {
-        let mantissa = if digits.len() == 1 { digits.clone() } else { format!("{}.{}", &digits[..1], &digits[1..]) };
-        let exp_sign = if exponent < 0 { '-' } else { '+' };
-        format!("{sign}{mantissa}e{exp_sign}{:02}", exponent.abs())
+    (mantissa.chars().filter(char::is_ascii_digit).collect(), exponent)
+}
+
+/// The digits in fixed notation, with at least one digit after the point.
+fn fixed_repr(digits: &str, exponent: i32) -> String {
+    let point = exponent + 1;
+    if point <= 0 {
+        return format!("0.{}{digits}", "0".repeat(usize::try_from(-point).unwrap_or(0)));
     }
+    let point = usize::try_from(point).unwrap_or(0);
+    if digits.len() <= point {
+        format!("{digits}{}.0", "0".repeat(point - digits.len()))
+    } else {
+        format!("{}.{}", &digits[..point], &digits[point..])
+    }
+}
+
+/// The digits in Python's exponent notation (`1.5e+16`, `1e-05`).
+fn exponent_repr(digits: &str, exponent: i32) -> String {
+    let mantissa = if digits.len() == 1 { digits.to_owned() } else { format!("{}.{}", &digits[..1], &digits[1..]) };
+    let exp_sign = if exponent < 0 { '-' } else { '+' };
+    format!("{mantissa}e{exp_sign}{:02}", exponent.abs())
 }
 
 #[cfg(test)]
