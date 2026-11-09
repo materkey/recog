@@ -45,6 +45,48 @@ fn retryable(value: Option<&Value>) -> Result<bool, PyErr> {
     }
 }
 
+fn same_target(value: Option<&Value>, wanted: &Value) -> bool {
+    value.is_some_and(|v| v.py_eq(wanted))
+}
+
+/// `previous` is a final result for the target `wanted`, unless its reason may
+/// clear.
+fn settled(previous: &Value, wanted: &Value) -> Result<bool, PyErr> {
+    Ok(same_target(py::get(previous, "target")?, wanted)
+        && is_state(py::get(previous, "state")?, &["attached", "incompatible", "error", "inspector_unclosed"])
+        && !retryable(py::get(previous, "reason")?)?)
+}
+
+/// The page reported the target's runtime incompatible.
+fn runtime_incompatible(runtime: &Value, wanted: &Value) -> Result<bool, PyErr> {
+    Ok(same_target(py::get(runtime, "target")?, wanted) && is_state(py::get(runtime, "state")?, &["incompatible"]))
+}
+
+/// A page of the target initialized after the last result recorded a page failure.
+fn page_recovered(runtime: &Value, previous: &Value, wanted: &Value) -> Result<bool, PyErr> {
+    Ok(runtime_ready(runtime, wanted)? && page_failed(previous, wanted)?)
+}
+
+fn runtime_ready(runtime: &Value, wanted: &Value) -> Result<bool, PyErr> {
+    Ok(same_target(py::get(runtime, "target")?, wanted) && is_state(py::get(runtime, "state")?, &["ready"]))
+}
+
+fn page_failed(previous: &Value, wanted: &Value) -> Result<bool, PyErr> {
+    Ok(same_target(py::get(previous, "target")?, wanted)
+        && is_state(py::get(previous, "state")?, &["incompatible"])
+        && is_state(py::get(previous, "reason")?, &["page_initialization_failed"]))
+}
+
+/// A result of an observation that does not attach to `target`.
+fn unattached(state: &str, reason: &str, target: &Target) -> Value {
+    py::obj([
+        ("state", Value::from(state)),
+        ("reason", Value::from(reason)),
+        ("target", target.to_value()),
+        ("inspector_closed", Value::Null),
+    ])
+}
+
 fn caught(error: &PyErr) -> bool {
     error.is_os() || error.is_value() || error.is("TypeError") || error.is("AttributeError")
 }
@@ -52,21 +94,7 @@ fn caught(error: &PyErr) -> bool {
 fn try_status(root: &Path, now: f64) -> Result<Value, PyErr> {
     let existing = storage::read(&root.join("status.json"))?;
     if py::get(&existing, "state")?.and_then(Value::as_str) == Some("inspector_unclosed") {
-        let enabled = match storage::read(&root.join("config.json")).and_then(|c| Ok(py::get(&c, "enabled")?.cloned()))
-        {
-            Ok(enabled) => enabled.is_some_and(|v| v.truthy()),
-            Err(e) if caught(&e) => true,
-            Err(e) => return Err(e),
-        };
-        let app_version = py::get(&existing, "app_version")?.cloned().unwrap_or(Value::Null);
-        return py::spread(
-            &existing,
-            &py::obj([
-                ("enabled", Value::Bool(enabled)),
-                ("app_version", app_version),
-                ("inspector_closed", Value::Bool(false)),
-            ]),
-        );
+        return unclosed_status(root, &existing);
     }
     let config = storage::read(&root.join("config.json"))?;
     if !py::get(&config, "enabled")?.is_some_and(Value::truthy) {
@@ -78,14 +106,40 @@ fn try_status(root: &Path, now: f64) -> Result<Value, PyErr> {
             ("inspector_closed", Value::Null),
         ]));
     }
+    enabled_status(root, now)
+}
+
+/// The unclosed-inspector warning, whatever the configuration says.
+fn unclosed_status(root: &Path, existing: &Value) -> Result<Value, PyErr> {
+    let enabled = configured_enabled(root)?;
+    let app_version = py::get(existing, "app_version")?.cloned().unwrap_or(Value::Null);
+    py::spread(
+        existing,
+        &py::obj([
+            ("enabled", Value::Bool(enabled)),
+            ("app_version", app_version),
+            ("inspector_closed", Value::Bool(false)),
+        ]),
+    )
+}
+
+/// `enabled` of a configuration that may not be read, which counts as enabled.
+fn configured_enabled(root: &Path) -> Result<bool, PyErr> {
+    match storage::read(&root.join("config.json")).and_then(|c| Ok(py::get(&c, "enabled")?.cloned())) {
+        Ok(enabled) => Ok(enabled.is_some_and(|v| v.truthy())),
+        Err(e) if caught(&e) => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// The status of an enabled installation: the last result, unless the web server
+/// that would act on it is not running.
+fn enabled_status(root: &Path, now: f64) -> Result<Value, PyErr> {
     let mut result = storage::read_json(&root.join("status.json"), Some(py::obj([("state", Value::from("waiting"))])))?;
     let heartbeat = storage::read(&root.join("heartbeat.json"))?;
-    let running = py::get(&heartbeat, "running")?.is_some_and(Value::truthy);
-    let stale = || -> Result<bool, PyErr> {
-        let updated = py::get(&heartbeat, "updated_at")?.cloned().unwrap_or(Value::Int(0));
-        Ok(now - py::number(&updated, "-")? > 8.0)
-    };
-    if (!running || stale()?) && py::get(&result, "state")?.and_then(Value::as_str) != Some("inspector_unclosed") {
+    if heartbeat_stale(&heartbeat, now)?
+        && py::get(&result, "state")?.and_then(Value::as_str) != Some("inspector_unclosed")
+    {
         result = py::spread(
             &result,
             &py::obj([("state", Value::from("server_offline")), ("reason", Value::from("web_server_not_running"))]),
@@ -100,6 +154,15 @@ fn try_status(root: &Path, now: f64) -> Result<Value, PyErr> {
         ]),
         &result,
     )
+}
+
+/// The heartbeat says the observer is not running, or was written over 8 s ago.
+fn heartbeat_stale(heartbeat: &Value, now: f64) -> Result<bool, PyErr> {
+    if !py::get(heartbeat, "running")?.is_some_and(Value::truthy) {
+        return Ok(true);
+    }
+    let updated = py::get(heartbeat, "updated_at")?.cloned().unwrap_or(Value::Int(0));
+    Ok(now - py::number(&updated, "-")? > 8.0)
 }
 
 /// `status(root)` at `now`: what the settings page and `desktop status` show.
@@ -226,62 +289,80 @@ pub fn launch_worker<'a>(
     recover: bool,
 ) -> BoxFuture<'a, Result<Value, PyErr>> {
     Box::pin(async move {
-        let mut args: Vec<OsString> = vec!["--root".into(), root.as_os_str().to_owned()];
-        if recover {
-            args.push("--recover".into());
-        } else if let Some(target) = &target {
-            args.push("--target".into());
-            args.push(py::dumps_ascii(&target.to_value()).into());
-        }
+        let args = worker_args(root, target.as_ref(), recover);
         let started = host.clock.time();
         let mut child = spawner.spawn(args).await?;
-        let deadline = host.clock.monotonic() + WORKER_DEADLINE_S;
-        loop {
-            let remaining = deadline - host.clock.monotonic();
-            if remaining <= 0.0 {
-                child.kill_and_reap().await;
-                break;
-            }
-            if child.wait_for(Duration::from_secs_f64(remaining.min(1.0))).await {
-                break;
-            }
-            storage::write_json(&root.join("heartbeat.json"), &heartbeat(host, true))?;
-        }
+        supervise(host, child.as_mut(), root).await?;
         let operation = storage::read(&root.join("operation.json"))?;
-        let phase = py::get(&operation, "phase")?;
-        if !recover && !(phase.is_none_or(Value::is_null) || phase.and_then(Value::as_str) == Some("closed")) {
+        if !recover && !crate::worker::journal_closed(py::get(&operation, "phase")?) {
             return launch_worker(host, spawner, root, None, true).await;
         }
-        let mut result = storage::read(&root.join("status.json"))?;
-        let state = py::get(&result, "state")?.cloned();
-        if state.as_ref().and_then(Value::as_str) != Some("inspector_unclosed") {
-            let updated = py::get(&result, "updated_at")?.cloned().unwrap_or(Value::Int(0));
-            let stale = match updated {
-                Value::Bool(_) | Value::Int(_) | Value::Float(_) => py::number(&updated, "<")? < started,
-                other => {
-                    return Err(PyErr::type_error(format!(
-                        "'<' not supported between instances of '{}' and 'float'",
-                        other.type_name()
-                    )));
-                }
-            };
-            if stale || state.as_ref().and_then(Value::as_str) == Some("attaching") {
-                result = py::obj([
-                    ("state", Value::from("error")),
-                    ("reason", Value::from("worker_failed")),
-                    ("inspector_closed", Value::Null),
-                    ("updated_at", Value::Float(host.clock.time())),
-                ]);
-                if let Some(target) = &target
-                    && let Some(map) = result.as_object_mut()
-                {
-                    map.insert("target", target.to_value());
-                }
-                storage::write_status(root, &result)?;
-            }
-        }
-        Ok(result)
+        let result = storage::read(&root.join("status.json"))?;
+        reported(host, root, result, started, target.as_ref())
     })
+}
+
+/// `--root ROOT (--recover | --target JSON)`.
+fn worker_args(root: &Path, target: Option<&Target>, recover: bool) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["--root".into(), root.as_os_str().to_owned()];
+    if recover {
+        args.push("--recover".into());
+    } else if let Some(target) = target {
+        args.push("--target".into());
+        args.push(py::dumps_ascii(&target.to_value()).into());
+    }
+    args
+}
+
+/// Waits for the worker until its deadline, the heartbeat fresh meanwhile, and
+/// kills it past the deadline.
+async fn supervise(host: &Host, child: &mut dyn WorkerProcess, root: &Path) -> Result<(), PyErr> {
+    let deadline = host.clock.monotonic() + WORKER_DEADLINE_S;
+    loop {
+        let remaining = deadline - host.clock.monotonic();
+        if remaining <= 0.0 {
+            child.kill_and_reap().await;
+            return Ok(());
+        }
+        if child.wait_for(Duration::from_secs_f64(remaining.min(1.0))).await {
+            return Ok(());
+        }
+        storage::write_json(&root.join("heartbeat.json"), &heartbeat(host, true))?;
+    }
+}
+
+/// What the worker reported, `worker_failed` when it left no fresh result.
+fn reported(host: &Host, root: &Path, result: Value, started: f64, target: Option<&Target>) -> Result<Value, PyErr> {
+    let state = py::get(&result, "state")?.cloned();
+    let state = state.as_ref().and_then(Value::as_str);
+    if state == Some("inspector_unclosed") || !(reported_before(&result, started)? || state == Some("attaching")) {
+        return Ok(result);
+    }
+    let mut failed = py::obj([
+        ("state", Value::from("error")),
+        ("reason", Value::from("worker_failed")),
+        ("inspector_closed", Value::Null),
+        ("updated_at", Value::Float(host.clock.time())),
+    ]);
+    if let Some(target) = target
+        && let Some(map) = failed.as_object_mut()
+    {
+        map.insert("target", target.to_value());
+    }
+    storage::write_status(root, &failed)?;
+    Ok(failed)
+}
+
+/// The result is older than the worker (`result.get("updated_at", 0) < started`).
+fn reported_before(result: &Value, started: f64) -> Result<bool, PyErr> {
+    let updated = py::get(result, "updated_at")?.cloned().unwrap_or(Value::Int(0));
+    match updated {
+        Value::Bool(_) | Value::Int(_) | Value::Float(_) => Ok(py::number(&updated, "<")? < started),
+        other => Err(PyErr::type_error(format!(
+            "'<' not supported between instances of '{}' and 'float'",
+            other.type_name()
+        ))),
+    }
 }
 
 /// How a notification command ended.
@@ -558,128 +639,166 @@ impl DesktopIntegration {
             return Ok(());
         }
         storage::write_json(&self.root.join("heartbeat.json"), &heartbeat(&self.context.host, true))?;
-        let phase = py::get(&operation, "phase")?;
-        if !(phase.is_none_or(Value::is_null) || phase.and_then(Value::as_str) == Some("closed")) {
-            return self.recover_operation(state, &operation, &config).await;
+        self.observe(state, &config, &operation).await
+    }
+
+    /// The recovery an open journal entry calls for, else the application's main
+    /// process when enabled.
+    async fn observe(&self, state: &mut State, config: &Value, operation: &Value) -> Result<(), PyErr> {
+        if !crate::worker::journal_closed(py::get(operation, "phase")?) {
+            return self.recover_operation(state, operation, config).await;
         }
-        if !py::get(&config, "enabled")?.is_some_and(Value::truthy) {
+        if !py::get(config, "enabled")?.is_some_and(Value::truthy) {
             return Ok(());
         }
-        let raw = crate::worker::path_arg(py::index(&config, "app")?)?.to_owned();
+        self.observe_application(state, config).await
+    }
+
+    /// Attaches to the one main process of the configured application; with none or
+    /// several, waits.
+    async fn observe_application(&self, state: &mut State, config: &Value) -> Result<(), PyErr> {
+        let raw = crate::worker::path_arg(py::index(config, "app")?)?.to_owned();
         let targets = self
             .blocking(move |host| {
                 let app = processes::application_path(host, &raw)?;
                 processes::find_targets(host, &app)
             })
             .await?;
-        if targets.len() != 1 {
-            let reason = if targets.is_empty() { Value::Null } else { Value::from("multiple_processes") };
-            return self
-                .save(&py::obj([
+        match <[Target; 1]>::try_from(targets) {
+            Ok([target]) => self.attach_target(state, target).await,
+            Err(targets) => {
+                let reason = if targets.is_empty() { Value::Null } else { Value::from("multiple_processes") };
+                self.save(&py::obj([
                     ("state", Value::from("waiting")),
                     ("reason", reason),
                     ("inspector_closed", Value::Null),
                 ]))
-                .await;
+                .await
+            }
         }
-        let target = targets.into_iter().next().unwrap_or_else(|| unreachable!("one target"));
-        self.attach_target(state, target).await
     }
 
     async fn recover_operation(&self, state: &mut State, operation: &Value, config: &Value) -> Result<(), PyErr> {
         let target = Target::from_value(py::index(operation, "target")?)?;
         if !self.blocking(move |host| processes::same_process(host, &target, None)).await? {
-            storage::write_json(
-                &self.root.join("operation.json"),
-                &py::spread(operation, &py::obj([("phase", Value::from("closed"))]))?,
-            )?;
-            let enabled = py::get(config, "enabled")?.is_some_and(Value::truthy);
-            return self
-                .save(&py::obj([
-                    ("state", Value::from(if enabled { "waiting" } else { "disabled" })),
-                    ("reason", Value::Null),
-                    ("inspector_closed", Value::Bool(true)),
-                ]))
-                .await;
+            return self.close_exited_operation(operation, config).await;
         }
         let token = py::dumps(py::get(operation, "token")?.unwrap_or(&Value::Null));
         if !state.recovered.contains(&token) {
-            let result = self.context.launcher.launch(&self.root, None, true).await?;
-            if py::get(&result, "reason")?.and_then(Value::as_str) != Some("attachment_in_progress") {
-                state.recovered.insert(token);
-            }
-            self.notify_with(state, &result).await;
+            self.recover_once(state, token).await?;
         }
         Ok(())
     }
 
+    /// The journal entry of a process that is gone, closed: nothing is left open.
+    async fn close_exited_operation(&self, operation: &Value, config: &Value) -> Result<(), PyErr> {
+        storage::write_json(
+            &self.root.join("operation.json"),
+            &py::spread(operation, &py::obj([("phase", Value::from("closed"))]))?,
+        )?;
+        let enabled = py::get(config, "enabled")?.is_some_and(Value::truthy);
+        self.save(&py::obj([
+            ("state", Value::from(if enabled { "waiting" } else { "disabled" })),
+            ("reason", Value::Null),
+            ("inspector_closed", Value::Bool(true)),
+        ]))
+        .await
+    }
+
+    /// A recovery worker for the operation `token`, run again only while another
+    /// attachment held the lock.
+    async fn recover_once(&self, state: &mut State, token: String) -> Result<(), PyErr> {
+        let result = self.context.launcher.launch(&self.root, None, true).await?;
+        if py::get(&result, "reason")?.and_then(Value::as_str) != Some("attachment_in_progress") {
+            state.recovered.insert(token);
+        }
+        self.notify_with(state, &result).await;
+        Ok(())
+    }
+
     async fn attach_target(&self, state: &mut State, target: Target) -> Result<(), PyErr> {
-        let wanted = target.to_value();
-        let same = |value: Option<&Value>| value.is_some_and(|v| v.py_eq(&wanted));
         let previous = storage::read(&self.root.join("status.json"))?;
-        if same(py::get(&previous, "target")?)
-            && is_state(py::get(&previous, "state")?, &["attached", "incompatible", "error", "inspector_unclosed"])
-            && !retryable(py::get(&previous, "reason")?)?
-        {
+        if settled(&previous, &target.to_value())? {
             state.attempted.insert(target.key());
         }
-        let runtime = storage::read(&self.root.join("runtime.json"))?;
-        if same(py::get(&runtime, "target")?) && is_state(py::get(&runtime, "state")?, &["incompatible"]) {
-            let closed = py::get(&previous, "inspector_closed")?.cloned().unwrap_or(Value::Null);
-            let result = py::spread(&py::spread(&previous, &runtime)?, &py::obj([("inspector_closed", closed)]))?;
-            self.save(&result).await?;
-            self.notify_with(state, &result).await;
-            state.attempted.insert(target.key());
-        } else if same(py::get(&runtime, "target")?)
-            && is_state(py::get(&runtime, "state")?, &["ready"])
-            && same(py::get(&previous, "target")?)
-            && is_state(py::get(&previous, "state")?, &["incompatible"])
-            && is_state(py::get(&previous, "reason")?, &["page_initialization_failed"])
-        {
-            // A later page initialized fine, so the persisted page failure is stale.
-            self.save(&py::spread(&previous, &py::obj([("state", Value::from("attached")), ("reason", Value::Null)]))?)
-                .await?;
-        }
+        self.apply_runtime(state, &target, &previous).await?;
         if state.attempted.contains(&target.key()) {
             return Ok(());
         }
-        let checked = target.clone();
-        if !self.blocking(move |host| processes::ready(host, &checked)).await? {
-            return self
-                .save(&py::obj([
-                    ("state", Value::from("waiting")),
-                    ("reason", Value::from("application_not_ready_or_debugging")),
-                    ("target", wanted.clone()),
-                    ("inspector_closed", Value::Null),
-                ]))
-                .await;
-        }
-        if !self.blocking(|host| Ok(processes::port_available(host))).await? {
-            return self
-                .save(&py::obj([
-                    ("state", Value::from("error")),
-                    ("reason", Value::from("inspector_port_busy")),
-                    ("target", wanted.clone()),
-                    ("inspector_closed", Value::Null),
-                ]))
-                .await;
-        }
-        let checked = target.clone();
-        if !self.blocking(move |host| processes::inspector_supported(host, &checked)).await? {
-            let result = py::obj([
-                ("state", Value::from("incompatible")),
-                ("reason", Value::from("inspector_disabled_or_unverified")),
-                ("target", wanted.clone()),
-                ("inspector_closed", Value::Null),
-            ]);
-            self.save(&result).await?;
-            state.attempted.insert(target.key());
-            self.notify_with(state, &result).await;
+        if !self.ready_to_attach(state, &target).await? {
             return Ok(());
         }
+        self.launch_attachment(state, target).await
+    }
+
+    /// What the page reported (`runtime.json`) about this target, over the last
+    /// result.
+    async fn apply_runtime(&self, state: &mut State, target: &Target, previous: &Value) -> Result<(), PyErr> {
+        let wanted = target.to_value();
+        let runtime = storage::read(&self.root.join("runtime.json"))?;
+        if runtime_incompatible(&runtime, &wanted)? {
+            return self.record_incompatible_runtime(state, target, previous, &runtime).await;
+        }
+        if page_recovered(&runtime, previous, &wanted)? {
+            // A later page initialized fine, so the persisted page failure is stale.
+            self.save(&py::spread(previous, &py::obj([("state", Value::from("attached")), ("reason", Value::Null)]))?)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn record_incompatible_runtime(
+        &self,
+        state: &mut State,
+        target: &Target,
+        previous: &Value,
+        runtime: &Value,
+    ) -> Result<(), PyErr> {
+        let closed = py::get(previous, "inspector_closed")?.cloned().unwrap_or(Value::Null);
+        let result = py::spread(&py::spread(previous, runtime)?, &py::obj([("inspector_closed", closed)]))?;
+        self.save(&result).await?;
+        self.notify_with(state, &result).await;
+        state.attempted.insert(target.key());
+        Ok(())
+    }
+
+    /// The application ready, the port free and the inspector allowed; otherwise
+    /// the reason saved (and an incompatible target not tried again).
+    async fn ready_to_attach(&self, state: &mut State, target: &Target) -> Result<bool, PyErr> {
+        if let Some(result) = self.retryable_obstacle(target).await? {
+            self.save(&result).await?;
+            return Ok(false);
+        }
+        let checked = target.clone();
+        if self.blocking(move |host| processes::inspector_supported(host, &checked)).await? {
+            return Ok(true);
+        }
+        let result = unattached("incompatible", "inspector_disabled_or_unverified", target);
+        self.save(&result).await?;
+        state.attempted.insert(target.key());
+        self.notify_with(state, &result).await;
+        Ok(false)
+    }
+
+    /// An application still starting (or debugged) or a busy port: the result
+    /// saying so, tried again on a later tick.
+    async fn retryable_obstacle(&self, target: &Target) -> Result<Option<Value>, PyErr> {
+        let checked = target.clone();
+        if !self.blocking(move |host| processes::ready(host, &checked)).await? {
+            return Ok(Some(unattached("waiting", "application_not_ready_or_debugging", target)));
+        }
+        if !self.blocking(|host| Ok(processes::port_available(host))).await? {
+            return Ok(Some(unattached("error", "inspector_port_busy", target)));
+        }
+        Ok(None)
+    }
+
+    /// The worker for `target`, which is not tried again unless it failed for a
+    /// reason that may clear.
+    async fn launch_attachment(&self, state: &mut State, target: Target) -> Result<(), PyErr> {
         self.save(&py::obj([
             ("state", Value::from("attaching")),
-            ("target", wanted.clone()),
+            ("target", target.to_value()),
             ("inspector_closed", Value::Null),
         ]))
         .await?;
