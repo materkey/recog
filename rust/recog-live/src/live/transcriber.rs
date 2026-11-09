@@ -889,38 +889,48 @@ impl Live {
             if !self.captures_ready() {
                 return Err("Audio capture is not ready".into());
             }
-            let attempt = (|| -> Result<(), String> {
-                self.open_audio_captures()?;
-                if let Some(storage) = self.storage() {
-                    storage.set_recording_active(true).map_err(storage_error)?;
-                }
-                self.recording_allowed.store(true, Ordering::SeqCst);
-                if let Some(worker) = self.refine_worker() {
-                    worker.resume();
-                }
-                Ok(())
-            })();
-            if let Err(e) = attempt {
+            if let Err(e) = self.open_conference_capture() {
                 self.set_conference_capture(false)?;
                 return Err(e);
             }
         } else {
-            self.recording_allowed.store(false, Ordering::SeqCst);
-            self.invalidate_pending_chunks();
-            for capture in [&self.mic_capture, &self.system_capture].into_iter().flatten() {
-                capture.stop();
-                capture.clear_buffer();
-            }
-            let closed = self.close_audio_writers();
-            if let Some(storage) = self.storage()
-                && let Err(e) = storage.set_recording_active(false)
-            {
-                self.env.log.line(&format!("Warning: recording status could not be saved: {e}"));
-            }
-            closed?;
+            self.shut_conference_capture()?;
         }
         self.print(if active { "KTalk recording active" } else { "Waiting for a KTalk meeting (audio capture off)" });
         Ok(())
+    }
+
+    /// The captures started, the meeting marked recording, recording allowed, refine
+    /// resumed.
+    fn open_conference_capture(&self) -> Result<(), String> {
+        self.open_audio_captures()?;
+        if let Some(storage) = self.storage() {
+            storage.set_recording_active(true).map_err(storage_error)?;
+        }
+        self.recording_allowed.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.refine_worker() {
+            worker.resume();
+        }
+        Ok(())
+    }
+
+    /// Recording stopped: pending chunks dropped, captures stopped and emptied, the
+    /// writers closed, the meeting marked not recording (a failure to say so is only
+    /// logged).
+    fn shut_conference_capture(&self) -> Result<(), String> {
+        self.recording_allowed.store(false, Ordering::SeqCst);
+        self.invalidate_pending_chunks();
+        for capture in [&self.mic_capture, &self.system_capture].into_iter().flatten() {
+            capture.stop();
+            capture.clear_buffer();
+        }
+        let closed = self.close_audio_writers();
+        if let Some(storage) = self.storage()
+            && let Err(e) = storage.set_recording_active(false)
+        {
+            self.env.log.line(&format!("Warning: recording status could not be saved: {e}"));
+        }
+        closed
     }
 
     /// The `ktalk_only` part of `_teardown_session`: captures no longer ready, off.
@@ -1075,21 +1085,7 @@ impl Live {
             if let Some(new_id) = storage.split_on_silence_timeout().map_err(storage_error)? {
                 self.on_meeting_change(&new_id, &storage.base_path().join(&new_id), true)?;
                 if let Some(chunk) = chunk {
-                    let offset = {
-                        let mut wav = lock(&self.wav);
-                        let writer = if is_mic { wav.mic.as_mut() } else { wav.system.as_mut() };
-                        match writer {
-                            Some(writer) => {
-                                let offset = writer.offset_ms();
-                                writer.write_chunk(chunk).map_err(|e| e.to_string())?;
-                                Some(offset)
-                            }
-                            None => None,
-                        }
-                    };
-                    if let Some(offset) = offset {
-                        lock(&self.state).source(is_mic).audio_offset = offset;
-                    }
+                    self.write_split_chunk(is_mic, chunk)?;
                 }
             }
             let mut st = lock(&self.state);
@@ -1098,6 +1094,27 @@ impl Live {
             s.last_words.clear();
         }
         lock(&self.state).source(is_mic).last_text_time = current_time;
+        Ok(())
+    }
+
+    /// The chunk that triggered a split into the new meeting's own WAV, so its first
+    /// segment points into that file.
+    fn write_split_chunk(&self, is_mic: bool, chunk: &[f32]) -> Result<(), String> {
+        let offset = {
+            let mut wav = lock(&self.wav);
+            let writer = if is_mic { wav.mic.as_mut() } else { wav.system.as_mut() };
+            match writer {
+                Some(writer) => {
+                    let offset = writer.offset_ms();
+                    writer.write_chunk(chunk).map_err(|e| e.to_string())?;
+                    Some(offset)
+                }
+                None => None,
+            }
+        };
+        if let Some(offset) = offset {
+            lock(&self.state).source(is_mic).audio_offset = offset;
+        }
         Ok(())
     }
 
@@ -1569,7 +1586,6 @@ impl Live {
     /// # Errors
     /// `TemporarilyUnavailable` for the ingest to hold the batch; anything else is
     /// logged here.
-    #[allow(clippy::too_many_lines)]
     pub fn on_pcm_batch(&self, batch: &[BatchedChunk]) -> Result<(), AsrError> {
         if batch.is_empty() {
             return Ok(());
@@ -1583,31 +1599,8 @@ impl Live {
         if batch.is_empty() {
             return Ok(());
         }
-        let clips: Vec<&[i16]> = batch.iter().map(|item| item.pcm.as_slice()).collect();
-        let refine = self.refine_worker();
-        if let Some(worker) = &refine {
-            worker.set_live_pending();
-        }
-        let result = self.asr.transcribe_batch(&clips);
-        if let Some(worker) = &refine {
-            worker.clear_live_pending();
-        }
-        let texts = match result {
-            Ok(texts) => {
-                if let Some(golden) = self.golden_now() {
-                    let audio: Vec<Audio<'_>> = clips.iter().map(|c| Audio::I16(c)).collect();
-                    golden.asr("transcribe_batch", &audio, AsrOutput::Texts(&texts));
-                }
-                texts
-            }
-            Err(AsrError::TemporarilyUnavailable) => return Err(AsrError::TemporarilyUnavailable),
-            Err(e) => {
-                self.env.log.line(&format!("[PerSpeaker] transcribe_batch failed: {e}"));
-                return Ok(());
-            }
-        };
+        let Some(texts) = self.batch_texts(&batch)? else { return Ok(()) };
         let current_time = self.env.clock.wall();
-        let batch_now_ms = current_time * 1000.0;
         let (anchor, wav_offset_now_ms) = {
             let wav = lock(&self.wav);
             (wav.system_anchor, wav.system.as_ref().map_or(0, IncrementalWavWriter::offset_ms))
@@ -1621,53 +1614,74 @@ impl Live {
             ));
             return Ok(());
         }
+        let timeline = PcmTimeline { batch_now_ms: current_time * 1000.0, anchor, wav_offset_now_ms };
         for (item, raw_text) in batch.iter().zip(&texts) {
-            let text = recog_core::py::strip(raw_text);
-            if text.is_empty() {
-                continue;
-            }
-            let mut st = lock(&self.state);
-            if self.generation() != chunk_gen {
-                continue;
-            }
-            let prev_words = st.pcm_prev_words.get(&item.pid).cloned().unwrap_or_default();
-            let Some(deduped) = deduplicate(text, &prev_words).filter(|t| !t.is_empty()) else { continue };
-            let safe_name = item.speaker_name.replace(['\n', '\r'], " ");
-            let safe_name = recog_core::py::strip(&safe_name);
-            let speaker_label = if safe_name.is_empty() {
-                format!("Участник {}", item.pid.chars().take(6).collect::<String>())
-            } else {
-                safe_name.to_owned()
-            };
-            st.pcm_prev_words.insert(item.pid.clone(), last_words(&deduped, 5));
-            let pid_state = st
-                .pcm_pid_state
-                .entry(item.pid.clone())
-                .or_insert(PidState { last_speech_time: 0.0, segment_start_time: current_time });
-            let gap = current_time - pid_state.last_speech_time;
-            let duration = current_time - pid_state.segment_start_time;
-            let is_continuation = gap < SPEAKER_TURN_GAP && duration < MAX_SEGMENT_DURATION;
-            pid_state.last_speech_time = current_time;
-            if !is_continuation {
-                pid_state.segment_start_time = current_time;
-            }
-            let timestamp = self.hms(item.chunk_end_ms / 1000.0);
-            #[allow(clippy::cast_possible_truncation)]
-            let audio_offset_ms = match anchor {
-                Some((wall, wav_ms)) if batch_now_ms - wall <= PCM_WAV_ANCHOR_MAX_AGE_MS => {
-                    // int() truncates toward zero, as Python's does.
-                    ((wav_ms as f64) + (item.chunk_start_ms - wall)).trunc().max(0.0) as i64
+            self.emit_pcm_segment(item, raw_text, chunk_gen, current_time, &timeline, ingest.is_some())?;
+        }
+        Ok(())
+    }
+
+    /// One batched ASR call with refine's live priority raised around it, recorded by
+    /// the golden recorder; None when it failed otherwise than temporarily (logged).
+    fn batch_texts(&self, batch: &[&BatchedChunk]) -> Result<Option<Vec<String>>, AsrError> {
+        let clips: Vec<&[i16]> = batch.iter().map(|item| item.pcm.as_slice()).collect();
+        let refine = self.refine_worker();
+        if let Some(worker) = &refine {
+            worker.set_live_pending();
+        }
+        let result = self.asr.transcribe_batch(&clips);
+        if let Some(worker) = &refine {
+            worker.clear_live_pending();
+        }
+        match result {
+            Ok(texts) => {
+                if let Some(golden) = self.golden_now() {
+                    let audio: Vec<Audio<'_>> = clips.iter().map(|c| Audio::I16(c)).collect();
+                    golden.asr("transcribe_batch", &audio, AsrOutput::Texts(&texts));
                 }
-                _ => {
-                    let age = (batch_now_ms - item.chunk_start_ms).trunc() as i64;
-                    (wav_offset_now_ms - age).max(0)
-                }
-            };
-            let line = format!("\n**{speaker_label}** *[{timestamp}]*: {deduped}\n");
-            self.push_line(line);
-            let mut segment_id = 0;
-            if let Some(storage) = self.storage() {
-                match storage.append_segment(&NewSegment {
+                Ok(Some(texts))
+            }
+            Err(AsrError::TemporarilyUnavailable) => Err(AsrError::TemporarilyUnavailable),
+            Err(e) => {
+                self.env.log.line(&format!("[PerSpeaker] transcribe_batch failed: {e}"));
+                Ok(None)
+            }
+        }
+    }
+
+    /// One participant's text of a batch: deduplicated against its last words,
+    /// attributed by its own name, stored and sent; nothing for an empty text or a
+    /// changed recording.
+    fn emit_pcm_segment(
+        &self,
+        item: &BatchedChunk,
+        raw_text: &str,
+        chunk_gen: i64,
+        current_time: f64,
+        timeline: &PcmTimeline,
+        has_ingest: bool,
+    ) -> Result<(), AsrError> {
+        let text = recog_core::py::strip(raw_text);
+        if text.is_empty() {
+            return Ok(());
+        }
+        let mut st = lock(&self.state);
+        if self.generation() != chunk_gen {
+            return Ok(());
+        }
+        let prev_words = st.pcm_prev_words.get(&item.pid).cloned().unwrap_or_default();
+        let Some(deduped) = deduplicate(text, &prev_words).filter(|t| !t.is_empty()) else { return Ok(()) };
+        let speaker_label = pcm_speaker_label(&item.speaker_name, &item.pid);
+        st.pcm_prev_words.insert(item.pid.clone(), last_words(&deduped, 5));
+        let is_continuation = pid_continues(&mut st, &item.pid, current_time);
+        let timestamp = self.hms(item.chunk_end_ms / 1000.0);
+        let audio_offset_ms = timeline.audio_offset_ms(item.chunk_start_ms);
+        let line = format!("\n**{speaker_label}** *[{timestamp}]*: {deduped}\n");
+        self.push_line(line);
+        let mut segment_id = 0;
+        if let Some(storage) = self.storage() {
+            segment_id = storage
+                .append_segment(&NewSegment {
                     speaker: speaker_label.clone(),
                     speaker_id: item.pid.clone(),
                     text: deduped.clone(),
@@ -1677,32 +1691,29 @@ impl Live {
                     uncertain_reason: String::new(),
                     audio_offset_ms,
                     captured_at: Some(item.chunk_end_ms / 1000.0),
-                }) {
-                    Ok(id) => segment_id = id,
-                    Err(e) => return Err(AsrError::Failed(e.to_string())),
-                }
-                register_pcm_live_segment(
-                    &mut st,
-                    ingest.is_some(),
-                    &item.pid,
-                    segment_id,
-                    item.pid_audio_ms_start,
-                    item.pid_audio_ms_end,
-                );
-                st.pcm_segment_texts.insert(segment_id, deduped.clone());
-            }
-            if let Some(conference) = self.conference() {
-                conference.send_transcript(&TranscriptLine {
-                    speaker: speaker_label,
-                    text: deduped,
-                    timestamp,
-                    is_continuation,
-                    is_local: item.is_local,
-                    segment_id,
-                    source_id: item.pid.clone(),
-                    ..TranscriptLine::default()
-                });
-            }
+                })
+                .map_err(|e| AsrError::Failed(e.to_string()))?;
+            register_pcm_live_segment(
+                &mut st,
+                has_ingest,
+                &item.pid,
+                segment_id,
+                item.pid_audio_ms_start,
+                item.pid_audio_ms_end,
+            );
+            st.pcm_segment_texts.insert(segment_id, deduped.clone());
+        }
+        if let Some(conference) = self.conference() {
+            conference.send_transcript(&TranscriptLine {
+                speaker: speaker_label,
+                text: deduped,
+                timestamp,
+                is_continuation,
+                is_local: item.is_local,
+                segment_id,
+                source_id: item.pid.clone(),
+                ..TranscriptLine::default()
+            });
         }
         Ok(())
     }
@@ -1735,52 +1746,8 @@ impl Live {
     /// The transcript rewrite failed.
     pub fn apply_refine(&self, result: &RefineResult) -> Result<(), String> {
         let task = &result.task;
-        let rebased: Vec<(f64, String)> = result
-            .words
-            .iter()
-            .filter_map(|w| {
-                let text = recog_core::py::strip(&w.text);
-                #[allow(clippy::cast_precision_loss)]
-                (!text.is_empty()).then(|| (task.offset_base_ms + w.start as f64, text.to_owned()))
-            })
-            .collect();
-        let mut updates: Vec<(i64, String)> = Vec::new();
-        let target_meeting_path;
-        {
-            let st = lock(&self.state);
-            if task.meeting_generation != self.generation() {
-                return Ok(());
-            }
-            if self.refine_worker().is_some_and(|w| w.is_paused()) {
-                return Ok(());
-            }
-            let Some(storage) = self.storage() else { return Ok(()) };
-            let Some(path) = storage.current_meeting_path() else { return Ok(()) };
-            target_meeting_path = path;
-            let task_start_ms = task.offset_base_ms;
-            let task_end_ms = task.offset_base_ms + PCM_REFINE_WINDOW_S * 1000.0;
-            for &(segment_id, seg_start, seg_end) in st.pcm_live_segments.get(&task.pid).into_iter().flatten() {
-                if seg_end < task_start_ms || seg_start > task_end_ms {
-                    continue;
-                }
-                let collected: Vec<&str> = rebased
-                    .iter()
-                    .filter(|(w_start, _)| seg_start <= *w_start && *w_start < seg_end)
-                    .map(|(_, t)| t.as_str())
-                    .collect();
-                if collected.is_empty() {
-                    continue;
-                }
-                let new_text = recog_core::py::strip(&collected.join(" ")).to_owned();
-                if new_text.is_empty() {
-                    continue;
-                }
-                if st.pcm_segment_texts.get(&segment_id) == Some(&new_text) {
-                    continue;
-                }
-                updates.push((segment_id, new_text));
-            }
-        }
+        let rebased = rebased_words(result);
+        let Some((target_meeting_path, updates)) = self.refine_updates(task, &rebased) else { return Ok(()) };
         if updates.is_empty() {
             return Ok(());
         }
@@ -1796,9 +1763,43 @@ impl Live {
             let meeting_id = target_meeting_path.file_name().map(|n| n.to_string_lossy().into_owned());
             conference.send_refine(&refined, meeting_id.as_deref());
         }
+        self.remember_refined_texts(task, updates);
+        Ok(())
+    }
+
+    /// The meeting the refine belongs to and the new text of each of its pid's live
+    /// segments the window overlaps; None when the recording changed, refine is
+    /// paused, or there is no meeting.
+    fn refine_updates(&self, task: &RefineTask, rebased: &[(f64, String)]) -> Option<(PathBuf, Vec<(i64, String)>)> {
+        let st = lock(&self.state);
+        if task.meeting_generation != self.generation() {
+            return None;
+        }
+        if self.refine_worker().is_some_and(|w| w.is_paused()) {
+            return None;
+        }
+        let path = self.storage()?.current_meeting_path()?;
+        let task_start_ms = task.offset_base_ms;
+        let task_end_ms = task.offset_base_ms + PCM_REFINE_WINDOW_S * 1000.0;
+        let mut updates = Vec::new();
+        for &(segment_id, seg_start, seg_end) in st.pcm_live_segments.get(&task.pid).into_iter().flatten() {
+            if seg_end < task_start_ms || seg_start > task_end_ms {
+                continue;
+            }
+            let Some(new_text) = refined_text(rebased, seg_start, seg_end) else { continue };
+            if st.pcm_segment_texts.get(&segment_id) == Some(&new_text) {
+                continue;
+            }
+            updates.push((segment_id, new_text));
+        }
+        Some((path, updates))
+    }
+
+    /// The refined texts kept for the identical-text skip, for segments still live.
+    fn remember_refined_texts(&self, task: &RefineTask, updates: Vec<(i64, String)>) {
         let mut st = lock(&self.state);
         if task.meeting_generation != self.generation() {
-            return Ok(());
+            return;
         }
         let live_ids: HashSet<i64> =
             st.pcm_live_segments.get(&task.pid).into_iter().flatten().map(|&(id, _, _)| id).collect();
@@ -1807,7 +1808,6 @@ impl Live {
                 st.pcm_segment_texts.insert(id, text);
             }
         }
-        Ok(())
     }
 
     /// `_teardown_session` without the bridge and storage ends, which
@@ -1836,21 +1836,7 @@ impl Live {
     /// # Errors
     /// Finalizing or storing the paths failed.
     pub fn finalize_audio(&self) -> Result<(), String> {
-        let (mic, system) = {
-            let mut wav = lock(&self.wav);
-            let mut mic = None;
-            let mut system = None;
-            if let Some(writer) = wav.mic.as_mut() {
-                writer.finalize().map_err(|e| e.to_string())?;
-                mic = Some(writer.path.display().to_string());
-            }
-            if let Some(writer) = wav.system.as_mut() {
-                writer.finalize().map_err(|e| e.to_string())?;
-                system = Some(writer.path.display().to_string());
-            }
-            wav.system_anchor = None;
-            (mic, system)
-        };
+        let (mic, system) = self.finalize_writers()?;
         if let Some(path) = &mic {
             self.print(&format!("Mic audio saved: {path}"));
         }
@@ -1863,6 +1849,23 @@ impl Live {
             storage.set_audio_paths(mic.as_deref(), system.as_deref(), None).map_err(storage_error)?;
         }
         Ok(())
+    }
+
+    /// Both writers finalized, the anchor dropped; the paths of the finalized WAVs.
+    fn finalize_writers(&self) -> Result<(Option<String>, Option<String>), String> {
+        let mut wav = lock(&self.wav);
+        let mut mic = None;
+        let mut system = None;
+        if let Some(writer) = wav.mic.as_mut() {
+            writer.finalize().map_err(|e| e.to_string())?;
+            mic = Some(writer.path.display().to_string());
+        }
+        if let Some(writer) = wav.system.as_mut() {
+            writer.finalize().map_err(|e| e.to_string())?;
+            system = Some(writer.path.display().to_string());
+        }
+        wav.system_anchor = None;
+        Ok((mic, system))
     }
 
     /// Prints a line on stdout (`print`).
@@ -1885,6 +1888,88 @@ fn register_pcm_live_segment(st: &mut State, has_ingest: bool, pid: &str, segmen
     for id in pruned {
         st.pcm_segment_texts.remove(&id);
     }
+}
+
+/// Where a batch's segments land in the system WAV.
+struct PcmTimeline {
+    batch_now_ms: f64,
+    /// (wall ms of the last system write's first sample, its WAV offset ms).
+    anchor: Option<(f64, i64)>,
+    wav_offset_now_ms: i64,
+}
+
+impl PcmTimeline {
+    /// The WAV offset of a chunk captured at `chunk_start_ms`: from the anchor while
+    /// it is fresh, else back from the WAV's end by the chunk's age.
+    #[allow(clippy::cast_possible_truncation)]
+    fn audio_offset_ms(&self, chunk_start_ms: f64) -> i64 {
+        match self.anchor {
+            Some((wall, wav_ms)) if self.batch_now_ms - wall <= PCM_WAV_ANCHOR_MAX_AGE_MS => {
+                // int() truncates toward zero, as Python's does.
+                ((wav_ms as f64) + (chunk_start_ms - wall)).trunc().max(0.0) as i64
+            }
+            _ => {
+                let age = (self.batch_now_ms - chunk_start_ms).trunc() as i64;
+                (self.wav_offset_now_ms - age).max(0)
+            }
+        }
+    }
+}
+
+/// The speaker of a participant's segment: its name on one line, else
+/// `Участник <pid prefix>`.
+fn pcm_speaker_label(speaker_name: &str, pid: &str) -> String {
+    let safe_name = speaker_name.replace(['\n', '\r'], " ");
+    let safe_name = recog_core::py::strip(&safe_name);
+    if safe_name.is_empty() {
+        format!("Участник {}", pid.chars().take(6).collect::<String>())
+    } else {
+        safe_name.to_owned()
+    }
+}
+
+/// Whether a participant's segment continues its last one (within the turn gap and
+/// the segment's length); its state moved on to `current_time`.
+fn pid_continues(st: &mut State, pid: &str, current_time: f64) -> bool {
+    let pid_state = st
+        .pcm_pid_state
+        .entry(pid.to_owned())
+        .or_insert(PidState { last_speech_time: 0.0, segment_start_time: current_time });
+    let gap = current_time - pid_state.last_speech_time;
+    let duration = current_time - pid_state.segment_start_time;
+    let is_continuation = gap < SPEAKER_TURN_GAP && duration < MAX_SEGMENT_DURATION;
+    pid_state.last_speech_time = current_time;
+    if !is_continuation {
+        pid_state.segment_start_time = current_time;
+    }
+    is_continuation
+}
+
+/// A refine's non-empty words, their starts moved onto the pid's audio timeline.
+fn rebased_words(result: &RefineResult) -> Vec<(f64, String)> {
+    result
+        .words
+        .iter()
+        .filter_map(|w| {
+            let text = recog_core::py::strip(&w.text);
+            #[allow(clippy::cast_precision_loss)]
+            (!text.is_empty()).then(|| (result.task.offset_base_ms + w.start as f64, text.to_owned()))
+        })
+        .collect()
+}
+
+/// The words starting inside a live segment, joined; None when there are none.
+fn refined_text(rebased: &[(f64, String)], seg_start: f64, seg_end: f64) -> Option<String> {
+    let collected: Vec<&str> = rebased
+        .iter()
+        .filter(|(w_start, _)| seg_start <= *w_start && *w_start < seg_end)
+        .map(|(_, t)| t.as_str())
+        .collect();
+    if collected.is_empty() {
+        return None;
+    }
+    let new_text = recog_core::py::strip(&collected.join(" ")).to_owned();
+    (!new_text.is_empty()).then_some(new_text)
 }
 
 /// Who a system chunk is attributed to, and how sure.
