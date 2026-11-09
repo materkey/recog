@@ -2080,12 +2080,22 @@ async function playSegmentAudio(meetingId, segmentIndex, buttonEl) {
         await startSegmentAudio(buttonEl, audioBlob);
 
     } catch (e) {
-        audioLoadingFor = null;
-        stopAudio();
-        buttonEl.classList.remove('loading');
-        buttonEl.disabled = false;
-        showNotification(`Audio error: ${e.message}`, 'error');
+        failSegmentAudio(buttonEl, e);
     }
+}
+
+// A load or start of this button's segment failed. A load another segment has
+// taken over was already reset by stopAudio(): its failure must not stop the new
+// playback or report an error for audio the user left.
+function failSegmentAudio(buttonEl, error) {
+    if (audioLoadingFor !== buttonEl && currentPlayButton !== buttonEl) {
+        return;
+    }
+    audioLoadingFor = null;
+    stopAudio();
+    buttonEl.classList.remove('loading');
+    buttonEl.disabled = false;
+    showNotification(`Audio error: ${error.message}`, 'error');
 }
 
 async function readSegmentAudio(response) {

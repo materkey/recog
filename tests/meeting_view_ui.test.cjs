@@ -258,6 +258,29 @@ test('segment loading - another segment takes over playback - the first button r
     assert.notEqual(p.playButton(0).querySelector('.play-icon'), null);
 });
 
+test('segment loading - its load fails after another segment took over - the new playback goes on, no error shown', async () => {
+    let fail;
+    const slow = new Promise((resolve, reject) => { fail = reject; });
+    const p = meetingPage({
+        segments: meetingWithTwoPlayable,
+        routes: {
+            'GET /api/meetings/m1/audio/0': async () => { await slow; return { ok: true, blob: async () => 'wav-0' }; },
+            'GET /api/meetings/m1/audio/3': async () => ({ ok: true, blob: async () => 'wav-3' }),
+        },
+    });
+    await p.settle();
+    p.playButton(0).click();
+    await p.flush();
+    p.playButton(1).click();
+    await p.settle();
+    fail(new Error('network down'));
+    await p.settle();
+    assert.equal(p.playButton(1).className, 'btn-play-segment playing');
+    assert.equal(p.playButton(0).className, 'btn-play-segment');
+    assert.equal(p.playButton(0).disabled, false);
+    assert.deepEqual(p.notifications(), []);
+});
+
 test('meeting shown - Copy clicked - Markdown with real names is copied and the button confirms', async () => {
     const p = meetingPage();
     await p.settle();
