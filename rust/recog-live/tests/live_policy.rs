@@ -457,6 +457,95 @@ fn a_pcm_frame_from_the_bridge_reaching_the_hooks_lands_in_the_ingest() {
     );
 }
 
+/// Copilot settings that cannot be read, as a broken `ai-settings.json` gives.
+struct UnreadablePolicy;
+
+impl recog_bridge::hooks::PolicySource for UnreadablePolicy {
+    fn read_policy(&self) -> Result<recog_bridge::hooks::CopilotPolicy, String> {
+        Err("settings unreadable".into())
+    }
+}
+
+#[test]
+fn an_unreadable_policy_setting_up_the_bridge_warns_and_runs_without_speaker_identification() {
+    // given
+    let r =
+        rig(RigOptions { options: LiveOptions { use_ktalk: true, ..LiveOptions::default() }, ..RigOptions::default() });
+    let mut config = session_config();
+    config.policy = Arc::new(UnreadablePolicy);
+    // when
+    let bridge = session::setup_bridge(&r.live, &mut config).unwrap();
+    // then
+    assert!(bridge.is_none());
+    assert!(!r.live.use_ktalk());
+    assert!(r.live.conference().is_none());
+    assert!(
+        r.stderr.lines().contains(
+            &"Warning: KTalk bridge error: settings unreadable, speaker identification unavailable".to_owned()
+        ),
+        "{:?}",
+        r.stderr.lines()
+    );
+}
+
+#[test]
+fn an_unreadable_policy_setting_up_a_ktalk_only_bridge_fails_with_its_error() {
+    // given
+    let r = rig(RigOptions {
+        options: LiveOptions { ktalk_only: true, ..LiveOptions::default() },
+        ..RigOptions::default()
+    });
+    let mut config = session_config();
+    config.policy = Arc::new(UnreadablePolicy);
+    // when
+    let result = session::setup_bridge(&r.live, &mut config);
+    // then
+    assert_eq!(result.err().as_deref(), Some("settings unreadable"));
+    assert!(r.live.use_ktalk());
+    assert!(r.live.conference().is_none());
+}
+
+/// A storage clock two days ahead: every WAV on disk is past the 24 h retention.
+struct TwoDaysAhead;
+
+impl recog_core::time::Clock for TwoDaysAhead {
+    fn now_micros(&self) -> i64 {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+        i64::try_from(now.as_micros()).unwrap() + 48 * 3600 * 1_000_000
+    }
+    fn utc_offset(&self, _utc_micros: i64) -> i64 {
+        0
+    }
+}
+
+#[test]
+fn an_hour_in_the_main_loop_running_the_session_deletes_audio_past_retention() {
+    // given: a session running with no bridge
+    let r = rig(RigOptions::default());
+    let mut config = session_config();
+    config.storage = recog_core::meeting_storage::StorageOptions::new(r.dir.path());
+    config.storage.log = Arc::new(|_, _| {});
+    config.storage.clock = Arc::new(TwoDaysAhead);
+    let live = r.live.clone();
+    let session = std::thread::spawn(move || session::run(&live, config));
+    assert!(r.clock.wait_until(0.5, std::time::Duration::from_secs(30)), "the main loop did not start");
+    // an old meeting's recording, written after the start-up retention pass
+    let old = r.data_dir().join("meetings").join("2026-01-01_old");
+    std::fs::create_dir_all(&old).unwrap();
+    let wav = old.join("audio_mic.wav");
+    std::fs::write(&wav, b"RIFF").unwrap();
+    // when
+    r.clock.advance(recog_live::live::AUDIO_CLEANUP_INTERVAL_S);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while wav.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    r.live.set_running(false);
+    session.join().unwrap().unwrap();
+    // then
+    assert!(!wav.exists());
+}
+
 #[test]
 fn a_speaker_update_reaching_the_hooks_sets_the_current_ktalk_speaker() {
     // given: no bridge object, only the speaker callback (Python's `_ktalk_current_speaker`)
