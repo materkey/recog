@@ -4,11 +4,12 @@
 //! else the working directory (the service units set it).
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
 
 use recog_copilot::ai_settings::AiSettingsFile;
+use recog_copilot::cli;
 use recog_copilot::config::{self, DEFAULT_BRIDGE_URL, Env};
 use recog_copilot::supervisor::{ProcessRunner, Supervisor, TmuxRunner, Tunables, tmux};
 
@@ -28,83 +29,67 @@ struct Args {
     repo_root: Option<PathBuf>,
 }
 
-fn parse(mut argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
+fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut args = Args { bridge_url: DEFAULT_BRIDGE_URL.to_owned(), repo_root: None };
-    while let Some(arg) = argv.next() {
-        let (flag, inline) = match arg.split_once('=') {
-            Some((flag, value)) if flag.starts_with("--") => (flag.to_owned(), Some(value.to_owned())),
-            _ => (arg.clone(), None),
-        };
-        let mut value = |name: &str| {
-            inline.clone().or_else(|| argv.next()).ok_or_else(|| format!("argument {name}: expected one argument"))
-        };
-        match flag.as_str() {
-            "-h" | "--help" => return Ok(None),
-            "--bridge-url" => args.bridge_url = value("--bridge-url")?,
-            "--repo-root" => args.repo_root = Some(PathBuf::from(value("--repo-root")?)),
-            _ => return Err(format!("unrecognized arguments: {arg}")),
+    let complete = cli::parse_options(argv, &["--bridge-url", "--repo-root"], |flag, value| {
+        if flag == "--bridge-url" {
+            args.bridge_url = value;
+        } else {
+            args.repo_root = Some(PathBuf::from(value));
         }
-    }
-    Ok(Some(args))
+        Ok(())
+    })?;
+    Ok(complete.then_some(args))
 }
 
 fn main() -> ExitCode {
-    let args = match parse(std::env::args().skip(1)) {
-        Ok(Some(args)) => args,
+    match parse(std::env::args().skip(1)) {
+        Ok(Some(args)) => match run(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("recog-copilot-supervisor: {message}");
+                ExitCode::FAILURE
+            }
+        },
         Ok(None) => {
             println!("{USAGE}");
-            return ExitCode::SUCCESS;
+            ExitCode::SUCCESS
         }
         Err(message) => {
             eprintln!("{}\nrecog-copilot-supervisor: error: {message}", USAGE.lines().next().unwrap_or(""));
-            return ExitCode::from(2);
+            ExitCode::from(2)
         }
-    };
-    // The checkout: named, else the one this binary is installed in, else the working
-    // directory (the service units set it).
-    let repo_root =
-        match args.repo_root.or_else(recog_core::install::installed_repo).map_or_else(std::env::current_dir, Ok) {
-            Ok(root) => root,
-            Err(e) => {
-                eprintln!("recog-copilot-supervisor: no working directory: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-    let settings = match config::load(&repo_root, Env::from_process()) {
-        Ok(settings) => settings,
-        Err(message) => {
-            eprintln!("recog-copilot-supervisor: {message}");
-            return ExitCode::FAILURE;
-        }
-    };
+    }
+}
 
+/// The supervisor for its whole life; an error stops it before it starts.
+fn run(args: Args) -> Result<(), String> {
+    let repo_root = cli::repo_root(args.repo_root)?;
+    let settings = config::load(&repo_root, Env::from_process())?;
+    let supervisor = build(&args.bridge_url, &repo_root, &settings);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("cannot start the runtime: {e}"))?;
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&runtime, supervisor.run());
+    Ok(())
+}
+
+/// The supervisor over the real tmux runner, with the installation's settings.
+fn build(bridge_url: &str, repo_root: &Path, settings: &config::Settings) -> Rc<Supervisor<TmuxRunner<ProcessRunner>>> {
     let ai_settings = Rc::new(AiSettingsFile::new(&settings.data_dir, settings.legacy.clone()));
     let process = ProcessRunner { extra_env: settings.from_dotenv.clone() };
-    let mut runner = TmuxRunner::new(process, ai_settings.clone(), &repo_root, &settings.mcp_url);
+    let mut runner = TmuxRunner::new(process, ai_settings.clone(), repo_root, &settings.mcp_url);
     runner.use_systemd_run = tmux::linux_session_manager();
     runner.session_env = settings.session_env.clone();
-    let supervisor = Supervisor::new(
-        &args.bridge_url,
-        Rc::new(runner),
-        ai_settings,
-        settings.autospawn,
-        Tunables::new(settings.grace_s),
-    );
+    let supervisor =
+        Supervisor::new(bridge_url, Rc::new(runner), ai_settings, settings.autospawn, Tunables::new(settings.grace_s));
     if !supervisor.autospawn {
         eprintln!(
             "[copilot-supervisor] RECOG_COPILOT_AUTOSPAWN is off — meeting-driven auto-spawn disabled; \
              manual webapp spawn/stop and crash-respawn still work"
         );
     }
-
-    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => runtime,
-        Err(e) => {
-            eprintln!("recog-copilot-supervisor: cannot start the runtime: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let local = tokio::task::LocalSet::new();
-    local.block_on(&runtime, supervisor.run());
-    ExitCode::SUCCESS
+    supervisor
 }

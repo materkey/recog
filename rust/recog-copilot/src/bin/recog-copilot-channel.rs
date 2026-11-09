@@ -7,12 +7,13 @@
 //! `privacy.json`.
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use recog_copilot::channel::link::BridgeLink;
 use recog_copilot::channel::{self, DEFAULT_BRIDGE_URL, DEFAULT_MCP_HOST, DEFAULT_MCP_PORT};
+use recog_copilot::cli;
 use recog_core::privacy::PrivacyStore;
 use recog_core::{data_dir, install_config};
 
@@ -37,107 +38,91 @@ struct Args {
     repo_root: Option<PathBuf>,
 }
 
-fn parse(mut argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
+const FLAGS: [&str; 4] = ["--bridge-url", "--mcp-host", "--mcp-port", "--repo-root"];
+
+fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut args = Args {
         bridge_url: DEFAULT_BRIDGE_URL.to_owned(),
         mcp_host: DEFAULT_MCP_HOST.to_owned(),
         mcp_port: DEFAULT_MCP_PORT,
         repo_root: None,
     };
-    while let Some(arg) = argv.next() {
-        let (flag, inline) = match arg.split_once('=') {
-            Some((flag, value)) if flag.starts_with("--") => (flag.to_owned(), Some(value.to_owned())),
-            _ => (arg.clone(), None),
-        };
-        let mut value = |name: &str| {
-            inline.clone().or_else(|| argv.next()).ok_or_else(|| format!("argument {name}: expected one argument"))
-        };
-        match flag.as_str() {
-            "-h" | "--help" => return Ok(None),
-            "--bridge-url" => args.bridge_url = value("--bridge-url")?,
-            "--mcp-host" => args.mcp_host = value("--mcp-host")?,
-            "--mcp-port" => {
-                let raw = value("--mcp-port")?;
-                args.mcp_port = raw
-                    .trim()
-                    .parse()
-                    .map_err(|_| format!("argument --mcp-port: invalid int value: {}", recog_core::py::repr(&raw)))?;
-            }
-            "--repo-root" => args.repo_root = Some(PathBuf::from(value("--repo-root")?)),
-            _ => return Err(format!("unrecognized arguments: {arg}")),
-        }
+    let complete = cli::parse_options(argv, &FLAGS, |flag, value| set(&mut args, flag, value))?;
+    Ok(complete.then_some(args))
+}
+
+fn set(args: &mut Args, flag: &str, value: String) -> Result<(), String> {
+    match flag {
+        "--bridge-url" => args.bridge_url = value,
+        "--mcp-host" => args.mcp_host = value,
+        "--mcp-port" => args.mcp_port = port(&value)?,
+        _ => args.repo_root = Some(PathBuf::from(value)),
     }
-    Ok(Some(args))
+    Ok(())
+}
+
+fn port(raw: &str) -> Result<u16, String> {
+    raw.trim().parse().map_err(|_| format!("argument --mcp-port: invalid int value: {}", recog_core::py::repr(raw)))
 }
 
 fn main() -> ExitCode {
-    let args = match parse(std::env::args().skip(1)) {
-        Ok(Some(args)) => args,
+    match parse(std::env::args().skip(1)) {
+        Ok(Some(args)) => run(args).unwrap_or_else(|message| {
+            eprintln!("recog-copilot-channel: {message}");
+            ExitCode::FAILURE
+        }),
         Ok(None) => {
             println!("{USAGE}");
-            return ExitCode::SUCCESS;
+            ExitCode::SUCCESS
         }
         Err(message) => {
             let usage: Vec<&str> = USAGE.lines().take(2).collect();
             eprintln!("{}\nrecog-copilot-channel: error: {message}", usage.join("\n"));
-            return ExitCode::from(2);
+            ExitCode::from(2)
         }
-    };
-    // The checkout: named, else the one this binary is installed in, else the working
-    // directory (the service units set it).
-    let repo_root =
-        match args.repo_root.or_else(recog_core::install::installed_repo).map_or_else(std::env::current_dir, Ok) {
-            Ok(root) => root,
-            Err(e) => {
-                eprintln!("recog-copilot-channel: no working directory: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-    // What importing recog.privacy does in Python: .env and config.toml are read (a
-    // malformed one stops the process), then the data directory is resolved.
+    }
+}
+
+/// The channel until it stops; an error stops it before it serves.
+fn run(args: Args) -> Result<ExitCode, String> {
+    let repo_root = cli::repo_root(args.repo_root.clone())?;
+    let link = Arc::new(BridgeLink::new(PrivacyStore::new(&data_dir_of(&repo_root)?)));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("cannot start the runtime: {e}"))?;
+    runtime.block_on(serve_until_signal(args, link))
+}
+
+/// What importing recog.privacy does in Python: .env and config.toml are read (a
+/// malformed one stops the process), then the data directory is resolved.
+fn data_dir_of(repo_root: &Path) -> Result<PathBuf, String> {
     let mut environ: install_config::Environ = std::env::vars().collect();
     let mut warn = |notice: String| eprintln!("{notice}");
-    if let Err(message) = install_config::load(&repo_root, &mut environ, &mut warn) {
-        eprintln!("recog-copilot-channel: {message}");
-        return ExitCode::FAILURE;
-    }
-    let data_dir = match data_dir::get_data_dir(&repo_root, &environ, &mut warn) {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("recog-copilot-channel: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let link = Arc::new(BridgeLink::new(PrivacyStore::new(&data_dir)));
+    install_config::load(repo_root, &mut environ, &mut warn)?;
+    data_dir::get_data_dir(repo_root, &environ, &mut warn).map_err(|e| e.to_string())
+}
 
-    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => runtime,
-        Err(e) => {
-            eprintln!("recog-copilot-channel: cannot start the runtime: {e}");
-            return ExitCode::FAILURE;
+/// Serves until the endpoint fails, SIGINT or SIGTERM.
+async fn serve_until_signal(args: Args, link: Arc<BridgeLink>) -> Result<ExitCode, String> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| format!("cannot watch SIGTERM: {e}"))?;
+    Ok(tokio::select! {
+        result = channel::serve(&args.bridge_url, link, &args.mcp_host, args.mcp_port) => served(result),
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("[copilot-channel] interrupted, exiting");
+            ExitCode::SUCCESS
         }
-    };
-    runtime.block_on(async move {
-        let mut terminate = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(signal) => signal,
-            Err(e) => {
-                eprintln!("recog-copilot-channel: cannot watch SIGTERM: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-        tokio::select! {
-            result = channel::serve(&args.bridge_url, link, &args.mcp_host, args.mcp_port) => match result {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("[copilot-channel] task crashed: {e}");
-                    ExitCode::FAILURE
-                }
-            },
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("[copilot-channel] interrupted, exiting");
-                ExitCode::SUCCESS
-            }
-            _ = terminate.recv() => ExitCode::SUCCESS,
-        }
+        _ = terminate.recv() => ExitCode::SUCCESS,
     })
+}
+
+fn served(result: std::io::Result<()>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("[copilot-channel] task crashed: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
