@@ -232,91 +232,125 @@ fn ws_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
 /// `_ws_loop`: keeps the bridge connection with reconnect and backoff (1 s doubling to
 /// 30 s), announcing itself with `copilot_channel_hello` on every connect.
 pub async fn ws_loop(bridge_url: String, server: Arc<McpServer>, push: bool) {
-    let link = server.link.clone();
     let mut delay = INITIAL_BACKOFF;
     let mut failure_streak = 0u32;
     let mut last_failure_log: Option<Instant> = None;
     let mut connected_once = false;
-    // The limits of the `websockets` client the Python channel connects with: 1 MiB
-    // messages, 10 s to open, a keepalive ping every 20 s answered within 20 s.
-    let config =
-        WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE_SIZE)).max_frame_size(Some(MAX_MESSAGE_SIZE));
     loop {
-        let connect = tokio_tungstenite::connect_async_with_config(bridge_url.as_str(), Some(config), false);
-        let connected = match tokio::time::timeout(OPEN_TIMEOUT, connect).await {
-            Ok(connected) => connected.map_err(|e| ws_error(&e)),
-            Err(_) => Err("TimeoutError: timed out during opening handshake".to_owned()),
-        };
-        match connected {
-            Ok((ws, _)) => {
-                let (mut sink, mut stream) = ws.split();
-                if let Err(e) =
-                    sink.send(WsMessage::text(format!(r#"{{"type": "{}"}}"#, protocol::COPILOT_CHANNEL_HELLO))).await
-                {
-                    log::line(&format!("{} copilot_channel_hello send failed: {}", log::PREFIX, ws_error(&e)));
-                }
-                let sink = Arc::new(AsyncMutex::new(sink));
-                link.set_socket(Some(Arc::new(WsSocket(sink.clone()))));
+        let failure = match connect(&bridge_url).await {
+            Ok(ws) => {
                 failure_streak = 0;
-                let word = if connected_once { "reconnected" } else { "connected" };
-                connected_once = true;
-                log::line(&format!("{} {word} to {bridge_url}", log::PREFIX));
                 delay = INITIAL_BACKOFF;
-                let mut failure = None;
-                let mut next_ping = tokio::time::Instant::now() + PING_INTERVAL;
-                let mut pong_due: Option<tokio::time::Instant> = None;
-                loop {
-                    let deadline = pong_due.unwrap_or(next_ping);
-                    let frame = tokio::select! {
-                        frame = stream.next() => frame,
-                        () = tokio::time::sleep_until(deadline) => {
-                            if pong_due.is_some() {
-                                failure = Some(
-                                    "ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; \
-                                     no close frame received"
-                                        .to_owned(),
-                                );
-                                break;
-                            }
-                            let payload = uuid::Uuid::new_v4().as_bytes()[..4].to_vec();
-                            if let Err(e) = sink.lock().await.send(WsMessage::Ping(payload.into())).await {
-                                failure = Some(ws_error(&e));
-                                break;
-                            }
-                            pong_due = Some(tokio::time::Instant::now() + PING_TIMEOUT);
-                            next_ping = tokio::time::Instant::now() + PING_INTERVAL;
-                            continue;
-                        }
-                    };
-                    match frame {
-                        Some(Ok(WsMessage::Text(text))) => {
-                            handle_inbound(text.as_bytes(), &link, push.then_some(&*server)).await;
-                        }
-                        Some(Ok(WsMessage::Binary(bytes))) => {
-                            handle_inbound(&bytes, &link, push.then_some(&*server)).await;
-                        }
-                        Some(Ok(WsMessage::Pong(_))) => pong_due = None,
-                        Some(Ok(WsMessage::Close(_))) | None => break,
-                        Some(Ok(_)) => {}
-                        Some(Err(e)) => {
-                            failure = Some(ws_error(&e));
-                            break;
-                        }
-                    }
-                }
-                link.set_socket(None);
-                if let Some(error) = failure {
-                    failure_streak += 1;
-                    log_failure(&mut last_failure_log, failure_streak, &error, delay);
-                }
+                let failure = bridge_session(ws, &bridge_url, &server, push, connected_once).await;
+                connected_once = true;
+                failure
             }
-            Err(error) => {
-                failure_streak += 1;
-                log_failure(&mut last_failure_log, failure_streak, &error, delay);
-            }
+            Err(error) => Some(error),
+        };
+        if let Some(error) = failure {
+            failure_streak += 1;
+            log_failure(&mut last_failure_log, failure_streak, &error, delay);
         }
         tokio::time::sleep(delay).await;
         delay = (delay * 2).min(MAX_BACKOFF);
+    }
+}
+
+type WsStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Opens the bridge WebSocket with the limits of the `websockets` client the Python
+/// channel connects with: 1 MiB messages, 10 s to open.
+async fn connect(bridge_url: &str) -> Result<WsStream, String> {
+    let config =
+        WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE_SIZE)).max_frame_size(Some(MAX_MESSAGE_SIZE));
+    let connect = tokio_tungstenite::connect_async_with_config(bridge_url, Some(config), false);
+    match tokio::time::timeout(OPEN_TIMEOUT, connect).await {
+        Ok(connected) => connected.map(|(ws, _)| ws).map_err(|e| ws_error(&e)),
+        Err(_) => Err("TimeoutError: timed out during opening handshake".to_owned()),
+    }
+}
+
+/// One connection: the hello, the link's socket, the frames until the connection
+/// ends; the failure that ended it, `None` for a clean close.
+async fn bridge_session(
+    ws: WsStream,
+    bridge_url: &str,
+    server: &Arc<McpServer>,
+    push: bool,
+    reconnected: bool,
+) -> Option<String> {
+    let link = &server.link;
+    let (mut sink, stream) = ws.split();
+    if let Err(e) = sink.send(WsMessage::text(format!(r#"{{"type": "{}"}}"#, protocol::COPILOT_CHANNEL_HELLO))).await {
+        log::line(&format!("{} copilot_channel_hello send failed: {}", log::PREFIX, ws_error(&e)));
+    }
+    let sink = Arc::new(AsyncMutex::new(sink));
+    link.set_socket(Some(Arc::new(WsSocket(sink.clone()))));
+    let word = if reconnected { "reconnected" } else { "connected" };
+    log::line(&format!("{} {word} to {bridge_url}", log::PREFIX));
+    let failure = read_frames(stream, &sink, link, push.then_some(&**server)).await;
+    link.set_socket(None);
+    failure
+}
+
+/// The bridge's frames until the connection ends, with a keepalive ping every 20 s
+/// answered within 20 s; the failure, `None` for a close.
+async fn read_frames(
+    mut stream: futures_util::stream::SplitStream<WsStream>,
+    sink: &AsyncMutex<WsSink>,
+    link: &BridgeLink,
+    server: Option<&McpServer>,
+) -> Option<String> {
+    let mut keepalive = Keepalive::new();
+    loop {
+        let frame = tokio::select! {
+            frame = stream.next() => frame,
+            () = tokio::time::sleep_until(keepalive.deadline()) => {
+                if let Err(failure) = keepalive.fire(sink).await {
+                    return Some(failure);
+                }
+                continue;
+            }
+        };
+        match frame {
+            Some(Ok(WsMessage::Text(text))) => handle_inbound(text.as_bytes(), link, server).await,
+            Some(Ok(WsMessage::Binary(bytes))) => handle_inbound(&bytes, link, server).await,
+            Some(Ok(WsMessage::Pong(_))) => keepalive.pong_due = None,
+            Some(Ok(WsMessage::Close(_))) | None => return None,
+            Some(Ok(_)) => {}
+            Some(Err(e)) => return Some(ws_error(&e)),
+        }
+    }
+}
+
+/// When the next keepalive ping is due, and the pong awaited for the last one.
+struct Keepalive {
+    next_ping: tokio::time::Instant,
+    pong_due: Option<tokio::time::Instant>,
+}
+
+impl Keepalive {
+    fn new() -> Self {
+        Keepalive { next_ping: tokio::time::Instant::now() + PING_INTERVAL, pong_due: None }
+    }
+
+    fn deadline(&self) -> tokio::time::Instant {
+        self.pong_due.unwrap_or(self.next_ping)
+    }
+
+    /// At the deadline: a late pong fails the connection, otherwise the next ping
+    /// goes out.
+    async fn fire(&mut self, sink: &AsyncMutex<WsSink>) -> Result<(), String> {
+        if self.pong_due.is_some() {
+            return Err("ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; \
+                        no close frame received"
+                .to_owned());
+        }
+        let payload = uuid::Uuid::new_v4().as_bytes()[..4].to_vec();
+        let sent = sink.lock().await.send(WsMessage::Ping(payload.into())).await;
+        self.pong_due = Some(tokio::time::Instant::now() + PING_TIMEOUT);
+        self.next_ping = tokio::time::Instant::now() + PING_INTERVAL;
+        sent.map_err(|e| ws_error(&e))
     }
 }
 
