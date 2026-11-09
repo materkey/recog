@@ -131,9 +131,13 @@ fn zone_offset(zone: &str) -> Option<i64> {
         return Some(0);
     }
     let sign = if zone.starts_with('-') { -1 } else { 1 };
-    let body = &zone[1..];
-    let body =
-        if body.len() == 4 && !body.contains(':') { format!("{}:{}", &body[..2], &body[2..]) } else { body.to_owned() };
+    let body = zone.get(1..)?;
+    // A hand-edited or damaged offset can hold any character: slice it only at
+    // character boundaries, so it is unreadable instead of a panic.
+    let body = match (body.get(..2), body.get(2..)) {
+        (Some(hours), Some(minutes)) if body.len() == 4 && !body.contains(':') => format!("{hours}:{minutes}"),
+        _ => body.to_owned(),
+    };
     let (offset_seconds, offset_micros) = clock_seconds(&body)?;
     Some(sign * (offset_seconds * 1_000_000 + offset_micros))
 }
@@ -141,6 +145,12 @@ fn zone_offset(zone: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_four_byte_offset_with_a_multibyte_character_when_read_then_unreadable_not_a_panic() {
+        assert_eq!(zone_offset("+a\u{e9}1"), None);
+        assert_eq!(zone_offset("\u{e9}0100"), None);
+    }
 
     #[test]
     fn instants_given_isoformat_when_printed_then_python_text() {
