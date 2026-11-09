@@ -322,3 +322,65 @@ describe('Transcript Panel Layout', () => {
     expect(parseInt(style.fontSize)).toBeLessThanOrEqual(12);
   });
 });
+
+describe('setVas3kView', () => {
+  let module;
+
+  beforeAll(async () => {
+    module = await import('./ui-vas3k.js');
+  });
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    module.setVas3kCopilotActivateHandler(null);
+    state.vas3kActiveView = 'transcript';
+  });
+
+  test('no floating panel - switching to copilot - changes nothing and calls no handler', () => {
+    const handler = jest.fn();
+    module.setVas3kCopilotActivateHandler(handler);
+
+    module.setVas3kView('copilot');
+
+    expect(state.vas3kActiveView).toBe('transcript');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  test('a panel with a copilot host - switching to copilot and back - swaps the visible view and tab', () => {
+    module.createFloatingPanel();
+    const panel = document.querySelector('.jitsi-transcript-panel');
+    const host = module.ensureVas3kCopilotHost();
+    const handler = jest.fn();
+    module.setVas3kCopilotActivateHandler(handler);
+    const transcript = panel.querySelector('.jitsi-transcript-content');
+    const speakerStatus = panel.querySelector('.jitsi-speaker-status');
+
+    module.setVas3kView('copilot');
+
+    expect(state.vas3kActiveView).toBe('copilot');
+    expect(transcript.style.display).toBe('none');
+    expect(speakerStatus.style.display).toBe('none');
+    expect(host.style.display).toBe('flex');
+    expect(handler).toHaveBeenLastCalledWith('copilot');
+    const tabs = [...panel.querySelectorAll('.jitsi-panel-tab')];
+    expect(tabs.length).toBeGreaterThan(0);
+    expect(tabs.filter((tab) => tab.classList.contains('active')).map((tab) => tab.dataset.view)).toEqual(['copilot']);
+
+    module.setVas3kView('transcript');
+
+    expect(transcript.style.display).toBe('');
+    expect(speakerStatus.style.display).toBe('');
+    expect(host.style.display).toBe('none');
+    expect(handler).toHaveBeenLastCalledWith('transcript');
+  });
+
+  test('a panel stripped of its views and no handler - switching - only records the view', () => {
+    const panel = document.createElement('div');
+    panel.className = 'jitsi-transcript-panel';
+    document.body.appendChild(panel);
+
+    module.setVas3kView('copilot');
+
+    expect(state.vas3kActiveView).toBe('copilot');
+  });
+});
