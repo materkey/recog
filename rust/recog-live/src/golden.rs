@@ -469,6 +469,16 @@ mod tests {
     }
 
     #[test]
+    fn nines_or_a_tail_past_a_half_when_rounding_round6_carries_up_like_python() {
+        // given numbers whose sixth decimal rounds up into every integer digit, or by
+        // a tail just past the half; when rounded; then Python's round(x, 6)
+        assert_eq!(round6(9.999_999_9), 10.0);
+        assert_eq!(round6(-0.000_000_500_1), -0.000_001);
+        assert_eq!(round6(0.000_000_4), 0.0);
+        assert!(round6(f64::NAN).is_nan());
+    }
+
+    #[test]
     fn same_numbers_other_dtype_audio_key_differs() {
         assert_ne!(audio_key(Audio::I16(&[0; 4])), audio_key(Audio::F32(&[0.0; 4])));
     }
