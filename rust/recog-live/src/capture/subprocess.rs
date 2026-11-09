@@ -293,6 +293,17 @@ fn locked<T: ?Sized>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Joins the reader thread if it finishes within a second; otherwise leaves it.
+fn join_within_a_second(handle: JoinHandle<()>) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !handle.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if handle.is_finished() {
+        let _ = handle.join();
+    }
+}
+
 /// PCM from a child's stdout into a [`BufferedAudioCapture`], with the restart policy.
 ///
 /// A cheap handle: clones share the capture.
@@ -703,21 +714,20 @@ impl SubprocessCapture {
         }
         let reader = locked(&self.inner.reader).take();
         if let Some(handle) = reader {
-            let deadline = Instant::now() + Duration::from_secs(1);
-            while !handle.is_finished() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            if handle.is_finished() {
-                let _ = handle.join();
-            }
+            join_within_a_second(handle);
         }
+        self.reap_late_child(snapshot.as_ref());
+        self.set_process(None);
+        self.inner.log.line(&format!("[{}] Stopped", self.inner.name));
+    }
+
+    /// Reaps a child the reader spawned while `stop()` reaped `snapshot`.
+    fn reap_late_child(&self, snapshot: Option<&Arc<dyn ChildProcess>>) {
         if let Some(late) = self.process()
-            && !snapshot.as_ref().is_some_and(|s| Arc::ptr_eq(s, &late))
+            && !snapshot.is_some_and(|s| Arc::ptr_eq(s, &late))
         {
             late.reap(2.0);
         }
-        self.set_process(None);
-        self.inner.log.line(&format!("[{}] Stopped", self.inner.name));
     }
 
     /// Installs a reader thread handle (tests that run the loop themselves).

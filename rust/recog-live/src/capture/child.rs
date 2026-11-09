@@ -89,25 +89,28 @@ impl Spawner for OsSpawner {
         let mut stdout = child.stdout.take().ok_or_else(|| io::Error::other("no stdout pipe"))?;
         let stderr = child.stderr.take();
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
-        std::thread::Builder::new().name("capture-stdout".into()).spawn(move || {
-            let mut buf = vec![0u8; PIPE_READ_BYTES];
-            loop {
-                match stdout.read(&mut buf) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => {
-                        if tx.send(buf[..n].to_vec()).is_err() {
-                            return;
-                        }
-                    }
-                }
-            }
-        })?;
+        std::thread::Builder::new().name("capture-stdout".into()).spawn(move || forward_stdout(&mut stdout, &tx))?;
         Ok(Arc::new(OsChild {
             pid: child.id(),
             child: Mutex::new(child),
             stdout: Mutex::new((rx, Vec::new())),
             stderr: Mutex::new(stderr),
         }))
+    }
+}
+
+/// The pipe's reads into `tx` until end of file, a read error or a gone receiver.
+fn forward_stdout(stdout: &mut impl io::Read, tx: &mpsc::Sender<Vec<u8>>) {
+    let mut buf = vec![0u8; PIPE_READ_BYTES];
+    loop {
+        match stdout.read(&mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => {
+                if tx.send(buf[..n].to_vec()).is_err() {
+                    return;
+                }
+            }
+        }
     }
 }
 

@@ -295,17 +295,22 @@ impl PulseAudioCapture {
         self.capture.start()?;
         let mut slot = locked(&self.watch);
         if self.follow && watch && slot.is_none() {
-            let capture = self.capture.clone();
-            let state = self.state.clone();
-            let interval = self.poll_interval_s;
-            *slot = Some(std::thread::Builder::new().name("pulse-watch".into()).spawn(move || {
-                while capture.running() {
-                    state.poll_default_sink_once();
-                    capture.sleep_while_running(interval);
-                }
-            })?);
+            *slot = Some(self.spawn_watch()?);
         }
         Ok(())
+    }
+
+    /// The thread that polls the default sink while the capture runs.
+    fn spawn_watch(&self) -> std::io::Result<std::thread::JoinHandle<()>> {
+        let capture = self.capture.clone();
+        let state = self.state.clone();
+        let interval = self.poll_interval_s;
+        std::thread::Builder::new().name("pulse-watch".into()).spawn(move || {
+            while capture.running() {
+                state.poll_default_sink_once();
+                capture.sleep_while_running(interval);
+            }
+        })
     }
 
     /// Stops the capture and the watch.
