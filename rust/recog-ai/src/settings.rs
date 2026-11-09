@@ -807,6 +807,162 @@ mod tests {
     }
 
     #[test]
+    fn bom_and_zero_patterns_given_settings_bytes_when_decoded_then_json_detect_encoding() {
+        let cases: [(&[u8], Option<&str>); 18] = [
+            (&[0, 0, 0xfe, 0xff, 0, 0, 0, b'{', 0, 0, 0, b'}'], Some("{}")),
+            (&[0xff, 0xfe, 0, 0, b'{', 0, 0, 0, b'}', 0, 0, 0], Some("{}")),
+            (&[0xfe, 0xff, 0, b'{', 0, b'}'], Some("{}")),
+            (&[0, b'{', 0, b'}'], Some("{}")),
+            (&[0, 0, 0, b'1'], Some("1")),
+            (&[b'1', 0, 0, 0], Some("1")),
+            (&[b'1', 0, 0, 0, b'2', 0, 0, 0], Some("12")),
+            (&[0, b'1'], Some("1")),
+            (&[b'1', 0], Some("1")),
+            (b"[1]", Some("[1]")),
+            (b"", Some("")),
+            (&[0xff, 0xfe, 0, 0], Some("")),
+            (&[0xfe, 0xff, 0], None),
+            (&[0, 0, 0xfe, 0xff, 0, 0], None),
+            (&[0, 0, 0xfe, 0xff, 0, 0x11, 0, 0], None),
+            (&[0xfe, 0xff, 0xd8, 0x00], None),
+            (&[0xef, 0xbb, 0xbf, 0xff], None),
+            (&[b'1', 0, b'2'], Some("1\u{0}2")),
+        ];
+        for (data, text) in cases {
+            assert_eq!(decode_json_bytes(data).as_deref(), text, "{data:?}");
+        }
+    }
+
+    fn raw_settings(models: Json, tasks: Json) -> Json {
+        json::object([
+            ("version", Json::Int(1)),
+            ("revision", Json::from("0f8fad5b-d9cb-469f-a165-70867728950e")),
+            ("models", models),
+            ("tasks", tasks),
+        ])
+    }
+
+    fn raw_error(raw: &Json) -> String {
+        validate_raw(raw).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn malformed_files_given_validate_raw_when_checked_then_python_messages() {
+        let empty = || Json::Object(Map::new());
+        let parse = |text: &str| Json::parse(text).unwrap();
+        assert!(
+            validate_raw(&raw_settings(parse(r#"{"codex": "m"}"#), parse(r#"{"title": {"claude_effort": "max"}}"#)))
+                .is_ok()
+        );
+        assert_eq!(raw_error(&Json::Array(Vec::new())), "settings must be an object");
+        let mut extra = raw_settings(empty(), empty());
+        extra.as_object_mut().unwrap().insert("secret".into(), Json::Null);
+        assert_eq!(raw_error(&extra), "Unknown settings fields: secret");
+        let mut incomplete = raw_settings(empty(), empty());
+        incomplete.as_object_mut().unwrap().shift_remove("tasks");
+        assert_eq!(raw_error(&incomplete), "Incomplete AI settings");
+        for version in [Json::Bool(true), Json::Float(1.0), Json::Int(2)] {
+            let mut raw = raw_settings(empty(), empty());
+            raw.as_object_mut().unwrap().insert("version".into(), version);
+            assert_eq!(raw_error(&raw), "Unsupported AI settings version");
+        }
+        for revision in [Json::from("defaults"), Json::Int(5)] {
+            let mut raw = raw_settings(empty(), empty());
+            raw.as_object_mut().unwrap().insert("revision".into(), revision);
+            assert_eq!(raw_error(&raw), "Invalid settings revision");
+        }
+        assert_eq!(raw_error(&raw_settings(parse(r#"{"codex": " "}"#), empty())), "Noncanonical model overrides");
+        assert_eq!(raw_error(&raw_settings(parse(r#"{"codex": 5}"#), empty())), "Model must be text");
+        assert_eq!(raw_error(&raw_settings(empty(), Json::Array(Vec::new()))), "Invalid task overrides");
+        let many = Json::Object((0..=MAX_TASKS).map(|index| (format!("t{index}"), empty())).collect());
+        assert_eq!(raw_error(&raw_settings(empty(), many)), "Invalid task overrides");
+        let blank_models = parse(r#"{"title": {"prompt": "x {transcript}", "models": {}}}"#);
+        assert_eq!(raw_error(&raw_settings(empty(), blank_models)), "Noncanonical task override");
+        assert_eq!(raw_error(&raw_settings(empty(), parse(r#"{"nope": {}}"#))), "Unknown AI task");
+    }
+
+    fn task_error(task_id: &str, values: &str) -> String {
+        task_values(task_id, &Json::parse(values).unwrap()).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn invalid_fields_given_task_values_when_checked_then_first_failing_field_named() {
+        let cases = [
+            ("unknown", "{}", "Unknown AI task"),
+            ("title", r#"{"x": 1, "a": 2}"#, "Unknown task fields: a, x"),
+            ("title", r#"{"enabled": true}"#, "Enabled must be a boolean for Copilot"),
+            ("copilot", r#"{"enabled": 1}"#, "Enabled must be a boolean for Copilot"),
+            ("title", r#"{"prompt": "", "enabled": true}"#, "Enabled must be a boolean for Copilot"),
+            ("title", r#"{"prompt": ""}"#, "Prompt must be nonempty text of at most 32000 characters"),
+            (
+                "title",
+                r#"{"prompt": "a\u0000{transcript}"}"#,
+                "Prompt must be nonempty text of at most 32000 characters",
+            ),
+            ("title", r#"{"prompt": 5}"#, "Prompt must be nonempty text of at most 32000 characters"),
+            ("title", r#"{"prompt": "No transcript"}"#, "Prompt must include {transcript}"),
+            ("title", r#"{"providers": ["claude", "codex"]}"#, "Invalid provider selection"),
+            ("copilot", r#"{"providers": ["codex"]}"#, "Invalid provider selection"),
+            ("analysis.increment", r#"{"providers": ["codex", "codex"]}"#, "Invalid provider selection"),
+            ("copilot", r#"{"models": {"codex": "m"}}"#, "Copilot supports only Claude"),
+            ("title", r#"{"reasoning_effort": "max"}"#, "Invalid Codex reasoning effort"),
+            ("copilot", r#"{"reasoning_effort": "max"}"#, "Invalid Codex reasoning effort"),
+            ("copilot", r#"{"reasoning_effort": "high"}"#, "Copilot does not support Codex reasoning effort"),
+            ("title", r#"{"claude_effort": "turbo"}"#, "Invalid Claude effort"),
+        ];
+        for (task_id, values, message) in cases {
+            assert_eq!(task_error(task_id, values), message, "{task_id} {values}");
+        }
+    }
+
+    #[test]
+    fn valid_fields_given_task_values_when_normalized_then_fixed_order_and_blank_models_dropped() {
+        let values = Json::parse(
+            r#"{"claude_effort": "high", "reasoning_effort": "low", "models": {"codex": "m", "claude": " "},
+                "providers": ["codex", "claude"], "prompt": "P {transcript}"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Json::Object(task_values("analysis.increment", &values).unwrap()).dumps(None),
+            r#"{"prompt": "P {transcript}", "providers": ["codex", "claude"], "models": {"codex": "m"}, "reasoning_effort": "low", "claude_effort": "high"}"#
+        );
+        let copilot = Json::parse(r#"{"prompt": "policy", "enabled": false, "models": {"claude": " "}}"#).unwrap();
+        assert_eq!(
+            Json::Object(task_values("copilot", &copilot).unwrap()).dumps(None),
+            r#"{"enabled": false, "prompt": "policy"}"#
+        );
+        let saved = Json::parse(r#"{"providers": ["claude"]}"#).unwrap();
+        assert_eq!(
+            Json::Object(task_values("saved:notes", &saved).unwrap()).dumps(None),
+            r#"{"providers": ["claude"]}"#
+        );
+    }
+
+    #[test]
+    fn unreadable_settings_path_given_read_when_called_then_os_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("data"), "a file, not a directory").unwrap();
+        assert!(matches!(store(dir.path()).read(), Err(AiError::Io(_))));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("data/ai-settings.json")).unwrap();
+        assert!(matches!(store(dir.path()).read(), Err(AiError::Io(_))));
+    }
+
+    #[test]
+    fn stale_revision_given_mutate_when_saving_then_conflict_and_file_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(dir.path());
+        let first = store.write_models(&json::object([("codex", Json::from("old"))]), None).unwrap();
+        let before = std::fs::read(&store.path).unwrap();
+        let error = store.write_models(&json::object([("codex", Json::from("new"))]), Some("stale")).unwrap_err();
+        assert!(matches!(&error, AiError::Conflict(message) if message == "AI settings changed; reload before saving"));
+        assert_eq!(std::fs::read(&store.path).unwrap(), before);
+        let next = store.write_models(&json::object([("codex", Json::from("new"))]), Some(&first.revision)).unwrap();
+        assert_eq!(next.models["codex"], "new");
+        assert_ne!(next.revision, first.revision);
+    }
+
+    #[test]
     fn uuid_texts_given_revision_check_when_validated_then_only_canonical_form_passes() {
         assert!(is_canonical_uuid("0f8fad5b-d9cb-469f-a165-70867728950e"));
         assert!(!is_canonical_uuid("0F8FAD5B-D9CB-469F-A165-70867728950E"));
