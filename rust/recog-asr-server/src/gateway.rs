@@ -84,11 +84,6 @@ impl Gateway {
         Self { config, agent, health: agent_for_health() }
     }
 
-    #[must_use]
-    pub fn config(&self) -> &GatewayConfig {
-        &self.config
-    }
-
     fn url(&self, target: Target) -> &str {
         match target {
             Target::Gigaam => &self.config.gigaam_url,
