@@ -74,12 +74,18 @@ impl Engine for Engine1 {
 
 #[test]
 fn remote_down_and_local_loaded_refining_with_live_waiting_then_the_local_path_gives_way() {
-    // given: a gateway address nobody listens on
+    // given: a gateway address nobody listens on, and a local model that loads only
+    // once the test lets it, so the first call surely finds it still loading
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let clock = ManualClock::new(0.0);
     clock.advance(100.0);
     let (logger, _) = Logger::capture(clock.shared());
-    let loader: Loader = Box::new(|| Ok(Arc::new(Engine1) as Arc<dyn Engine>));
+    let loading = Arc::new(Barrier::new(2));
+    let held = Arc::clone(&loading);
+    let loader: Loader = Box::new(move || {
+        held.wait();
+        Ok(Arc::new(Engine1) as Arc<dyn Engine>)
+    });
     let fb = FallbackAsr::new(
         RemoteAsrClient::new(&format!("http://127.0.0.1:{port}"), "gigaam", 2.0, Some(1.0)),
         Arc::new(WavoAsr::new(loader, logger.clone())),
@@ -90,6 +96,7 @@ fn remote_down_and_local_loaded_refining_with_live_waiting_then_the_local_path_g
     );
     let pcm = [100i16; 1600];
     assert_eq!(fb.transcribe_with_timestamps(&pcm, None), Err(AsrError::TemporarilyUnavailable));
+    loading.wait();
     assert!(fb.wait_local_ready(Duration::from_secs(10)));
     // when
     let aborted = fb.transcribe_with_timestamps(&pcm, Some(&|| true));
