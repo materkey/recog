@@ -204,6 +204,23 @@ function sourceLabels(meetings) {
     return labels;
 }
 
+// A transcript_refine update the live view can apply: a positive numeric
+// segment id and a text.
+function isRefineUpdate(update) {
+    if (update == null || typeof update !== 'object') return false;
+    if (typeof update.segment_id !== 'number' || update.segment_id <= 0) return false;
+    return typeof update.text === 'string';
+}
+
+function showRefinedRow(row, text) {
+    const textEl = row.querySelector('.segment-text');
+    if (textEl) {
+        textEl.textContent = text;
+    }
+    row.dataset.refined = 'true';
+    row.title = '';
+}
+
 const views = {
     meetings: {
         meetings: [],
@@ -897,48 +914,53 @@ const views = {
         },
 
         handleTranscriptRefine(msg, container) {
-            const currentId = this.currentMeeting ? this.currentMeeting.id : null;
-            if (msg && msg.meeting_id && currentId && msg.meeting_id !== currentId) {
-                return;
-            }
-            const updates = Array.isArray(msg && msg.updates) ? msg.updates : [];
-            const refineMeetingId = msg && msg.meeting_id ? msg.meeting_id : currentId;
+            const frame = msg || {};
+            const refineMeetingId = this.refineMeetingId(frame);
+            if (refineMeetingId === undefined) return;
+            const updates = Array.isArray(frame.updates) ? frame.updates : [];
             for (const update of updates) {
-                if (update == null || typeof update !== 'object') continue;
-                const segmentId = update.segment_id;
-                const text = update.text;
-                if (typeof segmentId !== 'number' || segmentId <= 0) continue;
-                if (typeof text !== 'string') continue;
+                if (!isRefineUpdate(update)) continue;
+                this.applyRefineUpdate(update.segment_id, update.text, container, {
+                    refined_at: frame.refined_at,
+                    meeting_id: refineMeetingId,
+                });
+            }
+        },
 
-                for (let i = 0; i < this.segments.length; i++) {
-                    if (this.segments[i].id === segmentId) {
-                        this.segments[i].text = text;
-                        this.segments[i].refined = true;
-                        break;
-                    }
-                }
+        // The meeting a refine frame belongs to; undefined when it is for
+        // another meeting than the one shown.
+        refineMeetingId(frame) {
+            const currentId = this.currentMeeting ? this.currentMeeting.id : null;
+            if (frame.meeting_id && currentId && frame.meeting_id !== currentId) {
+                return undefined;
+            }
+            return frame.meeting_id || currentId;
+        },
 
-                const row = container && container.querySelector
-                    ? container.querySelector(`[data-segment-id="${segmentId}"]`)
-                    : null;
-                if (row) {
-                    const textEl = row.querySelector('.segment-text');
-                    if (textEl) {
-                        textEl.textContent = text;
-                    }
-                    row.dataset.refined = 'true';
-                    row.title = '';
-                } else {
-                    // Tag with meeting_id so a WS reconnect that lands on
-                    // a different meeting cannot consume this entry against
-                    // an unrelated segment sharing the same id (ids restart
-                    // at 1 per meeting).
-                    this.pendingRefines.set(segmentId, {
-                        text,
-                        refined_at: msg.refined_at,
-                        meeting_id: refineMeetingId,
-                    });
+        applyRefineUpdate(segmentId, text, container, pendingTag) {
+            for (let i = 0; i < this.segments.length; i++) {
+                if (this.segments[i].id === segmentId) {
+                    this.segments[i].text = text;
+                    this.segments[i].refined = true;
+                    break;
                 }
+            }
+
+            const row = container && container.querySelector
+                ? container.querySelector(`[data-segment-id="${segmentId}"]`)
+                : null;
+            if (row) {
+                showRefinedRow(row, text);
+            } else {
+                // Tag with meeting_id so a WS reconnect that lands on
+                // a different meeting cannot consume this entry against
+                // an unrelated segment sharing the same id (ids restart
+                // at 1 per meeting).
+                this.pendingRefines.set(segmentId, {
+                    text,
+                    refined_at: pendingTag.refined_at,
+                    meeting_id: pendingTag.meeting_id,
+                });
             }
         },
 
@@ -992,59 +1014,8 @@ const views = {
             if (waiting) waiting.remove();
 
             for (const seg of segments) {
-                if (seg.id != null && this.pendingRefines.has(seg.id)) {
-                    const pending = this.pendingRefines.get(seg.id);
-                    seg.text = pending.text;
-                    seg.refined = true;
-                    this.pendingRefines.delete(seg.id);
-                }
-
-                const speakerClass = seg.is_local ? 'speaker-local' : 'speaker-other';
-
-                const div = document.createElement('div');
-                div.className = `transcript-segment ${speakerClass} segment-new`;
-                div.dataset.tsDisplay = seg.ts_display || '';
-                if (seg.id != null) {
-                    div.dataset.segmentId = String(seg.id);
-                }
-                if (!seg.event_type && (this.refineEnabled || seg.refined === true)) {
-                    div.dataset.refined = seg.refined === true ? 'true' : 'false';
-                    if (div.dataset.refined === 'false') {
-                        div.title = 'Предварительная расшифровка — будет уточнена';
-                    }
-                }
-
-                // Audio playback: the init frame delivers the same full
-                // segment list the /audio/{segment_index} endpoint indexes
-                // into, and `segments` frames append rows in file order, so
-                // the position in this.segments is the API's segment_index.
-                const hasAudio = !seg.event_type && seg.audio_offset_ms != null;
-                const playButton = hasAudio ? `
-                    <button class="btn-play-segment" title="Play audio">
-                        <svg class="play-icon" viewBox="0 0 24 24" width="16" height="16">
-                            <polygon points="5,3 19,12 5,21" fill="currentColor"/>
-                        </svg>
-                    </button>
-                ` : '';
-
-                div.innerHTML = `
-                    <div class="segment-header">
-                        <span class="segment-speaker">${escapeHtml(seg.speaker)}</span>
-                        ${playButton}
-                        <span class="segment-time">${seg.ts_display}</span>
-                    </div>
-                    <div class="segment-text">${escapeHtml(seg.text)}</div>
-                `;
-
-                const playBtn = div.querySelector('.btn-play-segment');
-                if (playBtn) {
-                    const segmentIndex = this.segments.indexOf(seg);
-                    playBtn.addEventListener('click', () => {
-                        const meetingId = this.currentMeeting && this.currentMeeting.id;
-                        playSegmentAudio(meetingId, segmentIndex, playBtn);
-                    });
-                }
-
+                this.consumePendingRefine(seg);
+                const div = this.renderLiveSegment(seg);
                 container.appendChild(div);
 
                 // Remove animation class after animation
@@ -1054,6 +1025,72 @@ const views = {
             // Auto-scroll to bottom if follow mode is on
             if (this.followMode) {
                 container.scrollTop = container.scrollHeight;
+            }
+        },
+
+        consumePendingRefine(seg) {
+            if (seg.id != null && this.pendingRefines.has(seg.id)) {
+                const pending = this.pendingRefines.get(seg.id);
+                seg.text = pending.text;
+                seg.refined = true;
+                this.pendingRefines.delete(seg.id);
+            }
+        },
+
+        renderLiveSegment(seg) {
+            const speakerClass = seg.is_local ? 'speaker-local' : 'speaker-other';
+
+            const div = document.createElement('div');
+            div.className = `transcript-segment ${speakerClass} segment-new`;
+            div.dataset.tsDisplay = seg.ts_display || '';
+            if (seg.id != null) {
+                div.dataset.segmentId = String(seg.id);
+            }
+            this.markLiveRefineState(div, seg);
+
+            // Audio playback: the init frame delivers the same full
+            // segment list the /audio/{segment_index} endpoint indexes
+            // into, and `segments` frames append rows in file order, so
+            // the position in this.segments is the API's segment_index.
+            const hasAudio = !seg.event_type && seg.audio_offset_ms != null;
+            const playButton = hasAudio ? `
+                <button class="btn-play-segment" title="Play audio">
+                    <svg class="play-icon" viewBox="0 0 24 24" width="16" height="16">
+                        <polygon points="5,3 19,12 5,21" fill="currentColor"/>
+                    </svg>
+                </button>
+            ` : '';
+
+            div.innerHTML = `
+                <div class="segment-header">
+                    <span class="segment-speaker">${escapeHtml(seg.speaker)}</span>
+                    ${playButton}
+                    <span class="segment-time">${seg.ts_display}</span>
+                </div>
+                <div class="segment-text">${escapeHtml(seg.text)}</div>
+            `;
+
+            this.bindLivePlayButton(div, seg);
+            return div;
+        },
+
+        markLiveRefineState(div, seg) {
+            if (!seg.event_type && (this.refineEnabled || seg.refined === true)) {
+                div.dataset.refined = seg.refined === true ? 'true' : 'false';
+                if (div.dataset.refined === 'false') {
+                    div.title = 'Предварительная расшифровка — будет уточнена';
+                }
+            }
+        },
+
+        bindLivePlayButton(div, seg) {
+            const playBtn = div.querySelector('.btn-play-segment');
+            if (playBtn) {
+                const segmentIndex = this.segments.indexOf(seg);
+                playBtn.addEventListener('click', () => {
+                    const meetingId = this.currentMeeting && this.currentMeeting.id;
+                    playSegmentAudio(meetingId, segmentIndex, playBtn);
+                });
             }
         },
 
