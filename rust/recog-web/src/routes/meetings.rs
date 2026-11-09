@@ -15,31 +15,34 @@ use crate::util::invalid_id;
 pub(super) async fn list_meetings(state: &AppState) -> Reply {
     let meetings = match state.catalog() {
         Some(catalog) => catalog.list_meetings(),
-        None => {
-            let storage = storage(state)?;
-            tokio::task::spawn_blocking(move || storage.list_meetings(true, false))
-                .await
-                .map_err(|_| responses::internal_error())?
-                .map_err(fail)?
-        }
+        None => stored_meetings(state).await?,
     };
-    let rows = meetings
-        .into_iter()
-        .map(|meeting| {
-            let label = match meeting.as_object().and_then(|m| m.get("source")) {
-                Some(Value::Str(source)) => state.config.source_label(source).map(str::to_owned),
-                _ => None,
-            };
-            match (label, meeting) {
-                (Some(label), Value::Object(mut map)) => {
-                    map.insert("source_label", Value::from(label));
-                    Value::Object(map)
-                }
-                (_, meeting) => meeting,
-            }
-        })
-        .collect();
+    let rows = meetings.into_iter().map(|meeting| with_source_label(state, meeting)).collect();
     Ok(responses::json(&Value::Array(rows)))
+}
+
+/// `storage.list_meetings()` without the catalog.
+async fn stored_meetings(state: &AppState) -> Result<Vec<Value>, axum::response::Response> {
+    let storage = storage(state)?;
+    tokio::task::spawn_blocking(move || storage.list_meetings(true, false))
+        .await
+        .map_err(|_| responses::internal_error())?
+        .map_err(fail)
+}
+
+/// A listed meeting with the configured label of its source, when there is one.
+fn with_source_label(state: &AppState, meeting: Value) -> Value {
+    let label = match meeting.as_object().and_then(|m| m.get("source")) {
+        Some(Value::Str(source)) => state.config.source_label(source).map(str::to_owned),
+        _ => None,
+    };
+    match (label, meeting) {
+        (Some(label), Value::Object(mut map)) => {
+            map.insert("source_label", Value::from(label));
+            Value::Object(map)
+        }
+        (_, meeting) => meeting,
+    }
 }
 
 /// `str.lower()` of a Python text value; others raise `AttributeError`.
@@ -57,30 +60,42 @@ fn search_meetings(storage: &MeetingStorage, q: &str) -> Result<Vec<Value>, PyEr
     for info in &meetings {
         let id = get(info, "id")?.ok_or("'id'")?.py_str();
         let Some(meeting) = storage.get_meeting(&id).map_err(|e| e.to_string())? else { continue };
-        let mut matches = Vec::new();
-        for segment in segments_of(&meeting) {
-            let text = get(&segment, "text")?.cloned().unwrap_or_else(|| Value::from(""));
-            if lower(&text)?.contains(&query) {
-                matches.push(json::object([
-                    ("ts_display", get(&segment, "ts_display")?.cloned().unwrap_or(Value::Null)),
-                    ("speaker", get(&segment, "speaker")?.cloned().unwrap_or(Value::Null)),
-                    ("text", text),
-                ]));
-            }
-        }
+        let mut matches = segment_matches(&meeting, &query)?;
         if !matches.is_empty() {
             matches.truncate(5);
-            let title = get(info, "title")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(id.as_str()));
-            results.push(json::object([
-                ("meeting_id", get(info, "id")?.cloned().unwrap_or(Value::Null)),
-                ("title", title),
-                ("created_at", get(info, "created_at")?.cloned().unwrap_or(Value::Null)),
-                ("source", get(info, "source")?.cloned().unwrap_or(Value::Null)),
-                ("matches", Value::Array(matches)),
-            ]));
+            results.push(search_result(info, &id, matches)?);
         }
     }
     Ok(results)
+}
+
+/// The rows of a meeting whose text contains the lower-cased query.
+fn segment_matches(meeting: &Value, query: &str) -> Result<Vec<Value>, PyError> {
+    let mut matches = Vec::new();
+    for segment in segments_of(meeting) {
+        let text = get(&segment, "text")?.cloned().unwrap_or_else(|| Value::from(""));
+        if lower(&text)?.contains(query) {
+            matches.push(json::object([
+                ("ts_display", get(&segment, "ts_display")?.cloned().unwrap_or(Value::Null)),
+                ("speaker", get(&segment, "speaker")?.cloned().unwrap_or(Value::Null)),
+                ("text", text),
+            ]));
+        }
+    }
+    Ok(matches)
+}
+
+/// One meeting of the search's answer: its listed fields, the title falling back to
+/// the ID, and its matches.
+fn search_result(info: &Value, id: &str, matches: Vec<Value>) -> Result<Value, PyError> {
+    let title = get(info, "title")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(id));
+    Ok(json::object([
+        ("meeting_id", get(info, "id")?.cloned().unwrap_or(Value::Null)),
+        ("title", title),
+        ("created_at", get(info, "created_at")?.cloned().unwrap_or(Value::Null)),
+        ("source", get(info, "source")?.cloned().unwrap_or(Value::Null)),
+        ("matches", Value::Array(matches)),
+    ]))
 }
 
 pub(super) async fn search(state: &AppState, req: &Req) -> Reply {
