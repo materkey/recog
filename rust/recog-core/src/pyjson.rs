@@ -332,6 +332,14 @@ pub fn utf8_error_message(raw: &[u8], error: &std::str::Utf8Error) -> String {
     }
 }
 
+/// The character of a one-letter JSON escape.
+fn simple_escape(e: char) -> Option<char> {
+    [('"', '"'), ('\\', '\\'), ('/', '/'), ('b', '\u{8}'), ('f', '\u{c}'), ('n', '\n'), ('r', '\r'), ('t', '\t')]
+        .into_iter()
+        .find(|(letter, _)| *letter == e)
+        .map(|(_, c)| c)
+}
+
 struct Parser<'a> {
     chars: &'a [char],
     at: usize,
@@ -363,6 +371,10 @@ impl Parser<'_> {
 
     fn value(&mut self) -> Result<Value, DecodeError> {
         let start = self.at;
+        if let Some((length, value)) = self.literal() {
+            self.at += length;
+            return Ok(value);
+        }
         match self.peek() {
             Some('"') => {
                 self.at += 1;
@@ -370,74 +382,81 @@ impl Parser<'_> {
             }
             Some('{') => self.object(),
             Some('[') => self.array(),
-            Some('n') if self.starts_with("null") => {
-                self.at += 4;
-                Ok(Value::Null)
-            }
-            Some('t') if self.starts_with("true") => {
-                self.at += 4;
-                Ok(Value::Bool(true))
-            }
-            Some('f') if self.starts_with("false") => {
-                self.at += 5;
-                Ok(Value::Bool(false))
-            }
-            Some('N') if self.starts_with("NaN") => {
-                self.at += 3;
-                Ok(Value::Float(f64::NAN))
-            }
-            Some('I') if self.starts_with("Infinity") => {
-                self.at += 8;
-                Ok(Value::Float(f64::INFINITY))
-            }
-            Some('-') if self.starts_with("-Infinity") => {
-                self.at += 9;
-                Ok(Value::Float(f64::NEG_INFINITY))
-            }
             Some('-' | '0'..='9') => self.number(start),
             _ => Err(self.error("Expecting value", start)),
         }
     }
 
+    /// `null`, `true`, `false` and Python's `NaN`, `Infinity` and `-Infinity` at the
+    /// position, with their length.
+    fn literal(&self) -> Option<(usize, Value)> {
+        [
+            ("null", Value::Null),
+            ("true", Value::Bool(true)),
+            ("false", Value::Bool(false)),
+            ("NaN", Value::Float(f64::NAN)),
+            ("Infinity", Value::Float(f64::INFINITY)),
+            ("-Infinity", Value::Float(f64::NEG_INFINITY)),
+        ]
+        .into_iter()
+        .find(|(word, _)| self.starts_with(word))
+        .map(|(word, value)| (word.len(), value))
+    }
+
     fn number(&mut self, start: usize) -> Result<Value, DecodeError> {
+        let (end, float) = self.number_extent(start)?;
+        let text: String = self.chars[start..end].iter().collect();
+        self.at = end;
+        if float {
+            Ok(Value::Float(text.parse().unwrap_or(f64::NAN)))
+        } else {
+            text.parse::<i128>().map(Value::Int).map_err(|_| self.error("Integer out of range", start))
+        }
+    }
+
+    /// Where the number at `start` ends, and whether it is a float.
+    fn number_extent(&self, start: usize) -> Result<(usize, bool), DecodeError> {
         // NUMBER_RE: (-?(?:0|[1-9]\d*))(\.\d+)?([eE][-+]?\d+)?
-        let digits = |p: &Self, mut i: usize| {
-            while p.chars.get(i).is_some_and(char::is_ascii_digit) {
-                i += 1;
-            }
-            i
-        };
         let mut i = start;
         if self.chars[i] == '-' {
             i += 1;
         }
         match self.chars.get(i) {
             Some('0') => i += 1,
-            Some('1'..='9') => i = digits(self, i),
+            Some('1'..='9') => i = self.digits_end(i),
             _ => return Err(self.error("Expecting value", start)),
         }
-        let mut float = false;
+        let (i, fraction) = self.fraction_end(i);
+        let (i, exponent) = self.exponent_end(i);
+        Ok((i, fraction || exponent))
+    }
+
+    fn digits_end(&self, mut i: usize) -> usize {
+        while self.chars.get(i).is_some_and(char::is_ascii_digit) {
+            i += 1;
+        }
+        i
+    }
+
+    /// `(\.\d+)?` at `i`: where it ends, and whether it is there.
+    fn fraction_end(&self, i: usize) -> (usize, bool) {
         if self.chars.get(i) == Some(&'.') && self.chars.get(i + 1).is_some_and(char::is_ascii_digit) {
-            i = digits(self, i + 1);
-            float = true;
-        }
-        if matches!(self.chars.get(i), Some('e' | 'E')) {
-            let mut j = i + 1;
-            if matches!(self.chars.get(j), Some('+' | '-')) {
-                j += 1;
-            }
-            if self.chars.get(j).is_some_and(char::is_ascii_digit) {
-                i = digits(self, j);
-                float = true;
-            }
-        }
-        let text: String = self.chars[start..i].iter().collect();
-        self.at = i;
-        if float {
-            Ok(Value::Float(text.parse().unwrap_or(f64::NAN)))
+            (self.digits_end(i + 1), true)
         } else {
-            text.parse::<i128>().map(Value::Int).map_err(|_| self.error("Integer out of range", start))
+            (i, false)
         }
+    }
+
+    /// `([eE][-+]?\d+)?` at `i`: where it ends, and whether it is there.
+    fn exponent_end(&self, i: usize) -> (usize, bool) {
+        if !matches!(self.chars.get(i), Some('e' | 'E')) {
+            return (i, false);
+        }
+        let mut j = i + 1;
+        if matches!(self.chars.get(j), Some('+' | '-')) {
+            j += 1;
+        }
+        if self.chars.get(j).is_some_and(char::is_ascii_digit) { (self.digits_end(j), true) } else { (i, false) }
     }
 
     fn string(&mut self, start: usize) -> Result<String, DecodeError> {
@@ -451,51 +470,56 @@ impl Parser<'_> {
                     self.at += 1;
                     return Ok(out);
                 }
-                '\\' => {
-                    let escape_at = self.at;
-                    self.at += 1;
-                    let Some(e) = self.peek() else {
-                        return Err(self.error("Unterminated string starting at", start));
-                    };
-                    self.at += 1;
-                    match e {
-                        '"' => out.push('"'),
-                        '\\' => out.push('\\'),
-                        '/' => out.push('/'),
-                        'b' => out.push('\u{8}'),
-                        'f' => out.push('\u{c}'),
-                        'n' => out.push('\n'),
-                        'r' => out.push('\r'),
-                        't' => out.push('\t'),
-                        'u' => {
-                            let first = self.hex4(escape_at)?;
-                            let code = if (0xD800..0xDC00).contains(&first)
-                                && self.chars.get(self.at) == Some(&'\\')
-                                && self.chars.get(self.at + 1) == Some(&'u')
-                            {
-                                let saved = self.at;
-                                self.at += 2;
-                                let second = self.hex4(saved)?;
-                                if (0xDC00..0xE000).contains(&second) {
-                                    0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
-                                } else {
-                                    self.at = saved;
-                                    first
-                                }
-                            } else {
-                                first
-                            };
-                            out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
-                        }
-                        _ => return Err(self.error("Invalid \\escape", escape_at)),
-                    }
-                }
+                '\\' => out.push(self.escape(start)?),
                 c if u32::from(c) < 0x20 => return Err(self.error("Invalid control character at", self.at)),
                 c => {
                     out.push(c);
                     self.at += 1;
                 }
             }
+        }
+    }
+
+    /// The character the backslash escape at the position stands for.
+    fn escape(&mut self, start: usize) -> Result<char, DecodeError> {
+        let escape_at = self.at;
+        self.at += 1;
+        let Some(e) = self.peek() else {
+            return Err(self.error("Unterminated string starting at", start));
+        };
+        self.at += 1;
+        match e {
+            'u' => self.unicode_escape(escape_at),
+            _ => simple_escape(e).ok_or_else(|| self.error("Invalid \\escape", escape_at)),
+        }
+    }
+
+    /// `\uXXXX`, a high surrogate joined with the low one after it; a lone surrogate
+    /// becomes U+FFFD.
+    fn unicode_escape(&mut self, escape_at: usize) -> Result<char, DecodeError> {
+        let first = self.hex4(escape_at)?;
+        let code = if (0xD800..0xDC00).contains(&first)
+            && self.chars.get(self.at) == Some(&'\\')
+            && self.chars.get(self.at + 1) == Some(&'u')
+        {
+            self.low_surrogate(first)?
+        } else {
+            first
+        };
+        Ok(char::from_u32(code).unwrap_or('\u{fffd}'))
+    }
+
+    /// The code point of `first` and the `\uXXXX` after it, or `first` alone (the
+    /// escape after it left unread) when that is not a low surrogate.
+    fn low_surrogate(&mut self, first: u32) -> Result<u32, DecodeError> {
+        let saved = self.at;
+        self.at += 2;
+        let second = self.hex4(saved)?;
+        if (0xDC00..0xE000).contains(&second) {
+            Ok(0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00))
+        } else {
+            self.at = saved;
+            Ok(first)
         }
     }
 
@@ -584,21 +608,23 @@ pub fn dumps(value: &Value, indent: Option<usize>) -> String {
 fn write_string(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if u32::from(c) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", u32::from(c));
-            }
-            c => out.push(c),
+        if let Some(escaped) = short_escape(c) {
+            out.push_str(escaped);
+        } else if u32::from(c) < 0x20 {
+            let _ = write!(out, "\\u{:04x}", u32::from(c));
+        } else {
+            out.push(c);
         }
     }
     out.push('"');
+}
+
+/// The two-character escape `json.dumps` writes for `c`, if it has one.
+fn short_escape(c: char) -> Option<&'static str> {
+    [('"', "\\\""), ('\\', "\\\\"), ('\n', "\\n"), ('\r', "\\r"), ('\t', "\\t"), ('\u{8}', "\\b"), ('\u{c}', "\\f")]
+        .into_iter()
+        .find(|(plain, _)| *plain == c)
+        .map(|(_, escaped)| escaped)
 }
 
 fn write_float(out: &mut String, x: f64) {
@@ -625,49 +651,55 @@ fn write_value(out: &mut String, value: &Value, indent: Option<usize>, level: us
         }
         Value::Float(x) => write_float(out, *x),
         Value::Str(s) => write_string(out, s),
-        Value::Array(items) => {
-            if items.is_empty() {
-                out.push_str("[]");
-                return;
-            }
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(if indent.is_some() { "," } else { ", " });
-                }
-                if let Some(n) = indent {
-                    newline(out, n, level + 1);
-                }
-                write_value(out, item, indent, level + 1);
-            }
-            if let Some(n) = indent {
-                newline(out, n, level);
-            }
-            out.push(']');
-        }
-        Value::Object(map) => {
-            if map.is_empty() {
-                out.push_str("{}");
-                return;
-            }
-            out.push('{');
-            for (i, (k, v)) in map.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(if indent.is_some() { "," } else { ", " });
-                }
-                if let Some(n) = indent {
-                    newline(out, n, level + 1);
-                }
-                write_string(out, k);
-                out.push_str(": ");
-                write_value(out, v, indent, level + 1);
-            }
-            if let Some(n) = indent {
-                newline(out, n, level);
-            }
-            out.push('}');
-        }
+        Value::Array(items) => write_array(out, items, indent, level),
+        Value::Object(map) => write_object(out, map, indent, level),
     }
+}
+
+fn write_array(out: &mut String, items: &[Value], indent: Option<usize>, level: usize) {
+    if items.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push('[');
+    for (i, item) in items.iter().enumerate() {
+        write_separator(out, i, indent, level);
+        write_value(out, item, indent, level + 1);
+    }
+    write_close(out, ']', indent, level);
+}
+
+fn write_object(out: &mut String, map: &Map, indent: Option<usize>, level: usize) {
+    if map.is_empty() {
+        out.push_str("{}");
+        return;
+    }
+    out.push('{');
+    for (i, (k, v)) in map.iter().enumerate() {
+        write_separator(out, i, indent, level);
+        write_string(out, k);
+        out.push_str(": ");
+        write_value(out, v, indent, level + 1);
+    }
+    write_close(out, '}', indent, level);
+}
+
+/// Before the `i`th item of a container: the comma after the one before, then the
+/// item's own line when indenting.
+fn write_separator(out: &mut String, i: usize, indent: Option<usize>, level: usize) {
+    if i > 0 {
+        out.push_str(if indent.is_some() { "," } else { ", " });
+    }
+    if let Some(n) = indent {
+        newline(out, n, level + 1);
+    }
+}
+
+fn write_close(out: &mut String, bracket: char, indent: Option<usize>, level: usize) {
+    if let Some(n) = indent {
+        newline(out, n, level);
+    }
+    out.push(bracket);
 }
 
 #[cfg(test)]
