@@ -215,3 +215,38 @@ test('stream open - connection drops or fails - status says so', () => {
     p.socket.close();
     assert.equal(p.text(p.$('live-status')), 'Disconnected');
 });
+
+test('rows shown - download clicked - a Markdown file named after the meeting', () => {
+    const p = livePage();
+    p.init([segment(1, 'привет')]);
+    p.$('download-live-btn').click();
+    assert.equal(p.downloads.length, 1);
+    assert.equal(p.downloads[0].name, 'm1.md');
+    assert.match(p.downloads[0].blob.parts[0], /^# Планёрка\n\n\*\*Date:\*\* .*\n\n---\n\n\*\*Анна\*\* \*\[10:01\]\*: привет\n\n$/);
+});
+
+test('rows without a meeting - download clicked - a dated live file with the default title', () => {
+    const p = livePage();
+    p.receive({ type: 'init', meeting: null, segments: [segment(1, 'привет')] });
+    p.$('download-live-btn').click();
+    assert.match(p.downloads[0].name, /^live-\d+\.md$/);
+    assert.match(p.downloads[0].blob.parts[0], /^# Live Transcription\n/);
+});
+
+test('no rows - copy or download clicked - nothing is produced', async () => {
+    const p = livePage();
+    p.$('download-live-btn').click();
+    p.$('copy-live-btn').click();
+    await p.flush();
+    assert.deepEqual(p.downloads, []);
+    assert.deepEqual(p.clipboard, []);
+});
+
+test('rows shown - copy clicked - the button confirms and comes back', async () => {
+    const p = livePage();
+    p.init([segment(1, 'привет')]);
+    await p.copied();
+    assert.equal(p.text(p.$('copy-live-btn')), 'Copied!');
+    p.timers.advance(1500);
+    assert.equal(p.text(p.$('copy-live-btn')), 'Copy MD');
+});
