@@ -187,6 +187,25 @@ def cargo_target_dir():
     return (ROOT / "rust" / os.environ.get("CARGO_TARGET_DIR", "target")).resolve()
 
 
+def present_targets(crate):
+    """The crate's listed test targets that this tree has (`tests/<name>.rs`): both
+    trees are measured with the head's list, and a baseline older than a target the
+    list names must still run the rest."""
+    arguments = RUST_RESTRICTED_TESTS[crate.name]
+    kept = []
+    position = 0
+    while position < len(arguments):
+        if arguments[position] != "--test":
+            kept.append(arguments[position])
+            position += 1
+            continue
+        name = arguments[position + 1]
+        if (crate / "tests" / f"{name}.rs").is_file():
+            kept += ["--test", name]
+        position += 2
+    return kept
+
+
 def rust_coverage(root, output, label):
     """{production file: (line hits, branch hits)} of the workspace's tests from cargo llvm-cov."""
     workspace = root / "rust"
@@ -196,7 +215,10 @@ def rust_coverage(root, output, label):
     steps = [
         ("clean", ["clean", "--workspace"]),
         ("tests", ["--no-report", "--workspace", *(f"--exclude={name}" for name in restricted)]),
-        *((name, ["--no-report", "-p", name, *RUST_RESTRICTED_TESTS[name]]) for name in restricted),
+        *(
+            (name, ["--no-report", "-p", name, *present_targets(workspace / name)])
+            for name in restricted
+        ),
         ("report", ["report", "--lcov", "--output-path", str(artifact)]),
     ]
     for step, arguments in steps:

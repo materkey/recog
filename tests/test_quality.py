@@ -515,10 +515,40 @@ def test_coverage_report_when_paths_join_then_production_files_are_returned(
 
 
 @needs_tree_sitter_rust
+def test_listed_test_target_absent_from_a_tree_when_measured_then_left_out(
+    repository, tmp_path, monkeypatch
+):
+    # a baseline older than a target the list names (the gate runs its own list on both trees)
+    (repository / "rust/speexdsp-aec/src").mkdir(parents=True)
+    (repository / "rust/speexdsp-aec/tests").mkdir()
+    for target in ("properties", "cli"):
+        (repository / f"rust/speexdsp-aec/tests/{target}.rs").write_text("")
+    calls = []
+    lcov = f"SF:{repository}/rust/demo/src/lib.rs\nDA:1,1\nend_of_record\n"
+    monkeypatch.setattr(quality, "run", fake_cargo(lcov, calls))
+    quality.rust_coverage(repository, tmp_path, "baseline")
+    assert calls[2] == [
+        "cargo",
+        "llvm-cov",
+        "--no-report",
+        "-p",
+        "speexdsp-aec",
+        "--lib",
+        "--test",
+        "properties",
+        "--test",
+        "cli",
+    ]
+
+
+@needs_tree_sitter_rust
 def test_crate_with_data_bound_tests_when_measured_then_only_its_listed_targets_run(
     repository, tmp_path, monkeypatch
 ):
     (repository / "rust/speexdsp-aec/src").mkdir(parents=True)
+    (repository / "rust/speexdsp-aec/tests").mkdir()
+    for target in ("properties", "cli", "adapted_golden"):
+        (repository / f"rust/speexdsp-aec/tests/{target}.rs").write_text("")
     calls = []
     lcov = f"SF:{repository}/rust/demo/src/lib.rs\nDA:1,1\nend_of_record\n"
     monkeypatch.setattr(quality, "run", fake_cargo(lcov, calls))
