@@ -664,4 +664,88 @@ mod tests {
         assert_eq!(parse(&args("prefetch --help"), "Me").unwrap_err().code, 0);
         assert!(parse(&args("config -h"), "Me").unwrap_err().stdout.contains("install-runtime"));
     }
+
+    #[test]
+    fn a_double_dash_or_a_lone_dash_when_parsing_then_positionals_live_does_not_take() {
+        // given / when
+        let after_dashes = parse(&args("live -- --ktalk"), "Me").unwrap_err();
+        let dash = parse(&args("live -"), "Me").unwrap_err();
+        // then
+        assert_eq!(after_dashes.stderr, format!("{MAIN_USAGE}\nrecog: error: unrecognized arguments: --ktalk\n"));
+        assert_eq!(dash.stderr, format!("{MAIN_USAGE}\nrecog: error: unrecognized arguments: -\n"));
+    }
+
+    #[test]
+    fn a_flag_given_a_value_when_parsing_then_argparse_says_it_ignores_it() {
+        // given / when
+        let err = parse(&args("live --ktalk=yes"), "Me").unwrap_err();
+        // then
+        assert_eq!((err.code, err.stdout.as_str()), (2, ""));
+        assert_eq!(
+            err.stderr,
+            format!("{LIVE_USAGE}\nrecog live: error: argument --ktalk: ignored explicit argument 'yes'\n")
+        );
+    }
+
+    #[test]
+    fn a_value_option_given_with_an_equals_sign_when_parsing_then_the_whole_value_after_it() {
+        // given / when
+        let parsed = live("live --mic-speaker-name=a=b --chunk-duration=1.5");
+        // then
+        assert_eq!(parsed.mic_speaker_name.as_deref(), Some("a=b"));
+        assert!((parsed.chunk_duration - 1.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_main_help_or_an_unknown_top_level_option_when_parsing_then_help_or_usage_error() {
+        // given / when
+        let help = parse(&args("--help"), "Me").unwrap_err();
+        let option = parse(&args("--bogus live"), "Me").unwrap_err();
+        // then
+        assert_eq!((help.code, help.stdout), (0, main_help()));
+        assert_eq!(
+            (option.code, option.stderr),
+            (2, format!("{MAIN_USAGE}\nrecog: error: unrecognized arguments: --bogus\n"))
+        );
+    }
+
+    #[test]
+    fn meetings_with_help_or_two_ids_when_parsing_then_help_or_the_extra_id_is_refused() {
+        // given / when
+        let help = parse(&args("meetings -h"), "Me").unwrap_err();
+        let two = parse(&args("meetings a b c"), "Me").unwrap_err();
+        // then
+        assert_eq!((help.code, help.stdout), (0, meetings_help()));
+        assert_eq!(two.stderr, format!("{MAIN_USAGE}\nrecog: error: unrecognized arguments: b c\n"));
+    }
+
+    #[test]
+    fn replay_with_its_options_or_wrong_positionals_when_parsing_then_read_or_refused() {
+        // given / when
+        let Command::Replay(read) = parse(&args("replay --profile p.json s o"), "Me").unwrap() else { panic!() };
+        let help = parse(&args("replay --help"), "Me").unwrap_err();
+        let none = parse(&args("replay"), "Me").unwrap_err();
+        let three = parse(&args("replay s o x"), "Me").unwrap_err();
+        let tail = parse(&args("replay s o --tail soon"), "Me").unwrap_err();
+        // then
+        assert_eq!(
+            read,
+            ReplayArgs {
+                session: "s".into(),
+                out: "o".into(),
+                profile: Some("p.json".into()),
+                tail: crate::live::replay::TAIL_S
+            }
+        );
+        assert_eq!((help.code, help.stdout), (0, replay_help()));
+        assert_eq!(
+            none.stderr,
+            format!("{REPLAY_USAGE}\nrecog replay: error: the following arguments are required: session, out\n")
+        );
+        assert_eq!(three.stderr, format!("{MAIN_USAGE}\nrecog: error: unrecognized arguments: x\n"));
+        assert_eq!(
+            tail.stderr,
+            format!("{REPLAY_USAGE}\nrecog replay: error: argument --tail: invalid float value: 'soon'\n")
+        );
+    }
 }
