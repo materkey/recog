@@ -39,67 +39,136 @@ use settings::{
 /// One route.
 pub async fn handle(state: &Arc<AppState>, route: Route, req: Req) -> Reply {
     match route {
-        Route::DesktopStatus => {
-            let root = state.config.data_dir.join("desktop");
-            let value = tokio::task::spawn_blocking(move || desktop::status(&root))
-                .await
-                .map_err(|_| responses::internal_error())?;
-            Ok(responses::json(&value))
+        Route::GetAiSettings | Route::SaveAiModels | Route::SaveAiTask | Route::ResetAiTask => {
+            ai_settings_route(state, route, &req).await
         }
+        Route::GetPrivacy
+        | Route::SavePrivacy
+        | Route::GetUserProfile
+        | Route::SaveUserProfile
+        | Route::ClearUserProfile => profile_route(state, route, &req).await,
+        Route::ListMeetings | Route::Search | Route::GetMeeting | Route::GetTranscript | Route::DeleteMeeting => {
+            meeting_route(state, route, &req).await
+        }
+        Route::ListPrompts
+        | Route::ListIncrements
+        | Route::ListPromptIncrements
+        | Route::GetIncrement
+        | Route::GenerateIncrement
+        | Route::GenerateTitle => increment_route(state, route, &req).await,
+        Route::LiveStatus
+        | Route::PcmDiagnostics
+        | Route::Debug
+        | Route::GetDebugAiContext
+        | Route::SetDebugAiContext
+        | Route::ClearDebugAiContext => debug_route(state, route, &req).await,
+        Route::Analyze
+        | Route::AnalyzeMulti
+        | Route::AnalyzeStream
+        | Route::GetChat
+        | Route::ClearChat
+        | Route::AskChat
+        | Route::SegmentAudio => question_route(state, route, &req).await,
+        Route::DesktopStatus => desktop_status(state).await,
+        Route::Root => Ok(root_response(&state.config.static_dir, &req.headers)),
+    }
+}
+
+/// The AI settings routes; `handle` sends no other here.
+async fn ai_settings_route(state: &Arc<AppState>, route: Route, req: &Req) -> Reply {
+    match route {
         Route::GetAiSettings => get_ai_settings(state).await,
-        Route::SaveAiModels => save_ai_models(state, &req).await,
-        Route::SaveAiTask => save_ai_task(state, &req).await,
-        Route::ResetAiTask => reset_ai_task(state, &req).await,
+        Route::SaveAiModels => save_ai_models(state, req).await,
+        Route::SaveAiTask => save_ai_task(state, req).await,
+        _ => reset_ai_task(state, req).await,
+    }
+}
+
+/// The privacy and user profile routes; `handle` sends no other here.
+async fn profile_route(state: &Arc<AppState>, route: Route, req: &Req) -> Reply {
+    match route {
         Route::GetPrivacy => get_privacy(state),
-        Route::SavePrivacy => save_privacy(state, &req),
+        Route::SavePrivacy => save_privacy(state, req),
         Route::GetUserProfile => {
             let snapshot = state.profile.snapshot().await.map_err(|_| read_profile_error())?;
             Ok(responses::json(&snapshot))
         }
-        Route::SaveUserProfile => save_user_profile(state, &req).await,
-        Route::ClearUserProfile => {
+        Route::SaveUserProfile => save_user_profile(state, req).await,
+        _ => {
             let snapshot = state.profile.clear().await.map_err(|_| {
                 responses::detail(StatusCode::INTERNAL_SERVER_ERROR, "Не удалось очистить профиль пользователя.")
             })?;
             Ok(responses::json(&snapshot))
         }
+    }
+}
+
+/// The meeting routes; `handle` sends no other here.
+async fn meeting_route(state: &Arc<AppState>, route: Route, req: &Req) -> Reply {
+    match route {
         Route::ListMeetings => list_meetings(state).await,
-        Route::Search => search(state, &req).await,
-        Route::GetMeeting | Route::GetTranscript => get_meeting(state, &req, route == Route::GetMeeting),
-        Route::DeleteMeeting => delete_meeting(state, &req).await,
-        Route::ListPrompts => {
-            let prompts = PromptRegistry::new(&state.config.prompts_dir).load_all();
-            let rows = prompts
-                .iter()
-                .map(|p| {
-                    json::object([
-                        ("id", Value::from(p.id.as_str())),
-                        ("name", Value::from(p.name.as_str())),
-                        ("filter", json::opt_str(p.filter.as_deref())),
-                    ])
-                })
-                .collect();
-            Ok(responses::json(&Value::Array(rows)))
-        }
-        Route::ListIncrements | Route::ListPromptIncrements | Route::GetIncrement => increments(state, route, &req),
-        Route::GenerateIncrement => generate_increment(state, &req).await,
-        Route::GenerateTitle => generate_title(state, &req).await,
+        Route::Search => search(state, req).await,
+        Route::DeleteMeeting => delete_meeting(state, req).await,
+        _ => get_meeting(state, req, route == Route::GetMeeting),
+    }
+}
+
+/// The prompt, increment and title routes; `handle` sends no other here.
+async fn increment_route(state: &Arc<AppState>, route: Route, req: &Req) -> Reply {
+    match route {
+        Route::ListPrompts => Ok(list_prompts(state)),
+        Route::GenerateIncrement => generate_increment(state, req).await,
+        Route::GenerateTitle => generate_title(state, req).await,
+        _ => increments(state, route, req),
+    }
+}
+
+fn list_prompts(state: &AppState) -> axum::response::Response {
+    let prompts = PromptRegistry::new(&state.config.prompts_dir).load_all();
+    let rows = prompts
+        .iter()
+        .map(|p| {
+            json::object([
+                ("id", Value::from(p.id.as_str())),
+                ("name", Value::from(p.name.as_str())),
+                ("filter", json::opt_str(p.filter.as_deref())),
+            ])
+        })
+        .collect();
+    responses::json(&Value::Array(rows))
+}
+
+/// The live status and debug routes; `handle` sends no other here.
+async fn debug_route(state: &Arc<AppState>, route: Route, req: &Req) -> Reply {
+    match route {
         Route::LiveStatus => live_status(state).await,
         Route::PcmDiagnostics => pcm_diagnostics(state),
         Route::Debug => debug(state).await,
-        Route::GetDebugAiContext => get_debug_ai_context(state, &req),
-        Route::SetDebugAiContext => set_debug_ai_context(state, &req),
-        Route::ClearDebugAiContext => {
+        Route::GetDebugAiContext => get_debug_ai_context(state, req),
+        Route::SetDebugAiContext => set_debug_ai_context(state, req),
+        _ => {
             *state.debug_ai.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Default::default();
             Ok(responses::json(&json::object([("active", Value::Bool(false))])))
         }
-        Route::Analyze | Route::AnalyzeMulti => analysis::analyze(state, &req, route == Route::AnalyzeMulti).await,
-        Route::AnalyzeStream => analysis::analyze_stream(state, &req),
-        Route::GetChat | Route::ClearChat => chat(state, &req, route == Route::ClearChat),
-        Route::AskChat => ask_chat(state, &req).await,
-        Route::SegmentAudio => audio::segment_audio(state, &req).await,
-        Route::Root => Ok(root_response(&state.config.static_dir, &req.headers)),
     }
+}
+
+/// The analysis, meeting chat and segment audio routes; `handle` sends no other here.
+async fn question_route(state: &Arc<AppState>, route: Route, req: &Req) -> Reply {
+    match route {
+        Route::Analyze | Route::AnalyzeMulti => analysis::analyze(state, req, route == Route::AnalyzeMulti).await,
+        Route::AnalyzeStream => analysis::analyze_stream(state, req),
+        Route::GetChat | Route::ClearChat => chat(state, req, route == Route::ClearChat),
+        Route::AskChat => ask_chat(state, req).await,
+        _ => audio::segment_audio(state, req).await,
+    }
+}
+
+async fn desktop_status(state: &AppState) -> Reply {
+    let root = state.config.data_dir.join("desktop");
+    let value =
+        tokio::task::spawn_blocking(move || desktop::status(&root)).await.map_err(|_| responses::internal_error())?;
+    Ok(responses::json(&value))
 }
 
 /// `HTTPException(500, detail=str(e))`.
