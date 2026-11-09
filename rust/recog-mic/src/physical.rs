@@ -171,6 +171,19 @@ mod tests {
     }
 
     #[test]
+    fn entries_that_are_not_linear_pcm_or_claim_float_and_integer_at_once_match_nothing() {
+        // given: a compressed float entry and a float-and-integer entry beside a 16-bit one
+        let mut compressed = format(48_000.0, FLOAT, 32, 1);
+        compressed.linear_pcm = false;
+        let formats = [compressed, format(48_000.0, FLOAT | INT, 32, 1), format(48_000.0, INT, 16, 1)];
+        // when / then: neither counts for a float or a 32-bit request, so cpal writes nothing
+        assert!(!matches(&formats[0], Request::F32, 48_000, 1));
+        assert!(!matches(&formats[1], Request::F32, 48_000, 1));
+        assert!(!matches(&formats[1], Request::I32, 48_000, 1));
+        assert_eq!(safe_request(&formats, 48_000, 1), Some(Request::F32));
+    }
+
+    #[test]
     fn a_stereo_request_skips_mono_entries_like_coreaudio_rs() {
         // given: a mono float entry and a stereo float entry at the same rate
         let formats = [format(48_000.0, FLOAT, 32, 1), format(48_000.0, FLOAT, 32, 2)];
