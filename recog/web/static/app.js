@@ -137,6 +137,13 @@ const router = {
 
 // --- Views ---
 
+// A saved list row with the fields the cards read, of the types they expect.
+function isCachedMeeting(m) {
+    return m && typeof m.id === 'string' && typeof m.created_at === 'string' &&
+        (m.title == null || typeof m.title === 'string') &&
+        (m.participants == null || Array.isArray(m.participants));
+}
+
 const meetingListCache = {
     key: 'recog.meetings.v1',
     maxAgeMs: 5 * 60 * 1000,
@@ -146,11 +153,7 @@ const meetingListCache = {
             const cached = JSON.parse(sessionStorage.getItem(this.key));
             const age = Date.now() - cached?.savedAt;
             if (!Number.isFinite(age) || age < 0 || age > this.maxAgeMs) return null;
-            if (!Array.isArray(cached.meetings) || !cached.meetings.every(m =>
-                m && typeof m.id === 'string' && typeof m.created_at === 'string' &&
-                (m.title == null || typeof m.title === 'string') &&
-                (m.participants == null || Array.isArray(m.participants))
-            )) return null;
+            if (!Array.isArray(cached.meetings) || !cached.meetings.every(isCachedMeeting)) return null;
             return cached.meetings;
         } catch {
             return null;
@@ -269,6 +272,26 @@ const views = {
             }
 
             // Setup filter listeners only once (prevents duplicates on view re-entry)
+            this.bindFilterListeners(sourceSelect, searchModeSelect, titleInput);
+
+            try {
+                const meetings = await api.getMeetings();
+                if (loadId !== this._loadId) return;
+                this.meetings = meetings;
+                this._hasLoaded = true;
+                this.renderSourceOptions();
+                this.render();
+                status.textContent = '';
+                meetingListCache.write(meetings);
+            } catch (e) {
+                if (loadId !== this._loadId) return;
+                this.showLoadFailure(e, saved !== null, container, status);
+            } finally {
+                if (loadId === this._loadId) container.removeAttribute('aria-busy');
+            }
+        },
+
+        bindFilterListeners(sourceSelect, searchModeSelect, titleInput) {
             if (!this._listenersInitialized) {
                 this._listenersInitialized = true;
 
@@ -295,25 +318,13 @@ const views = {
                     this.searchTimeout = setTimeout(() => this.handleSearch(), 300);
                 });
             }
+        },
 
-            try {
-                const meetings = await api.getMeetings();
-                if (loadId !== this._loadId) return;
-                this.meetings = meetings;
-                this._hasLoaded = true;
-                this.renderSourceOptions();
-                this.render();
-                status.textContent = '';
-                meetingListCache.write(meetings);
-            } catch (e) {
-                if (loadId !== this._loadId) return;
-                if (saved !== null) {
-                    status.textContent = 'Could not refresh meetings. Showing saved list.';
-                } else {
-                    container.innerHTML = `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
-                }
-            } finally {
-                if (loadId === this._loadId) container.removeAttribute('aria-busy');
+        showLoadFailure(error, hasSaved, container, status) {
+            if (hasSaved) {
+                status.textContent = 'Could not refresh meetings. Showing saved list.';
+            } else {
+                container.innerHTML = `<div class="error">Error: ${escapeHtml(error.message)}</div>`;
             }
         },
 
