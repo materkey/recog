@@ -553,53 +553,10 @@ async fn generate_increment(state: &AppState, req: &Req) -> Reply {
     ])))
 }
 
-/// `json.dumps(value, ensure_ascii=False, indent=2)` written as Python writes it.
-fn write_json(path: &Path, value: &Value) -> std::io::Result<()> {
-    std::fs::write(path, pyjson::dumps(value, Some(2)))
-}
-
 fn read_json(path: &Path) -> Result<Value, PyError> {
     let raw = std::fs::read(path).map_err(|e| e.to_string())?;
     let text = std::str::from_utf8(&raw).map_err(|e| pyjson::utf8_error_message(&raw, &e))?;
     pyjson::loads(&text.replace("\r\n", "\n").replace('\r', "\n")).map_err(|e| e.0)
-}
-
-fn store_title(state: &AppState, meeting_id: &str, update: &Map) -> Result<(), PyError> {
-    let meta_path = state.config.meetings_dir.join(meeting_id).join("meta.json");
-    if !meta_path.exists() {
-        return Ok(());
-    }
-    let mut meta = read_json(&meta_path)?;
-    let Value::Object(map) = &mut meta else { return Err("'list' object does not support item assignment".into()) };
-    for (k, v) in update.iter() {
-        map.insert(k.clone(), v.clone());
-    }
-    map.insert("updated_at", Value::from(local_now_isoformat()));
-    let ended = map.get("ended_at").is_some_and(Value::truthy);
-    write_json(&meta_path, &meta).map_err(|e| e.to_string())?;
-    if !ended {
-        return Ok(());
-    }
-    let index_path = state.config.meetings_dir.join("index.json");
-    if !index_path.exists() {
-        return Ok(());
-    }
-    let mut index = read_json(&index_path)?;
-    let empty = Value::Array(Vec::new());
-    let rows = get(&index, "meetings")?.unwrap_or(&empty).clone();
-    let Value::Array(mut rows) = rows else { return Err("'meetings' is not a list".into()) };
-    for row in &mut rows {
-        if get(row, "id")? == Some(&Value::from(meeting_id)) {
-            if let Value::Object(m) = row {
-                m.insert("title", update.get("title").cloned().unwrap_or(Value::Null));
-            }
-            break;
-        }
-    }
-    if let Value::Object(map) = &mut index {
-        map.insert("meetings", Value::Array(rows));
-    }
-    write_json(&index_path, &index).map_err(|e| e.to_string())
 }
 
 async fn generate_title(state: &AppState, req: &Req) -> Reply {
@@ -634,7 +591,7 @@ async fn generate_title(state: &AppState, req: &Req) -> Reply {
     let model = settings.models.get(&provider).ok_or_else(|| fail(format!("'{provider}'")))?;
     update.insert("title_model", Value::from(model.as_str()));
     update.insert("title_settings_revision", Value::from(settings.revision.as_str()));
-    store_title(state, &meeting_id, &update).map_err(fail)?;
+    storage.store_title(&meeting_id, &update).map_err(fail)?;
     if let Some(catalog) = state.catalog() {
         catalog.refresh(None).await;
     }

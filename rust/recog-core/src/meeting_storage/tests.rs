@@ -486,3 +486,81 @@ fn no_current_meeting_when_meta_loaded_then_type_error_and_after_start_the_orpha
     assert_eq!(field(&meta, &["source"]), &Value::from("orphan"));
     assert_eq!(meta, read_json(&storage.current_meeting_path().unwrap().join("meta.json")).unwrap());
 }
+
+const STORED_META: &str = "{\n  \"id\": \"m1\",\n  \"title\": \"Старое\",\n  \"created_at\": \"2026-07-04T09:00:00+00:00\",\n  \"ended_at\": \"2026-07-04T09:30:00+00:00\",\n  \"stats\": {\n    \"segment_count\": 3,\n    \"duration_seconds\": 1800\n  },\n  \"participants\": {\n    \"a\": {\n      \"name\": \"Алиса\",\n      \"is_local\": true\n    }\n  },\n  \"updated_at\": \"2026-07-04T09:30:00+00:00\"\n}";
+const STORED_INDEX: &str = "{\n  \"meetings\": [\n    {\n      \"id\": \"m2\",\n      \"title\": \"Другая\",\n      \"segment_count\": 1\n    },\n    {\n      \"id\": \"m1\",\n      \"title\": \"Старое\",\n      \"segment_count\": 3\n    }\n  ]\n}";
+
+fn title_fields() -> Map {
+    let mut fields = Map::new();
+    fields.insert("title", Value::from("Обзор дизайна"));
+    fields.insert("title_source", Value::from("claude"));
+    fields.insert("title_model", Value::from("opus"));
+    fields.insert("title_settings_revision", Value::from("r1"));
+    fields
+}
+
+fn stored_meeting(storage: &MeetingStorage, meta: &str) -> PathBuf {
+    let meeting = storage.base_path().join("m1");
+    fs::create_dir_all(&meeting).unwrap();
+    fs::write(meeting.join("meta.json"), meta).unwrap();
+    fs::write(storage.base_path().join("index.json"), STORED_INDEX).unwrap();
+    meeting
+}
+
+#[test]
+fn an_ended_meeting_when_its_title_stored_then_meta_and_index_hold_the_bytes_python_wrote() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _) = storage_at(dir.path());
+    let meeting = stored_meeting(&storage, STORED_META);
+    // when
+    storage.store_title("m1", &title_fields()).unwrap();
+    // then: json.dumps(meta, ensure_ascii=False, indent=2), updated_at as datetime.now()
+    assert_eq!(
+        fs::read_to_string(meeting.join("meta.json")).unwrap(),
+        "{\n  \"id\": \"m1\",\n  \"title\": \"Обзор дизайна\",\n  \"created_at\": \"2026-07-04T09:00:00+00:00\",\n  \
+         \"ended_at\": \"2026-07-04T09:30:00+00:00\",\n  \"stats\": {\n    \"segment_count\": 3,\n    \
+         \"duration_seconds\": 1800\n  },\n  \"participants\": {\n    \"a\": {\n      \"name\": \"Алиса\",\n      \
+         \"is_local\": true\n    }\n  },\n  \"updated_at\": \"2026-07-04T10:00:00\",\n  \"title_source\": \"claude\",\n  \
+         \"title_model\": \"opus\",\n  \"title_settings_revision\": \"r1\"\n}"
+    );
+    assert_eq!(
+        fs::read_to_string(storage.base_path().join("index.json")).unwrap(),
+        "{\n  \"meetings\": [\n    {\n      \"id\": \"m2\",\n      \"title\": \"Другая\",\n      \"segment_count\": 1\n    \
+         },\n    {\n      \"id\": \"m1\",\n      \"title\": \"Обзор дизайна\",\n      \"segment_count\": 3\n    }\n  ]\n}"
+    );
+}
+
+#[test]
+fn a_stored_title_when_written_then_the_old_files_are_replaced_by_rename_not_rewritten_in_place() {
+    // given: a second name for each file keeps the inode a reader may hold open
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _) = storage_at(dir.path());
+    let meeting = stored_meeting(&storage, STORED_META);
+    fs::hard_link(meeting.join("meta.json"), dir.path().join("meta.before")).unwrap();
+    fs::hard_link(storage.base_path().join("index.json"), dir.path().join("index.before")).unwrap();
+    // when
+    storage.store_title("m1", &title_fields()).unwrap();
+    // then: the old inodes were never truncated, and no temp file is left
+    assert_eq!(fs::read_to_string(dir.path().join("meta.before")).unwrap(), STORED_META);
+    assert_eq!(fs::read_to_string(dir.path().join("index.before")).unwrap(), STORED_INDEX);
+    assert_ne!(fs::read_to_string(meeting.join("meta.json")).unwrap(), STORED_META);
+    assert_eq!(fs::read_dir(&meeting).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(storage.base_path()).unwrap().count(), 2);
+}
+
+#[test]
+fn a_meeting_not_ended_or_missing_when_its_title_stored_then_the_index_stays_and_nothing_is_created() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _) = storage_at(dir.path());
+    let open = STORED_META.replace("\"ended_at\": \"2026-07-04T09:30:00+00:00\"", "\"ended_at\": null");
+    let meeting = stored_meeting(&storage, &open);
+    // when
+    storage.store_title("m1", &title_fields()).unwrap();
+    storage.store_title("absent", &title_fields()).unwrap();
+    // then
+    assert_eq!(field(&read_json(&meeting.join("meta.json")).unwrap(), &["title"]), &Value::from("Обзор дизайна"));
+    assert_eq!(fs::read_to_string(storage.base_path().join("index.json")).unwrap(), STORED_INDEX);
+    assert!(!storage.base_path().join("absent").exists());
+}

@@ -1835,6 +1835,53 @@ impl MeetingStorage {
         set(&mut meta, "updated_at", self.shared.now_iso())?;
         save_json(&meta_path, &meta)
     }
+
+    /// The web's generated title: `fields` (the title and its provenance) merged into
+    /// the meeting's `meta.json` with `updated_at` as `datetime.now()` writes it (local,
+    /// without an offset), and the title copied into its `index.json` row once the
+    /// meeting has ended. Both files go through `save_json`, so a reader never sees half
+    /// a file. No `meta.json`: nothing is written.
+    ///
+    /// Another process (the live one) may rewrite the same `meta.json` between the read
+    /// and the write here; the later write wins.
+    ///
+    /// # Errors
+    /// As Python raises.
+    pub fn store_title(&self, meeting_id: &str, fields: &Map) -> Result<()> {
+        let _inner = self.shared.lock();
+        let meta_path = self.shared.base_path.join(meeting_id).join("meta.json");
+        if !meta_path.exists() {
+            return Ok(());
+        }
+        let mut meta = read_json(&meta_path)?;
+        for (key, value) in fields.iter() {
+            set(&mut meta, key, value.clone())?;
+        }
+        let clock = self.shared.options.clock.as_ref();
+        let now = PyDateTime { wall_micros: self.shared.now().local_wall(clock), offset_micros: None };
+        set(&mut meta, "updated_at", Value::from(now.isoformat()))?;
+        save_json(&meta_path, &meta)?;
+        if !get(&meta, "ended_at")?.is_some_and(Value::truthy) {
+            return Ok(());
+        }
+        let index_path = self.shared.base_path.join("index.json");
+        if !index_path.exists() {
+            return Ok(());
+        }
+        let mut index = read_json(&index_path)?;
+        let title = fields.get("title").cloned().unwrap_or(Value::Null);
+        if let Some(Value::Array(rows)) = index.as_object_mut().and_then(|m| m.get_mut("meetings")) {
+            for row in rows.iter_mut() {
+                if get(row, "id")? == Some(&Value::from(meeting_id)) {
+                    set(row, "title", title)?;
+                    break;
+                }
+            }
+        } else if let Some(other) = get(&index, "meetings")? {
+            return Err(StorageError::Type(format!("'{}' object is not iterable", other.type_name())));
+        }
+        save_json(&index_path, &index)
+    }
 }
 
 impl Drop for MeetingStorage {
