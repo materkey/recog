@@ -244,6 +244,27 @@ fn find_option<'a>(specs: &'a [Spec], name: &str) -> Result<&'a Spec, Vec<&'a st
 /// The options given (name, value), the positionals, and whether help was asked for.
 type Split = (Vec<(&'static str, Option<String>)>, Vec<String>, bool);
 
+/// What one argument is before the option table is consulted.
+enum ArgKind {
+    Positional,
+    /// `--`: everything after it is positional.
+    EndOfOptions,
+    Help,
+    Option,
+}
+
+fn arg_kind(arg: &str, only_positionals: bool) -> ArgKind {
+    if only_positionals || !arg.starts_with('-') || arg == "-" {
+        ArgKind::Positional
+    } else if arg == "--" {
+        ArgKind::EndOfOptions
+    } else if arg == "-h" || arg == "--help" {
+        ArgKind::Help
+    } else {
+        ArgKind::Option
+    }
+}
+
 /// Options and positionals of one subcommand.
 fn split(args: &[String], specs: &[Spec], usage: &str, prog: &str) -> Result<Split, Exit> {
     let mut options = Vec::new();
@@ -255,68 +276,76 @@ fn split(args: &[String], specs: &[Spec], usage: &str, prog: &str) -> Result<Spl
     while i < args.len() {
         let arg = &args[i];
         i += 1;
-        if only_positionals || !arg.starts_with('-') || arg == "-" {
-            positionals.push(arg.clone());
-            continue;
-        }
-        if arg == "--" {
-            only_positionals = true;
-            continue;
-        }
-        if arg == "-h" || arg == "--help" {
-            help = true;
-            continue;
-        }
-        let (name, inline) = match arg.split_once('=') {
-            Some((name, value)) if name.starts_with("--") => (name, Some(value.to_owned())),
-            _ => (arg.as_str(), None),
-        };
-        match find_option(specs, name) {
-            Ok(spec) if spec.takes_value => {
-                let value = match inline {
-                    Some(v) => v,
-                    None => match args.get(i) {
-                        Some(next) if !next.starts_with('-') || next.parse::<f64>().is_ok() => {
-                            i += 1;
-                            next.clone()
-                        }
-                        _ => {
-                            return Err(error(
-                                usage,
-                                prog,
-                                &format!("argument {}: expected one argument", spec_label(spec)),
-                            ));
-                        }
-                    },
-                };
-                options.push((spec.name, Some(value)));
-            }
-            Ok(spec) => {
-                if inline.is_some() {
-                    return Err(error(
-                        usage,
-                        prog,
-                        &format!(
-                            "argument {}: ignored explicit argument {}",
-                            spec.name,
-                            py_repr(inline.as_deref().unwrap_or(""))
-                        ),
-                    ));
+        match arg_kind(arg, only_positionals) {
+            ArgKind::Positional => positionals.push(arg.clone()),
+            ArgKind::EndOfOptions => only_positionals = true,
+            ArgKind::Help => help = true,
+            ArgKind::Option => {
+                if let Some((name, value, used)) = option(arg, args.get(i), specs, usage, prog)? {
+                    i += used;
+                    options.push((name, value));
+                } else {
+                    unrecognized.push(arg.clone());
                 }
-                options.push((spec.name, None));
             }
-            Err(candidates) if candidates.len() > 1 => {
-                let mut message = format!("ambiguous option: {name} could match ");
-                let _ = write!(message, "{}", candidates.join(", "));
-                return Err(error(usage, prog, &message));
-            }
-            Err(_) => unrecognized.push(arg.clone()),
         }
     }
     if !unrecognized.is_empty() {
         return Err(error(MAIN_USAGE, "recog", &format!("unrecognized arguments: {}", unrecognized.join(" "))));
     }
     Ok((options, positionals, help))
+}
+
+/// An option's name, its value, and how many of the following arguments it took.
+type Taken = (&'static str, Option<String>, usize);
+
+/// An option argument (`next` the argument after it) and what it took; None when no
+/// option has that name.
+fn option(arg: &str, next: Option<&String>, specs: &[Spec], usage: &str, prog: &str) -> Result<Option<Taken>, Exit> {
+    let (name, inline) = match arg.split_once('=') {
+        Some((name, value)) if name.starts_with("--") => (name, Some(value.to_owned())),
+        _ => (arg, None),
+    };
+    match find_option(specs, name) {
+        Ok(spec) if spec.takes_value => {
+            option_value(spec, inline, next, usage, prog).map(|(value, used)| Some((spec.name, Some(value), used)))
+        }
+        Ok(spec) => flag(spec, inline.as_deref(), usage, prog).map(|()| Some((spec.name, None, 0))),
+        Err(candidates) if candidates.len() > 1 => {
+            let mut message = format!("ambiguous option: {name} could match ");
+            let _ = write!(message, "{}", candidates.join(", "));
+            Err(error(usage, prog, &message))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+/// The value of an option that takes one: after `=`, else the next argument unless
+/// it is another option (a negative number is a value).
+fn option_value(
+    spec: &Spec,
+    inline: Option<String>,
+    next: Option<&String>,
+    usage: &str,
+    prog: &str,
+) -> Result<(String, usize), Exit> {
+    if let Some(value) = inline {
+        return Ok((value, 0));
+    }
+    match next {
+        Some(next) if !next.starts_with('-') || next.parse::<f64>().is_ok() => Ok((next.clone(), 1)),
+        _ => Err(error(usage, prog, &format!("argument {}: expected one argument", spec_label(spec)))),
+    }
+}
+
+/// A flag takes no `=value`.
+fn flag(spec: &Spec, inline: Option<&str>, usage: &str, prog: &str) -> Result<(), Exit> {
+    match inline {
+        Some(value) => {
+            Err(error(usage, prog, &format!("argument {}: ignored explicit argument {}", spec.name, py_repr(value))))
+        }
+        None => Ok(()),
+    }
 }
 
 fn spec_label(spec: &Spec) -> &'static str {
@@ -351,32 +380,45 @@ fn parse_live(args: &[String], mic_default: &str) -> Result<Command, Exit> {
     }
     let mut live = LiveArgs::default();
     for (name, value) in options {
-        let value = value.unwrap_or_default();
-        match name {
-            "--mic-device" => live.mic_device = value,
-            "--system-audio" => live.system_audio = Some(value),
-            "--system-device" => live.system_device = Some(value),
-            "--chunk-duration" => {
-                live.chunk_duration = recog_core::py::parse_float(&value).map_err(|_| {
-                    error(
-                        LIVE_USAGE,
-                        "recog live",
-                        &format!("argument --chunk-duration: invalid float value: {}", py_repr(&value)),
-                    )
-                })?;
-            }
-            "--output" => live.output = Some(value),
-            "--list-devices" => live.list_devices = true,
-            "--ktalk" => live.ktalk = true,
-            "--ktalk-only" => live.ktalk_only = true,
-            "--zoom-app" => live.zoom_app = true,
-            "--screencapture" => live.screencapture = true,
-            "--mic-speaker-name" => live.mic_speaker_name = Some(value),
-            "--no-save-audio" => live.no_save_audio = true,
-            _ => {}
+        match value {
+            Some(value) => set_live_value(&mut live, name, value)?,
+            None => set_live_flag(&mut live, name),
         }
     }
     Ok(Command::Live(live))
+}
+
+/// An option of `live` that takes a value.
+fn set_live_value(live: &mut LiveArgs, name: &str, value: String) -> Result<(), Exit> {
+    match name {
+        "--mic-device" => live.mic_device = value,
+        "--system-audio" => live.system_audio = Some(value),
+        "--system-device" => live.system_device = Some(value),
+        "--chunk-duration" => live.chunk_duration = float_value(&value, "--chunk-duration", LIVE_USAGE, "recog live")?,
+        "--output" => live.output = Some(value),
+        "--mic-speaker-name" => live.mic_speaker_name = Some(value),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// A flag of `live`.
+fn set_live_flag(live: &mut LiveArgs, name: &str) {
+    match name {
+        "--list-devices" => live.list_devices = true,
+        "--ktalk" => live.ktalk = true,
+        "--ktalk-only" => live.ktalk_only = true,
+        "--zoom-app" => live.zoom_app = true,
+        "--screencapture" => live.screencapture = true,
+        "--no-save-audio" => live.no_save_audio = true,
+        _ => {}
+    }
+}
+
+/// A float option's value as argparse's `type=float` reads it.
+fn float_value(value: &str, option: &str, usage: &str, prog: &str) -> Result<f64, Exit> {
+    recog_core::py::parse_float(value)
+        .map_err(|_| error(usage, prog, &format!("argument {option}: invalid float value: {}", py_repr(value))))
 }
 
 fn config_help() -> String {
@@ -457,32 +499,29 @@ fn parse_replay(args: &[String]) -> Result<Command, Exit> {
     if help {
         return Err(Exit { stdout: replay_help(), stderr: String::new(), code: 0 });
     }
-    let [session, out] = positionals.as_slice() else {
+    let (session, out) = replay_positionals(&positionals)?;
+    let mut replay = ReplayArgs { session, out, profile: None, tail: crate::live::replay::TAIL_S };
+    for (name, value) in options {
+        let value = value.unwrap_or_default();
+        match name {
+            "--profile" => replay.profile = Some(value),
+            "--tail" => replay.tail = float_value(&value, "--tail", REPLAY_USAGE, "recog replay")?,
+            _ => {}
+        }
+    }
+    Ok(Command::Replay(replay))
+}
+
+/// `session` and `out`, or what argparse says of missing or extra positionals.
+fn replay_positionals(positionals: &[String]) -> Result<(String, String), Exit> {
+    let [session, out] = positionals else {
         let missing = if positionals.is_empty() { "session, out" } else { "out" };
         if positionals.len() > 2 {
             return Err(error(MAIN_USAGE, "recog", &format!("unrecognized arguments: {}", positionals[2..].join(" "))));
         }
         return Err(error(REPLAY_USAGE, "recog replay", &format!("the following arguments are required: {missing}")));
     };
-    let mut replay =
-        ReplayArgs { session: session.clone(), out: out.clone(), profile: None, tail: crate::live::replay::TAIL_S };
-    for (name, value) in options {
-        let value = value.unwrap_or_default();
-        match name {
-            "--profile" => replay.profile = Some(value),
-            "--tail" => {
-                replay.tail = recog_core::py::parse_float(&value).map_err(|_| {
-                    error(
-                        REPLAY_USAGE,
-                        "recog replay",
-                        &format!("argument --tail: invalid float value: {}", py_repr(&value)),
-                    )
-                })?;
-            }
-            _ => {}
-        }
-    }
-    Ok(Command::Replay(replay))
+    Ok((session.clone(), out.clone()))
 }
 
 /// Parses `argv` without the program name; `mic_default` is `MIC_SPEAKER_NAME` for the
@@ -499,21 +538,34 @@ pub fn parse(argv: &[String], mic_default: &str) -> Result<Command, Exit> {
         "meetings" => parse_meetings(rest),
         "replay" => parse_replay(rest),
         "desktop" => Ok(Command::Desktop(rest.to_vec())),
-        "check" => parse_bare(rest, CHECK_USAGE, "Проверить настройки установки", Command::Check),
         "config" => parse_config(rest),
-        "launcher" => parse_bare(rest, LAUNCHER_USAGE, "Собрать Recog.app (macOS)", Command::Launcher),
-        "prefetch" => parse_bare(rest, PREFETCH_USAGE, "Скачать модель ASR", Command::Prefetch),
-        other if other.starts_with('-') => Err(error(MAIN_USAGE, "recog", &format!("unrecognized arguments: {other}"))),
-        other => Err(error(
-            MAIN_USAGE,
-            "recog",
-            &format!(
-                "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop', \
-                 'check', 'config', 'launcher', 'prefetch')",
-                py_repr(other)
-            ),
-        )),
+        "check" | "launcher" | "prefetch" => parse_helper(first, rest),
+        other => Err(unknown_command(other)),
     }
+}
+
+/// An installation helper without arguments.
+fn parse_helper(name: &str, rest: &[String]) -> Result<Command, Exit> {
+    match name {
+        "check" => parse_bare(rest, CHECK_USAGE, "Проверить настройки установки", Command::Check),
+        "launcher" => parse_bare(rest, LAUNCHER_USAGE, "Собрать Recog.app (macOS)", Command::Launcher),
+        _ => parse_bare(rest, PREFETCH_USAGE, "Скачать модель ASR", Command::Prefetch),
+    }
+}
+
+fn unknown_command(other: &str) -> Exit {
+    if other.starts_with('-') {
+        return error(MAIN_USAGE, "recog", &format!("unrecognized arguments: {other}"));
+    }
+    error(
+        MAIN_USAGE,
+        "recog",
+        &format!(
+            "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop', \
+             'check', 'config', 'launcher', 'prefetch')",
+            py_repr(other)
+        ),
+    )
 }
 
 #[cfg(test)]
