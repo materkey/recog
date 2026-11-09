@@ -181,16 +181,101 @@ fn parse_time(s: &str) -> Option<(i64, i64, i64, i64)> {
             second = digits(r, 0, 2)?;
             rest = &r[2..];
             if let Some(r) = rest.strip_prefix(['.', ',']) {
-                if r.is_empty() || !r.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-                let kept = &r[..r.len().min(6)];
-                micro = kept.parse::<i64>().ok()? * 10_i64.pow(u32::try_from(6 - kept.len()).ok()?);
+                micro = parse_fraction(r)?;
                 rest = "";
             }
         }
     }
     rest.is_empty().then_some((hour, minute, second, micro))
+}
+
+/// The microseconds of the digits after the decimal point, beyond six dropped.
+fn parse_fraction(r: &str) -> Option<i64> {
+    if r.is_empty() || !r.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let kept = &r[..r.len().min(6)];
+    Some(kept.parse::<i64>().ok()? * 10_i64.pow(u32::try_from(6 - kept.len()).ok()?))
+}
+
+/// `YYYY-MM-DD`, the first ten characters.
+fn parse_date(text: &str, chars: &[char]) -> Result<(i64, i64, i64), TimeError> {
+    if chars.len() < 10 || !chars[..10].iter().all(char::is_ascii) {
+        return Err(invalid(text));
+    }
+    let date_part: String = chars[..10].iter().collect();
+    match (
+        digits(&date_part, 0, 4),
+        &date_part[4..5],
+        digits(&date_part, 5, 2),
+        &date_part[7..8],
+        digits(&date_part, 8, 2),
+    ) {
+        (Some(y), "-", Some(m), "-", Some(d)) => Ok((y, m, d)),
+        _ => Err(invalid(text)),
+    }
+}
+
+type TimeFields = (i64, i64, i64, i64);
+
+/// The time after the separator and its UTC offset, if any.
+fn parse_time_and_offset(text: &str, rest: &str) -> Result<(TimeFields, Option<i64>), TimeError> {
+    if rest.is_empty() {
+        return Err(invalid(text));
+    }
+    let split = rest.find(['Z', '+', '-']).unwrap_or(rest.len());
+    let time = parse_time(&rest[..split]).ok_or_else(|| invalid(text))?;
+    Ok((time, parse_offset(text, &rest[split..])?))
+}
+
+/// `Z`, `±HHMM` or `±HH:MM[:SS[.f…]]` in microseconds; None for no offset.
+fn parse_offset(text: &str, tz: &str) -> Result<Option<i64>, TimeError> {
+    if tz.is_empty() {
+        return Ok(None);
+    }
+    if tz == "Z" {
+        return Ok(Some(0));
+    }
+    let sign = if tz.starts_with('-') { -1 } else { 1 };
+    let (h, m, s, us) = offset_fields(text, &tz[1..])?;
+    if h > 23 || m > 59 || s > 59 {
+        return Err(TimeError::Value(
+            "offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24).".into(),
+        ));
+    }
+    Ok(Some(sign * (((h * 60 + m) * 60 + s) * MICROS + us)))
+}
+
+fn offset_fields(text: &str, body: &str) -> Result<TimeFields, TimeError> {
+    if body.len() == 4 && body.bytes().all(|b| b.is_ascii_digit()) {
+        return Ok((digits(body, 0, 2).unwrap_or(0), digits(body, 2, 2).unwrap_or(0), 0, 0));
+    }
+    parse_time(body).ok_or_else(|| invalid(text))
+}
+
+/// The date, or the range error Python raises for its year, month or day.
+fn checked_date(year: i64, month: i64, day: i64) -> Result<NaiveDate, TimeError> {
+    if year < 1 {
+        return Err(TimeError::Value(format!("year {year} is out of range")));
+    }
+    if !(1..=12).contains(&month) {
+        return Err(TimeError::Value("month must be in 1..12".into()));
+    }
+    NaiveDate::from_ymd_opt(
+        i32::try_from(year).unwrap_or(1),
+        u32::try_from(month).unwrap_or(1),
+        u32::try_from(day).unwrap_or(0),
+    )
+    .ok_or_else(|| TimeError::Value("day is out of range for month".into()))
+}
+
+fn check_clock(hour: i64, minute: i64, second: i64) -> Result<(), TimeError> {
+    for (value, name, max) in [(hour, "hour", 23), (minute, "minute", 59), (second, "second", 59)] {
+        if value > max {
+            return Err(TimeError::Value(format!("{name} must be in 0..{max}")));
+        }
+    }
+    Ok(())
 }
 
 /// `datetime.fromisoformat(text)`.
@@ -200,73 +285,16 @@ fn parse_time(s: &str) -> Option<(i64, i64, i64, i64)> {
 /// a component.
 pub fn fromisoformat(text: &str) -> Result<PyDateTime, TimeError> {
     let chars: Vec<char> = text.chars().collect();
-    if chars.len() < 10 || !chars[..10].iter().all(char::is_ascii) {
-        return Err(invalid(text));
-    }
-    let date_part: String = chars[..10].iter().collect();
-    let (year, month, day) = match (
-        digits(&date_part, 0, 4),
-        &date_part[4..5],
-        digits(&date_part, 5, 2),
-        &date_part[7..8],
-        digits(&date_part, 8, 2),
-    ) {
-        (Some(y), "-", Some(m), "-", Some(d)) => (y, m, d),
-        _ => return Err(invalid(text)),
-    };
+    let (year, month, day) = parse_date(text, &chars)?;
     let rest: String = chars.iter().skip(11).collect();
     if !rest.is_ascii() {
         return Err(invalid(text));
     }
     let has_separator = chars.len() > 10;
-    let (time, offset) = if has_separator {
-        if rest.is_empty() {
-            return Err(invalid(text));
-        }
-        let split = rest.find(['Z', '+', '-']).unwrap_or(rest.len());
-        let time = parse_time(&rest[..split]).ok_or_else(|| invalid(text))?;
-        let tz = &rest[split..];
-        let offset = if tz.is_empty() {
-            None
-        } else if tz == "Z" {
-            Some(0)
-        } else {
-            let sign = if tz.starts_with('-') { -1 } else { 1 };
-            let body = &tz[1..];
-            let (h, m, s, us) = if body.len() == 4 && body.bytes().all(|b| b.is_ascii_digit()) {
-                (digits(body, 0, 2).unwrap_or(0), digits(body, 2, 2).unwrap_or(0), 0, 0)
-            } else {
-                parse_time(body).ok_or_else(|| invalid(text))?
-            };
-            if h > 23 || m > 59 || s > 59 {
-                return Err(TimeError::Value(
-                    "offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24).".into(),
-                ));
-            }
-            Some(sign * (((h * 60 + m) * 60 + s) * MICROS + us))
-        };
-        (time, offset)
-    } else {
-        ((0, 0, 0, 0), None)
-    };
+    let (time, offset) = if has_separator { parse_time_and_offset(text, &rest)? } else { ((0, 0, 0, 0), None) };
     let (hour, minute, second, micro) = time;
-    if year < 1 {
-        return Err(TimeError::Value(format!("year {year} is out of range")));
-    }
-    if !(1..=12).contains(&month) {
-        return Err(TimeError::Value("month must be in 1..12".into()));
-    }
-    let date = NaiveDate::from_ymd_opt(
-        i32::try_from(year).unwrap_or(1),
-        u32::try_from(month).unwrap_or(1),
-        u32::try_from(day).unwrap_or(0),
-    )
-    .ok_or_else(|| TimeError::Value("day is out of range for month".into()))?;
-    for (value, name, max) in [(hour, "hour", 23), (minute, "minute", 59), (second, "second", 59)] {
-        if value > max {
-            return Err(TimeError::Value(format!("{name} must be in 0..{max}")));
-        }
-    }
+    let date = checked_date(year, month, day)?;
+    check_clock(hour, minute, second)?;
     let wall = NaiveDateTime::new(
         date,
         chrono::NaiveTime::from_hms_micro_opt(
