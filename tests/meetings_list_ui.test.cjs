@@ -76,6 +76,17 @@ test('content mode - search fails - the error is shown', async () => {
     assert.equal(p.text(p.$('search-results')), 'Error: Search failed');
 });
 
+test('content mode - search answers a body that is not JSON - the parser error is shown as text', async () => {
+    const unparsable = { ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token \'<\', "<b>oops</b>" is not valid JSON'); } };
+    const p = listPage({ local: { searchMode: 'content' }, search: async () => unparsable });
+    await p.settle();
+    p.input('filter-title', 'релиз', 'input');
+    p.timers.advance(300);
+    await p.settle();
+    assert.equal(p.text(p.$('search-results')), 'Error: Unexpected token \'<\', "<b>oops</b>" is not valid JSON');
+    assert.equal(p.$('search-results').querySelector('b'), null);
+});
+
 test('content mode - query shorter than two letters or title mode - the card list filtered by title is back', async () => {
     const p = listPage({ local: { searchMode: 'content' } });
     await p.settle();

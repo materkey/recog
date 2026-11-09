@@ -350,7 +350,7 @@ const views = {
                 const results = await api.searchTranscripts(this.filterTitle);
                 this.renderSearchResults(results);
             } catch (e) {
-                resultsContainer.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+                resultsContainer.innerHTML = `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
             }
         },
 
@@ -542,7 +542,7 @@ const views = {
                     });
                 }
             } catch (e) {
-                transcriptEl.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+                transcriptEl.innerHTML = `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
             }
         },
 
@@ -919,7 +919,7 @@ const views = {
                     break;
 
                 case 'error':
-                    infoEl.innerHTML = `<div class="error">${msg.message}</div>`;
+                    infoEl.innerHTML = `<div class="error">${escapeHtml(msg.message)}</div>`;
                     break;
             }
         },

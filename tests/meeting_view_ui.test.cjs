@@ -86,6 +86,14 @@ test('unknown meeting - opened - the error is shown in the transcript', async ()
     assert.equal(p.text(p.$('transcript')), 'Error: Meeting not found');
 });
 
+test('transcript answers a body that is not JSON - opened - the parser error is shown as text', async () => {
+    const unparsable = { ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token \'<\', "<b>oops</b>" is not valid JSON'); } };
+    const p = meetingPage({ routes: { 'GET /api/meetings/m1/transcript': () => unparsable } });
+    await p.settle();
+    assert.equal(p.text(p.$('transcript')), 'Error: Unexpected token \'<\', "<b>oops</b>" is not valid JSON');
+    assert.equal(p.$('transcript').querySelector('b'), null);
+});
+
 test('transcript shown - searching for a word - only matching rows, highlighted; clearing shows all', async () => {
     const p = meetingPage();
     await p.settle();

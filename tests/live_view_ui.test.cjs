@@ -191,6 +191,13 @@ test('stream open - error frame arrives - the message is shown in the meeting ca
     assert.equal(p.info(), 'нет данных');
 });
 
+test('stream open - error frame with markup arrives - the markup is shown as text', () => {
+    const p = livePage();
+    p.receive({ type: 'error', message: '<img src=x onerror=alert(1)> нет данных' });
+    assert.equal(p.info(), '<img src=x onerror=alert(1)> нет данных');
+    assert.equal(p.$('live-meeting-info').querySelector('img'), null);
+});
+
 test('privacy loading - privacy_updated arrives - both privacy buttons follow it', () => {
     const p = livePage();
     p.receive({ type: 'privacy_updated', enabled: true });
