@@ -39,26 +39,32 @@ fn translate(event: &notify::Event) -> Vec<(EventKind, bool, PathBuf, Option<Pat
         paths.iter().map(|p| (kind, dir.unwrap_or_else(|| p.is_dir()), p.clone(), None)).collect::<Vec<_>>()
     };
     match &event.kind {
-        NotifyKind::Create(CreateKind::Folder) => one(EventKind::Created, Some(true)),
-        NotifyKind::Create(CreateKind::File) => one(EventKind::Created, Some(false)),
-        NotifyKind::Create(_) => one(EventKind::Created, None),
-        NotifyKind::Remove(RemoveKind::Folder) => one(EventKind::Deleted, Some(true)),
-        NotifyKind::Remove(_) => one(EventKind::Deleted, Some(false)),
+        NotifyKind::Create(kind) => one(EventKind::Created, created_directory(*kind)),
+        NotifyKind::Remove(kind) => one(EventKind::Deleted, Some(matches!(kind, RemoveKind::Folder))),
         NotifyKind::Modify(ModifyKind::Name(RenameMode::Both)) if paths.len() == 2 => {
             vec![(EventKind::Moved, paths[1].is_dir(), paths[0].clone(), Some(paths[1].clone()))]
         }
-        NotifyKind::Modify(ModifyKind::Name(_)) => paths
-            .iter()
-            .map(|p| {
-                if p.exists() {
-                    (EventKind::Created, p.is_dir(), p.clone(), None)
-                } else {
-                    (EventKind::Deleted, false, p.clone(), None)
-                }
-            })
-            .collect(),
+        NotifyKind::Modify(ModifyKind::Name(_)) => paths.iter().map(|p| renamed(p)).collect(),
         NotifyKind::Modify(_) | NotifyKind::Any | NotifyKind::Other => one(EventKind::Modified, None),
         NotifyKind::Access(_) => Vec::new(),
+    }
+}
+
+/// Whether a creation was a directory, when notify says; else the path decides.
+fn created_directory(kind: CreateKind) -> Option<bool> {
+    match kind {
+        CreateKind::Folder => Some(true),
+        CreateKind::File => Some(false),
+        _ => None,
+    }
+}
+
+/// One side of a rename: a creation when the path exists, else a deletion.
+fn renamed(path: &Path) -> (EventKind, bool, PathBuf, Option<PathBuf>) {
+    if path.exists() {
+        (EventKind::Created, path.is_dir(), path.to_path_buf(), None)
+    } else {
+        (EventKind::Deleted, false, path.to_path_buf(), None)
     }
 }
 
