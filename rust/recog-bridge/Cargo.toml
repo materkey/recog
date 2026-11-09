@@ -5,10 +5,6 @@ edition = "2024"
 description = "The conference bridge of recog: the WebSocket server between the extension, the live process and the Copilot"
 publish = false
 
-[[bin]]
-name = "recog-bridge-probe"
-path = "src/bin/recog-bridge-probe.rs"
-
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Insertion order of the pending Copilot requests: Python's dict, iterated when the

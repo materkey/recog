@@ -1,9 +1,9 @@
-//! Test doubles of the bridge's surroundings, for the crate's tests and the
-//! differential probe (`recog-bridge-probe`): the counterparts of the Python tests'
-//! `FakeWebSocket`, `Mock()` storage and recording callbacks.
+//! Test doubles of the bridge's surroundings, for the crate's tests and those of the
+//! crates that drive a bridge: the counterparts of the Python tests' `FakeWebSocket`,
+//! `Mock()` storage and recording callbacks.
 //!
-//! Everything here records what the bridge did to it, as JSON values, so a test (or
-//! the probe) can compare it with what the Python bridge did to its fakes.
+//! Everything here records what the bridge did to it, as JSON values, so a test can
+//! compare it with what it expects.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
