@@ -95,4 +95,78 @@ describe('installFocusGuard', () => {
       expect(origRequestFullscreen).toHaveBeenCalled();
     });
   });
+
+  it('a window whose focus cannot be replaced - installed - logs the failure and keeps going', () => {
+    const win = buildFakeWindow();
+    const origFocus = win.focus;
+    Object.defineProperty(win, 'focus', { get: () => origFocus });
+
+    installFocusGuard(win);
+
+    expect(console.log).toHaveBeenCalledWith(
+      '[KTalk Recog] focus guard: window.focus override failed', expect.any(TypeError)
+    );
+    expect(win.focus).toBe(origFocus);
+    win.alert('still wrapped');
+    expect(console.log).toHaveBeenCalledWith('[KTalk Recog] alert() called by page:', 'still wrapped');
+  });
+
+  it('a window without Element, Notification or dialogs - installed - leaves them absent', () => {
+    const win = { focus: jest.fn(), document: null };
+
+    installFocusGuard(win);
+
+    expect(win.Notification).toBeUndefined();
+    expect(win.alert).toBeUndefined();
+    expect(win.__ktalkFocusGuardInstalled).toBe(true);
+  });
+
+  it('window and document events - fired - log focus, blur, visibility and fullscreen changes', () => {
+    const winHandlers = {};
+    const docHandlers = {};
+    const doc = {
+      visibilityState: 'hidden',
+      fullscreenElement: null,
+      addEventListener: (type, fn) => { docHandlers[type] = fn; },
+    };
+    const win = {
+      ...buildFakeWindow(),
+      document: doc,
+      addEventListener: (type, fn) => { winHandlers[type] = fn; },
+    };
+
+    installFocusGuard(win);
+    winHandlers.focus();
+    winHandlers.blur();
+    docHandlers.visibilitychange();
+    docHandlers.fullscreenchange();
+    doc.fullscreenElement = { tagName: 'VIDEO' };
+    docHandlers.fullscreenchange();
+
+    const lines = console.log.mock.calls
+      .map(
+        (args) => args[0]
+      );
+    const stamp = '\\d\\d:\\d\\d:\\d\\d\\.\\d{3}';
+    expect(lines).toEqual(expect.arrayContaining([
+      expect.stringMatching(new RegExp(`^\\[KTalk Recog\\] window FOCUS at ${stamp}$`)),
+      expect.stringMatching(new RegExp(`^\\[KTalk Recog\\] window blur at ${stamp}$`)),
+      expect.stringMatching(new RegExp(`^\\[KTalk Recog\\] visibility=hidden at ${stamp}$`)),
+      expect.stringMatching(new RegExp(`^\\[KTalk Recog\\] fullscreenchange element=none at ${stamp}$`)),
+      expect.stringMatching(new RegExp(`^\\[KTalk Recog\\] fullscreenchange element=VIDEO at ${stamp}$`)),
+    ]));
+  });
+
+  it('a window with events but no document listener - installed - registers window events only', () => {
+    const winHandlers = {};
+    const win = {
+      ...buildFakeWindow(),
+      document: {},
+      addEventListener: (type, fn) => { winHandlers[type] = fn; },
+    };
+
+    installFocusGuard(win);
+
+    expect(Object.keys(winHandlers).sort()).toEqual(['blur', 'focus']);
+  });
 });
