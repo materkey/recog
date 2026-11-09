@@ -239,29 +239,41 @@ fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
     let mut segments = parseparam(value).into_iter();
     let ctype = segments.next().unwrap_or_default().to_lowercase();
     let mut options: Vec<(String, String)> = Vec::new();
-    for segment in segments {
-        let (key, mut val) = match segment.split_once('=') {
-            Some((key, val)) => (key.to_owned(), val.to_owned()),
-            None => (segment.clone(), String::new()),
-        };
-        if key.contains('*') {
-            continue;
-        }
-        if val.chars().count() >= 2 && val.starts_with('"') && val.ends_with('"') {
-            val = val[1..val.len() - 1].replace(r"\\", r"\").replace(r#"\""#, "\"");
-        }
-        if key == "filename" {
-            let chars: Vec<char> = val.chars().collect();
-            if chars.get(1..3) == Some(&[':', '\\'][..]) || chars.get(..2) == Some(&['\\', '\\'][..]) {
-                val = val.rsplit('\\').next().unwrap_or_default().to_owned();
-            }
-        }
+    for (key, val) in segments.filter_map(|segment| parameter(&segment)) {
         match options.iter_mut().find(|(k, _)| *k == key) {
             Some(slot) => slot.1 = val,
             None => options.push((key, val)),
         }
     }
     (ctype, options)
+}
+
+/// One `key=value` segment of a header value; `None` for an extended parameter.
+fn parameter(segment: &str) -> Option<(String, String)> {
+    let (key, val) = segment.split_once('=').unwrap_or((segment, ""));
+    if key.contains('*') {
+        return None;
+    }
+    let val = unquote_parameter(val);
+    let val = if key == "filename" { windows_basename(val) } else { val };
+    Some((key.to_owned(), val))
+}
+
+/// A quoted value without its quotes, `\\` and `\"` unescaped.
+fn unquote_parameter(val: &str) -> String {
+    if val.chars().count() >= 2 && val.starts_with('"') && val.ends_with('"') {
+        return val[1..val.len() - 1].replace(r"\\", r"\").replace(r#"\""#, "\"");
+    }
+    val.to_owned()
+}
+
+/// The last component of a file name that is a Windows path (`C:\…`, `\\server\…`).
+fn windows_basename(val: String) -> String {
+    let chars: Vec<char> = val.chars().collect();
+    if chars.get(1..3) == Some(&[':', '\\'][..]) || chars.get(..2) == Some(&['\\', '\\'][..]) {
+        return val.rsplit('\\').next().unwrap_or_default().to_owned();
+    }
+    val
 }
 
 fn option<'a>(options: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -820,75 +832,20 @@ fn unquote_plus(text: &str) -> String {
     unquote_utf8(&text.replace('+', " "))
 }
 
-/// python-multipart's `QuerystringParser` (not strict) and Starlette's `FormParser`.
+/// python-multipart's `QuerystringParser` (not strict) and Starlette's `FormParser`:
+/// the fields between `&`s, empty ones skipped, each split at its first `=` (a field
+/// without one has an empty value).
 fn querystring(data: &[u8]) -> Vec<(String, FormValue)> {
-    #[derive(PartialEq)]
-    enum Q {
-        Before,
-        Name,
-        Data,
-    }
-    let mut items = Vec::new();
-    let (mut name, mut value): (Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new());
-    let mut end_field = |name: &mut Vec<u8>, value: &mut Vec<u8>| {
-        items.push((unquote_plus(&latin1(name)), FormValue::Text(unquote_plus(&latin1(value)))));
-    };
-    let sep = |from: usize| find(data, b"&", from);
-    let length = data.len();
-    let mut state = Q::Before;
-    let mut i = 0;
-    while i < length {
-        let ch = data[i];
-        match state {
-            Q::Before => {
-                if ch != b'&' {
-                    name.clear();
-                    value.clear();
-                    state = Q::Name;
-                    continue;
-                }
-            }
-            Q::Name => {
-                let sep_pos = sep(i);
-                let equals = match sep_pos {
-                    Some(s) => data[i..s].iter().position(|&b| b == b'=').map(|p| i + p),
-                    None => data[i..].iter().position(|&b| b == b'=').map(|p| i + p),
-                };
-                if let Some(eq) = equals {
-                    name.extend_from_slice(&data[i..eq]);
-                    i = eq;
-                    state = Q::Data;
-                } else if let Some(s) = sep_pos {
-                    name.extend_from_slice(&data[i..s]);
-                    end_field(&mut name, &mut value);
-                    i = s;
-                    state = Q::Before;
-                    continue;
-                } else {
-                    name.extend_from_slice(&data[i..]);
-                    i = length;
-                    continue;
-                }
-            }
-            Q::Data => {
-                if let Some(s) = sep(i) {
-                    value.extend_from_slice(&data[i..s]);
-                    end_field(&mut name, &mut value);
-                    i = s;
-                    state = Q::Before;
-                    continue;
-                }
-                value.extend_from_slice(&data[i..]);
-                i = length;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    if state != Q::Before {
-        end_field(&mut name, &mut value);
-    }
-    items
+    data.split(|&b| b == b'&')
+        .filter(|field| !field.is_empty())
+        .map(|field| {
+            let (name, value) = match field.iter().position(|&b| b == b'=') {
+                Some(eq) => (&field[..eq], &field[eq + 1..]),
+                None => (field, &[][..]),
+            };
+            (unquote_plus(&latin1(name)), FormValue::Text(unquote_plus(&latin1(value))))
+        })
+        .collect()
 }
 
 #[cfg(test)]
