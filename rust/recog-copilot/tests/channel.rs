@@ -217,6 +217,42 @@ fn built_server_when_initialization_options_created_then_channel_capability_pres
 }
 
 #[test]
+fn tool_arguments_when_taken_from_rmcp_json_then_integers_stay_integers() {
+    // given
+    let arguments = json!({"n": null, "b": true, "i": -5, "u": u64::MAX, "f": 1.5, "whole": 5.0, "s": "x",
+                           "a": [1, [2.5]], "o": {"k": false}});
+    let serde_json::Value::Object(arguments) = arguments else { unreachable!() };
+    // when
+    let map = handler::map_from_json(&arguments);
+    // then
+    assert_eq!(
+        dumps(&map),
+        r#"{"n": null, "b": true, "i": -5, "u": 18446744073709551615, "f": 1.5, "whole": 5.0, "s": "x", "a": [1, [2.5]], "o": {"k": false}}"#
+    );
+    assert_eq!(map.get("u"), Some(&Value::Int(i128::from(u64::MAX))));
+    assert_eq!(map.get("whole"), Some(&Value::Float(5.0)));
+}
+
+#[tokio::test]
+async fn unreadable_privacy_setting_when_event_pushed_then_failure_logged_with_python_class() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("privacy.json")).unwrap();
+    let link = link_in(&dir);
+    let server = McpServer::new(link.clone(), "127.0.0.1");
+    let capture = Capture::start();
+    // when
+    handle_inbound(br#"{"type": "transcript_tick"}"#, &link, Some(&server)).await;
+    // then
+    let log = capture.text();
+    assert!(
+        log.contains("[copilot-channel] channel push failed for 'transcript_tick': IsADirectoryError: [Errno 21]"),
+        "{log}"
+    );
+    assert_eq!(link.events.try_get().map(|e| dumps(&e)), Some(r#"{"type": "transcript_tick"}"#.to_owned()));
+}
+
+#[test]
 fn user_message_when_formatted_then_reply_hint_and_transport_meta() {
     // given
     let event = object(
@@ -249,6 +285,81 @@ fn transcript_tick_when_formatted_then_counts_segments_and_keeps_context() {
     assert_eq!(meta.get("event_type"), Some(&Value::from("transcript_tick")));
     assert_eq!(meta.get("meeting_id"), Some(&Value::from("meet-2")));
     assert_eq!(meta.get("local_user_name"), Some(&Value::from("Слава")));
+}
+
+#[test]
+fn each_event_kind_when_formatted_then_python_push_text() {
+    // given
+    let cases = [
+        (
+            r#"{"type": "copilot_user_message"}"#,
+            "User typed in the Copilot tab. Reply with send_copilot_message kind='reply' carrying the original request_id.\n\nText: ",
+        ),
+        (
+            r#"{"type": "copilot_user_message", "text": 7}"#,
+            "User typed in the Copilot tab. Reply with send_copilot_message kind='reply' carrying the original request_id.\n\nText: 7",
+        ),
+        (
+            r#"{"type": "transcript_tick", "new_segments": null, "recent_context": ""}"#,
+            "Transcript tick: 0 new segment(s). Apply the current editable Copilot instructions.\n\nRecent context:\n",
+        ),
+        (
+            r#"{"type": "transcript_tick", "new_segments": "abc", "recent_context": 5}"#,
+            "Transcript tick: 3 new segment(s). Apply the current editable Copilot instructions.\n\nRecent context:\n5",
+        ),
+        (
+            r#"{"type": "transcript_tick", "new_segments": {"a": 1}}"#,
+            "Transcript tick: 1 new segment(s). Apply the current editable Copilot instructions.\n\nRecent context:\n",
+        ),
+        (r#"{"type": "meeting_started"}"#, "Meeting started: (untitled). Reset internal proactive state."),
+        (
+            r#"{"type": "meeting_started", "meeting_title": "Синк {проекта}"}"#,
+            "Meeting started: Синк {проекта}. Reset internal proactive state.",
+        ),
+        (
+            r#"{"type": "user_profile_updated"}"#,
+            "Local user profile updated. Replace the previous profile with the current user context. Do not send a reply for this event.",
+        ),
+        (
+            r#"{"type": "copilot_policy_updated"}"#,
+            "Copilot instructions updated. Replace the previous policy with the current user configuration, including cleared instructions. Apply it from this event onward. Do not send a reply for this event.",
+        ),
+        (r#"{"type": "meeting_ended"}"#, "Meeting ended. Stop polling and exit the copilot loop."),
+        (r#"{"type": "something_else", "x": "é"}"#, r#"{"type": "something_else", "x": "é"}"#),
+        (r#"{"x": 1}"#, r#"{"x": 1}"#),
+    ];
+    for (event, expected) in cases {
+        // when
+        let (content, _) = format_channel_event(&object(event)).unwrap();
+        // then
+        assert_eq!(content, expected, "{event}");
+    }
+}
+
+#[test]
+fn event_without_type_when_formatted_then_unknown_kind_and_json_meta_values() {
+    // given
+    let event = object(
+        r#"{"type": "", "request_id": 5, "meeting_id": null, "meeting_title": ["a"], "local_user_identity_known": false,
+            "privacy_mode": true, "copilot_policy_revision": {"r": 1}}"#,
+    );
+    // when
+    let (_, meta) = format_channel_event(&event).unwrap();
+    // then
+    assert_eq!(
+        dumps(&meta),
+        r#"{"event_type": "unknown", "request_id": "5", "meeting_title": "[\"a\"]", "local_user_identity_known": "false", "copilot_policy_revision": "{\"r\": 1}", "privacy_mode": "true"}"#
+    );
+}
+
+#[test]
+fn tick_with_unsized_new_segments_when_formatted_then_python_type_error() {
+    // given
+    let event = object(r#"{"type": "transcript_tick", "new_segments": 5}"#);
+    // when
+    let error = format_channel_event(&event).unwrap_err();
+    // then
+    assert_eq!(error, "TypeError: object of type 'int' has no len()");
 }
 
 #[test]

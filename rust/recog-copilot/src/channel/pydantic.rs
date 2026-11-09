@@ -359,6 +359,135 @@ mod tests {
         );
     }
 
+    const STRING_TYPE: (&str, &str) = ("string_type", "Input should be a valid string");
+    const INT_TYPE: (&str, &str) = ("int_type", "Input should be a valid integer");
+    const INT_PARSING: (&str, &str) =
+        ("int_parsing", "Input should be a valid integer, unable to parse string as an integer");
+    const INT_FROM_FLOAT: (&str, &str) =
+        ("int_from_float", "Input should be a valid integer, got a number with a fractional part");
+    const FINITE: (&str, &str) = ("finite_number", "Input should be a finite number");
+    const INT_SIZE: (&str, &str) =
+        ("int_parsing_size", "Unable to parse input string as an integer, exceeded maximum size");
+    const BOOL_TYPE: (&str, &str) = ("bool_type", "Input should be a valid boolean");
+    const BOOL_PARSING: (&str, &str) = ("bool_parsing", "Input should be a valid boolean, unable to interpret input");
+
+    fn checked(kind: Kind, optional: bool, value: Value) -> Result<String, (&'static str, &'static str)> {
+        let field = Field { name: "f", kind, optional, default: None };
+        validate(&field, &value).map(|v| pyjson::dumps(&v, None)).map_err(|failure| {
+            assert_eq!(failure.field, "f");
+            assert_eq!(pyjson::dumps(&failure.input, None), pyjson::dumps(&value, None));
+            (failure.kind, failure.message)
+        })
+    }
+
+    fn text(s: &str) -> Value {
+        Value::from(s)
+    }
+
+    #[test]
+    fn string_field_when_validated_then_only_strings_pass() {
+        // given / when / then
+        assert_eq!(checked(Kind::Str, false, text("x")), Ok("\"x\"".to_owned()));
+        assert_eq!(checked(Kind::Str, false, Value::Int(5)), Err(STRING_TYPE));
+        assert_eq!(checked(Kind::Str, false, Value::Null), Err(STRING_TYPE));
+        assert_eq!(checked(Kind::Str, true, Value::Null), Ok("null".to_owned()));
+        assert_eq!(checked(Kind::Str, true, Value::Bool(true)), Err(STRING_TYPE));
+    }
+
+    #[test]
+    fn int_field_when_validated_then_numbers_and_strings_coerced_as_pydantic_lax_mode() {
+        // given / when / then
+        assert_eq!(checked(Kind::Int, false, Value::Int(5)), Ok("5".to_owned()));
+        assert_eq!(checked(Kind::Int, false, Value::Bool(true)), Ok("1".to_owned()));
+        assert_eq!(checked(Kind::Int, false, Value::Bool(false)), Ok("0".to_owned()));
+        assert_eq!(checked(Kind::Int, false, Value::Float(5.0)), Ok("5".to_owned()));
+        assert_eq!(checked(Kind::Int, false, Value::Float(-0.0)), Ok("0".to_owned()));
+        assert_eq!(checked(Kind::Int, false, Value::Float(-9.0e18)), Ok("-9000000000000000000".to_owned()));
+        assert_eq!(checked(Kind::Int, false, Value::Float(1.5)), Err(INT_FROM_FLOAT));
+        assert_eq!(checked(Kind::Int, false, Value::Float(f64::NAN)), Err(FINITE));
+        assert_eq!(checked(Kind::Int, false, Value::Float(f64::NEG_INFINITY)), Err(FINITE));
+        assert_eq!(checked(Kind::Int, false, Value::Float(9.3e18)), Err(INT_SIZE));
+        assert_eq!(checked(Kind::Int, false, Value::Float(1e300)), Err(INT_SIZE));
+        assert_eq!(checked(Kind::Int, false, text("12.000")), Ok("12".to_owned()));
+        assert_eq!(checked(Kind::Int, false, text("abc")), Err(INT_PARSING));
+        assert_eq!(checked(Kind::Int, false, Value::Null), Err(INT_TYPE));
+        assert_eq!(checked(Kind::Int, true, Value::Null), Ok("null".to_owned()));
+        assert_eq!(checked(Kind::Int, false, Value::Array(vec![Value::Int(1)])), Err(INT_TYPE));
+    }
+
+    #[test]
+    fn integer_strings_when_parsed_then_only_pydantic_integer_syntax_accepted() {
+        // given
+        let accepted = [
+            ("0", 0),
+            ("-5", -5),
+            ("+4", 4),
+            (" 7 ", 7),
+            ("1_0", 10),
+            ("1_000.00", 1000),
+            ("12.0", 12),
+            ("99999999999999999999", 99_999_999_999_999_999_999),
+        ];
+        let refused = ["", "-", "1.5", "1.", ".0", "1e3", "abc", "_1", "1_", "1__0", "1_.0", "٣", "1 0", "--1"];
+        // when / then
+        for (input, expected) in accepted {
+            assert_eq!(parse_int(input), Some(expected), "{input:?}");
+        }
+        for input in refused {
+            assert_eq!(parse_int(input), None, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn bool_field_when_validated_then_pydantic_truth_words_and_numbers_accepted() {
+        // given / when / then
+        assert_eq!(checked(Kind::Bool, false, Value::Bool(false)), Ok("false".to_owned()));
+        assert_eq!(checked(Kind::Bool, false, Value::Int(0)), Ok("false".to_owned()));
+        assert_eq!(checked(Kind::Bool, false, Value::Int(1)), Ok("true".to_owned()));
+        assert_eq!(checked(Kind::Bool, false, Value::Int(2)), Err(BOOL_PARSING));
+        assert_eq!(checked(Kind::Bool, false, Value::Int(-1)), Err(BOOL_PARSING));
+        assert_eq!(checked(Kind::Bool, false, Value::Int(123_456_789_012_345_678_901)), Err(BOOL_TYPE));
+        assert_eq!(checked(Kind::Bool, false, Value::Float(0.0)), Ok("false".to_owned()));
+        assert_eq!(checked(Kind::Bool, false, Value::Float(1.0)), Ok("true".to_owned()));
+        assert_eq!(checked(Kind::Bool, false, Value::Float(5.0)), Err(BOOL_PARSING));
+        assert_eq!(checked(Kind::Bool, false, Value::Float(0.5)), Err(BOOL_TYPE));
+        assert_eq!(checked(Kind::Bool, false, Value::Float(1e300)), Err(BOOL_TYPE));
+        assert_eq!(checked(Kind::Bool, false, Value::Float(f64::NAN)), Err(BOOL_TYPE));
+        assert_eq!(checked(Kind::Bool, false, Value::Float(f64::INFINITY)), Err(BOOL_TYPE));
+        for word in ["0", "off", "f", "false", "n", "no", "OFF", "No"] {
+            assert_eq!(checked(Kind::Bool, false, text(word)), Ok("false".to_owned()), "{word}");
+        }
+        for word in ["1", "on", "t", "true", "y", "yes", "T", "Yes"] {
+            assert_eq!(checked(Kind::Bool, false, text(word)), Ok("true".to_owned()), "{word}");
+        }
+        assert_eq!(checked(Kind::Bool, false, text("maybe")), Err(BOOL_PARSING));
+        assert_eq!(checked(Kind::Bool, false, text("")), Err(BOOL_PARSING));
+        assert_eq!(checked(Kind::Bool, false, Value::Null), Err(BOOL_TYPE));
+        assert_eq!(checked(Kind::Bool, true, Value::Null), Ok("null".to_owned()));
+        assert_eq!(checked(Kind::Bool, false, Value::Object(Map::new())), Err(BOOL_TYPE));
+    }
+
+    #[test]
+    fn strings_with_escapes_when_serialised_then_only_controls_escaped() {
+        // given
+        let value = Value::from("q\"b\\n\nr\rt\tb\u{8}f\u{c}c\u{1}d\u{1f}é😀\u{7f}");
+        // when
+        let text = to_json(&value);
+        // then
+        assert_eq!(text, "\"q\\\"b\\\\n\\nr\\rt\\tb\\bf\\fc\\u0001d\\u001fé😀\u{7f}\"");
+    }
+
+    #[test]
+    fn scalars_when_serialised_then_pydantic_text() {
+        // given / when / then
+        assert_eq!(to_json(&Value::Bool(false)), "false");
+        assert_eq!(to_json(&Value::Int(-123_456_789_012_345_678_901)), "-123456789012345678901");
+        assert_eq!(to_json(&Value::Float(f64::INFINITY)), "Infinity");
+        assert_eq!(to_json(&Value::Float(f64::NEG_INFINITY)), "-Infinity");
+        assert_eq!(to_json(&Value::Float(-2.5)), "-2.5");
+        assert_eq!(to_json(&Value::Float(5e-324)), "5e-324");
+    }
+
     #[test]
     fn lax_inputs_when_validated_then_coerced_as_pydantic_does() {
         // given

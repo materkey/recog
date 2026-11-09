@@ -375,3 +375,29 @@ pub async fn serve_on(
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn privacy_failures_when_logged_then_named_like_the_python_exception() {
+        // given
+        let cases = [
+            (PrivacyError::Invalid("Invalid privacy setting".into()), "ValueError"),
+            (
+                PrivacyError::Invalid("'utf-8' codec can't decode byte 0xff in position 0: invalid start byte".into()),
+                "UnicodeDecodeError",
+            ),
+            (PrivacyError::Invalid("Expecting value: line 1 column 1 (char 0)".into()), "JSONDecodeError"),
+            (PrivacyError::Io("[Errno 13] Permission denied: '/d/privacy.json'".into()), "PermissionError"),
+            (PrivacyError::Io("[Errno 21] Is a directory: '/d/privacy.json'".into()), "IsADirectoryError"),
+            (PrivacyError::Io("[Errno 20] Not a directory: '/d/privacy.json'".into()), "NotADirectoryError"),
+            (PrivacyError::Io("[Errno 5] Input/output error: '/d/privacy.json'".into()), "OSError"),
+        ];
+        for (error, class) in cases {
+            // when / then
+            assert_eq!(privacy_error_class(&error), class, "{error}");
+        }
+    }
+}

@@ -34,6 +34,22 @@ fn each_fixture_screen_classifies_as_python_does() {
 }
 
 #[test]
+fn each_agent_state_when_reported_then_bridge_status_word() {
+    // given
+    let cases = [
+        (AgentState::Spawning, "spawning"),
+        (AgentState::Online, "online"),
+        (AgentState::Working, "working"),
+        (AgentState::Blocked, "blocked"),
+        (AgentState::Offline, "offline"),
+    ];
+    for (state, word) in cases {
+        // when / then
+        assert_eq!(state.as_str(), word);
+    }
+}
+
+#[test]
 fn trust_dialog_with_cursor_below_the_accept_option_moves_up_then_confirms() {
     // given
     let screen = "   Yes, I trust this folder\n ❯ No, exit\n Enter to confirm\n";

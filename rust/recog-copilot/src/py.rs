@@ -302,6 +302,104 @@ mod tests {
         assert_eq!(json_dumps(&value), expected);
     }
 
+    /// The values the deleted differential test sent through Python, with what Python's
+    /// `bool`, `str`, `repr` and `json.dumps` answered.
+    fn builtin_cases() -> Vec<(Value, bool, &'static str, &'static str, &'static str)> {
+        vec![
+            (Value::Null, false, "None", "None", "null"),
+            (json!(true), true, "True", "True", "true"),
+            (json!(false), false, "False", "False", "false"),
+            (json!(0), false, "0", "0", "0"),
+            (json!(-7), true, "-7", "-7", "-7"),
+            (json!(9_007_199_254_740_993_i64), true, "9007199254740993", "9007199254740993", "9007199254740993"),
+            (json!(u64::MAX), true, "18446744073709551615", "18446744073709551615", "18446744073709551615"),
+            (json!(0.0), false, "0.0", "0.0", "0.0"),
+            (json!(-0.0), false, "-0.0", "-0.0", "-0.0"),
+            (json!(1.0), true, "1.0", "1.0", "1.0"),
+            (json!(1.5), true, "1.5", "1.5", "1.5"),
+            (json!(0.1), true, "0.1", "0.1", "0.1"),
+            (json!(1e16), true, "1e+16", "1e+16", "1e+16"),
+            (json!(1.5e16), true, "1.5e+16", "1.5e+16", "1.5e+16"),
+            (json!(1e15), true, "1000000000000000.0", "1000000000000000.0", "1000000000000000.0"),
+            (json!(123_456_789.125), true, "123456789.125", "123456789.125", "123456789.125"),
+            (json!(1e-4), true, "0.0001", "0.0001", "0.0001"),
+            (json!(1e-5), true, "1e-05", "1e-05", "1e-05"),
+            (json!(2.5e-7), true, "2.5e-07", "2.5e-07", "2.5e-07"),
+            (json!(1e300), true, "1e+300", "1e+300", "1e+300"),
+            (json!(""), false, "", "''", "\"\""),
+            (json!("A"), true, "A", "'A'", "\"A\""),
+            (json!("it's"), true, "it's", "\"it's\"", "\"it's\""),
+            (json!("say \"hi\""), true, "say \"hi\"", "'say \"hi\"'", "\"say \\\"hi\\\"\""),
+            (json!("both ' and \""), true, "both ' and \"", "'both \\' and \"'", "\"both ' and \\\"\""),
+            (
+                json!("tab\tnew\nline\rcr\\back"),
+                true,
+                "tab\tnew\nline\rcr\\back",
+                "'tab\\tnew\\nline\\rcr\\\\back'",
+                "\"tab\\tnew\\nline\\rcr\\\\back\"",
+            ),
+            (
+                json!("\u{0}\u{7}\u{8}\u{c}\u{1b}\u{7f}\u{85}\u{a0}\u{ad}"),
+                true,
+                "\u{0}\u{7}\u{8}\u{c}\u{1b}\u{7f}\u{85}\u{a0}\u{ad}",
+                "'\\x00\\x07\\x08\\x0c\\x1b\\x7f\\x85\\xa0\\xad'",
+                "\"\\u0000\\u0007\\b\\f\\u001b\\u007f\\u0085\\u00a0\\u00ad\"",
+            ),
+            (
+                json!("ünïcödé ❯ 😀 \u{2028} \u{e000} \u{fffe} \u{e0001}"),
+                true,
+                "ünïcödé ❯ 😀 \u{2028} \u{e000} \u{fffe} \u{e0001}",
+                "'ünïcödé ❯ 😀 \\u2028 \\ue000 \\ufffe \\U000e0001'",
+                "\"\\u00fcn\\u00efc\\u00f6d\\u00e9 \\u276f \\ud83d\\ude00 \\u2028 \\ue000 \\ufffe \\udb40\\udc01\"",
+            ),
+            (json!([]), false, "[]", "[]", "[]"),
+            (
+                json!([1, "a", null, [true]]),
+                true,
+                "[1, 'a', None, [True]]",
+                "[1, 'a', None, [True]]",
+                "[1, \"a\", null, [true]]",
+            ),
+            (json!({}), false, "{}", "{}", "{}"),
+            (
+                json!({"k": "v", "n": [1.5, {"x": null}]}),
+                true,
+                "{'k': 'v', 'n': [1.5, {'x': None}]}",
+                "{'k': 'v', 'n': [1.5, {'x': None}]}",
+                "{\"k\": \"v\", \"n\": [1.5, {\"x\": null}]}",
+            ),
+        ]
+    }
+
+    #[test]
+    fn json_values_when_shown_then_bool_str_repr_and_dumps_answer_as_python() {
+        for (value, truth, text, shown, dumped) in builtin_cases() {
+            // given / when / then
+            assert_eq!(truthy(&value), truth, "bool({value})");
+            assert_eq!(str_of(&value), text, "str({value})");
+            assert_eq!(repr(&value), shown, "repr({value})");
+            assert_eq!(json_dumps(&value), dumped, "json.dumps({value})");
+        }
+    }
+
+    #[test]
+    fn non_finite_and_tiny_floats_when_shown_then_python_repr() {
+        // given / when / then
+        assert_eq!(float_repr(f64::NAN), "nan");
+        assert_eq!(float_repr(f64::INFINITY), "inf");
+        assert_eq!(float_repr(f64::NEG_INFINITY), "-inf");
+        assert_eq!(float_repr(5e-324), "5e-324");
+        assert_eq!(float_repr(-1e-300), "-1e-300");
+        assert_eq!(float_repr(0.5), "0.5");
+    }
+
+    #[test]
+    fn optional_id_when_shown_then_none_or_quoted() {
+        // given / when / then
+        assert_eq!(repr_opt(None), "None");
+        assert_eq!(repr_opt(Some("A")), "'A'");
+    }
+
     #[test]
     fn shlex_quotes_only_unsafe_arguments() {
         // given / when / then
