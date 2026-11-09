@@ -504,29 +504,32 @@ fn label(_name: &str, label: &Doc) -> bool {
 }
 
 fn file_value(kind: Kind, value: &Doc, name: &str) -> Result<SettingValue, String> {
-    let wrong = || format!("{name} has the wrong type");
-    let positive = |n: i128| {
-        if n <= 0 {
-            return Err(format!("{name} must be a positive integer"));
-        }
-        // tomllib reads any integer; the toml crate stops at i64, so this holds.
-        i64::try_from(n).map_err(|_| format!("{name} must be a positive integer"))
-    };
-    Ok(match (kind, value) {
-        (Kind::Flag, Doc::Bool(b)) => SettingValue::Flag(*b),
-        (Kind::Integer, Doc::Int(n)) => SettingValue::Integer(Some(positive(*n)?)),
+    match (kind, value) {
+        (Kind::Flag, Doc::Bool(b)) => Ok(SettingValue::Flag(*b)),
+        (Kind::Integer, Doc::Int(n)) => positive_integer(*n, name).map(|n| SettingValue::Integer(Some(n))),
         #[allow(clippy::cast_precision_loss)]
-        (Kind::Number, Doc::Int(n)) => SettingValue::Number(*n as f64),
-        (Kind::Number, Doc::Float(x)) => SettingValue::Number(*x),
-        (Kind::Text, Doc::Str(s)) => SettingValue::Text(s.clone()),
-        (Kind::List, Doc::Array(items)) => SettingValue::List(
-            items
-                .iter()
-                .map(|item| if let Doc::Str(s) = item { Ok(s.clone()) } else { Err(wrong()) })
-                .collect::<Result<_, _>>()?,
-        ),
-        _ => return Err(wrong()),
-    })
+        (Kind::Number, Doc::Int(n)) => Ok(SettingValue::Number(*n as f64)),
+        (Kind::Number, Doc::Float(x)) => Ok(SettingValue::Number(*x)),
+        (Kind::Text, Doc::Str(s)) => Ok(SettingValue::Text(s.clone())),
+        (Kind::List, Doc::Array(items)) => string_list(items, name).map(SettingValue::List),
+        _ => Err(wrong_type(name)),
+    }
+}
+
+fn wrong_type(name: &str) -> String {
+    format!("{name} has the wrong type")
+}
+
+fn positive_integer(n: i128, name: &str) -> Result<i64, String> {
+    if n <= 0 {
+        return Err(format!("{name} must be a positive integer"));
+    }
+    // tomllib reads any integer; the toml crate stops at i64, so this holds.
+    i64::try_from(n).map_err(|_| format!("{name} must be a positive integer"))
+}
+
+fn string_list(items: &[Doc], name: &str) -> Result<Vec<String>, String> {
+    items.iter().map(|item| if let Doc::Str(s) = item { Ok(s.clone()) } else { Err(wrong_type(name)) }).collect()
 }
 
 fn settings_of(table_name: &str) -> &'static [Setting] {
@@ -553,33 +556,48 @@ pub fn parse_install_config(document: &Doc) -> Result<InstallConfig, String> {
     let empty = Doc::empty_table();
     let conferences = table(document.get("conferences").unwrap_or(&empty), "[conferences]", &CONFIGURABLE_PLATFORMS)?;
     let sources = table(document.get("sources").unwrap_or(&empty), "[sources]", &["aliases", "labels"])?;
-    let mut config = InstallConfig {
-        source_aliases: source_map(
-            sources.get("aliases").unwrap_or(&empty),
-            "[sources.aliases] must map legacy names to jitsi or matrix",
-            alias,
-        )?,
-        source_labels: source_map(
-            sources.get("labels").unwrap_or(&empty),
-            "[sources.labels] must map source names to nonempty names",
-            label,
-        )?,
-        ..InstallConfig::default()
-    };
+    let (source_aliases, source_labels) = source_maps(sources)?;
+    let mut config = InstallConfig { source_aliases, source_labels, ..InstallConfig::default() };
     for name in SECTIONS {
-        let settings = settings_of(name);
-        let keys: Vec<&str> = settings.iter().map(|s| s.key).collect();
-        let section = table(document.get(name).unwrap_or(&empty), &format!("[{name}]"), &keys)?;
-        for setting in settings {
-            if let Some(value) = section.get(setting.key) {
-                let value = file_value(setting.kind, value, &format!("{name}.{}", setting.key))?;
-                config.set(name, setting.key, value);
-                config.from_file.insert(setting.env.to_owned());
-            }
-        }
+        read_section(&mut config, document, name)?;
     }
     (config.jitsi, config.matrix) = conference_hosts(conferences)?;
     Ok(config)
+}
+
+/// `[sources.aliases]` and `[sources.labels]`.
+type SourceMaps = (Vec<(String, String)>, Vec<(String, String)>);
+
+fn source_maps(sources: &Doc) -> Result<SourceMaps, String> {
+    let empty = Doc::empty_table();
+    let aliases = source_map(
+        sources.get("aliases").unwrap_or(&empty),
+        "[sources.aliases] must map legacy names to jitsi or matrix",
+        alias,
+    )?;
+    let labels = source_map(
+        sources.get("labels").unwrap_or(&empty),
+        "[sources.labels] must map source names to nonempty names",
+        label,
+    )?;
+    Ok((aliases, labels))
+}
+
+/// One settings table of the file into `config`, each value it sets marked as the
+/// file's.
+fn read_section(config: &mut InstallConfig, document: &Doc, name: &str) -> Result<(), String> {
+    let empty = Doc::empty_table();
+    let settings = settings_of(name);
+    let keys: Vec<&str> = settings.iter().map(|s| s.key).collect();
+    let section = table(document.get(name).unwrap_or(&empty), &format!("[{name}]"), &keys)?;
+    for setting in settings {
+        if let Some(value) = section.get(setting.key) {
+            let value = file_value(setting.kind, value, &format!("{name}.{}", setting.key))?;
+            config.set(name, setting.key, value);
+            config.from_file.insert(setting.env.to_owned());
+        }
+    }
+    Ok(())
 }
 
 fn environment_value(setting: &Setting, environ: &Environ) -> Result<Option<SettingValue>, String> {
@@ -589,33 +607,31 @@ fn environment_value(setting: &Setting, environ: &Environ) -> Result<Option<Sett
     }
     let name = setting.env;
     let value = match setting.kind {
-        Kind::Flag => {
-            let lower = raw.to_lowercase();
-            match lower.as_str() {
-                "1" | "true" | "yes" | "on" => SettingValue::Flag(true),
-                "0" | "false" | "no" | "off" => SettingValue::Flag(false),
-                _ => {
-                    return Err(format!(
-                        "{name}: {name}={} is not one of 1/0, true/false, yes/no, on/off",
-                        py::repr(raw)
-                    ));
-                }
-            }
-        }
-        Kind::Integer => {
-            let n = py::parse_int(raw).map_err(|e| format!("{name}: {e}"))?;
-            if n <= 0 {
-                return Err(format!("{name}: {name} must be a positive integer"));
-            }
-            SettingValue::Integer(Some(n))
-        }
-        Kind::Number => SettingValue::Number(py::parse_float(raw).map_err(|e| format!("{name}: {e}"))?),
-        Kind::Text => SettingValue::Text(raw.to_owned()),
-        Kind::List => SettingValue::List(
+        Kind::Flag => environment_flag(name, raw),
+        Kind::Integer => environment_integer(name, raw),
+        Kind::Number => py::parse_float(raw).map(SettingValue::Number).map_err(|e| format!("{name}: {e}")),
+        Kind::Text => Ok(SettingValue::Text(raw.to_owned())),
+        Kind::List => Ok(SettingValue::List(
             raw.split(',').map(py::strip).filter(|item| !item.is_empty()).map(str::to_owned).collect(),
-        ),
-    };
+        )),
+    }?;
     Ok(Some(value))
+}
+
+fn environment_flag(name: &str, raw: &str) -> Result<SettingValue, String> {
+    match raw.to_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(SettingValue::Flag(true)),
+        "0" | "false" | "no" | "off" => Ok(SettingValue::Flag(false)),
+        _ => Err(format!("{name}: {name}={} is not one of 1/0, true/false, yes/no, on/off", py::repr(raw))),
+    }
+}
+
+fn environment_integer(name: &str, raw: &str) -> Result<SettingValue, String> {
+    let n = py::parse_int(raw).map_err(|e| format!("{name}: {e}"))?;
+    if n <= 0 {
+        return Err(format!("{name}: {name} must be a positive integer"));
+    }
+    Ok(SettingValue::Integer(Some(n)))
 }
 
 /// `with_environment(config, environ)`: environment values over the file's, and the
@@ -715,18 +731,8 @@ pub fn load_install_config(path: &Path, legacy: &Path, warn: &mut dyn FnMut(Stri
             legacy.display()
         ));
     }
-    let shown = if exists { path } else { legacy };
-    let wrap = |error: String| format!("{}: {error}", shown.display());
-    let read = |file: &Path| {
-        read_text(file).map_err(|e| match e {
-            ReadError::Os(message) => message,
-            ReadError::Decode(message) => wrap(message),
-        })
-    };
     if exists {
-        let text = read(path)?;
-        let document: toml::Table = toml::from_str(&text).map_err(|e| wrap(toml_error(&text, &e)))?;
-        return parse_install_config(&Doc::from(toml::Value::Table(document))).map_err(wrap);
+        return load_toml(path);
     }
     if legacy_exists {
         warn(format!(
@@ -734,11 +740,35 @@ pub fn load_install_config(path: &Path, legacy: &Path, warn: &mut dyn FnMut(Stri
             legacy.display(),
             path.display()
         ));
-        let text = read(legacy)?;
-        let document = pyjson::loads(&text).map_err(|e| wrap(e.0))?;
-        return parse_install_config(&from_legacy(&Doc::from(document)).map_err(wrap)?).map_err(wrap);
+        return load_legacy(legacy);
     }
     Ok(InstallConfig::default())
+}
+
+/// `<path>: <message>`, how a malformed file is reported.
+fn in_file(file: &Path, error: &str) -> String {
+    format!("{}: {error}", file.display())
+}
+
+/// A file's text; an `OSError` as it is, a decoding error with the path.
+fn read_config_text(file: &Path) -> Result<String, String> {
+    read_text(file).map_err(|e| match e {
+        ReadError::Os(message) => message,
+        ReadError::Decode(message) => in_file(file, &message),
+    })
+}
+
+fn load_toml(path: &Path) -> Result<InstallConfig, String> {
+    let text = read_config_text(path)?;
+    let document: toml::Table = toml::from_str(&text).map_err(|e| in_file(path, &toml_error(&text, &e)))?;
+    parse_install_config(&Doc::from(toml::Value::Table(document))).map_err(|e| in_file(path, &e))
+}
+
+fn load_legacy(legacy: &Path) -> Result<InstallConfig, String> {
+    let text = read_config_text(legacy)?;
+    let document = pyjson::loads(&text).map_err(|e| in_file(legacy, &e.0))?;
+    let document = from_legacy(&Doc::from(document)).map_err(|e| in_file(legacy, &e))?;
+    parse_install_config(&document).map_err(|e| in_file(legacy, &e))
 }
 
 /// `load_dotenv(env_path)`: fill unset variables of `environ` from a `.env` file
