@@ -88,55 +88,68 @@ function waitForConference(callback, maxAttempts = 100) {
 
 function tryAttachConference() {
   const adapter = getPlatformAdapter();
-  const platform = getPlatform();
 
   if (adapter) {
-    // Use adapter to check conference availability
-    if (!adapter.isConferenceAvailable()) {
-      if (state.activeConfRef || state.activeJitsiConf) {
-        state.conferenceReady = false;
-        state.activeConfRef = null;
-        state.activeJitsiConf = null;
-      }
-      // Update UI based on prejoin state
-      if (isJitsiPlatform()) {
-        if (adapter.isInPrejoin?.()) {
-          showVas3kPrejoinState();
-        } else {
-          showVas3kWaitingState();
-        }
-      }
-      return;
-    }
-
-    const conf = adapter.getConference();
-    const jitsiConf = adapter.getJitsiConference();
-
-    if (conf !== state.activeConfRef || jitsiConf !== state.activeJitsiConf) {
-      // Dispose old subscriptions and analysers before reattach
-      adapter.dispose();
-      state.activeConfRef = conf;
-      state.activeJitsiConf = jitsiConf;
-      console.log(`[${getPlatformDisplayName()} Transcript] Conference reattached`);
-      subscribeToDominantSpeaker(conf);
-    }
+    attachAdapterConference(adapter);
   } else {
-    // Legacy fallback for KTalk
-    if (!window.$conf || !window.$conf.jitsiConf || !window.$conf._dominantSpeakerId$) {
-      if (state.activeConfRef || state.activeJitsiConf) {
-        state.conferenceReady = false;
-        state.activeConfRef = null;
-        state.activeJitsiConf = null;
-      }
-      return;
-    }
+    attachLegacyConference();
+  }
+}
 
-    if (window.$conf !== state.activeConfRef || window.$conf.jitsiConf !== state.activeJitsiConf) {
-      state.activeConfRef = window.$conf;
-      state.activeJitsiConf = window.$conf.jitsiConf;
-      console.log('[KTalk Transcript] Conference reattached');
-      subscribeToDominantSpeaker(window.$conf);
+// The conference left the page: the next one attaches afresh.
+function forgetActiveConference() {
+  if (state.activeConfRef || state.activeJitsiConf) {
+    state.conferenceReady = false;
+    state.activeConfRef = null;
+    state.activeJitsiConf = null;
+  }
+}
+
+function attachAdapterConference(adapter) {
+  // Use adapter to check conference availability
+  if (!adapter.isConferenceAvailable()) {
+    forgetActiveConference();
+    // Update UI based on prejoin state
+    if (isJitsiPlatform()) {
+      showPrejoinOrWaitingState(adapter);
     }
+    return;
+  }
+
+  const conf = adapter.getConference();
+  const jitsiConf = adapter.getJitsiConference();
+
+  if (conf !== state.activeConfRef || jitsiConf !== state.activeJitsiConf) {
+    // Dispose old subscriptions and analysers before reattach
+    adapter.dispose();
+    state.activeConfRef = conf;
+    state.activeJitsiConf = jitsiConf;
+    console.log(`[${getPlatformDisplayName()} Transcript] Conference reattached`);
+    subscribeToDominantSpeaker(conf);
+  }
+}
+
+function showPrejoinOrWaitingState(adapter) {
+  if (adapter.isInPrejoin?.()) {
+    showVas3kPrejoinState();
+  } else {
+    showVas3kWaitingState();
+  }
+}
+
+// Legacy fallback for KTalk
+function attachLegacyConference() {
+  const conf = window.$conf;
+  if (!conf || !conf.jitsiConf || !conf._dominantSpeakerId$) {
+    forgetActiveConference();
+    return;
+  }
+
+  if (conf !== state.activeConfRef || conf.jitsiConf !== state.activeJitsiConf) {
+    state.activeConfRef = conf;
+    state.activeJitsiConf = conf.jitsiConf;
+    console.log('[KTalk Transcript] Conference reattached');
+    subscribeToDominantSpeaker(conf);
   }
 }
 
@@ -190,6 +203,17 @@ function setupUI() {
   return aiTabAdded;
 }
 
+// A legacy KTalk conference has loaded tracks once any participant, or the
+// user, has an audio track.
+function legacyHasAudioTrack(conf) {
+  const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
+  const localTracks = conf?.jitsiConf?.getLocalTracks?.() || [];
+  return jitsiParticipants.some(jp => {
+    const tracks = jp.getTracks?.() || jp._tracks || [];
+    return tracks.some(t => (t.getType?.() || t.type) === 'audio');
+  }) || localTracks.some(t => t.getType?.() === 'audio');
+}
+
 function subscribeToDominantSpeaker(conf) {
   const adapter = getPlatformAdapter();
   const platformName = getPlatformDisplayName();
@@ -207,19 +231,10 @@ function subscribeToDominantSpeaker(conf) {
         state.conferenceReady = true;
         console.log(`[${platformName} Transcript] Conference ready - tracks loaded`);
       }
-    } else {
+    } else if (legacyHasAudioTrack(conf)) {
       // Legacy KTalk check
-      const jitsiParticipants = conf?.jitsiConf?.getParticipants?.() || [];
-      const localTracks = conf?.jitsiConf?.getLocalTracks?.() || [];
-      const hasAnyTrack = jitsiParticipants.some(jp => {
-        const tracks = jp.getTracks?.() || jp._tracks || [];
-        return tracks.some(t => (t.getType?.() || t.type) === 'audio');
-      }) || localTracks.some(t => t.getType?.() === 'audio');
-
-      if (hasAnyTrack) {
-        state.conferenceReady = true;
-        console.log('[KTalk Transcript] Conference ready - tracks loaded');
-      }
+      state.conferenceReady = true;
+      console.log('[KTalk Transcript] Conference ready - tracks loaded');
     }
   };
 
