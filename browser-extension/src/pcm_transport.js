@@ -543,8 +543,19 @@ function refreshActiveEntry(pid, entry, existing) {
   tryRebindToReceiverTrack(pid, entry, false, REBIND_REASON.JITSI_UPDATE_RECEIVER_PROBE);
 }
 
+// The entry plays the receiver's own object for `track` and it still lives. Its
+// mediaStream is then the stream built around the receiver track, which no
+// wrapper stream ever equals, so the comparison below would take every update
+// of the same track for a new stream.
+function receiverBindsTrack(entry, track) {
+  return entry.boundVia === BOUND_VIA.RECEIVER
+    && track?.id === entry.boundTrackId
+    && entry.boundTrackObject?.readyState !== 'ended';
+}
+
 function rebindWrapperIfChanged(pid, entry, stream) {
   const newTrack = getAudioTrackFromStream(stream);
+  if (receiverBindsTrack(entry, newTrack)) return;
   const shouldRebindWrapper =
     stream !== entry.mediaStream ||
     (newTrack && entry.boundTrackId && newTrack.id !== entry.boundTrackId);

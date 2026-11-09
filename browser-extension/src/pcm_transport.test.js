@@ -685,6 +685,69 @@ describe('rebinding an attached participant', () => {
     expect(diag.last_rebind_reason).toBe('initial_receiver_probe');
   });
 
+  test('a participant moved to the receiver track - its wrapper stream reported again - stays on the receiver track', async () => {
+    constants.PCM_REBIND_ENABLED = true;
+    const conf = { pc: fakePc([{ track: new FakeTrack('track-a') }]) };
+    const { stream, track } = attachAlice({ conf });
+    await waitForPid('pid-a');
+    await sleep(550);
+    expect(pcmTransport.pcmGetDiagnostics().per_pid['pid-a'].bound_via).toBe('receiver');
+    const start = Date.now();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(start);
+    try {
+      // A later track update (trackAdded again, a conference reattach) carries the wrapper
+      // stream of the same track, right after the move and once the cooldown has passed.
+      for (const at of [start, start + 5000]) {
+        now.mockReturnValue(at);
+        pcmTransport.pcmAttachParticipant('pid-a', 'Alice', false, stream, {
+          jitsiTrack: makeJitsiTrack(track, stream),
+          conf,
+        });
+        const diag = pcmTransport.pcmGetDiagnostics().per_pid['pid-a'];
+        expect(diag.bound_via).toBe('receiver');
+        expect(diag.rebind_count).toBe(1);
+        expect(diag.last_rebind_reason).toBe('initial_receiver_probe');
+      }
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test('a participant on the receiver track - a new track reported - moves to its wrapper stream', async () => {
+    constants.PCM_REBIND_ENABLED = true;
+    const conf = { pc: fakePc([{ track: new FakeTrack('track-a') }]) };
+    attachAlice({ conf });
+    await waitForPid('pid-a');
+    await sleep(550);
+
+    attachAlice({ conf }, 'pid-a', 'track-b');
+
+    const diag = pcmTransport.pcmGetDiagnostics().per_pid['pid-a'];
+    expect(diag.bound_via).toBe('wrapper');
+    expect(diag.bound_track_id).toBe('track-b');
+    expect(diag.last_rebind_reason).toBe('jitsi_track_update');
+  });
+
+  test('a participant on a receiver track that ended - its wrapper stream reported again - moves to the wrapper', async () => {
+    constants.PCM_REBIND_ENABLED = true;
+    const receiverTrack = new FakeTrack('track-a');
+    const conf = { pc: fakePc([{ track: receiverTrack }]) };
+    const { stream, track } = attachAlice({ conf });
+    await waitForPid('pid-a');
+    await sleep(550);
+    receiverTrack.readyState = 'ended';
+
+    pcmTransport.pcmAttachParticipant('pid-a', 'Alice', false, stream, {
+      jitsiTrack: makeJitsiTrack(track, stream),
+      conf,
+    });
+
+    const diag = pcmTransport.pcmGetDiagnostics().per_pid['pid-a'];
+    expect(diag.bound_via).toBe('wrapper');
+    expect(diag.bound_track_id).toBe('track-a');
+    expect(diag.last_rebind_reason).toBe('jitsi_track_update');
+  });
+
   test('a receiver on a peer connection under window roots - probed - is found, deep or cyclic', async () => {
     const deepPc = fakePc([{ track: new FakeTrack('track-a') }]);
     const cyclic = { level1: { level2: { level3: { pc: deepPc } } } };

@@ -33,6 +33,13 @@ reasoning.
 - **Meeting page: playing a segment while another is still loading** no longer
   leaves the first play button disabled until the page re-renders; it returns to
   play at once.
+- **A KTalk participant's transcript audio stays on one source.** Once the
+  extension had moved a participant's audio to the call's receiver track, every
+  later update of that participant's track moved it back to the stream wrapping
+  the track, and the 4 s pause between moves kept it there, so the source flipped
+  at every update. It now stays on the receiver track while that track lives.
+  Rebuild and reload the extension: `./setup.sh`, then Reload in
+  `chrome://extensions`.
 
 ## 2026-11-08
 
