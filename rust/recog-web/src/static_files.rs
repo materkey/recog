@@ -283,3 +283,219 @@ pub fn lookup(directory: &Path, relative: &str) -> Option<PathBuf> {
     }
     Some(full)
 }
+
+#[cfg(test)]
+mod tests {
+    use http_body_util::BodyExt as _;
+
+    use super::*;
+
+    const CONTENT: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+    fn file(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, CONTENT).unwrap();
+        (dir, path)
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(header::HeaderName::from_bytes(name.as_bytes()).unwrap(), HeaderValue::from_str(value).unwrap());
+        }
+        map
+    }
+
+    const GET: Serve = Serve { head: false, conditional: true };
+    const HEAD: Serve = Serve { head: true, conditional: true };
+
+    async fn answer(path: &Path, request: &[(&str, &str)], how: Serve) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let response = serve(path, &headers(request), how).expect("a file");
+        let (parts, body) = response.into_parts();
+        (parts.status, parts.headers, body.collect().await.unwrap().to_bytes().to_vec())
+    }
+
+    fn value<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+        headers.get(name).map_or("", |v| v.to_str().unwrap())
+    }
+
+    #[tokio::test]
+    async fn plain_request_when_served_then_the_whole_file_with_its_validators() {
+        let (_dir, path) = file("app.js");
+
+        let (status, headers, body) = answer(&path, &[], GET).await;
+
+        assert_eq!((status, body.as_slice()), (StatusCode::OK, CONTENT));
+        assert_eq!(value(&headers, "content-type"), "text/javascript; charset=utf-8");
+        assert_eq!(value(&headers, "content-length"), "36");
+        assert_eq!(value(&headers, "accept-ranges"), "bytes");
+        assert_eq!(value(&headers, "cache-control"), "no-cache");
+        assert!(value(&headers, "etag").starts_with('"') && value(&headers, "etag").len() == 34);
+        assert!(value(&headers, "last-modified").ends_with(" GMT"));
+    }
+
+    #[tokio::test]
+    async fn head_request_when_served_then_headers_without_a_body() {
+        let (_dir, path) = file("app.js");
+
+        let (status, headers, body) = answer(&path, &[], HEAD).await;
+        assert_eq!((status, value(&headers, "content-length"), body.len()), (StatusCode::OK, "36", 0));
+        let (status, _, body) = answer(&path, &[("range", "bytes=0-9")], HEAD).await;
+        assert_eq!((status, body.len()), (StatusCode::PARTIAL_CONTENT, 0));
+        let (status, _, body) = answer(&path, &[("range", "bytes=0-1,5-6")], HEAD).await;
+        assert_eq!((status, body.len()), (StatusCode::PARTIAL_CONTENT, 0));
+    }
+
+    #[tokio::test]
+    async fn matching_validators_when_revalidated_then_304_unless_not_conditional() {
+        let (_dir, path) = file("app.js");
+        let (_, first, _) = answer(&path, &[], GET).await;
+        let (etag, modified) = (value(&first, "etag").to_owned(), value(&first, "last-modified").to_owned());
+        let weak = format!("W/\"other\", W/{etag}");
+
+        for request in [
+            vec![("if-none-match", etag.as_str())],
+            vec![("if-none-match", weak.as_str())],
+            vec![("if-modified-since", modified.as_str())],
+        ] {
+            let (status, headers, body) = answer(&path, &request, GET).await;
+
+            assert_eq!((status, body.len()), (StatusCode::NOT_MODIFIED, 0), "{request:?}");
+            assert_eq!((value(&headers, "etag"), value(&headers, "cache-control")), (etag.as_str(), "no-cache"));
+        }
+        let (status, _, _) =
+            answer(&path, &[("if-none-match", &etag)], Serve { head: false, conditional: false }).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn stale_validators_when_revalidated_then_the_file() {
+        let (_dir, path) = file("app.js");
+        for request in [
+            vec![("if-none-match", "W/\"other\", \"x\"")],
+            vec![("if-modified-since", "Thu, 01 Jan 1970 00:00:00 GMT")],
+            vec![("if-modified-since", "not a date")],
+            vec![("if-none-match", ""), ("if-modified-since", "Thu, 01 Jan 1970 00:00:00 GMT")],
+        ] {
+            assert_eq!(answer(&path, &request, GET).await.0, StatusCode::OK, "{request:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn one_range_when_served_then_206_with_that_slice() {
+        let (_dir, path) = file("app.js");
+        for (range, content_range, slice) in [
+            ("bytes=0-9", "bytes 0-9/36", &CONTENT[..10]),
+            ("bytes=30-", "bytes 30-35/36", &CONTENT[30..]),
+            ("bytes=-6", "bytes 30-35/36", &CONTENT[30..]),
+            ("bytes=30-999", "bytes 30-35/36", &CONTENT[30..]),
+            ("BYTES = 1-2, , -, x", "bytes 1-2/36", &CONTENT[1..3]),
+            ("bytes=0-4,3-8", "bytes 0-8/36", &CONTENT[..9]),
+        ] {
+            let (status, headers, body) = answer(&path, &[("range", range)], GET).await;
+
+            assert_eq!(status, StatusCode::PARTIAL_CONTENT, "{range}");
+            assert_eq!(value(&headers, "content-range"), content_range, "{range}");
+            assert_eq!(value(&headers, "content-length"), slice.len().to_string(), "{range}");
+            assert_eq!(body, slice, "{range}");
+        }
+    }
+
+    #[tokio::test]
+    async fn several_ranges_when_served_then_multipart_byteranges_in_order() {
+        let (_dir, path) = file("app.js");
+
+        let (status, headers, body) = answer(&path, &[("range", "bytes=10-14,0-4")], GET).await;
+
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        let content_type = value(&headers, "content-type");
+        let boundary = content_type.strip_prefix("multipart/byteranges; boundary=").unwrap();
+        assert_eq!(boundary.len(), 26);
+        let expected = format!(
+            "--{boundary}\r\nContent-Type: text/javascript; charset=utf-8\r\nContent-Range: bytes 0-4/36\r\n\r\n01234\r\n\
+             --{boundary}\r\nContent-Type: text/javascript; charset=utf-8\r\nContent-Range: bytes 10-14/36\r\n\r\nabcde\r\n\
+             --{boundary}--"
+        );
+        assert_eq!(String::from_utf8(body).unwrap(), expected);
+        assert_eq!(value(&headers, "content-length"), expected.len().to_string());
+    }
+
+    #[tokio::test]
+    async fn malformed_or_unsatisfiable_range_when_served_then_400_or_416() {
+        let (_dir, path) = file("app.js");
+        for (range, status, text) in [
+            ("bytes", StatusCode::BAD_REQUEST, "Malformed range header."),
+            ("items=0-1", StatusCode::BAD_REQUEST, "Only support bytes range"),
+            ("bytes=x-y", StatusCode::BAD_REQUEST, "Range header: range must be requested"),
+            ("bytes=-x", StatusCode::BAD_REQUEST, "Range header: range must be requested"),
+            ("bytes=1-x", StatusCode::BAD_REQUEST, "Range header: range must be requested"),
+            ("bytes=5-2", StatusCode::BAD_REQUEST, "Range header: start must be less than end"),
+            ("bytes=99999999-", StatusCode::RANGE_NOT_SATISFIABLE, ""),
+            ("bytes=-99", StatusCode::RANGE_NOT_SATISFIABLE, ""),
+        ] {
+            let (answer_status, headers, body) = answer(&path, &[("range", range)], GET).await;
+
+            assert_eq!((answer_status, String::from_utf8(body).unwrap().as_str()), (status, text), "{range}");
+            if status == StatusCode::RANGE_NOT_SATISFIABLE {
+                assert_eq!(value(&headers, "content-range"), "bytes */36");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn if_range_when_served_then_the_range_only_for_current_validators() {
+        let (_dir, path) = file("app.js");
+        let (_, first, _) = answer(&path, &[], GET).await;
+        let (etag, modified) = (value(&first, "etag").to_owned(), value(&first, "last-modified").to_owned());
+
+        for (if_range, status) in [
+            (etag.as_str(), StatusCode::PARTIAL_CONTENT),
+            (modified.as_str(), StatusCode::PARTIAL_CONTENT),
+            ("\"stale\"", StatusCode::OK),
+        ] {
+            let (answer_status, _, _) = answer(&path, &[("range", "bytes=0-9"), ("if-range", if_range)], GET).await;
+
+            assert_eq!(answer_status, status, "{if_range}");
+        }
+    }
+
+    #[test]
+    fn directory_or_missing_path_when_served_then_none() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(serve(dir.path(), &HeaderMap::new(), GET).is_none());
+        assert!(serve(&dir.path().join("absent"), &HeaderMap::new(), GET).is_none());
+    }
+
+    #[test]
+    fn extensions_of_a_web_ui_when_typed_then_their_media_type_else_text_plain() {
+        for (name, media) in [
+            ("a.JS", "text/javascript"),
+            ("a.mjs", "text/javascript"),
+            ("a.css", "text/css"),
+            ("a.htm", "text/html"),
+            ("a.html", "text/html"),
+            ("a.svg", "image/svg+xml"),
+            ("a.json", "application/json"),
+            ("a.png", "image/png"),
+            ("a.jpg", "image/jpeg"),
+            ("a.jpeg", "image/jpeg"),
+            ("a.gif", "image/gif"),
+            ("a.webp", "image/webp"),
+            ("a.ico", "image/x-icon"),
+            ("a.woff", "font/woff"),
+            ("a.woff2", "font/woff2"),
+            ("a.ttf", "font/ttf"),
+            ("a.wav", "audio/x-wav"),
+            ("a.md", "text/markdown"),
+            ("a.bin", "text/plain"),
+            ("Makefile", "text/plain"),
+        ] {
+            assert_eq!(guess_type(Path::new(name)), media, "{name}");
+        }
+        assert_eq!(content_type("text/css"), "text/css; charset=utf-8");
+        assert_eq!(content_type("text/css; charset=latin-1"), "text/css; charset=latin-1");
+        assert_eq!(content_type("image/png"), "image/png");
+    }
+}
