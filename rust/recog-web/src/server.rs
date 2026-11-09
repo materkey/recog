@@ -330,62 +330,81 @@ async fn dispatch(State(state): State<Arc<AppState>>, request: Request) -> Respo
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
     if is_upgrade {
-        let Some((route, params)) = router::ws_route(&path) else {
-            return responses::plain(StatusCode::FORBIDDEN, "", &[]);
-        };
-        let headers = request.headers().clone();
-        if route == WsRoute::LiveStream
-            && let Some(reason) = live_stream::origin_rejection(&headers, &state.config.extra_origins)
-        {
-            crate::util::log_rate_limited(
-                "frontend-ws-origin-reject",
-                &format!("[Frontend] Rejected /api/live/stream connection from {reason}"),
-            );
-            return responses::plain(StatusCode::FORBIDDEN, "", &[]);
-        }
-        let upgrade = match WebSocketUpgrade::from_request(request, &state).await {
-            Ok(upgrade) => upgrade,
-            Err(rejection) => return axum::response::IntoResponse::into_response(rejection),
-        };
-        let meeting_id = params.get("meeting_id").to_owned();
-        return match route {
-            WsRoute::LiveStream => upgrade.on_upgrade(move |socket| live_stream::live_stream(state, socket)),
-            WsRoute::WatchMeeting => {
-                upgrade.on_upgrade(move |socket| live_stream::watch_meeting(state, meeting_id, socket))
-            }
-        };
+        return upgrade(state, request, &path).await;
     }
     let method = request.method().clone();
-    let matched = router::route(method.as_str(), &path);
-    let query: Vec<(String, String)> =
-        request.uri().query().map(|q| form_urlencoded::parse(q.as_bytes()).into_owned().collect()).unwrap_or_default();
-    match matched {
+    match router::route(method.as_str(), &path) {
         Match::NotFound => responses::status_detail(StatusCode::NOT_FOUND),
         Match::MethodNotAllowed(allow) => responses::method_not_allowed(allow),
-        Match::Redirect(twin) => {
-            let host = request.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or_default();
-            let query = request.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
-            responses::redirect(&format!("http://{host}{}{query}", quote_path(&twin)))
-        }
-        Match::Static(rest) => {
-            if method != Method::GET && method != Method::HEAD {
-                return responses::status_detail(StatusCode::METHOD_NOT_ALLOWED);
-            }
-            let headers = request.headers().clone();
-            let how = static_files::Serve { head: method == Method::HEAD, conditional: true };
-            static_files::lookup(&state.config.static_dir, &rest)
-                .and_then(|file| static_files::serve(&file, &headers, how))
-                .unwrap_or_else(|| responses::status_detail(StatusCode::NOT_FOUND))
-        }
-        Match::Route(route, params) => {
-            let (parts, body) = request.into_parts();
-            let Ok(body) = axum::body::to_bytes(body, usize::MAX).await else {
-                return responses::detail(StatusCode::BAD_REQUEST, "There was an error parsing the body");
-            };
-            let req = Req { method: method.to_string(), path, params, query, headers: parts.headers, body };
-            routes::handle(&state, route, req).await.unwrap_or_else(|error| error)
+        Match::Redirect(twin) => redirect(&request, &twin),
+        Match::Static(rest) => serve_static(&state, &method, request.headers(), &rest),
+        Match::Route(route, params) => handle_route(&state, request, path, route, params).await,
+    }
+}
+
+/// A WebSocket handshake: the 403 of an unknown path or a refused origin, the
+/// rejection of an invalid handshake, else the endpoint.
+async fn upgrade(state: Arc<AppState>, request: Request, path: &str) -> Response {
+    let Some((route, params)) = router::ws_route(path) else {
+        return responses::plain(StatusCode::FORBIDDEN, "", &[]);
+    };
+    if route == WsRoute::LiveStream
+        && let Some(reason) = live_stream::origin_rejection(request.headers(), &state.config.extra_origins)
+    {
+        crate::util::log_rate_limited(
+            "frontend-ws-origin-reject",
+            &format!("[Frontend] Rejected /api/live/stream connection from {reason}"),
+        );
+        return responses::plain(StatusCode::FORBIDDEN, "", &[]);
+    }
+    let upgrade = match WebSocketUpgrade::from_request(request, &state).await {
+        Ok(upgrade) => upgrade,
+        Err(rejection) => return axum::response::IntoResponse::into_response(rejection),
+    };
+    let meeting_id = params.get("meeting_id").to_owned();
+    match route {
+        WsRoute::LiveStream => upgrade.on_upgrade(move |socket| live_stream::live_stream(state, socket)),
+        WsRoute::WatchMeeting => {
+            upgrade.on_upgrade(move |socket| live_stream::watch_meeting(state, meeting_id, socket))
         }
     }
+}
+
+/// The 307 to a path's twin with or without its trailing slash, the query kept.
+fn redirect(request: &Request, twin: &str) -> Response {
+    let host = request.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let query = request.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+    responses::redirect(&format!("http://{host}{}{query}", quote_path(twin)))
+}
+
+/// A file of `/static/`: GET and HEAD only, the 404 of anything that is not one.
+fn serve_static(state: &AppState, method: &Method, headers: &axum::http::HeaderMap, rest: &str) -> Response {
+    if method != Method::GET && method != Method::HEAD {
+        return responses::status_detail(StatusCode::METHOD_NOT_ALLOWED);
+    }
+    let how = static_files::Serve { head: method == Method::HEAD, conditional: true };
+    static_files::lookup(&state.config.static_dir, rest)
+        .and_then(|file| static_files::serve(&file, headers, how))
+        .unwrap_or_else(|| responses::status_detail(StatusCode::NOT_FOUND))
+}
+
+/// An API route with its body read whole.
+async fn handle_route(
+    state: &Arc<AppState>,
+    request: Request,
+    path: String,
+    route: router::Route,
+    params: router::Params,
+) -> Response {
+    let method = request.method().to_string();
+    let query: Vec<(String, String)> =
+        request.uri().query().map(|q| form_urlencoded::parse(q.as_bytes()).into_owned().collect()).unwrap_or_default();
+    let (parts, body) = request.into_parts();
+    let Ok(body) = axum::body::to_bytes(body, usize::MAX).await else {
+        return responses::detail(StatusCode::BAD_REQUEST, "There was an error parsing the body");
+    };
+    let req = Req { method, path, params, query, headers: parts.headers, body };
+    routes::handle(state, route, req).await.unwrap_or_else(|error| error)
 }
 
 /// Serves the application on a bound listener until `shutdown` resolves, with the

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::http::HeaderMap;
 use futures_util::{SinkExt as _, StreamExt as _};
+use recog_core::meeting_storage::MeetingStorage;
 use recog_core::protocol;
 use recog_core::pyjson::Value;
 use recog_core::ws_origin::origin_allowed;
@@ -116,6 +117,38 @@ fn spawn_writer(
     })
 }
 
+/// The `init` frame of a current meeting, which becomes the live watcher's, its
+/// rows already sent marked seen.
+fn current_init(
+    state: &AppState,
+    storage: &MeetingStorage,
+    current: &Value,
+    active: &[Value],
+) -> Result<Value, String> {
+    let fields = current.as_object().cloned().unwrap_or_default();
+    let id = fields.get("id").map(Value::py_str).unwrap_or_default();
+    let source = fields.get("source").filter(|v| !v.is_null()).cloned();
+    let refine = source.as_ref().and_then(Value::as_str) == Some("ktalk");
+    state.live_watcher.set_current_meeting(Some(&id), source);
+    let meeting = storage.get_meeting(&id).map_err(|e| e.to_string())?;
+    let segments = meeting
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|m| m.get("segments"))
+        .cloned()
+        .unwrap_or(Value::Array(Vec::new()));
+    if let Value::Array(rows) = &segments {
+        state.live_watcher.seed_post_init_watermark(rows.iter().filter_map(|s| s.as_object()?.get("id")));
+    }
+    Ok(json::object([
+        ("type", Value::from("init")),
+        ("meeting", current.clone()),
+        ("segments", segments),
+        ("active_meetings", Value::Array(active.to_vec())),
+        ("refine_enabled", Value::Bool(refine)),
+    ]))
+}
+
 /// What the live stream sends right after the handshake.
 async fn send_init(state: &Arc<AppState>, client: &Client) -> Result<(), String> {
     let storage = state.config.storage().map_err(|e| e.to_string())?;
@@ -123,42 +156,16 @@ async fn send_init(state: &Arc<AppState>, client: &Client) -> Result<(), String>
         state.live_watcher.read_active_meetings(state.config.storage().map_err(|e| e.to_string())?).await;
     let active = active.map_err(|e| e.to_string())?;
     let init = match active.first() {
-        Some(current) => {
-            let fields = current.as_object().cloned().unwrap_or_default();
-            let id = fields.get("id").map(Value::py_str).unwrap_or_default();
-            let source = fields.get("source").filter(|v| !v.is_null()).cloned();
-            let refine = source.as_ref().and_then(Value::as_str) == Some("ktalk");
-            state.live_watcher.set_current_meeting(Some(&id), source);
-            let meeting = storage.get_meeting(&id).map_err(|e| e.to_string())?;
-            let segments = meeting
-                .as_ref()
-                .and_then(Value::as_object)
-                .and_then(|m| m.get("segments"))
-                .cloned()
-                .unwrap_or(Value::Array(Vec::new()));
-            if let Value::Array(rows) = &segments {
-                state.live_watcher.seed_post_init_watermark(rows.iter().filter_map(|s| s.as_object()?.get("id")));
-            }
-            drop(guard);
-            json::object([
-                ("type", Value::from("init")),
-                ("meeting", current.clone()),
-                ("segments", segments),
-                ("active_meetings", Value::Array(active.clone())),
-                ("refine_enabled", Value::Bool(refine)),
-            ])
-        }
-        None => {
-            drop(guard);
-            json::object([
-                ("type", Value::from("init")),
-                ("meeting", Value::Null),
-                ("segments", Value::Array(Vec::new())),
-                ("active_meetings", Value::Array(Vec::new())),
-                ("refine_enabled", Value::Bool(false)),
-            ])
-        }
+        Some(current) => current_init(state, &storage, current, &active)?,
+        None => json::object([
+            ("type", Value::from("init")),
+            ("meeting", Value::Null),
+            ("segments", Value::Array(Vec::new())),
+            ("active_meetings", Value::Array(Vec::new())),
+            ("refine_enabled", Value::Bool(false)),
+        ]),
     };
+    drop(guard);
     client.send_text(&json::ascii(&init));
     if let Some(primer) = state.agent_state_primer() {
         client.send_text(&primer);
