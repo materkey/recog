@@ -13,16 +13,12 @@ function getUncertainSuffix(line) {
   return " (?)";
 }
 
-function updateUI(data) {
+function updateSpeakerStatus(data) {
   const statusDot = document.getElementById('statusDot');
   const statusText = document.getElementById('statusText');
   const currentSpeakerName = document.getElementById('currentSpeakerName');
   const currentSpeakerId = document.getElementById('currentSpeakerId');
-  const participantsList = document.getElementById('participantsList');
-  const participantCount = document.getElementById('participantCount');
-  const historyList = document.getElementById('historyList');
 
-  // Update current speaker
   if (data.currentSpeaker) {
     statusDot.classList.add('connected');
     statusText.textContent = 'Connected to conference';
@@ -39,11 +35,15 @@ function updateUI(data) {
     currentSpeakerName.textContent = '-';
     currentSpeakerId.textContent = '';
   }
+}
 
-  // Update participants
-  if (data.participants && data.participants.length > 0) {
-    participantCount.textContent = data.participants.length;
-    participantsList.innerHTML = data.participants.map(p => `
+function updateParticipants(participants) {
+  const participantsList = document.getElementById('participantsList');
+  const participantCount = document.getElementById('participantCount');
+
+  if (participants && participants.length > 0) {
+    participantCount.textContent = participants.length;
+    participantsList.innerHTML = participants.map(p => `
       <li>
         <div class="participant-name">
           <div class="participant-avatar">${getInitials(p.name)}</div>
@@ -56,10 +56,13 @@ function updateUI(data) {
     participantCount.textContent = '0';
     participantsList.innerHTML = '<li class="empty-state">No participants</li>';
   }
+}
 
-  // Update history
-  if (data.speakerHistory && data.speakerHistory.length > 0) {
-    historyList.innerHTML = data.speakerHistory.slice(0, 10).map(h => `
+function updateHistory(speakerHistory) {
+  const historyList = document.getElementById('historyList');
+
+  if (speakerHistory && speakerHistory.length > 0) {
+    historyList.innerHTML = speakerHistory.slice(0, 10).map(h => `
       <li>
         <span>${h.name}</span>
         <span class="history-time">${h.time}</span>
@@ -68,6 +71,17 @@ function updateUI(data) {
   } else {
     historyList.innerHTML = '<li class="empty-state">No history yet</li>';
   }
+}
+
+function updateUI(data) {
+  // Update current speaker
+  updateSpeakerStatus(data);
+
+  // Update participants
+  updateParticipants(data.participants);
+
+  // Update history
+  updateHistory(data.speakerHistory);
 
   // Update transcript
   if (data.transcriptLines) {
