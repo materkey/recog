@@ -125,21 +125,38 @@ impl<S: PrivacySource> CopilotPrivacy<S> {
             return Ok(payload.clone());
         }
         let mut result = payload.clone();
+        let meeting = self.meeting_of(&result);
+        let names = self.names_for(meeting);
+        mask_segments(&mut result, names);
+        mask_context(&mut result, names);
+        mask_identity(&mut result, names);
+        result.insert("privacy_mode", Value::Bool(true));
+        Ok(result)
+    }
+
+    /// The payload's meeting: its `meeting_id`, else its first segment's, else the
+    /// meeting of the payload before.
+    fn meeting_of(&self, result: &Map) -> Value {
         let first_segment_meeting = match result.get("segments").filter(|s| s.truthy()) {
             Some(Value::Array(segments)) => segments
                 .first()
                 .map(|s| s.as_object().and_then(|m| m.get("meeting_id")).cloned().unwrap_or(Value::Null)),
             _ => None,
         };
-        let meeting = match result.get("meeting_id") {
+        match result.get("meeting_id") {
             Some(id) => id.clone(),
             None => first_segment_meeting.unwrap_or_else(|| self.current_meeting.clone()),
-        };
+        }
+    }
+
+    /// The aliases of a meeting, now the most recent; the 17th meeting back is
+    /// forgotten.
+    fn names_for(&mut self, meeting: Value) -> &mut Map {
         self.current_meeting = meeting.clone();
         let at = match self.meetings.iter().position(|(id, _)| id.py_eq(&meeting)) {
             Some(at) => at,
             None => {
-                self.meetings.push((meeting.clone(), Map::new()));
+                self.meetings.push((meeting, Map::new()));
                 self.meetings.len() - 1
             }
         };
@@ -148,76 +165,100 @@ impl<S: PrivacySource> CopilotPrivacy<S> {
         if self.meetings.len() > 16 {
             self.meetings.remove(0);
         }
-        let names = &mut self.meetings.last_mut().unwrap_or_else(|| unreachable!("just pushed")).1;
-        let mut alias = |name: Option<&Value>| -> String {
-            match name {
-                Some(Value::Str(name)) if !name.is_empty() => {
-                    let next = format!("speaker_{}", names.len());
-                    names.setdefault(name, Value::from(next)).py_str()
-                }
-                _ => "speaker_?".to_owned(),
+        &mut self.meetings.last_mut().unwrap_or_else(|| unreachable!("just pushed")).1
+    }
+}
+
+/// A speaker's stable alias in its meeting: `speaker_<n>` in order of appearance,
+/// `speaker_?` for a missing, empty or non-text name.
+fn alias(names: &mut Map, name: Option<&Value>) -> String {
+    match name {
+        Some(Value::Str(name)) if !name.is_empty() => {
+            let next = format!("speaker_{}", names.len());
+            names.setdefault(name, Value::from(next)).py_str()
+        }
+        _ => "speaker_?".to_owned(),
+    }
+}
+
+/// The speakers of every segment list, system events left as they are.
+fn mask_segments(result: &mut Map, names: &mut Map) {
+    for key in ["recent_segments", "new_segments", "segments"] {
+        let Some(Value::Array(segments)) = result.get_mut(key) else { continue };
+        for segment in segments.iter_mut() {
+            let Some(segment) = segment.as_object_mut() else { continue };
+            if segment.get("event_type").is_some_and(Value::truthy) {
+                continue;
             }
-        };
-        for key in ["recent_segments", "new_segments", "segments"] {
-            let Some(Value::Array(segments)) = result.get_mut(key) else { continue };
-            for segment in segments.iter_mut() {
-                let Some(segment) = segment.as_object_mut() else { continue };
-                if segment.get("event_type").is_some_and(Value::truthy) {
-                    continue;
-                }
-                let masked = alias(segment.get("speaker"));
-                segment.insert("speaker", Value::from(masked.as_str()));
-                if segment.contains_key("speaker_id") {
-                    segment.insert("speaker_id", Value::from(masked));
-                }
+            let masked = alias(names, segment.get("speaker"));
+            segment.insert("speaker", Value::from(masked.as_str()));
+            if segment.contains_key("speaker_id") {
+                segment.insert("speaker_id", Value::from(masked));
             }
         }
-        if result.contains_key("recent_context") {
-            let context = if let Some(Value::Array(segments)) = result.get("recent_segments") {
-                segments
-                    .iter()
-                    .map(|segment| {
-                        let field = |key: &str, fallback: &str| {
-                            segment
-                                .as_object()
-                                .and_then(|m| m.get(key))
-                                .filter(|v| v.truthy())
-                                .map_or_else(|| fallback.to_owned(), Value::py_str)
-                        };
-                        format!("{}: {}", field("speaker", "?"), field("text", ""))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else {
-                // Compatibility with a bridge not yet restarted after upgrade.
-                let text = result.get("recent_context").and_then(Value::as_str).unwrap_or_default().to_owned();
-                py::splitlines(&text)
-                    .into_iter()
-                    .map(|line| match line.split_once(": ") {
-                        Some((name, text)) => format!("{}: {text}", alias(Some(&Value::from(name)))),
-                        None => line.to_owned(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
+    }
+}
+
+/// `recent_context` rebuilt from the masked segments, or its own lines aliased.
+fn mask_context(result: &mut Map, names: &mut Map) {
+    if !result.contains_key("recent_context") {
+        return;
+    }
+    let context = if let Some(Value::Array(segments)) = result.get("recent_segments") {
+        context_of(segments)
+    } else {
+        // Compatibility with a bridge not yet restarted after upgrade.
+        let text = result.get("recent_context").and_then(Value::as_str).unwrap_or_default().to_owned();
+        alias_lines(&text, names)
+    };
+    result.insert("recent_context", Value::from(context));
+}
+
+/// `speaker: text` per segment.
+fn context_of(segments: &[Value]) -> String {
+    segments
+        .iter()
+        .map(|segment| {
+            let field = |key: &str, fallback: &str| {
+                segment
+                    .as_object()
+                    .and_then(|m| m.get(key))
+                    .filter(|v| v.truthy())
+                    .map_or_else(|| fallback.to_owned(), Value::py_str)
             };
-            result.insert("recent_context", Value::from(context));
-        }
-        if result.contains_key("local_user_name") {
-            let masked = alias(result.get("local_user_name"));
-            result.insert("local_user_name", Value::from(masked));
-        }
-        if result.contains_key("local_user_aliases") {
-            result.insert("local_user_aliases", Value::Array(Vec::new()));
-        }
-        if result.contains_key("local_user_identity_known") {
-            result.insert("local_user_identity_known", Value::Bool(false));
-        }
-        if let Some(revision) = result.get("local_user_profile_revision") {
-            let masked = format!("privacy:{}", revision.py_str());
-            result.insert("local_user_profile_revision", Value::from(masked));
-        }
-        result.insert("privacy_mode", Value::Bool(true));
-        Ok(result)
+            format!("{}: {}", field("speaker", "?"), field("text", ""))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn alias_lines(text: &str, names: &mut Map) -> String {
+    py::splitlines(text)
+        .into_iter()
+        .map(|line| match line.split_once(": ") {
+            Some((name, text)) => format!("{}: {text}", alias(names, Some(&Value::from(name)))),
+            None => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The user's name aliased, aliases and identity dropped, the profile revision
+/// marked.
+fn mask_identity(result: &mut Map, names: &mut Map) {
+    if result.contains_key("local_user_name") {
+        let masked = alias(names, result.get("local_user_name"));
+        result.insert("local_user_name", Value::from(masked));
+    }
+    if result.contains_key("local_user_aliases") {
+        result.insert("local_user_aliases", Value::Array(Vec::new()));
+    }
+    if result.contains_key("local_user_identity_known") {
+        result.insert("local_user_identity_known", Value::Bool(false));
+    }
+    if let Some(revision) = result.get("local_user_profile_revision") {
+        let masked = format!("privacy:{}", revision.py_str());
+        result.insert("local_user_profile_revision", Value::from(masked));
     }
 }
 
