@@ -223,11 +223,13 @@ fn div_1000(value: &Value) -> Result<f64, String> {
     json::as_f64(value).map(|x| x / 1000.0).ok_or_else(|| json::operand_error("/", value, "int"))
 }
 
-/// `data.get("timestamp", time.time() * 1000) / 1000`.
-fn raw_timestamp(data: &Map, now: f64) -> Result<f64, String> {
+/// The frame's `timestamp` (ms, browser clock) moved onto the bridge's clock by
+/// `clock_offset`, or `now` for a frame without one: the bridge's own time is on
+/// its clock already.
+fn event_time(data: &Map, now: f64, clock_offset: f64) -> Result<f64, String> {
     match data.get("timestamp") {
-        Some(ts) => div_1000(ts),
-        None => Ok(now * 1000.0 / 1000.0),
+        Some(ts) => Ok(div_1000(ts)? + clock_offset),
+        None => Ok(now),
     }
 }
 
@@ -370,11 +372,10 @@ impl Bridge {
         }
         let speaker = data.get("speaker");
         let now = self.now();
-        let raw_ts = raw_timestamp(data, now)?;
         let outcome = {
             let mut st = self.st();
             let offset = st.clock_offset;
-            let event_time = if offset == 0.0 { raw_ts } else { raw_ts + offset };
+            let event_time = event_time(data, now, offset)?;
             st.speakers.speaker_update(speaker, event_time, now, offset)?
         };
         self.report_speaker_outcome(&outcome);

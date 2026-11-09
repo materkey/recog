@@ -245,7 +245,7 @@ async fn given_null_seq_or_none_when_update_arrives_then_order_not_checked() {
 }
 
 #[tokio::test]
-async fn given_clock_offset_when_update_has_no_timestamp_then_stamped_now_plus_the_offset() {
+async fn given_clock_offset_when_update_has_no_timestamp_then_stamped_now_without_the_offset() {
     // given
     let (h, _live) = rig();
     h.bridge.set_clock_offset(2.0);
@@ -253,9 +253,9 @@ async fn given_clock_offset_when_update_has_no_timestamp_then_stamped_now_plus_t
     h.clock.advance(3.0);
     // when: no timestamp
     h.process(r#"{"type": "speaker_update", "seq": 2, "speaker": null}"#, None).await.unwrap();
-    // then: Alice's segment ran from her stamp moved by the offset to the bridge's
-    // own time, which Python moves by the offset as well
-    assert_eq!(h.bridge.get_all_completed_segments(), vec![segment("Alice", "a", NOW, NOW + 5.0, 5000)]);
+    // then: Alice's segment ran from her stamp, moved onto the bridge's clock by the
+    // offset, to the bridge's own time, which is on that clock already
+    assert_eq!(h.bridge.get_all_completed_segments(), vec![segment("Alice", "a", NOW, NOW + 3.0, 3000)]);
 }
 
 #[tokio::test]
