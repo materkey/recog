@@ -283,28 +283,10 @@ async fn run(shared: Arc<Shared>, handler: Arc<dyn BridgeHandler>, initial: Dura
         let error = match outcome {
             Err(e) => Some(e.to_string()),
             Ok((socket, _)) => {
-                let (mut sink, stream) = socket.split();
-                let hello = sink.send(Message::text(format!(r#"{{"type": "{}"}}"#, protocol::SUBSCRIBER_HELLO))).await;
-                if let Err(e) = hello {
-                    eprintln!("{} subscriber_hello send failed: {e}", shared.prefix);
-                }
-                *shared.sink.lock().await = Some(sink);
-                shared.published.store(true, Ordering::SeqCst);
                 failures.streak = 0;
-                if connected_once {
-                    eprintln!("{} reconnected to {}", shared.prefix, shared.url);
-                } else {
-                    connected_once = true;
-                    eprintln!("{} connected to {}", shared.prefix, shared.url);
-                }
-                handler.connected(Arc::clone(&shared) as Arc<dyn RawSender>).await;
                 delay = initial;
-                let ended = receive(&shared, handler.as_ref(), stream, &mut stop).await;
-                shared.published.store(false, Ordering::SeqCst);
-                if let Some(mut sink) = shared.sink.lock().await.take() {
-                    let _ = sink.close().await;
-                }
-                handler.disconnected().await;
+                let ended = session(&shared, handler.as_ref(), socket, connected_once, &mut stop).await;
+                connected_once = true;
                 match ended {
                     Ended::Stopped => return,
                     Ended::Lost(error) => error,
@@ -314,12 +296,42 @@ async fn run(shared: Arc<Shared>, handler: Arc<dyn BridgeHandler>, initial: Dura
         if let Some(error) = error {
             failures.failed(&shared.prefix, &error, delay);
         }
-        if is_stopped(&stop) {
-            return;
-        }
-        if tokio::time::timeout(delay, stopped(&mut stop)).await.is_ok() {
+        if !backoff(&mut stop, delay).await {
             return;
         }
         delay = (delay * 2).min(MAX_BACKOFF);
     }
+}
+
+/// One connection: the hello, the link published to the handler until it is lost
+/// or the subscriber stops, then withdrawn.
+async fn session(
+    shared: &Arc<Shared>,
+    handler: &dyn BridgeHandler,
+    socket: Socket,
+    reconnect: bool,
+    stop: &mut watch::Receiver<bool>,
+) -> Ended {
+    let (mut sink, stream) = socket.split();
+    let hello = sink.send(Message::text(format!(r#"{{"type": "{}"}}"#, protocol::SUBSCRIBER_HELLO))).await;
+    if let Err(e) = hello {
+        eprintln!("{} subscriber_hello send failed: {e}", shared.prefix);
+    }
+    *shared.sink.lock().await = Some(sink);
+    shared.published.store(true, Ordering::SeqCst);
+    let verb = if reconnect { "reconnected" } else { "connected" };
+    eprintln!("{} {verb} to {}", shared.prefix, shared.url);
+    handler.connected(Arc::clone(shared) as Arc<dyn RawSender>).await;
+    let ended = receive(shared, handler, stream, stop).await;
+    shared.published.store(false, Ordering::SeqCst);
+    if let Some(mut sink) = shared.sink.lock().await.take() {
+        let _ = sink.close().await;
+    }
+    handler.disconnected().await;
+    ended
+}
+
+/// Waits out the backoff; false when the subscriber stops before or during it.
+async fn backoff(stop: &mut watch::Receiver<bool>, delay: Duration) -> bool {
+    !is_stopped(stop) && tokio::time::timeout(delay, stopped(stop)).await.is_err()
 }
