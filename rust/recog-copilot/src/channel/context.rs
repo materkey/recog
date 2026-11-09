@@ -76,22 +76,23 @@ fn get_or(event: &Map, key: &str, default: &str) -> String {
 /// `"TypeError: <message>"`; the push is then skipped and logged.
 pub fn format_channel_event(event: &Map) -> Result<(String, Map), String> {
     let msg_type = get_or(event, "type", "unknown");
-    let mut content = match msg_type.as_str() {
+    let mut content = event_content(&msg_type, event)?;
+    let context = build_copilot_context(event);
+    if !context.is_empty() {
+        content = format!("{context}\n\n{content}");
+    }
+    Ok((content, push_meta(&msg_type, event)))
+}
+
+/// What the push says about an event of `msg_type`.
+fn event_content(msg_type: &str, event: &Map) -> Result<String, String> {
+    Ok(match msg_type {
         protocol::COPILOT_USER_MESSAGE => format!(
             "User typed in the Copilot tab. Reply with send_copilot_message kind='reply' carrying the original \
              request_id.\n\nText: {}",
             event.get("text").map_or_else(String::new, Value::py_str)
         ),
-        protocol::TRANSCRIPT_TICK => {
-            let new_segments =
-                event.get("new_segments").filter(|v| v.truthy()).cloned().unwrap_or(Value::Array(vec![]));
-            format!(
-                "Transcript tick: {} new segment(s). Apply the current editable Copilot instructions.\n\nRecent \
-                 context:\n{}",
-                py_len(&new_segments)?,
-                get_or(event, "recent_context", "")
-            )
-        }
+        protocol::TRANSCRIPT_TICK => tick_content(event)?,
         protocol::MEETING_STARTED => {
             format!(
                 "Meeting started: {}. Reset internal proactive state.",
@@ -111,14 +112,23 @@ pub fn format_channel_event(event: &Map) -> Result<(String, Map), String> {
         }
         protocol::MEETING_ENDED => "Meeting ended. Stop polling and exit the copilot loop.".to_owned(),
         _ => pyjson::dumps(&Value::Object(event.clone()), None),
-    };
-    let context = build_copilot_context(event);
-    if !context.is_empty() {
-        content = format!("{context}\n\n{content}");
-    }
+    })
+}
 
+fn tick_content(event: &Map) -> Result<String, String> {
+    let new_segments = event.get("new_segments").filter(|v| v.truthy()).cloned().unwrap_or(Value::Array(vec![]));
+    Ok(format!(
+        "Transcript tick: {} new segment(s). Apply the current editable Copilot instructions.\n\nRecent \
+         context:\n{}",
+        py_len(&new_segments)?,
+        get_or(event, "recent_context", "")
+    ))
+}
+
+/// The `<channel>` tag's attributes: the event type and the transport keys present.
+fn push_meta(msg_type: &str, event: &Map) -> Map {
     let mut meta = Map::new();
-    meta.insert("event_type", Value::from(msg_type.as_str()));
+    meta.insert("event_type", Value::from(msg_type));
     // Transport metadata for clients and sessions started before the rendered context
     // was introduced; new instructions use the context block.
     let keys = ["request_id", "meeting_id", "meeting_title"]
@@ -133,5 +143,5 @@ pub fn format_channel_event(event: &Map) -> Result<(String, Map), String> {
         };
         meta.insert(key, Value::from(text));
     }
-    Ok((content, meta))
+    meta
 }

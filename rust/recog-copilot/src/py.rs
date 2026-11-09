@@ -35,12 +35,7 @@ pub fn repr(value: &Value) -> String {
         Value::Null => "None".to_owned(),
         Value::Bool(true) => "True".to_owned(),
         Value::Bool(false) => "False".to_owned(),
-        Value::Number(n) => match (n.as_i64(), n.as_u64(), n.as_f64()) {
-            (Some(i), _, _) => i.to_string(),
-            (None, Some(u), _) => u.to_string(),
-            (None, None, Some(f)) => float_repr(f),
-            (None, None, None) => n.to_string(),
-        },
+        Value::Number(n) => number_text(n),
         Value::String(s) => str_repr(s),
         Value::Array(items) => {
             let inner: Vec<String> = items.iter().map(repr).collect();
@@ -50,6 +45,16 @@ pub fn repr(value: &Value) -> String {
             let inner: Vec<String> = map.iter().map(|(k, v)| format!("{}: {}", str_repr(k), repr(v))).collect();
             format!("{{{}}}", inner.join(", "))
         }
+    }
+}
+
+/// A JSON number as Python's `repr` and `json.dumps` both write it.
+fn number_text(n: &serde_json::Number) -> String {
+    match (n.as_i64(), n.as_u64(), n.as_f64()) {
+        (Some(i), _, _) => i.to_string(),
+        (None, Some(u), _) => u.to_string(),
+        (None, None, Some(f)) => float_repr(f),
+        (None, None, None) => n.to_string(),
     }
 }
 
@@ -72,22 +77,33 @@ pub fn float_repr(f: f64) -> String {
     let (mantissa, exponent) = sci.split_once('e').unwrap_or((&sci, "0"));
     let exponent: i32 = exponent.parse().unwrap_or(0);
     let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let n = digits.len() as i32;
-    let decpt = exponent + 1;
     let body = if (-4..16).contains(&exponent) {
-        if decpt <= 0 {
-            format!("0.{}{}", "0".repeat((-decpt) as usize), digits)
-        } else if decpt >= n {
-            format!("{}{}.0", digits, "0".repeat((decpt - n) as usize))
-        } else {
-            format!("{}.{}", &digits[..decpt as usize], &digits[decpt as usize..])
-        }
+        fixed_notation(&digits, exponent)
     } else {
-        let rest = if n > 1 { format!(".{}", &digits[1..]) } else { String::new() };
-        let exp_sign = if exponent < 0 { '-' } else { '+' };
-        format!("{}{}e{}{:02}", &digits[..1], rest, exp_sign, exponent.abs())
+        exponent_notation(&digits, exponent)
     };
     format!("{sign}{body}")
+}
+
+/// The shortest round-trip `digits` of a float with decimal exponent `exponent`,
+/// written without an exponent.
+fn fixed_notation(digits: &str, exponent: i32) -> String {
+    let n = digits.len() as i32;
+    let decpt = exponent + 1;
+    if decpt <= 0 {
+        format!("0.{}{}", "0".repeat((-decpt) as usize), digits)
+    } else if decpt >= n {
+        format!("{}{}.0", digits, "0".repeat((decpt - n) as usize))
+    } else {
+        format!("{}.{}", &digits[..decpt as usize], &digits[decpt as usize..])
+    }
+}
+
+/// The same digits as `d.ddde+XX`, the exponent signed and at least two digits.
+fn exponent_notation(digits: &str, exponent: i32) -> String {
+    let rest = if digits.len() > 1 { format!(".{}", &digits[1..]) } else { String::new() };
+    let exp_sign = if exponent < 0 { '-' } else { '+' };
+    format!("{}{}e{}{:02}", &digits[..1], rest, exp_sign, exponent.abs())
 }
 
 /// `repr(text)` of a `str`.
@@ -96,23 +112,35 @@ pub fn str_repr(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push(quote);
     for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if is_printable(c) => out.push(c),
-            c if (c as u32) < 0x100 => out.push_str(&format!("\\x{:02x}", c as u32)),
-            c if (c as u32) < 0x10000 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push_str(&format!("\\U{:08x}", c as u32)),
-        }
+        push_repr_char(&mut out, c, quote);
     }
     out.push(quote);
     out
+}
+
+/// One character of a `str` repr quoted with `quote`.
+fn push_repr_char(out: &mut String, c: char, quote: char) {
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '\t' => out.push_str("\\t"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        c if c == quote => {
+            out.push('\\');
+            out.push(c);
+        }
+        c if is_printable(c) => out.push(c),
+        c => out.push_str(&hex_escape(c)),
+    }
+}
+
+/// `\xhh`, `\uhhhh` or `\Uhhhhhhhh`: the shortest escape `repr` has for `c`.
+fn hex_escape(c: char) -> String {
+    match c as u32 {
+        code if code < 0x100 => format!("\\x{code:02x}"),
+        code if code < 0x10000 => format!("\\u{code:04x}"),
+        code => format!("\\U{code:08x}"),
+    }
 }
 
 /// `str.isprintable()` of one character.
@@ -213,51 +241,44 @@ fn write_json(value: &Value, out: &mut String) {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => match (n.as_i64(), n.as_u64(), n.as_f64()) {
-            (Some(i), _, _) => out.push_str(&i.to_string()),
-            (None, Some(u), _) => out.push_str(&u.to_string()),
-            (None, None, Some(f)) => out.push_str(&float_repr(f)),
-            (None, None, None) => out.push_str(&n.to_string()),
-        },
+        Value::Number(n) => out.push_str(&number_text(n)),
         Value::String(s) => write_json_string(s, out),
-        Value::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write_json(item, out);
-            }
-            out.push(']');
-        }
-        Value::Object(map) => {
-            out.push('{');
-            for (i, (key, item)) in map.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write_json_string(key, out);
-                out.push_str(": ");
-                write_json(item, out);
-            }
-            out.push('}');
-        }
+        Value::Array(items) => write_json_array(items, out),
+        Value::Object(map) => write_json_object(map, out),
     }
+}
+
+fn write_json_array(items: &[Value], out: &mut String) {
+    out.push('[');
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_json(item, out);
+    }
+    out.push(']');
+}
+
+fn write_json_object(map: &serde_json::Map<String, Value>, out: &mut String) {
+    out.push('{');
+    for (i, (key, item)) in map.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_json_string(key, out);
+        out.push_str(": ");
+        write_json(item, out);
+    }
+    out.push('}');
 }
 
 fn write_json_string(text: &str, out: &mut String) {
     out.push('"');
     for c in text.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            ' '..='~' => out.push(c),
-            c => {
+        match json_short_escape(c) {
+            Some(escape) => out.push_str(escape),
+            None if (' '..='~').contains(&c) => out.push(c),
+            None => {
                 let mut units = [0u16; 2];
                 for unit in c.encode_utf16(&mut units) {
                     out.push_str(&format!("\\u{unit:04x}"));
@@ -266,6 +287,21 @@ fn write_json_string(text: &str, out: &mut String) {
         }
     }
     out.push('"');
+}
+
+/// The two-character escape JSON has for `c`, if any: the quote, the backslash and
+/// the five named controls.
+pub(crate) fn json_short_escape(c: char) -> Option<&'static str> {
+    match c {
+        '"' => Some("\\\""),
+        '\\' => Some("\\\\"),
+        '\n' => Some("\\n"),
+        '\r' => Some("\\r"),
+        '\t' => Some("\\t"),
+        '\u{08}' => Some("\\b"),
+        '\u{0c}' => Some("\\f"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

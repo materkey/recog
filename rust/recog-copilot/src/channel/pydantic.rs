@@ -27,18 +27,12 @@ pub fn to_json(value: &Value) -> String {
 fn write_string(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if u32::from(c) < 0x20 => {
+        match crate::py::json_short_escape(c) {
+            Some(escape) => out.push_str(escape),
+            None if u32::from(c) < 0x20 => {
                 let _ = write!(out, "\\u{:04x}", u32::from(c));
             }
-            c => out.push(c),
+            None => out.push(c),
         }
     }
     out.push('"');
@@ -77,35 +71,45 @@ fn write_value(out: &mut String, value: &Value, level: usize) {
         }
         Value::Float(x) => out.push_str(&float_text(*x)),
         Value::Str(s) => write_string(out, s),
-        Value::Array(items) if items.is_empty() => out.push_str("[]"),
-        Value::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                newline(out, level + 1);
-                write_value(out, item, level + 1);
-            }
-            newline(out, level);
-            out.push(']');
-        }
-        Value::Object(map) if map.is_empty() => out.push_str("{}"),
-        Value::Object(map) => {
-            out.push('{');
-            for (i, (key, item)) in map.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                newline(out, level + 1);
-                write_string(out, key);
-                out.push_str(": ");
-                write_value(out, item, level + 1);
-            }
-            newline(out, level);
-            out.push('}');
-        }
+        Value::Array(items) => write_array(out, items, level),
+        Value::Object(map) => write_object(out, map, level),
     }
+}
+
+fn write_array(out: &mut String, items: &[Value], level: usize) {
+    if items.is_empty() {
+        out.push_str("[]");
+        return;
+    }
+    out.push('[');
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        newline(out, level + 1);
+        write_value(out, item, level + 1);
+    }
+    newline(out, level);
+    out.push(']');
+}
+
+fn write_object(out: &mut String, map: &Map, level: usize) {
+    if map.is_empty() {
+        out.push_str("{}");
+        return;
+    }
+    out.push('{');
+    for (i, (key, item)) in map.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        newline(out, level + 1);
+        write_string(out, key);
+        out.push_str(": ");
+        write_value(out, item, level + 1);
+    }
+    newline(out, level);
+    out.push('}');
 }
 
 /// The type a tool parameter declares.
@@ -155,23 +159,36 @@ pub fn input_repr(value: &Value) -> String {
 /// pydantic's lax `str` → `int`: surrounding whitespace, a sign, digits with single
 /// underscores between them, and an all-zero fraction.
 fn parse_int(text: &str) -> Option<i128> {
-    let text = text.trim();
-    let (sign, rest) = match text.as_bytes().first() {
+    let (sign, rest) = split_sign(text.trim());
+    let whole = strip_zero_fraction(rest)?;
+    let digits = integer_digits(whole)?;
+    digits.parse::<i128>().ok().map(|n| sign * n)
+}
+
+/// The sign of a number's text and the rest of it.
+fn split_sign(text: &str) -> (i128, &str) {
+    match text.as_bytes().first() {
         Some(b'-') => (-1, &text[1..]),
         Some(b'+') => (1, &text[1..]),
         _ => (1, text),
-    };
-    let (whole, fraction) = match rest.split_once('.') {
-        Some((whole, fraction)) => (whole, Some(fraction)),
-        None => (rest, None),
-    };
-    if let Some(fraction) = fraction
-        && (fraction.is_empty() || !fraction.bytes().all(|b| b == b'0'))
-    {
-        return None;
     }
+}
+
+/// The text before the decimal point, when whatever follows it is a non-empty run of
+/// zeros.
+fn strip_zero_fraction(text: &str) -> Option<&str> {
+    match text.split_once('.') {
+        None => Some(text),
+        Some((whole, fraction)) if !fraction.is_empty() && fraction.bytes().all(|b| b == b'0') => Some(whole),
+        Some(_) => None,
+    }
+}
+
+/// The digits of `whole`, which must start and end with a digit and may have single
+/// underscores between digits.
+fn integer_digits(whole: &str) -> Option<String> {
     let bytes = whole.as_bytes();
-    if bytes.is_empty() || !bytes[0].is_ascii_digit() || !bytes[bytes.len() - 1].is_ascii_digit() {
+    if !digit_at_both_ends(bytes) {
         return None;
     }
     let mut digits = String::with_capacity(bytes.len());
@@ -182,56 +199,105 @@ fn parse_int(text: &str) -> Option<i128> {
             _ => return None,
         }
     }
-    digits.parse::<i128>().ok().map(|n| sign * n)
+    Some(digits)
 }
 
+fn digit_at_both_ends(bytes: &[u8]) -> bool {
+    bytes.first().is_some_and(u8::is_ascii_digit) && bytes.last().is_some_and(u8::is_ascii_digit)
+}
+
+/// Why an input fails a type: pydantic's error kind and message.
+type Rejection = (&'static str, &'static str);
+
+const BOOL_PARSING: Rejection = ("bool_parsing", "Input should be a valid boolean, unable to interpret input");
+const BOOL_TYPE: Rejection = ("bool_type", "Input should be a valid boolean");
+
+/// The floats an `int` accepts as whole numbers: below 2^63 in magnitude.
+const INT_FLOAT_LIMIT: f64 = 9_223_372_036_854_775_808.0;
+
 fn validate(field: &Field, value: &Value) -> Result<Value, Failure> {
-    let fail = |kind, message| Failure { field: field.name, kind, message, input: value.clone() };
     if field.optional && value.is_null() {
         return Ok(Value::Null);
     }
-    match field.kind {
-        Kind::Str => match value {
-            Value::Str(_) => Ok(value.clone()),
-            _ => Err(fail("string_type", "Input should be a valid string")),
-        },
-        Kind::Int => match value {
-            Value::Int(n) => Ok(Value::Int(*n)),
-            Value::Bool(b) => Ok(Value::Int(i128::from(*b))),
-            Value::Float(x) if !x.is_finite() => Err(fail("finite_number", "Input should be a finite number")),
-            Value::Float(x) if x.fract() != 0.0 => {
-                Err(fail("int_from_float", "Input should be a valid integer, got a number with a fractional part"))
-            }
-            #[allow(clippy::cast_possible_truncation)]
-            Value::Float(x) if x.abs() < 9_223_372_036_854_775_808.0 => Ok(Value::Int(*x as i128)),
-            Value::Float(_) => {
-                Err(fail("int_parsing_size", "Unable to parse input string as an integer, exceeded maximum size"))
-            }
-            Value::Str(s) => parse_int(s).map(Value::Int).ok_or_else(|| {
-                fail("int_parsing", "Input should be a valid integer, unable to parse string as an integer")
-            }),
-            _ => Err(fail("int_type", "Input should be a valid integer")),
-        },
-        Kind::Bool => {
-            let parsing = || fail("bool_parsing", "Input should be a valid boolean, unable to interpret input");
-            match value {
-                Value::Bool(b) => Ok(Value::Bool(*b)),
-                Value::Int(0) => Ok(Value::Bool(false)),
-                Value::Int(1) => Ok(Value::Bool(true)),
-                Value::Int(n) if i64::try_from(*n).is_ok() => Err(parsing()),
-                Value::Float(x) if *x == 0.0 => Ok(Value::Bool(false)),
-                Value::Float(x) if *x == 1.0 => Ok(Value::Bool(true)),
-                // A whole float reads as an integer other than 0 and 1; a fraction is
-                // not a boolean at all, nor is a float beyond i64.
-                Value::Float(x) if x.fract() == 0.0 && x.abs() < 9_223_372_036_854_775_808.0 => Err(parsing()),
-                Value::Str(s) => match s.to_lowercase().as_str() {
-                    "0" | "off" | "f" | "false" | "n" | "no" => Ok(Value::Bool(false)),
-                    "1" | "on" | "t" | "true" | "y" | "yes" => Ok(Value::Bool(true)),
-                    _ => Err(parsing()),
-                },
-                _ => Err(fail("bool_type", "Input should be a valid boolean")),
-            }
-        }
+    let checked = match field.kind {
+        Kind::Str => validate_str(value),
+        Kind::Int => validate_int(value),
+        Kind::Bool => validate_bool(value),
+    };
+    checked.map_err(|(kind, message)| Failure { field: field.name, kind, message, input: value.clone() })
+}
+
+fn validate_str(value: &Value) -> Result<Value, Rejection> {
+    match value {
+        Value::Str(_) => Ok(value.clone()),
+        _ => Err(("string_type", "Input should be a valid string")),
+    }
+}
+
+fn validate_int(value: &Value) -> Result<Value, Rejection> {
+    match value {
+        Value::Int(n) => Ok(Value::Int(*n)),
+        Value::Bool(b) => Ok(Value::Int(i128::from(*b))),
+        Value::Float(x) => int_from_float(*x).map(Value::Int),
+        Value::Str(s) => parse_int(s)
+            .map(Value::Int)
+            .ok_or(("int_parsing", "Input should be a valid integer, unable to parse string as an integer")),
+        _ => Err(("int_type", "Input should be a valid integer")),
+    }
+}
+
+fn int_from_float(x: f64) -> Result<i128, Rejection> {
+    if !x.is_finite() {
+        return Err(("finite_number", "Input should be a finite number"));
+    }
+    if x.fract() != 0.0 {
+        return Err(("int_from_float", "Input should be a valid integer, got a number with a fractional part"));
+    }
+    if x.abs() < INT_FLOAT_LIMIT {
+        #[allow(clippy::cast_possible_truncation)]
+        return Ok(x as i128);
+    }
+    Err(("int_parsing_size", "Unable to parse input string as an integer, exceeded maximum size"))
+}
+
+fn validate_bool(value: &Value) -> Result<Value, Rejection> {
+    match value {
+        Value::Bool(b) => Ok(Value::Bool(*b)),
+        Value::Int(n) => bool_from_int(*n),
+        Value::Float(x) => bool_from_float(*x),
+        Value::Str(s) => bool_from_str(s),
+        _ => Err(BOOL_TYPE),
+    }
+}
+
+/// 0 and 1; any other integer of i64 does not read as a boolean, a larger one is not
+/// a boolean at all.
+fn bool_from_int(n: i128) -> Result<Value, Rejection> {
+    match n {
+        0 => Ok(Value::Bool(false)),
+        1 => Ok(Value::Bool(true)),
+        n if i64::try_from(n).is_ok() => Err(BOOL_PARSING),
+        _ => Err(BOOL_TYPE),
+    }
+}
+
+/// A whole float reads as an integer other than 0 and 1; a fraction is not a boolean
+/// at all, nor is a float beyond i64.
+fn bool_from_float(x: f64) -> Result<Value, Rejection> {
+    if x == 0.0 {
+        return Ok(Value::Bool(false));
+    }
+    if x == 1.0 {
+        return Ok(Value::Bool(true));
+    }
+    if x.fract() == 0.0 && x.abs() < INT_FLOAT_LIMIT { Err(BOOL_PARSING) } else { Err(BOOL_TYPE) }
+}
+
+fn bool_from_str(s: &str) -> Result<Value, Rejection> {
+    match s.to_lowercase().as_str() {
+        "0" | "off" | "f" | "false" | "n" | "no" => Ok(Value::Bool(false)),
+        "1" | "on" | "t" | "true" | "y" | "yes" => Ok(Value::Bool(true)),
+        _ => Err(BOOL_PARSING),
     }
 }
 

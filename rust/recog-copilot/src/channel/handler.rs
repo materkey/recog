@@ -129,14 +129,18 @@ pub fn value_from_json(value: &serde_json::Value) -> Value {
     match value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => match (n.as_i64(), n.as_u64()) {
-            (Some(i), _) => Value::Int(i128::from(i)),
-            (None, Some(u)) => Value::Int(i128::from(u)),
-            _ => Value::Float(n.as_f64().unwrap_or(f64::NAN)),
-        },
+        serde_json::Value::Number(n) => number_from_json(n),
         serde_json::Value::String(s) => Value::Str(s.clone()),
         serde_json::Value::Array(items) => Value::Array(items.iter().map(value_from_json).collect()),
         serde_json::Value::Object(object) => Value::Object(map_from_json(object)),
+    }
+}
+
+fn number_from_json(n: &serde_json::Number) -> Value {
+    match (n.as_i64(), n.as_u64()) {
+        (Some(i), _) => Value::Int(i128::from(i)),
+        (None, Some(u)) => Value::Int(i128::from(u)),
+        _ => Value::Float(n.as_f64().unwrap_or(f64::NAN)),
     }
 }
 
