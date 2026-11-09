@@ -617,6 +617,13 @@ fn printed(lines: &Lines) -> Vec<(Stream, String)> {
     printed
 }
 
+/// `json.dumps(json.loads(compact), indent=2)`: the bytes `save_json` writes.
+fn pretty(compact: &str) -> String {
+    pyjson::dumps(&pyjson::loads(compact).unwrap(), Some(2))
+}
+
+mod editing;
+mod joining;
 mod lifecycle;
 mod listing;
 mod records;

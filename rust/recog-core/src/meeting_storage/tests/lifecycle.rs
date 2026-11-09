@@ -3,10 +3,6 @@
 
 use super::*;
 
-fn pretty(compact: &str) -> String {
-    pyjson::dumps(&pyjson::loads(compact).unwrap(), Some(2))
-}
-
 const STALE_WITH_UPDATE: &str = r#"{"id": "s1", "created_at": "2026-07-04T09:00:00+00:00", "ended_at": null,
     "updated_at": "2026-07-04T09:20:00+00:00", "source": "ktalk", "title": "Daily", "end_reason": null,
     "conference": {"live_url": "https://k.example.org/r"}, "stats": {"segment_count": 2, "duration_seconds": 0,
