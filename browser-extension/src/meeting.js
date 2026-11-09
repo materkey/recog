@@ -42,26 +42,34 @@ export function getMeetingUrl() {
   return adapter?.getMeetingUrl?.() || window.location.href;
 }
 
+// The meeting URL a title retry chain still serves, or null once it is stale.
+function titleChainUrl(scheduledUrl, gen) {
+  // A newer join has superseded this retry chain. The `scheduledUrl` guard
+  // below only distinguishes DIFFERENT meetings; a leave+rejoin of the SAME
+  // url (e.g. after `meeting_join_rejected`) would otherwise let this stale
+  // chain's near-exhausted `attempt` count fall back to `document.title` and
+  // lock the room before the fresh join's room name has synced. The per-join
+  // generation token invalidates the old chain regardless of url.
+  if (gen !== titleRetryGen) return null;
+
+  const url = state.currentMeetingUrl;
+  if (!url || titleSentForUrl === url) return null;
+
+  // Abandon this retry chain if the meeting changed since it was scheduled.
+  // Retries read `state.currentMeetingUrl` fresh, so a stale chain from
+  // meeting A (carrying A's near-exhausted `attempt` count) could otherwise
+  // fire during meeting B, skip B's own retries, and prematurely lock B to
+  // the generic `document.title` before B's room name has synced.
+  if (scheduledUrl !== url) return null;
+
+  return url;
+}
+
 function sendDelayedTitle(attempt = 0, scheduledUrl = state.currentMeetingUrl, gen = titleRetryGen) {
   // Отправляем title через 2 сек после входа, когда страница уже загрузилась
   setTimeout(() => {
-    // A newer join has superseded this retry chain. The `scheduledUrl` guard
-    // below only distinguishes DIFFERENT meetings; a leave+rejoin of the SAME
-    // url (e.g. after `meeting_join_rejected`) would otherwise let this stale
-    // chain's near-exhausted `attempt` count fall back to `document.title` and
-    // lock the room before the fresh join's room name has synced. The per-join
-    // generation token invalidates the old chain regardless of url.
-    if (gen !== titleRetryGen) return;
-
-    const url = state.currentMeetingUrl;
-    if (!url || titleSentForUrl === url) return;
-
-    // Abandon this retry chain if the meeting changed since it was scheduled.
-    // Retries read `state.currentMeetingUrl` fresh, so a stale chain from
-    // meeting A (carrying A's near-exhausted `attempt` count) could otherwise
-    // fire during meeting B, skip B's own retries, and prematurely lock B to
-    // the generic `document.title` before B's room name has synced.
-    if (scheduledUrl !== url) return;
+    const url = titleChainUrl(scheduledUrl, gen);
+    if (!url) return;
 
     // Prefer the adapter's authoritative title (matrix → room name) over the
     // page title: inside the EC iframe `document.title` is Element Call's own
