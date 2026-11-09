@@ -236,32 +236,7 @@ impl ProfileCoordinator {
     /// The profile cannot be read.
     pub async fn handle_frame(&self, frame: &Map) -> Result<(), ProfileError> {
         match frame.get("type").and_then(Value::as_str) {
-            Some(protocol::USER_PROFILE_APPLIED) => {
-                let identity = frame.get("identity").cloned();
-                let connection = self.lock().connection_generation;
-                {
-                    let _guard = self.write_lock.lock().await;
-                    let profile = self.read().await?;
-                    let revision = Value::from(profile.revision.as_str());
-                    let mut state = self.lock();
-                    let Some(Value::Object(fields)) = identity.as_ref() else { return Ok(()) };
-                    if connection != state.connection_generation
-                        || state.send.is_none()
-                        || frame.get("revision") != Some(&revision)
-                        || fields.get("local_user_profile_revision") != Some(&revision)
-                        || !matches!(fields.get("local_user_name"), Some(Value::Str(_)))
-                        || !is_str_list(fields.get("local_user_aliases"))
-                        || !matches!(fields.get("local_user_identity_known"), Some(Value::Bool(_)))
-                    {
-                        return Ok(());
-                    }
-                    state.applied_identity = identity;
-                    state.error = None;
-                    drop(state);
-                    self.changed.set();
-                }
-                self.publish().await
-            }
+            Some(protocol::USER_PROFILE_APPLIED) => self.applied(frame).await,
             Some(protocol::USER_PROFILE_ERROR) => {
                 {
                     let mut state = self.lock();
@@ -274,4 +249,39 @@ impl ProfileCoordinator {
             _ => Ok(()),
         }
     }
+
+    /// `user_profile_applied`: the identity is taken only when it acknowledges the
+    /// saved revision on the current link.
+    async fn applied(&self, frame: &Map) -> Result<(), ProfileError> {
+        let identity = frame.get("identity").cloned();
+        let connection = self.lock().connection_generation;
+        {
+            let _guard = self.write_lock.lock().await;
+            let profile = self.read().await?;
+            let revision = Value::from(profile.revision.as_str());
+            let mut state = self.lock();
+            let Some(Value::Object(fields)) = identity.as_ref() else { return Ok(()) };
+            if connection != state.connection_generation
+                || state.send.is_none()
+                || !acknowledges(frame, fields, &revision)
+            {
+                return Ok(());
+            }
+            state.applied_identity = identity;
+            state.error = None;
+            drop(state);
+            self.changed.set();
+        }
+        self.publish().await
+    }
+}
+
+/// Whether an applied frame and its identity name the saved revision and carry a
+/// well-formed identity.
+fn acknowledges(frame: &Map, fields: &Map, revision: &Value) -> bool {
+    frame.get("revision") == Some(revision)
+        && fields.get("local_user_profile_revision") == Some(revision)
+        && matches!(fields.get("local_user_name"), Some(Value::Str(_)))
+        && is_str_list(fields.get("local_user_aliases"))
+        && matches!(fields.get("local_user_identity_known"), Some(Value::Bool(_)))
 }

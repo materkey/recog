@@ -38,6 +38,13 @@ pub fn segment_id(segment: &Value) -> Option<i128> {
 /// # Errors
 /// The file cannot be read or decoded, or a line holds JSON that is not an object.
 pub fn read_new_segments(path: &Path, state: &mut TailState) -> Result<Vec<Value>, String> {
+    let text = read_appended(path, state)?;
+    unseen_segments(&text, state)
+}
+
+/// The text appended since the last read, from the start after a rewrite (a new
+/// inode or a shorter file).
+fn read_appended(path: &Path, state: &mut TailState) -> Result<String, String> {
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let rewrite = state.inode.is_some_and(|inode| inode != metadata.ino()) || metadata.len() < state.position;
     if rewrite {
@@ -50,7 +57,11 @@ pub fn read_new_segments(path: &Path, state: &mut TailState) -> Result<Vec<Value
     file.read_to_end(&mut raw).map_err(|e| e.to_string())?;
     let text = std::str::from_utf8(&raw).map_err(|e| pyjson::utf8_error_message(&raw, &e))?;
     state.position += raw.len() as u64;
-    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
+}
+
+/// The rows of the text not seen before, marked seen; unreadable lines skipped.
+fn unseen_segments(text: &str, state: &mut TailState) -> Result<Vec<Value>, String> {
     let mut segments = Vec::new();
     for line in text.split_inclusive('\n') {
         let line = py::strip(line);
