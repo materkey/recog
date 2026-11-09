@@ -237,6 +237,18 @@ async fn meeting_names_and_title_when_orphan_titled_then_prompt_variables_follow
 }
 
 #[tokio::test]
+async fn meta_without_participants_when_orphan_titled_then_names_are_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let prompt = r#"{"prompt": "U=[{user_name}] P=[{participants}] {transcript}"}"#;
+    store(dir.path()).write_task("title", &Json::parse(prompt).unwrap(), None).unwrap();
+    let meeting = dir.path().join("meetings/m1");
+    write_meeting(&meeting, r#"{"title": "Old"}"#, &[LONG_ROW]);
+    let factory = FakeFactory::new("codex", "m", None, "New title");
+    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await.unwrap().title, "New title");
+    assert!(factory.prompts()[0].starts_with("U=[] P=[] [12:00:00] User: Обсуждаем"), "{}", factory.prompts()[0]);
+}
+
+#[tokio::test]
 async fn unreadable_meta_when_orphan_titled_then_no_title_and_no_provider() {
     let metas = [
         "not json",

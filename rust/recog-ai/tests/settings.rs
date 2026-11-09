@@ -124,6 +124,21 @@ fn retired_features_given_legacy_file_when_loaded_then_active_settings_remain_us
 }
 
 #[test]
+fn retired_provider_beside_a_non_object_task_given_saved_file_when_loaded_then_settings_read_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    std::fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+    let raw = format!(
+        r#"{{"version": 1, "revision": "{}", "models": {{}}, "tasks": {{"title": "not a task",
+        "analysis.increment": {{"providers": ["openrouter"]}}}}}}"#,
+        uuid()
+    );
+    std::fs::write(&store.path, &raw).unwrap();
+    assert!(matches!(store.view(), Err(AiError::SettingsRead(_))));
+    assert_eq!(std::fs::read_to_string(&store.path).unwrap(), raw);
+}
+
+#[test]
 fn codex_auto_given_scenario_when_saved_then_empty_effort_roundtrips() {
     let dir = tempfile::tempdir().unwrap();
     let store = store(dir.path());

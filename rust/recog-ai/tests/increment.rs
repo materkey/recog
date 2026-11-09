@@ -903,6 +903,81 @@ async fn meeting_meta_missing_or_broken_when_generating_all_then_nothing_or_erro
     assert!(factory.calls().is_empty());
 }
 
+const AGED: &str = "2000-01-01T00:00:00+00:00";
+
+/// A provider that ages the `generating` placeholder, then waits for the heartbeat to
+/// refresh it, and records the metadata it saw refreshed.
+struct HeartbeatWatch {
+    meta: PathBuf,
+    seen: Arc<Mutex<Option<Json>>>,
+}
+
+impl recog_ai::provider::AiProvider for HeartbeatWatch {
+    fn key(&self) -> &str {
+        "codex"
+    }
+    fn name(&self) -> String {
+        "Watch".into()
+    }
+    fn model(&self) -> &str {
+        "m"
+    }
+    fn reasoning_effort(&self) -> Option<&str> {
+        None
+    }
+    fn complete<'a>(&'a self, _prompt: &'a str) -> recog_ai::provider::BoxFuture<'a, recog_ai::Result<String>> {
+        Box::pin(async move {
+            let mut meta = read_json(&self.meta);
+            meta.as_object_mut().unwrap().insert("generated_at".into(), Json::from(AGED));
+            std::fs::write(&self.meta, meta.dumps(None)).unwrap();
+            for _ in 0..500 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                let current = std::fs::read_to_string(&self.meta).ok().and_then(|text| Json::parse(&text).ok());
+                if let Some(current) = current.filter(|m| m["generated_at"] != Json::from(AGED)) {
+                    *self.seen.lock().unwrap() = Some(current);
+                    break;
+                }
+            }
+            Ok("## Итог\n- ok\n".to_owned())
+        })
+    }
+}
+
+struct HeartbeatFactory {
+    meta: PathBuf,
+    seen: Arc<Mutex<Option<Json>>>,
+}
+
+impl recog_ai::provider::ProviderFactory for HeartbeatFactory {
+    fn create(
+        &self,
+        _settings: &recog_ai::settings::ResolvedTask,
+        _task: &str,
+        _provider: Option<&str>,
+    ) -> recog_ai::Result<Box<dyn recog_ai::provider::AiProvider>> {
+        Ok(Box::new(HeartbeatWatch { meta: self.meta.clone(), seen: self.seen.clone() }))
+    }
+}
+
+#[tokio::test]
+async fn long_generation_when_heartbeat_fires_then_generating_placeholder_gets_a_fresh_generated_at() {
+    let dir = tempfile::tempdir().unwrap();
+    let meeting = make_meeting(dir.path(), MEETING, None);
+    let seen = Arc::new(Mutex::new(None));
+    let factory = Arc::new(HeartbeatFactory { meta: inc_dir(&meeting).join("v1_meta.json"), seen: seen.clone() });
+    let generator = IncrementGenerator::new(dir.path(), Some(dir.path().join("no-prompts")))
+        .with_factory(factory)
+        .with_legacy_env(LegacyEnv::default())
+        .with_heartbeat_interval(std::time::Duration::from_millis(50));
+    let version = generator.generate(MEETING, &meeting, &default_prompt(), false, None).await;
+    assert_eq!(version.unwrap(), Some(1));
+    let refreshed = seen.lock().unwrap().clone().expect("the heartbeat refreshed the placeholder");
+    assert_eq!(refreshed["status"], Json::from("generating"));
+    let stamp = refreshed["generated_at"].as_str().unwrap().to_owned();
+    assert!(stamp.as_str() > "2026", "{stamp}");
+    assert_eq!(read_json(&inc_dir(&meeting).join("v1_meta.json"))["status"], Json::from("completed"));
+}
+
 #[tokio::test]
 async fn failing_prompt_when_generating_all_then_reported_and_the_others_still_run() {
     let dir = tempfile::tempdir().unwrap();
