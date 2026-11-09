@@ -1,8 +1,11 @@
 //! Questions about a meeting.
 
+use std::path::Path;
+
 use axum::http::StatusCode;
 use recog_ai::AiError;
 use recog_ai::meeting_chat::{self, ChatTurn};
+use recog_ai::settings::ResolvedTask;
 use recog_core::meeting_storage::{MeetingStorage, UnnamedLocal, local_participant_names};
 use recog_core::pyjson::Value;
 
@@ -66,51 +69,97 @@ pub fn resolve_ai_context(
     Ok(Ok((segments, local)))
 }
 
-pub(super) async fn ask_chat(state: &AppState, req: &Req) -> Reply {
+/// The validated question of `POST /chat`, or the 422.
+fn chat_question(req: &Req) -> Result<String, axum::response::Response> {
     let mut errors = Vec::new();
     let fields = [field("question", Ty::ConStr { strip: true, min: 1, max: 4000 }, true)];
     let body = body_model(req, &fields, false, &mut errors)?;
     check(&errors)?;
-    let question = body.unwrap_or_default().get("question").map(Value::py_str).unwrap_or_default();
+    Ok(body.unwrap_or_default().get("question").map(Value::py_str).unwrap_or_default())
+}
+
+/// The meeting's transcript for a question, or the 400 of a meeting without one.
+fn chat_transcript(segments: &[Value], max_chars: usize) -> Result<String, axum::response::Response> {
+    let transcript = transcript::build_ai_transcript(segments, max_chars).map_err(|_| responses::internal_error())?;
+    if transcript.is_empty() {
+        return Err(bad_request("Meeting has no transcript"));
+    }
+    Ok(transcript)
+}
+
+/// What a question is asked about: the task's settings, the transcript and the
+/// local participant.
+struct ChatContext<'a> {
+    settings: &'a ResolvedTask,
+    transcript: &'a str,
+    local: &'a str,
+}
+
+/// The task's instructions over the meeting, then the saved dialog and the question.
+fn chat_prompt(
+    storage: &MeetingStorage,
+    meeting_id: &str,
+    path: &Path,
+    context: &ChatContext<'_>,
+    question: &str,
+) -> Result<String, axum::response::Response> {
+    let again = storage.get_meeting(meeting_id).map_err(|_| responses::internal_error())?;
+    let (title, participants) =
+        transcript::analysis_prompt_metadata(again.as_ref()).map_err(|_| responses::internal_error())?;
+    let instructions = build_prompt(context.settings, context.transcript, context.local, &participants, &title)
+        .map_err(|_| responses::internal_error())?;
+    let history = meeting_chat::read_turns(path).map_err(|_| responses::internal_error())?;
+    Ok(meeting_chat::build_chat_prompt(&instructions, &history, question))
+}
+
+fn bad_gateway(message: impl std::fmt::Display) -> axum::response::Response {
+    responses::detail(StatusCode::BAD_GATEWAY, &message.to_string())
+}
+
+/// The provider's stripped answer and its name, or the 502 of a failure or an empty
+/// answer.
+async fn chat_answer(
+    state: &AppState,
+    settings: &ResolvedTask,
+    prompt: &str,
+) -> Result<(String, String), axum::response::Response> {
+    let provider = state.ai.provider("meeting_chat", settings).map_err(bad_gateway)?;
+    let answer = provider.complete(prompt).await.map_err(bad_gateway)?;
+    let answer = recog_core::py::strip(&answer).to_owned();
+    if answer.is_empty() {
+        return Err(bad_gateway("Модель вернула пустой ответ"));
+    }
+    Ok((answer, provider.name()))
+}
+
+/// The exchange appended to the dialog, or the 404 of a meeting deleted meanwhile.
+fn save_turn(path: &Path, turn: &ChatTurn) -> Reply {
+    match meeting_chat::append_turn(path, turn) {
+        Ok(()) => Ok(responses::json(&json::to_core(&turn.to_json()))),
+        Err(AiError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(not_found("Meeting not found")),
+        Err(_) => Err(responses::internal_error()),
+    }
+}
+
+pub(super) async fn ask_chat(state: &AppState, req: &Req) -> Reply {
+    let question = chat_question(req)?;
     let meeting_id = req.param("meeting_id").to_owned();
     let storage = state.config.storage().map_err(|_| responses::internal_error())?;
     let path = chat_path(&storage, &meeting_id)?;
     let (segments, local) =
         resolve_ai_context(state, &meeting_id, &storage, false).map_err(|_| responses::internal_error())??;
-    let transcript = transcript::build_ai_transcript(&segments, state.config.chat_transcript_max_chars)
-        .map_err(|_| responses::internal_error())?;
-    if transcript.is_empty() {
-        return Err(bad_request("Meeting has no transcript"));
-    }
+    let transcript = chat_transcript(&segments, state.config.chat_transcript_max_chars)?;
     let settings = state.ai.task_settings("meeting_chat").map_err(|_| responses::internal_error())?;
-    let again = storage.get_meeting(&meeting_id).map_err(|_| responses::internal_error())?;
-    let (title, participants) =
-        transcript::analysis_prompt_metadata(again.as_ref()).map_err(|_| responses::internal_error())?;
-    let instructions =
-        build_prompt(&settings, &transcript, &local, &participants, &title).map_err(|_| responses::internal_error())?;
-    let history = meeting_chat::read_turns(&path).map_err(|_| responses::internal_error())?;
-    let prompt = meeting_chat::build_chat_prompt(&instructions, &history, &question);
-    let provider = state
-        .ai
-        .provider("meeting_chat", &settings)
-        .map_err(|e| responses::detail(StatusCode::BAD_GATEWAY, &e.to_string()))?;
-    let answer =
-        provider.complete(&prompt).await.map_err(|e| responses::detail(StatusCode::BAD_GATEWAY, &e.to_string()))?;
-    let answer = recog_core::py::strip(&answer).to_owned();
-    if answer.is_empty() {
-        return Err(responses::detail(StatusCode::BAD_GATEWAY, "Модель вернула пустой ответ"));
-    }
+    let context = ChatContext { settings: &settings, transcript: &transcript, local: &local };
+    let prompt = chat_prompt(&storage, &meeting_id, &path, &context, &question)?;
+    let (answer, provider) = chat_answer(state, &settings, &prompt).await?;
     let turn = ChatTurn::new(
         &utc_now_isoformat(),
         &question,
         &answer,
-        &provider.name(),
+        &provider,
         &settings.revision,
         transcript.starts_with("...(truncated)..."),
     );
-    match meeting_chat::append_turn(&path, &turn) {
-        Ok(()) => Ok(responses::json(&json::to_core(&turn.to_json()))),
-        Err(AiError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(not_found("Meeting not found")),
-        Err(_) => Err(responses::internal_error()),
-    }
+    save_turn(&path, &turn)
 }
