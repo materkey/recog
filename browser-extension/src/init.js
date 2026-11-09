@@ -41,7 +41,7 @@ function waitForConference(callback, maxAttempts = 100) {
     adapter.waitForConference(maxAttempts)
       .then((conf) => {
         console.log(`[${platformName} Transcript] Conference found`);
-        callback(conf);
+        if (claimConference(conf, adapter.getJitsiConference())) callback(conf);
       })
       .catch(() => {
         console.log(`[${platformName} Transcript] Conference not found after ${maxAttempts} attempts`);
@@ -72,7 +72,7 @@ function waitForConference(callback, maxAttempts = 100) {
       attempts++;
       if (window.$conf && window.$conf._dominantSpeakerId$ && window.$conf.jitsiConf) {
         console.log('[KTalk Transcript] Conference found');
-        if (claimLegacyConference(window.$conf)) callback(window.$conf);
+        if (claimConference(window.$conf, window.$conf.jitsiConf)) callback(window.$conf);
         return;
       }
       if (attempts < maxAttempts) {
@@ -119,11 +119,9 @@ function attachAdapterConference(adapter) {
   const conf = adapter.getConference();
   const jitsiConf = adapter.getJitsiConference();
 
-  if (conf !== state.activeConfRef || jitsiConf !== state.activeJitsiConf) {
+  if (claimConference(conf, jitsiConf)) {
     // Dispose old subscriptions and analysers before reattach
     adapter.dispose();
-    state.activeConfRef = conf;
-    state.activeJitsiConf = jitsiConf;
     console.log(`[${getPlatformDisplayName()} Transcript] Conference reattached`);
     subscribeToDominantSpeaker(conf);
   }
@@ -145,18 +143,19 @@ function attachLegacyConference() {
     return;
   }
 
-  if (claimLegacyConference(conf)) {
+  if (claimConference(conf, conf.jitsiConf)) {
     console.log('[KTalk Transcript] Conference reattached');
     subscribeToDominantSpeaker(conf);
   }
 }
 
-// Records `conf` as the attached legacy conference; false when it already is.
-// The wait and the 2 s interval both find it, and only the first subscribes.
-function claimLegacyConference(conf) {
-  if (conf === state.activeConfRef && conf.jitsiConf === state.activeJitsiConf) return false;
+// Records `conf` and its Jitsi conference as the attached ones; false when they
+// already are. The wait and the 2 s interval both find a conference, and only
+// the first subscribes.
+function claimConference(conf, jitsiConf) {
+  if (conf === state.activeConfRef && jitsiConf === state.activeJitsiConf) return false;
   state.activeConfRef = conf;
-  state.activeJitsiConf = conf.jitsiConf;
+  state.activeJitsiConf = jitsiConf;
   return true;
 }
 

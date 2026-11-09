@@ -45,7 +45,7 @@ const fakeAdapter = {
   getParticipants: () => [],
   getParticipantName: (id) => id,
   isMicMuted: () => false,
-  dispose: () => {},
+  dispose: jest.fn(),
 };
 
 beforeAll(async () => {
@@ -80,10 +80,14 @@ beforeEach(() => {
   fakeAdapter.inMeeting = false;
   fakeAdapter.prejoin = false;
   fakeAdapter.subscribeToSpeakerChanges.mockClear();
+  fakeAdapter.onParticipantJoined.mockClear();
+  fakeAdapter.dispose.mockClear();
   fakeAdapter.waitForConference.mockReset();
   fakeAdapter.waitForConference.mockImplementation(() => new Promise(() => {}));
   sendMeetingLeave();
   state.currentMeetingId = null;
+  state.activeConfRef = null;
+  state.activeJitsiConf = null;
 });
 
 afterEach(() => {
@@ -230,4 +234,83 @@ test('an attached call - the conference goes away - the next tick forgets it', (
   expect(state.activeConfRef).toBeNull();
   expect(state.activeJitsiConf).toBeNull();
   expect(state.conferenceReady).toBe(false);
+});
+
+describe('a call found by the wait and by the 2 s interval', () => {
+  const flushPromises = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  function waitFindsCall() {
+    fakeAdapter.roomPage = true;
+    fakeAdapter.inMeeting = true;
+    fakeAdapter.waitForConference.mockImplementation(() => Promise.resolve(conference));
+  }
+
+  test('a call the wait found - the interval ticks - is attached once', async () => {
+    waitFindsCall();
+
+    init();
+    await flushPromises();
+    expect(fakeAdapter.subscribeToSpeakerChanges).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(4000);
+
+    expect(fakeAdapter.subscribeToSpeakerChanges).toHaveBeenCalledTimes(1);
+    expect(fakeAdapter.onParticipantJoined).toHaveBeenCalledTimes(1);
+    expect(fakeAdapter.dispose).not.toHaveBeenCalled();
+  });
+
+  test('a call the interval attached first - the wait finds it - is attached once', async () => {
+    fakeAdapter.roomPage = true;
+    let found;
+    fakeAdapter.waitForConference.mockImplementation(() => new Promise((resolve) => { found = resolve; }));
+    init();
+    fakeAdapter.inMeeting = true;
+    jest.advanceTimersByTime(2000);
+    expect(fakeAdapter.subscribeToSpeakerChanges).toHaveBeenCalledTimes(1);
+
+    found(conference);
+    await flushPromises();
+
+    expect(fakeAdapter.subscribeToSpeakerChanges).toHaveBeenCalledTimes(1);
+  });
+
+  test('a call the wait found - the call ends and another starts - the next tick attaches it afresh', async () => {
+    waitFindsCall();
+    init();
+    await flushPromises();
+    jest.advanceTimersByTime(2000);
+
+    fakeAdapter.inMeeting = false;
+    jest.advanceTimersByTime(2000);
+    expect(state.activeConfRef).toBeNull();
+    fakeAdapter.inMeeting = true;
+    jest.advanceTimersByTime(2000);
+
+    expect(fakeAdapter.dispose).toHaveBeenCalledTimes(1);
+    expect(fakeAdapter.subscribeToSpeakerChanges).toHaveBeenCalledTimes(2);
+    expect(state.activeConfRef).toBe(conference);
+  });
+
+  test('a call the wait found - its Jitsi conference is replaced - the next tick reattaches', async () => {
+    // Element Call's livekit Room mounts after the session: null, then the Room.
+    const room = { platform: 'room' };
+    const getJitsiConference = fakeAdapter.getJitsiConference;
+    waitFindsCall();
+    try {
+      init();
+      await flushPromises();
+      jest.advanceTimersByTime(2000);
+
+      fakeAdapter.getJitsiConference = () => room;
+      jest.advanceTimersByTime(2000);
+    } finally {
+      fakeAdapter.getJitsiConference = getJitsiConference;
+    }
+
+    expect(fakeAdapter.dispose).toHaveBeenCalledTimes(1);
+    expect(fakeAdapter.subscribeToSpeakerChanges).toHaveBeenCalledTimes(2);
+    expect(state.activeJitsiConf).toBe(room);
+  });
 });

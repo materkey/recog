@@ -44,6 +44,11 @@ reasoning.
   bridge named the speaker of an uncertain line on Jitsi, Element Call, Google
   Meet or Zoom, the panel renamed the line but left `(?)` or `(🔇?)` after its
   text. Rebuild and reload the extension as above.
+- **The extension attaches to a call once.** About 2 s into every call it let go
+  of everything it had attached to the call and attached it again; on KTalk that
+  tore down and rebuilt every participant's transcript audio, dropping what had
+  not yet been sent. It now attaches once and again only when the call changes or
+  ends. Rebuild and reload the extension as above.
 
 ## 2026-11-08
 
