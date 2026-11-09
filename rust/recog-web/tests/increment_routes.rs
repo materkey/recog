@@ -190,6 +190,16 @@ async fn meeting_of_an_external_directory_when_generated_then_404_no_directory()
 // --- Listing and reading ---
 
 #[tokio::test]
+async fn shipped_prompts_when_listed_then_their_ids_names_and_filters() {
+    let (status, body) = App::new().json("GET", "/api/prompts", None).await;
+
+    assert_eq!(
+        (status, pyjson::dumps(&body, None)),
+        (StatusCode::OK, r#"[{"id": "my-increment", "name": "Инкремент", "filter": null}]"#.to_owned())
+    );
+}
+
+#[tokio::test]
 async fn generated_increment_when_listed_and_read_then_its_metadata_and_content() {
     let app = meeting();
     let (_, empty) = app.json("GET", "/api/meetings/m1/increments", None).await;
