@@ -116,32 +116,3 @@ def validate_lint(rows):
             if type(value) is not int or value < 1:
                 raise ValueError("Malformed Ruff location")
     return rows
-
-
-def validate_region(region):
-    summary = region["summary"]
-    for total, covered, missing, executed_field, missing_field in (
-        ("num_statements", "covered_lines", "missing_lines", "executed_lines", "missing_lines"),
-        (
-            "num_branches",
-            "covered_branches",
-            "missing_branches",
-            "executed_branches",
-            "missing_branches",
-        ),
-    ):
-        counts = [summary[key] for key in (total, covered, missing)]
-        if any(type(value) is not int or value < 0 for value in counts):
-            raise ValueError("Invalid coverage counts")
-        if counts[1] + counts[2] != counts[0]:
-            raise ValueError("Inconsistent coverage counts")
-        for field, count in ((executed_field, counts[1]), (missing_field, counts[2])):
-            entries = region[field]
-            if not isinstance(entries, list) or len(entries) != count:
-                raise ValueError("Missing or inconsistent coverage lines/branches")
-            for entry in entries:
-                values = entry if "branches" in field else [entry]
-                if not isinstance(values, list) or any(type(value) is not int for value in values):
-                    raise ValueError("Invalid coverage location")
-                if "branches" in field and len(values) != 2:
-                    raise ValueError("Invalid coverage arc")

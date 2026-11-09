@@ -29,10 +29,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The Rust workspace: check.sh formats, lints and tests it.
+      # The Rust workspace: check.sh formats, lints and tests it; the quality gate
+      # measures its coverage with cargo llvm-cov, which needs llvm-tools.
       - name: Install Rust components
         shell: bash
-        run: rustup component add clippy rustfmt
+        run: rustup component add clippy rustfmt llvm-tools-preview
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
 
       - uses: Swatinem/rust-cache@v2
         with:

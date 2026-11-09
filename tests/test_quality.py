@@ -119,17 +119,36 @@ def test_failed_command_when_measurement_runs_then_rejects_and_retains_log(tmp_p
     assert "failure evidence" in log.read_text()
 
 
+LIBRARY = """pub fn answer() -> u32 {
+    42
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn answer_when_asked_then_42() {
+        assert_eq!(super::answer(), 42);
+    }
+}
+"""
+
+
 @pytest.fixture
-def repository(tmp_path):
+def repository(tmp_path, monkeypatch):
     root = tmp_path / "repo"
-    (root / "recog").mkdir(parents=True)
+    (root / "scripts").mkdir(parents=True)
     (root / "tests").mkdir()
-    (root / "recog/__init__.py").write_text("")
-    (root / "recog/example.py").write_text("def answer():\n    return 42\n")
-    (root / "tests/test_example.py").write_text(
-        "from recog.example import answer\n\n\ndef test_answer():\n    assert answer() == 42\n"
+    (root / "rust/demo/src").mkdir(parents=True)
+    (root / "rust/Cargo.toml").write_text('[workspace]\nresolver = "3"\nmembers = ["demo"]\n')
+    (root / "rust/demo/Cargo.toml").write_text(
+        '[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2024"\n'
     )
-    (root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    (root / "rust/demo/src/lib.rs").write_text(LIBRARY)
+    (root / "scripts/example.py").write_text("def answer():\n    return 42\n")
+    (root / "tests/test_example.py").write_text("def test_answer():\n    assert 6 * 7 == 42\n")
+    (root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\ntarget/\nCargo.lock\n")
+    # The crate builds into the test's own directory, not a shared one from the caller.
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "target"))
     for args in [
         ("init", "-q"),
         ("add", "."),
@@ -147,31 +166,61 @@ def repository(tmp_path):
     return root
 
 
-@pytest.mark.skipif(
+def cargo_llvm_cov_missing():
+    try:
+        return subprocess.run(["cargo", "llvm-cov", "--version"], capture_output=True).returncode
+    except OSError:
+        return True
+
+
+needs_rust_tools = pytest.mark.skipif(
     importlib.util.find_spec("crapkit") is None
     or importlib.util.find_spec("scb_check") is None
-    or importlib.util.find_spec("pytest_cov") is None
-    or importlib.util.find_spec("ruff") is None,
-    reason="Install requirements-quality.txt for tool integration tests",
+    or importlib.util.find_spec("tree_sitter_rust") is None
+    or importlib.util.find_spec("ruff") is None
+    or cargo_llvm_cov_missing(),
+    reason="Install requirements-quality.txt, cargo-llvm-cov and llvm-tools",
 )
+
+
+@needs_rust_tools
 def test_real_baseline_when_head_has_new_uncovered_function_then_gate_fails(
     repository, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda: {})
-    code = "\n\ndef uncovered(value):\n"
-    for index in range(5):
-        code += f"    if value == {index}:\n        return {index}\n"
-    code += "    return -1\n"
-    with (repository / "recog/example.py").open("a") as stream:
-        stream.write(code)
+    arms = "".join(
+        f"    if value == {index} {{\n        return {index};\n    }}\n" for index in range(5)
+    )
+    library = repository / "rust/demo/src/lib.rs"
+    library.write_text(
+        library.read_text() + f"\npub fn uncovered(value: u32) -> u32 {{\n{arms}    9\n}}\n"
+    )
     output = tmp_path / "reports"
     assert quality.main(["--base", "HEAD", "--output", str(output)]) == 1
     result = json.loads(next(output.glob("run-*/report.json")).read_text())
     assert result["status"] == "fail", result
-    assert any(item["kind"] == "crap" and item["baseline"] is None for item in result["failures"])
-    assert len(result["baseline"]["functions"]) == 1
-    assert len(result["head"]["functions"]) == 2
+    failures = [item for item in result["failures"] if item["kind"] == "crap"]
+    assert [item["function"].split("::")[0] for item in failures] == ["rust/demo/src/lib.rs"]
+    assert failures[0]["baseline"] is None
+    # The test module's function is not production code.
+    assert [row["long_name"] for row in result["baseline"]["functions"]] == ["answer"]
+    assert {row["long_name"].split()[0]: row["cov"] for row in result["head"]["functions"]} == {
+        "answer": 1.0,
+        "uncovered": 0.0,
+    }
+    assert "1 passed" in next(output.glob("run-*/head-tests.log")).read_text()
+
+
+@needs_rust_tools
+def test_real_baseline_when_head_equals_it_then_gate_passes(repository, tmp_path, monkeypatch):
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda: {})
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "HEAD", "--output", str(output)]) == 0
+    result = json.loads(next(output.glob("run-*/report.json")).read_text())
+    assert result["status"] == "pass", result
+    assert result["head"]["scb"]["files_scanned"] == 1
 
 
 @pytest.mark.skipif(importlib.util.find_spec("ruff") is None, reason="Needs ruff")
@@ -187,13 +236,14 @@ def test_style_only_when_changed_line_is_checked_then_only_ruff_decides(
 ):
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda packages=None: {})
-    monkeypatch.setattr(quality, "coverage", lambda *args: pytest.fail("tests must not run"))
-    with (repository / "recog/example.py").open("a") as stream:
+    monkeypatch.setattr(quality, "tests", lambda *args: pytest.fail("tests must not run"))
+    monkeypatch.setattr(quality, "rust_coverage", lambda *args: pytest.fail("cargo must not run"))
+    with (repository / "scripts/example.py").open("a") as stream:
         stream.write(line)
     output = tmp_path / "reports"
     assert quality.main(["--base", "HEAD", "--style-only", "--output", str(output)]) == code
     printed = capsys.readouterr().out
-    assert ("recog/example.py:6: differs from ruff format" in printed) == bool(code)
+    assert ("scripts/example.py:6: differs from ruff format" in printed) == bool(code)
     assert not list(output.glob("*/report.json"))
     assert not list(output.iterdir())
 
@@ -248,7 +298,7 @@ def test_style_only_when_javascript_changes_then_only_new_eslint_findings_fail(
 
 @pytest.mark.skipif(
     importlib.util.find_spec("crapkit") is None
-    or importlib.util.find_spec("pytest_cov") is None
+    or importlib.util.find_spec("tree_sitter_rust") is None
     or not (quality.NODE_TOOLS / "node_modules/.bin/c8").exists(),
     reason="Install requirements-quality.txt and run npm ci --prefix deploy/node",
 )
@@ -258,7 +308,10 @@ def test_real_baseline_when_web_script_gets_uncovered_function_then_gate_fails(
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda: {})
     metrics = {"total_loc": 1, "verbosity": 0, "erosion": 0, "cog_erosion": 0}
-    monkeypatch.setattr(quality, "scb", lambda root: metrics)
+    monkeypatch.setattr(quality, "scb", lambda sources: metrics)
+    # The Rust side is measured by the tests above; here its coverage is given.
+    covered = {"rust/demo/src/lib.rs": ({1: 1, 2: 1, 3: 1}, {})}
+    monkeypatch.setattr(quality, "rust_coverage", lambda *args: covered)
     script = repository / "recog/web/static/page.js"
     script.parent.mkdir(parents=True)
     script.write_text("function answer() {\n  return 42;\n}\n")
@@ -331,6 +384,7 @@ def test_extension_jest_when_installed_version_differs_from_lock_then_measuremen
     )
     monkeypatch.setattr(quality, "ROOT", tmp_path)
     monkeypatch.setattr(quality, "NODE_TOOLS", tmp_path)
+    monkeypatch.setattr(quality, "rust_tools", dict)
     with pytest.raises(ValueError, match="installed None; run npm ci --prefix browser-extension"):
         quality.versions()
     installed = extension / "node_modules/jest/package.json"
@@ -365,6 +419,18 @@ def test_missing_base_when_runner_starts_then_report_explains_failure(
     assert result["error"] in capsys.readouterr().out
 
 
+def test_missing_rust_tools_when_gate_starts_then_measurement_names_them(monkeypatch):
+    def missing(*args, **kwargs):
+        raise OSError("No such file or directory: 'cargo'")
+
+    monkeypatch.setattr(quality, "run", missing)
+    with pytest.raises(ValueError, match="install cargo-llvm-cov and the llvm-tools component"):
+        quality.rust_tools()
+
+
+SCB_SOURCES = {"rust/a/src/lib.rs": "pub fn a() {}\n", "rust/a/src/b.rs": "", "page.js": ""}
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -374,13 +440,13 @@ def test_missing_base_when_runner_starts_then_report_explains_failure(
         '{"verbosity": 0, "erosion": 0, "cog_erosion": 0, "total_loc": 1, "files_scanned": 0}',
     ],
 )
-def test_malformed_scb_when_parsed_then_measurement_fails(repository, monkeypatch, payload):
+def test_malformed_scb_when_parsed_then_measurement_fails(monkeypatch, payload):
     monkeypatch.setattr(quality, "run", lambda *args, **kwargs: payload)
     with pytest.raises((ValueError, KeyError)):
-        quality.scb(repository)
+        quality.scb(SCB_SOURCES)
 
 
-def test_scb_findings_when_report_is_valid_then_return_one_is_accepted(repository, monkeypatch):
+def test_scb_findings_when_report_is_valid_then_return_one_is_accepted(monkeypatch):
     payload = {
         "verbosity": 0.1,
         "erosion": 0.2,
@@ -389,30 +455,87 @@ def test_scb_findings_when_report_is_valid_then_return_one_is_accepted(repositor
         "files_scanned": 2,
     }
 
-    def fake_run(*args, **kwargs):
+    def fake_run(command, cwd, **kwargs):
         assert kwargs["accepted"] == (0, 1)
+        # Only the production Rust, outside any repository whose .gitignore could hide it.
+        names = {path.relative_to(cwd).as_posix() for path in cwd.rglob("*") if path.is_file()}
+        assert names == {"rust/a/src/lib.rs", "rust/a/src/b.rs"}
+        assert not any((parent / ".git").exists() for parent in cwd.parents)
         return json.dumps(payload)
 
     monkeypatch.setattr(quality, "run", fake_run)
-    monkeypatch.setattr(quality, "source_files", lambda root: {"a": "", "b": ""})
-    assert quality.scb(repository) == payload
+    assert quality.scb(SCB_SOURCES) == payload
 
 
-def test_coverage_hole_when_suite_returns_success_then_measurement_fails(
+def fake_cargo(lcov, calls):
+    real = quality.run
+
+    def run(command, cwd, **kwargs):
+        if command[0] != "cargo":
+            return real(command, cwd, **kwargs)
+        calls.append(command)
+        if "report" in command:
+            Path(command[command.index("--output-path") + 1]).write_text(lcov)
+        return ""
+
+    return run
+
+
+needs_tree_sitter_rust = pytest.mark.skipif(
+    importlib.util.find_spec("tree_sitter_rust") is None, reason="Needs tree-sitter-rust"
+)
+
+
+@needs_tree_sitter_rust
+@pytest.mark.parametrize("source", ["/elsewhere/rust/demo/src/lib.rs", None])
+def test_coverage_report_when_paths_do_not_join_then_measurement_fails(
+    repository, tmp_path, monkeypatch, source
+):
+    lcov = f"SF:{source}\nDA:1,1\nend_of_record\n" if source else ""
+    monkeypatch.setattr(quality, "run", fake_cargo(lcov, []))
+    with pytest.raises(ValueError, match=r"Missing Rust coverage of crates: \['demo'\]"):
+        quality.rust_coverage(repository, tmp_path, "head")
+
+
+@needs_tree_sitter_rust
+def test_coverage_report_when_paths_join_then_production_files_are_returned(
     repository, tmp_path, monkeypatch
 ):
-    (tmp_path / "head-coverage.json").write_text(
-        json.dumps(
-            {
-                "meta": {"branch_coverage": True},
-                "files": {"recog/__init__.py": {"functions": {}}},
-            }
-        )
-    )
-    monkeypatch.setattr(quality, "run", lambda *args, **kwargs: "")
-    monkeypatch.setattr(quality, "source_files", lambda root: {"recog/example.py": ""})
-    with pytest.raises(ValueError, match="Missing coverage function regions"):
-        quality.coverage(repository, tmp_path, "head")
+    calls = []
+    lcov = f"SF:{repository}/rust/demo/src/lib.rs\nDA:1,3\nDA:2,0\nend_of_record\n"
+    lcov += "SF:/registry/serde/src/lib.rs\nDA:1,1\nend_of_record\n"
+    monkeypatch.setattr(quality, "run", fake_cargo(lcov, calls))
+    assert quality.rust_coverage(repository, tmp_path, "head") == {
+        "rust/demo/src/lib.rs": ({1: 3, 2: 0}, {})
+    }
+    assert calls[:2] == [
+        ["cargo", "llvm-cov", "clean", "--workspace"],
+        ["cargo", "llvm-cov", "--no-report", "--workspace"],
+    ]
+
+
+@needs_tree_sitter_rust
+def test_crate_with_data_bound_tests_when_measured_then_only_its_listed_targets_run(
+    repository, tmp_path, monkeypatch
+):
+    (repository / "rust/speexdsp-aec/src").mkdir(parents=True)
+    calls = []
+    lcov = f"SF:{repository}/rust/demo/src/lib.rs\nDA:1,1\nend_of_record\n"
+    monkeypatch.setattr(quality, "run", fake_cargo(lcov, calls))
+    quality.rust_coverage(repository, tmp_path, "head")
+    assert calls[1] == ["cargo", "llvm-cov", "--no-report", "--workspace", "--exclude=speexdsp-aec"]
+    assert calls[2] == [
+        "cargo",
+        "llvm-cov",
+        "--no-report",
+        "-p",
+        "speexdsp-aec",
+        "--lib",
+        "--test",
+        "properties",
+        "--test",
+        "cli",
+    ]
 
 
 def test_wrong_installed_version_when_gate_starts_then_measurement_fails(monkeypatch):
@@ -421,18 +544,16 @@ def test_wrong_installed_version_when_gate_starts_then_measurement_fails(monkeyp
         quality.versions()
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("pytest_cov") is None, reason="Optional coverage plugin"
-)
+@needs_rust_tools
 def test_baseline_failure_when_head_would_pass_then_gate_does_not_substitute_head(
     repository, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda: {})
-    test = repository / "tests/test_example.py"
+    test = repository / "rust/demo/src/lib.rs"
     correct = test.read_text()
-    test.write_text(correct.replace("== 42", "== 43"))
-    quality.git(repository, "add", "tests/test_example.py")
+    test.write_text(correct.replace("answer(), 42", "answer(), 43"))
+    quality.git(repository, "add", "rust/demo/src/lib.rs")
     quality.git(
         repository,
         "-c",
@@ -448,8 +569,8 @@ def test_baseline_failure_when_head_would_pass_then_gate_does_not_substitute_hea
     assert quality.main(["--base", "HEAD", "--output", str(output)]) == 1
     result = json.loads(next(output.glob("run-*/report.json")).read_text())
     assert result["status"] == "measurement-error"
-    assert "baseline-tests.log" in result["error"]
-    assert not list(output.glob("run-*/head-coverage.json"))
+    assert "baseline-rust-tests.log" in result["error"]
+    assert not list(output.glob("run-*/head-*"))
 
 
 @pytest.mark.parametrize(
@@ -460,41 +581,6 @@ def test_malformed_lint_when_compared_then_fails_closed(rows):
         policy.lint_regressions(rows, rows, {})
 
 
-def region():
-    return {
-        "summary": {
-            "num_statements": 1,
-            "covered_lines": 1,
-            "missing_lines": 0,
-            "num_branches": 2,
-            "covered_branches": 1,
-            "missing_branches": 1,
-        },
-        "executed_lines": [2],
-        "missing_lines": [],
-        "executed_branches": [[2, 3]],
-        "missing_branches": [[2, 4]],
-    }
-
-
-@pytest.mark.parametrize(
-    "field", ["num_branches", "covered_branches", "num_statements", "covered_lines"]
-)
-def test_missing_coverage_counts_when_parsed_then_no_statement_fallback(field):
-    value = region()
-    del value["summary"][field]
-    with pytest.raises(KeyError):
-        policy.validate_region(value)
-
-
-@pytest.mark.parametrize(
-    "update", [{"executed_lines": []}, {"missing_branches": None}, {"executed_branches": [[2]]}]
-)
-def test_inconsistent_coverage_locations_when_parsed_then_rejected(update):
-    with pytest.raises(ValueError):
-        policy.validate_region({**region(), **update})
-
-
 @pytest.mark.parametrize("staged", [False, True])
 def test_clean_head_snapshot_when_local_config_exists_then_only_versioned_and_new_source_copied(
     repository, tmp_path, monkeypatch, staged
@@ -503,18 +589,18 @@ def test_clean_head_snapshot_when_local_config_exists_then_only_versioned_and_ne
     with (repository / ".gitignore").open("a") as stream:
         stream.write("private-installation.cfg\n")
     (repository / "private-installation.cfg").write_text("local-only")
-    (repository / "recog/new.py").write_text("VALUE = 1\n")
-    (repository / "recog/example.py").unlink()
+    (repository / "scripts/new.py").write_text("VALUE = 1\n")
+    (repository / "scripts/example.py").unlink()
     if staged:
-        quality.git(repository, "add", "recog/example.py")
+        quality.git(repository, "add", "scripts/example.py")
     snapshot = tmp_path / "snapshot"
     try:
         quality.snapshot_head(snapshot)
         assert not (snapshot / "private-installation.cfg").exists()
-        assert not (snapshot / "recog/example.py").exists()
-        assert (snapshot / "recog/new.py").read_text() == "VALUE = 1\n"
-        assert "recog/new.py" in quality.git(snapshot, "ls-files")
-        assert "recog/new.py" not in quality.git(repository, "ls-files")
+        assert not (snapshot / "scripts/example.py").exists()
+        assert (snapshot / "scripts/new.py").read_text() == "VALUE = 1\n"
+        assert "scripts/new.py" in quality.git(snapshot, "ls-files")
+        assert "scripts/new.py" not in quality.git(repository, "ls-files")
     finally:
         quality.git(repository, "worktree", "remove", "--force", str(snapshot))
 
@@ -533,21 +619,21 @@ def test_scb_out_of_range_metrics_when_parsed_then_fail_closed(repository, monke
     }
     monkeypatch.setattr(quality, "run", lambda *args, **kwargs: json.dumps(payload))
     with pytest.raises(ValueError):
-        quality.scb(repository)
+        quality.scb(SCB_SOURCES)
 
 
 def test_untracked_ignored_head_file_when_snapshotted_then_old_commit_does_not_resurrect_it(
     repository, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(quality, "ROOT", repository)
-    quality.git(repository, "update-index", "--force-remove", "recog/example.py")
+    quality.git(repository, "update-index", "--force-remove", "scripts/example.py")
     with (repository / ".gitignore").open("a") as stream:
-        stream.write("recog/example.py\n")
+        stream.write("scripts/example.py\n")
     snapshot = tmp_path / "snapshot"
     try:
         quality.snapshot_head(snapshot)
-        assert (repository / "recog/example.py").exists()
-        assert not (snapshot / "recog/example.py").exists()
+        assert (repository / "scripts/example.py").exists()
+        assert not (snapshot / "scripts/example.py").exists()
     finally:
         quality.git(repository, "worktree", "remove", "--force", str(snapshot))
 
@@ -561,7 +647,7 @@ def test_incomplete_snapshot_when_gate_starts_then_refused_before_measurement(
 
     def incomplete_snapshot(destination):
         original_snapshot(destination)
-        (destination / "recog/example.py").unlink()
+        (destination / "scripts/example.py").unlink()
 
     monkeypatch.setattr(quality, "snapshot_head", incomplete_snapshot)
     output = tmp_path / "reports"
@@ -569,4 +655,206 @@ def test_incomplete_snapshot_when_gate_starts_then_refused_before_measurement(
     result = json.loads(next(output.glob("run-*/report.json")).read_text())
     assert result["status"] == "measurement-error"
     assert "Head snapshot differs" in result["error"]
-    assert not list(output.glob("run-*/*-coverage.json"))
+    assert not list(output.glob("run-*/*.lcov"))
+
+
+rust = importlib.import_module("quality_rust")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "needed"),
+    [
+        ("(test)", True),
+        ("(all(test, unix))", True),
+        ("(all(unix, any(test, test)))", True),
+        ('(any(test, feature = "fake"))', False),
+        ("(not(test))", False),
+        ('(target_os = "macos")', False),
+        ("(any())", False),
+    ],
+)
+def test_cfg_predicate_when_read_then_only_one_false_without_test_needs_test(arguments, needed):
+    assert rust.requires_test(arguments) is needed
+
+
+@pytest.mark.parametrize("arguments", ["(all(test", "test", "(test, unix)", "(test))"])
+def test_malformed_cfg_predicate_when_read_then_refused(arguments):
+    with pytest.raises((ValueError, IndexError)):
+        rust.requires_test(arguments)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "test"),
+    [
+        ("#[test]", True),
+        ('#[tokio::test(flavor = "multi_thread")]', True),
+        ("#[cfg(test)]", True),
+        ("#![cfg(test)]", True),
+        ("#[cfg_attr(test, allow(dead_code))]", False),
+        ("#[cfg(not(test))]", False),
+        ("#[derive(Debug)]", False),
+        ("#[test_case(1)]", False),
+    ],
+)
+def test_attribute_when_read_then_test_code_is_recognised(attribute, test):
+    assert rust.is_test_attribute(attribute) is test
+
+
+CRATE = {
+    "rust/c/src/lib.rs": (
+        "pub mod a;\n"
+        "#[cfg(test)]\n"
+        "mod tests;\n"
+        "#[cfg(test)]\n"
+        "mod helpers {\n"
+        "    pub fn helper() {}\n"
+        "}\n"
+        "pub fn kept() -> u8 {\n"
+        "    #[cfg(test)]\n"
+        "    let _ = test_only();\n"
+        "    1\n"
+        "}\n"
+        "#[test]\n"
+        "fn loose() {}\n"
+        "#[cfg(all(test, unix))]\n"
+        "fn unix_only() {}\n"
+        "#[cfg(not(test))]\n"
+        "fn production_only() {}\n"
+    ),
+    "rust/c/src/a.rs": (
+        "pub fn a() -> char {\n    'é'\n}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"
+    ),
+    "rust/c/src/tests.rs": "mod nested;\nfn shared() {}\n",
+    "rust/c/src/tests/nested.rs": "fn deep() {}\n",
+    "rust/c/src/whole.rs": "#![cfg(test)]\nfn inside() {}\n",
+    "rust/c/src/bin/tool.rs": "#[cfg(test)]\nmod tool_tests;\nfn main() {}\n",
+    "rust/c/src/bin/tool_tests.rs": "fn checked() {}\n",
+}
+
+
+@needs_tree_sitter_rust
+def test_crate_sources_when_read_then_test_code_is_blanked_and_test_files_left_out():
+    production = rust.production_sources(CRATE)
+    assert set(production) == {"rust/c/src/lib.rs", "rust/c/src/a.rs", "rust/c/src/bin/tool.rs"}
+    for name, code in production.items():
+        assert code.count("\n") == CRATE[name].count("\n")
+        assert len(code.encode()) == len(CRATE[name].encode())
+    library = production["rust/c/src/lib.rs"]
+    for kept in ("pub mod a;", "pub fn kept() -> u8 {", "fn production_only() {}"):
+        assert kept in library
+    for gone in ("mod tests;", "helper", "test_only", "loose", "unix_only", "#[test]", "cfg(test)"):
+        assert gone not in library
+    assert library.splitlines()[7] == "pub fn kept() -> u8 {"
+    assert "fn t()" not in production["rust/c/src/a.rs"]
+    assert "'é'" in production["rust/c/src/a.rs"]
+
+
+@needs_tree_sitter_rust
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"rust/c/src/lib.rs": "#[cfg(test)]\nmod missing;\n"},
+        {"rust/c/src/lib.rs": "#[cfg(test)]\nmod a;\n", "rust/c/src/a.rs": "mod b;\n"},
+    ],
+)
+def test_test_module_when_its_file_cannot_be_found_then_refused(files):
+    with pytest.raises(ValueError, match="Cannot resolve module"):
+        rust.production_sources(files)
+
+
+@needs_tree_sitter_rust
+def test_unparsable_source_when_read_then_refused():
+    with pytest.raises(ValueError, match="does not parse"):
+        rust.production_sources({"rust/c/src/lib.rs": "fn broken( {\n"})
+
+
+LIZARD_HAZARDS = """pub fn word(byte: u8) -> bool {
+    byte == b'_' || byte == b'a'
+}
+
+pub fn raw() -> &'static str {
+    r#"{
+"#
+}
+
+pub trait Shape {
+    fn area(&self) -> u32;
+    fn doubled(&self) -> u32 {
+        if self.area() > 1 { self.area() * 2 } else { 0 }
+    }
+}
+"""
+NEUTRALISED = [("word", 1, 3), ("raw", 5, 8), ("doubled", 12, 14)]
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("crapkit") is None
+    or importlib.util.find_spec("tree_sitter_rust") is None,
+    reason="Install requirements-quality.txt",
+)
+def test_lizard_hazards_when_neutralised_then_each_function_keeps_its_own_span():
+    from crapkit.analyze import analyze_source
+
+    production = rust.production_sources({"rust/c/src/lib.rs": LIZARD_HAZARDS})
+    production = production["rust/c/src/lib.rs"]
+
+    def functions(code):
+        rows = analyze_source("a.rs", code)
+        return [(row.long_name.split()[0], row.start, row.end) for row in rows]
+
+    # lizard 1.24.0 alone: `b'_'` opens a quote that swallows the next function, and the
+    # bodiless `area` takes the body of `doubled`.
+    assert functions(LIZARD_HAZARDS) != NEUTRALISED
+    with pytest.raises(ValueError, match="lizard misread"):
+        rust.check_functions("a.rs", LIZARD_HAZARDS, functions(LIZARD_HAZARDS))
+    assert functions(rust.lizard_text(production)) == NEUTRALISED
+    rust.check_functions("a.rs", production, NEUTRALISED)
+    assert rust.lizard_text(production).count("\n") == production.count("\n")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "DA:1,1\n",
+        "end_of_record\n",
+        "SF:a.rs\nDA:x,1\nend_of_record\n",
+        "SF:a.rs\nDA:1\nend_of_record\n",
+        "SF:a.rs\nDA:1,-1\nend_of_record\n",
+        "SF:a.rs\nBRDA:1,0,0\nend_of_record\n",
+        "SF:a.rs\nSF:b.rs\nend_of_record\n",
+        "SF:a.rs\nDA:1,1\n",
+    ],
+)
+def test_malformed_lcov_when_parsed_then_refused(text):
+    with pytest.raises(ValueError):
+        rust.parse_lcov(text)
+
+
+def test_lcov_when_parsed_then_lines_and_branches_per_file():
+    text = "TN:\nSF:a.rs\nFN:1,f\nDA:1,2\nDA:2,0,abc\nBRDA:2,0,0,1\nBRDA:2,0,1,-\nend_of_record\n"
+    assert rust.parse_lcov(text) == {"a.rs": ({1: 2, 2: 0}, {2: [1, 0]})}
+
+
+def test_nested_function_when_attributed_then_its_lines_are_not_the_enclosers():
+    lines = {1: 1, 2: 0, 3: 1, 4: 1, 6: 0, 20: 1}
+    counted = rust.function_coverage([(1, 10), (3, 5)], lines, {4: [1, 0]})
+    assert counted == [((1, 10), 3, 1, 0, 0), ((3, 5), 2, 2, 2, 1)]
+
+
+@pytest.mark.skipif(importlib.util.find_spec("crapkit") is None, reason="Needs crapkit")
+def test_function_without_instrumented_lines_when_scored_then_left_out_as_not_built():
+    from crapkit.snapshot import InventoryRow
+
+    def row(path, name, start, end):
+        return InventoryRow("production", path, name, start, end, 1, 1, 1, 3, 0, 0)
+
+    rows = [
+        row("rust/c/src/lib.rs", "built", 1, 3),
+        row("rust/c/src/lib.rs", "macos_only", 5, 7),
+        row("page.js", "answer", 1, 3),
+    ]
+    rust_lines = {"rust/c/src/lib.rs": ({1: 1, 2: 0}, {})}
+    measured, unbuilt = quality.rust_function_coverage(rows, rust_lines)
+    assert unbuilt == [rows[1]]
+    assert [(fn.name, fn.coverage) for fn in measured["rust/c/src/lib.rs"]] == [("built", 0.5)]
+    assert "page.js" not in measured

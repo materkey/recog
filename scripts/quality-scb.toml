@@ -1,1 +1,2 @@
-exclude = ["**/*.js", "**/*.ts", "**/*.swift", "**/native/**", "**/__pycache__/**"]
+# scripts/quality.py runs SCB on a copy holding only the production Rust files.
+exclude = []

@@ -51,6 +51,10 @@ then run from the repository root (replace `origin/main` with that target):
 python3 scripts/quality.py --base origin/main --output .local/quality
 ```
 
+`python3` stands for the interpreter that has `deploy/python/requirements-quality.txt`
+(the one `scripts/check.sh` uses: `RECOG_CHECK_PYTHON`, else a leftover `venv-gigaam`,
+else `python3`); the gate also
+needs `cargo-llvm-cov` with the `llvm-tools-preview` component for the Rust coverage.
 Copy `report.md` and `report.json` from the exact `run-*` directory printed by this
 invocation into the round's `input/context/`, and identify them in the review context.
 Regenerate after changes; never substitute an older successful report for a failed
@@ -494,7 +498,7 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 - `RECOG_PYTHON` - the interpreter baked into the rendered units (`scripts/service/common.sh`). Deliberately **not** `DEPS_PYTHON`, which only selects the interpreter `scripts/deps.sh` uses for its library probes.
 - `RECOG_HOST_OS` - overrides `uname -s` for the `scripts/deps.sh` probes (lets a Mac exercise the Linux ones).
 - `RECOG_CHECK_PYTHON` - interpreter override for `scripts/check.sh`.
-- `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs the full merge-base quality gate (`scripts/quality.py`, baseline + head pytest with branch coverage, `docs/quality.md`) instead of plain pytest; CI sets it on both hosts. Unset, `check.sh` runs pytest once plus only the gate's Ruff and ESLint check of lines changed since the local `origin/main` (`quality.py --style-only`, no fetch; skipped when that ref is absent). Either way it runs shellcheck, actionlint and gitleaks first (`docs/quality.md`); ESLint needs `npm ci --prefix deploy/node`, the full gate's JavaScript coverage also `npm ci --prefix browser-extension`, gitleaks a package-manager install.
+- `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs the full merge-base quality gate (`scripts/quality.py`: baseline and head coverage of Rust with `cargo llvm-cov` and of JavaScript, then pytest once, `docs/quality.md`) instead of plain pytest; CI sets it on both hosts. Unset, `check.sh` runs pytest once plus only the gate's Ruff and ESLint check of lines changed since the local `origin/main` (`quality.py --style-only`, no fetch; skipped when that ref is absent). Either way it runs shellcheck, actionlint and gitleaks first (`docs/quality.md`); ESLint needs `npm ci --prefix deploy/node`, the full gate's JavaScript coverage also `npm ci --prefix browser-extension` and its Rust coverage `cargo-llvm-cov` with the `llvm-tools-preview` component, gitleaks a package-manager install.
 - `RECOG_QUALITY_OUTPUT` - output root for those quality runs (default `.local/quality`).
 - `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL` / `RECOG_GIGAAM_REF` / `RECOG_GIGAAM_EDITABLE` - see Setup above.
 

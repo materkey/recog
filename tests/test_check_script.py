@@ -9,6 +9,7 @@ The workflow tests are drift guards: CI must keep installing the tools
 check.sh needs and running check.sh itself on both hosts.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -477,6 +478,19 @@ def test_ci_runs_the_check_script(workflow):
 
 def test_ci_has_the_rust_components_check_script_runs(workflow):
     assert "rustup component add clippy rustfmt" in _run_script(workflow)
+
+
+def test_ci_when_gate_measures_rust_then_a_pinned_cargo_llvm_cov_and_llvm_tools_are_installed(
+    workflow,
+):
+    assert "llvm-tools-preview" in _run_script(workflow)
+    installs = [
+        step["with"]["tool"]
+        for step in _steps(workflow)
+        if str(step.get("uses", "")).startswith("taiki-e/install-action")
+    ]
+    assert len(installs) == 1
+    assert re.fullmatch(r"cargo-llvm-cov@\d+\.\d+\.\d+", installs[0])
 
 
 @pytest.mark.parametrize(

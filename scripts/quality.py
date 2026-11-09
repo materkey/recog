@@ -12,6 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import quality_rust
 from quality_policy import (
     CRAP_CEILING,
     crap_regressions,
@@ -22,7 +23,6 @@ from quality_policy import (
     score_index,
     unchanged_lines,
     validate_lint,
-    validate_region,
 )
 
 # At import, so that crapkit's spawned analysis workers, which import this
@@ -41,6 +41,10 @@ NODE_TOOLS = ROOT / "deploy/node"
 ESLINT = NODE_TOOLS / "node_modules/.bin/eslint"
 C8 = NODE_TOOLS / "node_modules/.bin/c8"
 EXTENSION = "browser-extension/"
+# What check.sh tests, minus the doctests (stable rustc does not instrument them): a
+# crate listed here runs only these targets, the echo canceller's parity tests
+# needing golden data CI does not have.
+RUST_RESTRICTED_TESTS = {"speexdsp-aec": ["--lib", "--test", "properties", "--test", "cli"]}
 # The web UI and what the extension loads; its tests and build tooling are not production.
 JAVASCRIPT_SOURCES = (
     "recog/",
@@ -87,12 +91,12 @@ def javascript_files(root):
     return listed_files(root, "*.js", "*.cjs", "*.mjs")
 
 
-def source_files(root):
-    return {
-        name: (root / name).read_text()
-        for name in python_files(root)
-        if name.startswith("recog/") and "/native/" not in name
-    }
+def rust_sources(root):
+    """Production Rust (`rust/<crate>/src/`) with its test code blanked; see quality_rust."""
+    names = [
+        name for name in listed_files(root, "rust/*.rs") if quality_rust.is_production_path(name)
+    ]
+    return quality_rust.production_sources({name: (root / name).read_text() for name in names})
 
 
 def javascript_sources(root):
@@ -137,6 +141,25 @@ def versions(packages=None):
     if lock.is_file() and (packages is None or "jest" in packages):
         version = json.loads(lock.read_text())["packages"]["node_modules/jest"]["version"]
         result["jest"] = installed_version(ROOT / EXTENSION, "jest", version, EXTENSION.rstrip("/"))
+    if packages is None:
+        result.update(rust_tools())
+    return result
+
+
+def rust_tools():
+    """rustc and cargo-llvm-cov as found: CI pins cargo-llvm-cov, rustc is the runner's stable."""
+    result = {}
+    for name, command in (
+        ("rustc", ["rustc", "--version"]),
+        ("cargo-llvm-cov", ["cargo", "llvm-cov", "--version"]),
+    ):
+        try:
+            result[name] = run(command, ROOT).strip()
+        except (OSError, RuntimeError) as error:
+            raise ValueError(
+                f"{name} is not available ({error}); install cargo-llvm-cov and the "
+                "llvm-tools component (docs/quality.md)"
+            ) from error
     return result
 
 
@@ -150,40 +173,47 @@ def installed_version(prefix, package, version, install):
     return actual
 
 
-def coverage(root, output, label):
-    artifact = output / f"{label}-coverage.json"
-    env = {
-        **os.environ,
-        "COVERAGE_FILE": str(output / f"{label}.coverage"),
-        "PYTHONPATH": str(root),
-    }
-    command = [
-        PYTHON,
-        "-m",
-        "pytest",
-        "-q",
-        "-o",
-        "addopts=",
-        "-m",
-        "not e2e",
-        "--cov=recog",
-        "--cov-branch",
-        f"--cov-config={CONFIG / 'quality-coverage.ini'}",
-        f"--cov-report=json:{artifact}",
+def tests(root, output):
+    """The pytest suite (shell scripts and tooling) passes or fails; no Python is measured."""
+    env = {**os.environ, "PYTHONPATH": str(root)}
+    command = [PYTHON, "-m", "pytest", "-q", "-o", "addopts=", "-m", "not e2e"]
+    run(command, root, env=env, log=output / "head-tests.log")
+
+
+def cargo_target_dir():
+    """One target directory for both trees, so the dependencies are built once."""
+    return (ROOT / "rust" / os.environ.get("CARGO_TARGET_DIR", "target")).resolve()
+
+
+def rust_coverage(root, output, label):
+    """{production file: (line hits, branch hits)} of the workspace's tests from cargo llvm-cov."""
+    workspace = root / "rust"
+    artifact = output / f"{label}-rust.lcov"
+    env = {**os.environ, "CARGO_TARGET_DIR": str(cargo_target_dir())}
+    restricted = [name for name in RUST_RESTRICTED_TESTS if (workspace / name).is_dir()]
+    steps = [
+        ("clean", ["clean", "--workspace"]),
+        ("tests", ["--no-report", "--workspace", *(f"--exclude={name}" for name in restricted)]),
+        *((name, ["--no-report", "-p", name, *RUST_RESTRICTED_TESTS[name]]) for name in restricted),
+        ("report", ["report", "--lcov", "--output-path", str(artifact)]),
     ]
-    run(command, root, env=env, log=output / f"{label}-tests.log")
-    data = json.loads(artifact.read_text())
-    if data["meta"]["branch_coverage"] is not True or not data["files"]:
-        raise ValueError("Missing branch coverage or file inventory")
-    expected = source_files(root)
-    for name in expected:
-        measured = data["files"].get(name)
-        if measured is None or not isinstance(measured.get("functions"), dict):
-            raise ValueError(f"Missing coverage function regions: {name}")
-        validate_region(measured)
-        for region in measured["functions"].values():
-            validate_region(region)
-    return artifact
+    for step, arguments in steps:
+        log = output / f"{label}-rust-{step}.log"
+        run(["cargo", "llvm-cov", *arguments], workspace, env=env, log=log)
+    resolved = root.resolve()
+    measured = {}
+    for source, hits in quality_rust.parse_lcov(artifact.read_text()).items():
+        path = Path(source).resolve()
+        name = path.relative_to(resolved).as_posix() if path.is_relative_to(resolved) else ""
+        if quality_rust.is_production_path(name):
+            measured[name] = hits
+    # Every crate has code built on every host: a crate without a measured file
+    # means its tests did not run or the report's paths did not join.
+    crates = {name.split("/")[1] for name in rust_sources(root)}
+    missing = sorted(crates - {name.split("/")[1] for name in measured})
+    if not crates or missing:
+        raise ValueError(f"Missing Rust coverage of crates: {missing or 'no crates found'}")
+    return measured
 
 
 def javascript_coverage(root, output, label):
@@ -235,23 +265,64 @@ def javascript_coverage(root, output, label):
     return measured
 
 
-def structural(root, artifact, javascript):
+def rust_function_coverage(rows, rust):
+    """crapkit's per-function coverage for the Rust rows, and the rows no line was reported for.
+
+    A function without a single instrumented line was not compiled on this host
+    (`#[cfg(target_os = …)]`): it has no coverage to score here, and the other CI
+    host measures it.
+    """
+    from crapkit.coverage_istanbul import FnCoverage
+
+    by_path = {}
+    for row in rows:
+        if row.path.endswith(".rs"):
+            by_path.setdefault(row.path, []).append(row)
+    measured, unbuilt = {}, []
+    for path, file_rows in by_path.items():
+        lines, branches = rust.get(path, ({}, {}))
+        spans = [(row.start, row.end) for row in file_rows]
+        counted = quality_rust.function_coverage(spans, lines, branches)
+        measured[path] = []
+        for row, (_, total, hit, branch_total, branch_hit) in zip(file_rows, counted):
+            if not total:
+                unbuilt.append(row)
+                continue
+            measured[path].append(
+                FnCoverage(
+                    row.long_name, row.start, row.end, hit > 0, branch_total, branch_hit, total, hit
+                )
+            )
+    return measured, unbuilt
+
+
+def structural(root, sources, rust, javascript):
     from crapkit.analyze import analyze_source
-    from crapkit.covstream import parse_coveragepy_file
     from crapkit.dup import find_duplicates
     from crapkit.keys import key_names, lookup
+    from crapkit.merge import UnanalyzableFile
     from crapkit.score import score_rows
     from crapkit.snapshot import build_inventory_rows
 
-    sources = source_files(root)
     if not sources:
-        raise ValueError("Empty production source inventory")
-    sources.update(javascript_sources(root))
-    records = [record for name, code in sources.items() for record in analyze_source(name, code)]
+        raise ValueError("Empty production Rust inventory")
+    sources = {**sources, **javascript_sources(root)}
+    records = []
+    for name, code in sources.items():
+        is_rust = name.endswith(".rs")
+        found = analyze_source(name, quality_rust.lizard_text(code) if is_rust else code)
+        if isinstance(found, UnanalyzableFile):
+            raise ValueError(found.reason)
+        if is_rust:
+            functions = [(row.long_name.split()[0], row.start, row.end) for row in found]
+            quality_rust.check_functions(name, code, functions)
+        records.extend(found)
     rows = build_inventory_rows({"production": records})
-    measured, _ = parse_coveragepy_file(artifact, path_prefix="")
+    measured, unbuilt = rust_function_coverage(rows, rust)
     measured.update(javascript)
-    scored = score_rows(rows, measured, lane_scopes={"production"}, target=CRAP_CEILING)
+    skipped = set(unbuilt)
+    built = [row for row in rows if row not in skipped]
+    scored = score_rows(built, measured, lane_scopes={"production"}, target=CRAP_CEILING)
     duplicates = find_duplicates(rows, lambda: sources, top=len(rows) ** 2)
     keys = key_names(rows)
     pair_names = {(row.path, row.long_name, row.start): keys[lookup(row)] for row in rows}
@@ -263,34 +334,40 @@ def structural(root, artifact, javascript):
     return {
         "functions": [{**row._asdict(), "key_name": keys[lookup(row)]} for row in scored],
         "duplicates": duplicates,
+        "unbuilt": [f"{row.path}::{keys[lookup(row)]}" for row in unbuilt],
     }
 
 
-def scb(root):
+def scb(sources):
+    """SCB's informational metrics of production Rust, read from a copy of the blanked sources.
+
+    The copy lives outside any repository: SCB skips files a .gitignore above them names.
+    """
     executable = Path(sys.executable).parent / "scb-check"
-    data = json.loads(
-        run(
-            [
-                str(executable),
-                "check",
-                "recog",
-                "--output-format",
-                "json",
-                "--config",
-                str(CONFIG / "quality-scb.toml"),
-            ],
-            root,
-            accepted=(0, 1),
-        )
-    )
+    rust = {name: code for name, code in sources.items() if name.endswith(".rs")}
+    with tempfile.TemporaryDirectory(prefix="recog-scb-") as directory:
+        tree = Path(directory)
+        for name, code in rust.items():
+            (tree / name).parent.mkdir(parents=True, exist_ok=True)
+            (tree / name).write_text(code)
+        command = [
+            str(executable),
+            "check",
+            "rust",
+            "--output-format",
+            "json",
+            "--config",
+            str(CONFIG / "quality-scb.toml"),
+        ]
+        data = json.loads(run(command, tree, accepted=(0, 1)))
     for key in ("verbosity", "erosion", "cog_erosion", "total_loc", "files_scanned"):
         number(data[key])
     if any(data[key] > 1 for key in ("verbosity", "erosion", "cog_erosion")):
         raise ValueError("SCB ratios must be between zero and one")
     if any(type(data[key]) is not int for key in ("total_loc", "files_scanned")):
         raise ValueError("SCB source counts must be integers")
-    if not data["files_scanned"] or data["files_scanned"] != len(source_files(root)):
-        raise ValueError("SCB inventory does not match production Python files")
+    if not data["files_scanned"] or data["files_scanned"] != len(rust):
+        raise ValueError("SCB inventory does not match production Rust files")
     return data
 
 
@@ -432,9 +509,14 @@ def report(output, data):
     for label in ("baseline", "head"):
         if label in data:
             metrics = data[label]["scb"]
+            functions = data[label]["functions"]
+            over = [row for row in functions if row["crap"] > CRAP_CEILING]
+            rust_over = sum(row["path"].endswith(".rs") for row in over)
             lines.append(
-                f"{label}: {len(data[label]['functions'])} functions; "
-                f"LOC {metrics['total_loc']}; verbosity {metrics['verbosity']:.4f}; "
+                f"{label}: {len(functions)} functions, {len(over)} over CRAP {CRAP_CEILING} "
+                f"({rust_over} Rust, {len(over) - rust_over} JavaScript); "
+                f"{len(data[label]['unbuilt'])} Rust functions not built on this host; "
+                f"Rust LOC {metrics['total_loc']}; verbosity {metrics['verbosity']:.4f}; "
                 f"erosion {metrics['erosion']:.4f}; cognitive erosion {metrics['cog_erosion']:.4f}."
             )
     if data["status"] in ("pass", "fail") and "baseline" in data and "head" in data:
@@ -461,6 +543,11 @@ def report(output, data):
         largest = sorted(current.items(), key=lambda item: item[1]["ccn"], reverse=True)[:10]
         lines.extend(
             f"- `{key}`: {row['ccn']} / {row['cognitive']} / {row['nloc']}" for key, row in largest
+        )
+        lines.extend(["", "Highest CRAP (CRAP / CC / coverage):", ""])
+        worst = sorted(current.items(), key=lambda item: item[1]["crap"], reverse=True)[:10]
+        lines.extend(
+            f"- `{key}`: {row['crap']:.1f} / {row['ccn']} / {row['cov']:.2f}" for key, row in worst
         )
     lines.extend(["", "## Gate findings", ""])
     lines.extend(
@@ -519,15 +606,16 @@ def main(argv=None):
         if fingerprint(head) != data["source_fingerprint"]:
             raise ValueError("Head snapshot differs from the working tree; measurement refused")
         for label, root in [("baseline", baseline), ("head", head)]:
-            if (ROOT / "venv-gigaam").exists():
-                (root / "venv-gigaam").symlink_to(ROOT / "venv-gigaam", target_is_directory=True)
             modules = ROOT / EXTENSION / "node_modules"
             if modules.exists() and (root / EXTENSION).is_dir():
                 (root / EXTENSION / "node_modules").symlink_to(modules, target_is_directory=True)
             print(f"quality: measuring {label}; logs in {output}", flush=True)
-            artifact = coverage(root, output, label)
+            rust = rust_coverage(root, output, label)
             javascript = javascript_coverage(root, output, label)
-            data[label] = {**structural(root, artifact, javascript), "scb": scb(root)}
+            sources = rust_sources(root)
+            data[label] = {**structural(root, sources, rust, javascript), "scb": scb(sources)}
+        print(f"quality: running pytest; log in {output}", flush=True)
+        tests(head, output)
         data["failures"] = style(baseline, head)
         data["failures"] += crap_regressions(
             data["baseline"]["functions"], data["head"]["functions"]

@@ -1,12 +1,16 @@
-# Python quality gate
+# Quality gate
 
-The gate compares the working tree (including new, nonignored Python files) with
-`git merge-base HEAD <target-ref>`. It runs both non-e2e test suites with fresh
-branch coverage in the **same Python interpreter and dependency environment**.
-Both revisions run in disposable source worktrees; ignored installation config
-and personal data are absent from both. The head snapshot includes tracked
-modifications, deletions and new nonignored files without changing the root index.
-It does not accept cached coverage or a committed numeric baseline.
+The gate compares the working tree (including new, nonignored files) with
+`git merge-base HEAD <target-ref>`. It measures both revisions with fresh coverage
+from the **same toolchain, Python interpreter and dependency environment**: the
+Rust workspace's tests under `cargo llvm-cov`, and the JavaScript suites under
+jest and c8. Then it runs the pytest suite once, on the head: there is no
+production Python left to measure, so pytest (the shell scripts' and the tooling's
+tests) only passes or fails. Both revisions run in disposable source worktrees;
+ignored installation config and personal data are absent from both. The head
+snapshot includes tracked modifications, deletions and new nonignored files
+without changing the root index. It does not accept cached coverage or a committed
+numeric baseline.
 
 Install the test/runtime dependencies first. Quality tools are separate from the
 runtime setup and require Python 3.12 or newer:
@@ -19,6 +23,11 @@ python3 -m pip install -r deploy/python/requirements-quality.txt pyyaml
 # and the extension's jest for its coverage:
 npm ci --prefix deploy/node
 npm ci --prefix browser-extension
+# cargo llvm-cov for the Rust coverage (CI pins 0.9.1), and the LLVM tools it drives.
+# A toolchain without rustup (a distribution's rustc): set LLVM_COV and LLVM_PROFDATA
+# to the llvm-cov and llvm-profdata of the LLVM version that rustc was built with.
+cargo install cargo-llvm-cov --version 0.9.1 --locked
+rustup component add llvm-tools-preview
 python3 scripts/quality.py --base origin/main --output .local/quality
 # The same gate as part of the regular checks (what CI runs):
 RECOG_QUALITY_BASE=origin/main ./scripts/check.sh
@@ -29,13 +38,22 @@ python3 scripts/quality.py --style-only --base origin/main
 A plain `./scripts/check.sh` runs that `--style-only` check against the local
 `origin/main` before its single pytest run. The target ref is used as last
 fetched; a stale ref only widens the compared range. A missing ref,
-failed baseline or head test suite, missing tool/version mismatch, invalid JSON,
-missing function coverage, nonfinite metrics, or a changing working tree fails
-the run. Results go into a new `run-*` directory under the selected output root:
-`report.json`, `report.md`, baseline/head coverage JSON and test logs. The temporary
-worktrees are removed after the run. CI publishes only those reports and
-logs, never the temporary source tree. The normal test suite runs policy tests
-without the optional quality tools; real analyzer integration tests require them.
+failed baseline or head test suite, missing tool/version mismatch, invalid JSON or
+lcov, a crate without any measured file, a Rust file lizard reads differently from
+the syntax tree, nonfinite metrics, or a changing working tree fails the run.
+Results go into a new `run-*` directory under the selected output root:
+`report.json`, `report.md`, the baseline/head lcov exports, coverage JSON and test
+logs. The temporary worktrees are removed after the run. CI publishes only those
+reports and logs, never the temporary source tree. The normal test suite runs
+policy tests without the optional quality tools; real analyzer integration tests
+require them (the Rust ones also `cargo llvm-cov`, on a one-function crate).
+
+Both revisions build into one target directory, `CARGO_TARGET_DIR` (relative to
+`rust/`) or else `rust/target`, under its `llvm-cov-target/`: the dependencies are
+compiled once, and only the workspace's own crates again for each tree. On a
+32-core Linux machine with the dependencies already built, the whole gate took
+about 7.5 minutes, most of it the two instrumented builds and test runs; the first
+run also builds the dependencies with instrumentation.
 
 ## Policy
 
@@ -52,29 +70,67 @@ without the optional quality tools; real analyzer integration tests require them
   way: `eslint:recommended` from `scripts/quality-eslint.config.mjs`, compared
   against the merge base line by line like Ruff. There is no JavaScript
   formatter check. Generated bundles are excluded.
-- Newly detected duplicate function pairs fail until resolved or explicitly
-  reviewed in `scripts/quality-exceptions.json`. An exception names exactly two
-  canonical function identities and explains why keeping the duplication is
-  better than extracting it. The initial exception list is empty. Existing pairs
-  remain visible in the JSON report; this adoption gate does not demand a
-  repository-wide duplication cleanup.
+- Newly detected duplicate function pairs, Rust or JavaScript, fail until resolved
+  or explicitly reviewed in `scripts/quality-exceptions.json`. An exception names
+  exactly two canonical function identities and explains why keeping the
+  duplication is better than extracting it. The initial exception list is empty.
+  Existing pairs remain visible in the JSON report; this adoption gate does not
+  demand a repository-wide duplication cleanup.
 - SCB verbosity, erosion, cognitive erosion, source LOC, per-function cognitive
   complexity and LOC are informational. They are not independent pass thresholds.
 
-Structural analysis covers Python source under `recog/`, excluding native
-source, and production JavaScript: the web UI under `recog/` and what the
-extension loads (`browser-extension/src/`, `content.js`, `popup.js`). Tests,
-scripts, build configuration, generated bundles and ignored files are not
-included. The extension's coverage comes from its jest suite
-(`--coverageProvider=babel`); the web UI's from the `node:test` suites
-`tests/*.test.cjs` under c8, which see a script only when it is evaluated with
-its path as the `vm` filename. c8 runs with monocart, which takes the functions
-from the source's syntax tree: raw V8 coverage omits a function that was never
-compiled, such as a registered handler no test fires. A JavaScript file no
-suite loads still gets its functions, at 0%. Functions written on the same line as the function enclosing them
-share its line span, which crapkit refuses to join to coverage; start such a
-callback on its own line. Ruff applies to changed/new nonignored Python anywhere in the repository,
-ESLint to changed/new nonignored JavaScript.
+Structural analysis covers production Rust and production JavaScript.
+
+**Rust** is every `rust/<crate>/src/**/*.rs` (binaries under `src/bin/` included)
+without its test code; a crate's `tests/`, `benches/` and build script are outside
+`src/` and never read (`src/live/build.rs` of recog-live is a module, not a build
+script, and is measured). Test code is found in the syntax tree
+(`scripts/quality_rust.py`, tree-sitter-rust), not by file or module name: an item
+carrying `#[test]`, `#[<runner>::test]` or a `#[cfg(…)]` that is false without
+`test` (`cfg(test)`, `cfg(all(test, …))`; not `cfg(any(test, …))` or
+`cfg(not(test))`) is blanked out of the source with its attributes, every other
+byte and line kept in place, and a file that is a module declared under such an
+attribute (`#[cfg(test)] mod tests;`, resolved like rustc does from the declaring
+file), a module of such a file, or a file opening with `#![cfg(test)]` is left
+out whole. A test module whose file cannot be found stops the run. Function
+signatures without a body (trait methods, extern fns) are blanked too.
+
+Coverage comes from `cargo llvm-cov` over the workspace's tests, as check.sh runs
+them: `--workspace` except speexdsp-aec, which runs only `--lib --test properties
+--test cli` because its parity tests need golden data CI does not have; doctests are
+not instrumented on stable. Stable rustc records lines, not branches, so a Rust
+function's coverage is that of the lines of the lcov export inside its span that
+belong to no function nested in it (branch hits are used when a toolchain records
+them). A function without a single line in the export was not compiled on this
+host (`#[cfg(target_os = "macos")]` on Linux): it is listed in the report as not
+built and not scored, and the other CI host scores it. Every crate must have at
+least one measured file, which also catches a report whose paths do not join.
+
+lizard 1.24.0 misreads Rust in two ways the gate works around before handing it a
+file: it reads `'_'` or `'a'` as a lifetime followed by an opening quote that
+swallows code up to the next quote, and a `#` as a C preprocessor line, so a
+multi-line `r#"…"#` leaks its text as code; and it does not end a function at
+`;`, so a bodiless trait method takes the body of the next function. Each moved
+or merged functions. lizard reads a copy whose char literals hold only dots and
+whose raw strings are plain strings of spaces, lines unchanged, and the bodiless
+signatures are blanked; its functions must then match the syntax tree's `fn`
+items by name and last line (lizard alone may add the functions of a
+`macro_rules!` template), or the run stops.
+
+**JavaScript** is the web UI under `recog/` and what the extension loads
+(`browser-extension/src/`, `content.js`, `popup.js`). Tests, scripts, build
+configuration, generated bundles and ignored files are not included. The
+extension's coverage comes from its jest suite (`--coverageProvider=babel`); the
+web UI's from the `node:test` suites `tests/*.test.cjs` under c8, which see a
+script only when it is evaluated with its path as the `vm` filename. c8 runs with
+monocart, which takes the functions from the source's syntax tree: raw V8 coverage
+omits a function that was never compiled, such as a registered handler no test
+fires. A JavaScript file no suite loads still gets its functions, at 0%. Functions
+written on the same line as the function enclosing them share its line span, which
+crapkit refuses to join to coverage; start such a callback on its own line.
+
+Ruff applies to changed/new nonignored Python anywhere in the repository (the
+scripts and tests), ESLint to changed/new nonignored JavaScript.
 
 ## Shell, workflow and secret checks
 
@@ -105,35 +161,39 @@ runner's stable toolchain, so a new clippy lint can fail a run that passed befor
 
 CRAP calculation, coverage joins, function identity and duplicate detection come
 from pinned **crapkit 0.7.3**, not a local complexity implementation. It uses the
-smaller standard/modified cyclomatic complexity and per-function branch coverage
-(statement coverage for a function without branches; for JavaScript, from the
-Istanbul report). Same-named methods use
-crapkit's canonical ordinal identities; signature changes are conservatively new
-functions. Duplicate candidates use its default minimum eight normalized lines
-and 0.8 containment; all pairs are retained, not just the first 50. The gate owns
-only comparison policy, orchestration and report formatting, plus one
-correction of lizard 1.24.0 (`scripts/lizard_template_literals.py`): lizard ends
-a template literal at the next backtick, so one nested in another's `${…}` made
-the enclosing function absorb every function after it. The gate replaces that
-match with a scanner that finds the literal's real end and yields the same
-tokens otherwise; it refuses to run with another lizard version.
+smaller standard/modified cyclomatic complexity (with its corrected Rust reader,
+which counts `match` arms) and per-function branch coverage (statement coverage for
+a function without branches; for JavaScript, from the Istanbul report; for Rust,
+the lines above). Same-named methods use crapkit's canonical ordinal identities;
+signature changes are conservatively new functions. Duplicate candidates use its
+default minimum eight normalized lines and 0.8 containment; all pairs are retained,
+not just the first 50. The gate owns only comparison policy, orchestration and
+report formatting, the Rust inventory and line attribution above, and one
+correction of lizard 1.24.0 for JavaScript (`scripts/lizard_template_literals.py`):
+lizard ends a template literal at the next backtick, so one nested in another's
+`${…}` made the enclosing function absorb every function after it. The gate
+replaces that match with a scanner that finds the literal's real end and yields the
+same tokens otherwise; it refuses to run with another lizard version.
 
-SCB uses **scb-check 0.2.0**, including ast-grep. Exit 1 means valid findings and is
-accepted for its informational metrics; exit 2 or malformed/incomplete output is
-an error. Its Python file count must match the production source inventory.
+SCB uses **scb-check 0.2.0**, including ast-grep, on a copy of the production Rust
+(test code blanked) outside any repository, since SCB skips files a `.gitignore`
+above them names. Its slop rules are Python's, so for Rust its verbosity counts
+only clones. Exit 1 means valid findings and is accepted for its informational
+metrics; exit 2 or malformed/incomplete output is an error. Its file count must
+match the production Rust inventory.
 
-Tool versions and the working-tree fingerprint are recorded in each report.
-Both revisions use the current pinned quality configuration and dependencies,
-so results compare code changes rather than analyzer versions. A baseline that
-cannot run in that environment is an explicit measurement failure requiring
-investigation, never an implicit zero baseline.
+Tool versions (with `rustc` and `cargo-llvm-cov`) and the working-tree fingerprint
+are recorded in each report. Both revisions use the current pinned quality
+configuration and dependencies, so results compare code changes rather than
+analyzer versions. A baseline that cannot run in that environment is an explicit
+measurement failure requiring investigation, never an implicit zero baseline.
 
 Official tool contracts:
 [crapkit source](https://github.com/JeanFrancoisGagne/crapkit/tree/v0.7.3),
+[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov),
 [scb-check](https://github.com/gabeorlanski/scb-check),
 [Ruff](https://docs.astral.sh/ruff/),
 [ESLint](https://eslint.org/docs/latest/),
 [ShellCheck](https://www.shellcheck.net/wiki/),
 [actionlint](https://github.com/rhysd/actionlint/blob/main/docs/checks.md),
-[gitleaks](https://github.com/gitleaks/gitleaks),
-[pytest-cov](https://pytest-cov.readthedocs.io/).
+[gitleaks](https://github.com/gitleaks/gitleaks).

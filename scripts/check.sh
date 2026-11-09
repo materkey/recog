@@ -158,7 +158,7 @@ echo "  rendered $(find "$RENDER_DIR" -type f | wc -l | tr -d ' ') $(uname -s) u
 # of changed lines runs, against the local origin/main as last fetched (a stale
 # ref only widens the compared range), and is skipped without that ref.
 if [ -n "${RECOG_QUALITY_BASE:-}" ]; then
-    step "quality gates (baseline and current pytest with branch coverage)"
+    step "quality gates (baseline and current coverage of Rust and JavaScript, then pytest)"
     "$PYTHON" scripts/quality.py --base "$RECOG_QUALITY_BASE" \
         --output "${RECOG_QUALITY_OUTPUT:-.local/quality}"
 else
