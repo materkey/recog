@@ -115,3 +115,67 @@ impl FsWatcher {
         Some(FsWatcher { _watchers: watchers })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use notify::event::{AccessKind, DataChange, MetadataKind};
+
+    use super::*;
+
+    fn events(kind: NotifyKind, paths: &[&Path]) -> Vec<(EventKind, bool, PathBuf, Option<PathBuf>)> {
+        let event = paths.iter().fold(notify::Event::new(kind), |event, path| event.add_path(path.to_path_buf()));
+        translate(&event)
+    }
+
+    #[test]
+    fn creations_and_removals_when_translated_then_watchdog_kinds_with_the_directory_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let (folder, file) = (dir.path().join("d"), dir.path().join("f"));
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(&file, "").unwrap();
+
+        for (kind, path, expected) in [
+            (NotifyKind::Create(CreateKind::Folder), file.as_path(), (EventKind::Created, true)),
+            (NotifyKind::Create(CreateKind::File), folder.as_path(), (EventKind::Created, false)),
+            (NotifyKind::Create(CreateKind::Any), folder.as_path(), (EventKind::Created, true)),
+            (NotifyKind::Create(CreateKind::Other), file.as_path(), (EventKind::Created, false)),
+            (NotifyKind::Remove(RemoveKind::Folder), file.as_path(), (EventKind::Deleted, true)),
+            (NotifyKind::Remove(RemoveKind::File), folder.as_path(), (EventKind::Deleted, false)),
+            (NotifyKind::Remove(RemoveKind::Any), folder.as_path(), (EventKind::Deleted, false)),
+        ] {
+            assert_eq!(events(kind, &[path]), [(expected.0, expected.1, path.to_path_buf(), None)], "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn renames_when_translated_then_a_move_or_a_creation_and_a_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gone, here) = (dir.path().join("gone"), dir.path().join("here"));
+        std::fs::create_dir(&here).unwrap();
+        let both = NotifyKind::Modify(ModifyKind::Name(RenameMode::Both));
+
+        assert_eq!(events(both, &[&gone, &here]), [(EventKind::Moved, true, gone.clone(), Some(here.clone()))]);
+        assert_eq!(
+            events(NotifyKind::Modify(ModifyKind::Name(RenameMode::From)), &[&gone, &here]),
+            [(EventKind::Deleted, false, gone.clone(), None), (EventKind::Created, true, here.clone(), None)]
+        );
+        assert_eq!(events(both, &[&here]), [(EventKind::Created, true, here, None)]);
+    }
+
+    #[test]
+    fn modifications_and_accesses_when_translated_then_modified_or_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        std::fs::write(&file, "").unwrap();
+
+        for kind in [
+            NotifyKind::Modify(ModifyKind::Data(DataChange::Content)),
+            NotifyKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+            NotifyKind::Any,
+            NotifyKind::Other,
+        ] {
+            assert_eq!(events(kind, &[&file]), [(EventKind::Modified, false, file.clone(), None)], "{kind:?}");
+        }
+        assert!(events(NotifyKind::Access(AccessKind::Any), &[&file]).is_empty());
+    }
+}
