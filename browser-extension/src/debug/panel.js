@@ -33,31 +33,8 @@ export function updateDebugPanel() {
 
   const activeSpeaker = state.lastActiveSpeaker;
   const participants = state.lastParticipants || [];
-  const speakerName = activeSpeaker?.name || '—';
-  const speakerId = activeSpeaker?.id || '—';
   const pcm = pcmGetDiagnostics();
-
-  const rows = [
-    ['wsConnected', state.wsConnected],
-    ['conferenceReady', state.conferenceReady],
-    ['meetingUrl', state.currentMeetingUrl || '—'],
-    ['activeSpeaker', speakerName],
-    ['activeSpeakerId', speakerId],
-    ['participants', participants.length],
-    ['participantsMap', state.lastParticipantsMapSize],
-    ['jitsiParticipants', state.lastJitsiParticipantsCount],
-    ['jitsiParticipantsMap', state.lastJitsiParticipantsMapCount],
-    ['transcriptLines', state.transcriptLines.length],
-    ['speakerHistory', state.speakerHistory.length],
-    ['noiseFilter', state.audioFilterSuppressCount + ' suppressed'],
-    ['flatness', state.audioFilterLastFlatness?.toFixed(3) ?? '—'],
-    ['filterReason', state.audioFilterLastReason ?? '—'],
-    ['pcmActive', pcm.active_count],
-    ['pcmSilent', pcm.silent_bindings],
-    ['pcmRebinds', pcm.total_rebinds],
-    ['pcmPcCount', pcm.pc_count],
-    ['pcmInboundDelta', pcm.inbound_audio_bytes_delta]
-  ];
+  const rows = debugRows(activeSpeaker, participants, pcm);
 
   const rowsHtml = rows.map(([key, value]) => {
     return `<div class="ktalk-debug-row"><div class="ktalk-debug-key">${key}</div><div class="ktalk-debug-value">${formatValue(value)}</div></div>`;
@@ -82,6 +59,33 @@ export function updateDebugPanel() {
   if (copyBtn) {
     copyBtn.addEventListener('click', () => copyDebug(payload, copyBtn));
   }
+}
+
+function debugRows(activeSpeaker, participants, pcm) {
+  const speakerName = activeSpeaker?.name || '—';
+  const speakerId = activeSpeaker?.id || '—';
+
+  return [
+    ['wsConnected', state.wsConnected],
+    ['conferenceReady', state.conferenceReady],
+    ['meetingUrl', state.currentMeetingUrl || '—'],
+    ['activeSpeaker', speakerName],
+    ['activeSpeakerId', speakerId],
+    ['participants', participants.length],
+    ['participantsMap', state.lastParticipantsMapSize],
+    ['jitsiParticipants', state.lastJitsiParticipantsCount],
+    ['jitsiParticipantsMap', state.lastJitsiParticipantsMapCount],
+    ['transcriptLines', state.transcriptLines.length],
+    ['speakerHistory', state.speakerHistory.length],
+    ['noiseFilter', state.audioFilterSuppressCount + ' suppressed'],
+    ['flatness', state.audioFilterLastFlatness?.toFixed(3) ?? '—'],
+    ['filterReason', state.audioFilterLastReason ?? '—'],
+    ['pcmActive', pcm.active_count],
+    ['pcmSilent', pcm.silent_bindings],
+    ['pcmRebinds', pcm.total_rebinds],
+    ['pcmPcCount', pcm.pc_count],
+    ['pcmInboundDelta', pcm.inbound_audio_bytes_delta]
+  ];
 }
 
 function formatValue(value) {
