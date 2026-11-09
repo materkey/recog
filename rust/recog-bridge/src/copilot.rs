@@ -171,15 +171,21 @@ impl Default for AgentMerge {
 }
 
 impl AgentMerge {
-    /// `_update_sessions_zero_anchor`: the debounce starts when a confident zero meets
-    /// a supervisor past `spawning` and a session that should be alive.
-    pub fn update_zero_anchor(&mut self, now: f64, should_be_alive: bool) {
-        let eligible = self.claude_sessions == Some(0)
+    /// A confident zero of MCP sessions while the supervisor reports a TUI past
+    /// `spawning`.
+    #[must_use]
+    pub fn sessions_lost_under_supervisor(&self) -> bool {
+        self.claude_sessions == Some(0)
             && self
                 .supervisor_status
                 .as_deref()
                 .is_some_and(|s| s != protocol::AGENT_OFFLINE && s != protocol::AGENT_SPAWNING)
-            && should_be_alive;
+    }
+
+    /// `_update_sessions_zero_anchor`: the debounce starts when a confident zero meets
+    /// a supervisor past `spawning` and a session that should be alive.
+    pub fn update_zero_anchor(&mut self, now: f64, should_be_alive: bool) {
+        let eligible = self.sessions_lost_under_supervisor() && should_be_alive;
         if !eligible {
             self.sessions_zero_since = None;
         } else if self.sessions_zero_since.is_none() {

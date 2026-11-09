@@ -10,10 +10,11 @@ use recog_core::pyjson::{Map, Value};
 use crate::bridge::{Bridge, copy_identity};
 use crate::client::Client;
 use crate::copilot::MANUAL_MEETING_ID;
+use crate::hooks::CopilotPolicy;
 use crate::json::{self, dumps, dumps_ascii};
 use crate::obj;
 
-fn status_frame(request_id: &str, status: &str, message: &str) -> Value {
+pub(crate) fn status_frame(request_id: &str, status: &str, message: &str) -> Value {
     obj! {"type" => protocol::COPILOT_STATUS, "request_id" => request_id, "status" => status, "message" => message}
 }
 
@@ -59,46 +60,63 @@ impl Bridge {
     pub(crate) async fn refresh_ai_settings(&self, client: Option<&Arc<Client>>) -> Result<(), String> {
         let Some(client) = client.filter(|c| self.is_subscriber(Some(c))) else { return Ok(()) };
         let _guard = self.settings_lock.lock().await;
-        let source = self.policy_source.clone();
-        let read = tokio::task::spawn_blocking(move || source.read_policy()).await.map_err(|e| e.to_string());
-        let policy = match read {
-            Ok(Ok(policy)) => policy,
-            _ => {
-                let frame =
-                    obj! {"type" => protocol::AI_SETTINGS_ERROR, "message" => "Could not apply the saved AI settings"};
-                self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
-                return Ok(());
-            }
+        let Some(policy) = self.read_saved_policy().await else {
+            let frame = error_frame(protocol::AI_SETTINGS_ERROR, "Could not apply the saved AI settings");
+            self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
+            return Ok(());
         };
-        let changed = {
-            let mut st = self.st();
-            let changed = !policy.same_as(&st.policy);
-            st.policy = policy.clone();
-            changed
-        };
-        if changed {
-            if !policy.enabled.truthy() {
-                self.set_manual_copilot_active(false);
-                let pending: Vec<String> = self.st().pending.keys().cloned().collect();
-                for request_id in pending {
-                    // Python builds this one with `status` before `request_id`.
-                    let frame = obj! {
-                        "type" => protocol::COPILOT_STATUS,
-                        "status" => "error",
-                        "request_id" => request_id.as_str(),
-                        "message" => "Copilot выключен в настройках.",
-                    };
-                    self.broadcast_copilot_frame(&frame).await;
-                }
-                self.st().pending.clear();
-            }
-            self.relay_to_supervisors(&obj! {"type" => protocol::COPILOT_SETTINGS_CHANGED}).await;
-            let updated = with_identity(self, protocol::COPILOT_POLICY_UPDATED, &[]);
-            self.broadcast_to_channel_clients(&updated).await;
+        if self.adopt_policy(&policy) {
+            self.announce_policy_change(&policy).await;
         }
         let applied = obj! {"type" => protocol::AI_SETTINGS_APPLIED, "revision" => policy.revision, "model_application" => "next_session"};
         self.send_bounded(client, &dumps(&applied)).await.map_err(|e| e.0)?;
         Ok(())
+    }
+
+    /// The saved policy, read off the loop; None when it cannot be read.
+    async fn read_saved_policy(&self) -> Option<CopilotPolicy> {
+        let source = self.policy_source.clone();
+        match tokio::task::spawn_blocking(move || source.read_policy()).await {
+            Ok(Ok(policy)) => Some(policy),
+            _ => None,
+        }
+    }
+
+    /// Keeps `policy`; answers whether it differs from the one it replaces.
+    fn adopt_policy(&self, policy: &CopilotPolicy) -> bool {
+        let mut st = self.st();
+        let changed = !policy.same_as(&st.policy);
+        st.policy = policy.clone();
+        changed
+    }
+
+    /// A changed policy: the supervisor and the channel hear of it, and switching the
+    /// Copilot off first fails what waits for it.
+    async fn announce_policy_change(&self, policy: &CopilotPolicy) {
+        if !policy.enabled.truthy() {
+            self.fail_requests_of_disabled_copilot().await;
+        }
+        self.relay_to_supervisors(&obj! {"type" => protocol::COPILOT_SETTINGS_CHANGED}).await;
+        let updated = with_identity(self, protocol::COPILOT_POLICY_UPDATED, &[]);
+        self.broadcast_to_channel_clients(&updated).await;
+    }
+
+    /// The Copilot was switched off: the manual mirror ends and each pending request
+    /// gets a terminal error.
+    async fn fail_requests_of_disabled_copilot(&self) {
+        self.set_manual_copilot_active(false);
+        let pending: Vec<String> = self.st().pending.keys().cloned().collect();
+        for request_id in pending {
+            // Python builds this one with `status` before `request_id`.
+            let frame = obj! {
+                "type" => protocol::COPILOT_STATUS,
+                "status" => "error",
+                "request_id" => request_id.as_str(),
+                "message" => "Copilot выключен в настройках.",
+            };
+            self.broadcast_copilot_frame(&frame).await;
+        }
+        self.st().pending.clear();
     }
 
     /// `user_profile_refresh` (webapp only): the profile file is the truth, the frame
@@ -107,13 +125,10 @@ impl Bridge {
     pub(crate) async fn refresh_user_profile(&self, client: Option<&Arc<Client>>) -> Result<(), String> {
         let Some(client) = client.filter(|c| self.is_subscriber(Some(c))) else { return Ok(()) };
         let _guard = self.profile_lock.lock().await;
-        let (identity, changed) = match self.apply_user_profile() {
-            Ok(result) => result,
-            Err(_) => {
-                let frame = obj! {"type" => protocol::USER_PROFILE_ERROR, "message" => "Could not apply the saved user profile"};
-                self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
-                return Ok(());
-            }
+        let Ok((identity, changed)) = self.apply_user_profile() else {
+            let frame = error_frame(protocol::USER_PROFILE_ERROR, "Could not apply the saved user profile");
+            self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
+            return Ok(());
         };
         let fields = identity.as_object().cloned().unwrap_or_default();
         if changed {
@@ -178,14 +193,8 @@ impl Bridge {
             self.log("[KTalk Bridge] copilot_chat_message missing/invalid text — ignored");
             return Ok(());
         };
-        // Only a conference request is stamped: a manual one would get the orphan
-        // meeting, which a silence split rotates, and its reply would look stale.
-        let meeting_id =
-            if self.storage().is_some() && self.is_conference_active() { self.current_meeting_id() } else { None };
-        let created_at = match data.get("created_at") {
-            Some(v) if json::is_number(v) => v.clone(),
-            _ => Value::Float(self.now() * 1000.0),
-        };
+        let meeting_id = self.chat_meeting_id();
+        let created_at = self.created_at_or_now(data);
         let channels = {
             let st = self.st();
             st.clients.list(&st.clients.channels)
@@ -218,6 +227,21 @@ impl Bridge {
         futures_util::future::join(self.broadcast_to_subscribers(&echo), futures_util::future::join_all(forwards))
             .await;
         Ok(())
+    }
+
+    /// The meeting a chat question belongs to. Only a conference request is stamped:
+    /// a manual one would get the orphan meeting, which a silence split rotates, and
+    /// its reply would look stale.
+    fn chat_meeting_id(&self) -> Option<String> {
+        if self.storage().is_some() && self.is_conference_active() { self.current_meeting_id() } else { None }
+    }
+
+    /// The frame's numeric `created_at`, else now in milliseconds.
+    fn created_at_or_now(&self, data: &Map) -> Value {
+        match data.get("created_at") {
+            Some(v) if json::is_number(v) => v.clone(),
+            _ => Value::Float(self.now() * 1000.0),
+        }
     }
 
     /// A chat with no channel connected: its originator learns the channel is gone.
@@ -258,52 +282,58 @@ impl Bridge {
         }
         let tracked = self.st().pending.get(request_id).cloned();
         if let Some(scope) = tracked.as_deref().and_then(|t| t.strip_prefix("stale:")) {
-            self.log(&format!(
-                "[KTalk Bridge] copilot_channel_reply for stale request_id={request_id} (kind={kind}) — dropped"
-            ));
-            self.st().pending.shift_remove(request_id);
+            self.drop_stale_reply(request_id, kind, scope).await;
+            return Ok(());
+        }
+        if let Some((reply_meeting, current)) = self.other_meeting_of(&meeting_id) {
+            self.drop_other_meeting_reply(request_id, kind, &reply_meeting, &current).await;
+            return Ok(());
+        }
+        let created_at = self.created_at_or_now(data);
+        self.broadcast_copilot_frame(&reply_frame(request_id, kind, text, meeting_id, created_at)).await;
+        self.st().pending.shift_remove(request_id);
+        Ok(())
+    }
+
+    /// A reply to a request gone stale: dropped, and its UI told why.
+    async fn drop_stale_reply(&self, request_id: &str, kind: &str, scope: &str) {
+        self.log(&format!(
+            "[KTalk Bridge] copilot_channel_reply for stale request_id={request_id} (kind={kind}) — dropped"
+        ));
+        self.st().pending.shift_remove(request_id);
+        let message = if scope.is_empty() {
+            "Ответ не доставлен: ручная сессия copilot была прервана."
+        } else {
+            "Ответ не доставлен: встреча, в которой был задан вопрос, уже завершилась."
+        };
+        self.broadcast_copilot_frame(&status_frame(request_id, "error", message)).await;
+    }
+
+    /// (the reply's meeting, the current one) when the reply names a meeting and the
+    /// bridge is in another.
+    fn other_meeting_of(&self, meeting_id: &Value) -> Option<(String, String)> {
+        let Value::Str(mid) = meeting_id else { return None };
+        if mid.is_empty() {
+            return None;
+        }
+        let current = self.current_meeting_id().filter(|c| !c.is_empty())?;
+        (current != *mid).then(|| (mid.clone(), current))
+    }
+
+    /// A reply of another meeting: dropped; a tracked request gets a terminal error.
+    async fn drop_other_meeting_reply(&self, request_id: &str, kind: &str, reply_meeting: &str, current: &str) {
+        self.log(&format!(
+            "[KTalk Bridge] copilot_channel_reply for meeting_id={reply_meeting} but current is {current} (kind={kind}) — dropped"
+        ));
+        let tracked = self.st().pending.shift_remove(request_id);
+        if let Some(scope) = tracked {
             let message = if scope.is_empty() {
                 "Ответ не доставлен: ручная сессия copilot была прервана."
             } else {
-                "Ответ не доставлен: встреча, в которой был задан вопрос, уже завершилась."
+                "Ответ не доставлен: встреча сменилась до получения ответа."
             };
             self.broadcast_copilot_frame(&status_frame(request_id, "error", message)).await;
-            return Ok(());
         }
-        if let Value::Str(mid) = &meeting_id
-            && !mid.is_empty()
-            && let Some(current) = self.current_meeting_id().filter(|c| !c.is_empty())
-            && current != *mid
-        {
-            self.log(&format!(
-                "[KTalk Bridge] copilot_channel_reply for meeting_id={mid} but current is {current} (kind={kind}) — dropped"
-            ));
-            let tracked = self.st().pending.shift_remove(request_id);
-            if let Some(scope) = tracked {
-                let message = if scope.is_empty() {
-                    "Ответ не доставлен: ручная сессия copilot была прервана."
-                } else {
-                    "Ответ не доставлен: встреча сменилась до получения ответа."
-                };
-                self.broadcast_copilot_frame(&status_frame(request_id, "error", message)).await;
-            }
-            return Ok(());
-        }
-        let created_at = match data.get("created_at") {
-            Some(v) if json::is_number(v) => v.clone(),
-            _ => Value::Float(self.now() * 1000.0),
-        };
-        let reply = obj! {
-            "type" => protocol::COPILOT_REPLY,
-            "request_id" => request_id,
-            "kind" => kind,
-            "text" => text.as_str(),
-            "meeting_id" => meeting_id,
-            "created_at" => created_at,
-        };
-        self.broadcast_copilot_frame(&reply).await;
-        self.st().pending.shift_remove(request_id);
-        Ok(())
     }
 
     /// `copilot_channel_status`: a per-request status, relayed unless stale; a
@@ -511,32 +541,54 @@ impl Bridge {
         // conditions, and only then reads meta.json; the same order keeps its log
         // lines.
         let mut agent = std::mem::take(&mut self.st().agent);
-        let eligible = agent.claude_sessions == Some(0)
-            && agent
-                .supervisor_status
-                .as_deref()
-                .is_some_and(|s| s != protocol::AGENT_OFFLINE && s != protocol::AGENT_SPAWNING);
-        let alive = eligible && self.copilot_should_be_alive();
+        let alive = agent.sessions_lost_under_supervisor() && self.copilot_should_be_alive();
         agent.update_zero_anchor(now, alive);
         let effective = agent.effective(now, || self.copilot_should_be_alive());
         let recover = agent.take_recovery(now);
         self.st().agent = agent;
         if recover {
-            let meeting_id = self.compute_meeting_state().as_object().and_then(|m| m.get("meeting_id").cloned());
-            let frame = obj! {"type" => protocol::COPILOT_CHANNEL_UNAVAILABLE, "meeting_id" => meeting_id.unwrap_or(Value::Null)};
-            self.relay_to_supervisors(&frame).await;
+            self.relay_to_supervisors(&self.channel_unavailable_frame()).await;
         }
-        let changed = {
-            let mut st = self.st();
-            let changed = st.agent.last_effective != effective;
-            if changed {
-                st.agent.last_effective.clone_from(&effective);
-            }
-            changed
-        };
+        if self.note_effective_state(&effective) {
+            self.broadcast_copilot_frame(&agent_state_frame(effective)).await;
+        }
+    }
+
+    /// `copilot_channel_unavailable` for the meeting a session serves now.
+    fn channel_unavailable_frame(&self) -> Value {
+        let meeting_id = self.compute_meeting_state().as_object().and_then(|m| m.get("meeting_id").cloned());
+        obj! {"type" => protocol::COPILOT_CHANNEL_UNAVAILABLE, "meeting_id" => meeting_id.unwrap_or(Value::Null)}
+    }
+
+    /// Keeps `effective` as the last broadcast status; answers whether it changed.
+    fn note_effective_state(&self, effective: &str) -> bool {
+        let mut st = self.st();
+        let changed = st.agent.last_effective != effective;
         if changed {
-            let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => protocol::STATUS_AGENT_STATE, protocol::STATUS_AGENT_STATE => effective};
-            self.broadcast_copilot_frame(&frame).await;
+            effective.clone_into(&mut st.agent.last_effective);
         }
+        changed
+    }
+}
+
+/// The agent chip's status frame.
+pub(crate) fn agent_state_frame(effective: String) -> Value {
+    obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => protocol::STATUS_AGENT_STATE, protocol::STATUS_AGENT_STATE => effective}
+}
+
+/// `{"type": kind, "message": message}`: a refresh the webapp asked for failed.
+fn error_frame(kind: &str, message: &str) -> Value {
+    obj! {"type" => kind, "message" => message}
+}
+
+/// The `copilot_reply` relayed to the extensions and the webapp.
+fn reply_frame(request_id: &str, kind: &str, text: &str, meeting_id: Value, created_at: Value) -> Value {
+    obj! {
+        "type" => protocol::COPILOT_REPLY,
+        "request_id" => request_id,
+        "kind" => kind,
+        "text" => text,
+        "meeting_id" => meeting_id,
+        "created_at" => created_at,
     }
 }

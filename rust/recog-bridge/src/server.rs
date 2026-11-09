@@ -31,6 +31,7 @@ use crate::bridge::Bridge;
 use crate::client::{Client, ClientSink, Connection, Inbound, SendError, python_address};
 use crate::hooks::BoxFuture;
 use crate::obj;
+use crate::relay::{agent_state_frame, status_frame};
 
 const MAX_MESSAGE: usize = 1 << 20;
 const PING_INTERVAL: Duration = Duration::from_secs(20);
@@ -375,14 +376,14 @@ impl Bridge {
     /// and the agent chip.
     async fn send_primers(&self, client: &Arc<Client>, channels_present: bool) {
         if channels_present {
-            let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => "channel_connected", "message" => "Copilot channel server connected"};
+            let frame = status_frame("", "channel_connected", "Copilot channel server connected");
             if let Err(e) = client.sink.send(crate::json::dumps(&frame)).await {
                 self.log(&format!("[KTalk Bridge] Failed to send channel_connected primer to new client: {e}"));
             }
         }
         // The chip broadcast is change-only: a reloaded tab learns the current state here.
         let agent_state = self.st().agent.last_effective.clone();
-        let frame = obj! {"type" => protocol::COPILOT_STATUS, "request_id" => "", "status" => protocol::STATUS_AGENT_STATE, protocol::STATUS_AGENT_STATE => agent_state};
+        let frame = agent_state_frame(agent_state);
         if let Err(e) = client.sink.send(crate::json::dumps(&frame)).await {
             self.log(&format!("[KTalk Bridge] Failed to send agent_state primer to new client: {e}"));
         }
