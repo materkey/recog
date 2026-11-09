@@ -6,8 +6,8 @@
 //!
 //! The route list is in [`router`]. Bodies, status codes, the headers that matter
 //! (content type and length, ETag, ranges, cache control) and the frames on the
-//! WebSockets are Python's; `tests/differential.rs` runs both servers on the same data
-//! and compares. Nothing is wired yet: the Python frontend service stays the default.
+//! WebSockets are Python's, pinned by the tests of each route since the Python server
+//! and the differential tests that compared the two were deleted.
 //!
 //! Known differences from Python, beyond those of the modules below:
 //! - FastAPI's generated documentation (`/openapi.json`, `/docs`, `/redoc`) is not

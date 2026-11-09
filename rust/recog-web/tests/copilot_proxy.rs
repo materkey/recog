@@ -1,7 +1,7 @@
 //! The cases of tests/test_frontend_copilot_proxy.py: the inbound whitelist and relay of
 //! the live stream, the `bridge_disconnected` replies, the agent-state primer, the
 //! shared dialog history, and the Origin gate. The lifespan wiring of the bridge
-//! subscriber is compared with Python end to end in live_differential.rs.
+//! subscriber is in bridge_link.rs.
 
 mod support;
 
