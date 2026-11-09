@@ -243,41 +243,6 @@ def test_real_baseline_when_head_moves_a_file_then_its_functions_are_not_new(
 
 
 @needs_rust_tools
-def test_baseline_with_its_workspace_in_rust_when_head_has_it_at_the_root_then_gate_passes(
-    repository, tmp_path, monkeypatch
-):
-    """given: a baseline from before the workspace moved to the checkout's root, with an
-    uncovered function over the ceiling
-    when: the head holds the same crate under crates/
-    then: the baseline is measured where it lies, and the function is its own, not new"""
-    monkeypatch.setattr(quality, "ROOT", repository)
-    monkeypatch.setattr(quality, "versions", lambda: {})
-    arms = "".join(
-        f"    if value == {index} {{\n        return {index};\n    }}\n" for index in range(5)
-    )
-    library = repository / "crates/demo/src/lib.rs"
-    library.write_text(
-        library.read_text() + f"\npub fn uncovered(value: u32) -> u32 {{\n{arms}    9\n}}\n"
-    )
-    quality.git(repository, "mv", "crates", "rust")
-    quality.git(repository, "mv", "Cargo.toml", "rust/Cargo.toml")
-    (repository / "rust/Cargo.toml").write_text('[workspace]\nresolver = "3"\nmembers = ["demo"]\n')
-    commit(repository, "the workspace in rust/")
-    quality.git(repository, "mv", "rust/Cargo.toml", "Cargo.toml")
-    quality.git(repository, "mv", "rust", "crates")
-    (repository / "Cargo.toml").write_text(
-        '[workspace]\nresolver = "3"\nmembers = ["crates/demo"]\n'
-    )
-    output = tmp_path / "reports"
-    assert quality.main(["--base", "HEAD", "--output", str(output)]) == 0
-    result = json.loads(next(output.glob("run-*/report.json")).read_text())
-    assert result["status"] == "pass", result
-    assert [
-        (row["path"], row["long_name"].split()[0]) for row in result["baseline"]["functions"]
-    ] == [("crates/demo/src/lib.rs", "answer"), ("crates/demo/src/lib.rs", "uncovered")]
-
-
-@needs_rust_tools
 def test_real_baseline_when_head_equals_it_then_gate_passes(repository, tmp_path, monkeypatch):
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda: {})

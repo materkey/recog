@@ -43,10 +43,6 @@ C8 = NODE_TOOLS / "node_modules/.bin/c8"
 EXTENSION = "browser-extension/"
 # The crates lie in `crates/`, beside the workspace manifest at the checkout's root.
 CRATES = "crates"
-# Until 2026-11-09 `rust/` held the manifest and the crates, and `recog/` the web UI
-# and the desktop bootstrap script: a baseline from before that is measured where it lies.
-FORMER_WORKSPACE = "rust"
-FORMER_JAVASCRIPT = "recog/"
 # What check.sh tests, minus the doctests (stable rustc does not instrument them): a
 # crate listed here runs only these targets, the echo canceller's parity tests
 # needing golden data CI does not have.
@@ -57,7 +53,6 @@ RUST_RESTRICTED_TESTS = {
 JAVASCRIPT_SOURCES = (
     "crates/recog-web/static/",
     "crates/recog-desktop/bootstrap.js",
-    FORMER_JAVASCRIPT,
     f"{EXTENSION}src/",
     f"{EXTENSION}content.js",
     f"{EXTENSION}popup.js",
@@ -113,17 +108,12 @@ def javascript_files(root):
     return listed_files(root, "*.js", "*.cjs", "*.mjs")
 
 
-def crates_directory(root):
-    return CRATES if (root / "Cargo.toml").is_file() else FORMER_WORKSPACE
-
-
 def rust_sources(root):
     """Production Rust (`crates/<crate>/src/`) with its test code blanked; see quality_rust."""
-    crates = crates_directory(root)
     names = [
         name
-        for name in listed_files(root, f"{crates}/*.rs")
-        if quality_rust.is_production_path(name, crates)
+        for name in listed_files(root, f"{CRATES}/*.rs")
+        if quality_rust.is_production_path(name)
     ]
     return quality_rust.production_sources({name: (root / name).read_text() for name in names})
 
@@ -235,29 +225,27 @@ def present_targets(crate):
 
 def rust_coverage(root, output, label):
     """{production file: (line hits, branch hits)} of the workspace's tests from cargo llvm-cov."""
-    crates = crates_directory(root)
-    workspace = root if crates == CRATES else root / crates
     artifact = output / f"{label}-rust.lcov"
     env = {**os.environ, "CARGO_TARGET_DIR": str(cargo_target_dir())}
-    restricted = [name for name in RUST_RESTRICTED_TESTS if (root / crates / name).is_dir()]
+    restricted = [name for name in RUST_RESTRICTED_TESTS if (root / CRATES / name).is_dir()]
     steps = [
         ("clean", ["clean", "--workspace"]),
         ("tests", ["--no-report", "--workspace", *(f"--exclude={name}" for name in restricted)]),
         *(
-            (name, ["--no-report", "-p", name, *present_targets(root / crates / name)])
+            (name, ["--no-report", "-p", name, *present_targets(root / CRATES / name)])
             for name in restricted
         ),
         ("report", ["report", "--lcov", "--output-path", str(artifact)]),
     ]
     for step, arguments in steps:
         log = output / f"{label}-rust-{step}.log"
-        run(["cargo", "llvm-cov", *arguments], workspace, env=env, log=log)
+        run(["cargo", "llvm-cov", *arguments], root, env=env, log=log)
     resolved = root.resolve()
     measured = {}
     for source, hits in quality_rust.parse_lcov(artifact.read_text()).items():
         path = Path(source).resolve()
         name = path.relative_to(resolved).as_posix() if path.is_relative_to(resolved) else ""
-        if quality_rust.is_production_path(name, crates):
+        if quality_rust.is_production_path(name):
             measured[name] = hits
     # Every crate has code built on every host: a crate without a measured file
     # means its tests did not run or the report's paths did not join.
@@ -419,12 +407,10 @@ def scb(sources):
         for name, code in rust.items():
             (tree / name).parent.mkdir(parents=True, exist_ok=True)
             (tree / name).write_text(code)
-        # The one directory the tree keeps its crates in.
-        (crates,) = {name.split("/")[0] for name in rust}
         command = [
             str(executable),
             "check",
-            crates,
+            CRATES,
             "--output-format",
             "json",
             "--config",

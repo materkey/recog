@@ -25,10 +25,10 @@ _CFG_TOKEN = re.compile(r'\s*(?:(\w+)|("(?:[^"\\]|\\.)*")|([(),=]))')
 _SKIPPED = {"attribute_item", "line_comment", "block_comment"}
 
 
-def is_production_path(name, crates="crates"):
+def is_production_path(name):
     """`crates/<crate>/src/**/*.rs`: the crate's own sources, not tests/, benches/ or build.rs."""
     parts = PurePosixPath(name).parts
-    return len(parts) >= 4 and parts[0] == crates and parts[2] == "src" and name.endswith(".rs")
+    return len(parts) >= 4 and parts[0] == "crates" and parts[2] == "src" and name.endswith(".rs")
 
 
 def _cfg_tokens(text):
