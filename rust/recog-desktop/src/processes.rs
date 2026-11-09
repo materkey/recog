@@ -102,18 +102,73 @@ fn split(p: &str) -> (String, String) {
 fn normpath(p: &str) -> String {
     let initial = if p.starts_with("//") && !p.starts_with("///") { 2 } else { usize::from(p.starts_with('/')) };
     let mut parts: Vec<&str> = Vec::new();
-    for comp in p.split('/') {
-        if comp.is_empty() || comp == "." {
-            continue;
-        }
-        if comp != ".." || (initial == 0 && parts.is_empty()) || parts.last() == Some(&"..") {
-            parts.push(comp);
-        } else if !parts.is_empty() {
-            parts.pop();
-        }
+    for comp in p.split('/').filter(|comp| !comp.is_empty() && *comp != ".") {
+        push_component(&mut parts, comp, initial > 0);
     }
     let joined = format!("{}{}", "/".repeat(initial), parts.join("/"));
     if joined.is_empty() { ".".to_owned() } else { joined }
+}
+
+/// One component of `normpath`: `..` drops the previous one where it can.
+fn push_component<'a>(parts: &mut Vec<&'a str>, comp: &'a str, rooted: bool) {
+    if comp != ".." || (!rooted && parts.is_empty()) || parts.last() == Some(&"..") {
+        parts.push(comp);
+    } else if !parts.is_empty() {
+        parts.pop();
+    }
+}
+
+/// What `_joinrealpath` remembers of each link: resolved, or being resolved (a
+/// loop when met again).
+type Seen = HashMap<String, Option<String>>;
+
+/// `_joinrealpath(path, rest, strict=True, seen)`.
+fn join_real(mut path: String, rest: &str, seen: &mut Seen) -> Result<String, PyErr> {
+    let mut rest = rest;
+    if let Some(stripped) = rest.strip_prefix('/') {
+        rest = stripped;
+        path = "/".to_owned();
+    }
+    while !rest.is_empty() {
+        let (name, remainder) = rest.split_once('/').unwrap_or((rest, ""));
+        rest = remainder;
+        path = match name {
+            "" | "." => path,
+            ".." => parent_of(path),
+            name => join_name(path, name, seen)?,
+        };
+    }
+    Ok(path)
+}
+
+/// `..` of a path being resolved, which may itself be relative.
+fn parent_of(path: String) -> String {
+    if path.is_empty() {
+        return "..".to_owned();
+    }
+    let (head, tail) = split(&path);
+    if tail == ".." { join(&join(&head, ".."), "..") } else { head }
+}
+
+/// `path/name`, through `name` when it is a link.
+fn join_name(path: String, name: &str, seen: &mut Seen) -> Result<String, PyErr> {
+    let newpath = join(&path, name);
+    let meta = fs::symlink_metadata(&newpath).map_err(|e| PyErr::os(&e, Some(Path::new(&newpath))))?;
+    if !meta.file_type().is_symlink() {
+        return Ok(newpath);
+    }
+    match seen.get(&newpath) {
+        Some(Some(resolved)) => return Ok(resolved.clone()),
+        Some(None) => {
+            return Err(PyErr::new("RuntimeError", format!("Symlink loop from {}", core_py::repr(&newpath))));
+        }
+        None => {}
+    }
+    seen.insert(newpath.clone(), None);
+    let link = fs::read_link(&newpath).map_err(|e| PyErr::os(&e, Some(Path::new(&newpath))))?;
+    let resolved = join_real(path, &link.to_string_lossy(), seen)?;
+    seen.insert(newpath, Some(resolved.clone()));
+    Ok(resolved)
 }
 
 /// `Path(path).resolve(strict=True)`: `os.path.realpath(path, strict=True)`, every
@@ -123,52 +178,7 @@ fn normpath(p: &str) -> String {
 /// # Errors
 /// The `OSError` of the missing or unreadable component, or the loop.
 pub fn resolve_strict(path: &Path) -> Result<PathBuf, PyErr> {
-    fn join_real(mut path: String, rest: &str, seen: &mut HashMap<String, Option<String>>) -> Result<String, PyErr> {
-        let mut rest = rest;
-        if let Some(stripped) = rest.strip_prefix('/') {
-            rest = stripped;
-            path = "/".to_owned();
-        }
-        while !rest.is_empty() {
-            let (name, remainder) = rest.split_once('/').unwrap_or((rest, ""));
-            rest = remainder;
-            if name.is_empty() || name == "." {
-                continue;
-            }
-            if name == ".." {
-                if path.is_empty() {
-                    path = "..".to_owned();
-                } else {
-                    let (head, tail) = split(&path);
-                    path = if tail == ".." { join(&join(&head, ".."), "..") } else { head };
-                }
-                continue;
-            }
-            let newpath = join(&path, name);
-            let meta = fs::symlink_metadata(&newpath).map_err(|e| PyErr::os(&e, Some(Path::new(&newpath))))?;
-            if !meta.file_type().is_symlink() {
-                path = newpath;
-                continue;
-            }
-            match seen.get(&newpath) {
-                Some(Some(resolved)) => {
-                    path = resolved.clone();
-                    continue;
-                }
-                Some(None) => {
-                    return Err(PyErr::new("RuntimeError", format!("Symlink loop from {}", core_py::repr(&newpath))));
-                }
-                None => {}
-            }
-            seen.insert(newpath.clone(), None);
-            let link = fs::read_link(&newpath).map_err(|e| PyErr::os(&e, Some(Path::new(&newpath))))?;
-            path = join_real(path, &link.to_string_lossy(), seen)?;
-            seen.insert(newpath, Some(path.clone()));
-        }
-        Ok(path)
-    }
-    let text = path.to_string_lossy();
-    let resolved = join_real(String::new(), &text, &mut HashMap::new())?;
+    let resolved = join_real(String::new(), &path.to_string_lossy(), &mut HashMap::new())?;
     let absolute = if resolved.starts_with('/') {
         resolved
     } else {
@@ -189,6 +199,7 @@ fn read_plist(path: &Path) -> Result<plist::Value, PyErr> {
     plist::Value::from_reader(std::io::Cursor::new(raw)).map_err(|_| PyErr::new("InvalidFileException", "Invalid file"))
 }
 
+/// The Python type plistlib gives a value.
 fn plist_type(value: &plist::Value) -> &'static str {
     match value {
         plist::Value::Array(_) => "list",
@@ -196,6 +207,12 @@ fn plist_type(value: &plist::Value) -> &'static str {
         plist::Value::Boolean(_) => "bool",
         plist::Value::Data(_) => "bytes",
         plist::Value::Date(_) => "datetime",
+        other => plist_scalar_type(other),
+    }
+}
+
+fn plist_scalar_type(value: &plist::Value) -> &'static str {
+    match value {
         plist::Value::Real(_) => "float",
         plist::Value::Integer(_) => "int",
         plist::Value::String(_) => "str",
@@ -214,11 +231,9 @@ fn plist_get<'a>(info: &'a plist::Value, key: &str) -> Result<Option<&'a plist::
 
 /// `app / "Contents/MacOS" / info["CFBundleExecutable"]`.
 fn bundle_executable(app: &Path, info: &plist::Value) -> Result<PathBuf, PyErr> {
+    // plist_get has refused a root that is not a dictionary.
     match plist_get(info, "CFBundleExecutable")? {
-        None => match info {
-            plist::Value::Dictionary(_) => Err(PyErr::key("CFBundleExecutable")),
-            _ => unreachable!("plist_get fails for a non-dictionary"),
-        },
+        None => Err(PyErr::key("CFBundleExecutable")),
         Some(plist::Value::String(name)) => Ok(app.join("Contents/MacOS").join(name)),
         Some(other) => Err(PyErr::type_error(format!(
             "unsupported operand type(s) for /: 'PosixPath' and '{}'",
@@ -236,25 +251,33 @@ fn bundle_executable(app: &Path, info: &plist::Value) -> Result<PathBuf, PyErr> 
 pub fn application_path(host: &Host, raw: &str) -> Result<PathBuf, PyErr> {
     let path = resolve_strict(&paths::expanduser(raw, &host.environ()))?;
     match host.platform {
-        Platform::Darwin => {
-            let info = read_plist(&path.join("Contents/Info.plist"))?;
-            let identifier = plist_get(&info, "CFBundleIdentifier")?;
-            if !matches!(identifier, Some(plist::Value::String(s)) if s == "kontur.talk") {
-                return Err(PyErr::value("Select the official KTalk application bundle"));
-            }
-            if !bundle_executable(&path, &info)?.is_file() {
-                return Err(PyErr::value("Application executable is missing"));
-            }
-        }
-        Platform::Linux => {
-            let executable = nix::unistd::access(&path, nix::unistd::AccessFlags::X_OK).is_ok();
-            if !path.is_file() || !executable {
-                return Err(PyErr::value("Select an executable KTalk AppImage or binary"));
-            }
-        }
+        Platform::Darwin => check_bundle(&path)?,
+        Platform::Linux => check_executable(&path)?,
         Platform::Other(_) => return Err(PyErr::value("Desktop integration supports Linux and macOS")),
     }
     Ok(path)
+}
+
+/// The official KTalk bundle, with its main executable.
+fn check_bundle(path: &Path) -> Result<(), PyErr> {
+    let info = read_plist(&path.join("Contents/Info.plist"))?;
+    let identifier = plist_get(&info, "CFBundleIdentifier")?;
+    if !matches!(identifier, Some(plist::Value::String(s)) if s == "kontur.talk") {
+        return Err(PyErr::value("Select the official KTalk application bundle"));
+    }
+    if !bundle_executable(path, &info)?.is_file() {
+        return Err(PyErr::value("Application executable is missing"));
+    }
+    Ok(())
+}
+
+/// An executable file (an AppImage or the binary).
+fn check_executable(path: &Path) -> Result<(), PyErr> {
+    let executable = nix::unistd::access(path, nix::unistd::AccessFlags::X_OK).is_ok();
+    if !path.is_file() || !executable {
+        return Err(PyErr::value("Select an executable KTalk AppImage or binary"));
+    }
+    Ok(())
 }
 
 /// `int(x)` inside `is_ktalk_executable`, whose `except` catches all but overflow.
@@ -293,44 +316,74 @@ pub fn is_ktalk_executable(host: &Host, executable: &Path) -> Result<bool, PyErr
         Platform::Darwin => parent(&parent(executable)).join("Resources"),
         _ => parent(executable).join("resources"),
     };
-    let check = || -> Result<bool, AsarFailure> {
-        let path = resources.join("app.asar");
-        let mut archive = fs::File::open(&path).map_err(|e| PyErr::os(&e, Some(&path)))?;
-        let head = read_up_to(&mut archive, 16)?;
-        if head.len() != 16 {
-            return Err(PyErr::new("error", "unpack requires a buffer of 16 bytes").into());
-        }
-        let word = |i: usize| u32::from_le_bytes([head[i * 4], head[i * 4 + 1], head[i * 4 + 2], head[i * 4 + 3]]);
-        if !(0 < word(3) && word(3) <= 8 * 1024 * 1024) {
-            return Ok(false);
-        }
-        let tree = pyjson_bytes(&read_up_to(&mut archive, word(3) as usize)?)?;
-        let package = py::index(py::index(&tree, "files")?, "package.json")?;
-        let size = py::to_int(py::index(package, "size")?)?;
-        if !(0 < size && size <= 65536) {
-            return Ok(false);
-        }
-        let offset = py::to_int(py::index(package, "offset")?)?;
-        let position = 8 + i128::from(word(1)) + offset;
-        let position = u64::try_from(position).map_err(|_| {
-            if position < 0 {
-                PyErr::value(format!("negative seek position {position}"))
-            } else {
-                PyErr::new("OverflowError", "Python int too large to convert to C long")
-            }
-        })?;
-        archive.seek(SeekFrom::Start(position)).map_err(|e| PyErr::os(&e, None))?;
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let metadata = pyjson_bytes(&read_up_to(&mut archive, size as usize)?)?;
-        let name = py::get(&metadata, "name").map_err(AsarFailure::Raise)?;
-        let main = py::get(&metadata, "main").map_err(AsarFailure::Raise)?;
-        Ok(name.and_then(Value::as_str) == Some("ktalk") && main.and_then(Value::as_str) == Some("build/main.js"))
-    };
-    match check() {
+    match read_package(&resources.join("app.asar")) {
         Ok(found) => Ok(found),
         Err(AsarFailure::No) => Ok(false),
         Err(AsarFailure::Raise(error)) => Err(error),
     }
+}
+
+/// The archive's `package.json` is KTalk's.
+fn read_package(path: &Path) -> Result<bool, AsarFailure> {
+    let mut archive = fs::File::open(path).map_err(|e| PyErr::os(&e, Some(path)))?;
+    let (header_size, tree_size) = asar_header(&mut archive)?;
+    let Some(tree) = read_tree(&mut archive, tree_size)? else { return Ok(false) };
+    let Some((size, offset)) = package_entry(&tree)? else { return Ok(false) };
+    let metadata = read_metadata(&mut archive, header_size, offset, size)?;
+    is_ktalk_package(&metadata).map_err(AsarFailure::Raise)
+}
+
+/// `struct.unpack("<4I", archive.read(16))`: the header pickle's size (word 1) and
+/// the file tree's (word 3).
+fn asar_header(archive: &mut fs::File) -> Result<(u32, u32), PyErr> {
+    let head = read_up_to(archive, 16)?;
+    if head.len() != 16 {
+        return Err(PyErr::new("error", "unpack requires a buffer of 16 bytes"));
+    }
+    let word = |i: usize| u32::from_le_bytes([head[i * 4], head[i * 4 + 1], head[i * 4 + 2], head[i * 4 + 3]]);
+    Ok((word(1), word(3)))
+}
+
+/// The file tree, None for a size out of bounds.
+fn read_tree(archive: &mut fs::File, size: u32) -> Result<Option<Value>, PyErr> {
+    if !(0 < size && size <= 8 * 1024 * 1024) {
+        return Ok(None);
+    }
+    Ok(Some(pyjson_bytes(&read_up_to(archive, size as usize)?)?))
+}
+
+/// The size and offset of `files["package.json"]`, None for a size out of bounds
+/// (its offset then never read).
+fn package_entry(tree: &Value) -> Result<Option<(i128, i128)>, PyErr> {
+    let package = py::index(py::index(tree, "files")?, "package.json")?;
+    let size = py::to_int(py::index(package, "size")?)?;
+    if !(0 < size && size <= 65536) {
+        return Ok(None);
+    }
+    let offset = py::to_int(py::index(package, "offset")?)?;
+    Ok(Some((size, offset)))
+}
+
+/// The `package.json` at `offset` past the header.
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+fn read_metadata(archive: &mut fs::File, header_size: u32, offset: i128, size: i128) -> Result<Value, PyErr> {
+    let position = 8 + i128::from(header_size) + offset;
+    let position = u64::try_from(position).map_err(|_| {
+        if position < 0 {
+            PyErr::value(format!("negative seek position {position}"))
+        } else {
+            PyErr::new("OverflowError", "Python int too large to convert to C long")
+        }
+    })?;
+    archive.seek(SeekFrom::Start(position)).map_err(|e| PyErr::os(&e, None))?;
+    pyjson_bytes(&read_up_to(archive, size as usize)?)
+}
+
+/// `metadata.get("name") == "ktalk" and metadata.get("main") == "build/main.js"`.
+fn is_ktalk_package(metadata: &Value) -> Result<bool, PyErr> {
+    let name = py::get(metadata, "name")?;
+    let main = py::get(metadata, "main")?;
+    Ok(name.and_then(Value::as_str) == Some("ktalk") && main.and_then(Value::as_str) == Some("build/main.js"))
 }
 
 /// `json.loads(data)` of bytes.
@@ -396,35 +449,60 @@ pub fn fuse_device_matches(host: &Host, device: u64, app: &Path) -> Result<bool,
     }
     let app_name = name_of(app);
     for (pid, name) in process_iter(host) {
-        let name = name.unwrap_or_default();
-        if name.is_empty() || !app_name.starts_with(&name) {
+        if !runtime_named(name, &app_name) {
             continue;
         }
-        let candidate = || -> Result<bool, PyErr> {
-            if host.table.uid_real(pid)? != host.uid || resolve(&host.table.exe(pid)?) != app {
-                return Ok(false);
-            }
-            let directory = host.proc_root.join(pid.to_string()).join("fdinfo");
-            for entry in fs::read_dir(&directory).map_err(|e| PyErr::os(&e, Some(&directory)))? {
-                let path = entry.map_err(|e| PyErr::os(&e, Some(&directory)))?.path();
-                let raw = fs::read(&path).map_err(|e| PyErr::os(&e, Some(&path)))?;
-                let text = std::str::from_utf8(&raw).map_err(|_| PyErr::new("UnicodeDecodeError", "utf-8"))?;
-                for line in core_py::splitlines(text) {
-                    if let Some(value) = line.strip_prefix("fuse_connection:") {
-                        let value = core_py::parse_int(value).map_err(PyErr::value)?;
-                        if u64::try_from(value) == Ok(connection) {
-                            return Ok(true);
-                        }
-                    }
-                }
-            }
-            Ok(false)
-        };
-        match candidate() {
+        match fuse_runtime(host, pid, app, connection) {
             Ok(true) => return Ok(true),
             Ok(false) => {}
-            Err(e) if e.is_psutil() || e.is_os() || e.is_value() => {}
+            Err(e) if skipped(&e) => {}
             Err(e) => return Err(e),
+        }
+    }
+    Ok(false)
+}
+
+/// A process name the runtime of `app` may have: a non-empty prefix of its file
+/// name (the kernel truncates it).
+fn runtime_named(name: Option<String>, app_name: &str) -> bool {
+    let name = name.unwrap_or_default();
+    !name.is_empty() && app_name.starts_with(&name)
+}
+
+/// What makes `fuse_device_matches` go on to the next candidate.
+fn skipped(error: &PyErr) -> bool {
+    error.is_psutil() || error.is_os() || error.is_value()
+}
+
+/// `pid` is this user's runtime of `app` and holds the FUSE `connection`.
+fn fuse_runtime(host: &Host, pid: i64, app: &Path, connection: u64) -> Result<bool, PyErr> {
+    if host.table.uid_real(pid)? != host.uid || resolve(&host.table.exe(pid)?) != app {
+        return Ok(false);
+    }
+    holds_connection(&host.proc_root.join(pid.to_string()).join("fdinfo"), connection)
+}
+
+/// One of the descriptors under `fdinfo` is the FUSE `connection`.
+fn holds_connection(directory: &Path, connection: u64) -> Result<bool, PyErr> {
+    for entry in fs::read_dir(directory).map_err(|e| PyErr::os(&e, Some(directory)))? {
+        let path = entry.map_err(|e| PyErr::os(&e, Some(directory)))?.path();
+        if names_connection(&path, connection)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The `fuse_connection:` line of one descriptor's info is `connection`.
+fn names_connection(path: &Path, connection: u64) -> Result<bool, PyErr> {
+    let raw = fs::read(path).map_err(|e| PyErr::os(&e, Some(path)))?;
+    let text = std::str::from_utf8(&raw).map_err(|_| PyErr::new("UnicodeDecodeError", "utf-8"))?;
+    for line in core_py::splitlines(text) {
+        if let Some(value) = line.strip_prefix("fuse_connection:") {
+            let value = core_py::parse_int(value).map_err(PyErr::value)?;
+            if u64::try_from(value) == Ok(connection) {
+                return Ok(true);
+            }
         }
     }
     Ok(false)
@@ -436,10 +514,7 @@ pub fn fuse_device_matches(host: &Host, device: u64, app: &Path) -> Result<bool,
 /// # Errors
 /// What reading the process or the bundle raises.
 pub fn matches(host: &Host, pid: i64, app: &Path) -> Result<bool, PyErr> {
-    if host.table.uid_real(pid)? != host.uid {
-        return Ok(false);
-    }
-    if host.table.cmdline(pid)?.iter().any(|arg| arg.starts_with("--type=")) {
+    if !main_process_of_user(host, pid)? {
         return Ok(false);
     }
     let executable = resolve(&host.table.exe(pid)?);
@@ -447,23 +522,38 @@ pub fn matches(host: &Host, pid: i64, app: &Path) -> Result<bool, PyErr> {
         return Ok(false);
     }
     if host.platform == Platform::Darwin {
-        let info = read_plist(&app.join("Contents/Info.plist"))?;
-        return Ok(executable == paths::resolve(&bundle_executable(app, &info)?));
+        return bundle_runs(app, &executable);
     }
     if executable == app {
         return Ok(true);
     }
+    appimage_runs(host, pid, &executable, app)
+}
+
+/// `pid` is this user's and not a helper (`--type=`).
+fn main_process_of_user(host: &Host, pid: i64) -> Result<bool, PyErr> {
+    Ok(host.table.uid_real(pid)? == host.uid && !host.table.cmdline(pid)?.iter().any(|arg| arg.starts_with("--type=")))
+}
+
+/// `executable` is the main executable of the bundle `app`.
+fn bundle_runs(app: &Path, executable: &Path) -> Result<bool, PyErr> {
+    let info = read_plist(&app.join("Contents/Info.plist"))?;
+    Ok(executable == paths::resolve(&bundle_executable(app, &info)?))
+}
+
+/// `pid`, running a mounted `executable`, was started from the AppImage `app`.
+fn appimage_runs(host: &Host, pid: i64, executable: &Path, app: &Path) -> Result<bool, PyErr> {
     // AppImage's runtime mounts a new path each launch: match the selected source
     // file as well as the actual main executable, not the process name.
     let environ = host.table.environ(pid)?;
     let image = environ.iter().rev().find(|(k, _)| k == "APPIMAGE").map_or("", |(_, v)| v.as_str());
-    if name_of(&executable) != "ktalk" {
+    if name_of(executable) != "ktalk" {
         return Ok(false);
     }
     if !image.is_empty() && resolve(image) == app {
         return Ok(true);
     }
-    fuse_source_matches(host, &executable, app)
+    fuse_source_matches(host, executable, app)
 }
 
 fn caught(error: &PyErr) -> bool {
@@ -481,13 +571,7 @@ pub fn find_targets(host: &Host, app: &Path) -> Result<Vec<Target>, PyErr> {
         if !name.is_some_and(|name| names.contains(&name)) {
             continue;
         }
-        let found = matches(host, pid, app).and_then(|matched| {
-            if !matched {
-                return Ok(None);
-            }
-            Ok(Some(Target { pid, started: host.table.create_time(pid)?, executable: host.table.exe(pid)? }))
-        });
-        match found {
+        match main_target(host, pid, app) {
             Ok(Some(target)) => targets.push(target),
             Ok(None) => {}
             Err(e) if caught(&e) => {}
@@ -497,30 +581,43 @@ pub fn find_targets(host: &Host, app: &Path) -> Result<Vec<Target>, PyErr> {
     Ok(targets)
 }
 
+/// `pid` as a target, when it is the application's main process.
+fn main_target(host: &Host, pid: i64, app: &Path) -> Result<Option<Target>, PyErr> {
+    if !matches(host, pid, app)? {
+        return Ok(None);
+    }
+    Ok(Some(Target { pid, started: host.table.create_time(pid)?, executable: host.table.exe(pid)? }))
+}
+
 /// `same_process(target, app)`: the process is still the one recorded (same user,
 /// start time and executable) and, when `app` is given, still the application's.
 ///
 /// # Errors
 /// What `matches` raises beyond the classes caught.
 pub fn same_process(host: &Host, target: &Target, app: Option<&Path>) -> Result<bool, PyErr> {
-    let check = || -> Result<bool, PyErr> {
-        let table = &host.table;
-        table.open(target.pid)?;
-        if table.uid_real(target.pid)? != host.uid
-            || table.create_time(target.pid)? != target.started
-            || table.exe(target.pid)? != target.executable
-        {
-            return Ok(false);
-        }
-        match app {
-            Some(app) => matches(host, target.pid, app),
-            None => Ok(true),
-        }
-    };
-    match check() {
+    match still_running(host, target, app) {
         Err(e) if caught(&e) => Ok(false),
         other => other,
     }
+}
+
+fn still_running(host: &Host, target: &Target, app: Option<&Path>) -> Result<bool, PyErr> {
+    host.table.open(target.pid)?;
+    if !recorded_identity(host, target)? {
+        return Ok(false);
+    }
+    match app {
+        Some(app) => matches(host, target.pid, app),
+        None => Ok(true),
+    }
+}
+
+/// The process has the recorded user, start time and executable.
+fn recorded_identity(host: &Host, target: &Target) -> Result<bool, PyErr> {
+    let table = &host.table;
+    Ok(table.uid_real(target.pid)? == host.uid
+        && table.create_time(target.pid)? == target.started
+        && table.exe(target.pid)? == target.executable)
 }
 
 /// `listeners(target)`: the TCP ports the recorded process listens on, none when it
@@ -629,24 +726,8 @@ pub fn inspect_fuses(path: &Path) -> Result<bool, PyErr> {
         let chunk = read_up_to(&mut binary, CHUNK)?;
         let mut data = tail.clone();
         data.extend_from_slice(&chunk);
-        let mut index = find(&data, FUSE_SENTINEL, 0);
-        while let Some(at) = index {
-            let position = offset - tail.len() + at;
-            let header = at + FUSE_SENTINEL.len();
-            if data.len() >= header + 2 {
-                let (version, length) = (data[header], usize::from(data[header + 1]));
-                if version != 1 || length < 4 {
-                    return Ok(false);
-                }
-                if data.len() >= header + 2 + length {
-                    found.insert(position, data[header + 2 + 3] == 0x31);
-                } else if chunk.is_empty() {
-                    return Ok(false);
-                }
-            } else if chunk.is_empty() {
-                return Ok(false);
-            }
-            index = find(&data, FUSE_SENTINEL, at + 1);
+        if !scan_wires(&data, offset - tail.len(), chunk.is_empty(), &mut found) {
+            return Ok(false);
         }
         if chunk.is_empty() {
             break;
@@ -655,6 +736,50 @@ pub fn inspect_fuses(path: &Path) -> Result<bool, PyErr> {
         tail = data[data.len().saturating_sub(overlap)..].to_vec();
     }
     Ok((1..=2).contains(&found.len()) && found.values().all(|enabled| *enabled))
+}
+
+/// What the bytes after one sentinel say.
+enum Wire {
+    /// A whole v1 wire: whether its inspector fuse is on.
+    Read(bool),
+    /// Cut off by the end of the data read so far.
+    Partial,
+    /// Malformed, or cut off by the end of the file.
+    Refused,
+}
+
+/// The wire whose sentinel is at `at` in `data` (`at_end`: no more data follows).
+fn wire_at(data: &[u8], at: usize, at_end: bool) -> Wire {
+    let cut_off = if at_end { Wire::Refused } else { Wire::Partial };
+    let header = at + FUSE_SENTINEL.len();
+    if data.len() < header + 2 {
+        return cut_off;
+    }
+    let (version, length) = (data[header], usize::from(data[header + 1]));
+    if version != 1 || length < 4 {
+        return Wire::Refused;
+    }
+    if data.len() < header + 2 + length {
+        return cut_off;
+    }
+    Wire::Read(data[header + 2 + 3] == 0x31)
+}
+
+/// Records each whole wire in `data` by its position in the file (`data` starts
+/// at `base`); false as soon as one is refused.
+fn scan_wires(data: &[u8], base: usize, at_end: bool, found: &mut HashMap<usize, bool>) -> bool {
+    let mut index = find(data, FUSE_SENTINEL, 0);
+    while let Some(at) = index {
+        match wire_at(data, at, at_end) {
+            Wire::Refused => return false,
+            Wire::Read(enabled) => {
+                found.insert(base + at, enabled);
+            }
+            Wire::Partial => {}
+        }
+        index = find(data, FUSE_SENTINEL, at + 1);
+    }
+    true
 }
 
 /// `_inspect_fuses` with its `lru_cache(maxsize=8)`, keyed by the path and the file's
