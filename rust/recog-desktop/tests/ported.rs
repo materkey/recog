@@ -628,6 +628,26 @@ fn binary_identity_when_changed_then_support_cache_not_reused() {
 }
 
 #[test]
+fn darwin_application_when_support_checked_then_the_electron_framework_fuses_decide() {
+    // given: the executable allows nothing, the framework beside it allows the inspector
+    let fixture = Fixture::new();
+    let mut host = fixture.host();
+    host.platform = Platform::Darwin;
+    let contents = fixture.path().join("KTalk.app/Contents");
+    let framework = contents.join("Frameworks/Electron Framework.framework");
+    std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+    std::fs::create_dir_all(&framework).unwrap();
+    let executable = contents.join("MacOS/ktalk");
+    std::fs::write(&executable, fuse_wire(false, 1, 8)).unwrap();
+    std::fs::write(framework.join("Electron Framework"), fuse_wire(true, 1, 8)).unwrap();
+    let target = Target { pid: 42, started: now() + 100.0, executable: executable.to_string_lossy().into_owned() };
+    // when / then
+    assert!(processes::inspector_supported(&host, &target).unwrap());
+    std::fs::remove_file(framework.join("Electron Framework")).unwrap();
+    assert!(!processes::inspector_supported(&host, &target).unwrap());
+}
+
+#[test]
 fn binary_changed_after_process_start_when_support_checked_then_unverified() {
     // given
     let fixture = Fixture::new();

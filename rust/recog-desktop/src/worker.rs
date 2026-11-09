@@ -106,31 +106,38 @@ struct Split {
 fn urlsplit(url: &str) -> Result<Split, PyErr> {
     let url: String =
         url.trim_start_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
-    let mut rest = url.as_str();
-    let mut scheme = String::new();
-    if let Some(colon) = rest.find(':')
-        && colon > 0
-        && rest[..colon].chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-        && rest[..colon].chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
-    {
-        scheme = rest[..colon].to_ascii_lowercase();
-        rest = &rest[colon + 1..];
-    }
-    let mut netloc = String::new();
-    if let Some(after) = rest.strip_prefix("//") {
-        let end = after.find(['/', '?', '#']).unwrap_or(after.len());
-        netloc = after[..end].to_owned();
-        rest = &after[end..];
-        if netloc.contains('[') != netloc.contains(']') {
-            return Err(PyErr::value("Invalid IPv6 URL"));
-        }
-        if netloc.contains('[') && netloc.contains(']') {
-            check_bracketed_netloc(&netloc)?;
-        }
-    }
+    let (scheme, rest) = split_scheme(&url);
+    let (netloc, rest) = split_netloc(rest)?;
     let (rest, fragment) = rest.split_once('#').map_or((rest, ""), |(a, b)| (a, b));
     let (_, query) = rest.split_once('?').map_or((rest, ""), |(a, b)| (a, b));
     Ok(Split { scheme, netloc, query: query.to_owned(), fragment: fragment.to_owned() })
+}
+
+/// The lowercased scheme and what follows its colon; none when the text before the
+/// first colon is not a scheme.
+fn split_scheme(url: &str) -> (String, &str) {
+    if let Some(colon) = url.find(':')
+        && colon > 0
+        && url[..colon].chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && url[..colon].chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+    {
+        return (url[..colon].to_ascii_lowercase(), &url[colon + 1..]);
+    }
+    (String::new(), url)
+}
+
+/// The netloc after `//` and the rest; brackets must pair and hold a valid host.
+fn split_netloc(rest: &str) -> Result<(String, &str), PyErr> {
+    let Some(after) = rest.strip_prefix("//") else { return Ok((String::new(), rest)) };
+    let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+    let netloc = &after[..end];
+    if netloc.contains('[') != netloc.contains(']') {
+        return Err(PyErr::value("Invalid IPv6 URL"));
+    }
+    if netloc.contains('[') && netloc.contains(']') {
+        check_bracketed_netloc(netloc)?;
+    }
+    Ok((netloc.to_owned(), &after[end..]))
 }
 
 /// `_check_bracketed_netloc`: nothing before the bracket, only a port after it, and
@@ -663,23 +670,37 @@ pub struct WorkerArgs {
 /// # Errors
 /// What argparse would print before exiting with 2.
 pub fn parse_args(args: &[String]) -> Result<WorkerArgs, String> {
-    let mut root = None;
-    let mut target = None;
-    let mut recover = false;
+    let mut parsed = ParsedArgs::default();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        let (name, inline) = arg.split_once('=').map_or((arg.as_str(), None), |(n, v)| (n, Some(v.to_owned())));
+        parsed.take(arg, &mut iter)?;
+    }
+    let root = parsed.root.ok_or("the following arguments are required: --root")?;
+    Ok(WorkerArgs { root, target: parsed.target, recover: parsed.recover })
+}
+
+/// The worker's arguments while they are read, `--root` not yet required.
+#[derive(Default)]
+struct ParsedArgs {
+    root: Option<PathBuf>,
+    target: Option<Value>,
+    recover: bool,
+}
+
+impl ParsedArgs {
+    /// One option, its value inline (`--opt=value`) or the next argument.
+    fn take<'a>(&mut self, arg: &str, rest: &mut impl Iterator<Item = &'a String>) -> Result<(), String> {
+        let (name, inline) = arg.split_once('=').map_or((arg, None), |(n, v)| (n, Some(v.to_owned())));
         let mut value =
-            || inline.clone().or_else(|| iter.next().cloned()).ok_or(format!("argument {name}: expected one argument"));
+            || inline.clone().or_else(|| rest.next().cloned()).ok_or(format!("argument {name}: expected one argument"));
         match name {
-            "--root" => root = Some(PathBuf::from(value()?)),
-            "--target" => target = Some(value().and_then(|raw| target_arg(&raw))?),
-            "--recover" => recover = true,
+            "--root" => self.root = Some(PathBuf::from(value()?)),
+            "--target" => self.target = Some(value().and_then(|raw| target_arg(&raw))?),
+            "--recover" => self.recover = true,
             other => return Err(format!("unrecognized arguments: {other}")),
         }
+        Ok(())
     }
-    let root = root.ok_or("the following arguments are required: --root")?;
-    Ok(WorkerArgs { root, target, recover })
 }
 
 /// `--target`'s `type=json.loads`.
