@@ -1,10 +1,8 @@
 # The Rust code of recog (docs/plans/2026-11-07-rust-migration.md). Build and test from
-# this directory; speexdsp-aec/README.md says which tests need its golden data. The
-# Python modules are built by pip from speexdsp-aec-py and wavo-asr-py (maturin):
-# see setup.sh.
+# this directory; speexdsp-aec/README.md says which tests need its golden data.
 [workspace]
 resolver = "3"
-members = ["recog-ai", "recog-asr-server", "recog-bridge", "recog-copilot", "recog-core", "recog-desktop", "recog-live", "recog-mic", "recog-web", "recog-zoom", "speexdsp-aec", "speexdsp-aec-py", "wavo-asr-py"]
+members = ["recog-ai", "recog-asr-server", "recog-bridge", "recog-copilot", "recog-core", "recog-desktop", "recog-live", "recog-mic", "recog-web", "recog-zoom", "speexdsp-aec"]
 
 [profile.release]
 lto = "fat"

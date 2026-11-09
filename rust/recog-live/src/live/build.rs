@@ -9,7 +9,7 @@
 //! the microphone worker on the named input on a Mac and `parec` on the named source
 //! on Linux.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use recog_core::install_config::{AsrSettings, InstallConfig};
@@ -41,8 +41,6 @@ pub enum MicChoice {
 pub struct CaptureSettings<'a> {
     pub repo_root: &'a Path,
     pub config: &'a InstallConfig,
-    /// The interpreter of the Python microphone worker.
-    pub python: PathBuf,
     /// `sys.platform`.
     pub platform: &'a str,
     pub log: Logger,
@@ -61,17 +59,10 @@ pub fn create_echo_stage(system_audio: &str, config: &InstallConfig) -> Option<A
     Some(Arc::new(EchoStage::new()))
 }
 
-/// `[live] mic_worker`, except that an installation without Python
-/// (`[install] runtime = "rust"`, the only one left) has only the Rust worker.
-#[must_use]
-pub fn mic_worker_choice(config: &InstallConfig) -> &str {
-    if config.install.runtime == "rust" { "rust" } else { &config.live.mic_worker }
-}
-
 /// `create_mic_capture`: the worker child on a Mac, `parec` elsewhere.
 ///
 /// # Errors
-/// `[live] mic_worker` holds neither "python" nor "rust".
+/// Kept for the callers; building a capture does not fail today.
 pub fn create_mic_capture(
     device: Option<&str>,
     echo_stage: Option<Arc<dyn EchoSink>>,
@@ -79,14 +70,7 @@ pub fn create_mic_capture(
 ) -> Result<Arc<dyn LiveCapture>, String> {
     let cap = max_buffer_s(settings.config);
     if settings.platform == "darwin" {
-        let argv = mic_worker_argv(
-            mic_worker_choice(settings.config),
-            settings.repo_root,
-            &settings.python,
-            device,
-            SAMPLE_RATE,
-            &settings.log,
-        )?;
+        let argv = mic_worker_argv(settings.repo_root, device, SAMPLE_RATE, &settings.log);
         let capture =
             child_mic_capture(argv, echo_stage).sample_rate(SAMPLE_RATE).max_buffer_s(cap).logger(settings.log.clone());
         return Ok(Arc::new(capture.build()));
@@ -105,14 +89,7 @@ pub fn create_mic_capture(
 pub fn create_device_capture(name: &str, settings: &CaptureSettings<'_>) -> Result<Arc<dyn LiveCapture>, String> {
     let cap = max_buffer_s(settings.config);
     let builder = if settings.platform == "darwin" {
-        let argv = mic_worker_argv(
-            mic_worker_choice(settings.config),
-            settings.repo_root,
-            &settings.python,
-            Some(name),
-            SAMPLE_RATE,
-            &settings.log,
-        )?;
+        let argv = mic_worker_argv(settings.repo_root, Some(name), SAMPLE_RATE, &settings.log);
         SubprocessCapture::builder(argv, "system").decoder(Box::new(MicDecoder::new(None)))
     } else {
         SubprocessCapture::builder(parec_argv(name, SAMPLE_RATE), "system")
@@ -203,16 +180,6 @@ pub fn build_asr(settings: &AsrSettings, log: &Logger) -> Result<Arc<dyn LiveAsr
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn installation_without_python_when_choosing_the_mic_worker_then_rust_whatever_mic_worker_says() {
-        // given
-        let mut config = InstallConfig::default();
-        // when / then
-        assert_eq!(mic_worker_choice(&config), "rust");
-        config.live.mic_worker = "python".into();
-        assert_eq!(mic_worker_choice(&config), "rust");
-    }
 
     #[test]
     fn remote_backend_without_a_url_building_asr_fails_like_python() {

@@ -1,11 +1,7 @@
 # Runs scripts/check.sh on both supported hosts in a clean environment.
 #
-# The dependency set mirrors setup.sh (torch from the CPU index, GigaAM from
-# the pinned git ref, deploy/python/requirements.txt + deploy/python/requirements-web.txt, plus
-# deploy/python/requirements-macos.txt on darwin) so a run here fails for the same reasons a
-# fresh install would. On macOS every pip stage carries
-# `-c deploy/python/constraints/macos.txt`: CI must not resolve the ML stack to versions the
-# Mac's MPS/PyObjC contracts were never verified against.
+# recog itself is Rust (check.sh builds and tests the workspace); Python is only
+# the quality tools and the shell scripts' tests.
 #
 # No service is installed, no audio is captured and no model weights are
 # downloaded — that part of the verification needs real hardware.
@@ -24,11 +20,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    env:
-      # Same pin setup.sh installs; the PyPI release lags the decoder and
-      # word-timestamp API recog/asr.py and recog/refine.py call directly.
-      GIGAAM_URL: https://github.com/salute-developers/GigaAM.git
-      GIGAAM_REF: 6e4b027
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,51 +29,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Resolve pip constraints
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            echo "PIP_ARGS=-c deploy/python/constraints/macos.txt" >> "$GITHUB_ENV"
-          else
-            echo "PIP_ARGS=" >> "$GITHUB_ENV"
-          fi
-
-      # The Linux sounddevice wheel does not bundle PortAudio; scripts/deps.sh
-      # requires it (`import sounddevice` probe) and setup.sh refuses to start
-      # the services without it, so CI installs the same package.
-      - name: Install PortAudio (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libportaudio2
-
-      - name: Install torch (CPU wheels)
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
-          pip install $PIP_ARGS --index-url https://download.pytorch.org/whl/cpu \
-            torch torchaudio
-
-      - name: Install GigaAM (pinned git ref)
-        shell: bash
-        run: |
-          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
-          pip install $PIP_ARGS "gigaam @ git+${GIGAAM_URL}@${GIGAAM_REF}"
-
-      - name: Install requirements
-        shell: bash
-        run: |
-          reqs=(-r deploy/python/requirements.txt -r deploy/python/requirements-web.txt)
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            reqs+=(-r deploy/python/requirements-macos.txt)
-          fi
-          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
-          pip install $PIP_ARGS "${reqs[@]}"
-
-      # The Rust workspace: check.sh formats, lints and tests it, and the suite tests
-      # the echo canceller's Python module, built from it as setup.sh builds it.
+      # The Rust workspace: check.sh formats, lints and tests it.
       - name: Install Rust components
         shell: bash
         run: rustup component add clippy rustfmt
@@ -91,17 +38,12 @@ jobs:
         with:
           workspaces: rust
 
-      - name: Build the echo canceller module
-        shell: bash
-        run: |
-          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
-          pip install $PIP_ARGS ./rust/speexdsp-aec-py
-
+      # The quality tools and pytest, and PyYAML for the workflow's own tests.
       - name: Install quality tools
         shell: bash
         run: |
-          # shellcheck disable=SC2086 # PIP_ARGS is a flag list, split on purpose
-          pip install $PIP_ARGS -r deploy/python/requirements-quality.txt
+          python -m pip install --upgrade pip
+          pip install -r deploy/python/requirements-quality.txt pyyaml
 
       # ESLint, c8 and the extension's jest for the JavaScript part of the
       # quality gate (docs/quality.md).

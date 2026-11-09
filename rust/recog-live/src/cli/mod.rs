@@ -60,16 +60,6 @@ pub fn legacy_mic_name(environ: &Environ) -> String {
         .unwrap_or_else(|| DEFAULT_MIC_SPEAKER_NAME.to_owned())
 }
 
-/// The interpreter of the Python microphone worker: `RECOG_LIVE_PYTHON` (the Python
-/// CLI sets it when it hands over to this binary), the repository's venv, `python3`.
-fn worker_python(repo_root: &Path) -> PathBuf {
-    if let Some(python) = std::env::var_os("RECOG_LIVE_PYTHON") {
-        return PathBuf::from(python);
-    }
-    let venv = repo_root.join("venv-gigaam/bin/python3");
-    if venv.exists() { venv } else { PathBuf::from("python3") }
-}
-
 fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path).map(|dir| dir.join(name)).find(|candidate| candidate.is_file())
@@ -181,7 +171,7 @@ fn run_live(args: &LiveArgs, config: &InstallConfig, environ: &Environ, repo_roo
         _ => backend.clone(),
     };
     let log = Logger::stderr();
-    let settings = CaptureSettings { repo_root, config, python: worker_python(repo_root), platform, log: log.clone() };
+    let settings = CaptureSettings { repo_root, config, platform, log: log.clone() };
     let (mic_capture, system_capture) = match build_captures(&capture_backend, &mic, &settings) {
         Ok(captures) => captures,
         Err(e) => {

@@ -123,47 +123,21 @@ fn is_executable(path: &Path) -> bool {
     path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// `mic_worker_argv`: the worker `[live] mic_worker` names, Python's (`python -I
-/// recog/mic_worker.py`, `python` standing for `sys.executable`) or the Rust binary
-/// when it is built; the Rust choice without a build falls back to Python and says so.
-///
-/// # Errors
-/// The setting is neither "python" nor "rust", in Python's `ValueError` words.
-pub fn mic_worker_argv(
-    choice: &str,
-    repo_root: &Path,
-    python: &Path,
-    device_name: Option<&str>,
-    sample_rate: u32,
-    log: &Logger,
-) -> Result<Vec<String>, String> {
-    if choice != "python" && choice != "rust" {
-        return Err(format!(r#"[live] mic_worker must be "python" or "rust", not {}"#, recog_core::py::repr(choice)));
-    }
+/// `mic_worker_argv`: `recog-mic` of the installation with the arguments the Python
+/// worker took; a missing build is said in the log, and the capture's restart policy
+/// then reports the failed start.
+#[must_use]
+pub fn mic_worker_argv(repo_root: &Path, device_name: Option<&str>, sample_rate: u32, log: &Logger) -> Vec<String> {
     let binary = rust_mic_worker(repo_root);
-    let mut argv = if choice == "rust" && is_executable(&binary) {
-        vec![binary.display().to_string(), "--sample-rate".into(), sample_rate.to_string()]
-    } else {
-        if choice == "rust" {
-            log.line(&format!(
-                "[mic] {} is not built (./setup.sh builds it when cargo is installed): the microphone runs in the Python worker",
-                binary.display()
-            ));
-        }
-        let worker = repo_root.join("recog").join("mic_worker.py");
-        vec![
-            python.display().to_string(),
-            "-I".into(),
-            worker.display().to_string(),
-            "--sample-rate".into(),
-            sample_rate.to_string(),
-        ]
-    };
+    if !is_executable(&binary) {
+        log.line(&format!("[mic] {} is not built: ./setup.sh builds it", binary.display()));
+    }
+    let mut argv = vec![binary.display().to_string(), "--sample-rate".into(), sample_rate.to_string()];
     if let Some(name) = device_name {
         argv.push("--device".into());
         argv.push(name.to_owned());
     }
-    Ok(argv)
+    argv
 }
 
 #[allow(clippy::cast_precision_loss)]

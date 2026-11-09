@@ -6,13 +6,36 @@ After migration, run recog-service.sh install and recog-service.sh restart.
 """
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
 REPO_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_DIR))
 
-from recog.config import data_dir_target, data_entries
+
+# What recog/config.py held before the Python modules were deleted; the recog
+# binary resolves the same (rust/recog-core, data_dir.rs). Run with the services'
+# RECOG_DATA_DIR in the environment: .env is not read.
+def data_entries(root: Path) -> list[Path]:
+    """Переносимые данные, включая старые базы спикеров, без .env."""
+    candidates = [
+        root / "meetings",
+        root / "logs",
+        root / "user-profile.json",
+        root / "ai-settings.json",
+        root / "privacy.json",
+        *sorted(root.glob("speakers*.json")),
+    ]
+    return [path for path in candidates if path.exists() or path.is_symlink()]
+
+
+def data_dir_target() -> Path:
+    """Новый каталог: одинаковый для CLI, setup и сервисов, независимо от cwd."""
+    value = os.environ.get("RECOG_DATA_DIR", "").strip()
+    path = Path(value).expanduser() if value else Path.home() / ".recog"
+    if not path.is_absolute():
+        raise ValueError("RECOG_DATA_DIR must be an absolute path (or start with ~/)")
+    return path
 
 
 def migrate(repo: Path, target: Path, *, apply: bool = False) -> list[tuple[Path, Path]]:

@@ -1,5 +1,0 @@
-# A Python extension module leaves the interpreter's symbols to the interpreter that
-# loads it. maturin passes this itself; plain cargo needs it to link the module for
-# clippy and tests on macOS (Linux allows undefined symbols in a shared library).
-[target.'cfg(target_os = "macos")']
-rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]

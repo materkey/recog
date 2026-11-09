@@ -1,7 +1,7 @@
-"""Scores the runs: agreement with recog's PyTorch output, WER against checked references,
-speed, word timings, memory, abort latency. Prints Markdown.
+"""Scores the runs: WER against checked references, speed, word timings, memory, abort
+latency, and agreement with a reference run when one is named. Prints Markdown.
 
-    python score.py <corpus dir> <run dir> [reference run name, default pytorch-*]
+    python score.py <corpus dir> <run dir> [reference run name]
 """
 
 import difflib
@@ -68,7 +68,6 @@ def main(corpus: str, runs: str, ref_name: str | None = None) -> None:
     items = {s: v for s, v in manifest["shapes"].items()}
     runs_dir = Path(runs)
     results = {p.stem: json.loads(p.read_text()) for p in sorted(runs_dir.glob("*.json"))}
-    ref_name = ref_name or next((n for n in results if n.startswith("pytorch")), None)
     labelled = any("ref" in it for it in items["refine"])
     audio_s = {s: sum(it["len"] for it in v) / SR for s, v in items.items()}
 

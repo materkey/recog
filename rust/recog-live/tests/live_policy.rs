@@ -481,7 +481,6 @@ fn settings<'a>(root: &'a std::path::Path, config: &'a InstallConfig, platform: 
     CaptureSettings {
         repo_root: root,
         config,
-        python: "/usr/bin/python3".into(),
         platform,
         log: recog_live::log::Logger::capture(recog_live::clock::SystemClock::shared()).0,
     }
@@ -514,7 +513,7 @@ fn each_choice_building_captures_gives_the_sources_python_builds() {
     let mac = settings(root.path(), &config, "darwin");
     let (mic, _) = build_captures("none", &MicChoice::Named("Микрофон MacBook Pro".into()), &mac).unwrap();
     let argv = mic.unwrap().argv();
-    assert!(argv[2].ends_with("recog/mic_worker.py"), "{argv:?}");
+    assert!(argv[0].ends_with("recog-mic"), "{argv:?}");
     assert_eq!(argv[argv.len() - 2..], ["--device".to_owned(), "Микрофон MacBook Pro".to_owned()]);
 }
 

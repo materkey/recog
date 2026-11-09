@@ -225,21 +225,7 @@ fn built_worker(root: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn default_setting_and_a_built_rust_worker_argv_runs_the_python_worker() {
-    let root = tempfile::tempdir().unwrap();
-    built_worker(root.path());
-    let python = std::path::Path::new("/venv/bin/python");
-    let argv =
-        mic_worker_argv("python", root.path(), python, None, SR, &Logger::capture(ManualClock::new(0.0).shared()).0)
-            .unwrap();
-    assert_eq!(argv[0], "/venv/bin/python");
-    assert_eq!(argv[1], "-I");
-    assert!(argv[2].ends_with("mic_worker.py"));
-    assert!(!argv.contains(&"--device".to_owned()));
-}
-
-#[test]
-fn installed_and_built_rust_worker_when_resolving_then_the_installed_one_runs() {
+fn installed_and_built_worker_when_resolving_then_the_installed_one_runs() {
     use std::os::unix::fs::PermissionsExt as _;
     // given
     let root = tempfile::tempdir().unwrap();
@@ -249,32 +235,19 @@ fn installed_and_built_rust_worker_when_resolving_then_the_installed_one_runs() 
     std::fs::write(&installed, "#!/bin/sh\nexit 0\n").unwrap();
     std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
     // when
-    let argv = mic_worker_argv(
-        "rust",
-        root.path(),
-        std::path::Path::new("py"),
-        None,
-        SR,
-        &Logger::capture(ManualClock::new(0.0).shared()).0,
-    )
-    .unwrap();
+    let argv = mic_worker_argv(root.path(), None, SR, &Logger::capture(ManualClock::new(0.0).shared()).0);
     // then
     assert_eq!(argv[0], installed.display().to_string());
 }
 
 #[test]
-fn rust_setting_with_the_binary_built_argv_runs_it_with_the_same_arguments() {
+fn built_worker_when_resolving_then_it_runs_with_the_python_worker_s_arguments() {
+    // given
     let root = tempfile::tempdir().unwrap();
     let binary = built_worker(root.path());
-    let argv = mic_worker_argv(
-        "rust",
-        root.path(),
-        std::path::Path::new("py"),
-        Some(MIC),
-        SR,
-        &Logger::capture(ManualClock::new(0.0).shared()).0,
-    )
-    .unwrap();
+    // when
+    let argv = mic_worker_argv(root.path(), Some(MIC), SR, &Logger::capture(ManualClock::new(0.0).shared()).0);
+    // then
     assert_eq!(
         argv,
         vec![binary.display().to_string(), "--sample-rate".into(), "16000".into(), "--device".into(), MIC.into()]
@@ -282,25 +255,13 @@ fn rust_setting_with_the_binary_built_argv_runs_it_with_the_same_arguments() {
 }
 
 #[test]
-fn rust_setting_without_a_build_argv_falls_back_to_python_and_says_so() {
+fn no_build_when_resolving_then_the_log_says_so() {
+    // given
     let root = tempfile::tempdir().unwrap();
     let (log, captured) = Logger::capture(ManualClock::new(0.0).shared());
-    let argv = mic_worker_argv("rust", root.path(), std::path::Path::new("py"), None, SR, &log).unwrap();
-    assert!(argv[2].ends_with("mic_worker.py"));
+    // when
+    let argv = mic_worker_argv(root.path(), None, SR, &log);
+    // then
+    assert!(argv[0].ends_with("recog-mic"));
     assert!(captured.text().contains("not built"));
-}
-
-#[test]
-fn typo_in_the_setting_argv_fails_naming_it() {
-    let root = tempfile::tempdir().unwrap();
-    let e = mic_worker_argv(
-        "rsut",
-        root.path(),
-        std::path::Path::new("py"),
-        None,
-        SR,
-        &Logger::capture(ManualClock::new(0.0).shared()).0,
-    )
-    .unwrap_err();
-    assert_eq!(e, r#"[live] mic_worker must be "python" or "rust", not 'rsut'"#);
 }

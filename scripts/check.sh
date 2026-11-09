@@ -106,8 +106,7 @@ fi
 
 # The Rust workspace (rust/Cargo.toml): format, lint, the tests that need no data.
 # The parity tests against pyaec need the port's golden data, named by
-# SPEEXDSP_AEC_GOLDEN (rust/speexdsp-aec/README.md). Run from rust/ so cargo reads
-# rust/.cargo/config.toml.
+# SPEEXDSP_AEC_GOLDEN (rust/speexdsp-aec/README.md). Run from rust/, the workspace.
 if [ -f rust/Cargo.toml ]; then
     step "rust"
     if ! command -v cargo > /dev/null 2>&1; then
@@ -137,7 +136,9 @@ if [ -f rust/Cargo.toml ]; then
 fi
 
 step "CLI help"
-"$PYTHON" -m recog --help > /dev/null
+if [ -f rust/Cargo.toml ]; then
+    (cd rust && cargo run -q -p recog-live --bin recog -- --help > /dev/null)
+fi
 
 step "service units render"
 RENDER_DIR="$(mktemp -d)"

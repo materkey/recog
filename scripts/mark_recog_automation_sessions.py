@@ -8,7 +8,6 @@ import json
 import os
 import re
 import shutil
-import sys
 import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
@@ -17,10 +16,23 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
-from recog.ai_provider import CCS_AUTOMATION_MARKER_PREFIX, mark_ccs_automation
+# The marker recog's AI calls put on their prompts (rust/recog-ai, provider.rs; once
+# recog/ai_provider.py).
+CCS_AUTOMATION_MARKER_PREFIX = "<!-- ccs-automation:recog"
+
+
+def _sanitize_ccs_task(task: str) -> str:
+    normalized = (task or "analysis").strip().lower()
+    safe = "".join(ch if ch.isalnum() or ch in "._:-" else "-" for ch in normalized).strip("-")
+    return safe or "analysis"
+
+
+def mark_ccs_automation(prompt: str, task: str = "analysis") -> str:
+    """Mark a Recog-generated prompt so session search can classify it as automation."""
+    if prompt.lstrip().startswith(CCS_AUTOMATION_MARKER_PREFIX):
+        return prompt
+    return f"{CCS_AUTOMATION_MARKER_PREFIX} task={_sanitize_ccs_task(task)} -->\n{prompt}"
 
 RECOG_PROJECT_PREFIX = str(REPO_ROOT)
 CODEX_DEFAULT_ROOT = Path.home() / ".codex" / "sessions"

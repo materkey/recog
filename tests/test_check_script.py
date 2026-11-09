@@ -5,13 +5,10 @@ check.sh is driven against a throwaway repo copy whose interpreter and
 runs, in which order, and which failure stops it* — without compiling anything
 or running the real suite a second time.
 
-The workflow tests are drift guards: CI must keep installing what setup.sh
-installs (same GigaAM pin, same requirements, macOS under
-`deploy/python/constraints/macos.txt`), otherwise a green CI stops saying anything about a
-fresh install.
+The workflow tests are drift guards: CI must keep installing the tools
+check.sh needs and running check.sh itself on both hosts.
 """
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -23,13 +20,12 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 
-# Answers the three interpreter invocations check.sh makes, each with its own
+# Answers the interpreter invocations check.sh makes, each with its own
 # steerable exit code so a test can fail exactly one step.
 PYTHON_STUB = r"""#!/bin/sh
 printf '%s\n' "python $*" >> "$STUB_LOG"
 case "$*" in
   *compileall*)    exit "${STUB_COMPILEALL_RC:-0}" ;;
-  *"-m recog --help"*)  exit "${STUB_HELP_RC:-0}" ;;
   *scripts/quality.py*) exit "${STUB_QUALITY_RC:-0}" ;;
   *pytest*)        exit "${STUB_PYTEST_RC:-0}" ;;
 esac
@@ -200,7 +196,6 @@ def test_deselects_the_e2e_marker(repo, stub_bin):
     "rc_var,later_step",
     [
         ("STUB_COMPILEALL_RC", "pytest"),
-        ("STUB_HELP_RC", "pytest"),
         ("STUB_RENDER_RC", "pytest"),
     ],
 )
@@ -262,6 +257,7 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
         "cargo test -p recog-web",
         "cargo test -p recog-desktop",
         "cargo test -p recog-asr-server",
+        "cargo run -q -p recog-live --bin recog -- --help",
     ]
     # "-m pytest": the logged interpreter paths hold this test's name, "pytest" too.
     assert result.calls.index(cargo[-1]) < next(
@@ -463,41 +459,8 @@ def test_ci_uses_python_312(workflow):
     assert setup["with"]["python-version"] == "3.12"
 
 
-def test_ci_installs_cpu_torch(workflow):
-    assert "https://download.pytorch.org/whl/cpu" in _run_script(workflow)
-
-
-def test_ci_pins_the_same_gigaam_ref_as_setup(workflow):
-    setup_sh = (REPO_ROOT / "setup.sh").read_text()
-    url = re.search(r'RECOG_GIGAAM_URL:-(\S+?)}', setup_sh).group(1)
-    ref = re.search(r'RECOG_GIGAAM_REF:-(\S+?)}', setup_sh).group(1)
-
-    env = workflow["jobs"]["check"]["env"]
-    assert env["GIGAAM_URL"] == url
-    assert str(env["GIGAAM_REF"]) == ref
-    assert "gigaam @ git+${GIGAAM_URL}@${GIGAAM_REF}" in _run_script(workflow)
-
-
-def test_ci_installs_the_same_requirements_as_setup(workflow):
-    script = _run_script(workflow)
-    for req in ("deploy/python/requirements.txt", "deploy/python/requirements-web.txt",
-                "deploy/python/requirements-macos.txt"):
-        assert req in script
-
-
-def test_ci_constrains_macos_installs(workflow):
-    """Without the constraints file CI would resolve the ML stack to versions
-    the Mac's MPS/PyObjC behaviour was never verified against."""
-    script = _run_script(workflow)
-    assert "-c deploy/python/constraints/macos.txt" in script
-    # Every pip stage goes through the same variable, so none can skip it.
-    dependency_installs = [
-        line
-        for line in script.splitlines()
-        if "pip install" in line and "--upgrade pip" not in line
-    ]
-    assert dependency_installs
-    assert all("pip install $PIP_ARGS" in line for line in dependency_installs)
+def test_ci_installs_the_python_tools_the_remaining_tests_need(workflow):
+    assert "pip install -r deploy/python/requirements-quality.txt" in _run_script(workflow)
 
 
 def test_ci_installs_the_linters_check_script_requires(workflow):
@@ -510,12 +473,6 @@ def test_ci_installs_the_linters_check_script_requires(workflow):
 
 def test_ci_runs_the_check_script(workflow):
     assert any(step.get("run", "").strip() == "./scripts/check.sh" for step in _steps(workflow))
-
-
-def test_ci_builds_the_echo_canceller_module_for_the_suite(workflow):
-    """The Python test of the Rust echo canceller skips without the module, so CI
-    builds it the way setup.sh does, under the same pip constraints."""
-    assert "pip install $PIP_ARGS ./rust/speexdsp-aec-py" in _run_script(workflow)
 
 
 def test_ci_has_the_rust_components_check_script_runs(workflow):
