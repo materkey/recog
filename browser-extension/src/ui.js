@@ -1126,7 +1126,7 @@ export function renderCopilotMessage(msg) {
   const textHtml = `<div class="copilot-msg-text${isPending ? ' pending' : ''}">${escapeCopilotText(msg.text || (isPending ? '…' : ''))}</div>`;
 
   let actionsHtml = '';
-  if (msg.kind === 'assistant' || msg.kind === 'proactive') {
+  if (copilotKindHasActions(msg.kind)) {
     actionsHtml = `
         <div class="copilot-msg-actions">
           <button type="button" class="copilot-msg-action-btn copilot-msg-copy-btn" title="Copy">Copy</button>
@@ -1189,69 +1189,51 @@ function dismissCopilotMessage(id) {
   showCopilotEmptyIfNoneLeft();
 }
 
+function copilotKindHasActions(kind) {
+  return kind === 'assistant' || kind === 'proactive';
+}
+
+function setCopilotMessageText(el, text, status) {
+  const textEl = el.querySelector('.copilot-msg-text');
+  if (textEl) {
+    textEl.textContent = text;
+    textEl.classList.toggle('pending', status === 'working');
+  }
+}
+
+function setCopilotMessageTime(el, time) {
+  const timeEl = el.querySelector('.copilot-msg-time');
+  if (timeEl) timeEl.textContent = time;
+}
+
+function setCopilotMessageKind(el, kind) {
+  el.classList.remove(
+    'copilot-msg-user',
+    'copilot-msg-assistant',
+    'copilot-msg-proactive',
+    'copilot-msg-status',
+    'copilot-msg-error'
+  );
+  el.classList.add(`copilot-msg-${kind}`);
+  const roleEl = el.querySelector('.copilot-msg-role');
+  if (roleEl) roleEl.textContent = getCopilotRoleLabel(kind);
+  // Drop the copy/dismiss row when the kind flips to one that does not
+  // own actions (status/error/user), so an assistant bubble downgraded
+  // to error does not keep a Copy button that copies stale text. A
+  // placeholder never flips back to assistant/proactive: every flip away
+  // from assistant also settles its pending request.
+  if (!copilotKindHasActions(kind)) {
+    const existingActions = el.querySelector('.copilot-msg-actions');
+    if (existingActions) existingActions.remove();
+  }
+}
+
 function updateCopilotMessageDom(id, updates) {
   const el = findCopilotMessageElement(id);
   if (!el) return;
-  if (updates.text != null) {
-    const textEl = el.querySelector('.copilot-msg-text');
-    if (textEl) {
-      textEl.textContent = updates.text;
-      textEl.classList.toggle('pending', updates.status === 'working');
-    }
-  }
-  if (updates.time != null) {
-    const timeEl = el.querySelector('.copilot-msg-time');
-    if (timeEl) timeEl.textContent = updates.time;
-  }
-  if (updates.kind) {
-    el.classList.remove(
-      'copilot-msg-user',
-      'copilot-msg-assistant',
-      'copilot-msg-proactive',
-      'copilot-msg-status',
-      'copilot-msg-error'
-    );
-    el.classList.add(`copilot-msg-${updates.kind}`);
-    const roleEl = el.querySelector('.copilot-msg-role');
-    if (roleEl) roleEl.textContent = getCopilotRoleLabel(updates.kind);
-    // Drop the copy/dismiss row when the kind flips to one that does not
-    // own actions (status/error/user). The block below re-adds the row
-    // only for assistant/proactive, so without this cleanup an assistant
-    // bubble downgraded to error keeps a Copy button that copies stale
-    // text.
-    if (updates.kind !== 'assistant' && updates.kind !== 'proactive') {
-      const existingActions = el.querySelector('.copilot-msg-actions');
-      if (existingActions) existingActions.remove();
-    }
-  }
-  if (updates.kind === 'assistant' || updates.kind === 'proactive') {
-    if (!el.querySelector('.copilot-msg-actions')) {
-      const actions = document.createElement('div');
-      actions.className = 'copilot-msg-actions';
-      actions.innerHTML = toTrustedHtml(`
-          <button type="button" class="copilot-msg-action-btn copilot-msg-copy-btn" title="Copy">Copy</button>
-          <button type="button" class="copilot-msg-action-btn copilot-msg-dismiss-btn" title="Dismiss">Dismiss</button>
-        `);
-      el.appendChild(actions);
-      const copyBtn = actions.querySelector('.copilot-msg-copy-btn');
-      copyBtn.addEventListener('click', () => {
-        const msg = state.copilotMessages.find((m) => m.id === id);
-        const text = msg ? (msg.text || '') : '';
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-          navigator.clipboard.writeText(text).then(() => {
-            copyBtn.classList.add('copied');
-            copyBtn.textContent = 'Copied';
-            setTimeout(() => {
-              copyBtn.classList.remove('copied');
-              copyBtn.textContent = 'Copy';
-            }, 1500);
-          }).catch(() => {});
-        }
-      });
-      const dismissBtn = actions.querySelector('.copilot-msg-dismiss-btn');
-      dismissBtn.addEventListener('click', () => dismissCopilotMessage(id));
-    }
-  }
+  if (updates.text != null) setCopilotMessageText(el, updates.text, updates.status);
+  if (updates.time != null) setCopilotMessageTime(el, updates.time);
+  if (updates.kind) setCopilotMessageKind(el, updates.kind);
 }
 
 function updateCopilotMessage(id, updates) {
@@ -1383,135 +1365,122 @@ export function handleCopilotReply(data) {
   });
 }
 
-export function handleCopilotStatus(data) {
-  ensureCopilotContent();
-  const requestId = data && data.request_id;
-  const status = (data && data.status) || 'unknown';
+function appendCopilotError(text) {
+  appendCopilotMessage({
+    id: nextCopilotId(),
+    kind: 'error',
+    text,
+    time: nowDisplay()
+  });
+}
 
-  if (status === 'agent_state') {
-    // Agent lifecycle status from the bridge merge (supervisor screen state +
-    // daemon MCP-session count). Drives the standalone chip only — independent
-    // from the channel/per-request indicator. Reset to ⚫ is delivered as an
-    // explicit `agent_state: offline` frame (never on `meeting_ended`, whose
-    // last-extension-gone path fires after the extension is already gone).
-    const next = data && data.agent_state;
-    if (COPILOT_AGENT_CHIP[next]) {
-      state.copilotAgentState = next;
-      updateCopilotAgentChip();
-    }
-    // Unknown agent_state (SDK drift) — ignore, keep the last known chip.
-    return;
+function failCopilotPlaceholder(assistantId, text) {
+  updateCopilotMessage(assistantId, {
+    kind: 'error',
+    text,
+    status: 'error',
+    time: nowDisplay()
+  });
+}
+
+function settleCopilotRequest(requestId) {
+  state.copilotPending.delete(requestId);
+  setCopilotInputBusy(false);
+}
+
+function applyCopilotAgentState(data) {
+  // Agent lifecycle status from the bridge merge (supervisor screen state +
+  // daemon MCP-session count). Drives the standalone chip only — independent
+  // from the channel/per-request indicator. Reset to ⚫ is delivered as an
+  // explicit `agent_state: offline` frame (never on `meeting_ended`, whose
+  // last-extension-gone path fires after the extension is already gone).
+  const next = data && data.agent_state;
+  if (COPILOT_AGENT_CHIP[next]) {
+    state.copilotAgentState = next;
+    updateCopilotAgentChip();
   }
+  // Unknown agent_state (SDK drift) — ignore, keep the last known chip.
+}
 
-  if (status === 'channel_connected') {
-    // Channel-level recovery signal — bridge emits this on the 0→1 channel
-    // client transition (or as a primer when an extension late-joins a
-    // bridge whose channel was already up). Without it, once the indicator
-    // flipped to `channel_disconnected` it would stay stuck even after the
-    // channel came back online.
-    state.copilotChannelStatus = 'connected';
-    updateCopilotStatusIndicator();
-    return;
+function applyCopilotChannelConnected() {
+  // Channel-level recovery signal — bridge emits this on the 0→1 channel
+  // client transition (or as a primer when an extension late-joins a
+  // bridge whose channel was already up). Without it, once the indicator
+  // flipped to `channel_disconnected` it would stay stuck even after the
+  // channel came back online.
+  state.copilotChannelStatus = 'connected';
+  updateCopilotStatusIndicator();
+}
+
+function applyCopilotChannelDisconnected(data, requestId) {
+  // Channel-level event — surface in the connectivity indicator. Per-
+  // request statuses (queued/working/done/error) below describe a single
+  // chat turn and must not overwrite the indicator: otherwise the label
+  // would read "done" or "working…" long after the per-request bubble
+  // already settled, masking actual channel health.
+  state.copilotChannelStatus = 'channel_disconnected';
+  updateCopilotStatusIndicator();
+  const text = 'Channel offline: Claude не подключён.';
+  const pendingId = findPendingAssistantId(requestId);
+  if (pendingId) {
+    failCopilotPlaceholder(pendingId, text);
+    settleCopilotRequest(requestId);
+  } else if (state.copilotPending && state.copilotPending.size > 0) {
+    // Channel-level signal (no specific request_id match) with pending
+    // requests in flight — the bridge fires this when the last channel
+    // client drops mid-flight. Flip every placeholder to error and re-
+    // enable input rather than appending a single bubble that says
+    // nothing about the stranded turns.
+    state.copilotPending.forEach((pending) => {
+      if (pending && pending.assistantId) {
+        failCopilotPlaceholder(pending.assistantId, text);
+      }
+    });
+    state.copilotPending.clear();
+    setCopilotInputBusy(false);
+  } else {
+    appendCopilotError(text);
   }
+}
 
-  if (status === 'channel_disconnected') {
-    // Channel-level event — surface in the connectivity indicator. Per-
-    // request statuses (queued/working/done/error) below describe a single
-    // chat turn and must not overwrite the indicator: otherwise the label
-    // would read "done" or "working…" long after the per-request bubble
-    // already settled, masking actual channel health.
-    state.copilotChannelStatus = 'channel_disconnected';
-    updateCopilotStatusIndicator();
-    const pendingId = findPendingAssistantId(requestId);
-    if (pendingId) {
-      updateCopilotMessage(pendingId, {
-        kind: 'error',
-        text: 'Channel offline: Claude не подключён.',
-        status: 'error',
-        time: nowDisplay()
-      });
-      state.copilotPending.delete(requestId);
-      setCopilotInputBusy(false);
-    } else if (state.copilotPending && state.copilotPending.size > 0) {
-      // Channel-level signal (no specific request_id match) with pending
-      // requests in flight — the bridge fires this when the last channel
-      // client drops mid-flight. Flip every placeholder to error and re-
-      // enable input rather than appending a single bubble that says
-      // nothing about the stranded turns.
-      state.copilotPending.forEach((pending) => {
-        if (pending && pending.assistantId) {
-          updateCopilotMessage(pending.assistantId, {
-            kind: 'error',
-            text: 'Channel offline: Claude не подключён.',
-            status: 'error',
-            time: nowDisplay()
-          });
-        }
-      });
-      state.copilotPending.clear();
-      setCopilotInputBusy(false);
-    } else {
-      appendCopilotMessage({
-        id: nextCopilotId(),
-        kind: 'error',
-        text: 'Channel offline: Claude не подключён.',
-        time: nowDisplay()
-      });
-    }
-    return;
+// Terminal `error` from the channel server (e.g. Claude failed) — without
+// a corresponding `copilot_reply` the input would stay disabled forever
+// and the placeholder would still claim "working". Symmetrize with
+// channel_disconnected: flip the placeholder to an error bubble, drop the
+// pending entry, and re-enable input so the user can retry.
+function applyCopilotError(data, requestId) {
+  const pendingId = findPendingAssistantId(requestId);
+  const message = (data && data.message) || 'Claude не смог ответить.';
+  if (pendingId) {
+    failCopilotPlaceholder(pendingId, message);
+    settleCopilotRequest(requestId);
+  } else {
+    appendCopilotError(message);
   }
+}
 
-  // Terminal `error` from the channel server (e.g. Claude failed) — without
-  // a corresponding `copilot_reply` the input would stay disabled forever
-  // and the placeholder would still claim "working". Symmetrize with
-  // channel_disconnected: flip the placeholder to an error bubble, drop the
-  // pending entry, and re-enable input so the user can retry.
-  if (status === 'error') {
-    const pendingId = findPendingAssistantId(requestId);
-    const message = (data && data.message) || 'Claude не смог ответить.';
-    if (pendingId) {
-      updateCopilotMessage(pendingId, {
-        kind: 'error',
-        text: message,
-        status: 'error',
-        time: nowDisplay()
-      });
-      state.copilotPending.delete(requestId);
-      setCopilotInputBusy(false);
-    } else {
-      appendCopilotMessage({
-        id: nextCopilotId(),
-        kind: 'error',
-        text: message,
-        time: nowDisplay()
-      });
-    }
-    return;
+// Terminal `done` — the bridge already pops the pending bookkeeping
+// (ktalk_bridge.py:2349). If a matching `copilot_reply` arrived first,
+// `findPendingAssistantId` returns null and there is nothing to do.
+// If `done` arrived without a preceding reply (Claude called
+// `set_copilot_status('done')` standalone), the placeholder would stay
+// on "Жду ответа Claude…" and `setCopilotInputBusy(false)` would never
+// run, stranding the textarea disabled until reload.
+function applyCopilotDone(data, requestId) {
+  const pendingId = findPendingAssistantId(requestId);
+  if (pendingId) {
+    const message = (data && data.message) || 'Запрос завершён без ответа.';
+    updateCopilotMessage(pendingId, {
+      kind: 'status',
+      text: message,
+      status: 'done',
+      time: nowDisplay()
+    });
+    settleCopilotRequest(requestId);
   }
+}
 
-  // Terminal `done` — the bridge already pops the pending bookkeeping
-  // (ktalk_bridge.py:2349). If a matching `copilot_reply` arrived first,
-  // `findPendingAssistantId` returns null and there is nothing to do.
-  // If `done` arrived without a preceding reply (Claude called
-  // `set_copilot_status('done')` standalone), the placeholder would stay
-  // on "Жду ответа Claude…" and `setCopilotInputBusy(false)` would never
-  // run, stranding the textarea disabled until reload.
-  if (status === 'done') {
-    const pendingId = findPendingAssistantId(requestId);
-    if (pendingId) {
-      const message = (data && data.message) || 'Запрос завершён без ответа.';
-      updateCopilotMessage(pendingId, {
-        kind: 'status',
-        text: message,
-        status: 'done',
-        time: nowDisplay()
-      });
-      state.copilotPending.delete(requestId);
-      setCopilotInputBusy(false);
-    }
-    return;
-  }
-
+function applyCopilotRequestStatus(data, requestId, status) {
   const pendingId = findPendingAssistantId(requestId);
   if (pendingId) {
     updateCopilotMessage(pendingId, {
@@ -1520,6 +1489,24 @@ export function handleCopilotStatus(data) {
       time: nowDisplay()
     });
   }
+}
+
+// A Map, not an object: a status such as `toString` must reach the
+// per-request branch, not a prototype method.
+const COPILOT_STATUS_HANDLERS = new Map([
+  ['agent_state', applyCopilotAgentState],
+  ['channel_connected', applyCopilotChannelConnected],
+  ['channel_disconnected', applyCopilotChannelDisconnected],
+  ['error', applyCopilotError],
+  ['done', applyCopilotDone]
+]);
+
+export function handleCopilotStatus(data) {
+  ensureCopilotContent();
+  const requestId = data && data.request_id;
+  const status = (data && data.status) || 'unknown';
+  const apply = COPILOT_STATUS_HANDLERS.get(status) || applyCopilotRequestStatus;
+  apply(data, requestId, status);
 }
 
 export function appendCopilotSystemMessage(text) {
@@ -1555,17 +1542,15 @@ export function handleCopilotBridgeDisconnect() {
   updateCopilotStatusIndicator();
 }
 
-function setActiveView(view) {
+function setAiTabActive(isAnyActive) {
   const aiTabBtn = document.querySelector('.ktalk-ai-tab');
   const aiTab = aiTabBtn?.closest('.tl-tab');
 
-  const isTranscript = view === 'transcript';
-  const isCopilot = view === 'copilot';
-  const isAnyActive = isTranscript || isCopilot;
-
   if (aiTab) aiTab.classList.toggle('_active', isAnyActive);
   if (aiTabBtn) aiTabBtn.classList.toggle('_active', isAnyActive);
+}
 
+function setAiPanelView(view, isAnyActive) {
   const panel = document.querySelector('.ktalk-ai-panel');
   if (panel) {
     panel.classList.toggle('active', isAnyActive);
@@ -1573,9 +1558,11 @@ function setActiveView(view) {
       btn.classList.toggle('active', btn.dataset.view === view);
     });
   }
+}
 
+function setAiContentVisibility(isTranscript, isCopilot) {
   if (state.originalChatContent) {
-    state.originalChatContent.style.display = isAnyActive ? 'none' : '';
+    state.originalChatContent.style.display = isTranscript || isCopilot ? 'none' : '';
   }
   if (state.transcriptContentElement) {
     state.transcriptContentElement.classList.toggle('active', isTranscript);
@@ -1583,17 +1570,29 @@ function setActiveView(view) {
   if (state.copilotContentElement) {
     state.copilotContentElement.classList.toggle('active', isCopilot);
   }
+}
+
+function rememberAiView(view) {
+  state.lastAiView = view;
+  try {
+    localStorage.setItem(constants.AI_LAST_VIEW_KEY, view);
+  } catch (err) {
+    void err;
+  }
+}
+
+function setActiveView(view) {
+  const isTranscript = view === 'transcript';
+  const isCopilot = view === 'copilot';
+  const isAnyActive = isTranscript || isCopilot;
+
+  setAiTabActive(isAnyActive);
+  setAiPanelView(view, isAnyActive);
+  setAiContentVisibility(isTranscript, isCopilot);
 
   state.isCopilotActive = isCopilot;
 
-  if (isAnyActive) {
-    state.lastAiView = view;
-    try {
-      localStorage.setItem(constants.AI_LAST_VIEW_KEY, view);
-    } catch (err) {
-      void err;
-    }
-  }
+  if (isAnyActive) rememberAiView(view);
   if (isCopilot) setCopilotUnread(false);
 }
 
@@ -1653,6 +1652,71 @@ export function watchTabChanges() {
   });
 }
 
+function dispatchTranscriptUpdate() {
+  window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
+    detail: { transcriptLines: state.transcriptLines.slice() }
+  }));
+}
+
+// A frame tagged with another meeting than this tab's. Frames without the
+// tag (older bridge builds) and a tab that has no meeting yet pass.
+function isOtherMeetingFrame(data) {
+  return !!(data && data.meeting_id && state.currentMeetingId
+    && data.meeting_id !== state.currentMeetingId);
+}
+
+function transcriptFlags({ is_local, uncertain, uncertain_reason }) {
+  return {
+    is_local: is_local || false,
+    uncertain: uncertain || false,
+    uncertain_reason: uncertain_reason || ''
+  };
+}
+
+function capTranscriptLines(lines) {
+  if (lines.length > constants.MAX_TRANSCRIPT_LINES) {
+    return lines.slice(-constants.MAX_TRANSCRIPT_LINES);
+  }
+  return lines;
+}
+
+function historyTime(seg) {
+  return seg.ts_display || new Date(seg.ts).toLocaleTimeString('ru-RU', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+}
+
+function historySegmentToLine(seg) {
+  return {
+    speaker: seg.speaker,
+    text: seg.text,
+    timestamp: seg.timestamp || seg.ts_display,
+    segment_id: seg.id || 0,
+    // Preserve real source_id semantics: it must stay empty for legacy /
+    // no-source streams (local mic, mixed call sites) so the next live
+    // continuation still takes handleTranscript's `!prev.source_id` merge
+    // path. Fabricating one from speaker_id breaks that merge.
+    source_id: seg.source_id || '',
+    // Stable identity used ONLY for privacy aliasing, kept separate from
+    // source_id so duplicate/Unknown labels don't collapse after a reload.
+    privacy_id: seg.source_id || seg.speaker_id || '',
+    ...transcriptFlags(seg),
+    time: historyTime(seg),
+    createdAt: seg.ts ? new Date(seg.ts).getTime() : Date.now()
+  };
+}
+
+function renderAllTranscriptLines() {
+  if (isJitsiPlatform()) {
+    clearVas3kTranscript();
+    for (const line of state.transcriptLines) {
+      addVas3kTranscriptLine(line);
+    }
+  } else {
+    updateTranscriptUI();
+  }
+}
+
 export function handleTranscriptHistory(data) {
   console.log('[KTalk Transcript] Received history:', data.segments?.length || 0, 'segments');
 
@@ -1664,49 +1728,12 @@ export function handleTranscriptHistory(data) {
     return;
   }
 
-  state.transcriptLines = [];
-
-  for (const seg of data.segments) {
-    state.transcriptLines.push({
-      speaker: seg.speaker,
-      text: seg.text,
-      timestamp: seg.timestamp || seg.ts_display,
-      segment_id: seg.id || 0,
-      // Preserve real source_id semantics: it must stay empty for legacy /
-      // no-source streams (local mic, mixed call sites) so the next live
-      // continuation still takes handleTranscript's `!prev.source_id` merge
-      // path. Fabricating one from speaker_id breaks that merge.
-      source_id: seg.source_id || '',
-      // Stable identity used ONLY for privacy aliasing, kept separate from
-      // source_id so duplicate/Unknown labels don't collapse after a reload.
-      privacy_id: seg.source_id || seg.speaker_id || '',
-      is_local: seg.is_local || false,
-      uncertain: seg.uncertain || false,
-      uncertain_reason: seg.uncertain_reason || "",
-      time: seg.ts_display || new Date(seg.ts).toLocaleTimeString('ru-RU', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
-      }),
-      createdAt: seg.ts ? new Date(seg.ts).getTime() : Date.now()
-    });
-  }
-
-  if (state.transcriptLines.length > constants.MAX_TRANSCRIPT_LINES) {
-    state.transcriptLines = state.transcriptLines.slice(-constants.MAX_TRANSCRIPT_LINES);
-  }
+  state.transcriptLines = capTranscriptLines(data.segments.map(historySegmentToLine));
 
   // Re-render using the appropriate platform renderer
-  if (isJitsiPlatform()) {
-    clearVas3kTranscript();
-    for (const line of state.transcriptLines) {
-      addVas3kTranscriptLine(line);
-    }
-  } else {
-    updateTranscriptUI();
-  }
+  renderAllTranscriptLines();
 
-  window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
-    detail: { transcriptLines: state.transcriptLines.slice() }
-  }));
+  dispatchTranscriptUpdate();
 }
 
 export function handleNewMeeting(data) {
@@ -1725,21 +1752,10 @@ export function handleNewMeeting(data) {
   }));
 }
 
-export function handleTranscript(data) {
-  // Drop segments produced from a sibling tab's audio when two KTalk
-  // tabs are open at the same time. Mirrors the cross-meeting guard in
-  // `handleTranscriptRefine`. Older bridge builds that don't tag the
-  // frame still pass through (missing field == no filter).
-  if (data && data.meeting_id && state.currentMeetingId
-      && data.meeting_id !== state.currentMeetingId) {
-    return;
-  }
-
-  const { speaker, text, timestamp, is_continuation, is_local, uncertain, uncertain_reason, correction, segment_id, source_id } = data;
-
+function buildLiveTranscriptLine(data) {
+  const { speaker, text, timestamp, segment_id, source_id } = data;
   const sid = segment_id || 0;
-  const sourceId = typeof source_id === 'string' ? source_id : '';
-  const newLine = {
+  return {
     speaker,
     text,
     timestamp,
@@ -1747,91 +1763,132 @@ export function handleTranscript(data) {
     // Stable per-source identifier (e.g. per-pid PCM stream). Used by the
     // continuation-merge predicate below so chunks from different sources
     // are not glued into a single bubble even if `is_continuation=true`.
-    source_id: sourceId,
+    source_id: typeof source_id === 'string' ? source_id : '',
     // Per-child segment tracking so tier-2 refine can target continuation
     // chunks merged into this line. Backend issues a fresh segment_id for
     // every 3-s PCM chunk including continuations; without this, refines
     // for any chunk after the first in a merged bubble are silently dropped.
     segment_ids: sid > 0 ? [sid] : [],
     segment_texts: sid > 0 ? { [sid]: text } : {},
-    is_local: is_local || false,
-    uncertain: uncertain || false,
-    uncertain_reason: uncertain_reason || '',
+    ...transcriptFlags(data),
     time: new Date().toLocaleTimeString('ru-RU', {
       hour: '2-digit', minute: '2-digit', second: '2-digit'
     }),
     createdAt: Date.now()
   };
+}
 
-  if (correction) {
-    // Retroactive correction: find and update existing Unknown line by timestamp+text
-    const idx = state.transcriptLines.findIndex(
-      line => line.speaker === 'Unknown' && line.text.startsWith(text) && line.timestamp === timestamp
-    );
-    if (idx !== -1) {
-      state.transcriptLines[idx].speaker = speaker;
-      state.transcriptLines[idx].uncertain = uncertain || false;
-      state.transcriptLines[idx].uncertain_reason = uncertain_reason || '';
+function stripUncertainMarks(text) {
+  return text.replace(/ \(\?\)$/, '').replace(/ \(🔇\?\)$/, '').trim();
+}
+
+function isUnknownVas3kLine(lineEl, text, timestamp) {
+  const speakerEl = lineEl.querySelector('.jitsi-transcript-speaker');
+  const textEl = lineEl.querySelector('.jitsi-transcript-text');
+  return speakerEl && speakerEl.textContent === 'Unknown' &&
+    textEl && stripUncertainMarks(textEl.textContent).startsWith(text) &&
+    (!timestamp || lineEl.dataset.timestamp === timestamp);
+}
+
+// Find the DOM element with Unknown speaker matching this text and update in place
+function correctVas3kUnknownLine(speaker, text, timestamp) {
+  const content = document.querySelector('.jitsi-transcript-content');
+  if (!content) return;
+  for (const lineEl of content.querySelectorAll('.jitsi-transcript-line')) {
+    if (isUnknownVas3kLine(lineEl, text, timestamp)) {
+      lineEl.querySelector('.jitsi-transcript-speaker').textContent = speaker;
+      const textEl = lineEl.querySelector('.jitsi-transcript-text');
+      // Remove uncertainty markers from corrected line
+      textEl.classList.remove('jitsi-transcript-uncertain');
+      textEl.textContent = stripUncertainMarks(textEl.textContent);
+      break;
     }
-    // Re-render UI for correction (don't fall through to append which would duplicate)
-    if (isJitsiPlatform()) {
-      // Find the DOM element with Unknown speaker matching this text and update in place
-      const content = document.querySelector('.jitsi-transcript-content');
-      if (content) {
-        for (const lineEl of content.querySelectorAll('.jitsi-transcript-line')) {
-          const speakerEl = lineEl.querySelector('.jitsi-transcript-speaker');
-          const textEl = lineEl.querySelector('.jitsi-transcript-text');
-          const rawText = textEl ? textEl.textContent.replace(/ \(\?\)$/, '').replace(/ \(🔇\?\)$/, '').trim() : '';
-          if (speakerEl && speakerEl.textContent === 'Unknown' &&
-              textEl && rawText.startsWith(text) &&
-              (!timestamp || lineEl.dataset.timestamp === timestamp)) {
-            speakerEl.textContent = speaker;
-            // Remove uncertainty markers from corrected line
-            textEl.classList.remove('jitsi-transcript-uncertain');
-            textEl.textContent = rawText;
-            break;
-          }
-        }
-      }
-    } else {
-      updateTranscriptUI();
-    }
-    window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
-      detail: { transcriptLines: state.transcriptLines.slice() }
-    }));
+  }
+}
+
+function applySpeakerCorrection({ speaker, text, timestamp, uncertain, uncertain_reason }) {
+  // Retroactive correction: find and update existing Unknown line by timestamp+text
+  const idx = state.transcriptLines.findIndex(
+    line => line.speaker === 'Unknown' && line.text.startsWith(text) && line.timestamp === timestamp
+  );
+  if (idx !== -1) {
+    state.transcriptLines[idx].speaker = speaker;
+    state.transcriptLines[idx].uncertain = uncertain || false;
+    state.transcriptLines[idx].uncertain_reason = uncertain_reason || '';
+  }
+  // Re-render UI for correction (don't fall through to append which would duplicate)
+  if (isJitsiPlatform()) {
+    correctVas3kUnknownLine(speaker, text, timestamp);
+  } else {
+    updateTranscriptUI();
+  }
+  dispatchTranscriptUpdate();
+}
+
+function lastTranscriptLine() {
+  const lines = state.transcriptLines;
+  return lines.length > 0 ? lines[lines.length - 1] : null;
+}
+
+// source_id prevents continuation chunks from contaminating another
+// source's segment_ids/segment_texts; speaker fallback is only for
+// legacy frames without source_id.
+function continuesLine(prev, line) {
+  if (line.source_id) return prev.source_id === line.source_id;
+  return !prev.source_id && prev.speaker === line.speaker;
+}
+
+// Backfill tracking for legacy lines pushed before this change so the
+// refine handler can find them by either primary or child segment_id.
+function backfillSegmentTracking(prev, text) {
+  if (!prev.segment_ids) {
+    prev.segment_ids = prev.segment_id > 0 ? [prev.segment_id] : [];
+  }
+  if (!prev.segment_texts) {
+    prev.segment_texts = prev.segment_id > 0
+      ? { [prev.segment_id]: prev.text.slice(0, -(text.length + 1)) }
+      : {};
+  }
+}
+
+function appendContinuation(prev, line) {
+  const { text, segment_id: sid } = line;
+  prev.text += ' ' + text;
+  if (sid > 0) {
+    backfillSegmentTracking(prev, text);
+    prev.segment_ids.push(sid);
+    prev.segment_texts[sid] = text;
+  }
+}
+
+function pushTranscriptLine(line) {
+  state.transcriptLines.push(line);
+
+  if (state.transcriptLines.length > constants.MAX_TRANSCRIPT_LINES) {
+    state.transcriptLines.shift();
+  }
+}
+
+export function handleTranscript(data) {
+  // Drop segments produced from a sibling tab's audio when two KTalk
+  // tabs are open at the same time. Mirrors the cross-meeting guard in
+  // `handleTranscriptRefine`. Older bridge builds that don't tag the
+  // frame still pass through (missing field == no filter).
+  if (isOtherMeetingFrame(data)) {
     return;
   }
 
-  const prev = state.transcriptLines.length > 0
-    ? state.transcriptLines[state.transcriptLines.length - 1]
-    : null;
-  const sameSource = sourceId && prev && prev.source_id === sourceId;
-  const legacySameSpeaker = prev && !sourceId && !prev.source_id && prev.speaker === speaker;
-  if (is_continuation && prev && (sameSource || legacySameSpeaker)) {
-    // source_id prevents continuation chunks from contaminating another
-    // source's segment_ids/segment_texts; speaker fallback is only for
-    // legacy frames without source_id.
-    prev.text += ' ' + text;
-    if (sid > 0) {
-      // Backfill tracking for legacy lines pushed before this change so the
-      // refine handler can find them by either primary or child segment_id.
-      if (!prev.segment_ids) {
-        prev.segment_ids = prev.segment_id > 0 ? [prev.segment_id] : [];
-      }
-      if (!prev.segment_texts) {
-        prev.segment_texts = prev.segment_id > 0
-          ? { [prev.segment_id]: prev.text.slice(0, -(text.length + 1)) }
-          : {};
-      }
-      prev.segment_ids.push(sid);
-      prev.segment_texts[sid] = text;
-    }
-  } else {
-    state.transcriptLines.push(newLine);
+  if (data.correction) {
+    applySpeakerCorrection(data);
+    return;
+  }
 
-    if (state.transcriptLines.length > constants.MAX_TRANSCRIPT_LINES) {
-      state.transcriptLines.shift();
-    }
+  const newLine = buildLiveTranscriptLine(data);
+  const prev = lastTranscriptLine();
+  if (data.is_continuation && prev && continuesLine(prev, newLine)) {
+    appendContinuation(prev, newLine);
+  } else {
+    pushTranscriptLine(newLine);
   }
 
   // Update platform-specific UI
@@ -1841,9 +1898,97 @@ export function handleTranscript(data) {
     updateTranscriptUI();
   }
 
-  window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
-    detail: { transcriptLines: state.transcriptLines.slice() }
-  }));
+  dispatchTranscriptUpdate();
+}
+
+function refineTextsById(updates) {
+  const byId = new Map();
+  for (const upd of updates) {
+    if (!upd) continue;
+    const sid = Number(upd.segment_id);
+    if (!Number.isFinite(sid) || sid <= 0) continue;
+    if (typeof upd.text !== 'string') continue;
+    byId.set(sid, upd.text);
+  }
+  return byId;
+}
+
+function findLineBySegmentId(sid) {
+  return state.transcriptLines.find(
+    (line) => (Array.isArray(line.segment_ids) && line.segment_ids.includes(sid)) || line.segment_id === sid
+  );
+}
+
+function applyRefinedText(target, sid, newText) {
+  if (target.segment_texts && Array.isArray(target.segment_ids)
+      && target.segment_ids.length > 0) {
+    target.segment_texts[sid] = newText;
+    target.text = target.segment_ids
+      .map(id => target.segment_texts[id] || '')
+      .filter(Boolean)
+      .join(' ');
+  } else {
+    target.text = newText;
+  }
+}
+
+// Resolve each refined segment_id to its containing state line. A state
+// line may own multiple segment_ids when consecutive PCM chunks were
+// merged as continuations (handleTranscript above) — we look up via both
+// `segment_ids` (child list) and `segment_id` (legacy primary).
+function applyRefinesToState(byId) {
+  const touchedLines = new Set();
+  for (const [sid, newText] of byId) {
+    const target = findLineBySegmentId(sid);
+    if (!target) continue;
+    applyRefinedText(target, sid, newText);
+    target.refined = true;
+    touchedLines.add(target);
+  }
+  return touchedLines;
+}
+
+function pulseRefined(textEl) {
+  textEl.classList.add('refine-fade');
+  setTimeout(() => textEl.classList.remove('refine-fade'), 200);
+}
+
+function refineVas3kLines(byId) {
+  const content = document.querySelector('.jitsi-transcript-content');
+  if (!content) return;
+  // Vas3k path renders one DOM line per chunk (addVas3kTranscriptLine is
+  // called for every transcript, including continuations), so each
+  // refined segment_id has its own bubble to target.
+  for (const [sid, newText] of byId) {
+    const lineEl = content.querySelector(`.jitsi-transcript-line[data-segment-id="${sid}"]`);
+    if (!lineEl) continue;
+    const textEl = lineEl.querySelector('.jitsi-transcript-text');
+    if (!textEl) continue;
+    textEl.textContent = newText;
+    pulseRefined(textEl);
+  }
+}
+
+function refineKtalkBubbles(touchedLines) {
+  const container = document.querySelector('.ktalk-transcript-messages');
+  if (!container) return;
+  // Paused-mode anchor compensation for in-place bubble growth (no-op in Follow).
+  const anchor = captureScrollAnchor(container);
+  // Ktalk path rebuilds the container from state.transcriptLines, so
+  // merged continuation bubbles only expose `data-segment-id` of the
+  // primary (first) chunk. Look up by primary id but render the
+  // rebuilt merged text (already updated in state above).
+  for (const line of touchedLines) {
+    const primaryId = line.segment_id;
+    if (!primaryId) continue;
+    const msgEl = container.querySelector(`.ktalk-msg[data-segment-id="${primaryId}"]`);
+    if (!msgEl) continue;
+    const textEl = msgEl.querySelector('.ktalk-msg-text');
+    if (!textEl) continue;
+    textEl.innerHTML = toTrustedHtml(formatTranscriptText(line.text));
+    pulseRefined(textEl);
+  }
+  restoreScrollAnchor(container, anchor);
 }
 
 /**
@@ -1867,96 +2012,22 @@ export function handleTranscriptRefine(data) {
   // Segment_ids restart at 1 per meeting, so a refine that slipped past a
   // meeting switch would otherwise rewrite a DIFFERENT speaker's bubble in
   // the new meeting with stale text from the old one.
-  if (data && data.meeting_id && state.currentMeetingId
-      && data.meeting_id !== state.currentMeetingId) {
+  if (isOtherMeetingFrame(data)) {
     return;
   }
 
-  const byId = new Map();
-  for (const upd of updates) {
-    if (!upd) continue;
-    const sid = Number(upd.segment_id);
-    if (!Number.isFinite(sid) || sid <= 0) continue;
-    if (typeof upd.text !== 'string') continue;
-    byId.set(sid, upd.text);
-  }
+  const byId = refineTextsById(updates);
   if (byId.size === 0) return;
 
-  // Resolve each refined segment_id to its containing state line. A state
-  // line may own multiple segment_ids when consecutive PCM chunks were
-  // merged as continuations (handleTranscript above) — we look up via both
-  // `segment_ids` (child list) and `segment_id` (legacy primary).
-  const touchedLines = new Set();
-  for (const [sid, newText] of byId) {
-    let target = null;
-    for (const line of state.transcriptLines) {
-      if (Array.isArray(line.segment_ids) && line.segment_ids.includes(sid)) {
-        target = line;
-        break;
-      }
-      if (line.segment_id === sid) {
-        target = line;
-        break;
-      }
-    }
-    if (!target) continue;
-    if (target.segment_texts && Array.isArray(target.segment_ids)
-        && target.segment_ids.length > 0) {
-      target.segment_texts[sid] = newText;
-      target.text = target.segment_ids
-        .map(id => target.segment_texts[id] || '')
-        .filter(Boolean)
-        .join(' ');
-    } else {
-      target.text = newText;
-    }
-    target.refined = true;
-    touchedLines.add(target);
-  }
+  const touchedLines = applyRefinesToState(byId);
 
   if (isJitsiPlatform()) {
-    const content = document.querySelector('.jitsi-transcript-content');
-    if (content) {
-      // Vas3k path renders one DOM line per chunk (addVas3kTranscriptLine is
-      // called for every transcript, including continuations), so each
-      // refined segment_id has its own bubble to target.
-      for (const [sid, newText] of byId) {
-        const lineEl = content.querySelector(`.jitsi-transcript-line[data-segment-id="${sid}"]`);
-        if (!lineEl) continue;
-        const textEl = lineEl.querySelector('.jitsi-transcript-text');
-        if (!textEl) continue;
-        textEl.textContent = newText;
-        textEl.classList.add('refine-fade');
-        setTimeout(() => textEl.classList.remove('refine-fade'), 200);
-      }
-    }
+    refineVas3kLines(byId);
   } else {
-    const container = document.querySelector('.ktalk-transcript-messages');
-    if (container) {
-      // Paused-mode anchor compensation for in-place bubble growth (no-op in Follow).
-      const anchor = captureScrollAnchor(container);
-      // Ktalk path rebuilds the container from state.transcriptLines, so
-      // merged continuation bubbles only expose `data-segment-id` of the
-      // primary (first) chunk. Look up by primary id but render the
-      // rebuilt merged text (already updated in state above).
-      for (const line of touchedLines) {
-        const primaryId = line.segment_id;
-        if (!primaryId) continue;
-        const msgEl = container.querySelector(`.ktalk-msg[data-segment-id="${primaryId}"]`);
-        if (!msgEl) continue;
-        const textEl = msgEl.querySelector('.ktalk-msg-text');
-        if (!textEl) continue;
-        textEl.innerHTML = toTrustedHtml(formatTranscriptText(line.text));
-        textEl.classList.add('refine-fade');
-        setTimeout(() => textEl.classList.remove('refine-fade'), 200);
-      }
-      restoreScrollAnchor(container, anchor);
-    }
+    refineKtalkBubbles(touchedLines);
   }
 
-  window.dispatchEvent(new CustomEvent('ktalk-transcript-update', {
-    detail: { transcriptLines: state.transcriptLines.slice() }
-  }));
+  dispatchTranscriptUpdate();
 }
 
 // Fail closed: if an alias lookup misses while privacy is on, use a generic
@@ -2217,6 +2288,10 @@ function updateBioReadControls() {
   if (contrastValue) contrastValue.textContent = `${state.bioRead.tailOpacity}%`;
 }
 
+function onBioReadControl(el, type, listener) {
+  if (el) el.addEventListener(type, listener);
+}
+
 function setupBioReadControls(container) {
   const toggleBtn = container.querySelector('.ktalk-bioread-toggle');
   const settingsBtn = container.querySelector('.ktalk-bioread-settings-btn');
@@ -2224,38 +2299,28 @@ function setupBioReadControls(container) {
   const fixationSlider = container.querySelector('.ktalk-bioread-fixation');
   const contrastSlider = container.querySelector('.ktalk-bioread-contrast');
 
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', () => {
-      state.bioRead.enabled = !state.bioRead.enabled;
-      applyBioReadSettings();
-    });
-  }
+  onBioReadControl(toggleBtn, 'click', () => {
+    state.bioRead.enabled = !state.bioRead.enabled;
+    applyBioReadSettings();
+  });
 
-  if (settingsBtn) {
-    settingsBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      state.bioRead.panelOpen = !state.bioRead.panelOpen;
-      updateBioReadControls();
-    });
-  }
+  onBioReadControl(settingsBtn, 'click', (event) => {
+    event.stopPropagation();
+    state.bioRead.panelOpen = !state.bioRead.panelOpen;
+    updateBioReadControls();
+  });
 
-  if (panel) {
-    panel.addEventListener('click', (event) => event.stopPropagation());
-  }
+  onBioReadControl(panel, 'click', (event) => event.stopPropagation());
 
-  if (fixationSlider) {
-    fixationSlider.addEventListener('input', () => {
-      state.bioRead.fixation = parseInt(fixationSlider.value, 10);
-      applyBioReadSettings();
-    });
-  }
+  onBioReadControl(fixationSlider, 'input', () => {
+    state.bioRead.fixation = parseInt(fixationSlider.value, 10);
+    applyBioReadSettings();
+  });
 
-  if (contrastSlider) {
-    contrastSlider.addEventListener('input', () => {
-      state.bioRead.tailOpacity = parseInt(contrastSlider.value, 10);
-      applyBioReadSettings();
-    });
-  }
+  onBioReadControl(contrastSlider, 'input', () => {
+    state.bioRead.tailOpacity = parseInt(contrastSlider.value, 10);
+    applyBioReadSettings();
+  });
 
   if (!bioReadHotkeyBound) {
     bioReadHotkeyBound = true;
