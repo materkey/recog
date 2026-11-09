@@ -122,12 +122,7 @@ impl WavoTranscriber {
         let name = hub_name(variant).ok_or_else(|| {
             format!("GIGAAM_VARIANT {variant} is not available on wavo (v3_e2e_rnnt, v3_e2e_ctc, v3_rnnt, v3_ctc)")
         })?;
-        let hub = wavo::hub::Hub::new();
-        let path = match hub.find(name) {
-            Some(path) => path,
-            None => hub.pull(name, |_| std::ops::ControlFlow::Continue(())).map_err(|e| e.to_string())?,
-        };
-        let model = wavo::Model::load_with(&path, wavo::Backend::Gpu).map_err(|e| e.to_string())?;
+        let model = wavo::Model::load_with(&model_path(name)?, wavo::Backend::Gpu).map_err(|e| e.to_string())?;
         Ok(Self { model })
     }
 
@@ -138,17 +133,39 @@ impl WavoTranscriber {
     }
 }
 
+/// The model's file in the Hugging Face cache, downloaded there first when missing.
+fn model_path(name: &str) -> Result<std::path::PathBuf, String> {
+    let hub = wavo::hub::Hub::new();
+    hub.find(name)
+        .map_or_else(|| hub.pull(name, |_| std::ops::ControlFlow::Continue(())).map_err(|e| e.to_string()), Ok)
+}
+
+/// The longform result of the pieces of `pcm` cut at `ranges`, each transcribed by
+/// `piece`; the first failure is the result.
+///
+/// # Errors
+/// A piece's failure.
+fn transcribe_pieces(
+    pcm: &[f32],
+    ranges: &[std::ops::Range<usize>],
+    word_timestamps: bool,
+    piece: impl FnMut(&[f32]) -> Result<PieceAnswer, String>,
+) -> Result<Longform, String> {
+    let answers = ranges.iter().map(|range| &pcm[range.clone()]).map(piece).collect::<Result<Vec<_>, _>>()?;
+    Ok(assemble(ranges, answers, word_timestamps))
+}
+
+impl WavoTranscriber {
+    fn transcribe_piece(&self, pcm: &[f32]) -> Result<PieceAnswer, String> {
+        let transcript = self.model.transcribe(pcm).map_err(|e| e.to_string())?;
+        Ok((transcript.text, transcript.tokens.into_iter().map(|t| (t.piece, t.start_ms)).collect()))
+    }
+}
+
 impl Transcriber for WavoTranscriber {
     fn transcribe_longform(&self, pcm: &[f32], word_timestamps: bool) -> Result<Longform, String> {
-        let window = self.model.max_audio_ms().unwrap_or(25_000);
-        let ranges = wavo::split(pcm, window);
-        let mut answers = Vec::with_capacity(ranges.len());
-        for range in &ranges {
-            let transcript = self.model.transcribe(&pcm[range.clone()]).map_err(|e| e.to_string())?;
-            let tokens = transcript.tokens.into_iter().map(|t| (t.piece, t.start_ms)).collect();
-            answers.push((transcript.text, tokens));
-        }
-        Ok(assemble(&ranges, answers, word_timestamps))
+        let ranges = wavo::split(pcm, self.model.max_audio_ms().unwrap_or(25_000));
+        transcribe_pieces(pcm, &ranges, word_timestamps, |piece| self.transcribe_piece(piece))
     }
 }
 
@@ -188,6 +205,43 @@ mod tests {
         let longform = assemble(&ranges, answers, false);
         assert_eq!(longform.segments.len(), 2);
         assert!(longform.words.is_empty());
+    }
+
+    #[test]
+    fn pieces_when_transcribed_then_each_gets_its_samples_and_the_answers_are_assembled() {
+        let pcm: Vec<f32> = (0..48_000u16).map(f32::from).collect();
+        let mut seen = Vec::new();
+        let longform = transcribe_pieces(&pcm, &[0..16_000, 16_000..48_000], true, |piece| {
+            seen.push((piece[0], piece.len()));
+            Ok((format!("p{}", seen.len()), tokens(&[("▁w", 40)])))
+        })
+        .unwrap();
+        assert_eq!(seen, [(0.0, 16_000), (16_000.0, 32_000)]);
+        assert_eq!(
+            longform.segments,
+            vec![Span { text: "p1".into(), start: 0.0, end: 1.0 }, Span { text: "p2".into(), start: 1.0, end: 3.0 }]
+        );
+        assert_eq!(
+            longform.words,
+            vec![Span { text: "w".into(), start: 0.04, end: 0.08 }, Span { text: "w".into(), start: 1.04, end: 1.08 }]
+        );
+    }
+
+    #[test]
+    fn a_failing_piece_when_transcribed_then_its_error_and_no_later_piece() {
+        let mut calls = 0;
+        let result = transcribe_pieces(&[0.0; 32_000], &[0..16_000, 16_000..32_000], false, |_| {
+            calls += 1;
+            Err("device lost".to_owned())
+        });
+        assert_eq!(result, Err("device lost".to_owned()));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn a_variant_wavo_lacks_when_loaded_then_the_message_names_the_ones_it_has() {
+        let Err(error) = WavoTranscriber::load("v2_rnnt") else { panic!("v2_rnnt loaded") };
+        assert_eq!(error, "GIGAAM_VARIANT v2_rnnt is not available on wavo (v3_e2e_rnnt, v3_e2e_ctc, v3_rnnt, v3_ctc)");
     }
 
     #[test]
