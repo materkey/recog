@@ -280,6 +280,90 @@ mod tests {
         assert_eq!(payload.get("local_user_name"), Some(&Value::from("Anna")));
     }
 
+    fn enabled(dir: &Path) -> CopilotPrivacy<PrivacyStore> {
+        let store = PrivacyStore::new(dir);
+        store.write(true).unwrap();
+        CopilotPrivacy::new(store)
+    }
+
+    #[test]
+    fn privacy_off_when_delivering_then_the_payload_goes_as_it_is() {
+        // given
+        let dir = tempfile::tempdir().unwrap();
+        let mut privacy = CopilotPrivacy::new(PrivacyStore::new(dir.path()));
+        let payload = object(r#"{"segments": [{"speaker": "Anna"}], "local_user_name": "Anna"}"#);
+        // when / then
+        assert_eq!(privacy.apply(&payload), Ok(payload));
+    }
+
+    #[test]
+    fn segments_without_a_meeting_id_when_masked_then_the_first_segment_or_the_last_meeting_names_the_meeting() {
+        // given
+        let dir = tempfile::tempdir().unwrap();
+        let mut privacy = enabled(dir.path());
+        let speaker = |masked: &Map, key: &str, i: usize| match masked.get(key) {
+            Some(Value::Array(segments)) => pyjson::dumps(&segments[i], None),
+            other => panic!("{other:?}"),
+        };
+        // when
+        let first = privacy
+            .apply(&object(
+                r#"{"segments": [{"meeting_id": "m1", "speaker": "Anna", "speaker_id": "p1"},
+                    {"speaker": "Boris"}, {"speaker": ""}, {"speaker": 5}, "not a segment"]}"#,
+            ))
+            .unwrap();
+        let later = privacy.apply(&object(r#"{"new_segments": [{"speaker": "Boris"}, {"speaker": "Vera"}]}"#)).unwrap();
+        // then
+        assert_eq!(
+            speaker(&first, "segments", 0),
+            r#"{"meeting_id": "m1", "speaker": "speaker_0", "speaker_id": "speaker_0"}"#
+        );
+        assert_eq!(speaker(&first, "segments", 1), r#"{"speaker": "speaker_1"}"#);
+        assert_eq!(speaker(&first, "segments", 2), r#"{"speaker": "speaker_?"}"#);
+        assert_eq!(speaker(&first, "segments", 3), r#"{"speaker": "speaker_?"}"#);
+        assert_eq!(speaker(&first, "segments", 4), r#""not a segment""#);
+        assert_eq!(speaker(&later, "new_segments", 0), r#"{"speaker": "speaker_1"}"#);
+        assert_eq!(speaker(&later, "new_segments", 1), r#"{"speaker": "speaker_2"}"#);
+        assert_eq!(first.get("privacy_mode"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn seventeen_meetings_when_masked_then_the_oldest_forgets_its_aliases_and_a_recent_one_keeps_them() {
+        // given
+        let dir = tempfile::tempdir().unwrap();
+        let mut privacy = enabled(dir.path());
+        let name = |privacy: &mut CopilotPrivacy<PrivacyStore>, meeting: &str, speaker: &str| {
+            let payload = object(&format!(r#"{{"meeting_id": "{meeting}", "local_user_name": "{speaker}"}}"#));
+            privacy.apply(&payload).unwrap().get("local_user_name").cloned().unwrap()
+        };
+        name(&mut privacy, "m0", "Anna");
+        name(&mut privacy, "m0", "Boris");
+        name(&mut privacy, "m1", "Anna");
+        name(&mut privacy, "m1", "Boris");
+        for i in 2..=16 {
+            name(&mut privacy, &format!("m{i}"), "X");
+        }
+        // when / then: m0 is the 17th meeting back and went; m1 stayed
+        assert_eq!(name(&mut privacy, "m1", "Boris"), Value::from("speaker_1"));
+        assert_eq!(name(&mut privacy, "m0", "Boris"), Value::from("speaker_0"));
+    }
+
+    #[test]
+    fn a_context_from_an_old_bridge_when_masked_then_each_named_line_is_aliased() {
+        // given
+        let dir = tempfile::tempdir().unwrap();
+        let mut privacy = enabled(dir.path());
+        let payload =
+            object(r#"{"meeting_id": "m", "recent_context": "Anna: hi\nno speaker here\nBoris: a: b\r\nAnna: again"}"#);
+        // when
+        let masked = privacy.apply(&payload).unwrap();
+        // then
+        assert_eq!(
+            masked.get("recent_context"),
+            Some(&Value::from("speaker_0: hi\nno speaker here\nspeaker_1: a: b\nspeaker_0: again"))
+        );
+    }
+
     #[test]
     fn corrupt_setting_when_delivering_then_refuses_to_expose_names() {
         // given
