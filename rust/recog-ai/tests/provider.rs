@@ -9,7 +9,7 @@ use std::path::Path;
 use common::{shell_stub, stub_argv, stub_env, stub_stdin};
 use recog_ai::provider::{
     AiProvider, CCS_AUTOMATION_MARKER_PREFIX, ClaudeCliProvider, CliEnv, CodexCliProvider, build_codex_exec_command,
-    mark_ccs_automation, provider_for_settings, resolve_cli,
+    mark_ccs_automation, node_env, provider_for_settings, resolve_cli,
 };
 use recog_ai::settings::{AiSettingsStore, Fallback};
 
@@ -292,6 +292,51 @@ async fn streaming_analysis_when_spawning_codex_then_context_is_isolated() {
     assert_eq!(&argv[argv.len() - 2..], ["--json", "-"]);
 }
 
+#[tokio::test]
+async fn agent_message_without_text_when_completing_then_empty_part_is_joined() {
+    let bare = r#"{"type":"item.completed","item":{"type":"agent_message"}}"#;
+    assert_eq!(codex_complete(&[bare, &agent("two")], 0, "").await.unwrap(), "\ntwo");
+}
+
+#[tokio::test]
+async fn non_text_agent_messages_when_completing_then_python_join_error_names_the_item() {
+    let number = r#"{"type":"item.completed","item":{"type":"agent_message","text":5}}"#;
+    let null = r#"{"type":"item.completed","item":{"type":"agent_message","text":null}}"#;
+    let error = codex_complete(&[number], 0, "").await.unwrap_err();
+    assert_eq!(error.to_string(), "sequence item 0: expected str instance, int found");
+    let error = codex_complete(&[&agent("one"), null], 0, "").await.unwrap_err();
+    assert_eq!(error.to_string(), "sequence item 1: expected str instance, NoneType found");
+}
+
+#[tokio::test]
+async fn invalid_utf8_answer_when_completing_then_decode_error() {
+    let stub = stubbed("codex", "", "", 0);
+    std::fs::write(stub.bin.join("codex.data/stdout"), b"\xff\n").unwrap();
+    let error = codex(&stub).complete("hello").await.unwrap_err();
+    assert!(error.to_string().starts_with("'utf-8' codec can't decode"), "{error}");
+}
+
+#[tokio::test]
+async fn non_text_agent_message_when_streaming_then_type_error_after_earlier_chunks() {
+    let number = r#"{"type":"item.completed","item":{"type":"agent_message","text":5}}"#;
+    let stub = stubbed("codex", &format!("{}\n{number}\n", agent("one")), "", 0);
+    let mut chunks = Vec::new();
+    let error = codex(&stub).stream("hello", &mut |text, done| chunks.push((text, done))).await.unwrap_err();
+    assert_eq!(error.to_string(), "Codex streaming error: agent message text is a int");
+    assert_eq!(chunks, [("one".to_owned(), false)]);
+}
+
+#[tokio::test]
+async fn turn_completed_without_message_when_streaming_then_empty_final_chunk() {
+    let chunks = codex_stream(&[r#"{"type":"turn.completed"}"#], 0, "").await.unwrap();
+    assert_eq!(chunks, [(String::new(), true)]);
+}
+
+#[tokio::test]
+async fn no_message_and_clean_exit_when_streaming_then_no_chunk() {
+    assert!(codex_stream(&[RECONNECT], 0, "").await.unwrap().is_empty());
+}
+
 // --- Claude ---
 
 fn claude(stub: &Stubbed, task: &str, effort: Option<&str>) -> ClaudeCliProvider {
@@ -348,6 +393,145 @@ async fn claude_stream_without_result_event_when_ended_then_last_text_is_final()
     let mut chunks = Vec::new();
     claude(&stub, "analysis", None).stream("hello", &mut |text, done| chunks.push((text, done))).await.unwrap();
     assert_eq!(chunks, [("partial".to_owned(), false), ("partial".to_owned(), true)]);
+}
+
+async fn claude_stream(lines: &[&str], code: i32, stderr: &str) -> (recog_ai::Result<()>, Vec<(String, bool)>) {
+    let stub = stubbed("claude", &(lines.join("\n") + "\n"), stderr, code);
+    let mut chunks = Vec::new();
+    let result = claude(&stub, "analysis", None).stream("hello", &mut |text, done| chunks.push((text, done))).await;
+    (result, chunks)
+}
+
+fn chunk(text: &str, done: bool) -> (String, bool) {
+    (text.to_owned(), done)
+}
+
+#[tokio::test]
+async fn mixed_content_blocks_when_streaming_claude_then_each_nonempty_text_and_last_is_final() {
+    let assistant = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"one"},{"type":"tool_use"},{"type":"text","text":""},{"type":"text","text":"two"},{"type":"text","text":7}]}}"#;
+    let lines = ["", "   ", r#"{"type":"system"}"#, r#"{"type":"assistant"}"#, assistant, r#"{"type":"result"}"#];
+    let (result, chunks) = claude_stream(&lines, 0, "").await;
+    result.unwrap();
+    assert_eq!(chunks, [chunk("one", false), chunk("two", false), chunk("7", false), chunk("7", true)]);
+}
+
+#[tokio::test]
+async fn non_text_results_when_streaming_claude_then_python_str_of_the_value() {
+    let (result, chunks) = claude_stream(&[r#"{"type":"result","result":5}"#, "ignored"], 0, "").await;
+    result.unwrap();
+    assert_eq!(chunks, [chunk("5", true)]);
+    let (result, chunks) = claude_stream(&[r#"{"type":"result","result":null}"#], 0, "").await;
+    result.unwrap();
+    assert_eq!(chunks, [chunk("", true)]);
+}
+
+#[tokio::test]
+async fn malformed_events_when_streaming_claude_then_python_type_errors() {
+    let text = r#"{"type":"text","text":"a"}"#;
+    let cases = [
+        ("[1]".to_owned(), "'list' object has no attribute 'get'"),
+        (r#"{"type":"assistant","message":5}"#.to_owned(), "'int' object has no attribute 'get'"),
+        (r#"{"type":"assistant","message":{"content":"ab"}}"#.to_owned(), "'str' object has no attribute 'get'"),
+        (r#"{"type":"assistant","message":{"content":{"k":1}}}"#.to_owned(), "'str' object has no attribute 'get'"),
+        (r#"{"type":"assistant","message":{"content":5}}"#.to_owned(), "'int' object is not iterable"),
+        (
+            format!(r#"{{"type":"assistant","message":{{"content":[{text},5]}}}}"#),
+            "'int' object has no attribute 'get'",
+        ),
+    ];
+    for (line, message) in cases {
+        let (result, chunks) = claude_stream(&[&line], 0, "").await;
+        assert_eq!(result.unwrap_err().to_string(), format!("Claude streaming error: {message}"), "{line}");
+        let expected: Vec<(String, bool)> = if line.contains(text) { vec![chunk("a", false)] } else { Vec::new() };
+        assert_eq!(chunks, expected, "{line}");
+    }
+}
+
+#[tokio::test]
+async fn claude_exits_nonzero_when_streaming_then_stderr_after_partial_text() {
+    let partial = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}"#;
+    let (result, chunks) = claude_stream(&[partial], 2, "quota\n").await;
+    assert_eq!(result.unwrap_err().to_string(), "Claude streaming error: Claude CLI error: quota");
+    assert_eq!(chunks, [chunk("partial", false)]);
+}
+
+#[tokio::test]
+async fn no_text_and_clean_exit_when_streaming_claude_then_no_chunk() {
+    let (result, chunks) = claude_stream(&[r#"{"type":"system"}"#], 0, "").await;
+    result.unwrap();
+    assert!(chunks.is_empty());
+}
+
+#[test]
+fn claude_effort_when_named_then_shown_only_when_nonempty() {
+    let stub = stubbed("claude", "", "", 0);
+    assert_eq!(claude(&stub, "analysis", Some("max")).name(), "Claude (claude-opus-5-5 max)");
+    assert_eq!(claude(&stub, "analysis", Some("")).name(), "Claude (claude-opus-5-5)");
+    assert_eq!(claude(&stub, "analysis", None).name(), "Claude (claude-opus-5-5)");
+}
+
+// --- node_env ---
+
+fn node_at(home: &Path, version_dir: &str) -> std::path::PathBuf {
+    let bin = home.join(version_dir).join("bin");
+    executable(&bin.join("node"));
+    bin
+}
+
+#[test]
+fn node_on_path_when_node_env_built_then_environment_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    executable(&bin.join("node"));
+    node_at(&dir.path().join("home"), ".nvm/versions/node/v20.0.0");
+    let env = CliEnv::from_pairs([
+        ("PATH", bin.display().to_string()),
+        ("HOME", dir.path().join("home").display().to_string()),
+    ]);
+    assert_eq!(node_env(&env).unwrap(), env);
+}
+
+#[test]
+fn several_nvm_versions_when_node_env_built_then_newest_with_node_is_prepended() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    node_at(&home, ".nvm/versions/node/v9.0.0");
+    let newest = node_at(&home, ".nvm/versions/node/v20.1.0");
+    std::fs::create_dir_all(home.join(".nvm/versions/node/v21.0.0/bin")).unwrap();
+    let env = CliEnv::from_pairs([("PATH", "/nowhere".to_owned()), ("HOME", home.display().to_string())]);
+    let built = node_env(&env).unwrap();
+    assert_eq!(built.get("PATH").unwrap().to_string_lossy(), format!("{}:/nowhere", newest.display()));
+    assert_eq!(built.get("HOME"), env.get("HOME"));
+}
+
+#[test]
+fn both_nvm_layouts_when_node_env_built_then_local_share_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let share = node_at(&home, ".local/share/nvm/v18.0.0");
+    node_at(&home, ".nvm/versions/node/v22.0.0");
+    let env = CliEnv::from_pairs([("PATH", "/nowhere".to_owned()), ("HOME", home.display().to_string())]);
+    let built = node_env(&env).unwrap();
+    assert_eq!(built.get("PATH").unwrap().to_string_lossy(), format!("{}:/nowhere", share.display()));
+}
+
+#[test]
+fn no_node_anywhere_when_node_env_built_then_environment_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".nvm/versions/node/v20.0.0/bin")).unwrap();
+    let env = CliEnv::from_pairs([("PATH", "/nowhere".to_owned()), ("HOME", home.display().to_string())]);
+    assert_eq!(node_env(&env).unwrap(), env);
+}
+
+#[test]
+fn nvm_base_is_a_file_when_node_env_built_then_os_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".local/share")).unwrap();
+    std::fs::write(home.join(".local/share/nvm"), "").unwrap();
+    let env = CliEnv::from_pairs([("PATH", "/nowhere".to_owned()), ("HOME", home.display().to_string())]);
+    assert!(node_env(&env).is_err());
 }
 
 // --- tests/test_claude_effort.py: each provider gets only its own effort ---
