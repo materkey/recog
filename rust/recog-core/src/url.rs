@@ -96,33 +96,47 @@ fn rpartition_tail(s: &str, sep: char) -> &str {
 }
 
 fn check_bracketed_netloc(netloc: &str) -> Result<(), String> {
+    check_bracketed_host(bracketed_hostname(netloc)?)
+}
+
+/// The host of a netloc with brackets: between them, nothing before the opening one
+/// and only a port after the closing one.
+fn bracketed_hostname(netloc: &str) -> Result<&str, String> {
     let host_and_port = rpartition_tail(netloc, '@');
     let (before, open, bracketed) = partition(host_and_port, "[");
-    let hostname = if open {
-        if !before.is_empty() {
-            return Err("Invalid IPv6 URL".into());
-        }
-        let (hostname, _, port) = partition(bracketed, "]");
-        if !port.is_empty() && !port.starts_with(':') {
-            return Err("Invalid IPv6 URL".into());
-        }
-        hostname
-    } else {
-        partition(host_and_port, ":").0
-    };
+    if !open {
+        return Ok(partition(host_and_port, ":").0);
+    }
+    if !before.is_empty() {
+        return Err("Invalid IPv6 URL".into());
+    }
+    let (hostname, _, port) = partition(bracketed, "]");
+    if !port.is_empty() && !port.starts_with(':') {
+        return Err("Invalid IPv6 URL".into());
+    }
+    Ok(hostname)
+}
+
+/// `_check_bracketed_host`: an IPvFuture address or an IPv6 one.
+fn check_bracketed_host(hostname: &str) -> Result<(), String> {
     if let Some(future) = hostname.strip_prefix('v') {
-        let (version, dot, address) = partition(future, ".");
-        let valid = dot && !version.is_empty() && version.chars().all(|c| c.is_ascii_hexdigit()) && !address.is_empty();
-        if !valid {
-            return Err("IPvFuture address is invalid".into());
-        }
-        return Ok(());
+        return check_ipvfuture(future);
     }
     if parse_ipv4(hostname).is_ok() {
         return Err("An IPv4 address cannot be in brackets".into());
     }
     if !is_ipv6(hostname) {
         return Err(format!("{} does not appear to be an IPv4 or IPv6 address", py::repr(hostname)));
+    }
+    Ok(())
+}
+
+/// `v[a-fA-F0-9]+\..+` after the `v`.
+fn check_ipvfuture(future: &str) -> Result<(), String> {
+    let (version, dot, address) = partition(future, ".");
+    let valid = dot && !version.is_empty() && version.chars().all(|c| c.is_ascii_hexdigit()) && !address.is_empty();
+    if !valid {
+        return Err("IPvFuture address is invalid".into());
     }
     Ok(())
 }
