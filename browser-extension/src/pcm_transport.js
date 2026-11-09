@@ -744,7 +744,7 @@ function findReceiverTrackByIds(trackIds, conf, jitsiConf) {
   if (!trackIds || trackIds.size === 0) return null;
   const pcs = findPeerConnections(conf, jitsiConf);
   for (const pc of pcs) {
-    let receivers = [];
+    let receivers;
     try { receivers = pc.getReceivers?.() || []; } catch (_) { receivers = []; }
     for (const receiver of receivers) {
       const track = receiver?.track;

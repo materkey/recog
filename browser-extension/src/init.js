@@ -25,7 +25,6 @@ function sendConnectionStatus(connected) {
 }
 
 function waitForConference(callback, maxAttempts = 100) {
-  const platform = getPlatform();
   const adapter = getPlatformAdapter();
   const platformName = getPlatformDisplayName();
 
@@ -262,14 +261,14 @@ function subscribeToDominantSpeaker(conf) {
       sendParticipantsUpdate(conf);
     });
 
-    adapter.onParticipantJoined?.((id) => {
+    adapter.onParticipantJoined?.(() => {
       updateSpeakerStatus(conf);
       sendParticipantsUpdate(conf);
       startParticipantsRefresh(conf, 'user_joined');
     });
   } else {
     // Legacy KTalk event subscription
-    conf?._participantsMap?.forEach((p, key) => {
+    conf?._participantsMap?.forEach((p) => {
       if (p._activeSpeaker$?.subscribe) {
         p._activeSpeaker$.subscribe(() => updateSpeakerStatus(conf));
       }
