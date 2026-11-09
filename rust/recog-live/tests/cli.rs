@@ -6,9 +6,11 @@
 //! `setup.sh` installs it), so that checkout, not the one it was built in, is its own.
 //! A child keeps `LLVM_PROFILE_FILE`, so a coverage run counts what it executed.
 
+#[cfg(target_os = "linux")]
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
 use recog_core::meeting_storage::{MeetingStorage, NewSegment, SessionMode, StorageOptions};
@@ -45,6 +47,7 @@ impl Sandbox {
     }
 
     /// A stand-in program on the sandbox's PATH.
+    #[cfg(target_os = "linux")]
     fn program(&self, name: &str, script: &str) {
         let path = self.path("bin").join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
@@ -403,6 +406,7 @@ fn blackhole_asked_for_on_linux_when_starting_live_then_no_system_audio_and_noth
 }
 
 /// Waits for a line of the child's stdout holding `needle`; the lines so far.
+#[cfg(target_os = "linux")]
 fn wait_for_line(reader: &mut impl std::io::BufRead, needle: &str, timeout: Duration) -> String {
     let deadline = Instant::now() + timeout;
     let mut seen = String::new();
