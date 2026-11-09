@@ -778,30 +778,43 @@ impl Live {
             return Ok(());
         }
         self.close_audio_writers()?;
-        if self.opts.ktalk_only {
-            let storage = self.storage();
-            let meta = storage.map(|s| s.load_meta().map_err(storage_error)).transpose()?;
-            let source = meta.as_ref().and_then(|m| m.as_object()).and_then(|m| m.get("source")).cloned();
-            if source != Some(Value::from("ktalk")) {
-                return Ok(());
-            }
+        if self.opts.ktalk_only && !self.current_meeting_is_ktalk()? {
+            return Ok(());
         }
+        self.open_audio_writers(meeting_path, continuation)
+    }
+
+    /// A writer for each capture there is, in the meeting's directory.
+    fn open_audio_writers(&self, meeting_path: &Path, continuation: bool) -> Result<(), String> {
         let mut wav = lock(&self.wav);
         if self.mic_capture.is_some() {
-            let path = meeting_path.join("audio_mic.wav");
-            let mut writer = IncrementalWavWriter::new(&path);
-            writer.open(continuation).map_err(|e| e.to_string())?;
-            wav.mic = Some(writer);
-            self.print(&format!("Recording mic audio: {}", path.display()));
+            wav.mic = Some(self.open_track_writer(meeting_path, "mic", continuation)?);
         }
         if self.system_capture.is_some() {
-            let path = meeting_path.join("audio_system.wav");
-            let mut writer = IncrementalWavWriter::new(&path);
-            writer.open(continuation).map_err(|e| e.to_string())?;
-            wav.system = Some(writer);
-            self.print(&format!("Recording system audio: {}", path.display()));
+            wav.system = Some(self.open_track_writer(meeting_path, "system", continuation)?);
         }
         Ok(())
+    }
+
+    /// Whether the current meeting's `meta.json` says it is a KTalk meeting.
+    fn current_meeting_is_ktalk(&self) -> Result<bool, String> {
+        let meta = self.storage().map(|s| s.load_meta().map_err(storage_error)).transpose()?;
+        let source = meta.as_ref().and_then(|m| m.as_object()).and_then(|m| m.get("source")).cloned();
+        Ok(source == Some(Value::from("ktalk")))
+    }
+
+    /// `audio_<track>.wav` of the meeting, opened for writing.
+    fn open_track_writer(
+        &self,
+        meeting_path: &Path,
+        track: &str,
+        continuation: bool,
+    ) -> Result<IncrementalWavWriter, String> {
+        let path = meeting_path.join(format!("audio_{track}.wav"));
+        let mut writer = IncrementalWavWriter::new(&path);
+        writer.open(continuation).map_err(|e| e.to_string())?;
+        self.print(&format!("Recording {track} audio: {}", path.display()));
+        Ok(writer)
     }
 
     /// `_before_meeting_switch`.

@@ -18,7 +18,7 @@ use crate::live::parts::Conference;
 use crate::live::transcriber::Live;
 use crate::live::{AUDIO_CLEANUP_INTERVAL_S, GOLDEN_KEEP_DAYS};
 use crate::per_speaker::{IngestOptions, IngestStats, PcmChunk, PerSpeakerIngest, TranscribeCallback};
-use crate::refine::{AbortMode, RefineOptions, RefineWorker, new_model_lock};
+use crate::refine::{AbortMode, GenerationGetter, RefineOptions, RefineWorker, new_model_lock};
 
 /// Makes the increment generator of a meetings directory.
 pub type IncrementsFactory = Box<dyn Fn(&Path) -> Arc<dyn IncrementGenerator> + Send>;
@@ -218,21 +218,8 @@ pub fn setup_bridge(live: &Arc<Live>, config: &mut SessionConfig) -> Result<Opti
     let ktalk_only = live.options().ktalk_only;
     let mut bridge_config = config.bridge.clone();
     bridge_config.ktalk_only = ktalk_only;
-    let built = Bridge::new(bridge_config, config.policy.clone()).and_then(|bridge| {
-        let hooks = Arc::new(LiveHooks(Arc::downgrade(live)));
-        if ktalk_only {
-            bridge.set_meeting_capture(hooks.clone());
-        }
-        bridge.configure_user_profile(&live.user_identity(), hooks.clone())?;
-        bridge.set_live_events(Some(hooks));
-        if let Some(storage) = live.storage() {
-            bridge.set_meeting_storage(storage.clone());
-            if let Some(make) = &config.increments {
-                bridge.set_increment_generator(make(storage.base_path()));
-            }
-        }
-        Ok(bridge)
-    });
+    let built = Bridge::new(bridge_config, config.policy.clone())
+        .and_then(|bridge| wire_bridge(live, config, bridge, ktalk_only));
     match built {
         Ok(bridge) => {
             live.set_conference(Some(Arc::new(bridge.clone()) as Arc<dyn Conference>));
@@ -247,19 +234,58 @@ pub fn setup_bridge(live: &Arc<Live>, config: &mut SessionConfig) -> Result<Opti
     }
 }
 
+/// The bridge's hooks into the transcriber, its storage and the increments.
+fn wire_bridge(
+    live: &Arc<Live>,
+    config: &SessionConfig,
+    bridge: Arc<Bridge>,
+    ktalk_only: bool,
+) -> Result<Arc<Bridge>, String> {
+    let hooks = Arc::new(LiveHooks(Arc::downgrade(live)));
+    if ktalk_only {
+        bridge.set_meeting_capture(hooks.clone());
+    }
+    bridge.configure_user_profile(&live.user_identity(), hooks.clone())?;
+    bridge.set_live_events(Some(hooks));
+    if let Some(storage) = live.storage() {
+        bridge.set_meeting_storage(storage.clone());
+        if let Some(make) = &config.increments {
+            bridge.set_increment_generator(make(storage.base_path()));
+        }
+    }
+    Ok(bridge)
+}
+
 /// `_setup_per_speaker_ingest` and `_setup_refine_worker`.
 pub fn setup_per_speaker_ingest(live: &Arc<Live>) {
     if !(live.use_pcm_transport() && live.use_ktalk() && live.conference().is_some()) {
         return;
     }
     let weak = Arc::downgrade(live);
+    let generation: GenerationGetter = {
+        let weak = weak.clone();
+        Arc::new(move || weak.upgrade().map_or(0, |live| live.generation()))
+    };
+    let ingest = start_ingest(live, &weak, generation.clone());
+    let worker = start_refine_worker(live, &weak, generation);
+    if !live.is_recording_active() {
+        worker.pause();
+    }
+    worker.start();
+    ingest.set_refine_submit_callback(Some(Arc::new(move |task| {
+        if let Some(live) = weak.upgrade() {
+            live.submit_refine(task);
+        }
+        Ok(())
+    })));
+    live.println("RefineWorker started");
+}
+
+/// `_setup_per_speaker_ingest`: the ingest started, its batches into the transcriber.
+fn start_ingest(live: &Arc<Live>, weak: &Weak<Live>, generation: GenerationGetter) -> Arc<PerSpeakerIngest> {
     let callback: TranscribeCallback = {
         let weak = weak.clone();
         Arc::new(move |batch| weak.upgrade().map_or(Ok(()), |live| live.on_pcm_batch(batch)))
-    };
-    let generation = {
-        let weak = weak.clone();
-        Arc::new(move || weak.upgrade().map_or(0, |live| live.generation()))
     };
     let meeting_active = {
         let weak = weak.clone();
@@ -274,7 +300,7 @@ pub fn setup_per_speaker_ingest(live: &Arc<Live>) {
     let ingest = Arc::new(PerSpeakerIngest::new(
         callback,
         IngestOptions {
-            generation_getter: Some(generation.clone()),
+            generation_getter: Some(generation),
             meeting_active_getter: Some(meeting_active),
             asr_available_getter: Some(asr_available),
             clock: live.env.clock.clone(),
@@ -285,7 +311,12 @@ pub fn setup_per_speaker_ingest(live: &Arc<Live>) {
     live.set_ingest(Some(ingest.clone()));
     ingest.start();
     live.println("Per-speaker PCM ingest started");
+    ingest
+}
 
+/// `_setup_refine_worker`: the worker, not started, re-transcribing through the
+/// transcriber and applying there.
+fn start_refine_worker(live: &Arc<Live>, weak: &Weak<Live>, generation: GenerationGetter) -> Arc<RefineWorker> {
     let transcribe = {
         let weak = weak.clone();
         Arc::new(move |pcm: &[i16], should_abort: Option<&dyn Fn() -> bool>| match weak.upgrade() {
@@ -313,17 +344,7 @@ pub fn setup_per_speaker_ingest(live: &Arc<Live>) {
         },
     ));
     live.set_refine_worker(Some(worker.clone()));
-    if !live.is_recording_active() {
-        worker.pause();
-    }
-    worker.start();
-    ingest.set_refine_submit_callback(Some(Arc::new(move |task| {
-        if let Some(live) = weak.upgrade() {
-            live.submit_refine(task);
-        }
-        Ok(())
-    })));
-    live.println("RefineWorker started");
+    worker
 }
 
 fn banner(live: &Live) {

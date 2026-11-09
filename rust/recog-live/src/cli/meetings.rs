@@ -126,16 +126,32 @@ pub fn format_list(meetings: &[Value]) -> String {
 /// Runs the command against `storage`.
 #[must_use]
 pub fn run(storage: &MeetingStorage, args: &MeetingsArgs, zone: &dyn Clock) -> Printed {
-    let ok = |stdout: String| Printed { stdout, stderr: String::new(), code: 0 };
-    let failed = |e: &dyn std::fmt::Display| Printed { stdout: String::new(), stderr: format!("{e}\n"), code: 1 };
-    if let Some(id) = &args.meeting_id {
-        return match storage.get_meeting(id) {
-            Ok(Some(meeting)) if args.json => ok(format!("{}\n", pyjson::dumps(&meeting, Some(2)))),
-            Ok(Some(meeting)) => ok(format_meeting(&meeting, zone)),
-            Ok(None) => Printed { stdout: String::new(), stderr: format!("Meeting not found: {id}\n"), code: 1 },
-            Err(e) => failed(&e),
-        };
+    match &args.meeting_id {
+        Some(id) => show_meeting(storage, id, args.json, zone),
+        None => list_meetings(storage, args),
     }
+}
+
+fn ok(stdout: String) -> Printed {
+    Printed { stdout, stderr: String::new(), code: 0 }
+}
+
+fn failed(e: &dyn std::fmt::Display) -> Printed {
+    Printed { stdout: String::new(), stderr: format!("{e}\n"), code: 1 }
+}
+
+/// `meetings <id>`: one meeting, as JSON or as text.
+fn show_meeting(storage: &MeetingStorage, id: &str, json: bool, zone: &dyn Clock) -> Printed {
+    match storage.get_meeting(id) {
+        Ok(Some(meeting)) if json => ok(format!("{}\n", pyjson::dumps(&meeting, Some(2)))),
+        Ok(Some(meeting)) => ok(format_meeting(&meeting, zone)),
+        Ok(None) => Printed { stdout: String::new(), stderr: format!("Meeting not found: {id}\n"), code: 1 },
+        Err(e) => failed(&e),
+    }
+}
+
+/// `meetings`: every meeting, as JSON or as a table.
+fn list_meetings(storage: &MeetingStorage, args: &MeetingsArgs) -> Printed {
     match storage.list_meetings(true, args.refresh_cache) {
         Ok(meetings) if args.json => ok(format!("{}\n", pyjson::dumps(&Value::Array(meetings), Some(2)))),
         Ok(meetings) => ok(format_list(&meetings)),

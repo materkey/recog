@@ -471,18 +471,7 @@ impl Inner {
         let transcription = match self.transcribe_task(task) {
             Ok(Outcome::Done(t)) => t,
             Ok(Outcome::NotCurrent) => return Ok(()),
-            Err(AsrError::TemporarilyUnavailable) => {
-                if self.task_is_current(task) {
-                    self.options.clock.sleep(self.options.unavailable_retry_delay_s);
-                }
-                self.submit(task.clone());
-                return Ok(());
-            }
-            Err(AsrError::Aborted) => {
-                self.submit(task.clone());
-                return Ok(());
-            }
-            Err(e) => return Err(e),
+            Err(e) => return self.resubmit_after(task, e),
         };
         // pause() may have landed during the inference: no spurious promotions.
         if !self.task_is_current(task) {
@@ -492,6 +481,22 @@ impl Inner {
         if let Err(e) = (self.apply_fn)(&result) {
             self.options.logger.line(&format!("[RefineWorker] apply_fn raised RuntimeError: {e}"));
         }
+        Ok(())
+    }
+
+    /// A failed inference: an unavailable model (after the retry delay, unless the
+    /// task went stale) and an abort put the task back; anything else is the error.
+    fn resubmit_after(&self, task: &Arc<RefineTask>, error: AsrError) -> Result<(), AsrError> {
+        match error {
+            AsrError::TemporarilyUnavailable => {
+                if self.task_is_current(task) {
+                    self.options.clock.sleep(self.options.unavailable_retry_delay_s);
+                }
+            }
+            AsrError::Aborted => {}
+            e => return Err(e),
+        }
+        self.submit(task.clone());
         Ok(())
     }
 }
