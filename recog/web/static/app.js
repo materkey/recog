@@ -2059,51 +2059,14 @@ async function playSegmentAudio(meetingId, segmentIndex, buttonEl) {
             return;  // Another click happened, abort
         }
 
-        if (!response.ok) {
-            const error = await response.json().catch(() => ({}));
-            throw new Error(error.detail || 'Failed to load audio');
-        }
-
-        const audioBlob = await response.blob();
+        const audioBlob = await readSegmentAudio(response);
 
         // Check again after blob load
         if (audioLoadingFor !== buttonEl) {
             return;
         }
 
-        const audioObjectUrl = URL.createObjectURL(audioBlob);
-
-        currentAudio = new Audio(audioObjectUrl);
-        currentAudioUrl = audioObjectUrl;
-        currentPlayButton = buttonEl;
-        audioLoadingFor = null;
-
-        // Update button to playing state
-        buttonEl.classList.remove('loading');
-        buttonEl.classList.add('playing');
-        buttonEl.innerHTML = `
-            <svg class="stop-icon" viewBox="0 0 24 24" width="16" height="16">
-                <rect x="6" y="6" width="12" height="12" fill="currentColor"/>
-            </svg>
-        `;
-        buttonEl.disabled = false;
-
-        // Highlight the segment
-        const segmentEl = buttonEl.closest('.transcript-segment');
-        if (segmentEl) {
-            segmentEl.classList.add('segment-playing');
-        }
-
-        currentAudio.onended = () => {
-            stopAudio();
-        };
-
-        currentAudio.onerror = () => {
-            stopAudio();
-            showNotification('Audio playback failed', 'error');
-        };
-
-        await currentAudio.play();
+        await startSegmentAudio(buttonEl, audioBlob);
 
     } catch (e) {
         audioLoadingFor = null;
@@ -2112,6 +2075,51 @@ async function playSegmentAudio(meetingId, segmentIndex, buttonEl) {
         buttonEl.disabled = false;
         showNotification(`Audio error: ${e.message}`, 'error');
     }
+}
+
+async function readSegmentAudio(response) {
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || 'Failed to load audio');
+    }
+    return response.blob();
+}
+
+// The loaded segment starts playing; its button becomes the stop button.
+async function startSegmentAudio(buttonEl, audioBlob) {
+    const audioObjectUrl = URL.createObjectURL(audioBlob);
+
+    currentAudio = new Audio(audioObjectUrl);
+    currentAudioUrl = audioObjectUrl;
+    currentPlayButton = buttonEl;
+    audioLoadingFor = null;
+
+    // Update button to playing state
+    buttonEl.classList.remove('loading');
+    buttonEl.classList.add('playing');
+    buttonEl.innerHTML = `
+        <svg class="stop-icon" viewBox="0 0 24 24" width="16" height="16">
+            <rect x="6" y="6" width="12" height="12" fill="currentColor"/>
+        </svg>
+    `;
+    buttonEl.disabled = false;
+
+    // Highlight the segment
+    const segmentEl = buttonEl.closest('.transcript-segment');
+    if (segmentEl) {
+        segmentEl.classList.add('segment-playing');
+    }
+
+    currentAudio.onended = () => {
+        stopAudio();
+    };
+
+    currentAudio.onerror = () => {
+        stopAudio();
+        showNotification('Audio playback failed', 'error');
+    };
+
+    await currentAudio.play();
 }
 
 function stopAudio() {
