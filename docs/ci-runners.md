@@ -44,7 +44,10 @@ directory, check its SHA-256, then:
 ./svc.sh install && ./svc.sh start   # a LaunchAgent: it runs while the user is logged in
 ```
 
-The job adds clippy, rustfmt and llvm-tools-preview to the user's stable toolchain.
+The job adds clippy, rustfmt and llvm-tools-preview to the user's stable toolchain, and
+takes Python 3.12 from Homebrew (`/opt/homebrew/bin/python3.12`, `brew install
+python@3.12`) into a venv of its own: setup-python's macOS builds install only under
+`/Users/runner/hostedtoolcache`, which exists on hosted runners alone.
 A sleeping Mac leaves the macOS job queued (GitHub keeps a queued job for a day). The
 quality gate runs on Linux only (docs/quality.md), so the Mac builds the workspace
 once per job.
