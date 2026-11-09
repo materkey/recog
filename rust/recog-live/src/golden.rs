@@ -27,7 +27,7 @@ use std::time::UNIX_EPOCH;
 use recog_core::pyjson::{self, Map, Value};
 use sha1::{Digest as _, Sha1};
 
-use crate::asr::{Clip, Transcription};
+use crate::asr::Transcription;
 use crate::clock::{Clock as _, SystemClock};
 use crate::log::Logger;
 
@@ -66,33 +66,12 @@ impl Audio<'_> {
     }
 }
 
-impl<'a> From<Clip<'a>> for Audio<'a> {
-    fn from(clip: Clip<'a>) -> Self {
-        match clip {
-            Clip::F32(s) => Audio::F32(s),
-            Clip::I16(s) => Audio::I16(s),
-        }
-    }
-}
-
 /// Samples read back from `audio.bin`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AudioData {
     F32(Vec<f32>),
     I16(Vec<i16>),
     F64(Vec<f64>),
-}
-
-impl AudioData {
-    /// The samples as an [`Audio`] view, e.g. to key them with [`audio_key`].
-    #[must_use]
-    pub fn as_audio(&self) -> Audio<'_> {
-        match self {
-            AudioData::F32(s) => Audio::F32(s),
-            AudioData::I16(s) => Audio::I16(s),
-            AudioData::F64(s) => Audio::F64(s),
-        }
-    }
 }
 
 /// What an ASR call was given: its dtype and samples, hashed (sha1 hex).
@@ -156,34 +135,40 @@ pub fn round6(x: f64) -> f64 {
     let (int_part, frac) = exact.split_once('.').unwrap_or((&exact, ""));
     let (kept, rest) = frac.split_at(6);
     let mut digits: Vec<u8> = int_part.bytes().chain(kept.bytes()).map(|b| b - b'0').collect();
-    let rest = rest.as_bytes();
-    let up = match rest.first() {
+    if rounds_up(rest.as_bytes(), digits.last().is_some_and(|d| d % 2 == 1)) {
+        carry_one(&mut digits);
+    }
+    let value: f64 = six_decimals(&digits).parse().unwrap_or(0.0);
+    if x.is_sign_negative() { -value } else { value }
+}
+
+/// Whether the digits cut off after the sixth decimal round it up, half to even.
+fn rounds_up(rest: &[u8], last_kept_odd: bool) -> bool {
+    match rest.first() {
         Some(d) if *d > b'5' => true,
-        Some(b'5') => rest[1..].iter().any(|&d| d != b'0') || digits.last().is_some_and(|d| d % 2 == 1),
+        Some(b'5') => rest[1..].iter().any(|&d| d != b'0') || last_kept_odd,
         _ => false,
-    };
-    if up {
-        let mut i = digits.len();
-        loop {
-            if i == 0 {
-                digits.insert(0, 1);
-                break;
-            }
-            i -= 1;
-            if digits[i] == 9 {
-                digits[i] = 0;
-            } else {
-                digits[i] += 1;
-                break;
-            }
+    }
+}
+
+/// Adds one to the last decimal digit, carrying to the left.
+fn carry_one(digits: &mut Vec<u8>) {
+    for digit in digits.iter_mut().rev() {
+        if *digit == 9 {
+            *digit = 0;
+        } else {
+            *digit += 1;
+            return;
         }
     }
+    digits.insert(0, 1);
+}
+
+/// The digits as a decimal with the last six after the point.
+fn six_decimals(digits: &[u8]) -> String {
     let split = digits.len() - 6;
-    let text: String = digits[..split].iter().map(|d| char::from(b'0' + d)).collect::<String>()
-        + "."
-        + &digits[split..].iter().map(|d| char::from(b'0' + d)).collect::<String>();
-    let value: f64 = text.parse().unwrap_or(0.0);
-    if x.is_sign_negative() { -value } else { value }
+    let text = |part: &[u8]| part.iter().map(|d| char::from(b'0' + d)).collect::<String>();
+    text(&digits[..split]) + "." + &text(&digits[split..])
 }
 
 /// `str(OSError)`: `[Errno n] message` when the error has an errno.
@@ -374,22 +359,28 @@ pub fn remove_old_sessions(root: &Path, max_age_days: f64, now: Option<f64>) -> 
     entries.sort();
     let mut removed = Vec::new();
     for directory in entries {
-        let events = directory.join(EVENTS);
-        let keep = directory.file_name().is_some_and(|n| n.to_string_lossy().ends_with(KEEP_SUFFIX));
-        if keep || !events.is_file() {
-            continue;
-        }
-        let modified = fs::metadata(&events)?.modified()?;
-        let mtime = match modified.duration_since(UNIX_EPOCH) {
-            Ok(d) => d.as_secs_f64(),
-            Err(e) => -e.duration().as_secs_f64(),
-        };
-        if now - mtime > max_age_days * 86400.0 {
+        if is_old_session(&directory, max_age_days, now)? {
             fs::remove_dir_all(&directory)?;
             removed.push(directory);
         }
     }
     Ok(removed)
+}
+
+/// Whether `directory` is a session not marked `-keep` whose `events.jsonl` was last
+/// written more than `max_age_days` before `now`.
+fn is_old_session(directory: &Path, max_age_days: f64, now: f64) -> io::Result<bool> {
+    let events = directory.join(EVENTS);
+    let keep = directory.file_name().is_some_and(|n| n.to_string_lossy().ends_with(KEEP_SUFFIX));
+    if keep || !events.is_file() {
+        return Ok(false);
+    }
+    let modified = fs::metadata(&events)?.modified()?;
+    let mtime = match modified.duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs_f64(),
+        Err(e) => -e.duration().as_secs_f64(),
+    };
+    Ok(now - mtime > max_age_days * 86400.0)
 }
 
 /// An event read back: its JSON object, and for a `capture` its samples.
@@ -433,24 +424,34 @@ pub fn read_session(directory: &Path) -> io::Result<Vec<Event>> {
     let text = fs::read_to_string(directory.join(EVENTS))?;
     let mut events = Vec::new();
     for line in text.split_inclusive('\n') {
-        let value = pyjson::loads(line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let Value::Object(fields) = value else {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "an event that is not an object"));
-        };
-        let samples = if fields.contains_key("nbytes") {
-            let offset = int_field(&fields, "offset")?;
-            let nbytes = usize::try_from(int_field(&fields, "nbytes")?).unwrap_or(usize::MAX);
-            let dtype = fields.get("dtype").and_then(Value::as_str).unwrap_or("");
-            audio.seek(SeekFrom::Start(offset))?;
-            let mut bytes = vec![0; nbytes];
-            audio.read_exact(&mut bytes)?;
-            Some(decode(dtype, &bytes)?)
-        } else {
-            None
-        };
+        let fields = event_fields(line)?;
+        let samples = event_samples(&fields, &mut audio)?;
         events.push(Event { fields, audio: samples });
     }
     Ok(events)
+}
+
+/// One line of `events.jsonl` as its object.
+fn event_fields(line: &str) -> io::Result<Map> {
+    let value = pyjson::loads(line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let Value::Object(fields) = value else {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "an event that is not an object"));
+    };
+    Ok(fields)
+}
+
+/// The samples an event names in `audio.bin`, None when it names none.
+fn event_samples(fields: &Map, audio: &mut File) -> io::Result<Option<AudioData>> {
+    if !fields.contains_key("nbytes") {
+        return Ok(None);
+    }
+    let offset = int_field(fields, "offset")?;
+    let nbytes = usize::try_from(int_field(fields, "nbytes")?).unwrap_or(usize::MAX);
+    let dtype = fields.get("dtype").and_then(Value::as_str).unwrap_or("");
+    audio.seek(SeekFrom::Start(offset))?;
+    let mut bytes = vec![0; nbytes];
+    audio.read_exact(&mut bytes)?;
+    Ok(Some(decode(dtype, &bytes)?))
 }
 
 #[cfg(test)]
