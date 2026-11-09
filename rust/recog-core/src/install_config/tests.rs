@@ -165,7 +165,7 @@ fn install_runtime_when_parsing_and_overlaying_then_file_default_and_variable_ap
     // when
     let (resolved, overridden) = with_environment(&config, &environ(&[("RECOG_INSTALL_RUNTIME", "python")])).unwrap();
     // then
-    assert_eq!(InstallConfig::default().install.runtime, "python");
+    assert_eq!(InstallConfig::default().install.runtime, "rust");
     assert_eq!(config.install.runtime, "rust");
     assert_eq!(resolved.install.runtime, "python");
     assert_eq!(overridden, vec!["RECOG_INSTALL_RUNTIME"]);

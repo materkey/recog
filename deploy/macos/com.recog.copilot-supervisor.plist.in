@@ -42,8 +42,6 @@
         <string>@DATA_DIR@</string>
         <key>TERM</key>
         <string>xterm-256color</string>
-        <key>PYTHONUNBUFFERED</key>
-        <string>1</string>
     </dict>
 </dict>
 </plist>

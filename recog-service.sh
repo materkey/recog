@@ -351,11 +351,7 @@ cmd_claude() {
     elif [ ! -f "$channel_unit" ]; then
         warn "Copilot channel daemon is NOT responding at http://127.0.0.1:8767/mcp"
         warn "Service unit not installed at $channel_unit — start manually:"
-        if deps_rust_mode; then
-            warn "  $SVC_BIN_DIR/recog-copilot-channel --repo-root $SCRIPT_DIR"
-        else
-            warn "  cd $SCRIPT_DIR && $(svc_python) -m recog.copilot_channel"
-        fi
+        warn "  $SVC_BIN_DIR/recog-copilot-channel --repo-root $SCRIPT_DIR"
         warn ""
         warn "Launching Claude Code anyway — channel push will be a no-op until the daemon comes up."
     else
@@ -412,24 +408,11 @@ cmd_claude() {
     # for the manual launch: the project-scope entry in ~/.claude.json
     # disappeared, so without these flags Claude Code starts with no `copilot`
     # server (channel push is a no-op). This mirrors what the supervisor spawns
-    # (recog/copilot_supervisor.py:build_claude_command) — built-ins + copilot
+    # (rust/recog-copilot's supervisor) — built-ins + copilot
     # only, no user MCP servers. URL overridable via RECOG_COPILOT_MCP_URL.
     # The model and the effort ("auto" without one), on two lines.
     local copilot_launch copilot_model copilot_effort
-    if deps_rust_mode; then
-        copilot_launch="$(deps_recog config copilot-launch)" || return 1
-    else
-        copilot_launch="$("$(svc_python)" -c '
-import sys
-from recog.ai_settings import AiSettingsStore
-from recog.config import get_data_dir
-task = AiSettingsStore(get_data_dir()).resolve_task("copilot")
-if not task["enabled"]:
-    sys.exit("Copilot выключен в настройках.")
-print(task["models"]["claude"])
-print(task["claude_effort"] or "auto")
-')" || return 1
-    fi
+    copilot_launch="$(deps_recog config copilot-launch)" || return 1
     copilot_model="${copilot_launch%%$'\n'*}"
     copilot_effort="${copilot_launch##*$'\n'}"
     local effort_args=()
@@ -529,7 +512,7 @@ cmd_help() {
     echo "  logs-supervisor    - Tail copilot supervisor daemon logs"
     echo "  claude             - Launch Claude Code wired to the Copilot channel"
     echo ""
-    echo "Services ($(svc_backend_name), [install] runtime = $(deps_install_runtime)):"
+    echo "Services ($(svc_backend_name)):"
     echo "  - Live transcription: $(svc_command live | tr '\n' ' ')"
     echo "  - Frontend: http://127.0.0.1:9080"
     echo "  - Copilot channel daemon: $(svc_command copilot-channel | tr '\n' ' ')(http://127.0.0.1:8767/mcp)"

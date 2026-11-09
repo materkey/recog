@@ -212,10 +212,11 @@ section!(
         zoom_app: bool = ("RECOG_ZOOM_APP", Flag, false),
         /// Cancel what the built-in speakers play out of the microphone (macOS).
         echo_cancel: bool = ("RECOG_ECHO_CANCEL", Flag, false),
-        /// The microphone's child process on macOS: "python" or "rust".
-        mic_worker: String = ("RECOG_MIC_WORKER", Text, "python".into()),
-        /// The live process: "python" or "rust" (the `recog` binary of recog-live).
-        runtime: String = ("RECOG_LIVE_RUNTIME", Text, "python".into()),
+        /// No effect: the microphone's child process is always `recog-mic`. Still
+        /// accepted, so that a config.toml written for the Python worker stays valid.
+        mic_worker: String = ("RECOG_MIC_WORKER", Text, "rust".into()),
+        /// No effect: the live process is always the `recog` binary. Still accepted.
+        runtime: String = ("RECOG_LIVE_RUNTIME", Text, "rust".into()),
         /// Record golden sessions under <data dir>/golden for replay.
         golden_record: bool = ("RECOG_GOLDEN_RECORD", Flag, false),
     }
@@ -227,8 +228,8 @@ section!(
         autospawn: bool = ("RECOG_COPILOT_AUTOSPAWN", Flag, true),
         grace_s: f64 = ("RECOG_COPILOT_GRACE_S", Number, 90.0),
         mcp_url: String = ("RECOG_COPILOT_MCP_URL", Text, "http://127.0.0.1:8767/mcp".into()),
-        /// The supervisor and the MCP channel: "python" or "rust" (recog-copilot's binaries).
-        runtime: String = ("RECOG_COPILOT_RUNTIME", Text, "python".into()),
+        /// No effect: the supervisor and the channel are recog-copilot's binaries.
+        runtime: String = ("RECOG_COPILOT_RUNTIME", Text, "rust".into()),
     }
 );
 
@@ -240,8 +241,8 @@ section!(
         extra_ws_origins: Vec<String> = ("RECOG_EXTRA_WS_ORIGINS", List, Vec::new()),
         /// Read-only meeting directories of other sources: "path" or "path:source".
         external_meetings_paths: Vec<String> = ("EXTERNAL_MEETINGS_PATHS", List, Vec::new()),
-        /// The web server: "python" or "rust" (the `recog-web` binary).
-        runtime: String = ("RECOG_WEB_RUNTIME", Text, "python".into()),
+        /// No effect: the web server is the `recog-web` binary.
+        runtime: String = ("RECOG_WEB_RUNTIME", Text, "rust".into()),
     }
 );
 
@@ -256,9 +257,9 @@ section!(
 section!(
     /// `[install]`.
     InstallSettings, "install" {
-        /// How setup.sh installs recog and what the service units run: "python" (the
-        /// venv) or "rust" (the binaries in bin/, run by the units directly).
-        runtime: String = ("RECOG_INSTALL_RUNTIME", Text, "python".into()),
+        /// "rust", the only installation left: the binaries in bin/, run by the units.
+        /// "python" was the venv; setup.sh and `recog check` refuse it now.
+        runtime: String = ("RECOG_INSTALL_RUNTIME", Text, "rust".into()),
     }
 );
 

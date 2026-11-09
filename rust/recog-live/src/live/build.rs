@@ -62,7 +62,7 @@ pub fn create_echo_stage(system_audio: &str, config: &InstallConfig) -> Option<A
 }
 
 /// `[live] mic_worker`, except that an installation without Python
-/// (`[install] runtime = "rust"`) has only the Rust worker.
+/// (`[install] runtime = "rust"`, the only one left) has only the Rust worker.
 #[must_use]
 pub fn mic_worker_choice(config: &InstallConfig) -> &str {
     if config.install.runtime == "rust" { "rust" } else { &config.live.mic_worker }
@@ -209,11 +209,8 @@ mod tests {
         // given
         let mut config = InstallConfig::default();
         // when / then
-        assert_eq!(mic_worker_choice(&config), "python");
-        config.live.mic_worker = "rust".into();
         assert_eq!(mic_worker_choice(&config), "rust");
         config.live.mic_worker = "python".into();
-        config.install.runtime = "rust".into();
         assert_eq!(mic_worker_choice(&config), "rust");
     }
 

@@ -5,18 +5,56 @@ without touching the service manager, and RECOG_SERVICE_OS selects that backend
 independently of the host — so both the launchd and the systemd units are
 covered from either OS. The lifecycle tests drive the real script against stub
 `launchctl` / `systemctl` binaries on PATH.
+
+The scripts run from a copy of the checkout whose bin/ holds stub programs:
+rendering asks `bin/recog config data-dir`, which the stub answers as the real
+binary does (RECOG_DATA_DIR, else ~/.recog).
 """
+
+import atexit
 import os
 import plistlib
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+SOURCE_ROOT = Path(__file__).resolve().parent.parent
+PROGRAM_STUB = """#!/bin/sh
+if [ -n "$STUB_LOG" ]; then printf '%s\\n' "$(basename "$0") $*" >> "$STUB_LOG"; fi
+if [ "$*" = "config data-dir" ]; then printf '%s\\n' "${RECOG_DATA_DIR:-$HOME/.recog}"; fi
+exit 0
+"""
+RUST_PROGRAMS = (
+    "recog",
+    "recog-web",
+    "recog-copilot-supervisor",
+    "recog-copilot-channel",
+    "recog-desktop",
+    "recog-mic",
+)
+
+
+def make_checkout(repo):
+    """A copy of what the service scripts read, with stub programs in bin/."""
+    repo.mkdir(parents=True)
+    shutil.copy2(SOURCE_ROOT / "recog-service.sh", repo / "recog-service.sh")
+    for tree in ("scripts", "deploy"):
+        shutil.copytree(SOURCE_ROOT / tree, repo / tree)
+    (repo / "bin").mkdir()
+    for name in RUST_PROGRAMS:
+        (repo / "bin" / name).write_text(PROGRAM_STUB)
+        (repo / "bin" / name).chmod(0o755)
+    return repo
+
+
+_CHECKOUT_DIR = tempfile.mkdtemp(prefix="recog-units-")
+atexit.register(shutil.rmtree, _CHECKOUT_DIR, True)
+REPO_ROOT = make_checkout(Path(_CHECKOUT_DIR).resolve() / "recog")
 SERVICE_SH = REPO_ROOT / "recog-service.sh"
 
 SERVICES = ("live", "frontend", "copilot-channel", "copilot-supervisor")
@@ -30,8 +68,9 @@ PLACEHOLDER_RE = re.compile(r"@[A-Z_]+@")
 def run_service_sh(*args, env_extra=None, check=True, script=SERVICE_SH):
     env = {**os.environ}
     env.pop("XDG_CONFIG_HOME", None)
-    # The developer's own config.toml must not pick the installation's runtime.
-    env["RECOG_INSTALL_RUNTIME"] = "python"
+    # The developer's own config.toml must not decide anything here.
+    env["RECOG_CONFIG_FILE"] = "/nonexistent/recog/config.toml"
+    env.pop("RECOG_INSTALL_RUNTIME", None)
     env.update(env_extra or {})
     return subprocess.run(
         ["bash", str(script), *args],
@@ -271,17 +310,15 @@ def test_render_rejects_a_template_with_an_unknown_placeholder(tmp_path):
     assert not dst.exists()
 
 
-def test_macos_live_unit_starts_the_interpreter_through_the_recog_application(tmp_path):
+def test_macos_live_unit_starts_the_binary_through_the_recog_application(tmp_path):
     """macOS attributes Screen Recording and the microphone to the program the
-    job starts: the interpreter itself made them "python3.12" and lost them on
-    every interpreter upgrade."""
+    job starts: the permissions belong to "Recog", whatever it runs."""
     units = render("Darwin", tmp_path / "out")
     live = plistlib.loads(units["com.recog.live.plist"].read_bytes())
 
     program = live["ProgramArguments"]
     assert program[0] == f"{REPO_ROOT}/Recog.app/Contents/MacOS/recog_launcher"
-    assert Path(program[1]).name.startswith("python")
-    assert program[2:] == ["-m", "recog", "live", "--system-audio", "auto", "--ktalk"]
+    assert program[1:] == [f"{REPO_ROOT}/bin/recog", "live", "--system-audio", "auto", "--ktalk"]
 
 
 @pytest.mark.skipif(
@@ -521,17 +558,8 @@ def test_unsupported_os_is_rejected():
 
 
 # ---------------------------------------------------------------------------
-# Installation without Python: [install] runtime = "rust"
+# The commands of the units
 # ---------------------------------------------------------------------------
-
-RUST_PROGRAMS = (
-    "recog",
-    "recog-web",
-    "recog-copilot-supervisor",
-    "recog-copilot-channel",
-    "recog-desktop",
-    "recog-mic",
-)
 
 
 @pytest.fixture
@@ -541,9 +569,9 @@ def rust_checkout(tmp_path):
     data-dir` answers as the real binary does; a python on PATH would log."""
     repo = tmp_path / "check & out"
     repo.mkdir()
-    shutil.copy2(SERVICE_SH, repo / "recog-service.sh")
+    shutil.copy2(SOURCE_ROOT / "recog-service.sh", repo / "recog-service.sh")
     for tree in ("scripts", "deploy"):
-        shutil.copytree(REPO_ROOT / tree, repo / tree)
+        shutil.copytree(SOURCE_ROOT / tree, repo / tree)
     bin_dir = repo / "bin"
     bin_dir.mkdir()
     for name in RUST_PROGRAMS:
@@ -652,22 +680,6 @@ def test_installation_without_python_when_rendering_systemd_then_exec_start_runs
     for path in units.values():
         assert not PLACEHOLDER_RE.search(path.read_text()), path.name
     assert not [c for c in log.read_text().splitlines() if c.startswith("python")]
-
-
-@pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
-def test_python_installation_when_rendering_then_units_run_the_modules(target_os, tmp_path):
-    """The default stays: the units start the interpreter on the service's module."""
-    units = render(target_os, tmp_path / "out")
-
-    text = "\n".join(path.read_text() for path in units.values())
-    for module in (
-        "recog",
-        "recog.web.server",
-        "recog.copilot_channel",
-        "recog.copilot_supervisor",
-    ):
-        assert module in text
-    assert f"{REPO_ROOT}/bin/" not in text
 
 
 @pytest.mark.parametrize("target_os", ["Darwin", "Linux"])

@@ -9,8 +9,8 @@
 # Requires SVC_REPO_DIR to be set by the caller.
 
 SVC_REPO_DIR="${SVC_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-# deps_install_runtime decides what the units run.
-if ! declare -F deps_install_runtime > /dev/null; then
+# deps.sh runs the recog binary for the data directory.
+if ! declare -F deps_recog > /dev/null; then
     DEPS_REPO_DIR="${DEPS_REPO_DIR:-$SVC_REPO_DIR}"
     # shellcheck source=../deps.sh
     source "$SVC_REPO_DIR/scripts/deps.sh"
@@ -39,18 +39,6 @@ svc_label() {
 }
 
 # --- placeholder values ----------------------------------------------------
-
-# The interpreter the units run. RECOG_PYTHON overrides it (tests, non-standard
-# venv layouts); otherwise the repo venv wins over whatever is in PATH.
-svc_python() {
-    if [ -n "${RECOG_PYTHON:-}" ]; then
-        echo "$RECOG_PYTHON"
-    elif [ -x "$SVC_REPO_DIR/venv-gigaam/bin/python3" ]; then
-        echo "$SVC_REPO_DIR/venv-gigaam/bin/python3"
-    else
-        command -v python3 || echo "python3"
-    fi
-}
 
 # Directory holding `node`, replacing the hardcoded nvm path the old plists
 # carried. AI providers and the title generator shell out to node-based CLIs
@@ -87,27 +75,14 @@ svc_cli_path_prefix() {
     printf '%s' "$extra"
 }
 
-# The program and arguments a service's unit runs, one per line. With Python
-# that is `python -m <module>`, whose module hands over to the Rust binary when
-# the service's own runtime asks for it; without Python ([install] runtime =
-# "rust") the unit runs the binary in bin/ directly, the checkout named.
+# The program and arguments a service's unit runs, one per line: the binary in
+# bin/ with the checkout named.
 svc_command() {
-    if [ "$(deps_install_runtime)" = "rust" ]; then
-        case "$1" in
-            live)               printf '%s\n' "$SVC_BIN_DIR/recog" live --system-audio auto --ktalk ;;
-            frontend)           printf '%s\n' "$SVC_BIN_DIR/recog-web" --host 127.0.0.1 --port 9080 --repo "$SVC_REPO_DIR" ;;
-            copilot-channel)    printf '%s\n' "$SVC_BIN_DIR/recog-copilot-channel" --repo-root "$SVC_REPO_DIR" ;;
-            copilot-supervisor) printf '%s\n' "$SVC_BIN_DIR/recog-copilot-supervisor" --repo-root "$SVC_REPO_DIR" ;;
-            *)                  return 1 ;;
-        esac
-        return
-    fi
-    local python; python="$(svc_python)"
     case "$1" in
-        live)               printf '%s\n' "$python" -m recog live --system-audio auto --ktalk ;;
-        frontend)           printf '%s\n' "$python" -m recog.web.server ;;
-        copilot-channel)    printf '%s\n' "$python" -m recog.copilot_channel ;;
-        copilot-supervisor) printf '%s\n' "$python" -m recog.copilot_supervisor ;;
+        live)               printf '%s\n' "$SVC_BIN_DIR/recog" live --system-audio auto --ktalk ;;
+        frontend)           printf '%s\n' "$SVC_BIN_DIR/recog-web" --host 127.0.0.1 --port 9080 --repo "$SVC_REPO_DIR" ;;
+        copilot-channel)    printf '%s\n' "$SVC_BIN_DIR/recog-copilot-channel" --repo-root "$SVC_REPO_DIR" ;;
+        copilot-supervisor) printf '%s\n' "$SVC_BIN_DIR/recog-copilot-supervisor" --repo-root "$SVC_REPO_DIR" ;;
         *)                  return 1 ;;
     esac
 }
@@ -190,7 +165,6 @@ svc_render_template() {
         -e "s|@REPO_DIR@|$(_svc_value "$SVC_REPO_DIR")|g" \
         -e "s|@DATA_DIR@|$(_svc_value "$SVC_DATA_DIR")|g" \
         -e "s|@HOME@|$(_svc_value "$HOME")|g" \
-        -e "s|@PYTHON@|$(_svc_value "$(svc_python)")|g" \
         -e "s|@LOG_DIR@|$(_svc_value "$SVC_LOG_DIR")|g" \
         -e "s|@NODE_BIN@|$(_svc_value "$(svc_node_bin)")|g" \
         -e "s|@CLI_PATH_PREFIX@|$(_svc_value "$(svc_cli_path_prefix)")|g" \

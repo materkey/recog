@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,22 +15,42 @@ function isExecutable(file) {
   }
 }
 
-// The installation config has one parser, recog/install_config.py, and its Rust
-// port in the recog binary; the build asks it for the configured hosts instead
-// of validating the file again. RECOG_PYTHON names an interpreter; otherwise an
-// installation without Python ([install] runtime = "rust") answers from bin/recog,
-// any other from the venv.
-export function loadConferenceHosts(env = process.env, root = projectRoot) {
-  const run = (program, args) => execFileSync(program, args, {
-    cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
-  });
-  const recog = path.join(root, 'bin/recog');
-  if (!env.RECOG_PYTHON && isExecutable(recog)) {
-    return JSON.parse(run(recog, ['config', 'conferences']));
+function expandHome(file, env) {
+  const home = env.HOME || os.homedir();
+  if (file === '~') {
+    return home;
   }
-  const venvPython = path.join(root, 'venv-gigaam/bin/python');
-  const python = env.RECOG_PYTHON || (fs.existsSync(venvPython) ? venvPython : 'python3');
-  return JSON.parse(run(python, ['-m', 'recog.install_config']));
+  return file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
+}
+
+// Where the recog binary would look: RECOG_CONFIG_FILE (relative to the
+// checkout), else $XDG_CONFIG_HOME/recog/config.toml, and the legacy hosts file.
+function configFiles(env, root) {
+  const inRoot = file => (path.isAbsolute(file) ? file : path.join(root, file));
+  const config = env.RECOG_CONFIG_FILE
+    ? inRoot(expandHome(env.RECOG_CONFIG_FILE, env))
+    : path.join(expandHome(env.XDG_CONFIG_HOME || '~/.config', env), 'recog', 'config.toml');
+  const legacy = inRoot(expandHome(env.RECOG_CONFERENCE_HOSTS_FILE || '.local/conference-hosts.json', env));
+  return [config, legacy];
+}
+
+// The installation config has one parser, the recog binary's; the build asks
+// bin/recog for the configured hosts instead of validating the file again. A
+// checkout setup.sh has not built (CI) has no bin/recog: with no configuration
+// file either, the built-in hosts are all there is.
+export function loadConferenceHosts(env = process.env, root = projectRoot) {
+  const recog = path.join(root, 'bin/recog');
+  if (isExecutable(recog)) {
+    const output = execFileSync(recog, ['config', 'conferences'], {
+      cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    return JSON.parse(output);
+  }
+  const present = configFiles(env, root).filter(file => fs.existsSync(file));
+  if (present.length) {
+    throw new Error(`${present[0]} needs ${recog} to be read: run ./setup.sh first`);
+  }
+  return { jitsi: [], matrix: [] };
 }
 
 export function createManifest(template, hosts) {

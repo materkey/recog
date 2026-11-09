@@ -3,7 +3,6 @@
 import os
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -131,43 +130,3 @@ assert server.get_storage().base_path == expected / 'meetings'
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.skipif(shutil.which("rsync") is None, reason="rsync required for backup")
-def test_migrated_data_when_backing_up_then_all_databases_and_logs_are_in_snapshot(tmp_path):
-    root = Path(__file__).resolve().parent.parent
-    repo = tmp_path / "checkout"
-    (repo / "scripts").mkdir(parents=True)
-    for name in ("backup-data.sh", "config-path.sh", "data-dir.sh", "deps.sh"):
-        shutil.copy2(root / "scripts" / name, repo / "scripts" / name)
-    (repo / "recog").mkdir()
-    for name in ("__init__.py", "config.py", "install_config.py"):
-        shutil.copy2(root / "recog" / name, repo / "recog" / name)
-    (repo / ".env").write_bytes(b"BACKUP_TEST=value\n")
-    data = tmp_path / "My data"
-    (data / "meetings").mkdir(parents=True)
-    (data / "meetings/transcript.jsonl").write_bytes(b"transcript\n")
-    (data / "logs").mkdir()
-    (data / "logs/live.log").write_bytes(b"log\n")
-    (data / "speakers_custom.json").write_bytes(b"{}")
-    config = tmp_path / "config home/recog/config.toml"
-    config.parent.mkdir(parents=True)
-    config.write_bytes(b'[asr]\nbackend = "local"\n')
-    destination = tmp_path / "backup"
-    result = subprocess.run(
-        ["bash", str(repo / "scripts/backup-data.sh"), "--with-logs", "--dest", str(destination)],
-        env={
-            **os.environ,
-            "DEPS_PYTHON": sys.executable,
-            "RECOG_DATA_DIR": str(data),
-            "RECOG_CONFIG_FILE": str(config),
-        },
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    for relative in ("meetings/transcript.jsonl", "logs/live.log", "speakers_custom.json"):
-        assert (destination / relative).read_bytes() == (data / relative).read_bytes()
-    assert (destination / "env.backup").read_bytes() == (repo / ".env").read_bytes()
-    assert (destination / "config.toml").read_bytes() == config.read_bytes()
-    assert not (repo / "meetings").exists()

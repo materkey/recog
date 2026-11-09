@@ -142,7 +142,14 @@ step "CLI help"
 step "service units render"
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "$RENDER_DIR"' EXIT
-./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
+# Rendering asks recog for the data directory: the installed one, else the debug
+# build the Rust tests above made (a checkout setup.sh has not installed, CI).
+if [ -x bin/recog ] || [ ! -x "${CARGO_TARGET_DIR:-rust/target}/debug/recog" ]; then
+    ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
+else
+    DEPS_BIN_DIR="$(cd "${CARGO_TARGET_DIR:-rust/target}/debug" && pwd)" \
+        ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
+fi
 echo "  rendered $(find "$RENDER_DIR" -type f | wc -l | tr -d ' ') $(uname -s) units"
 
 # RECOG_QUALITY_BASE runs the full quality gate (docs/quality.md), which

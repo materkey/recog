@@ -1,100 +1,107 @@
-"""Tests for `setup.sh` and `scripts/prefetch_gigaam.py`.
+"""Tests for `setup.sh`, which installs recog without Python.
 
 setup.sh is driven end-to-end against a throwaway copy of the repo with every
-external command stubbed on PATH (python/pip/npm/ffmpeg/systemctl/...), so the
-assertions are about *what it decides* — which index torch comes from, which
-GigaAM ref is installed, whether a running service is restarted rather than
+external command stubbed on PATH (cargo, the programs it builds, npm, ffmpeg,
+systemctl, ...), so the assertions are about *what it decides*: what cargo
+builds, what lands in bin/, whether a running service is restarted rather than
 started, whether an incomplete install is allowed to touch the service manager
-at all — without installing anything.
+at all. Every Python entry point on PATH logs and fails, and no test may see it
+called.
 
 RECOG_HOST_OS / RECOG_SERVICE_OS pin the OS, so the Linux decisions are
 covered from a Mac and vice versa.
 """
-import email.message
-import hashlib
+
 import os
 import plistlib
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-
-@pytest.mark.parametrize("payload,ready", [
-    (None, True),
-    ('{"version":1,"revision":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","models":{},"tasks":{}}', True),
-    ("broken JSON", False),
-    ('{"version":1,"revision":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","models":{"api_key":"secret"},"tasks":{}}', False),
-])
-def test_ai_settings_when_checking_readiness_then_invalid_settings_block_activation(tmp_path, payload, ready):
-    root = Path(__file__).resolve().parent.parent
-    settings = tmp_path / "ai-settings.json"
-    if payload is not None:
-        settings.write_text(payload)
-    result = subprocess.run(
-        ["bash", "-c", 'source "$1"; deps_asr_config_check', "--", str(root / "scripts/deps.sh")],
-        env={**os.environ, "DEPS_PYTHON": sys.executable, "RECOG_DATA_DIR": str(tmp_path),
-             "RECOG_ASR_BACKEND": "local"}, capture_output=True, text=True,
-    )
-    assert (result.returncode == 0) is ready, result.stdout + result.stderr
-    if not ready:
-        assert "Invalid AI settings" in result.stdout
-    if payload is None:
-        assert not settings.exists()
-    else:
-        assert settings.read_text() == payload
-    assert not (tmp_path / "ai-settings.lock").exists()
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
-
-import prefetch_gigaam  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Fake repo + stub commands
 # ---------------------------------------------------------------------------
 
-# `python` covers both the bootstrap interpreter and the venv one setup.sh
-# creates from it: it answers the version probe, materialises a venv on
-# `-m venv`, and lets the library probes be steered per test.
-PYTHON_STUB = r"""#!/bin/sh
-printf '%s\n' "python $*" >> "$STUB_LOG"
-case "$*" in
-  *"print(get_data_dir())"*) exec "$STUB_REAL_PYTHON" "$@" ;;
-  *sys.version_info*)   echo "${STUB_PY_VERSION:-3.12}"; exit 0 ;;
-  *"-m venv"*)
-      for arg in "$@"; do target="$arg"; done
-      mkdir -p "$target/bin"
-      cp "$STUB_BIN/python3.12" "$target/bin/python"
-      cp "$STUB_BIN/pip" "$target/bin/pip"
-      exit 0 ;;
-  *recog.config*)       exit "${STUB_ASR_RC:-0}" ;;
-  *sounddevice*)        exit "${STUB_PORTAUDIO_RC:-0}" ;;
-  *prefetch_gigaam*)    exit "${STUB_PREFETCH_RC:-0}" ;;
-  *"print(INSTALL_CONFIG.asr.backend)"*) echo "${STUB_ASR_BACKEND:-auto}"; exit 0 ;;
-  *"print(INSTALL_CONFIG.live.runtime)"*) echo "${STUB_LIVE_RUNTIME:-python}"; exit 0 ;;
-  *"print(INSTALL_CONFIG.web.runtime)"*) echo "${STUB_WEB_RUNTIME:-python}"; exit 0 ;;
-  *"print(INSTALL_CONFIG.copilot.runtime)"*) echo "${STUB_COPILOT_RUNTIME:-python}"; exit 0 ;;
-  *"print(INSTALL_CONFIG.install.runtime)"*) echo "${STUB_PARSED_INSTALL_RUNTIME:-python}"; exit 0 ;;
-esac
-exit 0
-"""
-
 PLAIN_STUB = """#!/bin/sh
 printf '%s\\n' "{name} $*" >> "$STUB_LOG"
 exit {code}
 """
 
+# Every program cargo builds: logs its arguments, answers the installation's
+# questions the way the real `recog` does.
+RUST_PROGRAM_STUB = r"""#!/bin/sh
+printf '%s\n' "$(basename "$0") $*" >> "$STUB_LOG"
+case "$*" in
+  "check") [ -n "$STUB_CHECK" ] && { printf '%s\n' "$STUB_CHECK"; exit 1; }; exit 0 ;;
+  "config install-runtime") echo "${STUB_PARSED_INSTALL_RUNTIME:-rust}" ;;
+  "config data-dir") printf '%s\n' "$HOME/.recog" ;;
+  "config conferences") echo '{"jitsi": [], "matrix": []}' ;;
+  "launcher") printf '%s\n' "$(dirname "$0")/../Recog.app/Contents/MacOS/recog_launcher" ;;
+esac
+exit 0
+"""
+
+# cargo: logs, and for `build` writes each `--bin` into target/release.
+CARGO_STUB = r"""#!/bin/sh
+printf '%s\n' "cargo $*" >> "$STUB_LOG"
+[ "$1" = "build" ] || exit 0
+[ -n "$STUB_CARGO_FAIL" ] && exit 101
+mkdir -p target/release
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--bin" ]; then
+    cp "$STUB_BIN/.rust-program" "target/release/$arg"
+    chmod 755 "target/release/$arg"
+  fi
+  previous="$arg"
+done
+exit 0
+"""
+
+# Logged and failing: the installation must never get here.
+NO_PYTHON_STUB = """#!/bin/sh
+printf '%s\\n' "python-called $(basename "$0") $*" >> "$STUB_LOG"
+exit 1
+"""
+
 # Present by default; a test drops one to simulate a missing dependency.
 DEFAULT_STUBS = (
-    "ffmpeg", "parec", "pactl", "pip", "npm", "node", "tmux", "claude",
-    "jq", "swiftc", "launchctl", "systemctl", "curl",
+    "ffmpeg",
+    "parec",
+    "pactl",
+    "npm",
+    "node",
+    "tmux",
+    "claude",
+    "jq",
+    "swiftc",
+    "launchctl",
+    "systemctl",
+    "curl",
 )
-# Builds the echo canceller on macOS (rust/speexdsp-aec-py).
-DEFAULT_STUBS += ("cargo",)
+
+PROGRAMS = {
+    "Linux": [
+        "recog",
+        "recog-copilot-channel",
+        "recog-copilot-supervisor",
+        "recog-desktop",
+        "recog-web",
+    ],
+    "Darwin": [
+        "recog",
+        "recog-copilot-channel",
+        "recog-copilot-supervisor",
+        "recog-desktop",
+        "recog-mic",
+        "recog-web",
+    ],
+}
 
 COPY_FILES = (
     "setup.sh",
@@ -113,9 +120,11 @@ def repo(tmp_path):
         shutil.copy2(REPO_ROOT / rel, dst / rel)
     for rel in COPY_TREES:
         shutil.copytree(
-            REPO_ROOT / rel, dst / rel,
+            REPO_ROOT / rel,
+            dst / rel,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+    (dst / "rust").mkdir()
     # A prebuilt macOS helper: the darwin readiness probe wants it executable.
     helper = dst / "sck_audio_capture"
     helper.write_text("#!/bin/sh\nexit 0\n")
@@ -127,12 +136,6 @@ def repo(tmp_path):
     launcher.parent.mkdir(parents=True)
     launcher.write_text('#!/bin/sh\nexec "$@"\n')
     launcher.chmod(0o755)
-    # The echo canceller's Python package: setup.sh hands its directory to pip.
-    (dst / "rust/speexdsp-aec-py").mkdir(parents=True)
-    (dst / "rust/speexdsp-aec-py/pyproject.toml").write_text('[project]\nname = "speexdsp-aec"\n')
-    # The ASR backend "wavo"'s Python package, built only when that backend is chosen.
-    (dst / "rust/wavo-asr-py").mkdir(parents=True)
-    (dst / "rust/wavo-asr-py/pyproject.toml").write_text('[project]\nname = "wavo-asr"\n')
     return dst
 
 
@@ -141,9 +144,31 @@ def repo(tmp_path):
 # test that drops a stub to simulate a missing dependency cannot accidentally
 # find the host's real ffmpeg / swiftc / node instead.
 SYS_TOOLS = (
-    "bash", "sh", "sed", "grep", "awk", "head", "tail", "wc", "du", "mkdir",
-    "cp", "mv", "rm", "ln", "cat", "dirname", "basename", "readlink", "sleep",
-    "tr", "uname", "sort", "date", "chmod", "git",
+    "bash",
+    "sh",
+    "sed",
+    "grep",
+    "awk",
+    "head",
+    "tail",
+    "wc",
+    "du",
+    "mkdir",
+    "cp",
+    "mv",
+    "rm",
+    "ln",
+    "cat",
+    "dirname",
+    "basename",
+    "readlink",
+    "sleep",
+    "tr",
+    "uname",
+    "sort",
+    "date",
+    "chmod",
+    "git",
 )
 
 
@@ -156,12 +181,16 @@ def stubs(tmp_path):
     sys_dir.mkdir()
     log = tmp_path / "stub.log"
 
-    (bin_dir / "python3.12").write_text(PYTHON_STUB)
-    (bin_dir / "python3.12").chmod(0o755)
     for name in DEFAULT_STUBS:
         stub = bin_dir / name
         stub.write_text(PLAIN_STUB.format(name=name, code=0))
         stub.chmod(0o755)
+    (bin_dir / ".rust-program").write_text(RUST_PROGRAM_STUB)
+    (bin_dir / "cargo").write_text(CARGO_STUB)
+    (bin_dir / "cargo").chmod(0o755)
+    for name in ("python3.12", "python3.13", "python3", "python", "pip"):
+        (bin_dir / name).write_text(NO_PYTHON_STUB)
+        (bin_dir / name).chmod(0o755)
     for name in SYS_TOOLS:
         real = shutil.which(name)
         if real:
@@ -176,11 +205,7 @@ def run_setup(repo, stubs, *args, host_os="Linux", env_extra=None, check=False):
         "PATH": f"{bin_dir}{os.pathsep}{sys_dir}",
         "STUB_LOG": str(log),
         "STUB_BIN": str(bin_dir),
-        "STUB_REAL_PYTHON": sys.executable,
         "RECOG_HOST_OS": host_os,
-        # Pinned with the OS: setup.sh rejects macOS on anything but arm64,
-        # and the Darwin decisions are exercised from a Linux CI runner.
-        "RECOG_HOST_ARCH": "arm64" if host_os == "Darwin" else "x86_64",
         "RECOG_SERVICE_OS": host_os,
         "TERM": "dumb",
     }
@@ -188,19 +213,19 @@ def run_setup(repo, stubs, *args, host_os="Linux", env_extra=None, check=False):
     env.update(env_extra or {})
     result = subprocess.run(
         ["bash", str(repo / "setup.sh"), *args],
-        capture_output=True, text=True, env=env, check=check,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=check,
     )
     result.calls = log.read_text().splitlines() if log.exists() else []
+    assert not [c for c in result.calls if c.startswith(("python", "pip"))], result.calls
     return result
 
 
 def offline_args(*extra):
     """Flags that keep a run free of network and service-manager work."""
     return ("--no-prefetch", "--no-extension", *extra)
-
-
-def pip_calls(result):
-    return [c for c in result.calls if c.startswith("pip ")]
 
 
 # ---------------------------------------------------------------------------
@@ -210,36 +235,109 @@ def pip_calls(result):
 
 @pytest.mark.parametrize(
     "script",
-    ["setup.sh", "recog-service.sh", "scripts/deps.sh",
-     "scripts/service/common.sh", "scripts/service/launchd.sh",
-     "scripts/service/systemd.sh"],
+    [
+        "setup.sh",
+        "recog-service.sh",
+        "scripts/deps.sh",
+        "scripts/service/common.sh",
+        "scripts/service/launchd.sh",
+        "scripts/service/systemd.sh",
+    ],
 )
 def test_shell_scripts_parse(script):
-    result = subprocess.run(
-        ["bash", "-n", str(REPO_ROOT / script)], capture_output=True, text=True
-    )
+    result = subprocess.run(["bash", "-n", str(REPO_ROOT / script)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
 # ---------------------------------------------------------------------------
-# Python and venv
+# Building and installing the programs
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
-@pytest.mark.parametrize("existing", [False, True])
-def test_fresh_or_existing_install_when_dry_run_then_no_commands_or_files_change(repo, stubs, host_os, existing):
-    if existing:
-        venv_bin = repo / "venv-gigaam/bin"
-        venv_bin.mkdir(parents=True)
-        shutil.copy2(stubs[0] / "python3.12", venv_bin / "python")
+def test_setup_when_it_runs_then_cargo_builds_and_bin_holds_the_programs(repo, stubs, host_os):
+    """given: no usable Python on PATH
+    when: setup.sh runs end to end
+    then: cargo builds the programs in release, they land in bin/, the units
+          run them and every service is started
+    """
+    result = run_setup(repo, stubs, host_os=host_os)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    builds = [c for c in result.calls if c.startswith("cargo build")]
+    assert len(builds) == 1
+    assert builds[0].startswith("cargo build --release ")
+    assert ("-p recog-mic --bin recog-mic" in builds[0]) is (host_os == "Darwin")
+    assert sorted(p.name for p in (repo / "bin").iterdir()) == PROGRAMS[host_os]
+    assert not (repo / "venv-gigaam").exists()
+    if host_os == "Darwin":
+        agents = repo.parent / "home/Library/LaunchAgents"
+        live = plistlib.loads((agents / "com.recog.live.plist").read_bytes())
+        assert live["ProgramArguments"][1:3] == [f"{repo}/bin/recog", "live"]
+        assert "recog launcher" in result.calls
+        assert len([c for c in result.calls if c.startswith("launchctl load")]) == 4
+    else:
+        units = repo.parent / "home/.config/systemd/user"
+        assert f'ExecStart="{repo}/bin/recog" live' in (units / "recog-live.service").read_text()
+        assert len([c for c in result.calls if "enable --now" in c]) == 4
+    assert "recog prefetch" in result.calls
+    assert f"Programs:  {repo}/bin" in result.stdout
+
+
+def test_setup_when_it_runs_then_check_precedes_install_and_activation(repo, stubs):
+    result = run_setup(repo, stubs, *offline_args())
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = result.calls
+    build = next(i for i, c in enumerate(calls) if c.startswith("cargo build"))
+    check = calls.index("recog check")
+    first_enable = next(i for i, c in enumerate(calls) if "enable --now" in c)
+    assert build < check < first_enable
+    assert "recog prefetch" not in calls
+
+
+def test_bad_config_when_setup_runs_then_nothing_is_installed(repo, stubs):
+    result = run_setup(
+        repo, stubs, *offline_args(), env_extra={"STUB_CHECK": "Invalid AI settings: x"}
+    )
+
+    assert result.returncode == 1
+    assert "Invalid AI settings: x" in result.stderr
+    assert "Nothing was installed or restarted" in result.stderr
+    assert not (repo / "bin").exists()
+    assert not [c for c in result.calls if c.startswith(("systemctl", "launchctl"))]
+
+
+def test_failed_build_when_setup_runs_then_it_stops(repo, stubs):
+    result = run_setup(repo, stubs, *offline_args(), env_extra={"STUB_CARGO_FAIL": "1"})
+
+    assert result.returncode == 1
+    assert "cargo build failed" in result.stderr
+    assert not (repo / "bin").exists()
+    assert not [c for c in result.calls if c.startswith(("systemctl", "launchctl"))]
+
+
+def test_no_cargo_when_setup_runs_then_it_stops_naming_rustup(repo, stubs):
+    (stubs[0] / "cargo").unlink()
+
+    result = run_setup(repo, stubs, *offline_args())
+
+    assert result.returncode == 1
+    assert "cargo not found" in result.stderr
+    assert "rustup" in result.stderr
+    assert not (repo / "bin").exists()
+
+
+@pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
+def test_fresh_install_when_dry_run_then_no_commands_or_files_change(repo, stubs, host_os):
     home = repo.parent / "home"
     home.mkdir()
 
     def snapshot():
         return {
             str(path.relative_to(repo.parent)): path.read_bytes() if path.is_file() else None
-            for root in (repo, home) for path in root.rglob("*")
+            for root in (repo, home)
+            for path in root.rglob("*")
         }
 
     before = snapshot()
@@ -248,496 +346,52 @@ def test_fresh_or_existing_install_when_dry_run_then_no_commands_or_files_change
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.calls == []
     assert snapshot() == before
-    assert ("Would reuse venv" if existing else "Would create venv") in result.stdout
-    assert "Would install GigaAM" in result.stdout
+    assert "Would build with cargo (release)" in result.stdout
+    assert f"install the programs into {repo}/bin" in result.stdout
+    assert "Would download the ASR model gigaam-v3" in result.stdout
     assert "Would install " + host_os + " service units" in result.stdout
     assert "readiness are not verified" in result.stdout
     assert ("Would build sck_audio_capture" in result.stdout) is (host_os == "Darwin")
 
 
-def test_skip_flags_and_overrides_when_dry_run_then_plan_reflects_them(repo, stubs):
+def test_skip_flags_when_dry_run_then_plan_reflects_them(repo, stubs):
     result = run_setup(
-        repo, stubs, "--dry-run", "--no-services", "--no-env", "--no-prefetch", "--no-extension",
-        env_extra={"RECOG_TORCH_INDEX_URL": "https://example.test/torch", "RECOG_GIGAAM_REF": "test-pin"},
+        repo, stubs, "--dry-run", "--no-services", "--no-env", "--no-prefetch", "--no-extension"
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.calls == []
     for flag in ("--no-services", "--no-env", "--no-prefetch", "--no-extension"):
         assert f"({flag})" in result.stdout
-    assert "https://example.test/torch" in result.stdout
-    assert "@test-pin" in result.stdout
     assert "Would install Linux service units" not in result.stdout
     assert "Would copy" not in result.stdout
 
 
-def test_creates_the_venv_and_installs_the_pinned_gigaam(repo, stubs):
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert any("-m venv" in call for call in result.calls)
-    assert any(
-        "gigaam @ git+https://github.com/salute-developers/GigaAM.git@6e4b027" in call
-        for call in pip_calls(result)
-    ), pip_calls(result)
-    assert any("deploy/python/requirements.txt" in call for call in pip_calls(result))
-
-
-def test_reuses_an_existing_venv_symlink(repo, stubs, tmp_path):
-    """The reference Mac has venv-gigaam as a symlink into the GigaAM
-    checkout; recreating it would swap the interpreter and every version."""
-    real_venv = tmp_path / "elsewhere-venv"
-    (real_venv / "bin").mkdir(parents=True)
-    shutil.copy2(stubs[0] / "python3.12", real_venv / "bin/python")
-    shutil.copy2(stubs[0] / "pip", real_venv / "bin/pip")
-    (repo / "venv-gigaam").symlink_to(real_venv)
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo / "venv-gigaam").is_symlink()
-    assert not any("-m venv" in call for call in result.calls)
-    assert "Reusing venv" in result.stdout
-
-
-def test_python_older_than_312_is_refused(repo, stubs):
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"),
-        env_extra={"STUB_PY_VERSION": "3.11"},
-    )
-
-    assert result.returncode != 0
-    assert "3.12" in result.stderr
-    assert not pip_calls(result)
-
-
-# ---------------------------------------------------------------------------
-# torch index / constraints / GigaAM source
-# ---------------------------------------------------------------------------
-
-
-def test_linux_without_nvidia_uses_the_cpu_torch_index(repo, stubs):
-    """Default PyPI torch on Linux drags in a CUDA runtime a GPU-less box
-    never uses."""
-    assert not (stubs[0] / "nvidia-smi").exists(), "nvidia-smi must not be stubbed here"
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    torch_call = next(c for c in pip_calls(result) if " torch " in f" {c} ")
-    assert "--index-url https://download.pytorch.org/whl/cpu" in torch_call
-
-
-def test_linux_with_nvidia_keeps_the_default_cuda_torch_wheels(repo, stubs):
-    """given: a Linux box where nvidia-smi is on PATH
-    when: setup installs torch
-    then: no --index-url is forced — the CPU-only override would leave
-          RECOG_ASR_DEVICE=cuda failing at startup on a GPU machine
-    """
-    stub = stubs[0] / "nvidia-smi"
-    stub.write_text(PLAIN_STUB.format(name="nvidia-smi", code=0))
-    stub.chmod(0o755)
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    torch_call = next(c for c in pip_calls(result) if " torch " in f" {c} ")
-    assert "--index-url" not in torch_call
-
-
-def test_torch_index_url_env_overrides_the_default(repo, stubs):
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"),
-        env_extra={"RECOG_TORCH_INDEX_URL": "https://example.test/cu129"},
-    )
-
-    torch_call = next(c for c in pip_calls(result) if " torch " in f" {c} ")
-    assert "--index-url https://example.test/cu129" in torch_call
-
-
-def test_empty_torch_index_url_falls_back_to_plain_pypi(repo, stubs):
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"),
-        env_extra={"RECOG_TORCH_INDEX_URL": ""},
-    )
-
-    torch_call = next(c for c in pip_calls(result) if " torch " in f" {c} ")
-    assert "--index-url" not in torch_call
-
-
-def test_macos_pip_stages_all_apply_the_constraints_file(repo, stubs):
-    """Porting to Linux must not bump the working Mac's ML stack — every pip
-    stage on darwin runs under deploy/python/constraints/macos.txt."""
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    installs = [c for c in pip_calls(result) if c.startswith("pip install")]
-    assert installs
-    for call in installs:
-        assert "-c " in call and "deploy/python/constraints/macos.txt" in call, call
-    assert any("deploy/python/requirements-macos.txt" in call for call in installs)
-
-
-def _echo_module_installs(result):
-    return [
-        c for c in pip_calls(result) if c.startswith("pip install") and "rust/speexdsp-aec-py" in c
-    ]
-
-
-def test_macos_with_cargo_setup_builds_the_echo_canceller_under_the_constraints(repo, stubs):
-    """given: macOS with cargo on PATH
-    when: setup runs
-    then: pip builds the Rust echo canceller, under the macOS constraints like every stage"""
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    [call] = _echo_module_installs(result)
-    assert "deploy/python/constraints/macos.txt" in call
-
-
-def test_macos_without_cargo_setup_goes_on_and_says_echo_cancellation_is_unavailable(repo, stubs):
-    """given: macOS without cargo (echo cancellation is off by default)
-    when: setup runs
-    then: it does not try the build, names rustup, and still finishes"""
-    (stubs[0] / "cargo").unlink()
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _echo_module_installs(result) == []
-    assert "echo cancellation" in result.stdout and "rustup" in result.stdout
-
-
-def test_macos_failed_echo_build_setup_goes_on_and_says_so(repo, stubs):
-    """given: macOS where the build of the echo canceller fails
-    when: setup runs
-    then: it reports the failure and finishes the rest"""
-    pip = stubs[0] / "pip"
-    pip.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "pip $*" >> "$STUB_LOG"\n'
-        'case "$*" in *speexdsp-aec-py*) exit 1 ;; esac\nexit 0\n'
-    )
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "echo canceller" in result.stdout and "not built" in result.stdout
-
-
-def test_linux_setup_does_not_build_the_echo_canceller(repo, stubs):
-    """given: Linux, where echo cancellation does not run
-    when: setup runs
-    then: no build"""
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert _echo_module_installs(result) == []
-
-
-def _mic_worker_builds(result):
-    return [c for c in result.calls if c.startswith("cargo build") and "recog-mic" in c]
-
-
-def test_macos_with_cargo_setup_builds_the_rust_microphone_worker(repo, stubs):
-    """given: macOS with cargo on PATH
-    when: setup runs
-    then: cargo builds the release binary [live] mic_worker = "rust" runs"""
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _mic_worker_builds(result) == ["cargo build --release -p recog-mic"]
-
-
-def test_macos_failed_mic_worker_build_setup_goes_on_and_says_so(repo, stubs):
-    """given: macOS where the build of the Rust microphone worker fails
-    when: setup runs
-    then: it reports that the microphone stays on the Python worker and finishes"""
-    cargo = stubs[0] / "cargo"
-    cargo.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "cargo $*" >> "$STUB_LOG"\n'
-        'case "$*" in *recog-mic*) exit 1 ;; esac\nexit 0\n'
-    )
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "microphone worker was not built" in result.stdout
-
-
-def test_linux_setup_does_not_build_the_rust_microphone_worker(repo, stubs):
-    """given: Linux, where the microphone is captured in the live process
-    when: setup runs
-    then: no build"""
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    assert _mic_worker_builds(result) == []
-
-
-def _live_builds(result):
-    return [c for c in result.calls if c.startswith("cargo build") and "recog-live" in c]
-
-
-def test_macos_with_cargo_setup_builds_the_rust_live_process(repo, stubs):
-    """given: macOS with cargo on PATH
-    when: setup runs
-    then: cargo builds the release binary [live] runtime = "rust" runs"""
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _live_builds(result) == ["cargo build --release -p recog-live --bin recog"]
-
-
-@pytest.mark.parametrize("runtime, built", [("python", 0), ("rust", 1)])
-def test_linux_setup_builds_the_rust_live_process_only_with_the_setting(
-    repo, stubs, runtime, built
+@pytest.mark.parametrize("value", ["python", "go"])
+def test_install_runtime_other_than_rust_when_setup_runs_then_it_stops_before_anything(
+    repo, stubs, value
 ):
-    """given: Linux with cargo on PATH and [live] runtime set either way
-    when: setup runs
-    then: the minutes-long release build happens only for that runtime"""
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"), env_extra={"STUB_LIVE_RUNTIME": runtime}
-    )
+    """The Python installation is gone: a config.toml still asking for it, or
+    for anything else, stops setup and says what to do."""
+    config = repo.parent / "home/.config/recog/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(f'[install]\nruntime = "{value}"\n')
+
+    result = run_setup(repo, stubs, *offline_args())
+
+    assert result.returncode == 1
+    assert "[install] runtime" in result.stderr
+    assert result.calls == []
+
+
+def test_the_extension_when_built_then_npm_runs(repo, stubs):
+    (repo / "browser-extension").mkdir()
+    (repo / "browser-extension/package-lock.json").write_text("{}")
+
+    result = run_setup(repo, stubs, "--no-prefetch", "--no-services")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert len(_live_builds(result)) == built
-
-
-def test_failed_live_build_setup_goes_on_and_says_the_service_stays_on_python(repo, stubs):
-    """given: macOS where the build of the Rust live process fails
-    when: setup runs
-    then: it says the live service stays on Python and finishes"""
-    cargo = stubs[0] / "cargo"
-    cargo.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "cargo $*" >> "$STUB_LOG"\n'
-        'case "$*" in *recog-live*) exit 1 ;; esac\nexit 0\n'
-    )
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "live service stays on Python" in result.stdout
-
-
-def test_no_cargo_setup_does_not_try_the_live_build(repo, stubs):
-    (stubs[0] / "cargo").unlink()
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _live_builds(result) == []
-
-
-# The other services' Rust programs, built like the live process: (package, the stub
-# variable of its runtime setting, the cargo call, what setup says when it fails).
-RUST_SERVICE_BUILDS = [
-    pytest.param(
-        "recog-web",
-        "STUB_WEB_RUNTIME",
-        "cargo build --release -p recog-web --bin recog-web",
-        "web service stays on Python",
-        id="web",
-    ),
-    pytest.param(
-        "recog-copilot",
-        "STUB_COPILOT_RUNTIME",
-        "cargo build --release -p recog-copilot"
-        " --bin recog-copilot-supervisor --bin recog-copilot-channel",
-        "Copilot services stay on Python",
-        id="copilot",
-    ),
-]
-
-
-def _package_builds(result, package):
-    return [c for c in result.calls if c.startswith("cargo build") and f"-p {package} " in c]
-
-
-@pytest.mark.parametrize("package, runtime_stub, build, fallback", RUST_SERVICE_BUILDS)
-def test_macos_with_cargo_setup_builds_the_rust_service_binaries(
-    repo, stubs, package, runtime_stub, build, fallback
-):
-    """given: macOS with cargo on PATH and the runtime setting left at "python"
-    when: setup runs
-    then: cargo builds the release binaries the setting's "rust" runs"""
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _package_builds(result, package) == [build]
-
-
-@pytest.mark.parametrize("runtime, built", [("python", 0), ("rust", 1)])
-@pytest.mark.parametrize("package, runtime_stub, build, fallback", RUST_SERVICE_BUILDS)
-def test_linux_setup_builds_the_rust_service_binaries_only_with_the_setting(
-    repo, stubs, package, runtime_stub, build, fallback, runtime, built
-):
-    """given: Linux with cargo on PATH and the service's runtime set either way
-    when: setup runs
-    then: the minutes-long release build happens only for "rust\""""
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"), env_extra={runtime_stub: runtime}
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert len(_package_builds(result, package)) == built
-
-
-@pytest.mark.parametrize("package, runtime_stub, build, fallback", RUST_SERVICE_BUILDS)
-def test_failed_service_build_setup_goes_on_and_says_the_service_stays_on_python(
-    repo, stubs, package, runtime_stub, build, fallback
-):
-    """given: macOS where the build of one service's Rust binaries fails
-    when: setup runs
-    then: it says that service stays on Python and finishes"""
-    cargo = stubs[0] / "cargo"
-    cargo.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "cargo $*" >> "$STUB_LOG"\n'
-        f'case "$*" in *"-p {package} "*) exit 1 ;; esac\nexit 0\n'
-    )
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert fallback in result.stdout
-
-
-@pytest.mark.parametrize("package, runtime_stub, build, fallback", RUST_SERVICE_BUILDS)
-def test_no_cargo_setup_does_not_try_the_service_builds(
-    repo, stubs, package, runtime_stub, build, fallback
-):
-    """given: macOS without cargo
-    when: setup runs
-    then: no build of the service's binaries is tried"""
-    (stubs[0] / "cargo").unlink()
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _package_builds(result, package) == []
-
-
-def _wavo_module_installs(result):
-    return [c for c in pip_calls(result) if c.startswith("pip install") and "rust/wavo-asr-py" in c]
-
-
-@pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
-def test_backend_wavo_with_cargo_setup_builds_the_wavo_module(repo, stubs, host_os):
-    """given: [asr] backend = "wavo" and cargo on PATH
-    when: setup runs
-    then: pip builds rust/wavo-asr-py, on either system"""
-    result = run_setup(
-        repo,
-        stubs,
-        *offline_args("--no-services"),
-        host_os=host_os,
-        env_extra={"STUB_ASR_BACKEND": "wavo"},
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert len(_wavo_module_installs(result)) == 1
-
-
-@pytest.mark.parametrize("host_os, built", [("Darwin", 1), ("Linux", 0)])
-def test_default_backend_auto_setup_builds_wavo_on_a_mac_only(repo, stubs, host_os, built):
-    """given: the default backend "auto" and cargo on PATH
-    when: setup runs
-    then: wavo is built on a Mac, where "auto" runs on it, and not on Linux"""
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os=host_os)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert len(_wavo_module_installs(result)) == built
-
-
-def test_default_backend_auto_without_cargo_setup_says_pytorch_stays(repo, stubs):
-    """given: the default backend on a Mac without cargo
-    when: setup runs
-    then: no build, no failure: ASR stays on PyTorch and setup says how to get wavo"""
-    (stubs[0] / "cargo").unlink()
-
-    result = run_setup(repo, stubs, *offline_args("--no-services"), host_os="Darwin")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _wavo_module_installs(result) == []
-    assert "PyTorch" in result.stdout and "rustup" in result.stdout
-
-
-def test_backend_local_setup_does_not_build_the_wavo_module(repo, stubs):
-    """given: [asr] backend = "local"
-    when: setup runs on a Mac
-    then: no wavo build, whose release build takes minutes"""
-    result = run_setup(
-        repo,
-        stubs,
-        *offline_args("--no-services"),
-        host_os="Darwin",
-        env_extra={"STUB_ASR_BACKEND": "local"},
-    )
-
-    assert _wavo_module_installs(result) == []
-
-
-def test_backend_wavo_without_cargo_setup_goes_on_and_says_what_to_install(repo, stubs):
-    """given: backend wavo and no cargo
-    when: setup runs
-    then: no build attempt, rustup named, and the rest still runs (readiness then reports it)"""
-    (stubs[0] / "cargo").unlink()
-
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"), env_extra={"STUB_ASR_BACKEND": "wavo"}
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert _wavo_module_installs(result) == []
-    assert "wavo" in result.stdout and "rustup" in result.stdout
-
-
-def test_macos_dry_run_mentions_the_echo_canceller(repo, stubs):
-    result = run_setup(repo, stubs, "--dry-run", host_os="Darwin")
-
-    assert "rust/speexdsp-aec-py" in result.stdout
-
-
-def test_linux_does_not_apply_the_macos_constraints(repo, stubs):
-    result = run_setup(repo, stubs, *offline_args("--no-services"))
-
-    for call in pip_calls(result):
-        assert "deploy/python/constraints/macos.txt" not in call
-    assert not any("deploy/python/requirements-macos.txt" in call for call in pip_calls(result))
-
-
-def test_editable_gigaam_needs_an_explicit_path(repo, stubs, tmp_path):
-    checkout = tmp_path / "GigaAM"
-    checkout.mkdir()
-    (checkout / "pyproject.toml").write_text('[project]\nname = "gigaam"\n')
-
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"),
-        env_extra={"RECOG_GIGAAM_EDITABLE": str(checkout)},
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert any(f"install -e {checkout}" in call for call in pip_calls(result))
-    assert not any("git+" in call for call in pip_calls(result))
-
-
-def test_editable_gigaam_rejects_a_directory_without_pyproject(repo, stubs, tmp_path):
-    empty = tmp_path / "not-gigaam"
-    empty.mkdir()
-
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"),
-        env_extra={"RECOG_GIGAAM_EDITABLE": str(empty)},
-    )
-
-    assert result.returncode != 0
-    assert "pyproject.toml" in result.stderr
-
-
-def test_gigaam_ref_is_overridable(repo, stubs):
-    result = run_setup(
-        repo, stubs, *offline_args("--no-services"),
-        env_extra={"RECOG_GIGAAM_REF": "deadbee", "RECOG_GIGAAM_URL": "https://git.test/g.git"},
-    )
-
-    assert any(
-        "gigaam @ git+https://git.test/g.git@deadbee" in call
-        for call in pip_calls(result)
-    )
+    assert "npm ci" in result.calls and "npm run build" in result.calls
 
 
 # ---------------------------------------------------------------------------
@@ -813,23 +467,6 @@ def test_migrated_database_when_setup_runs_then_preserved_outside_checkout(repo,
 
 
 # ---------------------------------------------------------------------------
-# ASR configuration gate
-# ---------------------------------------------------------------------------
-
-
-def test_remote_asr_without_a_url_stops_before_pip(repo, stubs):
-    """The check has to precede the package and unit changes: on an existing
-    machine this is the migration that must be done by hand first."""
-    result = run_setup(
-        repo, stubs, *offline_args(), env_extra={"STUB_ASR_RC": "1"},
-    )
-
-    assert result.returncode != 0
-    assert not pip_calls(result)
-    assert not [c for c in result.calls if c.startswith(("systemctl", "launchctl"))]
-
-
-# ---------------------------------------------------------------------------
 # Services: install stages, readiness gates, activation
 # ---------------------------------------------------------------------------
 
@@ -882,8 +519,10 @@ def test_install_precedes_activation_and_starts_every_unit(repo, stubs):
     assert result.returncode == 0, result.stdout + result.stderr
     unit_dir = repo.parent / "home/.config/systemd/user"
     assert sorted(p.name for p in unit_dir.iterdir()) == [
-        "recog-copilot-channel.service", "recog-copilot-supervisor.service",
-        "recog-frontend.service", "recog-live.service",
+        "recog-copilot-channel.service",
+        "recog-copilot-supervisor.service",
+        "recog-frontend.service",
+        "recog-live.service",
     ]
     enables = [c for c in result.calls if "enable --now" in c]
     assert len(enables) == 4
@@ -916,8 +555,6 @@ def test_a_failed_activation_is_not_reported_as_success(repo, stubs):
               без user-D-Bus или без linger)
     when: setup доходит до активации
     then: сводка не рапортует «services are running» и код возврата ненулевой
-          — иначе коллега и любой скриптовый вызов считают установку удачной,
-          хотя не поднялся ни один юнит
     """
     systemctl = stubs[0] / "systemctl"
     systemctl.write_text(
@@ -953,15 +590,17 @@ def test_a_missing_required_dependency_blocks_activation(repo, stubs):
     assert not [c for c in result.calls if "stop" in c]
 
 
-def test_linux_readiness_covers_portaudio(repo, stubs):
-    """PortAudio is a shared library, not a binary: the only honest probe is
-    importing sounddevice, which is why it happens after the pip stages."""
+def test_parser_disagreeing_when_setup_checks_readiness_then_activation_is_blocked(repo, stubs):
+    """given: the scripts read "rust", the parser reads another value (.env)"""
     result = run_setup(
-        repo, stubs, *offline_args(), env_extra={"STUB_PORTAUDIO_RC": "1"},
+        repo, stubs, *offline_args(), env_extra={"STUB_PARSED_INSTALL_RUNTIME": "python"}
     )
 
     assert result.returncode != 0
-    assert "PortAudio" in result.stdout + result.stderr
+    assert (
+        '[install] runtime is "python" for recog but "rust" for setup.sh'
+        in result.stdout + result.stderr
+    )
     assert not [c for c in result.calls if "enable --now" in c]
 
 
@@ -979,6 +618,7 @@ def test_macos_readiness_requires_the_capture_helper(repo, stubs):
 def test_macos_readiness_requires_the_launcher_application(repo, stubs):
     """The live job starts Recog.app: without it launchd has nothing to run."""
     shutil.rmtree(repo / "Recog.app")
+    (stubs[0] / "swiftc").unlink()
 
     result = run_setup(repo, stubs, *offline_args(), host_os="Darwin")
 
@@ -992,17 +632,10 @@ def test_recog_service_activation_runs_the_same_readiness_check(repo, stubs, com
     """setup.sh is not the only entry point: a direct start/restart must gate
     on the same probes *before* it stops or activates anything — a restart
     that unloads a working service and then fails is the worst outcome."""
+    first = run_setup(repo, stubs, *offline_args("--no-services"))
+    assert first.returncode == 0, first.stdout + first.stderr
     (stubs[0] / "ffmpeg").unlink()
     bin_dir, log, sys_dir = stubs
-    # The real interpreter for every probe but PortAudio's: on a Linux desktop
-    # loading PortAudio under this test's bare environment can wait forever on
-    # the sound server, and the gate under test is ffmpeg's.
-    deps_python = repo.parent / "deps-python"
-    deps_python.write_text(
-        '#!/bin/sh\n[ "$1 $2" = "-c import sounddevice" ] && exit 0\n'
-        f'exec "{sys.executable}" "$@"\n'
-    )
-    deps_python.chmod(0o755)
     env = {
         "HOME": str(repo.parent / "home"),
         "PATH": f"{bin_dir}{os.pathsep}{sys_dir}",
@@ -1010,507 +643,41 @@ def test_recog_service_activation_runs_the_same_readiness_check(repo, stubs, com
         "STUB_BIN": str(bin_dir),
         "RECOG_HOST_OS": "Linux",
         "RECOG_SERVICE_OS": "Linux",
-        "DEPS_PYTHON": str(deps_python),
     }
-    Path(env["HOME"]).mkdir(exist_ok=True)
     subprocess.run(
         ["bash", str(repo / "recog-service.sh"), "install"],
-        capture_output=True, text=True, env=env, check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
     )
 
     log.write_text("")
 
     result = subprocess.run(
         ["bash", str(repo / "recog-service.sh"), command],
-        capture_output=True, text=True, env=env,
+        capture_output=True,
+        text=True,
+        env=env,
     )
 
     assert result.returncode != 0
     assert "ffmpeg" in result.stdout + result.stderr
-    assert log.read_text() == ""
+    assert not [
+        c for c in log.read_text().splitlines() if c.startswith(("systemctl", "python", "pip"))
+    ]
 
 
 def test_a_second_run_is_an_update_not_a_reinstall(repo, stubs):
-    """Re-running setup is how you update after `git pull`."""
+    """Re-running setup is how you update after `git pull`: the programs are
+    replaced, the environment files kept."""
     first = run_setup(repo, stubs, *offline_args("--no-services"))
     assert first.returncode == 0, first.stdout + first.stderr
     (repo / ".env").write_text("MINE=1\n")
-    stubs[1].write_text("")
+    inode = (repo / "bin/recog").stat().st_ino
 
     second = run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert second.returncode == 0, second.stdout + second.stderr
-    assert not any("-m venv" in call for call in second.calls)
     assert (repo / ".env").read_text() == "MINE=1\n"
-
-
-def test_intel_mac_is_rejected_before_anything_is_installed(repo, stubs):
-    """given: macOS на x86_64
-    when: ./setup.sh
-    then: отказ до venv — deploy/python/constraints/macos.txt закрепляет torch 2.8.0, а
-          macOS-колёс под x86_64 upstream не публикует с 2.2.2, и установка
-          всё равно упёрлась бы в pip"""
-    result = run_setup(repo, stubs, *offline_args("--no-services"),
-                       host_os="Darwin", env_extra={"RECOG_HOST_ARCH": "x86_64"})
-
-    assert result.returncode != 0
-    assert "x86_64" in result.stderr
-    assert not any("-m venv" in call for call in result.calls)
-
-
-# ---------------------------------------------------------------------------
-# scripts/prefetch_gigaam.py
-# ---------------------------------------------------------------------------
-
-
-GIGAAM_INIT_SAMPLE = '''
-import os
-import plistlib
-_CACHE_DIR = os.path.expanduser("~/.cache/gigaam")
-_URL_DIR = "https://cdn.example.test/GigaAM"
-_MODEL_HASHES = {
-    "v3_e2e_rnnt": "2730de7545ac43ad256485a462b0a27a",
-    "v2_rnnt": "547460139acfebd842323f59ed54ab54",
-}
-'''
-
-
-def md5(data: bytes) -> str:
-    return hashlib.md5(data).hexdigest()
-
-
-def test_parses_url_and_hashes_from_the_pinned_gigaam_source():
-    """The constants are read with ast rather than imported: importing gigaam
-    pulls in torch, which is the one thing prefetch must not do."""
-    url_dir, hashes = prefetch_gigaam.parse_gigaam_constants(GIGAAM_INIT_SAMPLE)
-
-    assert url_dir == "https://cdn.example.test/GigaAM"
-    assert hashes["v3_e2e_rnnt"] == "2730de7545ac43ad256485a462b0a27a"
-
-
-def test_parsing_fails_loudly_when_the_constants_moved():
-    with pytest.raises(prefetch_gigaam.PrefetchError):
-        prefetch_gigaam.parse_gigaam_constants("_SOMETHING_ELSE = 1\n")
-
-
-def test_file_md5_matches_hashlib(tmp_path):
-    path = tmp_path / "blob.bin"
-    payload = os.urandom(3 * 1024)
-    path.write_bytes(payload)
-
-    assert prefetch_gigaam.file_md5(path, block_size=512) == md5(payload)
-
-
-def test_a_valid_cached_file_is_not_downloaded_again(tmp_path):
-    cached = tmp_path / "v3_e2e_rnnt.ckpt"
-    cached.write_bytes(b"weights")
-
-    state = prefetch_gigaam.ensure_file("http://unreachable.invalid/x", cached, md5(b"weights"))
-
-    assert state == "cached"
-    assert cached.read_bytes() == b"weights"
-
-
-def test_a_corrupt_cached_file_is_replaced(tmp_path):
-    source = tmp_path / "remote.ckpt"
-    source.write_bytes(b"good weights")
-    dst = tmp_path / "cache" / "model.ckpt"
-    dst.parent.mkdir()
-    dst.write_bytes(b"truncated")
-
-    state = prefetch_gigaam.ensure_file(source.as_uri(), dst, md5(b"good weights"))
-
-    assert state == "downloaded"
-    assert dst.read_bytes() == b"good weights"
-
-
-def test_a_checksum_mismatch_leaves_the_cache_untouched(tmp_path):
-    """A live pipeline must never see a bad or partial checkpoint: the
-    download is published only after it verifies."""
-    source = tmp_path / "remote.ckpt"
-    source.write_bytes(b"corrupted download")
-    dst = tmp_path / "cache" / "model.ckpt"
-    dst.parent.mkdir()
-    dst.write_bytes(b"previous good weights")
-
-    with pytest.raises(prefetch_gigaam.PrefetchError):
-        prefetch_gigaam.ensure_file(source.as_uri(), dst, md5(b"something else"))
-
-    assert dst.read_bytes() == b"previous good weights"
-    assert list(dst.parent.iterdir()) == [dst]
-
-
-class _FakeResponse:
-    """Ответ, отдающий `body` блоками и объявляющий `declared` байт.
-
-    Обрыв тела на середине http.client возвращает как b"" — исключения нет
-    ("it might break compatibility"), поэтому по одному циклу чтения полная
-    загрузка и оборванная неразличимы.
-    """
-
-    def __init__(self, body: bytes, declared=None, encoding=None):
-        self._body = body
-        self._pos = 0
-        self.headers = email.message.Message()
-        if declared is not None:
-            self.headers["Content-Length"] = str(declared)
-        if encoding is not None:
-            self.headers["Content-Encoding"] = encoding
-
-    def read(self, size):
-        block = self._body[self._pos:self._pos + size]
-        self._pos += len(block)
-        return block
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-def _serve(monkeypatch, response):
-    monkeypatch.setattr(
-        prefetch_gigaam.urllib.request, "urlopen",
-        lambda url, timeout=None: response,
-    )
-
-
-def test_a_truncated_download_is_not_published(tmp_path, monkeypatch):
-    """given: сервер объявил 12 байт и оборвал тело на третьем
-    when: докачка токенизатора (контрольной суммы у него нет)
-    then: PrefetchError, каталог кеша пуст — неполный файл не публикуется и
-          не принимается следующими запусками по факту существования"""
-    _serve(monkeypatch, _FakeResponse(b"abc", declared=12))
-    dst = tmp_path / "cache" / "v3_e2e_rnnt_tokenizer.model"
-
-    with pytest.raises(prefetch_gigaam.PrefetchError):
-        prefetch_gigaam.ensure_file("http://cdn.test/tok", dst, None)
-
-    assert not dst.exists()
-    assert list(dst.parent.iterdir()) == []
-
-
-def test_a_complete_download_is_published(tmp_path, monkeypatch):
-    _serve(monkeypatch, _FakeResponse(b"tokenizer", declared=9))
-    dst = tmp_path / "cache" / "v3_e2e_rnnt_tokenizer.model"
-
-    assert prefetch_gigaam.ensure_file("http://cdn.test/tok", dst, None) == "downloaded"
-    assert dst.read_bytes() == b"tokenizer"
-
-
-def test_a_compressed_body_is_rejected_instead_of_being_published(tmp_path, monkeypatch):
-    """given: сервер проигнорировал `Accept-Encoding: identity` и ответил gzip
-    when: докачка токенизатора
-    then: PrefetchError, ничего не опубликовано. urllib тело не распаковывает,
-          так что в кеш легли бы сжатые байты — а токенизатор без контрольной
-          суммы принимается следующими запусками по факту существования"""
-    _serve(monkeypatch, _FakeResponse(b"\x1f\x8b compressed", encoding="gzip"))
-    dst = tmp_path / "cache" / "tok.model"
-
-    with pytest.raises(prefetch_gigaam.PrefetchError):
-        prefetch_gigaam.ensure_file("http://cdn.test/tok", dst, None)
-
-    assert not dst.exists()
-    assert list(dst.parent.iterdir()) == []
-
-
-def test_content_length_is_checked_for_every_declared_encoding(tmp_path, monkeypatch):
-    """given: тело оборвано, сервер объявил identity-кодирование явно
-    when: докачка токенизатора
-    then: обрыв пойман — явный `identity` не отключает проверку длины"""
-    _serve(monkeypatch, _FakeResponse(b"abc", declared=12, encoding="identity"))
-    dst = tmp_path / "cache" / "tok.model"
-
-    with pytest.raises(prefetch_gigaam.PrefetchError):
-        prefetch_gigaam.ensure_file("http://cdn.test/tok", dst, None)
-
-    assert not dst.exists()
-
-
-def test_prefetch_fetches_the_checkpoint_and_the_tokenizer(tmp_path):
-    remote = tmp_path / "remote"
-    remote.mkdir()
-    (remote / "v3_e2e_rnnt.ckpt").write_bytes(b"ckpt")
-    (remote / "v3_e2e_rnnt_tokenizer.model").write_bytes(b"tok")
-    cache = tmp_path / "cache"
-
-    results = prefetch_gigaam.prefetch(
-        "v3_e2e_rnnt", cache, remote.as_uri(), {"v3_e2e_rnnt": md5(b"ckpt")}
-    )
-
-    assert results == {
-        "v3_e2e_rnnt.ckpt": "downloaded",
-        "v3_e2e_rnnt_tokenizer.model": "downloaded",
-    }
-    assert (cache / "v3_e2e_rnnt.ckpt").read_bytes() == b"ckpt"
-
-
-def test_prefetch_skips_the_tokenizer_for_models_without_one(tmp_path):
-    remote = tmp_path / "remote"
-    remote.mkdir()
-    (remote / "v2_rnnt.ckpt").write_bytes(b"ckpt")
-
-    results = prefetch_gigaam.prefetch(
-        "v2_rnnt", tmp_path / "cache", remote.as_uri(), {"v2_rnnt": md5(b"ckpt")}
-    )
-
-    assert list(results) == ["v2_rnnt.ckpt"]
-
-
-def test_prefetch_rejects_a_model_the_pin_does_not_publish(tmp_path):
-    with pytest.raises(prefetch_gigaam.PrefetchError):
-        prefetch_gigaam.prefetch("v9_imaginary", tmp_path, "file:///nowhere", {"v2_rnnt": "x"})
-
-
-def test_prefetch_main_reports_a_failure_without_raising(tmp_path, capsys):
-    rc = prefetch_gigaam.main(
-        ["--model", "v9_imaginary", "--cache-dir", str(tmp_path),
-         "--url-dir", "file:///nowhere"]
-    )
-
-    assert rc == 1
-    assert "v9_imaginary" in capsys.readouterr().err
-
-
-# ---------------------------------------------------------------------------
-# Installation without Python: [install] runtime = "rust"
-# ---------------------------------------------------------------------------
-
-# Every program cargo builds: logs its arguments, answers the installation's
-# questions the way the real `recog` does.
-RUST_PROGRAM_STUB = r"""#!/bin/sh
-printf '%s\n' "$(basename "$0") $*" >> "$STUB_LOG"
-case "$*" in
-  "check") [ -n "$STUB_CHECK" ] && { printf '%s\n' "$STUB_CHECK"; exit 1; }; exit 0 ;;
-  "config install-runtime") echo rust ;;
-  "config data-dir") printf '%s\n' "$HOME/.recog" ;;
-  "config conferences") echo '{"jitsi": [], "matrix": []}' ;;
-  "launcher") printf '%s\n' "$(dirname "$0")/../Recog.app/Contents/MacOS/recog_launcher" ;;
-esac
-exit 0
-"""
-
-# cargo: logs, and for `build` writes each `--bin` into target/release.
-CARGO_STUB = r"""#!/bin/sh
-printf '%s\n' "cargo $*" >> "$STUB_LOG"
-[ "$1" = "build" ] || exit 0
-[ -n "$STUB_CARGO_FAIL" ] && exit 101
-mkdir -p target/release
-previous=""
-for arg in "$@"; do
-  if [ "$previous" = "--bin" ]; then
-    cp "$STUB_BIN/.rust-program" "target/release/$arg"
-    chmod 755 "target/release/$arg"
-  fi
-  previous="$arg"
-done
-exit 0
-"""
-
-# Logged and failing: an installation without Python must never get here.
-NO_PYTHON_STUB = """#!/bin/sh
-printf '%s\\n' "python-called $(basename "$0") $*" >> "$STUB_LOG"
-exit 1
-"""
-
-RUST_PROGRAMS = {
-    "Linux": [
-        "recog",
-        "recog-copilot-channel",
-        "recog-copilot-supervisor",
-        "recog-desktop",
-        "recog-web",
-    ],
-    "Darwin": [
-        "recog",
-        "recog-copilot-channel",
-        "recog-copilot-supervisor",
-        "recog-desktop",
-        "recog-mic",
-        "recog-web",
-    ],
-}
-
-
-@pytest.fixture
-def rust_stubs(stubs):
-    """The stubs of `stubs` with cargo building stub programs and every Python
-    entry point (python3.12, python3, python, pip) logging and failing."""
-    bin_dir, log, sys_dir = stubs
-    (bin_dir / ".rust-program").write_text(RUST_PROGRAM_STUB)
-    (bin_dir / "cargo").write_text(CARGO_STUB)
-    for name in ("python3.12", "python3.13", "python3", "python", "pip"):
-        (bin_dir / name).write_text(NO_PYTHON_STUB)
-        (bin_dir / name).chmod(0o755)
-    return stubs
-
-
-def run_rust_setup(repo, stubs, *args, host_os="Linux", env_extra=None):
-    return run_setup(
-        repo,
-        stubs,
-        *args,
-        host_os=host_os,
-        env_extra={"RECOG_INSTALL_RUNTIME": "rust", **(env_extra or {})},
-    )
-
-
-def no_python(result):
-    return not [c for c in result.calls if c.startswith(("python", "pip"))]
-
-
-@pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
-def test_installation_without_python_when_setup_runs_then_cargo_builds_and_bin_holds_the_programs(
-    repo, rust_stubs, host_os
-):
-    """given: [install] runtime = "rust" and no usable Python on PATH
-    when: setup.sh runs end to end
-    then: no python or pip runs at all, cargo builds the programs in release,
-          they land in bin/, the units run them and every service is started
-    """
-    result = run_rust_setup(repo, rust_stubs, host_os=host_os)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert no_python(result), result.calls
-    builds = [c for c in result.calls if c.startswith("cargo build")]
-    assert len(builds) == 1
-    assert builds[0].startswith("cargo build --release ")
-    assert ("-p recog-mic --bin recog-mic" in builds[0]) is (host_os == "Darwin")
-    assert sorted(p.name for p in (repo / "bin").iterdir()) == RUST_PROGRAMS[host_os]
-    assert not (repo / "venv-gigaam").exists()
-    if host_os == "Darwin":
-        agents = repo.parent / "home/Library/LaunchAgents"
-        live = plistlib.loads((agents / "com.recog.live.plist").read_bytes())
-        assert live["ProgramArguments"][1:3] == [f"{repo}/bin/recog", "live"]
-        assert "recog launcher" in result.calls
-        assert len([c for c in result.calls if c.startswith("launchctl load")]) == 4
-    else:
-        units = repo.parent / "home/.config/systemd/user"
-        assert f'ExecStart="{repo}/bin/recog" live' in (units / "recog-live.service").read_text()
-        assert len([c for c in result.calls if "enable --now" in c]) == 4
-    assert "recog prefetch" in result.calls
-    assert f"Programs:  {repo}/bin" in result.stdout
-
-
-def test_installation_without_python_when_setup_runs_then_check_precedes_install_and_activation(
-    repo, rust_stubs
-):
-    result = run_rust_setup(repo, rust_stubs, *offline_args())
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    calls = result.calls
-    build = next(i for i, c in enumerate(calls) if c.startswith("cargo build"))
-    check = calls.index("recog check")
-    first_enable = next(i for i, c in enumerate(calls) if "enable --now" in c)
-    assert build < check < first_enable
-    assert "recog prefetch" not in calls
-
-
-def test_installation_without_python_and_a_bad_config_when_setup_runs_then_nothing_is_installed(
-    repo, rust_stubs
-):
-    result = run_rust_setup(
-        repo, rust_stubs, *offline_args(), env_extra={"STUB_CHECK": "Invalid AI settings: x"}
-    )
-
-    assert result.returncode == 1
-    assert "Invalid AI settings: x" in result.stderr
-    assert "Nothing was installed or restarted" in result.stderr
-    assert not (repo / "bin").exists()
-    assert not [c for c in result.calls if c.startswith(("systemctl", "launchctl"))]
-    assert no_python(result)
-
-
-def test_installation_without_python_and_a_failed_build_when_setup_runs_then_it_stops(
-    repo, rust_stubs
-):
-    result = run_rust_setup(repo, rust_stubs, *offline_args(), env_extra={"STUB_CARGO_FAIL": "1"})
-
-    assert result.returncode == 1
-    assert "cargo build failed" in result.stderr
-    assert not (repo / "bin").exists()
-    assert not [c for c in result.calls if c.startswith(("systemctl", "launchctl"))]
-    assert no_python(result)
-
-
-def test_installation_without_python_and_no_cargo_when_setup_runs_then_it_stops_naming_rustup(
-    repo, rust_stubs
-):
-    (rust_stubs[0] / "cargo").unlink()
-
-    result = run_rust_setup(repo, rust_stubs, *offline_args())
-
-    assert result.returncode == 1
-    assert "cargo not found" in result.stderr
-    assert "rustup" in result.stderr
-    assert not (repo / "bin").exists()
-    assert no_python(result)
-
-
-@pytest.mark.parametrize("host_os", ["Linux", "Darwin"])
-def test_installation_without_python_when_dry_run_then_the_plan_names_cargo_and_bin(
-    repo, rust_stubs, host_os
-):
-    result = run_rust_setup(repo, rust_stubs, "--dry-run", host_os=host_os)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.calls == []
-    assert "Installation without Python" in result.stdout
-    assert "Would build with cargo (release)" in result.stdout
-    assert f"install the programs into {repo}/bin" in result.stdout
-    assert "Would create venv" not in result.stdout
-    assert "Would install torch" not in result.stdout
-    assert "GigaAM from" not in result.stdout
-    assert "Would download the ASR model gigaam-v3" in result.stdout
-
-
-def test_install_runtime_in_config_file_when_setup_runs_then_it_installs_without_python(
-    repo, rust_stubs
-):
-    config = repo.parent / "home/.config/recog/config.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text('[install]\nruntime = "rust"\n')
-
-    result = run_setup(repo, rust_stubs, *offline_args("--no-services"))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo / "bin/recog").exists()
-    assert no_python(result)
-
-
-def test_unknown_install_runtime_when_setup_runs_then_it_stops_before_anything(repo, rust_stubs):
-    result = run_setup(repo, rust_stubs, *offline_args(), env_extra={"RECOG_INSTALL_RUNTIME": "go"})
-
-    assert result.returncode == 1
-    assert '[install] runtime must be "python" or "rust", not "go"' in result.stderr
-    assert result.calls == []
-
-
-def test_installation_without_python_when_the_extension_is_built_then_npm_runs_without_python(
-    repo, rust_stubs
-):
-    (repo / "browser-extension").mkdir()
-    (repo / "browser-extension/package-lock.json").write_text("{}")
-
-    result = run_rust_setup(repo, rust_stubs, "--no-prefetch", "--no-services")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "npm ci" in result.calls and "npm run build" in result.calls
-    assert no_python(result)
-
-
-def test_dotenv_saying_rust_when_python_setup_checks_readiness_then_activation_is_blocked(
-    repo, stubs
-):
-    """given: the scripts read "python", but the parser (from .env) reads "rust"
-    when: setup.sh reaches the readiness gate
-    then: no unit is activated and the problem names where to set it
-    """
-    result = run_setup(
-        repo, stubs, *offline_args(), env_extra={"STUB_PARSED_INSTALL_RUNTIME": "rust"}
-    )
-
-    assert result.returncode != 0
-    assert '[install] runtime is "rust" for recog but "python" for setup.sh' in result.stderr
-    assert not [c for c in result.calls if "enable --now" in c]
+    assert (repo / "bin/recog").stat().st_ino != inode

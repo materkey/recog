@@ -18,12 +18,11 @@
 # phone = "Phone"
 
 [asr]
-# RECOG_ASR_BACKEND: "auto" (default: "wavo" on macOS when ./setup.sh built it,
-# otherwise "local"), "local" (PyTorch), "remote", which offloads all four
-# GigaAM paths to an OpenAI-Whisper-compatible gateway (ADR-0020) with a lazy
-# local fallback and a circuit breaker (enable only on a confirmed LAN), or
-# "wavo", the same model on the Rust runtime wavo on the GPU; ./setup.sh builds
-# it with cargo (docs/usage.md, "ASR on wavo").
+# RECOG_ASR_BACKEND: "auto" (default) or "wavo", GigaAM on the Rust runtime wavo
+# inside the live process, or "remote", which offloads it to an
+# OpenAI-Whisper-compatible gateway (ADR-0020) with wavo as the lazy local
+# fallback and a circuit breaker (enable only on a confirmed LAN). "local" (the
+# PyTorch model) is gone: it runs on wavo, and the log says so.
 # backend = "auto"
 # RECOG_ASR_REMOTE_URL: gateway base URL. No default: backend = "remote"
 # without it fails at startup instead of silently running on-device.
@@ -65,17 +64,12 @@
 # `--system-audio screencapture`, which `auto` is on macOS. Stays off by default
 # until it has been checked on real calls and headphones.
 # echo_cancel = false
-# RECOG_MIC_WORKER (macOS): the process that captures the microphone, "python"
-# (recog/mic_worker.py) or "rust" (rust/recog-mic, which ./setup.sh builds when
-# cargo is installed; without the build the Python one runs and the log says so).
-# mic_worker = "python"
-# RECOG_LIVE_RUNTIME: the live service's process, "python" (python -m recog live)
-# or "rust" (rust/recog-live, which ./setup.sh builds when cargo is installed, on
-# Linux only with this set). The Rust one runs ASR on wavo, or for the [asr]
-# backend "remote" on the gateway with wavo as the fallback: the backend "local",
-# or no build, keeps Python and the log says why. Apply with
-# ./recog-service.sh restart.
-# runtime = "python"
+# RECOG_MIC_WORKER: no effect, the microphone is always captured by bin/recog-mic
+# (macOS); still accepted from older configurations.
+# mic_worker = "rust"
+# RECOG_LIVE_RUNTIME: no effect, the live service is always bin/recog; still
+# accepted from older configurations.
+# runtime = "rust"
 # RECOG_GOLDEN_RECORD: record each live session (bridge frames; microphone and
 # system audio and ASR answers while a conference is on) under <data dir>/golden,
 # to replay it into a new implementation
@@ -94,12 +88,9 @@
 # grace_s = 90
 # RECOG_COPILOT_MCP_URL: the copilot_channel MCP daemon the session uses.
 # mcp_url = "http://127.0.0.1:8767/mcp"
-# RECOG_COPILOT_RUNTIME: the supervisor's and the MCP channel's processes,
-# "python" (python -m recog.copilot_supervisor, python -m recog.copilot_channel)
-# or "rust" (rust/recog-copilot, which ./setup.sh builds when cargo is installed,
-# on Linux only with this set). Without the build Python runs and the log says
-# so. Apply with ./recog-service.sh restart.
-# runtime = "python"
+# RECOG_COPILOT_RUNTIME: no effect, the supervisor and the channel are always
+# bin/recog-copilot-*; still accepted from older configurations.
+# runtime = "rust"
 
 [web]
 # EXTERNAL_MEETINGS_PATHS: read-only meeting directories of other sources,
@@ -110,12 +101,10 @@
 # extra_ws_origins = ["https://meet.example.com"]
 # RECOG_BRIDGE_WS_URL: bridge WebSocket the web server subscribes to.
 # bridge_ws_url = "ws://localhost:8766"
-# RECOG_WEB_RUNTIME: the web server's process, "python" (python -m recog.web.server)
-# or "rust" (rust/recog-web, which ./setup.sh builds when cargo is installed, on
-# Linux only with this set). Without the build Python runs and the log says so.
-# It also runs the KTalk desktop integration's observer (docs/desktop-ktalk.md).
-# Apply with ./recog-service.sh restart.
-# runtime = "python"
+# RECOG_WEB_RUNTIME: no effect, the web server is always bin/recog-web (which
+# also runs the KTalk desktop integration's observer, docs/desktop-ktalk.md);
+# still accepted from older configurations.
+# runtime = "rust"
 
 [macos]
 # RECOG_CODESIGN_IDENTITY: signing identity for RecogZoomHelper.app (default
@@ -123,13 +112,8 @@
 # codesign_identity = "Developer ID Application: ..."
 
 [install]
-# RECOG_INSTALL_RUNTIME: how ./setup.sh installs recog and what the service units
-# run. "python" (default): a venv with PyTorch and GigaAM, the units run
-# python -m ..., and the runtime of each table above picks the program behind it.
-# "rust": no Python at all; ./setup.sh builds rust/ with cargo into bin/ and the
-# units run those binaries (the live one through Recog.app on macOS), so the
-# runtime and mic_worker keys above and the [asr] backend "local" do
-# nothing. setup.sh and recog-service.sh read this key from this file or the
-# calling shell, never from .env. Apply with ./setup.sh (docs/usage.md,
-# "Installing without Python").
-# runtime = "python"
+# RECOG_INSTALL_RUNTIME: "rust", the only installation: ./setup.sh builds the
+# programs of rust/ with cargo into bin/ and the units run them. "python" is
+# gone and makes setup.sh stop. setup.sh and recog-service.sh read this key
+# from this file or the calling shell, never from .env.
+# runtime = "rust"

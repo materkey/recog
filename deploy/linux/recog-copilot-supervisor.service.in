@@ -5,7 +5,6 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=@REPO_DIR@
-Environment=PYTHONUNBUFFERED=1
 Environment="HOME=@HOME@"
 Environment="RECOG_DATA_DIR=@DATA_DIR@"
 # TERM is pinned so Ink does not emit kitty-only DCS queries in the spawned TUI.

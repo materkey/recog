@@ -39,8 +39,6 @@
         <string>@HOME@</string>
         <key>RECOG_DATA_DIR</key>
         <string>@DATA_DIR@</string>
-        <key>PYTHONUNBUFFERED</key>
-        <string>1</string>
     </dict>
 </dict>
 </plist>

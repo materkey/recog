@@ -1,7 +1,7 @@
-"""The probes of an installation without Python (`[install] runtime = "rust"`).
+"""The probes of the installation, which has no Python.
 
-`scripts/deps.sh` reads the runtime itself (the calling shell, else a plain line
-under `[install]` in config.toml) and, in that mode, asks `bin/recog` what it asked
+`scripts/deps.sh` reads `[install] runtime` itself (the calling shell, else a plain
+line under `[install]` in config.toml) and asks `bin/recog` what it once asked
 Python: the configuration check, the data directory, the config path. Every test
 puts a logging `python` first on PATH and asserts it is never called.
 """
@@ -92,14 +92,14 @@ def python_calls(result):
 @pytest.mark.parametrize(
     "text,expected",
     [
-        (None, "python"),
-        ("", "python"),
+        (None, "rust"),
+        ("", "rust"),
         ('[install]\nruntime = "rust"\n', "rust"),
-        ("[install]\nruntime = 'rust'\n", "rust"),
-        ('# comment\n[ install ]   # the mode\n  runtime   =   "rust"   # no Python\n', "rust"),
-        ('[live]\nruntime = "rust"\n[web]\nruntime = "rust"\n', "python"),
-        ('[install]\n# runtime = "rust"\n', "python"),
-        ('[install]\nruntime = "rust"\n[live]\nruntime = "python"\n', "rust"),
+        ("[install]\nruntime = 'python'\n", "python"),
+        ('# comment\n[ install ]   # the mode\n  runtime   =   "python"   # old\n', "python"),
+        ('[live]\nruntime = "python"\n[web]\nruntime = "python"\n', "rust"),
+        ('[install]\n# runtime = "python"\n', "rust"),
+        ('[install]\nruntime = "python"\n[live]\nruntime = "rust"\n', "python"),
         ('[install]\nruntime = "go"\n', "go"),
     ],
 )
@@ -123,15 +123,13 @@ def test_calling_shell_and_config_file_when_reading_the_install_runtime_then_the
     _, _, home, _ = checkout
     config = home / ".config/recog/config.toml"
     config.parent.mkdir(parents=True)
-    config.write_text('[install]\nruntime = "rust"\n')
+    config.write_text('[install]\nruntime = "python"\n')
 
     default_location = deps(checkout, "deps_install_runtime", {"RECOG_CONFIG_FILE": ""}, runtime="")
-    overridden = deps(
-        checkout, "deps_install_runtime", {"RECOG_CONFIG_FILE": ""}, runtime=" python "
-    )
+    overridden = deps(checkout, "deps_install_runtime", {"RECOG_CONFIG_FILE": ""}, runtime=" rust ")
 
-    assert default_location.stdout == "rust\n"
-    assert overridden.stdout == "python\n"
+    assert default_location.stdout == "python\n"
+    assert overridden.stdout == "rust\n"
 
 
 def test_parser_disagreeing_with_the_scripts_when_checking_then_one_problem_names_both(checkout):
@@ -146,7 +144,7 @@ def test_invalid_or_agreeing_install_runtime_when_checking_then_a_problem_or_not
     invalid = deps(checkout, "deps_install_runtime_problem", runtime="go")
     agreeing = deps(checkout, "deps_install_runtime_problem")
 
-    assert invalid.stdout.startswith('[install] runtime must be "python" or "rust", not "go"')
+    assert invalid.stdout.startswith('[install] runtime must be "rust", not "go"')
     assert agreeing.stdout == ""
     assert not python_calls(invalid) and not python_calls(agreeing)
 
@@ -243,8 +241,8 @@ def test_installation_without_python_when_resolving_paths_then_recog_config_answ
 def test_real_recog_check_when_ai_settings_vary_then_it_blocks_as_the_python_probe_did(
     checkout, tmp_path, payload, ready
 ):
-    """The cases of test_ai_settings_when_checking_readiness_then_invalid_settings_block_activation
-    (tests/test_setup.py) against the built binary installed into bin/."""
+    """The cases the Python probe of AI settings was tested with, against the built
+    binary installed into bin/."""
     repo, _, _, _ = checkout
     program = repo / "bin/recog"
     program.unlink()

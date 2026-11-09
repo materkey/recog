@@ -67,9 +67,18 @@ fn data_dir(repo_root: &Path, environ: &Environ, warnings: &mut String) -> Resul
 #[must_use]
 pub fn check(repo_root: &Path, config: &InstallConfig, environ: &Environ) -> Printed {
     let runtime = &config.install.runtime;
-    if runtime != "python" && runtime != "rust" {
+    if runtime == "python" {
+        return printed(
+            line(
+                r#"[install] runtime = "python" is no longer available: recog installs without Python; delete the key"#,
+            ),
+            "",
+            1,
+        );
+    }
+    if runtime != "rust" {
         let repr = recog_core::py::repr(runtime);
-        return printed(line(format!(r#"[install] runtime must be "python" or "rust", not {repr}"#)), "", 1);
+        return printed(line(format!(r#"[install] runtime must be "rust", not {repr}"#)), "", 1);
     }
     let mut warnings = String::new();
     let data_dir = match data_dir(repo_root, environ, &mut warnings) {
@@ -337,14 +346,19 @@ mod tests {
         let env = environ(&[("RECOG_DATA_DIR", data.to_str().unwrap())]);
         let mut odd = InstallConfig::default();
         odd.install.runtime = "go".into();
+        let mut python = InstallConfig::default();
+        python.install.runtime = "python".into();
         // when
         let runtime = check(repo.path(), &odd, &env);
+        let gone = check(repo.path(), &python, &env);
         std::fs::write(data.join("ai-settings.json"), "broken JSON").unwrap();
         let ai = check(repo.path(), &InstallConfig::default(), &env);
         std::fs::write(data.join("user-profile.json"), "{").unwrap();
         let profile = check(repo.path(), &InstallConfig::default(), &env);
         // then
-        assert_eq!(runtime.stdout, "[install] runtime must be \"python\" or \"rust\", not 'go'\n");
+        assert_eq!(runtime.stdout, "[install] runtime must be \"rust\", not 'go'\n");
+        assert!(gone.stdout.contains("no longer available"), "{}", gone.stdout);
+        assert_eq!(gone.code, 1);
         assert!(ai.stdout.starts_with("Invalid AI settings: "), "{}", ai.stdout);
         assert!(profile.stdout.starts_with("Invalid user profile: "), "{}", profile.stdout);
         assert_eq!((runtime.code, ai.code, profile.code), (1, 1, 1));
