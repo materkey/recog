@@ -72,7 +72,7 @@ function waitForConference(callback, maxAttempts = 100) {
       attempts++;
       if (window.$conf && window.$conf._dominantSpeakerId$ && window.$conf.jitsiConf) {
         console.log('[KTalk Transcript] Conference found');
-        callback(window.$conf);
+        if (claimLegacyConference(window.$conf)) callback(window.$conf);
         return;
       }
       if (attempts < maxAttempts) {
@@ -145,12 +145,19 @@ function attachLegacyConference() {
     return;
   }
 
-  if (conf !== state.activeConfRef || conf.jitsiConf !== state.activeJitsiConf) {
-    state.activeConfRef = conf;
-    state.activeJitsiConf = conf.jitsiConf;
+  if (claimLegacyConference(conf)) {
     console.log('[KTalk Transcript] Conference reattached');
     subscribeToDominantSpeaker(conf);
   }
+}
+
+// Records `conf` as the attached legacy conference; false when it already is.
+// The wait and the 2 s interval both find it, and only the first subscribes.
+function claimLegacyConference(conf) {
+  if (conf === state.activeConfRef && conf.jitsiConf === state.activeJitsiConf) return false;
+  state.activeConfRef = conf;
+  state.activeJitsiConf = conf.jitsiConf;
+  return true;
 }
 
 function ktalkUiMissing() {

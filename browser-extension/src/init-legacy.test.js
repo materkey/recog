@@ -140,18 +140,45 @@ test('only a local audio track - conference found - is ready at once', () => {
   expect(state.conferenceReady).toBe(true);
 });
 
-test('no audio track yet - conference found - becomes ready 5 s after the interval attaches it', () => {
-  // The wait finds it at once, the first 2 s tick attaches it again and
-  // restarts the 5 s readiness timeout.
+test('no audio track yet - conference found - becomes ready 5 s after the wait finds it', () => {
+  // The wait finds it at once; the 2 s ticks leave the attached conference
+  // and its readiness timeout alone.
   window.$conf = makeLegacyConf({ tracks: [audioTrack('p1', 'video')] }).conf;
 
   init();
   expect(state.conferenceReady).toBe(false);
-  jest.advanceTimersByTime(6999);
+  jest.advanceTimersByTime(4999);
   expect(state.conferenceReady).toBe(false);
   jest.advanceTimersByTime(1);
 
   expect(state.conferenceReady).toBe(true);
+});
+
+test('a conference the wait found - the interval ticks - is subscribed to once', () => {
+  const { conf, participant } = makeLegacyConf();
+  window.$conf = conf;
+
+  init();
+  jest.advanceTimersByTime(4000);
+
+  expect(conf._dominantSpeakerId$.subscribe).toHaveBeenCalledTimes(1);
+  expect(participant._activeSpeaker$.subscribe).toHaveBeenCalledTimes(1);
+  expect(statusEvents()).toEqual([true]);
+});
+
+test('a conference the interval attached first - the wait finds it - is subscribed to once', () => {
+  const { conf } = makeLegacyConf();
+  init();
+  jest.advanceTimersByTime(1999);
+  window.$conf = conf;
+
+  // At 2 s the interval runs before the wait's check scheduled at 1.5 s.
+  jest.advanceTimersByTime(1);
+  expect(state.activeConfRef).toBe(conf);
+  jest.advanceTimersByTime(2000);
+
+  expect(conf._dominantSpeakerId$.subscribe).toHaveBeenCalledTimes(1);
+  expect(statusEvents()).toEqual([true]);
 });
 
 test('a subscribed conference - speaker observables fire - the speaker is reported again', () => {
