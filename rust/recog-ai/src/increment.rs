@@ -24,9 +24,9 @@ use crate::error::{AiError, Result};
 use crate::install::{LegacyEnv, default_prompts_dir};
 use crate::json::{self, Json, Map};
 use crate::prompt_registry::{PromptConfig, PromptRegistry};
-use crate::provider::{CliProviderFactory, ProviderFactory};
+use crate::provider::{AiProvider, CliProviderFactory, ProviderFactory};
 use crate::pytext;
-use crate::settings::{AiSettingsStore, Fallback, INCREMENT_TASK, render_prompt};
+use crate::settings::{AiSettingsStore, Fallback, INCREMENT_TASK, ResolvedTask, render_prompt};
 use crate::template::Variables;
 use crate::timestamp;
 
@@ -182,6 +182,233 @@ struct Claim {
     end: i128,
 }
 
+/// What the version files tell `_next_version`: the highest version, and the last
+/// segment covered for the wanted participant.
+struct SeenVersions {
+    wanted: Json,
+    max_version: i64,
+    last_segment: Option<i128>,
+}
+
+impl SeenVersions {
+    /// One metadata file; a stale placeholder is marked failed first.
+    fn account_file(&mut self, path: &Path, now: i64) -> Result<()> {
+        match read_recovering_stale(path, now) {
+            Ok((meta, status)) => self.account(&meta, status),
+            Err(ReadError::Decode(message)) => Err(AiError::Value(message)),
+            Err(ReadError::Io(_) | ReadError::Json) => self.account_retry(path),
+        }
+    }
+
+    /// The file may be being written by another claim (created, then filled): retry
+    /// once, then count at least its version from the name so that the claim does not
+    /// collide with it.
+    fn account_retry(&mut self, path: &Path) -> Result<()> {
+        std::thread::sleep(Duration::from_millis(50));
+        match read_json(path) {
+            Ok(meta) => self.account(&meta, None),
+            Err(ReadError::Decode(message)) => Err(AiError::Value(message)),
+            Err(_) => {
+                let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+                if let Some(version) = version_from_filename(name) {
+                    self.max_version = self.max_version.max(version);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Versions are counted past failed ones. `status` replaces the file's when given.
+    fn account(&mut self, meta: &Json, status: Option<String>) -> Result<()> {
+        object(meta)?;
+        self.max_version = self.max_version.max(meta_version(meta)? as i64);
+        let status = status.or_else(|| meta.get("status").and_then(Json::as_str).map(str::to_owned));
+        let participant = meta.get("participant_id").cloned().unwrap_or(Json::Null);
+        // Completed results are final; in-progress ranges stop two processes from
+        // summarizing the same delta. Failed versions free their segments.
+        if participant == self.wanted
+            && matches!(status.as_deref(), Some("completed" | "generating"))
+            && let Some(end) = range_end(meta)
+            && self.last_segment.is_none_or(|last| end > last)
+        {
+            self.last_segment = Some(end);
+        }
+        Ok(())
+    }
+}
+
+/// A metadata file, with a stale `generating` placeholder marked failed on disk; the
+/// status is `Some("failed")` when it was. A failed save is an OSError inside Python's
+/// try: the retry path.
+fn read_recovering_stale(path: &Path, now: i64) -> std::result::Result<(Json, Option<String>), ReadError> {
+    let mut meta = read_json(path)?;
+    if !is_stale_placeholder(&meta, now) {
+        return Ok((meta, None));
+    }
+    let map = meta.as_object_mut().expect("object with a status");
+    map.insert("status".into(), Json::from("failed"));
+    map.insert("error".into(), Json::from("stale generating placeholder (process crash recovery)"));
+    save_json(path, &meta).map_err(ReadError::Io)?;
+    Ok((meta, Some("failed".to_owned())))
+}
+
+/// A `generating` placeholder whose time stamp is older than the stale timeout.
+fn is_stale_placeholder(meta: &Json, now: i64) -> bool {
+    if meta.get("status").and_then(Json::as_str) != Some("generating") {
+        return false;
+    }
+    let started = meta.get("generated_at").and_then(Json::as_str).and_then(timestamp::parse_aware_isoformat);
+    started.is_some_and(|started| (now - started) as f64 / 1e6 > STALE_GENERATING_TIMEOUT_SECONDS as f64)
+}
+
+/// `meta.get("version", 0)`, which must be an int.
+fn meta_version(meta: &Json) -> Result<i128> {
+    match meta.get("version") {
+        None => Ok(0),
+        Some(value) => value.as_int().ok_or_else(|| AiError::Type(format!("version is a {}", value.type_name()))),
+    }
+}
+
+/// The last segment of a `[start, end]` range of integers.
+fn range_end(meta: &Json) -> Option<i128> {
+    match meta.get("segment_range") {
+        Some(Json::Array(range)) if range.len() == 2 => range[1].as_int(),
+        _ => None,
+    }
+}
+
+/// The segments after `last`, every segment without it.
+fn delta_after(segments: &[Json], last: Option<i128>) -> Result<Vec<Json>> {
+    let Some(last) = last else {
+        return Ok(segments.to_vec());
+    };
+    let mut delta = Vec::new();
+    for segment in segments {
+        if segment_id(segment)? > last {
+            delta.push(segment.clone());
+        }
+    }
+    Ok(delta)
+}
+
+/// The first and the last segment id of a nonempty delta.
+fn id_span(delta: &[Json]) -> Result<(i128, i128)> {
+    let ids = delta.iter().map(segment_id).collect::<Result<Vec<_>>>()?;
+    Ok((*ids.iter().min().expect("nonempty"), *ids.iter().max().expect("nonempty")))
+}
+
+/// Writes `data` to a new file at `path`; `false` when the file exists already.
+fn create_new_json(path: &Path, data: &Json) -> Result<bool> {
+    match OpenOptions::new().write(true).create_new(true).mode(0o644).open(path) {
+        Ok(mut file) => {
+            file.write_all((data.dumps(Some(2)) + "\n").as_bytes())?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// `meta.json` of a meeting, an error when it cannot be read.
+fn read_meeting_meta(path: &Path) -> Result<Json> {
+    read_json(path).map_err(|error| match error {
+        ReadError::Io(error) => AiError::Io(error),
+        ReadError::Json => AiError::Value("Invalid JSON in meta.json".to_owned()),
+        ReadError::Decode(message) => AiError::Value(message),
+    })
+}
+
+/// The non-empty lines of `transcript.jsonl`; `None` without the file or a segment.
+fn read_segments(meeting_path: &Path) -> Result<Option<Vec<Json>>> {
+    let transcript_path = meeting_path.join("transcript.jsonl");
+    if !transcript_path.exists() {
+        return Ok(None);
+    }
+    let content = pytext::read_text(&transcript_path)?;
+    let mut segments = Vec::new();
+    for (index, line) in pytext::strip(&content).split('\n').enumerate() {
+        if pytext::strip(line).is_empty() {
+            continue;
+        }
+        let segment = Json::parse(line).map_err(|error| {
+            AiError::Value(format!("Malformed JSONL in transcript.jsonl line {}: {error}", index + 1))
+        })?;
+        segments.push(segment);
+    }
+    Ok((!segments.is_empty()).then_some(segments))
+}
+
+/// The name an increment is generated for: the local participants (`User` without
+/// one), or the given participant's name, its id when it has none.
+fn user_name(meta: &Json, participant_id: Option<&str>) -> Result<String> {
+    let Some(pid) = participant_id else {
+        let names = local_participant_names(meta)?;
+        return Ok(if names.is_empty() { "User".to_owned() } else { names.join(", ") });
+    };
+    let participant = participants(meta)?.and_then(|participants| participants.get(pid));
+    let Some(participant) = participant else {
+        return Err(AiError::Value(format!("Participant '{pid}' not found")));
+    };
+    object(participant)?;
+    text_or(participant, "name", pid)
+}
+
+/// The names of every participant, by id when one has none.
+fn participant_names(meta: &Json) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    if let Some(map) = participants(meta)? {
+        for (pid, info) in map {
+            object(info)?;
+            names.push(field_or(info, "name", pid)?);
+        }
+    }
+    Ok(names)
+}
+
+/// The template of a saved prompt: an explicit override from the settings, else the
+/// caller's. A caller can supply a generated PromptConfig with an existing registry ID:
+/// only an explicit override replaces its text.
+fn prompt_template<'a>(snapshot: &'a Map, task_id: &str, prompt: &'a PromptConfig) -> &'a str {
+    let saved_prompt = |id: &str| {
+        snapshot.get("tasks").and_then(|tasks| tasks.get(id)).and_then(|task| task.get("prompt")).and_then(Json::as_str)
+    };
+    let template = saved_prompt(task_id).unwrap_or(&prompt.template);
+    if prompt.id == "my-increment" {
+        return saved_prompt(INCREMENT_TASK).unwrap_or(template);
+    }
+    template
+}
+
+/// A rendered increment prompt with the settings it was resolved from.
+struct Rendered {
+    settings: ResolvedTask,
+    prompt: String,
+    participants: Vec<String>,
+}
+
+/// Which provider, model, effort and settings revision produce a version.
+fn generation_meta(provider: &dyn AiProvider, settings: &ResolvedTask) -> Map {
+    let mut generation = Map::new();
+    generation.insert("provider".into(), Json::from(provider.key()));
+    generation.insert("model".into(), Json::from(provider.model()));
+    generation.insert("reasoning_effort".into(), provider.reasoning_effort().map_or(Json::Null, Json::from));
+    generation.insert("settings_revision".into(), Json::from(settings.revision.as_str()));
+    generation
+}
+
+/// The metadata of a completed version.
+fn completed_meta(base: &Map, generation: Map, claim: &Claim, duration: Duration) -> Json {
+    let mut completed = base.clone();
+    completed.extend(generation);
+    completed.insert("segment_range".into(), Json::Array(vec![Json::Int(claim.start), Json::Int(claim.end)]));
+    completed.insert("segment_count".into(), Json::from(claim.delta.len() as i64));
+    completed.insert("generated_at".into(), Json::from(timestamp::utc_now_isoformat()));
+    completed.insert("status".into(), Json::from("completed"));
+    completed.insert("duration_seconds".into(), Json::Float(round_tenths(duration)));
+    completed.insert("error".into(), Json::Null);
+    Json::Object(completed)
+}
+
 /// Writes the failed metadata if a generation is dropped (cancelled) before it ends, so
 /// that no `generating` placeholder outlives it; Python does this for `CancelledError`.
 struct CancelGuard {
@@ -197,17 +424,24 @@ impl Drop for CancelGuard {
         if !self.armed {
             return;
         }
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = save_json(&self.path, &self.failed_meta("cancelled: "));
+        eprintln!("[increment] {} CANCELLED: ", self.path.display());
+    }
+}
+
+impl CancelGuard {
+    /// The failed metadata of the version: its provenance, the time and the error.
+    fn failed_meta(&self, error: &str) -> Json {
         let mut meta = self.generation.clone();
         meta.extend(self.base.clone());
         meta.insert("generated_at".into(), Json::from(timestamp::utc_now_isoformat()));
         meta.insert("status".into(), Json::from("failed"));
         meta.insert("duration_seconds".into(), Json::Float(round_tenths(self.started.elapsed())));
-        meta.insert("error".into(), Json::from("cancelled: "));
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = save_json(&self.path, &Json::Object(meta));
-        eprintln!("[increment] {} CANCELLED: ", self.path.display());
+        meta.insert("error".into(), Json::from(error));
+        Json::Object(meta)
     }
 }
 
@@ -291,92 +525,13 @@ impl IncrementGenerator {
         if !dir.exists() {
             return Ok((1, None));
         }
-        let wanted = participant_id.map_or(Json::Null, Json::from);
-        let mut max_version: i64 = 0;
-        let mut last_segment: Option<i128> = None;
+        let mut seen =
+            SeenVersions { wanted: participant_id.map_or(Json::Null, Json::from), max_version: 0, last_segment: None };
         let now = timestamp::now_micros();
-        let account = |meta: &Json,
-                       max_version: &mut i64,
-                       last_segment: &mut Option<i128>,
-                       status: Option<String>|
-         -> Result<()> {
-            object(meta)?;
-            let version = match meta.get("version") {
-                None => 0,
-                Some(value) => {
-                    value.as_int().ok_or_else(|| AiError::Type(format!("version is a {}", value.type_name())))?
-                }
-            };
-            *max_version = (*max_version).max(version as i64);
-            let status = status.or_else(|| meta.get("status").and_then(Json::as_str).map(str::to_owned));
-            let participant = meta.get("participant_id").cloned().unwrap_or(Json::Null);
-            if participant == wanted && matches!(status.as_deref(), Some("completed" | "generating")) {
-                // Completed results are final; in-progress ranges stop two processes from
-                // summarizing the same delta. Failed versions free their segments.
-                if let Some(Json::Array(range)) = meta.get("segment_range")
-                    && range.len() == 2
-                    && let Some(end) = range[1].as_int()
-                    && last_segment.is_none_or(|last| end > last)
-                {
-                    *last_segment = Some(end);
-                }
-            }
-            Ok(())
-        };
         for path in meta_files(&dir) {
-            let first = match read_json(&path) {
-                Ok(mut meta) => {
-                    let mut status = None;
-                    let mut saved = Ok(());
-                    if meta.get("status").and_then(Json::as_str) == Some("generating") {
-                        let started =
-                            meta.get("generated_at").and_then(Json::as_str).and_then(timestamp::parse_aware_isoformat);
-                        if let Some(started) = started
-                            && (now - started) as f64 / 1e6 > STALE_GENERATING_TIMEOUT_SECONDS as f64
-                        {
-                            let map = meta.as_object_mut().expect("object with a status");
-                            map.insert("status".into(), Json::from("failed"));
-                            map.insert(
-                                "error".into(),
-                                Json::from("stale generating placeholder (process crash recovery)"),
-                            );
-                            saved = save_json(&path, &meta);
-                            status = Some("failed".to_owned());
-                        }
-                    }
-                    // A failed save is an OSError inside Python's try: the retry path.
-                    match saved {
-                        Ok(()) => {
-                            account(&meta, &mut max_version, &mut last_segment, status)?;
-                            Ok(())
-                        }
-                        Err(error) => Err(ReadError::Io(error)),
-                    }
-                }
-                Err(error) => Err(error),
-            };
-            match first {
-                Ok(()) => {}
-                Err(ReadError::Decode(message)) => return Err(AiError::Value(message)),
-                Err(ReadError::Io(_) | ReadError::Json) => {
-                    // The file may be being written by another claim (created, then
-                    // filled): retry once, then count at least its version from the name
-                    // so that the claim does not collide with it.
-                    std::thread::sleep(Duration::from_millis(50));
-                    match read_json(&path) {
-                        Ok(meta) => account(&meta, &mut max_version, &mut last_segment, None)?,
-                        Err(ReadError::Decode(message)) => return Err(AiError::Value(message)),
-                        Err(_) => {
-                            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-                            if let Some(version) = version_from_filename(name) {
-                                max_version = max_version.max(version);
-                            }
-                        }
-                    }
-                }
-            }
+            seen.account_file(&path, now)?;
         }
-        Ok((max_version + 1, last_segment))
+        Ok((seen.max_version + 1, seen.last_segment))
     }
 
     /// `_claim_version`: creates the `generating` placeholder of the next version with
@@ -394,23 +549,11 @@ impl IncrementGenerator {
         std::fs::create_dir_all(&dir)?;
         for _ in 0..5 {
             let (version, last_segment) = self.next_version(meeting_id, prompt_id, participant_id)?;
-            let delta: Vec<Json> = match last_segment.filter(|_| !force) {
-                Some(last) => {
-                    let mut delta = Vec::new();
-                    for segment in segments {
-                        if segment_id(segment)? > last {
-                            delta.push(segment.clone());
-                        }
-                    }
-                    delta
-                }
-                None => segments.to_vec(),
-            };
+            let delta = delta_after(segments, last_segment.filter(|_| !force))?;
             if delta.is_empty() {
                 return Ok(None);
             }
-            let ids = delta.iter().map(segment_id).collect::<Result<Vec<_>>>()?;
-            let (start, end) = (*ids.iter().min().expect("nonempty"), *ids.iter().max().expect("nonempty"));
+            let (start, end) = id_span(&delta)?;
             let placeholder = json::object([
                 ("version", Json::from(version)),
                 ("prompt_id", Json::from(prompt_id)),
@@ -420,14 +563,8 @@ impl IncrementGenerator {
                 ("generated_at", Json::from(timestamp::utc_now_isoformat())),
                 ("segment_range", Json::Array(vec![Json::Int(start), Json::Int(end)])),
             ]);
-            let path = dir.join(format!("v{version}_meta.json"));
-            match OpenOptions::new().write(true).create_new(true).mode(0o644).open(&path) {
-                Ok(mut file) => {
-                    file.write_all((placeholder.dumps(Some(2)) + "\n").as_bytes())?;
-                    return Ok(Some(Claim { version, delta, start, end }));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.into()),
+            if create_new_json(&dir.join(format!("v{version}_meta.json")), &placeholder)? {
+                return Ok(Some(Claim { version, delta, start, end }));
             }
         }
         Err(AiError::Runtime(format!("Could not claim version for {prompt_id} after retries")))
@@ -508,68 +645,50 @@ impl IncrementGenerator {
         if !meta_path.exists() {
             return Ok(None);
         }
-        let transcript_path = meeting_path.join("transcript.jsonl");
-        if !transcript_path.exists() {
+        let Some(segments) = read_segments(meeting_path)? else {
             return Ok(None);
-        }
-        let content = pytext::read_text(&transcript_path)?;
-        let mut segments = Vec::new();
-        for (index, line) in pytext::strip(&content).split('\n').enumerate() {
-            if pytext::strip(line).is_empty() {
-                continue;
-            }
-            let segment = Json::parse(line).map_err(|error| {
-                AiError::Value(format!("Malformed JSONL in transcript.jsonl line {}: {error}", index + 1))
-            })?;
-            segments.push(segment);
-        }
-        if segments.is_empty() {
-            return Ok(None);
-        }
+        };
 
         let lock = lock_for(meeting_id, prompt_id);
         let _guard = lock.lock().await;
-        let meta = read_json(&meta_path).map_err(|error| match error {
-            ReadError::Io(error) => AiError::Io(error),
-            ReadError::Json => AiError::Value("Invalid JSON in meta.json".to_owned()),
-            ReadError::Decode(message) => AiError::Value(message),
-        })?;
-        let user_name = match participant_id {
-            None => {
-                let names = local_participant_names(&meta)?;
-                if names.is_empty() { "User".to_owned() } else { names.join(", ") }
-            }
-            Some(pid) => {
-                let participant = participants(&meta)?.and_then(|participants| participants.get(pid));
-                let Some(participant) = participant else {
-                    return Err(AiError::Value(format!("Participant '{pid}' not found")));
-                };
-                object(participant)?;
-                text_or(participant, "name", pid)?
-            }
-        };
+        let meta = read_meeting_meta(&meta_path)?;
+        let user_name = user_name(&meta, participant_id)?;
 
         let Some(claim) = self.claim_version(meeting_id, prompt_id, &segments, participant_id, &user_name, force)?
         else {
             eprintln!("[increment] {prompt_id} skipped: 0 delta segments");
             return Ok(None);
         };
-        let Claim { version, delta, start, end } = claim;
+        self.generate_claimed(meeting_id, prompt, &meta, &user_name, participant_id, claim).await
+    }
+
+    /// The part of `generate` after the claim: a failure is recorded as failed metadata
+    /// and gives `Ok(None)`; the callback hears of a success.
+    async fn generate_claimed(
+        &self,
+        meeting_id: &str,
+        prompt: &PromptConfig,
+        meta: &Json,
+        user_name: &str,
+        participant_id: Option<&str>,
+        claim: Claim,
+    ) -> Result<Option<i64>> {
+        let prompt_id = prompt.id.as_str();
+        let version = claim.version;
         let dir = self.increments_dir(meeting_id, prompt_id);
         let meta_file = dir.join(format!("v{version}_meta.json"));
-        let started = Instant::now();
         let base = json::object([
             ("version", Json::from(version)),
             ("prompt_id", Json::from(prompt_id)),
             ("prompt_name", Json::from(prompt.name.as_str())),
             ("participant_id", participant_id.map_or(Json::Null, Json::from)),
-            ("participant_name", Json::from(user_name.as_str())),
+            ("participant_name", Json::from(user_name)),
         ]);
         let Json::Object(base) = base else { unreachable!() };
         let mut cancel =
-            CancelGuard { path: meta_file.clone(), base: base.clone(), generation: Map::new(), started, armed: true };
+            CancelGuard { path: meta_file.clone(), base, generation: Map::new(), started: Instant::now(), armed: true };
 
-        let outcome = self.run(meeting_id, prompt, &meta, &user_name, version, &delta, start, end, &mut cancel).await;
+        let outcome = self.run(meeting_id, prompt, meta, user_name, &claim, &mut cancel).await;
         cancel.armed = false;
         match outcome {
             Ok(Some(())) => {
@@ -580,14 +699,8 @@ impl IncrementGenerator {
             }
             Ok(None) => Ok(None),
             Err(error) => {
-                let mut failed = cancel.generation.clone();
-                failed.extend(base);
-                failed.insert("generated_at".into(), Json::from(timestamp::utc_now_isoformat()));
-                failed.insert("status".into(), Json::from("failed"));
-                failed.insert("duration_seconds".into(), Json::Float(round_tenths(started.elapsed())));
-                failed.insert("error".into(), Json::from(error.to_string()));
                 std::fs::create_dir_all(&dir)?;
-                save_json(&meta_file, &Json::Object(failed))?;
+                save_json(&meta_file, &cancel.failed_meta(&error.to_string()))?;
                 eprintln!("[increment] {prompt_id} v{version} FAILED: {error}");
                 Ok(None)
             }
@@ -596,56 +709,75 @@ impl IncrementGenerator {
 
     /// The part of `generate` after the claim whose failure is recorded as failed
     /// metadata. `Ok(None)`: skipped for lack of text.
-    #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
         meeting_id: &str,
         prompt: &PromptConfig,
         meta: &Json,
         user_name: &str,
-        version: i64,
-        delta: &[Json],
-        start: i128,
-        end: i128,
+        claim: &Claim,
         cancel: &mut CancelGuard,
     ) -> Result<Option<()>> {
         let prompt_id = prompt.id.as_str();
+        let version = claim.version;
         let dir = self.increments_dir(meeting_id, prompt_id);
-        let transcript = segments_to_transcript(delta)?;
+        let transcript = segments_to_transcript(&claim.delta)?;
         if pytext::strip(&transcript).is_empty() {
             eprintln!("[increment] {prompt_id} v{version} skipped: no text in delta segments");
             Self::remove_generating_meta(&dir, version);
             return Ok(None);
         }
-        let mut participants = Vec::new();
-        if let Some(map) = self::participants(meta)? {
-            for (pid, info) in map {
-                object(info)?;
-                participants.push(field_or(info, "name", pid)?);
-            }
-        }
+        let rendered = self.render(prompt, meta, user_name, transcript)?;
+        std::fs::create_dir_all(&dir)?;
 
+        let provider = self.factory.create(&rendered.settings, "increment", None)?;
+        let generation = generation_meta(&*provider, &rendered.settings);
+        cancel.generation = generation.clone();
+
+        let meta_file = dir.join(format!("v{version}_meta.json"));
+        let heartbeat = AbortOnDrop(tokio::spawn(heartbeat(meta_file.clone(), self.heartbeat_interval)));
+        let result = provider.complete(&rendered.prompt).await;
+        drop(heartbeat);
+        let result = result?;
+        let duration = cancel.started.elapsed();
+
+        Self::write_markdown(&dir, meta, meeting_id, claim, &rendered.participants, &result)?;
+        save_json(&meta_file, &completed_meta(&cancel.base, generation, claim, duration))?;
+        eprintln!(
+            "[increment] {prompt_id} v{version} generated ({} segments, {:.1}s)",
+            claim.delta.len(),
+            duration.as_secs_f64()
+        );
+        Ok(Some(()))
+    }
+
+    /// `vN.md`: the frontmatter and the answer.
+    fn write_markdown(
+        dir: &Path,
+        meta: &Json,
+        meeting_id: &str,
+        claim: &Claim,
+        participants: &[String],
+        answer: &str,
+    ) -> Result<()> {
+        let frontmatter = Self::frontmatter(meta, meeting_id, claim.version, claim.start, claim.end, participants)?;
+        std::fs::write(dir.join(format!("v{}.md", claim.version)), frontmatter + answer)?;
+        Ok(())
+    }
+
+    /// The prompt of an increment: the scenario's settings from one snapshot, the saved
+    /// template and the meeting's variables.
+    fn render(&self, prompt: &PromptConfig, meta: &Json, user_name: &str, transcript: String) -> Result<Rendered> {
+        let participants = participant_names(meta)?;
         let store = self.store();
         let snapshot = store.read()?;
-        let task_id = format!("saved:{prompt_id}");
+        let task_id = format!("saved:{}", prompt.id);
         let settings = store.resolve_task(
             &task_id,
             Some(&snapshot),
             Fallback { prompt: Some(&prompt.template), label: Some(&prompt.name) },
         )?;
-        // A caller can supply a generated PromptConfig with an existing registry ID: only
-        // an explicit override from the settings replaces its text.
-        let saved_prompt = |id: &str| {
-            snapshot
-                .get("tasks")
-                .and_then(|tasks| tasks.get(id))
-                .and_then(|task| task.get("prompt"))
-                .and_then(Json::as_str)
-        };
-        let mut template = saved_prompt(&task_id).unwrap_or(&prompt.template);
-        if prompt_id == "my-increment" {
-            template = saved_prompt(INCREMENT_TASK).unwrap_or(template);
-        }
+        let template = prompt_template(&snapshot, &task_id, prompt);
         let title = text_or(meta, "title", "")?;
         let variables: Variables = [
             ("user_name".to_owned(), user_name.to_owned()),
@@ -655,43 +787,8 @@ impl IncrementGenerator {
         ]
         .into_iter()
         .collect();
-        let rendered = render_prompt(template, &variables)?;
-        std::fs::create_dir_all(&dir)?;
-
-        let provider = self.factory.create(&settings, "increment", None)?;
-        let generation = json::object([
-            ("provider", Json::from(provider.key())),
-            ("model", Json::from(provider.model())),
-            ("reasoning_effort", provider.reasoning_effort().map_or(Json::Null, Json::from)),
-            ("settings_revision", Json::from(settings.revision.as_str())),
-        ]);
-        let Json::Object(generation) = generation else { unreachable!() };
-        cancel.generation = generation.clone();
-
-        let meta_file = dir.join(format!("v{version}_meta.json"));
-        let heartbeat = AbortOnDrop(tokio::spawn(heartbeat(meta_file.clone(), self.heartbeat_interval)));
-        let result = provider.complete(&rendered).await;
-        drop(heartbeat);
-        let result = result?;
-        let duration = cancel.started.elapsed();
-
-        let frontmatter = Self::frontmatter(meta, meeting_id, version, start, end, &participants)?;
-        std::fs::write(dir.join(format!("v{version}.md")), frontmatter + &result)?;
-        let mut completed = cancel.base.clone();
-        completed.extend(generation);
-        completed.insert("segment_range".into(), Json::Array(vec![Json::Int(start), Json::Int(end)]));
-        completed.insert("segment_count".into(), Json::from(delta.len() as i64));
-        completed.insert("generated_at".into(), Json::from(timestamp::utc_now_isoformat()));
-        completed.insert("status".into(), Json::from("completed"));
-        completed.insert("duration_seconds".into(), Json::Float(round_tenths(duration)));
-        completed.insert("error".into(), Json::Null);
-        save_json(&meta_file, &Json::Object(completed))?;
-        eprintln!(
-            "[increment] {prompt_id} v{version} generated ({} segments, {:.1}s)",
-            delta.len(),
-            duration.as_secs_f64()
-        );
-        Ok(Some(()))
+        let prompt = render_prompt(template, &variables)?;
+        Ok(Rendered { settings, prompt, participants })
     }
 
     /// `generate_all`: every prompt matching the meeting title, concurrently. A failing
@@ -703,11 +800,7 @@ impl IncrementGenerator {
         if !meta_path.exists() {
             return Ok(());
         }
-        let meta = read_json(&meta_path).map_err(|error| match error {
-            ReadError::Io(error) => AiError::Io(error),
-            ReadError::Json => AiError::Value("Invalid JSON in meta.json".to_owned()),
-            ReadError::Decode(message) => AiError::Value(message),
-        })?;
+        let meta = read_meeting_meta(&meta_path)?;
         let title = object(&meta)?.get("title").filter(|title| title.truthy()).map(Json::py_str).unwrap_or_default();
         let prompts = registry.matching(&title);
         if prompts.is_empty() {
@@ -760,19 +853,11 @@ impl IncrementGenerator {
                 Err(ReadError::Io(_) | ReadError::Json) => {}
             }
         }
-        let key = |meta: &Json| -> Result<i128> {
-            match meta.get("version") {
-                None => Ok(0),
-                Some(value) => {
-                    value.as_int().ok_or_else(|| AiError::Type(format!("version is a {}", value.type_name())))
-                }
-            }
-        };
         for meta in &metas {
             object(meta)?;
-            key(meta)?;
+            meta_version(meta)?;
         }
-        metas.sort_by_key(|meta| key(meta).unwrap_or(0));
+        metas.sort_by_key(|meta| meta_version(meta).unwrap_or(0));
         Ok(metas)
     }
 
