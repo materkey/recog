@@ -17,6 +17,26 @@ fn status_frame(request_id: &str, status: &str, message: &str) -> Value {
     obj! {"type" => protocol::COPILOT_STATUS, "request_id" => request_id, "status" => status, "message" => message}
 }
 
+/// What a `get_recent_transcript_request` asks for; a field of the wrong type gets
+/// Python's default (180 s, every id, refined segments included).
+struct RecentWindow {
+    seconds: f64,
+    since: Option<i128>,
+    include_refined: bool,
+}
+
+impl RecentWindow {
+    fn of(data: &Map) -> Self {
+        let seconds = data.get("window_seconds").and_then(json::as_f64).filter(|w| *w >= 0.0).unwrap_or(180.0);
+        let since = data.get("since_segment_id").filter(|v| json::is_int(v)).and_then(json::as_int);
+        let include_refined = match data.get("include_refined") {
+            Some(Value::Bool(b)) => *b,
+            _ => true,
+        };
+        Self { seconds, since, include_refined }
+    }
+}
+
 fn with_identity(bridge: &Bridge, kind: &str, rest: &[(&str, Value)]) -> Value {
     let mut map = Map::new();
     map.insert("type", Value::from(kind));
@@ -87,15 +107,7 @@ impl Bridge {
     pub(crate) async fn refresh_user_profile(&self, client: Option<&Arc<Client>>) -> Result<(), String> {
         let Some(client) = client.filter(|c| self.is_subscriber(Some(c))) else { return Ok(()) };
         let _guard = self.profile_lock.lock().await;
-        let applied = (|| -> Result<(Value, bool), String> {
-            let source = self.wired().identity.ok_or_else(|| "Live identity is not connected".to_owned())?;
-            let identity = copy_identity(&source.read_identity()?)?;
-            let changed = !identity.py_eq(&self.st().identity);
-            source.apply_mic_identity(&identity)?;
-            self.st().identity = identity.clone();
-            Ok((identity, changed))
-        })();
-        let (identity, changed) = match applied {
+        let (identity, changed) = match self.apply_user_profile() {
             Ok(result) => result,
             Err(_) => {
                 let frame = obj! {"type" => protocol::USER_PROFILE_ERROR, "message" => "Could not apply the saved user profile"};
@@ -113,6 +125,17 @@ impl Bridge {
         let frame = obj! {"type" => protocol::USER_PROFILE_APPLIED, "revision" => revision, "identity" => identity};
         self.send_bounded(client, &dumps(&frame)).await.map_err(|e| e.0)?;
         Ok(())
+    }
+
+    /// Reads the saved profile, hands it to the microphone and keeps it; answers the
+    /// identity and whether it changed.
+    fn apply_user_profile(&self) -> Result<(Value, bool), String> {
+        let source = self.wired().identity.ok_or_else(|| "Live identity is not connected".to_owned())?;
+        let identity = copy_identity(&source.read_identity()?)?;
+        let changed = !identity.py_eq(&self.st().identity);
+        source.apply_mic_identity(&identity)?;
+        self.st().identity = identity.clone();
+        Ok((identity, changed))
     }
 
     /// `copilot_channel_hello`: the socket leaves the extensions for the channel set,
@@ -168,18 +191,7 @@ impl Bridge {
             st.clients.list(&st.clients.channels)
         };
         if channels.is_empty() {
-            match client {
-                Some(client) => {
-                    let frame =
-                        status_frame(request_id, "channel_disconnected", "Copilot channel server is not connected");
-                    if let Err(e) = client.sink.send(dumps(&frame)).await {
-                        self.log(&format!("[KTalk Bridge] Failed to send channel_disconnected status: {e}"));
-                    }
-                }
-                None => {
-                    self.log("[KTalk Bridge] copilot_chat_message dropped — no channel client and no originator socket")
-                }
-            }
+            self.reply_no_channel(client, request_id).await;
             return Ok(());
         }
         let outbound = with_identity(
@@ -206,6 +218,21 @@ impl Bridge {
         futures_util::future::join(self.broadcast_to_subscribers(&echo), futures_util::future::join_all(forwards))
             .await;
         Ok(())
+    }
+
+    /// A chat with no channel connected: its originator learns the channel is gone.
+    async fn reply_no_channel(&self, client: Option<&Arc<Client>>, request_id: &str) {
+        match client {
+            Some(client) => {
+                let frame = status_frame(request_id, "channel_disconnected", "Copilot channel server is not connected");
+                if let Err(e) = client.sink.send(dumps(&frame)).await {
+                    self.log(&format!("[KTalk Bridge] Failed to send channel_disconnected status: {e}"));
+                }
+            }
+            None => {
+                self.log("[KTalk Bridge] copilot_chat_message dropped — no channel client and no originator socket")
+            }
+        }
     }
 
     /// `copilot_channel_reply`: relayed as `copilot_reply` unless its request went
@@ -318,33 +345,7 @@ impl Bridge {
             self.log("[KTalk Bridge] get_recent_transcript_request missing/invalid request_id — ignored");
             return Ok(());
         };
-        let window_seconds = match data.get("window_seconds") {
-            None => 180.0,
-            Some(v) => match json::as_f64(v) {
-                Some(w) if w >= 0.0 => w,
-                _ => 180.0,
-            },
-        };
-        let since = match data.get("since_segment_id") {
-            Some(v) if json::is_int(v) => json::as_int(v),
-            _ => None,
-        };
-        let include_refined = match data.get("include_refined") {
-            Some(Value::Bool(b)) => *b,
-            _ => true,
-        };
-        let current = self.current_meeting_id();
-        let cutoff_ms = self.now() * 1000.0 - window_seconds * 1000.0;
-        let entries = self.st().transcript.ordered();
-        let current_value = Value::from(current.as_deref());
-        let segments: Vec<Value> = entries
-            .into_iter()
-            .filter(|e| e.get("meeting_id").unwrap_or(&Value::Null) == &current_value)
-            .filter(|e| e.get("end_ms").and_then(json::as_f64).unwrap_or(0.0) >= cutoff_ms)
-            .filter(|e| since.is_none_or(|s| e.get("segment_id").and_then(json::as_int).is_some_and(|id| id > s)))
-            .filter(|e| include_refined || !e.get("refined").is_some_and(Value::truthy))
-            .map(Value::Object)
-            .collect();
+        let segments = self.recent_segments(&RecentWindow::of(data));
         let response = with_identity(
             self,
             protocol::GET_RECENT_TRANSCRIPT_RESPONSE,
@@ -359,6 +360,24 @@ impl Bridge {
             None => self.log("[KTalk Bridge] get_recent_transcript_request without websocket — response dropped"),
         }
         Ok(())
+    }
+
+    /// The buffered segments of the current meeting that `window` selects, in order.
+    fn recent_segments(&self, window: &RecentWindow) -> Vec<Value> {
+        let current = self.current_meeting_id();
+        let cutoff_ms = self.now() * 1000.0 - window.seconds * 1000.0;
+        let entries = self.st().transcript.ordered();
+        let current_value = Value::from(current.as_deref());
+        entries
+            .into_iter()
+            .filter(|e| e.get("meeting_id").unwrap_or(&Value::Null) == &current_value)
+            .filter(|e| e.get("end_ms").and_then(json::as_f64).unwrap_or(0.0) >= cutoff_ms)
+            .filter(|e| {
+                window.since.is_none_or(|s| e.get("segment_id").and_then(json::as_int).is_some_and(|id| id > s))
+            })
+            .filter(|e| window.include_refined || !e.get("refined").is_some_and(Value::truthy))
+            .map(Value::Object)
+            .collect()
     }
 
     /// `copilot_spawn_request`: relayed to the supervisor when no conference owns the
