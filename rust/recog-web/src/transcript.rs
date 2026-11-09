@@ -89,20 +89,25 @@ pub fn analysis_prompt_metadata(meeting: Option<&Value>) -> Result<(String, Stri
         None => &empty,
     };
     let title = get(meta, "title")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(""));
-    let participants = get(meta, "participants")?.unwrap_or(&empty);
-    let Value::Object(participants) = participants else {
-        return Err(format!("'{}' object has no attribute 'items'", participants.type_name()));
-    };
-    let mut names = Vec::new();
-    for (key, info) in participants.iter() {
-        let name = get(info, "name")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(key.as_str()));
-        names.push(name);
-    }
+    let names = participant_names(get(meta, "participants")?.unwrap_or(&empty))?;
     let title = match title {
         Value::Str(s) => s,
         other => other.py_str(),
     };
     Ok((title, join_names(&names)?))
+}
+
+/// `[info.get("name") or key for key, info in participants.items()]`.
+fn participant_names(participants: &Value) -> Result<Vec<Value>, PyError> {
+    let Value::Object(participants) = participants else {
+        return Err(format!("'{}' object has no attribute 'items'", participants.type_name()));
+    };
+    participants
+        .iter()
+        .map(|(key, info)| {
+            Ok(get(info, "name")?.filter(|v| v.truthy()).cloned().unwrap_or_else(|| Value::from(key.as_str())))
+        })
+        .collect()
 }
 
 /// `_tail_lines(path, max_lines)`: the last lines of a file, read backwards in 8 KiB
@@ -113,7 +118,16 @@ pub fn tail_lines(path: &Path, max_lines: usize) -> Vec<String> {
         return Vec::new();
     }
     let Ok(mut file) = std::fs::File::open(path) else { return Vec::new() };
-    let Ok(mut position) = file.seek(SeekFrom::End(0)) else { return Vec::new() };
+    let Ok(end) = file.seek(SeekFrom::End(0)) else { return Vec::new() };
+    let mut lines = last_lines(&mut file, end, max_lines);
+    lines.reverse();
+    lines.into_iter().map(|l| decode_ignore(&l)).collect()
+}
+
+/// The last `max_lines` non-empty lines of the file's first `end` bytes, the last
+/// first, read backwards in 8 KiB chunks.
+fn last_lines(file: &mut std::fs::File, end: u64, max_lines: usize) -> Vec<Vec<u8>> {
+    let mut position = end;
     let mut lines: Vec<Vec<u8>> = Vec::new();
     let mut buffer: Vec<u8> = Vec::new();
     while position > 0 && lines.len() < max_lines {
@@ -125,20 +139,25 @@ pub fn tail_lines(path: &Path, max_lines: usize) -> Vec<String> {
         }
         chunk.extend_from_slice(&buffer);
         buffer = chunk;
-        while lines.len() < max_lines {
-            let Some(idx) = buffer.iter().rposition(|b| *b == b'\n') else { break };
-            let line = buffer[idx + 1..].to_vec();
-            buffer.truncate(idx);
-            if !line.is_empty() {
-                lines.push(line);
-            }
-        }
+        take_lines(&mut buffer, &mut lines, max_lines);
     }
     if !buffer.is_empty() && lines.len() < max_lines {
         lines.push(buffer);
     }
-    lines.reverse();
-    lines.into_iter().map(|l| decode_ignore(&l)).collect()
+    lines
+}
+
+/// Moves the complete lines at the end of `buffer` to `lines`, the last first, until
+/// there are `max_lines`; empty lines are dropped.
+fn take_lines(buffer: &mut Vec<u8>, lines: &mut Vec<Vec<u8>>, max_lines: usize) {
+    while lines.len() < max_lines {
+        let Some(idx) = buffer.iter().rposition(|b| *b == b'\n') else { break };
+        let line = buffer[idx + 1..].to_vec();
+        buffer.truncate(idx);
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
 }
 
 /// `bytes.decode("utf-8", errors="ignore")`.
@@ -186,34 +205,43 @@ pub fn select_recent_segments(
         return Ok(Vec::new());
     }
     let scan_limit = (max_segments * 5).max(200);
-    let mut segments: Vec<Value> = tail_lines(&path, scan_limit)
+    let segments = parse_rows(&tail_lines(&path, scan_limit));
+    let Some(last) = segments.last() else { return Ok(Vec::new()) };
+    let last_ts = parse_iso_ts(get(last, "ts")?);
+    let mut segments = match last_ts {
+        Some(last_ts) => within_window(segments, last_ts, window_seconds)?,
+        None => segments,
+    };
+    if segments.len() > max_segments {
+        segments = segments.split_off(segments.len() - max_segments);
+    }
+    Ok(segments)
+}
+
+/// The JSON rows of a transcript's lines; blank and unreadable lines are skipped.
+fn parse_rows(lines: &[String]) -> Vec<Value> {
+    lines
         .iter()
         .filter_map(|line| {
             let line = recog_core::py::strip(line);
             if line.is_empty() { None } else { pyjson::loads(line).ok() }
         })
-        .collect();
-    let Some(last) = segments.last() else { return Ok(Vec::new()) };
-    if let Some(last_ts) = parse_iso_ts(get(last, "ts")?) {
-        let cutoff_micros = i64::try_from(window_seconds * 1_000_000).unwrap_or(i64::MAX);
-        let cutoff =
-            PyDateTime { wall_micros: last_ts.wall_micros - cutoff_micros, offset_micros: last_ts.offset_micros };
-        let mut windowed = Vec::new();
-        for segment in &segments {
-            if let Some(ts) = parse_iso_ts(get(segment, "ts")?)
-                && ts.minus(&cutoff).map_err(|e| e.to_string())? >= 0
-            {
-                windowed.push(segment.clone());
-            }
-        }
-        if !windowed.is_empty() {
-            segments = windowed;
+        .collect()
+}
+
+/// The rows timed at most `window_seconds` before `last_ts`; all of them when none is.
+fn within_window(segments: Vec<Value>, last_ts: PyDateTime, window_seconds: i128) -> Result<Vec<Value>, PyError> {
+    let cutoff_micros = i64::try_from(window_seconds * 1_000_000).unwrap_or(i64::MAX);
+    let cutoff = PyDateTime { wall_micros: last_ts.wall_micros - cutoff_micros, offset_micros: last_ts.offset_micros };
+    let mut windowed = Vec::new();
+    for segment in &segments {
+        if let Some(ts) = parse_iso_ts(get(segment, "ts")?)
+            && ts.minus(&cutoff).map_err(|e| e.to_string())? >= 0
+        {
+            windowed.push(segment.clone());
         }
     }
-    if segments.len() > max_segments {
-        segments = segments.split_off(segments.len() - max_segments);
-    }
-    Ok(segments)
+    Ok(if windowed.is_empty() { segments } else { windowed })
 }
 
 /// A number for `<` against an integer bound; other types raise `TypeError`.
@@ -282,44 +310,63 @@ pub fn slice_segments_by_ts_display(
 /// speaker extend the slice. Clamped to 1–30 s.
 #[must_use]
 pub fn compute_segment_duration_ms(segments: &[Value], segment_index: usize, shared_timeline: bool) -> f64 {
-    let field = |segment: &Value, key: &str| segment.as_object().and_then(|m| m.get(key)).cloned();
-    let number = |value: Option<Value>| match value {
+    let segment = &segments[segment_index];
+    let offset = as_ms(row_field(segment, "audio_offset_ms").filter(Value::truthy)).unwrap_or(0.0);
+    let (next_offset, last_valid) = slice_bounds(segments, segment_index, shared_timeline);
+    let duration = match next_offset {
+        Some(next) => next - offset,
+        None => (last_valid.unwrap_or(offset) - offset) + 3000.0,
+    };
+    duration.clamp(1000.0, 30000.0)
+}
+
+fn row_field(segment: &Value, key: &str) -> Option<Value> {
+    segment.as_object().and_then(|m| m.get(key)).cloned()
+}
+
+/// A number of milliseconds.
+fn as_ms(value: Option<Value>) -> Option<f64> {
+    match value {
         Some(Value::Int(n)) => Some(n as f64),
         Some(Value::Float(x)) => Some(x),
         Some(Value::Bool(b)) => Some(f64::from(u8::from(b))),
         _ => None,
-    };
+    }
+}
+
+/// What bounds a segment's slice: the offset of the first later row of its timeline
+/// that does not continue it (`None` without one, or when that row has none), and the
+/// last offset among the continuations before it.
+fn slice_bounds(segments: &[Value], segment_index: usize, shared_timeline: bool) -> (Option<f64>, Option<f64>) {
     let segment = &segments[segment_index];
-    let offset = number(field(segment, "audio_offset_ms").filter(Value::truthy)).unwrap_or(0.0);
-    let track_local = field(segment, "is_local").unwrap_or(Value::Bool(false));
-    let mut last_valid = offset;
-    let mut next_offset = None;
-    let mut index = segment_index + 1;
-    while index < segments.len() {
-        let next = &segments[index];
-        let other_track = !field(next, "is_local").unwrap_or(Value::Bool(false)).py_eq(&track_local);
-        if field(next, "event_type").is_some_and(|v| v.truthy()) || (!shared_timeline && other_track) {
-            index += 1;
+    let track_local = row_field(segment, "is_local").unwrap_or(Value::Bool(false));
+    let speaker = row_field(segment, "speaker_id").unwrap_or(Value::Null);
+    let mut last_valid = None;
+    for next in &segments[segment_index + 1..] {
+        if off_timeline(next, &track_local, shared_timeline) {
             continue;
         }
-        let same_speaker = field(next, "speaker_id")
-            .unwrap_or(Value::Null)
-            .py_eq(&field(segment, "speaker_id").unwrap_or(Value::Null));
-        if field(next, "cont").is_some_and(|v| v.truthy()) && same_speaker {
-            if let Some(value) = number(field(next, "audio_offset_ms").filter(|v| !v.is_null())) {
-                last_valid = value;
-            }
-            index += 1;
-        } else {
-            next_offset = number(field(next, "audio_offset_ms").filter(|v| !v.is_null()));
-            break;
+        let next_offset = as_ms(row_field(next, "audio_offset_ms").filter(|v| !v.is_null()));
+        if !continues(next, &speaker) {
+            return (next_offset, last_valid);
+        }
+        if next_offset.is_some() {
+            last_valid = next_offset;
         }
     }
-    let duration = match next_offset {
-        Some(next) => next - offset,
-        None => (last_valid - offset) + 3000.0,
-    };
-    duration.clamp(1000.0, 30000.0)
+    (None, last_valid)
+}
+
+/// An event row, or a row of the other side when each side has its own file.
+fn off_timeline(row: &Value, track_local: &Value, shared_timeline: bool) -> bool {
+    let other_track = !row_field(row, "is_local").unwrap_or(Value::Bool(false)).py_eq(track_local);
+    row_field(row, "event_type").is_some_and(|v| v.truthy()) || (!shared_timeline && other_track)
+}
+
+/// A continuation of the same speaker's segment.
+fn continues(row: &Value, speaker: &Value) -> bool {
+    row_field(row, "cont").is_some_and(|v| v.truthy())
+        && row_field(row, "speaker_id").unwrap_or(Value::Null).py_eq(speaker)
 }
 
 #[cfg(test)]
