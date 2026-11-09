@@ -546,3 +546,55 @@ impl Bridge {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_each_close_code_when_named_then_websockets_wording() {
+        let cases = [
+            (1000, "OK"),
+            (1001, "going away"),
+            (1002, "protocol error"),
+            (1003, "unsupported data"),
+            (1007, "invalid frame payload data"),
+            (1008, "policy violation"),
+            (1009, "message too big"),
+            (1011, "internal error"),
+            (4000, "unknown"),
+        ];
+        for (code, name) in cases {
+            assert_eq!(close_name(code), name, "{code}");
+        }
+    }
+
+    #[test]
+    fn given_peer_close_frames_when_described_then_only_unclean_ones_are_errors() {
+        let frame =
+            |code: u16, reason: &str| CloseFrame { code: CloseCode::from(code), reason: reason.to_owned().into() };
+        assert_eq!(peer_close_text(None), None);
+        assert_eq!(peer_close_text(Some(&frame(1000, ""))), None);
+        assert_eq!(peer_close_text(Some(&frame(1001, "bye"))), None);
+        assert_eq!(
+            peer_close_text(Some(&frame(1011, ""))).as_deref(),
+            Some("received 1011 (internal error); then sent 1011 (internal error)")
+        );
+        assert_eq!(
+            peer_close_text(Some(&frame(1008, "bad origin"))).as_deref(),
+            Some("received 1008 (policy violation) bad origin; then sent 1008 (policy violation) bad origin")
+        );
+        assert_eq!(
+            peer_close_text(Some(&frame(4000, ""))).as_deref(),
+            Some("received 4000 (unknown); then sent 4000 (unknown)")
+        );
+    }
+
+    #[test]
+    fn given_send_errors_when_described_then_closed_socket_reads_as_clean_close() {
+        assert_eq!(closed_text(&tungstenite::Error::ConnectionClosed), "sent 1000 (OK); then received 1000 (OK)");
+        assert_eq!(closed_text(&tungstenite::Error::AlreadyClosed), "sent 1000 (OK); then received 1000 (OK)");
+        let io = tungstenite::Error::Io(std::io::Error::other("broken pipe"));
+        assert_eq!(closed_text(&io), "IO error: broken pipe");
+    }
+}
