@@ -19,8 +19,9 @@ pub struct MacTable;
 
 /// The names XNU gives the strings it appends after a process's environment
 /// (`exec_add_apple_strings`).
-const APPLE_STRINGS: [&str; 16] = [
+const APPLE_STRINGS: [&str; 17] = [
     "executable_path",
+    "pfz",
     "stack_guard",
     "malloc_entropy",
     "ptr_munge",
