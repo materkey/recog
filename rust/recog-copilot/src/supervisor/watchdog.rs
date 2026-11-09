@@ -63,13 +63,7 @@ impl Watchdog {
     pub async fn tick<H: WatchdogHost, R: Runner>(&mut self, host: &H, runner: &R) -> Result<(), Error> {
         let now = (self.clock)();
         if host.lifecycle_state() == State::Idle {
-            // No session should exist: no probing, no heartbeats (the bridge reads
-            // silence as offline), the chip closed once.
-            self.dismissed_dialog = None;
-            self.spawning_since = None;
-            if self.last_reported.is_some_and(|s| s != AgentState::Offline) {
-                self.report(host, AgentState::Offline, now).await;
-            }
+            self.idle_tick(host, now).await;
             return Ok(());
         }
 
@@ -83,16 +77,7 @@ impl Watchdog {
             host.session_ready();
         }
 
-        let mut effective = observed;
-        if observed == AgentState::Spawning {
-            let since = *self.spawning_since.get_or_insert(now);
-            if now - since >= SPAWN_DEADLINE_S {
-                effective = AgentState::Blocked;
-            }
-        } else {
-            self.spawning_since = None;
-        }
-
+        let effective = self.past_spawn_deadline(observed, now);
         if Some(effective) != self.last_reported || now - self.last_report_ts >= HEARTBEAT_S {
             self.report(host, effective, now).await;
         }
@@ -100,6 +85,27 @@ impl Watchdog {
             host.on_session_died().await;
         }
         Ok(())
+    }
+
+    /// No session should exist: no probing, no heartbeats (the bridge reads silence as
+    /// offline), the chip closed once.
+    async fn idle_tick<H: WatchdogHost>(&mut self, host: &H, now: f64) {
+        self.dismissed_dialog = None;
+        self.spawning_since = None;
+        if self.last_reported.is_some_and(|s| s != AgentState::Offline) {
+            self.report(host, AgentState::Offline, now).await;
+        }
+    }
+
+    /// The state to report: a session spawning for longer than the deadline counts as
+    /// blocked.
+    fn past_spawn_deadline(&mut self, observed: AgentState, now: f64) -> AgentState {
+        if observed != AgentState::Spawning {
+            self.spawning_since = None;
+            return observed;
+        }
+        let since = *self.spawning_since.get_or_insert(now);
+        if now - since >= SPAWN_DEADLINE_S { AgentState::Blocked } else { observed }
     }
 
     async fn observe<R: Runner>(&mut self, runner: &R) -> Result<AgentState, Error> {

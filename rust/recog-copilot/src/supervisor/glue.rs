@@ -296,10 +296,25 @@ impl<R: Runner + 'static> Supervisor<R> {
         }
         self.st.borrow_mut().enabled = true;
         match ftype {
-            Some(protocol::MEETING_STATE) => {
-                if !self.autospawn {
-                    return;
-                }
+            Some(kind @ (protocol::MEETING_STATE | protocol::MEETING_STARTED | protocol::MEETING_ENDED)) => {
+                self.on_meeting_frame(kind, frame).await;
+            }
+            Some(protocol::COPILOT_CHANNEL_UNAVAILABLE) => {
+                self.recover_channel_session(frame.get("meeting_id")).await;
+            }
+            Some(protocol::COPILOT_SPAWN_REQUEST) => self.on_spawn_request().await,
+            Some(protocol::COPILOT_STOP_REQUEST) => self.on_stop_request(frame).await,
+            _ => {}
+        }
+    }
+
+    /// The meeting-driven frames, inert while `autospawn` is off (D3).
+    async fn on_meeting_frame(&self, kind: &str, frame: &serde_json::Map<String, Value>) {
+        if !self.autospawn {
+            return;
+        }
+        match kind {
+            protocol::MEETING_STATE => {
                 let session_alive = self.probe_session_alive().await;
                 let active = frame.get("active").is_some_and(py::truthy);
                 let meeting_id = frame.get("meeting_id").filter(|v| py::truthy(v)).map(py::str_of);
@@ -307,50 +322,42 @@ impl<R: Runner + 'static> Supervisor<R> {
                     reconcile(&mut self.st.borrow_mut().lifecycle, active, meeting_id.as_deref(), session_alive);
                 self.apply(commands).await;
             }
-            Some(protocol::MEETING_STARTED) => {
-                if !self.autospawn {
-                    return;
-                }
+            protocol::MEETING_STARTED => {
                 if let Some(meeting_id) = frame.get("meeting_id").filter(|v| py::truthy(v)).map(py::str_of) {
                     let commands = self.st.borrow_mut().lifecycle.meeting_started(&meeting_id);
                     self.apply(commands).await;
                 }
             }
-            Some(protocol::MEETING_ENDED) => {
-                if !self.autospawn {
-                    return;
-                }
+            _ => {
                 let meeting_id = frame.get("meeting_id").and_then(Value::as_str);
                 let commands = self.st.borrow_mut().lifecycle.meeting_ended(meeting_id);
                 self.apply(commands).await;
             }
-            Some(protocol::COPILOT_CHANNEL_UNAVAILABLE) => {
-                self.recover_channel_session(frame.get("meeting_id")).await;
-            }
-            Some(protocol::COPILOT_SPAWN_REQUEST) => {
-                // An explicit click is fresh intent, not a flap: reset the budget. A
-                // session that spent every attempt parks in SPAWNING("manual"), where
-                // the same-id flap emits no Spawn, so `apply` would never reset it and
-                // Start would stay inert. A retry already pending is kept: cancelling
-                // it would make a repeated click postpone recovery.
-                if !self.respawn_pending() {
-                    self.reset_respawn_backoff();
-                }
-                let commands = self.st.borrow_mut().lifecycle.meeting_started(MANUAL_MEETING_ID);
-                self.apply(commands).await;
-            }
-            Some(protocol::COPILOT_STOP_REQUEST) => {
-                // Immediate kill, no grace. Logged: the stuck "останавливается…"
-                // incident of 2026-08-06 was undiagnosable because this path was silent.
-                let commands = self.st.borrow_mut().lifecycle.stop_now(Some(MANUAL_MEETING_ID));
-                if !commands.is_empty() {
-                    let request_id = frame.get("request_id").map_or_else(|| "None".to_owned(), py::repr);
-                    self.log(&format!("manual stop request {request_id} — killing session now"));
-                }
-                self.apply(commands).await;
-            }
-            _ => {}
         }
+    }
+
+    async fn on_spawn_request(&self) {
+        // An explicit click is fresh intent, not a flap: reset the budget. A
+        // session that spent every attempt parks in SPAWNING("manual"), where
+        // the same-id flap emits no Spawn, so `apply` would never reset it and
+        // Start would stay inert. A retry already pending is kept: cancelling
+        // it would make a repeated click postpone recovery.
+        if !self.respawn_pending() {
+            self.reset_respawn_backoff();
+        }
+        let commands = self.st.borrow_mut().lifecycle.meeting_started(MANUAL_MEETING_ID);
+        self.apply(commands).await;
+    }
+
+    async fn on_stop_request(&self, frame: &serde_json::Map<String, Value>) {
+        // Immediate kill, no grace. Logged: the stuck "останавливается…"
+        // incident of 2026-08-06 was undiagnosable because this path was silent.
+        let commands = self.st.borrow_mut().lifecycle.stop_now(Some(MANUAL_MEETING_ID));
+        if !commands.is_empty() {
+            let request_id = frame.get("request_id").map_or_else(|| "None".to_owned(), py::repr);
+            self.log(&format!("manual stop request {request_id} — killing session now"));
+        }
+        self.apply(commands).await;
     }
 
     /// Replaces a session whose MCP client disconnected, on the respawn budget.

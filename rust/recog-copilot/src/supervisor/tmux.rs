@@ -299,6 +299,46 @@ impl<C: CommandRunner> TmuxRunner<C> {
         self.alive(Some(&sibling)).await.unwrap_or(false)
     }
 
+    /// The tmux session of a meeting's kind: the manual one, or the default.
+    fn session_name_for(&self, meeting_id: Option<&str>) -> String {
+        if meeting_id == Some(MANUAL_MEETING_ID) {
+            TMUX_SESSION_MANUAL.to_owned()
+        } else {
+            self.default_session_name.clone()
+        }
+    }
+
+    /// A live session of the other kind is stale by design (one copilot per machine),
+    /// e.g. a preemption whose kill ran out of retries: reap it first, and give up the
+    /// spawn when that fails, so two copilots cannot coexist.
+    async fn reap_sibling(&self, name: &str) -> Result<(), Error> {
+        let sibling = self.sibling_of(name);
+        if self.alive(Some(&sibling)).await? {
+            self.kill(Some(&sibling))
+                .await
+                .map_err(|_| Error(format!("stale sibling session {} could not be killed", py::str_repr(&sibling))))?;
+        }
+        Ok(())
+    }
+
+    /// `tmux new-session` running Claude in the checkout, inside a fresh transient unit
+    /// when systemd-run is used.
+    async fn create_session(&self, name: &str) -> Result<(), Error> {
+        let root = self.repo_root.display().to_string();
+        let command = self.build_claude_command()?;
+        let mut argv = self.tmux(&["new-session", "-d", "-s", name, "-c", &root, &command]);
+        if self.use_systemd_run {
+            // Only on the creating path: an adopted session's unit is never recreated.
+            self.reset_session_unit().await?;
+            argv = self.systemd_run(argv);
+        }
+        let (rc, out) = self.run.run(&argv).await?;
+        if rc != 0 {
+            return Err(Error(format!("tmux new-session failed (rc={rc}): {}", py::strip(&out))));
+        }
+        Ok(())
+    }
+
     async fn kill_tmux_session(&self, target: &str) -> Result<(), Error> {
         let (mut rc, mut out) = (0, String::new());
         for attempt in 0..self.kill_retries {
@@ -320,36 +360,13 @@ impl<C: CommandRunner> Runner for TmuxRunner<C> {
     async fn spawn(&self, meeting_id: Option<&str>) -> Result<bool, Error> {
         // Rebind to the name of the session's kind before the gate, so both the probe
         // and new-session target it.
-        let name = if meeting_id == Some(MANUAL_MEETING_ID) {
-            TMUX_SESSION_MANUAL.to_owned()
-        } else {
-            self.default_session_name.clone()
-        };
+        let name = self.session_name_for(meeting_id);
         self.set_session_name(&name);
-        // A live session of the other kind is stale by design (one copilot per
-        // machine), e.g. a preemption whose kill ran out of retries: reap it first, and
-        // give up the spawn when that fails, so two copilots cannot coexist.
-        let sibling = self.sibling_of(&name);
-        if self.alive(Some(&sibling)).await? {
-            self.kill(Some(&sibling))
-                .await
-                .map_err(|_| Error(format!("stale sibling session {} could not be killed", py::str_repr(&sibling))))?;
-        }
+        self.reap_sibling(&name).await?;
         if self.alive(None).await? {
             return Ok(false);
         }
-        let root = self.repo_root.display().to_string();
-        let command = self.build_claude_command()?;
-        let mut argv = self.tmux(&["new-session", "-d", "-s", &name, "-c", &root, &command]);
-        if self.use_systemd_run {
-            // Only on the creating path: an adopted session's unit is never recreated.
-            self.reset_session_unit().await?;
-            argv = self.systemd_run(argv);
-        }
-        let (rc, out) = self.run.run(&argv).await?;
-        if rc != 0 {
-            return Err(Error(format!("tmux new-session failed (rc={rc}): {}", py::strip(&out))));
-        }
+        self.create_session(&name).await?;
         Ok(true)
     }
 
