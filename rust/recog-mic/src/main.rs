@@ -20,6 +20,8 @@ mod framer;
 mod physical;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod resample;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod worker;
 
 use std::process::ExitCode;
 
@@ -40,19 +42,22 @@ fn main() -> ExitCode {
 
 #[cfg(target_os = "macos")]
 fn run(args: &args::Args) -> i32 {
-    // Keep the pipe to ourselves: whatever a library prints lands on stderr.
-    let pipe = match nix::unistd::dup(std::io::stdout()) {
-        Ok(fd) => std::fs::File::from(fd),
-        Err(e) => {
-            eprintln!("Cannot duplicate stdout: {e}");
-            return 1;
-        }
-    };
-    if let Err(e) = nix::unistd::dup2_stdout(std::io::stderr()) {
-        eprintln!("Cannot point stdout at stderr: {e}");
-        return 1;
-    }
-    capture::run(args, pipe)
+    take_stdout().map_or_else(
+        |message| {
+            eprintln!("{message}");
+            1
+        },
+        |pipe| capture::run(args, pipe),
+    )
+}
+
+/// Keep the pipe to ourselves: whatever a library prints lands on stderr.
+#[cfg(target_os = "macos")]
+fn take_stdout() -> Result<std::fs::File, String> {
+    let fd = nix::unistd::dup(std::io::stdout()).map_err(|e| format!("Cannot duplicate stdout: {e}"))?;
+    nix::unistd::dup2_stdout(std::io::stderr())
+        .map(|()| std::fs::File::from(fd))
+        .map_err(|e| format!("Cannot point stdout at stderr: {e}"))
 }
 
 #[cfg(not(target_os = "macos"))]

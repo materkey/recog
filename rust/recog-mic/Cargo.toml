@@ -9,6 +9,11 @@ publish = false
 name = "recog-mic"
 path = "src/main.rs"
 
+[dependencies]
+# The wait-free rings between the stream's callback and the writer loop, which
+# are tested on every system.
+rtrb = "0.4.1"
+
 # The capture runs on macOS only (the Linux microphone stays in the live process), and
 # cpal on Linux needs the ALSA headers: there the crate builds its pure parts and tests.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -17,4 +22,3 @@ cpal = "0.18.2"
 coreaudio-rs = { version = "0.14.2", default-features = false, features = ["audio_toolbox", "core_audio"] }
 libc = "0.2"
 nix = { version = "0.31.3", default-features = false, features = ["fs", "time"] }
-rtrb = "0.4.1"

@@ -49,6 +49,15 @@ impl Request {
             Request::I16 => 16,
         }
     }
+
+    /// The sample type as cpal's `SampleFormat` prints it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Request::F32 => "f32",
+            Request::I32 => "i32",
+            Request::I16 => "i16",
+        }
+    }
 }
 
 /// coreaudio-rs's rate test, with its truncating casts.
@@ -181,6 +190,12 @@ mod tests {
         assert!(!matches(&formats[1], Request::F32, 48_000, 1));
         assert!(!matches(&formats[1], Request::I32, 48_000, 1));
         assert_eq!(safe_request(&formats, 48_000, 1), Some(Request::F32));
+    }
+
+    #[test]
+    fn each_request_is_named_as_cpal_prints_its_sample_format() {
+        // given / when / then: the "Capturing ..." line names the type this way
+        assert_eq!([Request::F32, Request::I32, Request::I16].map(Request::name), ["f32", "i32", "i16"]);
     }
 
     #[test]
