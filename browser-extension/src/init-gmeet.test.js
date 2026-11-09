@@ -31,7 +31,8 @@ const fakeAdapter = {
   supportsTabInjection: () => false,
   isRoomPage: () => fakeAdapter.roomPage,
   getDiagnostic: () => fakeAdapter.diagnostic,
-  isInPrejoin: () => false,
+  prejoin: false,
+  isInPrejoin: () => fakeAdapter.prejoin,
   isConferenceAvailable: () => fakeAdapter.inMeeting,
   waitForConference: jest.fn(() => new Promise(() => {})),
   getConference: () => (fakeAdapter.inMeeting ? conference : null),
@@ -77,6 +78,7 @@ beforeEach(() => {
   fakeAdapter.roomPage = false;
   fakeAdapter.diagnostic = null;
   fakeAdapter.inMeeting = false;
+  fakeAdapter.prejoin = false;
   fakeAdapter.subscribeToSpeakerChanges.mockClear();
   fakeAdapter.waitForConference.mockReset();
   fakeAdapter.waitForConference.mockImplementation(() => new Promise(() => {}));
@@ -193,4 +195,39 @@ test('room page in a call - join refused because another tab holds the recording
   state.currentMeetingId = 'accepted-meeting';
   jest.advanceTimersByTime(2000);
   expect(document.querySelector('.jitsi-speaker-name').textContent).toBe('Никто не говорит');
+});
+
+test('room page before joining - init interval ticks - status line asks to join', () => {
+  fakeAdapter.roomPage = true;
+  fakeAdapter.prejoin = true;
+
+  init();
+  jest.advanceTimersByTime(2000);
+
+  expect(document.querySelector('.jitsi-speaker-name').textContent).toBe('Нажмите "Присоединиться" для начала');
+});
+
+test('room page outside a call - init interval ticks - status line waits for the connection', () => {
+  fakeAdapter.roomPage = true;
+
+  init();
+  jest.advanceTimersByTime(2000);
+
+  expect(document.querySelector('.jitsi-speaker-name').textContent).toBe('Ожидание подключения...');
+});
+
+test('an attached call - the conference goes away - the next tick forgets it', () => {
+  fakeAdapter.roomPage = true;
+  fakeAdapter.inMeeting = true;
+  init();
+  jest.advanceTimersByTime(2000);
+  expect(state.activeConfRef).toBe(conference);
+  state.conferenceReady = true;
+
+  fakeAdapter.inMeeting = false;
+  jest.advanceTimersByTime(2000);
+
+  expect(state.activeConfRef).toBeNull();
+  expect(state.activeJitsiConf).toBeNull();
+  expect(state.conferenceReady).toBe(false);
 });
