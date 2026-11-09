@@ -777,8 +777,6 @@ const views = {
 
             this.updateFollowButton();
             syncPrivacyButtons();
-            const statusEl = document.getElementById('live-status');
-            const infoEl = document.getElementById('live-meeting-info');
             const transcriptEl = document.getElementById('live-transcript');
 
             this.updateStatus('connecting');
