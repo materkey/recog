@@ -35,6 +35,52 @@ function resendParticipantsAfterJoin() {
   if (conf) sendParticipantsUpdate(conf);
 }
 
+// Bridge frame type → its handler. A Map, so a type such as `constructor`
+// finds nothing.
+const FRAME_HANDLERS = new Map([
+  ['transcript', handleTranscript],
+  [
+    'transcript_history',
+    (data) => {
+      handleTranscriptHistory(data);
+      resendParticipantsAfterJoin();
+    },
+  ],
+  ['transcript_refine', handleTranscriptRefine],
+  ['new_meeting', handleNewMeeting],
+  // Platform dispatch is centralized in the handler: ensureCopilotContent
+  // → createCopilotContent() mounts the copilot chat into the floating
+  // panel on floating-panel platforms (matrix / vas3k) and the KTalk tab
+  // otherwise, so copilot frames reach the right surface on every platform.
+  ['copilot_reply', handleCopilotReply],
+  ['copilot_status', handleCopilotStatus],
+  [
+    'meeting_started',
+    (data) => {
+      // No isOurMeeting() guard here: the bridge emits this BEFORE the
+      // joiner's `transcript_history` (ktalk_bridge.py:2651 vs :2698), so
+      // `state.currentMeetingId` is still the previous meeting's id.
+      const title = (data && data.meeting_title) ? ` — ${data.meeting_title}` : '';
+      appendCopilotSystemMessage(`Встреча началась${title}`);
+    },
+  ],
+  [
+    'meeting_ended',
+    (data) => {
+      if (isOurMeeting(data)) {
+        appendCopilotSystemMessage('Встреча закончилась');
+      }
+    },
+  ],
+  [
+    'meeting_join_rejected',
+    (data) => {
+      const notice = handleMeetingJoinRejected(data);
+      if (notice) appendCopilotSystemMessage(notice);
+    },
+  ],
+]);
+
 export function connectWebSocket() {
   if (state.wsConnection && state.wsConnection.readyState === WebSocket.OPEN) {
     return;
@@ -120,37 +166,7 @@ export function connectWebSocket() {
     state.wsConnection.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'transcript') {
-          handleTranscript(data);
-        } else if (data.type === 'transcript_history') {
-          handleTranscriptHistory(data);
-          resendParticipantsAfterJoin();
-        } else if (data.type === 'transcript_refine') {
-          handleTranscriptRefine(data);
-        } else if (data.type === 'new_meeting') {
-          handleNewMeeting(data);
-        } else if (data.type === 'copilot_reply') {
-          // Platform dispatch is centralized in the handler: ensureCopilotContent
-          // → createCopilotContent() mounts the copilot chat into the floating
-          // panel on floating-panel platforms (matrix / vas3k) and the KTalk tab
-          // otherwise, so copilot frames reach the right surface on every platform.
-          handleCopilotReply(data);
-        } else if (data.type === 'copilot_status') {
-          handleCopilotStatus(data);
-        } else if (data.type === 'meeting_started') {
-          // No isOurMeeting() guard here: the bridge emits this BEFORE the
-          // joiner's `transcript_history` (ktalk_bridge.py:2651 vs :2698), so
-          // `state.currentMeetingId` is still the previous meeting's id.
-          const title = (data && data.meeting_title) ? ` — ${data.meeting_title}` : '';
-          appendCopilotSystemMessage(`Встреча началась${title}`);
-        } else if (data.type === 'meeting_ended') {
-          if (isOurMeeting(data)) {
-            appendCopilotSystemMessage('Встреча закончилась');
-          }
-        } else if (data.type === 'meeting_join_rejected') {
-          const notice = handleMeetingJoinRejected(data);
-          if (notice) appendCopilotSystemMessage(notice);
-        }
+        FRAME_HANDLERS.get(data.type)?.(data);
       } catch (e) {
         console.log('[KTalk Transcript] Parse error:', e);
       }
