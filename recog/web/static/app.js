@@ -1218,19 +1218,26 @@ function scrollCopilotToBottom() {
 // escape-first renderMarkdown (safe for innerHTML) with .ai-answer
 // typography; user/error/status and pending placeholders stay plain text.
 function setCopilotMsgText(textEl, msg) {
+    const mode = copilotMsgTextMode(msg);
+    textEl.className = 'copilot-msg-text' + COPILOT_MSG_TEXT_CLASS[mode];
+    if (mode === 'markdown') {
+        textEl.innerHTML = renderMarkdown(msg.text || '');
+    } else {
+        textEl.textContent = msg.text || (mode === 'pending' ? '…' : '');
+    }
+}
+
+const COPILOT_MSG_TEXT_CLASS = { pending: ' pending', markdown: ' ai-answer', plain: '' };
+
+// 'pending' for an assistant placeholder still waiting, 'markdown' for an
+// assistant or proactive answer, 'plain' for everything else.
+function copilotMsgTextMode(msg) {
     const isPending = msg.kind === 'assistant'
         && typeof msg.status === 'string'
         && msg.status !== 'done'
         && msg.status !== 'error';
-    const isMarkdownKind = msg.kind === 'assistant' || msg.kind === 'proactive';
-    textEl.className = 'copilot-msg-text'
-        + (isPending ? ' pending' : '')
-        + (isMarkdownKind && !isPending ? ' ai-answer' : '');
-    if (isMarkdownKind && !isPending) {
-        textEl.innerHTML = renderMarkdown(msg.text || '');
-    } else {
-        textEl.textContent = msg.text || (isPending ? '…' : '');
-    }
+    if (isPending) return 'pending';
+    return msg.kind === 'assistant' || msg.kind === 'proactive' ? 'markdown' : 'plain';
 }
 
 function renderCopilotMessage(msg) {
@@ -1283,7 +1290,10 @@ function updateCopilotMessage(id, updates) {
 
     const messagesEl = getCopilotMessagesEl();
     const el = messagesEl ? messagesEl.querySelector(`[data-copilot-id="${id}"]`) : null;
-    if (!el) return;
+    if (el) redrawCopilotMessage(el, msg, updates);
+}
+
+function redrawCopilotMessage(el, msg, updates) {
     if (updates.kind) {
         el.classList.remove(
             'copilot-msg-user',
@@ -1339,22 +1349,24 @@ function updateCopilotControls() {
         input.placeholder = spawning ? 'запускается…' : 'Спросить Claude...';
     }
     if (sendBtn) sendBtn.disabled = spawning;
-    if (stopBtn) {
-        const stopping = copilotState.stopPendingId !== null;
-        const meetingSource = views.live.currentMeeting && views.live.currentMeeting.source;
-        const conferenceOwned = COPILOT_CONFERENCE_SOURCES.has(meetingSource);
-        // Manual Stop kills immediately — "останавливается…" resolves to ⚫
-        // within seconds, or the timeout in copilotStopClick reports the
-        // stop as lost. Disabled while a stop is already in flight (no
-        // duplicate frames) and while there is no manual session to stop.
-        stopBtn.textContent = stopping ? 'останавливается…' : 'Stop';
-        stopBtn.disabled = stopping
-            || copilotState.agentState === 'offline'
-            || conferenceOwned;
-        stopBtn.title = conferenceOwned
-            ? 'Conference Copilot sessions are managed automatically'
-            : '';
-    }
+    if (stopBtn) updateCopilotStopButton(stopBtn);
+}
+
+function updateCopilotStopButton(stopBtn) {
+    const stopping = copilotState.stopPendingId !== null;
+    const meetingSource = views.live.currentMeeting && views.live.currentMeeting.source;
+    const conferenceOwned = COPILOT_CONFERENCE_SOURCES.has(meetingSource);
+    // Manual Stop kills immediately — "останавливается…" resolves to ⚫
+    // within seconds, or the timeout in copilotStopClick reports the
+    // stop as lost. Disabled while a stop is already in flight (no
+    // duplicate frames) and while there is no manual session to stop.
+    stopBtn.textContent = stopping ? 'останавливается…' : 'Stop';
+    stopBtn.disabled = stopping
+        || copilotState.agentState === 'offline'
+        || conferenceOwned;
+    stopBtn.title = conferenceOwned
+        ? 'Conference Copilot sessions are managed automatically'
+        : '';
 }
 
 function openCopilotPanel() {
