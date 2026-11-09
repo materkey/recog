@@ -60,7 +60,7 @@ pub const SAME_ROOM_REOPEN_WINDOW_MICROS: i64 = 10 * 60 * 1_000_000;
 
 /// Sources of extension-driven conference meetings; "orphan" and "local" are plain
 /// recordings.
-pub const CONFERENCE_SOURCES: [&str; 6] = ["ktalk", "vas3k", "jitsi", "matrix", "gmeet", "zoom"];
+pub const CONFERENCE_SOURCES: [&str; 6] = crate::platforms::PLATFORMS;
 
 /// A Python exception the storage raised, by kind, with `str(exception)`.
 #[derive(Debug, Clone, PartialEq, Eq)]

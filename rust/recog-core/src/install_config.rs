@@ -28,21 +28,15 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use crate::platforms::{BUILTIN_HOSTS, PLATFORMS, in_builtin_wildcard_domain};
 use crate::pyjson;
 use crate::url::{parse_ipv4, urlsplit};
 use crate::{paths, py};
 
 pub use crate::paths::Environ;
 
-/// Every platform the extension and the bridge know.
-pub const PLATFORMS: [&str; 6] = ["ktalk", "vas3k", "jitsi", "matrix", "gmeet", "zoom"];
 /// Platforms whose hosts an installation configures.
 pub const CONFIGURABLE_PLATFORMS: [&str; 2] = ["jitsi", "matrix"];
-
-// Hosts the extension manifest already covers; configuring one again would register a
-// second platform for the same pages.
-const BUILTIN_HOSTS: [&str; 2] = ["meet.vas3k.cloud", "meet.google.com"];
-const BUILTIN_WILDCARD_DOMAINS: [&str; 2] = ["ktalk.ru", "zoom.us"];
 
 /// How a setting's value is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -423,9 +417,10 @@ fn table<'a>(value: &'a Doc, name: &str, keys: &[&str]) -> Result<&'a Doc, Strin
     Ok(value)
 }
 
+// Hosts the extension manifest already covers; configuring one again would register a
+// second platform for the same pages.
 fn is_builtin_host(hostname: &str) -> bool {
-    BUILTIN_HOSTS.contains(&hostname)
-        || BUILTIN_WILDCARD_DOMAINS.iter().any(|d| hostname == *d || hostname.ends_with(&format!(".{d}")))
+    BUILTIN_HOSTS.contains(&hostname) || in_builtin_wildcard_domain(hostname)
 }
 
 fn canonical_hostname(hostname: &str) -> bool {

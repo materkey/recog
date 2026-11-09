@@ -7,18 +7,16 @@
 //! Python daemons send none) passes; the literal `null` does not.
 
 use crate::install_config::InstallConfig;
+use crate::platforms::{BUILTIN_HOSTS, in_builtin_wildcard_domain};
 use crate::py;
 use crate::url::urlsplit;
 
-/// Exact-match origins: the built-in conference hosts and the web UI on port 9080.
-pub const ALLOWED_ORIGINS: [&str; 4] =
-    ["https://meet.vas3k.cloud", "https://meet.google.com", "http://127.0.0.1:9080", "http://localhost:9080"];
+/// The web UI on port 9080, admitted beside the built-in conference hosts.
+pub const WEBAPP_ORIGINS: [&str; 2] = ["http://127.0.0.1:9080", "http://localhost:9080"];
 
-/// Each admits `https://<domain>` and any `https://*.<domain>`.
-pub const WILDCARD_DOMAINS: [&str; 2] = ["ktalk.ru", "zoom.us"];
-
-fn in_wildcard_domain(hostname: &str) -> bool {
-    WILDCARD_DOMAINS.iter().any(|d| hostname == *d || hostname.ends_with(&format!(".{d}")))
+/// Exact-match origins: `https://` on each built-in conference host, and the web UI.
+fn is_allowed_exact(origin: &str) -> bool {
+    WEBAPP_ORIGINS.contains(&origin) || origin.strip_prefix("https://").is_some_and(|h| BUILTIN_HOSTS.contains(&h))
 }
 
 /// `EXTRA_ORIGINS`: `[web] extra_ws_origins` and the configured conference hosts.
@@ -32,7 +30,7 @@ pub fn extra_origins(config: &InstallConfig) -> Vec<String> {
 #[must_use]
 pub fn origin_allowed(origin: Option<&str>, extra: &[String]) -> bool {
     let Some(origin) = origin else { return true };
-    if ALLOWED_ORIGINS.contains(&origin) || extra.iter().any(|e| e == origin) {
+    if is_allowed_exact(origin) || extra.iter().any(|e| e == origin) {
         return true;
     }
     if origin.chars().any(py::is_space) {
@@ -65,15 +63,62 @@ pub fn origin_allowed(origin: Option<&str>, extra: &[String]) -> bool {
             && b[b.len() - 1].is_ascii_alphanumeric()
             && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-')
     };
-    hostname.split('.').all(label_ok) && in_wildcard_domain(&hostname)
+    hostname.split('.').all(label_ok) && in_builtin_wildcard_domain(&hostname)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
     use super::*;
+    use crate::platforms::BUILTIN_WILDCARD_DOMAINS;
 
     fn allowed(origin: &str) -> bool {
         origin_allowed(Some(origin), &[])
+    }
+
+    /// The hosts of the manifest's page patterns (`content_scripts[].matches` and
+    /// `host_permissions`), split into exact hosts and `*.` wildcard domains.
+    fn manifest_hosts() -> (BTreeSet<String>, BTreeSet<String>) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../browser-extension/manifest.json");
+        let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let content_scripts = manifest["content_scripts"].as_array().unwrap();
+        let matches = content_scripts.iter().flat_map(|entry| entry["matches"].as_array().unwrap());
+        let permissions = manifest["host_permissions"].as_array().unwrap();
+        let (mut exact, mut wildcard) = (BTreeSet::new(), BTreeSet::new());
+        for pattern in matches.chain(permissions) {
+            // Pattern shape: <scheme>://<host>/<path>, e.g. https://*.ktalk.ru/*.
+            let pattern = pattern.as_str().unwrap();
+            let (scheme, rest) = pattern.split_once("://").unwrap();
+            assert_eq!(scheme, "https", "unexpected scheme in {pattern:?}");
+            let host = rest.split('/').next().unwrap();
+            match host.strip_prefix("*.") {
+                Some(domain) => wildcard.insert(domain.to_owned()),
+                None => exact.insert(host.to_owned()),
+            };
+        }
+        (exact, wildcard)
+    }
+
+    #[test]
+    fn given_extension_manifest_when_compared_then_builtin_hosts_and_allowlist_match_both_ways() {
+        // given: the manifest's page patterns, the source of truth the hosts mirror
+        let (exact, wildcard) = manifest_hosts();
+        // when
+        let builtin_exact: BTreeSet<String> = BUILTIN_HOSTS.iter().map(|h| (*h).to_owned()).collect();
+        let builtin_wildcard: BTreeSet<String> = BUILTIN_WILDCARD_DOMAINS.iter().map(|d| (*d).to_owned()).collect();
+        // then: a host added on one side only fails here
+        assert_eq!(exact, builtin_exact);
+        assert_eq!(wildcard, builtin_wildcard);
+        assert_eq!(WEBAPP_ORIGINS, ["http://127.0.0.1:9080", "http://localhost:9080"]);
+        for host in &exact {
+            assert!(allowed(&format!("https://{host}")), "{host}");
+        }
+        for domain in &wildcard {
+            assert!(allowed(&format!("https://{domain}")), "{domain}");
+            assert!(allowed(&format!("https://sub.{domain}")), "{domain}");
+        }
     }
 
     #[test]
@@ -84,6 +129,8 @@ mod tests {
             "https://a.b.ktalk.ru",
             "https://app.zoom.us",
             "https://us05web.zoom.us:443",
+            "https://zoom.us",
+            "https://ktalk.ru:443",
         ] {
             assert!(allowed(origin), "{origin}");
         }
@@ -109,6 +156,18 @@ mod tests {
             "https://app.zoom.us:x",
             "null",
             "",
+            "http://app.zoom.us",
+            "https://evil-zoom.us",
+            "https://zoom.us.evil.example",
+            "https://evil.example",
+            "https://",
+            "not a url",
+            "https://[invalid",
+            "https://ktalk.ru:444",
+            "https://ktalk.ru:99999",
+            "https://.ktalk.ru",
+            "https://evil%00.ktalk.ru",
+            "https://evil-.ktalk.ru",
         ] {
             assert!(!allowed(origin), "{origin:?}");
         }
@@ -116,7 +175,11 @@ mod tests {
 
     #[test]
     fn given_exact_webapp_and_absent_origins_when_checked_then_allowed() {
-        for origin in ALLOWED_ORIGINS {
+        for host in BUILTIN_HOSTS {
+            assert!(allowed(&format!("https://{host}")));
+            assert!(!allowed(&format!("http://{host}")), "{host}");
+        }
+        for origin in WEBAPP_ORIGINS {
             assert!(allowed(origin));
         }
         assert!(origin_allowed(None, &[]));
@@ -131,6 +194,24 @@ mod tests {
         assert!(origin_allowed(Some("null"), &extra));
         assert!(!origin_allowed(Some("https://other.example.org"), &extra));
         assert!(!origin_allowed(Some("https://x.meet.example.org"), &extra));
+        assert!(!origin_allowed(Some("https://meet.example.org"), &[]));
+        assert!(!origin_allowed(Some("null"), &extra[..1]));
+    }
+
+    #[test]
+    fn given_configured_extra_and_conference_origins_when_collected_then_each_is_admitted() {
+        // given
+        let mut config = InstallConfig { jitsi: vec!["https://meet.example.org".to_owned()], ..Default::default() };
+        config.matrix = vec!["https://element.example.org".to_owned()];
+        config.web.extra_ws_origins = vec!["https://other.example.org".to_owned()];
+        // when
+        let extra = extra_origins(&config);
+        // then
+        for origin in ["https://meet.example.org", "https://element.example.org", "https://other.example.org"] {
+            assert!(origin_allowed(Some(origin), &extra), "{origin}");
+            assert!(!allowed(origin), "{origin}");
+        }
+        assert!(!origin_allowed(Some("https://evil.example.org"), &extra));
     }
 
     #[test]
