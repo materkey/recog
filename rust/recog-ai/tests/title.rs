@@ -220,3 +220,57 @@ async fn corrupt_title_settings_when_orphan_ends_then_no_title_and_no_provider()
     assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await, None);
     assert!(factory.calls().is_empty());
 }
+
+const LONG_ROW: &str = r#"{"id": 1, "ts_display": "12:00:00", "speaker": "User", "text": "Обсуждаем архитектуру системы и все необходимые изменения."}"#;
+
+#[tokio::test]
+async fn meeting_names_and_title_when_orphan_titled_then_prompt_variables_follow_meta() {
+    let dir = tempfile::tempdir().unwrap();
+    let prompt = r#"{"prompt": "U={user_name} P={participants} T={meeting_title} {transcript}"}"#;
+    store(dir.path()).write_task("title", &Json::parse(prompt).unwrap(), None).unwrap();
+    let meeting = dir.path().join("meetings/m1");
+    let meta = r#"{"title": "Old", "participants": {"local": {"name": "User", "is_local": true}, "p2": {"name": "Пётр"}, "p3": {"is_local": 1}}}"#;
+    write_meeting(&meeting, meta, &[LONG_ROW]);
+    let factory = FakeFactory::new("codex", "m", None, "New title");
+    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await.unwrap().title, "New title");
+    assert!(factory.prompts()[0].starts_with("U=User, p3 P=User, Пётр, p3 T=Old [12:00:00] User: Обсуждаем"));
+}
+
+#[tokio::test]
+async fn unreadable_meta_when_orphan_titled_then_no_title_and_no_provider() {
+    let metas = [
+        "not json",
+        "[]",
+        r#"{"title": 5}"#,
+        r#"{"participants": []}"#,
+        r#"{"participants": {"p": 5}}"#,
+        r#"{"participants": {"p": {"name": 5}}}"#,
+    ];
+    for meta in metas {
+        let dir = tempfile::tempdir().unwrap();
+        let meeting = dir.path().join("meetings/m1");
+        write_meeting(&meeting, meta, &[LONG_ROW]);
+        let factory = FakeFactory::new("codex", "m", None, "Title");
+        assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await, None, "{meta}");
+        assert!(factory.calls().is_empty(), "{meta}");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let meeting = dir.path().join("meetings/m1");
+    write_meeting(&meeting, "{}", &[LONG_ROW]);
+    std::fs::remove_file(meeting.join("meta.json")).unwrap();
+    let factory = FakeFactory::new("codex", "m", None, "Title");
+    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await, None);
+    assert!(factory.calls().is_empty());
+}
+
+#[tokio::test]
+async fn no_transcript_when_orphan_titled_then_no_title_even_with_broken_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ai-settings.json"), "broken settings").unwrap();
+    let meeting = dir.path().join("meetings/m1");
+    std::fs::create_dir_all(&meeting).unwrap();
+    std::fs::write(meeting.join("meta.json"), "{}").unwrap();
+    let factory = FakeFactory::new("codex", "m", None, "Title");
+    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await, None);
+    assert!(factory.calls().is_empty());
+}
