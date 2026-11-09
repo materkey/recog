@@ -379,6 +379,25 @@ mod tests {
     }
 
     #[test]
+    fn ureq_failures_when_told_as_httpx_errors_then_httpxs_texts() {
+        assert_eq!(httpx_message(&ureq::Error::Timeout(ureq::Timeout::PerRead)), "");
+        assert_eq!(httpx_message(&ureq::Error::ConnectionFailed), "All connection attempts failed");
+        for (kind, text) in [
+            (ErrorKind::ConnectionRefused, "All connection attempts failed"),
+            (ErrorKind::UnexpectedEof, "Server disconnected without sending a response."),
+            (ErrorKind::TimedOut, ""),
+            (ErrorKind::WouldBlock, ""),
+            (ErrorKind::ConnectionReset, ""),
+            (ErrorKind::BrokenPipe, ""),
+        ] {
+            let error = ureq::Error::Io(std::io::Error::new(kind, "the OS's text"));
+            assert_eq!(httpx_message(&error), text, "{kind:?}");
+        }
+        assert_eq!(httpx_message(&ureq::Error::Io(std::io::Error::other("disk full"))), "disk full");
+        assert_eq!(httpx_message(&ureq::Error::HostNotFound), ureq::Error::HostNotFound.to_string());
+    }
+
+    #[test]
     fn the_alias_table_when_listed_then_sorted_once_each() {
         assert_eq!(
             aliases(),
