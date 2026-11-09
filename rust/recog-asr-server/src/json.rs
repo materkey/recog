@@ -93,4 +93,26 @@ mod tests {
     fn a_nan_when_rendered_then_refused() {
         assert_eq!(render(&Value::Array(vec![Value::Float(f64::NAN)])), None);
     }
+
+    #[test]
+    fn an_infinity_inside_an_object_when_rendered_then_refused() {
+        let value = pyjson::loads(r#"{"a": {"b": [1, 2]}}"#).unwrap();
+        assert_eq!(render(&value).as_deref(), Some(r#"{"a":{"b":[1,2]}}"#));
+        let Value::Object(mut map) = value else { panic!() };
+        map.insert("c", Value::Float(f64::NEG_INFINITY));
+        assert_eq!(render(&Value::Object(map)), None);
+    }
+
+    #[test]
+    fn control_characters_and_quotes_when_rendered_then_jsons_escapes_and_the_rest_as_is() {
+        let text = "\"\\\n\r\t\u{8}\u{c}\u{1}\u{1f}\u{7f} ё/";
+        assert_eq!(render(&Value::from(text)).unwrap(), "\"\\\"\\\\\\n\\r\\t\\b\\f\\u0001\\u001f\u{7f} ё/\"");
+    }
+
+    #[test]
+    fn scalars_when_rendered_then_pythons_literals() {
+        let value = Value::Array(vec![Value::Bool(true), Value::Bool(false), Value::Int(-7), Value::Float(-0.0)]);
+        assert_eq!(render(&value).unwrap(), "[true,false,-7,-0.0]");
+        assert_eq!(render(&Value::Array(Vec::new())).unwrap(), "[]");
+    }
 }

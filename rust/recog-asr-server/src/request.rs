@@ -153,6 +153,57 @@ mod tests {
         );
     }
 
+    fn multipart(parts: &[(&str, Option<&str>, &str)]) -> FormData {
+        let mut body = String::new();
+        for (name, filename, value) in parts {
+            let filename = filename.map(|f| format!("; filename=\"{f}\"")).unwrap_or_default();
+            body.push_str(&format!(
+                "--b\r\nContent-Disposition: form-data; name=\"{name}\"{filename}\r\n\r\n{value}\r\n"
+            ));
+        }
+        body.push_str("--b--\r\n");
+        form::parse(Some(b"multipart/form-data; boundary=b"), body.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn only_a_file_when_validated_then_the_defaults() {
+        let t = transcription(&multipart(&[("file", Some("a.wav"), "RIFF")]), "whisper-1").unwrap();
+        assert_eq!((t.file.filename.as_str(), t.file.data.as_slice()), ("a.wav", b"RIFF".as_slice()));
+        assert_eq!((t.model.as_str(), t.response_format.as_str()), ("whisper-1", "json"));
+        assert_eq!((t.language, t.prompt, t.temperature, t.timestamp_granularities), (None, None, None, None));
+    }
+
+    #[test]
+    fn every_field_when_validated_then_each_taken_and_empty_ones_absent() {
+        let form = multipart(&[
+            ("file", Some("a.wav"), "x"),
+            ("model", None, "qwen"),
+            ("language", None, "en"),
+            ("response_format", None, ""),
+            ("prompt", None, "hi"),
+            ("temperature", None, " 1_0 "),
+            ("timestamp_granularities", None, "word"),
+        ]);
+        let t = transcription(&form, "gigaam").unwrap();
+        assert_eq!((t.model.as_str(), t.response_format.as_str()), ("qwen", "json"));
+        assert_eq!((t.language.as_deref(), t.prompt.as_deref()), (Some("en"), Some("hi")));
+        assert_eq!((t.temperature, t.timestamp_granularities.as_deref()), (Some(10.0), Some("word")));
+    }
+
+    #[test]
+    fn files_where_text_is_expected_when_validated_then_type_errors_with_name_and_size() {
+        let form = multipart(&[
+            ("model", Some("m.txt"), "abc"),
+            ("temperature", Some("t.txt"), "0"),
+            ("file", Some("a.wav"), "x"),
+        ]);
+        let errors = transcription(&form, "gigaam").unwrap_err();
+        assert_eq!(
+            json::render(&Value::Array(errors)).unwrap(),
+            r#"[{"type":"string_type","loc":["body","model"],"msg":"Input should be a valid string","input":{"filename":"m.txt","size":3}},{"type":"float_type","loc":["body","temperature"],"msg":"Input should be a valid number","input":{"filename":"t.txt","size":1}}]"#
+        );
+    }
+
     #[test]
     fn a_file_sent_as_text_when_validated_then_pydantics_value_error() {
         let errors = transcription(&urlencoded("file=abc"), "gigaam").unwrap_err();
