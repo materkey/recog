@@ -535,6 +535,8 @@ def test_crate_with_data_bound_tests_when_measured_then_only_its_listed_targets_
         "properties",
         "--test",
         "cli",
+        "--test",
+        "adapted_golden",
     ]
 
 

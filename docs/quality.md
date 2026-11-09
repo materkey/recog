@@ -97,8 +97,9 @@ signatures without a body (trait methods, extern fns) are blanked too.
 
 Coverage comes from `cargo llvm-cov` over the workspace's tests, as check.sh runs
 them: `--workspace` except speexdsp-aec, which runs only `--lib --test properties
---test cli` because its parity tests need golden data CI does not have; doctests are
-not instrumented on stable. Stable rustc records lines, not branches, so a Rust
+--test cli --test adapted_golden` because its parity tests need golden data CI does
+not have; doctests are not instrumented on stable. Stable rustc records lines, not
+branches, so a Rust
 function's coverage is that of the lines of the lcov export inside its span that
 belong to no function nested in it (branch hits are used when a toolchain records
 them). A function without a single line in the export was not compiled on this

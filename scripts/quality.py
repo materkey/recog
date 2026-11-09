@@ -44,7 +44,9 @@ EXTENSION = "browser-extension/"
 # What check.sh tests, minus the doctests (stable rustc does not instrument them): a
 # crate listed here runs only these targets, the echo canceller's parity tests
 # needing golden data CI does not have.
-RUST_RESTRICTED_TESTS = {"speexdsp-aec": ["--lib", "--test", "properties", "--test", "cli"]}
+RUST_RESTRICTED_TESTS = {
+    "speexdsp-aec": ["--lib", "--test", "properties", "--test", "cli", "--test", "adapted_golden"]
+}
 # The web UI and what the extension loads; its tests and build tooling are not production.
 JAVASCRIPT_SOURCES = (
     "recog/",

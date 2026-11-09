@@ -246,7 +246,7 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
     assert cargo == [
         "cargo fmt --check",
         "cargo clippy --workspace --all-targets -- -D warnings",
-        "cargo test -p speexdsp-aec --lib --test properties --test cli",
+        "cargo test -p speexdsp-aec --lib --test properties --test cli --test adapted_golden",
         "cargo test -p speexdsp-aec --doc",
         "cargo test -p recog-mic",
         "cargo test -p recog-copilot",

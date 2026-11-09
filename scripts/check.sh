@@ -117,7 +117,7 @@ if [ -f rust/Cargo.toml ]; then
         cd rust
         cargo fmt --check
         cargo clippy --workspace --all-targets -- -D warnings
-        cargo test -p speexdsp-aec --lib --test properties --test cli
+        cargo test -p speexdsp-aec --lib --test properties --test cli --test adapted_golden
         cargo test -p speexdsp-aec --doc
         cargo test -p recog-mic
         cargo test -p recog-copilot
