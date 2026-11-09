@@ -163,8 +163,42 @@ function getTrackIdSet(infoOrEntry) {
   return ids;
 }
 
+function errorText(e) {
+  return e?.message || String(e);
+}
+
+function consumerParent() {
+  return document.body || document.documentElement;
+}
+
+function canCreateConsumer(stream) {
+  return typeof document !== 'undefined' && !!document.createElement && !!stream;
+}
+
+function hideConsumerElement(audio) {
+  audio.style.position = 'fixed';
+  audio.style.left = '-10000px';
+  audio.style.top = '0';
+  audio.style.width = '1px';
+  audio.style.height = '1px';
+  audio.style.opacity = '0';
+  audio.style.pointerEvents = 'none';
+}
+
+function playConsumer(pid, audio, consumer) {
+  if (typeof audio.play !== 'function') return;
+  audio.play().then(
+    () => { consumer.state = 'playing'; },
+    (e) => {
+      consumer.state = 'play_failed';
+      consumer.error = errorText(e);
+      console.warn('[PcmTransport] hidden audio consumer play() failed pid=', pid, consumer.error);
+    }
+  );
+}
+
 function createHiddenAudioConsumer(pid, stream, trackId) {
-  if (typeof document === 'undefined' || !document.createElement || !stream) {
+  if (!canCreateConsumer(stream)) {
     return { element: null, state: 'unavailable', error: '' };
   }
   try {
@@ -176,28 +210,13 @@ function createHiddenAudioConsumer(pid, stream, trackId) {
     audio.srcObject = stream;
     audio.setAttribute('data-recog-pcm-consumer', String(pid));
     if (trackId) audio.setAttribute('data-recog-track-id', String(trackId));
-    audio.style.position = 'fixed';
-    audio.style.left = '-10000px';
-    audio.style.top = '0';
-    audio.style.width = '1px';
-    audio.style.height = '1px';
-    audio.style.opacity = '0';
-    audio.style.pointerEvents = 'none';
-    (document.body || document.documentElement).appendChild(audio);
+    hideConsumerElement(audio);
+    consumerParent().appendChild(audio);
     const consumer = { element: audio, state: 'created', error: '' };
-    if (typeof audio.play === 'function') {
-      audio.play().then(
-        () => { consumer.state = 'playing'; },
-        (e) => {
-          consumer.state = 'play_failed';
-          consumer.error = e?.message || String(e);
-          console.warn('[PcmTransport] hidden audio consumer play() failed pid=', pid, consumer.error);
-        }
-      );
-    }
+    playConsumer(pid, audio, consumer);
     return consumer;
   } catch (e) {
-    return { element: null, state: 'failed', error: e?.message || String(e) };
+    return { element: null, state: 'failed', error: errorText(e) };
   }
 }
 
@@ -263,6 +282,12 @@ function bindEntryToStream(pid, entry, stream, via, trackObject = null) {
   }
 
   disconnectSource(entry);
+  applyBinding(entry, binding, stream, track, via);
+  refreshConsumer(pid, entry, stream, entry.boundTrackId);
+  return true;
+}
+
+function applyBinding(entry, binding, stream, track, via) {
   entry.source = binding.source;
   entry.analyser = binding.analyser;
   entry.analyserBuf = binding.analyserBuf;
@@ -273,8 +298,12 @@ function bindEntryToStream(pid, entry, stream, via, trackObject = null) {
   entry.trackReadyState = track?.readyState || '';
   entry.trackMuted = track?.muted === true;
   entry.lastError = '';
-  refreshConsumer(pid, entry, stream, entry.boundTrackId);
-  return true;
+}
+
+function noteRebind(entry, nowMs, reason) {
+  entry.rebindCount++;
+  entry.lastRebindAtMs = nowMs;
+  entry.lastRebindReason = reason;
 }
 
 function sendDiagnosticsSnapshot(reason = 'snapshot') {
@@ -312,111 +341,131 @@ async function materialize(pid, info) {
       channelInterpretation: 'discrete',
     });
 
-    const entry = {
-      source: null,
-      analyser: null,
-      analyserBuf: null,
-      node,
-      seq: 0,
-      chunksLogged: 0,
-      speakerName: info.speakerName,
-      isLocal: info.isLocal,
-      mediaStream: null,
-      jitsiTrack: info.jitsiTrack || null,
-      jitsiConf: info.jitsiConf || null,
-      conf: info.conf || null,
-      consumer: null,
-      boundTrackObject: null,
-      boundTrackId: '',
-      requestedTrackId: '',
-      boundVia: '',
-      rebindCount: 0,
-      lastRebindAtMs: 0,
-      lastRebindReason: '',
-      lastChunkAtMs: 0,
-      preWorkletMaxAbs: 0,
-      trackReadyState: '',
-      trackMuted: false,
-      lastError: '',
-      createdAtMs: Date.now(),
-    };
-    entry.requestedTrackId = Array.from(getTrackIdSet(info))[0] || '';
-
-    node.port.onmessage = (ev) => {
-      const data = ev.data;
-      if (!data) return;
-      if (data.type === 'error') {
-        if (data.reason === 'sample_rate_mismatch') {
-          console.error(
-            '[PcmTransport] Worklet reported sample_rate_mismatch for pid',
-            pid,
-            'actualSampleRate=',
-            data.sampleRate
-          );
-          pcmDetachParticipant(pid);
-        }
-        return;
-      }
-      if (data.type !== 'pcm_chunk') return;
-      const int16 = data.int16Pcm;
-      if (!int16 || !int16.length) return;
-
-      const nowMs = Date.now();
-      const payloadMs = (data.sampleCount / 16000) * 1000;
-      const chunkEndMs = nowMs;
-      const chunkStartMs = nowMs - payloadMs;
-
-      const pcmBase64 = int16ToBase64(int16);
-      sendWsPcmChunk(
-        pid,
-        entry.speakerName,
-        entry.isLocal,
-        entry.seq++,
-        chunkStartMs,
-        chunkEndMs,
-        pcmBase64
-      );
-      entry.lastChunkAtMs = nowMs;
-
-      if (entry.chunksLogged < 3) {
-        entry.chunksLogged++;
-        console.log(
-          '[PcmTransport] chunk sent pid=', pid,
-          'seq=', entry.seq - 1,
-          'samples=', data.sampleCount,
-          'payloadMs=', payloadMs.toFixed(0)
-        );
-      }
-    };
+    const entry = createEntry(node, info);
+    node.port.onmessage = (ev) => handleWorkletMessage(pid, entry, ev);
 
     if (!bindEntryToStream(pid, entry, info.mediaStream, BOUND_VIA.WRAPPER)) {
-      try { node.port.onmessage = null; } catch (_) { /* ignore */ }
-      try { node.disconnect(); } catch (_) { /* ignore */ }
+      discardNode(node);
       return;
     }
 
-    // Pump the graph. AudioWorkletNode with numberOfOutputs:0 can be
-    // treated as disconnected by Chromium and never get process() ticks
-    // unless something downstream drives it. Connecting to destination
-    // here is a no-op signal-wise (worklet has no outputs) but keeps
-    // the graph alive. See docs/plans/rippling-mixing-giraffe.md POF-5.
-    try {
-      node.connect(ctx.destination);
-    } catch (e) {
-      console.warn('[PcmTransport] node.connect(destination) failed:', e?.message || e);
-    }
-    active.set(pid, entry);
-    ensureDiagnosticsTimer();
-    console.log('[PcmTransport] Attached participant:', pid, entry.speakerName);
-
-    if (constants.PCM_REBIND_ENABLED) {
-      setTimeout(() => {
-        const current = active.get(pid);
-        if (current) tryRebindToReceiverTrack(pid, current, true, REBIND_REASON.INITIAL_PROBE);
-      }, 500);
-    }
+    startEntry(pid, ctx, entry);
   } catch (e) {
     console.warn('[PcmTransport] Failed to materialize pid', pid, e);
+  }
+}
+
+function discardNode(node) {
+  try { node.port.onmessage = null; } catch (_) { /* ignore */ }
+  try { node.disconnect(); } catch (_) { /* ignore */ }
+}
+
+function createEntry(node, info) {
+  const entry = {
+    source: null,
+    analyser: null,
+    analyserBuf: null,
+    node,
+    seq: 0,
+    chunksLogged: 0,
+    speakerName: info.speakerName,
+    isLocal: info.isLocal,
+    mediaStream: null,
+    jitsiTrack: info.jitsiTrack || null,
+    jitsiConf: info.jitsiConf || null,
+    conf: info.conf || null,
+    consumer: null,
+    boundTrackObject: null,
+    boundTrackId: '',
+    requestedTrackId: '',
+    boundVia: '',
+    rebindCount: 0,
+    lastRebindAtMs: 0,
+    lastRebindReason: '',
+    lastChunkAtMs: 0,
+    preWorkletMaxAbs: 0,
+    trackReadyState: '',
+    trackMuted: false,
+    lastError: '',
+    createdAtMs: Date.now(),
+  };
+  entry.requestedTrackId = Array.from(getTrackIdSet(info))[0] || '';
+  return entry;
+}
+
+function handleWorkletMessage(pid, entry, ev) {
+  const data = ev.data;
+  if (!data) return;
+  if (data.type === 'error') {
+    handleWorkletError(pid, data);
+    return;
+  }
+  if (data.type !== 'pcm_chunk') return;
+  const int16 = data.int16Pcm;
+  if (!int16 || !int16.length) return;
+  sendChunk(pid, entry, int16, data.sampleCount);
+}
+
+function handleWorkletError(pid, data) {
+  if (data.reason !== 'sample_rate_mismatch') return;
+  console.error(
+    '[PcmTransport] Worklet reported sample_rate_mismatch for pid',
+    pid,
+    'actualSampleRate=',
+    data.sampleRate
+  );
+  pcmDetachParticipant(pid);
+}
+
+function sendChunk(pid, entry, int16, sampleCount) {
+  const nowMs = Date.now();
+  const payloadMs = (sampleCount / 16000) * 1000;
+  const chunkEndMs = nowMs;
+  const chunkStartMs = nowMs - payloadMs;
+
+  const pcmBase64 = int16ToBase64(int16);
+  sendWsPcmChunk(
+    pid,
+    entry.speakerName,
+    entry.isLocal,
+    entry.seq++,
+    chunkStartMs,
+    chunkEndMs,
+    pcmBase64
+  );
+  entry.lastChunkAtMs = nowMs;
+
+  if (entry.chunksLogged < 3) {
+    entry.chunksLogged++;
+    console.log(
+      '[PcmTransport] chunk sent pid=', pid,
+      'seq=', entry.seq - 1,
+      'samples=', sampleCount,
+      'payloadMs=', payloadMs.toFixed(0)
+    );
+  }
+}
+
+function startEntry(pid, ctx, entry) {
+  // Pump the graph. AudioWorkletNode with numberOfOutputs:0 can be
+  // treated as disconnected by Chromium and never get process() ticks
+  // unless something downstream drives it. Connecting to destination
+  // here is a no-op signal-wise (worklet has no outputs) but keeps
+  // the graph alive. See docs/plans/rippling-mixing-giraffe.md POF-5.
+  try {
+    entry.node.connect(ctx.destination);
+  } catch (e) {
+    console.warn('[PcmTransport] node.connect(destination) failed:', e?.message || e);
+  }
+  active.set(pid, entry);
+  ensureDiagnosticsTimer();
+  console.log('[PcmTransport] Attached participant:', pid, entry.speakerName);
+
+  if (constants.PCM_REBIND_ENABLED) {
+    setTimeout(() => {
+      const current = active.get(pid);
+      if (current) tryRebindToReceiverTrack(pid, current, true, REBIND_REASON.INITIAL_PROBE);
+    }, 500);
   }
 }
 
@@ -443,45 +492,15 @@ export function pcmAttachParticipant(pid, speakerName, isLocal, mediaStream, opt
   // Local mic stays on sounddevice path (D9).
   if (isLocal) return;
 
-  const next = {
-    speakerName: speakerName || pid,
-    isLocal: !!isLocal,
-    mediaStream,
-    jitsiTrack: options?.jitsiTrack || null,
-    jitsiConf: options?.jitsiConf || null,
-    conf: options?.conf || null,
-  };
+  const next = buildAttachInfo(pid, speakerName, isLocal, mediaStream, options);
 
   const existing = pending.get(pid);
   if (existing) {
-    existing.speakerName = next.speakerName;
-    existing.isLocal = next.isLocal;
-    existing.mediaStream = next.mediaStream || existing.mediaStream;
-    existing.jitsiTrack = next.jitsiTrack || existing.jitsiTrack;
-    existing.jitsiConf = next.jitsiConf || existing.jitsiConf;
-    existing.conf = next.conf || existing.conf;
+    mergeAttachInfo(existing, next);
 
     const entry = active.get(pid);
     if (entry) {
-      entry.speakerName = existing.speakerName;
-      entry.isLocal = existing.isLocal;
-      entry.jitsiTrack = existing.jitsiTrack || entry.jitsiTrack;
-      entry.jitsiConf = existing.jitsiConf || entry.jitsiConf;
-      entry.conf = existing.conf || entry.conf;
-      const ids = getTrackIdSet(existing);
-      entry.requestedTrackId = Array.from(ids)[0] || entry.requestedTrackId;
-      const newTrack = getAudioTrackFromStream(existing.mediaStream);
-      const shouldRebindWrapper =
-        existing.mediaStream !== entry.mediaStream ||
-        (newTrack && entry.boundTrackId && newTrack.id !== entry.boundTrackId);
-      if (shouldRebindWrapper) {
-        if (bindEntryToStream(pid, entry, existing.mediaStream, BOUND_VIA.WRAPPER, newTrack)) {
-          entry.rebindCount++;
-          entry.lastRebindAtMs = Date.now();
-          entry.lastRebindReason = REBIND_REASON.JITSI_TRACK_UPDATE;
-        }
-      }
-      tryRebindToReceiverTrack(pid, entry, false, REBIND_REASON.JITSI_UPDATE_RECEIVER_PROBE);
+      refreshActiveEntry(pid, entry, existing);
     } else {
       void materialize(pid, existing);
     }
@@ -490,6 +509,49 @@ export function pcmAttachParticipant(pid, speakerName, isLocal, mediaStream, opt
 
   pending.set(pid, next);
   void materialize(pid, pending.get(pid));
+}
+
+function buildAttachInfo(pid, speakerName, isLocal, mediaStream, options) {
+  return {
+    speakerName: speakerName || pid,
+    isLocal: !!isLocal,
+    mediaStream,
+    jitsiTrack: options?.jitsiTrack || null,
+    jitsiConf: options?.jitsiConf || null,
+    conf: options?.conf || null,
+  };
+}
+
+function mergeAttachInfo(existing, next) {
+  existing.speakerName = next.speakerName;
+  existing.isLocal = next.isLocal;
+  existing.mediaStream = next.mediaStream || existing.mediaStream;
+  existing.jitsiTrack = next.jitsiTrack || existing.jitsiTrack;
+  existing.jitsiConf = next.jitsiConf || existing.jitsiConf;
+  existing.conf = next.conf || existing.conf;
+}
+
+function refreshActiveEntry(pid, entry, existing) {
+  entry.speakerName = existing.speakerName;
+  entry.isLocal = existing.isLocal;
+  entry.jitsiTrack = existing.jitsiTrack || entry.jitsiTrack;
+  entry.jitsiConf = existing.jitsiConf || entry.jitsiConf;
+  entry.conf = existing.conf || entry.conf;
+  const ids = getTrackIdSet(existing);
+  entry.requestedTrackId = Array.from(ids)[0] || entry.requestedTrackId;
+  rebindWrapperIfChanged(pid, entry, existing.mediaStream);
+  tryRebindToReceiverTrack(pid, entry, false, REBIND_REASON.JITSI_UPDATE_RECEIVER_PROBE);
+}
+
+function rebindWrapperIfChanged(pid, entry, stream) {
+  const newTrack = getAudioTrackFromStream(stream);
+  const shouldRebindWrapper =
+    stream !== entry.mediaStream ||
+    (newTrack && entry.boundTrackId && newTrack.id !== entry.boundTrackId);
+  if (!shouldRebindWrapper) return;
+  if (bindEntryToStream(pid, entry, stream, BOUND_VIA.WRAPPER, newTrack)) {
+    noteRebind(entry, Date.now(), REBIND_REASON.JITSI_TRACK_UPDATE);
+  }
 }
 
 // Update the cached display name for a pid whose PCM transport is already
@@ -599,56 +661,62 @@ export function pcmTransportDispose() {
   console.log('[PcmTransport] Disposed');
 }
 
+// "First Last", or the first name alone; '' without a first name.
+function fullName(info) {
+  if (!info) return '';
+  const first = info.firstName || '';
+  const last = info.lastName || '';
+  if (first && last) return `${first} ${last}`;
+  return first;
+}
+
 function resolveSpeakerName(p, fallback) {
-  const userInfo = p?._userInfo$?.value;
-  if (userInfo) {
-    const first = userInfo.firstName || '';
-    const last = userInfo.lastName || '';
-    if (first && last) return `${first} ${last}`;
-    if (first) return first;
+  return fullName(p?._userInfo$?.value)
+    || fullName(p?._participantInfo$?.value)
+    || p?.name || p?.displayName || fallback;
+}
+
+function isPcLike(obj) {
+  return obj &&
+    typeof obj === 'object' &&
+    typeof obj.getStats === 'function' &&
+    typeof obj.getReceivers === 'function' &&
+    typeof obj.createOffer === 'function';
+}
+
+function pageConferenceRoots() {
+  if (typeof window === 'undefined') return [null, null];
+  return [window.$conf, window.APP?.conference?._room];
+}
+
+// False when `obj` was already walked; without a WeakSet every object is new.
+function firstVisit(seen, obj) {
+  if (!seen) return true;
+  try {
+    if (seen.has(obj)) return false;
+    seen.add(obj);
+  } catch (_) {
+    /* ignore */
   }
-  const info = p?._participantInfo$?.value;
-  if (info) {
-    const first = info.firstName || '';
-    const last = info.lastName || '';
-    if (first && last) return `${first} ${last}`;
-    if (first) return first;
-  }
-  return p?.name || p?.displayName || fallback;
+  return true;
 }
 
 function findPeerConnections(conf, jitsiConf) {
-  const roots = [
-    conf,
-    jitsiConf,
-    typeof window !== 'undefined' ? window.$conf : null,
-    typeof window !== 'undefined' ? window.APP?.conference?._room : null,
-  ];
+  const roots = [conf, jitsiConf, ...pageConferenceRoots()];
   const pcs = [];
   const seen = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
 
-  function isPcLike(obj) {
-    return obj &&
-      typeof obj === 'object' &&
-      typeof obj.getStats === 'function' &&
-      typeof obj.getReceivers === 'function' &&
-      typeof obj.createOffer === 'function';
-  }
-
   function walk(obj, depth) {
     if (!obj || typeof obj !== 'object' || depth > 4) return;
-    try {
-      if (seen) {
-        if (seen.has(obj)) return;
-        seen.add(obj);
-      }
-    } catch (_) {
-      /* ignore */
-    }
+    if (!firstVisit(seen, obj)) return;
     if (isPcLike(obj)) {
       if (!pcs.includes(obj)) pcs.push(obj);
       return;
     }
+    walkChildren(obj, depth);
+  }
+
+  function walkChildren(obj, depth) {
     for (const key in obj) {
       if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
       try { walk(obj[key], depth + 1); } catch (_) { /* ignore */ }
@@ -677,32 +745,39 @@ function findReceiverTrackByIds(trackIds, conf, jitsiConf) {
   return null;
 }
 
+function rebindCoolingDown(entry, force, now) {
+  const cooldownMs = constants.PCM_REBIND_COOLDOWN_MS ?? 4000;
+  return !force && entry.lastRebindAtMs && now - entry.lastRebindAtMs < cooldownMs;
+}
+
+// The receiver's own track for the entry's track ids, when the entry should move to it.
+function receiverRebindTarget(entry) {
+  const trackIds = getTrackIdSet(entry);
+  const receiverTrack = findReceiverTrackByIds(trackIds, entry.conf, entry.jitsiConf);
+  if (!receiverTrack) return null;
+  if (receiverTrack.readyState === 'ended') {
+    entry.lastError = 'receiver_track_ended';
+    return null;
+  }
+  if (entry.boundTrackObject === receiverTrack && entry.boundVia === BOUND_VIA.RECEIVER) {
+    return null;
+  }
+  return receiverTrack;
+}
+
 function tryRebindToReceiverTrack(pid, entry, force = false, reason = 'receiver_probe') {
   if (!constants.PCM_REBIND_ENABLED || !entry) return false;
   const now = Date.now();
-  const cooldownMs = constants.PCM_REBIND_COOLDOWN_MS ?? 4000;
-  if (!force && entry.lastRebindAtMs && now - entry.lastRebindAtMs < cooldownMs) {
-    return false;
-  }
+  if (rebindCoolingDown(entry, force, now)) return false;
 
-  const trackIds = getTrackIdSet(entry);
-  const receiverTrack = findReceiverTrackByIds(trackIds, entry.conf, entry.jitsiConf);
+  const receiverTrack = receiverRebindTarget(entry);
   if (!receiverTrack) return false;
-  if (receiverTrack.readyState === 'ended') {
-    entry.lastError = 'receiver_track_ended';
-    return false;
-  }
-  if (entry.boundTrackObject === receiverTrack && entry.boundVia === BOUND_VIA.RECEIVER) {
-    return false;
-  }
 
   const stream = new MediaStream([receiverTrack]);
   if (!bindEntryToStream(pid, entry, stream, BOUND_VIA.RECEIVER, receiverTrack)) {
     return false;
   }
-  entry.rebindCount++;
-  entry.lastRebindAtMs = now;
-  entry.lastRebindReason = reason;
+  noteRebind(entry, now, reason);
   console.log(
     '[PcmTransport] rebound pid=',
     pid,
@@ -728,20 +803,29 @@ function ensureDiagnosticsTimer() {
 
 async function updateDiagnostics() {
   if (active.size === 0) return;
-  if (audioContext?.state === 'suspended') {
-    try { await audioContext.resume(); } catch (_) { /* ignore */ }
-  }
+  if (audioContext?.state === 'suspended') await resumeAudioContext();
 
   for (const [pid, entry] of active.entries()) {
     updateEntryEnergy(entry);
-    const track = entry.boundTrackObject || getAudioTrackFromStream(entry.mediaStream);
-    entry.trackReadyState = track?.readyState || entry.trackReadyState || '';
-    entry.trackMuted = track?.muted === true;
+    refreshTrackState(entry);
     tryRebindToReceiverTrack(pid, entry, false, REBIND_REASON.DIAGNOSTICS_PROBE);
   }
 
   await updateWebrtcStats();
+  sendStatsWhenDue();
+}
 
+async function resumeAudioContext() {
+  try { await audioContext.resume(); } catch (_) { /* ignore */ }
+}
+
+function refreshTrackState(entry) {
+  const track = entry.boundTrackObject || getAudioTrackFromStream(entry.mediaStream);
+  entry.trackReadyState = track?.readyState || entry.trackReadyState || '';
+  entry.trackMuted = track?.muted === true;
+}
+
+function sendStatsWhenDue() {
   const now = Date.now();
   const sendIntervalMs = constants.PCM_STATS_SEND_INTERVAL_MS ?? 2000;
   if (now - lastStatsSentAtMs >= sendIntervalMs) {
