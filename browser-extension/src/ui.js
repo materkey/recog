@@ -1,8 +1,8 @@
 import { state, constants } from './state.js';
 import { formatBioReadText, normalizeBioReadSettings, BIOREAD_LIMITS, BIOREAD_SETTINGS_KEY } from './bioread.js';
-import { getUncertainSuffix, renderMarkdown, escapeHtml, toTrustedHtml } from './utils.js';
-import { sendWsMessage, sendCopilotChatMessage } from './ws_api.js';
-import { getPlatform, getPlatformAdapter, isJitsiPlatform } from './platforms/index.js';
+import { getUncertainSuffix, escapeHtml, toTrustedHtml } from './utils.js';
+import { sendCopilotChatMessage } from './ws_api.js';
+import { getPlatformAdapter, isJitsiPlatform } from './platforms/index.js';
 import { initVas3kUI, updateVas3kWsIndicator, addVas3kTranscriptLine, clearVas3kTranscript, ensureVas3kCopilotHost, setVas3kCopilotActivateHandler } from './ui-vas3k.js';
 
 let meetingTitle = document.title || '';
@@ -993,10 +993,6 @@ function getCopilotMessagesEl() {
 
 function getCopilotInputEl() {
   return state.copilotContentElement?.querySelector('.ktalk-copilot-input') || null;
-}
-
-function getCopilotSendBtn() {
-  return state.copilotContentElement?.querySelector('.ktalk-copilot-send-btn') || null;
 }
 
 function refreshCopilotMuteButton() {
@@ -2381,16 +2377,5 @@ export function initPlatformUI() {
 export function updateWsIndicatorPlatform(connected) {
   if (isJitsiPlatform()) {
     updateVas3kWsIndicator(connected);
-  }
-}
-
-/**
- * Platform-aware transcript line addition
- */
-export function addTranscriptLinePlatform(line) {
-  if (isJitsiPlatform()) {
-    addVas3kTranscriptLine(line);
-  } else {
-    addTranscriptLine(line);
   }
 }
