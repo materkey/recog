@@ -20,6 +20,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Debug information is most of a test build's size: with it, the tests'
+      # build and the coverage-instrumented one of the quality gate ran out of
+      # disk on ubuntu-latest (ld: Bus error). Neither needs it.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
         with:
