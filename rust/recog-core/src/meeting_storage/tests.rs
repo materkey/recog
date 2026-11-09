@@ -564,3 +564,23 @@ fn a_meeting_not_ended_or_missing_when_its_title_stored_then_the_index_stays_and
     assert_eq!(fs::read_to_string(storage.base_path().join("index.json")).unwrap(), STORED_INDEX);
     assert!(!storage.base_path().join("absent").exists());
 }
+
+#[test]
+fn local_participants_without_a_name_when_listed_then_the_fallback_asked_for_names_them() {
+    // given
+    let meta = pyjson::loads(
+        r#"{"participants": {"a": {"name": "Alice", "is_local": true}, "b": {"is_local": true}, "c": {"name": "Bob"}}}"#,
+    )
+    .unwrap();
+    // when / then
+    assert_eq!(local_participant_names(&meta, UnnamedLocal::Empty), Ok(vec![Value::from("Alice"), Value::from("")]));
+    assert_eq!(
+        local_participant_names(&meta, UnnamedLocal::ParticipantId),
+        Ok(vec![Value::from("Alice"), Value::from("b")])
+    );
+    assert_eq!(local_participant_names(&pyjson::loads("{}").unwrap(), UnnamedLocal::Empty), Ok(Vec::new()));
+    assert!(matches!(
+        local_participant_names(&pyjson::loads(r#"{"participants": []}"#).unwrap(), UnnamedLocal::Empty),
+        Err(StorageError::Attribute(_))
+    ));
+}

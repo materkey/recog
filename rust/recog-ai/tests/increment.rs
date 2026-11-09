@@ -116,6 +116,27 @@ async fn meeting_without_increments_when_generated_then_v1_files_in_prompt_direc
 }
 
 #[tokio::test]
+async fn local_participants_one_without_a_name_when_generated_then_the_unnamed_is_recorded_by_id() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    let meeting = make_meeting(dir.path(), MEETING, None);
+    std::fs::write(
+        meeting.join("meta.json"),
+        r#"{"id": "m", "title": "Daily sync", "created_at": "2026-03-21T14:30:00+00:00",
+        "participants": {"speaker_1": {"name": "Вася", "is_local": true}, "mic": {"is_local": true}}}"#,
+    )
+    .unwrap();
+    let factory = FakeFactory::new("codex", "gpt-5.4", Some("xhigh"), "## Задачи\n- Сделать ревью\n");
+    // when
+    let version =
+        generator(dir.path(), None, &factory).generate(MEETING, &meeting, &default_prompt(), false, None).await;
+    // then
+    assert_eq!(version.unwrap(), Some(1));
+    let meta = read_json(&meeting.join("increments/my-increment/v1_meta.json"));
+    assert_eq!(meta["participant_name"], Json::from("Вася, mic"));
+}
+
+#[tokio::test]
 async fn other_participant_when_generated_then_uses_their_name_and_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let meeting = make_meeting(dir.path(), MEETING, None);

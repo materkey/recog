@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use recog_core::meeting_storage::{self, UnnamedLocal};
+use recog_core::pyjson::Value as CoreValue;
+
 use crate::error::{AiError, Result};
 use crate::install::{LegacyEnv, default_prompts_dir};
 use crate::json::{self, Json, Map};
@@ -92,18 +95,18 @@ pub fn segments_to_transcript(segments: &[Json]) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-/// Names of the local participants (`is_local` true).
-pub fn local_participant_names(meta: &Json) -> Result<Vec<String>> {
-    let mut names = Vec::new();
-    if let Some(participants) = participants(meta)? {
-        for (pid, info) in participants {
-            object(info)?;
-            if info.get("is_local").is_some_and(Json::truthy) {
-                names.push(field_or(info, "name", pid)?);
-            }
-        }
-    }
-    Ok(names)
+/// Names of the local participants (`is_local` true), an unnamed one by its id
+/// (`recog_core::meeting_storage::local_participant_names`, which reads core's JSON).
+fn local_participant_names(meta: &Json) -> Result<Vec<String>> {
+    let meta = recog_core::pyjson::loads(&meta.dumps(None)).map_err(|error| AiError::Value(error.0))?;
+    meeting_storage::local_participant_names(&meta, UnnamedLocal::ParticipantId)
+        .map_err(|error| AiError::Type(error.to_string()))?
+        .into_iter()
+        .map(|name| match name {
+            CoreValue::Str(text) => Ok(text),
+            other => Err(AiError::Type(format!("expected str instance, {} found", other.type_name()))),
+        })
+        .collect()
 }
 
 /// `meta.get("participants", {})` as an object.

@@ -63,25 +63,6 @@ pub fn build_ai_transcript(segments: &[Value], max_chars: usize) -> Result<Strin
     Ok(transcript)
 }
 
-/// `_local_participant_names(meta)`.
-///
-/// # Errors
-/// Participants of the wrong shape.
-pub fn local_participant_names(meta: &Value) -> Result<Vec<Value>, PyError> {
-    let empty = Value::Object(Map::new());
-    let participants = get(meta, "participants")?.unwrap_or(&empty);
-    let Value::Object(participants) = participants else {
-        return Err(format!("'{}' object has no attribute 'values'", participants.type_name()));
-    };
-    let mut names = Vec::new();
-    for p in participants.values() {
-        if get(p, "is_local")?.is_some_and(Value::truthy) {
-            names.push(get(p, "name")?.cloned().unwrap_or_else(|| Value::from("")));
-        }
-    }
-    Ok(names)
-}
-
 /// `", ".join(names)`: a name that is not text raises `TypeError`.
 ///
 /// # Errors

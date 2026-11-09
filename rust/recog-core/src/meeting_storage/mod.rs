@@ -1884,6 +1884,38 @@ impl MeetingStorage {
     }
 }
 
+/// How [`local_participant_names`] names a local participant without a `name`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnnamedLocal {
+    /// `""`, as the web server read it (`p.get("name", "")`): its prompts fall back to
+    /// "User" or skip the empty name.
+    Empty,
+    /// The participant's id, as increments read it (`info.get("name", pid)`): the name
+    /// is also stored as the increment's `participant_name`, so it must name someone.
+    ParticipantId,
+}
+
+/// The names of the local participants (`is_local` true) of a meeting's `meta.json`,
+/// in its order; a name that is not text is returned as it is.
+///
+/// # Errors
+/// Participants of the wrong shape.
+pub fn local_participant_names(meta: &Value, unnamed: UnnamedLocal) -> Result<Vec<Value>> {
+    let empty = Value::Object(Map::new());
+    let participants = items(get_or_empty(meta, "participants", &empty)?, "values")?;
+    let mut names = Vec::new();
+    for (pid, info) in participants.iter() {
+        if get(info, "is_local")?.is_some_and(Value::truthy) {
+            let name = get(info, "name")?.cloned().unwrap_or_else(|| match unnamed {
+                UnnamedLocal::Empty => Value::from(""),
+                UnnamedLocal::ParticipantId => Value::from(pid.as_str()),
+            });
+            names.push(name);
+        }
+    }
+    Ok(names)
+}
+
 impl Drop for MeetingStorage {
     fn drop(&mut self) {
         // Python's executor thread outlives nothing either: let queued titles finish.

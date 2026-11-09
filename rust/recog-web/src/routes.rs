@@ -15,7 +15,7 @@ use recog_ai::meeting_chat::{self, ChatTurn};
 use recog_ai::prompt_registry::PromptRegistry;
 use recog_ai::template::variables;
 use recog_ai::title;
-use recog_core::meeting_storage::MeetingStorage;
+use recog_core::meeting_storage::{MeetingStorage, UnnamedLocal, local_participant_names};
 use recog_core::privacy::PrivacySource as _;
 use recog_core::pyjson::{self, Map, Value};
 use recog_core::user_profile::ProfileError;
@@ -575,7 +575,8 @@ async fn generate_title(state: &AppState, req: &Req) -> Reply {
     let again = storage.get_meeting(&meeting_id).map_err(fail)?;
     let (meeting_title, participants) = transcript::analysis_prompt_metadata(again.as_ref()).map_err(fail)?;
     let user_name =
-        transcript::join_names(&transcript::local_participant_names(&meta_of(&found)).map_err(fail)?).map_err(fail)?;
+        transcript::join_names(&local_participant_names(&meta_of(&found), UnnamedLocal::Empty).map_err(fail)?)
+            .map_err(fail)?;
     let user_name = if user_name.is_empty() { "User".to_owned() } else { user_name };
     let vars = variables([
         ("meeting_title", meeting_title.as_str()),
@@ -871,7 +872,7 @@ fn set_debug_ai_context(state: &AppState, req: &Req) -> Reply {
         };
         let meta = meta_of(&found);
         meeting_title = get(&meta, "title").map_err(|_| responses::internal_error())?.cloned().unwrap_or(Value::Null);
-        local_names = transcript::local_participant_names(&meta).map_err(|_| responses::internal_error())?;
+        local_names = local_participant_names(&meta, UnnamedLocal::Empty).map_err(|_| responses::internal_error())?;
         let rows = segments_of(&found);
         if int("from_id").is_some() || int("to_id").is_some() {
             transcript::slice_segments_by_id(&rows, int("from_id"), int("to_id"), max_segments)
@@ -958,7 +959,7 @@ pub fn resolve_ai_context(
     let Some(found) = storage.get_meeting(meeting_id).map_err(|e| e.to_string())? else {
         return Ok(Err(not_found("Meeting not found")));
     };
-    let names = transcript::local_participant_names(&meta_of(&found))?;
+    let names = local_participant_names(&meta_of(&found), UnnamedLocal::Empty).map_err(|e| e.to_string())?;
     let local = if names.is_empty() { "User".to_owned() } else { transcript::join_names(&names)? };
     let segments = segments_of(&found);
     if segments.is_empty() {
