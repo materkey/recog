@@ -944,19 +944,27 @@ fn transcript_as_text(meeting_path: &Path) -> Result<String> {
     let content = read_text(&path)?;
     let mut lines = Vec::new();
     for line in py::strip(&content).split('\n') {
-        if line.is_empty() {
-            continue;
+        if let Some(text) = transcript_text_line(line)? {
+            lines.push(text);
         }
-        let Ok(segment) = pyjson::loads(line) else { continue };
-        if get(&segment, "speaker_id")?.is_some_and(|v| *v == Value::from("__system__")) {
-            continue;
-        }
-        let field = |key: &str, default: &str| -> Result<String> {
-            Ok(get(&segment, key)?.map_or_else(|| default.to_owned(), Value::py_str))
-        };
-        lines.push(format!("[{}] {}: {}", field("ts_display", "")?, field("speaker", "Unknown")?, field("text", "")?));
     }
     Ok(lines.join("\n"))
+}
+
+/// One transcript row as `[ts] Speaker: text`; None for a blank line, a line that is
+/// not JSON and a system row.
+fn transcript_text_line(line: &str) -> Result<Option<String>> {
+    if line.is_empty() {
+        return Ok(None);
+    }
+    let Ok(segment) = pyjson::loads(line) else { return Ok(None) };
+    if get(&segment, "speaker_id")?.is_some_and(|v| *v == Value::from("__system__")) {
+        return Ok(None);
+    }
+    let field = |key: &str, default: &str| -> Result<String> {
+        Ok(get(&segment, key)?.map_or_else(|| default.to_owned(), Value::py_str))
+    };
+    Ok(Some(format!("[{}] {}: {}", field("ts_display", "")?, field("speaker", "Unknown")?, field("text", "")?)))
 }
 
 /// The transcript's rows, as `get_current_transcript` and `get_meeting` read them.
