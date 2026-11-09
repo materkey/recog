@@ -364,21 +364,33 @@ fn main_loop(live: &Live) -> Result<(), String> {
         }
         if clock.monotonic() - last_audio_cleanup >= AUDIO_CLEANUP_INTERVAL_S {
             last_audio_cleanup = clock.monotonic();
-            if let Some(storage) = live.storage()
-                && let Err(e) = storage.cleanup_old_audio(24.0)
-            {
-                live.env.log.line(&format!("Warning: audio cleanup failed: {e}"));
-            }
+            cleanup_old_audio(live);
         }
-        live.reopen_stopped_device_captures();
-        if live.mic_capture().is_some() {
-            live.process_chunk(true)?;
-        }
-        if live.system_capture().is_some() {
-            live.check_system_capture_alive()?;
-            live.restart_silent_system_capture();
-            live.process_chunk(false)?;
-        }
+        poll_captures(live)?;
+    }
+    Ok(())
+}
+
+/// The hourly retention pass over the recorded audio.
+fn cleanup_old_audio(live: &Live) {
+    if let Some(storage) = live.storage()
+        && let Err(e) = storage.cleanup_old_audio(24.0)
+    {
+        live.env.log.line(&format!("Warning: audio cleanup failed: {e}"));
+    }
+}
+
+/// One iteration's work on the captures: broken devices reopened, a chunk of each
+/// source, the system capture's liveness and digital-silence checks.
+fn poll_captures(live: &Live) -> Result<(), String> {
+    live.reopen_stopped_device_captures();
+    if live.mic_capture().is_some() {
+        live.process_chunk(true)?;
+    }
+    if live.system_capture().is_some() {
+        live.check_system_capture_alive()?;
+        live.restart_silent_system_capture();
+        live.process_chunk(false)?;
     }
     Ok(())
 }
@@ -402,20 +414,30 @@ pub fn teardown(live: &Live, bridge: Option<&Arc<Bridge>>) {
     if let Some(bridge) = bridge {
         bridge.stop();
     }
+    end_meeting(live);
+    write_transcript_file(live);
+}
+
+/// The storage's session ended, the saved meeting named.
+fn end_meeting(live: &Live) {
     if let Some(storage) = live.storage() {
         match storage.end_session() {
             Ok(Some(id)) => live.println(&format!("Meeting saved: {id}")),
             Ok(None) => {}
-            Err(e) => log.line(&format!("[LiveTranscriber] ending the meeting failed: {e}")),
+            Err(e) => live.env.log.line(&format!("[LiveTranscriber] ending the meeting failed: {e}")),
         }
     }
+}
+
+/// `--output`: the transcript lines written to the file, when there are any.
+fn write_transcript_file(live: &Live) {
     let lines = live.transcript_lines();
     if let Some(path) = &live.options().output_file
         && !lines.is_empty()
     {
         match std::fs::write(path, lines.join("\n")) {
             Ok(()) => live.println(&format!("Транскрипт сохранён в {}", path.display())),
-            Err(e) => log.line(&format!("[LiveTranscriber] writing {} failed: {e}", path.display())),
+            Err(e) => live.env.log.line(&format!("[LiveTranscriber] writing {} failed: {e}", path.display())),
         }
     }
 }
