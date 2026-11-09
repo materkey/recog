@@ -113,6 +113,44 @@ fn unique_names<I: IntoIterator<Item = String>>(values: I) -> Vec<String> {
     result
 }
 
+/// A saved profile file's contents, validated as Python's `read()` validates them.
+fn parse_profile(raw: &[u8]) -> Result<Profile, ProfileError> {
+    let saved = saved_profile(raw)?;
+    let revision = saved_revision(&saved)?;
+    let name = label(saved.get("name"))?;
+    let aliases = aliases(saved.get("aliases"))?;
+    check_saved_names(&name, &aliases)?;
+    Ok(Profile::new(name, aliases, revision))
+}
+
+/// The JSON object of a version 1 profile.
+fn saved_profile(raw: &[u8]) -> Result<Map, ProfileError> {
+    match pyjson::loads_bytes(raw).map_err(|_| invalid("Profile file is not valid JSON"))? {
+        Value::Object(map) if matches!(map.get("version"), Some(Value::Int(1))) => Ok(map),
+        _ => Err(invalid("Unsupported profile version")),
+    }
+}
+
+/// A revision: text, not blank, at most 128 characters, no control characters.
+fn saved_revision(saved: &Map) -> Result<String, ProfileError> {
+    match saved.get("revision") {
+        Some(Value::Str(r)) if !py::strip(r).is_empty() && r.chars().count() <= 128 && !r.chars().any(py::is_other) => {
+            Ok(r.clone())
+        }
+        _ => Err(invalid("Invalid profile revision")),
+    }
+}
+
+fn check_saved_names(name: &str, aliases: &[String]) -> Result<(), ProfileError> {
+    if !name.is_empty() && !is_name(name) {
+        return Err(invalid("Profile name cannot be Me"));
+    }
+    if name.is_empty() && !aliases.is_empty() {
+        return Err(invalid("An empty profile cannot have aliases"));
+    }
+    Ok(())
+}
+
 fn writer_lock(path: &Path) -> Arc<Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
     let mut locks = LOCKS.get_or_init(Mutex::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -139,11 +177,17 @@ impl UserProfileStore {
     /// # Errors
     /// A file that is too large, not JSON, or not a valid profile.
     pub fn read(&self) -> Result<Profile, ProfileError> {
+        match self.read_capped()? {
+            Some(raw) => parse_profile(&raw),
+            None => Ok(Profile::new(String::new(), Vec::new(), "unconfigured".into())),
+        }
+    }
+
+    /// The file's bytes, None without a file; a file over the cap is refused.
+    fn read_capped(&self) -> Result<Option<Vec<u8>>, ProfileError> {
         let file = match fs::File::open(&self.path) {
             Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Profile::new(String::new(), Vec::new(), "unconfigured".into()));
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(io_error(&e, &self.path)),
         };
         let mut raw = Vec::new();
@@ -151,28 +195,7 @@ impl UserProfileStore {
         if raw.len() > usize::try_from(MAX_FILE_BYTES).unwrap_or(usize::MAX) {
             return Err(invalid("Profile file is too large"));
         }
-        let saved = pyjson::loads_bytes(&raw).map_err(|_| invalid("Profile file is not valid JSON"))?;
-        let saved = match saved {
-            Value::Object(map) if matches!(map.get("version"), Some(Value::Int(1))) => map,
-            _ => return Err(invalid("Unsupported profile version")),
-        };
-        let revision = match saved.get("revision") {
-            Some(Value::Str(r))
-                if !py::strip(r).is_empty() && r.chars().count() <= 128 && !r.chars().any(py::is_other) =>
-            {
-                r.clone()
-            }
-            _ => return Err(invalid("Invalid profile revision")),
-        };
-        let name = label(saved.get("name"))?;
-        let aliases = aliases(saved.get("aliases"))?;
-        if !name.is_empty() && !is_name(&name) {
-            return Err(invalid("Profile name cannot be Me"));
-        }
-        if name.is_empty() && !aliases.is_empty() {
-            return Err(invalid("An empty profile cannot have aliases"));
-        }
-        Ok(Profile::new(name, aliases, revision))
+        Ok(Some(raw))
     }
 
     /// `write(name, aliases)`.
