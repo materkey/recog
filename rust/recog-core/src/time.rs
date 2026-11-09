@@ -327,6 +327,43 @@ mod tests {
     }
 
     #[test]
+    fn iso_texts_python_rejects_when_parsed_then_its_value_errors() {
+        // given / when / then
+        for (text, message) in [
+            ("2026/01/01", "Invalid isoformat string: '2026/01/01'"),
+            ("2026-01-0é", "Invalid isoformat string: '2026-01-0é'"),
+            ("2026-01-01Té", "Invalid isoformat string: '2026-01-01Té'"),
+            ("2026-01-01T", "Invalid isoformat string: '2026-01-01T'"),
+            ("2026-01-01T10:00:00.", "Invalid isoformat string: '2026-01-01T10:00:00.'"),
+            ("2026-01-01T10:00:00.5x", "Invalid isoformat string: '2026-01-01T10:00:00.5x'"),
+            ("2026-01-01T1", "Invalid isoformat string: '2026-01-01T1'"),
+            ("2026-01-01T10:0", "Invalid isoformat string: '2026-01-01T10:0'"),
+            ("2026-01-01T10:00:0", "Invalid isoformat string: '2026-01-01T10:00:0'"),
+            ("2026-01-01T10:00+1", "Invalid isoformat string: '2026-01-01T10:00+1'"),
+            (
+                "2026-01-01T10:00+24:00",
+                "offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24).",
+            ),
+            ("0000-01-01", "year 0 is out of range"),
+            ("2026-01-01T10:60", "minute must be in 0..59"),
+            ("2026-01-01T10:00:60", "second must be in 0..59"),
+        ] {
+            assert_eq!(fromisoformat(text), Err(TimeError::Value(message.into())), "{text}");
+        }
+    }
+
+    #[test]
+    fn offsets_with_seconds_when_read_then_kept_and_printed_as_python() {
+        // given / when
+        let west = fromisoformat("2026-01-01T10:00:00,25-01:30:15.5").unwrap();
+        // then
+        assert_eq!(west.isoformat(), "2026-01-01T10:00:00.250000-01:30:15.500000");
+        assert_eq!(fromisoformat("2026-01-01T10:00:00+00:00:30").unwrap().isoformat(), "2026-01-01T10:00:00+00:00:30");
+        let naive = fromisoformat("2026-01-01T10:00").unwrap();
+        assert_eq!(naive.minus(&fromisoformat("2026-01-01T09:00").unwrap()), Ok(3_600 * MICROS));
+    }
+
+    #[test]
     fn fromtimestamp_rounds_microseconds_half_to_even() {
         // given / when / then
         // Python: 1.0000005 -> .000001 and 1.0000015 -> .000001 (the fraction's own
