@@ -82,16 +82,15 @@ fn watch(path: &Path, tx: mpsc::UnboundedSender<FsEvent>, meetings: bool) -> not
 /// A watcher of the meetings directory or an external one; a failure is logged as
 /// the observer or the catalog logs it.
 fn watch_logged(path: &Path, tx: &mpsc::UnboundedSender<FsEvent>, meetings: bool) -> Option<RecommendedWatcher> {
-    match watch(path, tx.clone(), meetings) {
-        Ok(w) => Some(w),
-        Err(e) if meetings => {
-            eprintln!("[observer] cannot watch {}: {e}", path.display());
-            None
-        }
-        Err(e) => {
-            eprintln!("[Catalog] Cannot watch {}; using periodic reconciliation: {e}", path.display());
-            None
-        }
+    watch(path, tx.clone(), meetings).map_err(|e| eprintln!("{}", watch_failure_line(path, meetings, &e))).ok()
+}
+
+/// The log line of a directory that cannot be watched.
+fn watch_failure_line(path: &Path, meetings: bool, error: &notify::Error) -> String {
+    if meetings {
+        format!("[observer] cannot watch {}: {error}", path.display())
+    } else {
+        format!("[Catalog] Cannot watch {}; using periodic reconciliation: {error}", path.display())
     }
 }
 
@@ -187,5 +186,30 @@ mod tests {
             assert_eq!(events(kind, &[&file]), [(EventKind::Modified, false, file.clone(), None)], "{kind:?}");
         }
         assert!(events(NotifyKind::Access(AccessKind::Any), &[&file]).is_empty());
+    }
+
+    #[test]
+    fn a_missing_directory_when_watched_then_no_watcher_for_either_role() {
+        // given
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let (tx, _rx) = mpsc::unbounded_channel();
+        // when / then
+        assert!(watch_logged(&missing, &tx, true).is_none());
+        assert!(watch_logged(&missing, &tx, false).is_none());
+        assert!(watch_logged(dir.path(), &tx, true).is_some());
+    }
+
+    #[test]
+    fn a_watch_failure_when_logged_then_worded_as_the_observer_or_the_catalog_words_it() {
+        // given
+        let path = Path::new("/m");
+        let error = notify::Error::generic("boom");
+        // when / then
+        assert_eq!(watch_failure_line(path, true, &error), format!("[observer] cannot watch /m: {error}"));
+        assert_eq!(
+            watch_failure_line(path, false, &error),
+            format!("[Catalog] Cannot watch /m; using periodic reconciliation: {error}")
+        );
     }
 }

@@ -235,35 +235,53 @@ async fn receive(
     let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
     let mut awaiting_pong: Option<tokio::time::Instant> = None;
     loop {
-        tokio::select! {
-            _ = stopped(stop) => return Ended::Stopped,
-            _ = ping.tick() => {
-                if let Some(sent) = awaiting_pong
-                    && sent.elapsed() >= PING_INTERVAL
-                {
-                    return Ended::Lost(Some("keepalive ping timeout".into()));
-                }
-                let mut sink = shared.sink.lock().await;
-                if let Some(ws) = sink.as_mut()
-                    && ws.send(Message::Ping(Vec::new().into())).await.is_ok()
-                    && awaiting_pong.is_none()
-                {
-                    awaiting_pong = Some(tokio::time::Instant::now());
-                }
-            }
-            message = stream.next() => match message {
-                None => return Ended::Lost(None),
-                Some(Err(e)) => return Ended::Lost(Some(e.to_string())),
-                Some(Ok(Message::Close(_))) => return Ended::Lost(None),
-                Some(Ok(Message::Pong(_))) => awaiting_pong = None,
-                Some(Ok(message)) => {
-                    if let Some(raw) = forwarded(message) {
-                        handler.forward(raw).await;
-                    }
-                }
-            },
+        let ended = tokio::select! {
+            _ = stopped(stop) => Some(Ended::Stopped),
+            _ = ping.tick() => keepalive_tick(shared, &mut awaiting_pong).await,
+            message = stream.next() => on_message(handler, message, &mut awaiting_pong).await,
+        };
+        if let Some(ended) = ended {
+            return ended;
         }
     }
+}
+
+/// A keepalive tick: the connection is lost when the last ping's pong is overdue;
+/// otherwise a ping goes out, and the first one sent starts the pong wait.
+async fn keepalive_tick(shared: &Shared, awaiting_pong: &mut Option<tokio::time::Instant>) -> Option<Ended> {
+    if let Some(sent) = *awaiting_pong
+        && sent.elapsed() >= PING_INTERVAL
+    {
+        return Some(Ended::Lost(Some("keepalive ping timeout".into())));
+    }
+    let mut sink = shared.sink.lock().await;
+    if let Some(ws) = sink.as_mut()
+        && ws.send(Message::Ping(Vec::new().into())).await.is_ok()
+        && awaiting_pong.is_none()
+    {
+        *awaiting_pong = Some(tokio::time::Instant::now());
+    }
+    None
+}
+
+/// A read from the bridge: the end of the connection, or None after forwarding a
+/// frame of a forwarded type (a pong ends the pong wait).
+async fn on_message(
+    handler: &dyn BridgeHandler,
+    message: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+    awaiting_pong: &mut Option<tokio::time::Instant>,
+) -> Option<Ended> {
+    match message {
+        None | Some(Ok(Message::Close(_))) => return Some(Ended::Lost(None)),
+        Some(Err(e)) => return Some(Ended::Lost(Some(e.to_string()))),
+        Some(Ok(Message::Pong(_))) => *awaiting_pong = None,
+        Some(Ok(message)) => {
+            if let Some(raw) = forwarded(message) {
+                handler.forward(raw).await;
+            }
+        }
+    }
+    None
 }
 
 async fn run(shared: Arc<Shared>, handler: Arc<dyn BridgeHandler>, initial: Duration, mut stop: watch::Receiver<bool>) {
@@ -287,10 +305,8 @@ async fn run(shared: Arc<Shared>, handler: Arc<dyn BridgeHandler>, initial: Dura
                 delay = initial;
                 let ended = session(&shared, handler.as_ref(), socket, connected_once, &mut stop).await;
                 connected_once = true;
-                match ended {
-                    Ended::Stopped => return,
-                    Ended::Lost(error) => error,
-                }
+                let Ended::Lost(error) = ended else { return };
+                error
             }
         };
         if let Some(error) = error {
@@ -334,4 +350,92 @@ async fn session(
 /// Waits out the backoff; false when the subscriber stops before or during it.
 async fn backoff(stop: &mut watch::Receiver<bool>, delay: Duration) -> bool {
     !is_stopped(stop) && tokio::time::timeout(delay, stopped(stop)).await.is_err()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<String>>);
+
+    impl BridgeHandler for Recorder {
+        fn forward(&self, raw: String) -> BoxFuture<'_, ()> {
+            self.0.lock().unwrap().push(raw);
+            Box::pin(async {})
+        }
+    }
+
+    fn unlinked() -> Shared {
+        Shared {
+            url: "ws://127.0.0.1:1".into(),
+            prefix: "[test]".into(),
+            sink: AsyncMutex::new(None),
+            published: AtomicBool::new(false),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pong_overdue_when_the_keepalive_ticks_then_the_connection_is_lost_to_the_timeout() {
+        // given
+        let mut awaiting_pong = tokio::time::Instant::now().checked_sub(PING_INTERVAL);
+        // when
+        let ended = keepalive_tick(&unlinked(), &mut awaiting_pong).await;
+        // then
+        assert!(matches!(ended, Some(Ended::Lost(Some(e))) if e == "keepalive ping timeout"));
+    }
+
+    #[tokio::test]
+    async fn no_socket_when_the_keepalive_ticks_then_no_pong_is_awaited_and_the_connection_stays() {
+        // given
+        let mut awaiting_pong = None;
+        // when
+        let ended = keepalive_tick(&unlinked(), &mut awaiting_pong).await;
+        // then
+        assert!(ended.is_none());
+        assert!(awaiting_pong.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_pong_when_read_then_the_pong_wait_ends_and_reading_goes_on() {
+        // given
+        let handler = Recorder::default();
+        let mut awaiting_pong = Some(tokio::time::Instant::now());
+        // when
+        let ended = on_message(&handler, Some(Ok(Message::Pong(Vec::new().into()))), &mut awaiting_pong).await;
+        // then
+        assert!(ended.is_none());
+        assert!(awaiting_pong.is_none());
+        assert!(handler.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_end_of_the_stream_a_close_or_an_error_when_read_then_the_connection_is_lost() {
+        // given
+        let handler = Recorder::default();
+        let mut awaiting_pong = None;
+        let error = tokio_tungstenite::tungstenite::Error::ConnectionClosed;
+        let text = error.to_string();
+        // when / then
+        assert!(matches!(on_message(&handler, None, &mut awaiting_pong).await, Some(Ended::Lost(None))));
+        let close = Some(Ok(Message::Close(None)));
+        assert!(matches!(on_message(&handler, close, &mut awaiting_pong).await, Some(Ended::Lost(None))));
+        let failed = on_message(&handler, Some(Err(error)), &mut awaiting_pong).await;
+        assert!(matches!(failed, Some(Ended::Lost(Some(e))) if e == text));
+    }
+
+    #[tokio::test]
+    async fn frames_when_read_then_only_a_forwarded_type_reaches_the_handler() {
+        // given
+        let handler = Recorder::default();
+        let mut awaiting_pong = None;
+        let refine = r#"{"type": "transcript_refine", "updates": []}"#;
+        // when
+        let first = on_message(&handler, Some(Ok(Message::text(refine))), &mut awaiting_pong).await;
+        let second =
+            on_message(&handler, Some(Ok(Message::text(r#"{"type": "transcript"}"#))), &mut awaiting_pong).await;
+        // then
+        assert!(first.is_none() && second.is_none());
+        assert_eq!(*handler.0.lock().unwrap(), [refine.to_owned()]);
+    }
 }
