@@ -236,12 +236,7 @@ impl Bridge {
     /// `ktalk_only` moved them before the capture), the previous meeting's requests go
     /// stale, and a manual Copilot is preempted.
     async fn start_joined_meeting(self: &Arc<Self>, switch: &JoinSwitch, title: Value) -> Result<(), String> {
-        if switch.path_changed
-            && !self.config.ktalk_only
-            && let Some(live) = &switch.live
-        {
-            live.meeting_changed(switch.meeting_id.as_deref(), switch.new_path.as_deref())?;
-        }
+        self.move_live_writers(switch)?;
         // A direct switch to another meeting strands the old meeting's requests:
         // their late replies must not reach the new meeting's Copilot tab.
         let prev_meeting_id = switch.prev_meeting_id.as_deref();
@@ -250,12 +245,7 @@ impl Bridge {
         }
         // Segment ids restart at 1 per meeting.
         self.clear_transcript_buffer();
-        let started = obj! {
-            "type" => protocol::MEETING_STARTED,
-            "meeting_id" => switch.meeting_id.as_deref(),
-            "meeting_title" => title.clone(),
-            "created_at" => Value::Float(self.now() * 1000.0),
-        };
+        let started = self.meeting_started_frame(switch.meeting_id.as_deref(), title.clone());
         // The manual mirror and its requests go before the first send can let a
         // late reply in; the webapp hears of it after the lifecycle.
         let preempted = self.preempt_manual_copilot(false).await;
@@ -265,6 +255,26 @@ impl Bridge {
         }
         self.st().tick = Some(TickState::new(switch.meeting_id.clone(), title, self.now()));
         Ok(())
+    }
+
+    /// The live side's writers follow a join that moved the meeting path.
+    fn move_live_writers(&self, switch: &JoinSwitch) -> Result<(), String> {
+        if switch.path_changed
+            && !self.config.ktalk_only
+            && let Some(live) = &switch.live
+        {
+            live.meeting_changed(switch.meeting_id.as_deref(), switch.new_path.as_deref())?;
+        }
+        Ok(())
+    }
+
+    fn meeting_started_frame(&self, meeting_id: Option<&str>, title: Value) -> Value {
+        obj! {
+            "type" => protocol::MEETING_STARTED,
+            "meeting_id" => meeting_id,
+            "meeting_title" => title,
+            "created_at" => Value::Float(self.now() * 1000.0),
+        }
     }
 
     pub(crate) async fn on_meeting_leave(
@@ -285,18 +295,7 @@ impl Bridge {
         // find the old meeting's speakers.
         self.clear_speaker_state();
         let Some(storage) = self.storage() else { return Ok(()) };
-        let prev_meeting_id = storage.current_meeting_id();
-        let prev_meeting_path = storage.current_meeting_path();
-        let live = self.wired().live;
-        if let Some(live) = &live {
-            live.before_meeting_switch();
-        }
-        let new_meeting_id = storage.on_ktalk_leave(&reason)?;
-        self.log(&format!("[KTalk Bridge] Left meeting (reason: {reason}), new meeting: {new_meeting_id}"));
-        self.start_increments(prev_meeting_id.as_deref(), prev_meeting_path);
-        if let Some(live) = &live {
-            live.meeting_changed(Some(&new_meeting_id), storage.current_meeting_path().as_deref())?;
-        }
+        let (prev_meeting_id, new_meeting_id) = self.leave_stored_meeting(storage.as_ref(), &reason)?;
         self.mark_stale_logged(prev_meeting_id.as_deref(), true, "on meeting_leave");
         let ended = self.meeting_ended_frame(prev_meeting_id.as_deref());
         self.st().tick = None;
@@ -306,6 +305,29 @@ impl Bridge {
         let frame = obj! {"type" => "new_meeting", "meeting_id" => new_meeting_id.as_str()};
         self.send_to_tab_or_extensions(client, &frame).await;
         Ok(())
+    }
+
+    /// The storage leaves the meeting for a new orphan one around the live side's
+    /// writers, and the left meeting's increments start; answers (the left meeting,
+    /// the new one).
+    fn leave_stored_meeting(
+        &self,
+        storage: &dyn MeetingStore,
+        reason: &str,
+    ) -> Result<(Option<String>, String), String> {
+        let prev_meeting_id = storage.current_meeting_id();
+        let prev_meeting_path = storage.current_meeting_path();
+        let live = self.wired().live;
+        if let Some(live) = &live {
+            live.before_meeting_switch();
+        }
+        let new_meeting_id = storage.on_ktalk_leave(reason)?;
+        self.log(&format!("[KTalk Bridge] Left meeting (reason: {reason}), new meeting: {new_meeting_id}"));
+        self.start_increments(prev_meeting_id.as_deref(), prev_meeting_path);
+        if let Some(live) = &live {
+            live.meeting_changed(Some(&new_meeting_id), storage.current_meeting_path().as_deref())?;
+        }
+        Ok((prev_meeting_id, new_meeting_id))
     }
 
     /// `_end_meeting_on_extension_gone`: a conference meeting ends when its owner's
