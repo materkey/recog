@@ -123,89 +123,100 @@ impl Speakers {
         let mut out = SpeakerOutcome::default();
         if let Some(speaker) = speaker.filter(|s| s.truthy()) {
             let Some(fields) = speaker.as_object() else { return Err(json::attribute_error(speaker, "get")) };
-            let new_id = text(fields.get("id"));
-            let new_name = text(fields.get("name"));
-            let new_is_local = truthy(fields.get("isLocal"), false);
-            if !self.first_speaker_logged {
-                out.logs
-                    .push(format!("[KTalk Bridge] First speaker received: {}", new_name.as_deref().unwrap_or("None")));
-                self.first_speaker_logged = true;
-            }
-            if let Some(start) = self.segment_start_time {
-                let complete = self.segment_speaker_id != new_id || (event_time - start) >= MAX_SEGMENT_DURATION;
-                if complete {
-                    let duration_ms = millis(event_time - start);
-                    if duration_ms > 100 {
-                        let segment = SpeakerSegment {
-                            speaker_name: or_empty(self.segment_speaker_name.as_ref()),
-                            speaker_id: or_empty(self.segment_speaker_id.as_ref()),
-                            start_time: start,
-                            end_time: event_time,
-                            duration_ms,
-                            is_local: self.segment_is_local,
-                        };
-                        self.completed_segments.push(segment.clone());
-                        out.completed.push(segment);
-                    }
-                    self.segment_start_time = None;
-                }
-            }
-            if self.segment_start_time.is_none() {
-                self.segment_start_time = Some(event_time);
-                self.segment_speaker_name.clone_from(&new_name);
-                self.segment_speaker_id.clone_from(&new_id);
-                self.segment_is_local = new_is_local;
-            }
-            self.current_speaker = new_name;
-            self.current_speaker_id = new_id;
-            self.current_is_local = new_is_local;
-            self.is_speaking = true;
-            self.last_speaker.clone_from(&self.current_speaker);
-            self.last_speaker_time = Some(now);
-            self.last_is_local = new_is_local;
-            let timestamp = self.switch_time(fields, now, clock_offset);
-            self.history.push(SpeakerEvent {
-                speaker_name: self.current_speaker.clone(),
-                speaker_id: self.current_speaker_id.clone().filter(|s| !s.is_empty()).unwrap_or_default(),
-                timestamp,
-                is_local: new_is_local,
-            });
-            self.trim_history(now);
+            self.speaker_started(fields, event_time, now, clock_offset, &mut out);
         } else {
-            self.history.push(SpeakerEvent {
-                speaker_name: None,
-                speaker_id: String::new(),
-                timestamp: now,
-                is_local: false,
-            });
-            self.trim_history(now);
-            if let Some(start) =
-                self.segment_start_time.filter(|_| self.segment_speaker_name.as_ref().is_some_and(|n| !n.is_empty()))
-            {
-                let duration_ms = millis(event_time - start);
-                if duration_ms > 100 {
-                    let segment = SpeakerSegment {
-                        speaker_name: or_empty(self.segment_speaker_name.as_ref()),
-                        speaker_id: or_empty(self.segment_speaker_id.as_ref()),
-                        start_time: start,
-                        end_time: event_time,
-                        duration_ms,
-                        is_local: self.segment_is_local,
-                    };
-                    self.completed_segments.push(segment.clone());
-                    out.completed.push(segment);
-                }
-                self.segment_start_time = None;
-                self.segment_speaker_name = None;
-                self.segment_speaker_id = None;
-            }
-            self.is_speaking = false;
-            self.current_speaker = None;
-            self.current_speaker_id = None;
+            self.speaker_stopped(event_time, now, &mut out);
         }
         out.speaker.clone_from(&self.current_speaker);
         out.is_speaking = self.is_speaking;
         Ok(out)
+    }
+
+    /// A speaker in the frame: the open segment ends on a change of speaker or past
+    /// `MAX_SEGMENT_DURATION`, and the speaker becomes the current one.
+    fn speaker_started(
+        &mut self,
+        fields: &Map,
+        event_time: f64,
+        now: f64,
+        clock_offset: f64,
+        out: &mut SpeakerOutcome,
+    ) {
+        let new_id = text(fields.get("id"));
+        let new_name = text(fields.get("name"));
+        let new_is_local = truthy(fields.get("isLocal"), false);
+        if !self.first_speaker_logged {
+            out.logs.push(format!("[KTalk Bridge] First speaker received: {}", new_name.as_deref().unwrap_or("None")));
+            self.first_speaker_logged = true;
+        }
+        if let Some(start) = self.segment_start_time
+            && (self.segment_speaker_id != new_id || (event_time - start) >= MAX_SEGMENT_DURATION)
+        {
+            out.completed.extend(self.complete_segment(start, event_time));
+            self.segment_start_time = None;
+        }
+        if self.segment_start_time.is_none() {
+            self.segment_start_time = Some(event_time);
+            self.segment_speaker_name.clone_from(&new_name);
+            self.segment_speaker_id.clone_from(&new_id);
+            self.segment_is_local = new_is_local;
+        }
+        self.current_speaker = new_name;
+        self.current_speaker_id = new_id;
+        self.current_is_local = new_is_local;
+        self.is_speaking = true;
+        self.last_speaker.clone_from(&self.current_speaker);
+        self.last_speaker_time = Some(now);
+        self.last_is_local = new_is_local;
+        let timestamp = self.switch_time(fields, now, clock_offset);
+        self.history.push(SpeakerEvent {
+            speaker_name: self.current_speaker.clone(),
+            speaker_id: self.current_speaker_id.clone().filter(|s| !s.is_empty()).unwrap_or_default(),
+            timestamp,
+            is_local: new_is_local,
+        });
+        self.trim_history(now);
+    }
+
+    /// Nobody in the frame: silence enters the history and a named segment ends.
+    fn speaker_stopped(&mut self, event_time: f64, now: f64, out: &mut SpeakerOutcome) {
+        self.history.push(SpeakerEvent {
+            speaker_name: None,
+            speaker_id: String::new(),
+            timestamp: now,
+            is_local: false,
+        });
+        self.trim_history(now);
+        if let Some(start) =
+            self.segment_start_time.filter(|_| self.segment_speaker_name.as_ref().is_some_and(|n| !n.is_empty()))
+        {
+            out.completed.extend(self.complete_segment(start, event_time));
+            self.segment_start_time = None;
+            self.segment_speaker_name = None;
+            self.segment_speaker_id = None;
+        }
+        self.is_speaking = false;
+        self.current_speaker = None;
+        self.current_speaker_id = None;
+    }
+
+    /// The open segment from `start` to `end`, kept among the completed ones when it
+    /// lasted more than 100 ms.
+    fn complete_segment(&mut self, start: f64, end: f64) -> Option<SpeakerSegment> {
+        let duration_ms = millis(end - start);
+        if duration_ms <= 100 {
+            return None;
+        }
+        let segment = SpeakerSegment {
+            speaker_name: or_empty(self.segment_speaker_name.as_ref()),
+            speaker_id: or_empty(self.segment_speaker_id.as_ref()),
+            start_time: start,
+            end_time: end,
+            duration_ms,
+            is_local: self.segment_is_local,
+        };
+        self.completed_segments.push(segment.clone());
+        Some(segment)
     }
 
     /// `_speaker_switch_time_locked`: an adapter that reports a change late gives the
@@ -376,22 +387,11 @@ impl Speakers {
     /// and a new one starts with the same speaker.
     pub fn check_segment_timeout(&mut self, now: f64) -> Option<SpeakerSegment> {
         let start = self.segment_start_time?;
-        let name = self.segment_speaker_name.as_ref().filter(|n| !n.is_empty())?;
+        self.segment_speaker_name.as_ref().filter(|n| !n.is_empty())?;
         if now - start < MAX_SEGMENT_DURATION {
             return None;
         }
-        let duration_ms = millis(now - start);
-        let segment = (duration_ms > 100).then(|| SpeakerSegment {
-            speaker_name: name.clone(),
-            speaker_id: or_empty(self.segment_speaker_id.as_ref()),
-            start_time: start,
-            end_time: now,
-            duration_ms,
-            is_local: self.segment_is_local,
-        });
-        if let Some(segment) = &segment {
-            self.completed_segments.push(segment.clone());
-        }
+        let segment = self.complete_segment(start, now);
         self.segment_start_time = Some(now);
         segment
     }
