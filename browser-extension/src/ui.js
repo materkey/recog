@@ -1774,8 +1774,10 @@ function buildLiveTranscriptLine(data) {
   };
 }
 
+// Trimmed first: the panel's template leaves whitespace after the mark, which
+// the end anchors would otherwise stop at.
 function stripUncertainMarks(text) {
-  return text.replace(/ \(\?\)$/, '').replace(/ \(🔇\?\)$/, '').trim();
+  return text.trim().replace(/ \(\?\)$/, '').replace(/ \(🔇\?\)$/, '').trim();
 }
 
 function isUnknownVas3kLine(lineEl, text, timestamp) {

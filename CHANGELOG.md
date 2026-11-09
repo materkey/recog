@@ -40,6 +40,10 @@ reasoning.
   at every update. It now stays on the receiver track while that track lives.
   Rebuild and reload the extension: `./setup.sh`, then Reload in
   `chrome://extensions`.
+- **A corrected line in the floating panel loses its `(?)` mark.** When the
+  bridge named the speaker of an uncertain line on Jitsi, Element Call, Google
+  Meet or Zoom, the panel renamed the line but left `(?)` or `(🔇?)` after its
+  text. Rebuild and reload the extension as above.
 
 ## 2026-11-08
 

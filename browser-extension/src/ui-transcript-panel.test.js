@@ -171,6 +171,21 @@ describe('handleTranscript speaker correction', () => {
     expect(document.querySelectorAll('.jitsi-transcript-text')[2].textContent).toBe('hello again');
   });
 
+  test('an uncertain line rendered by the floating panel - a correction - drops its mark', () => {
+    isJitsiPlatformMock.mockReturnValue(true);
+    vas3k.createFloatingPanel();
+    ui.handleTranscript({ speaker: 'Unknown', text: 'hello world', timestamp: 'T1', uncertain: true });
+    ui.handleTranscript({
+      speaker: 'Unknown', text: 'muted words', timestamp: 'T2', uncertain: true, uncertain_reason: 'mics_off',
+    });
+
+    ui.handleTranscript({ correction: true, speaker: 'Alice', text: 'hello', timestamp: 'T1' });
+    ui.handleTranscript({ correction: true, speaker: 'Bob', text: 'muted', timestamp: 'T2' });
+
+    const texts = [...document.querySelectorAll('.jitsi-transcript-text')].map((el) => el.textContent);
+    expect(texts).toEqual(['hello world', 'muted words']);
+  });
+
   test('the floating panel is missing - a correction - updates state only', () => {
     isJitsiPlatformMock.mockReturnValue(true);
     state.transcriptLines = [{ speaker: 'Unknown', text: 'hello', timestamp: 'T1' }];
