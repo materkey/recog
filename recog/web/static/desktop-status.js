@@ -37,8 +37,22 @@
         request = null;
     }
 
+    // Polled only while someone can see it: the menu open in a shown tab.
+    function visible() {
+        return settings.open && !document.hidden;
+    }
+
+    function statusMessage(data) {
+        const state = data.state === 'inspector_unclosed' ? data.state
+            : data.enabled ? data.state : 'disabled';
+        let message = `KTalk Desktop: ${labels[state] || labels.error}`;
+        if (data.app_version) message += ` · ${data.app_version}`;
+        if (reasons[data.reason]) message += ` · ${reasons[data.reason]}`;
+        return message;
+    }
+
     async function refresh() {
-        if (!settings.open || document.hidden) return;
+        if (!visible()) return;
         const current = generation;
         const controller = new AbortController();
         request = controller;
@@ -49,28 +63,23 @@
             if (!response.ok) throw new Error('status request failed');
             const data = await response.json();
             if (current !== generation) return;
-            const state = data.state === 'inspector_unclosed' ? data.state
-                : data.enabled ? data.state : 'disabled';
-            let message = `KTalk Desktop: ${labels[state] || labels.error}`;
-            if (data.app_version) message += ` · ${data.app_version}`;
-            if (reasons[data.reason]) message += ` · ${reasons[data.reason]}`;
-            status.textContent = message;
+            status.textContent = statusMessage(data);
         } catch (error) {
             if (current === generation && error.name !== 'AbortError') status.textContent = 'KTalk Desktop: сервер недоступен';
         } finally {
             if (current === generation) {
                 request = null;
-                if (settings.open && !document.hidden) timer = setTimeout(refresh, 5000);
+                if (visible()) timer = setTimeout(refresh, 5000);
             }
         }
     }
 
     settings.addEventListener('toggle', () => {
         stop();
-        if (settings.open && !document.hidden) refresh();
+        if (visible()) refresh();
     });
     document.addEventListener('visibilitychange', () => {
         stop();
-        if (!document.hidden && settings.open) refresh();
+        if (visible()) refresh();
     });
 })();
