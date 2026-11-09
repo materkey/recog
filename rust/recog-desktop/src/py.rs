@@ -350,4 +350,83 @@ mod tests {
         assert!(error.is_os());
         assert!(PyErr::os(&io::Error::from_raw_os_error(35), None).is("BlockingIOError") || cfg!(target_os = "linux"));
     }
+
+    #[test]
+    fn errno_codes_when_converted_then_python_os_error_subclasses() {
+        // given
+        let cases = [
+            (Errno::ENOENT, "FileNotFoundError"),
+            (Errno::EACCES, "PermissionError"),
+            (Errno::EPERM, "PermissionError"),
+            (Errno::ENOTDIR, "NotADirectoryError"),
+            (Errno::EISDIR, "IsADirectoryError"),
+            (Errno::EEXIST, "FileExistsError"),
+            (Errno::ESRCH, "ProcessLookupError"),
+            (Errno::EAGAIN, "BlockingIOError"),
+            (Errno::EALREADY, "BlockingIOError"),
+            (Errno::EINPROGRESS, "BlockingIOError"),
+            (Errno::ETIMEDOUT, "TimeoutError"),
+            (Errno::ECONNREFUSED, "ConnectionRefusedError"),
+            (Errno::ECONNRESET, "ConnectionResetError"),
+            (Errno::ECONNABORTED, "ConnectionAbortedError"),
+            (Errno::EINTR, "InterruptedError"),
+            (Errno::ECHILD, "ChildProcessError"),
+            (Errno::EPIPE, "BrokenPipeError"),
+            (Errno::ESHUTDOWN, "BrokenPipeError"),
+            (Errno::EINVAL, "OSError"),
+        ];
+        for (errno, kind) in cases {
+            // when
+            let error = errno_error(errno, None);
+            // then
+            assert_eq!(error.kind, kind, "{errno:?}");
+            assert!(error.is_os(), "{errno:?}");
+        }
+    }
+
+    #[test]
+    fn error_without_a_path_or_a_code_when_converted_then_errno_text_or_plain_message() {
+        // given
+        let missing = io::Error::from_raw_os_error(2);
+        let plain = io::Error::other("no command");
+        // when / then
+        assert_eq!(PyErr::os(&missing, None).message, "[Errno 2] No such file or directory");
+        assert_eq!(PyErr::os(&plain, None).described(), "OSError: no command");
+    }
+
+    #[test]
+    fn json_values_when_converted_to_numbers_then_like_int_float_and_arithmetic() {
+        // given / when / then
+        assert_eq!(to_int(&Value::Bool(true)).unwrap(), 1);
+        assert_eq!(to_int(&Value::from(" 42 ")).unwrap(), 42);
+        assert_eq!(
+            to_int(&Value::Float(f64::NAN)).unwrap_err().described(),
+            "ValueError: cannot convert float NaN to integer"
+        );
+        assert_eq!(
+            to_int(&Value::from("x")).unwrap_err().described(),
+            "ValueError: invalid literal for int() with base 10: 'x'"
+        );
+        assert_eq!(
+            to_int(&Value::Null).unwrap_err().described(),
+            "TypeError: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'"
+        );
+        assert_eq!(to_float(&Value::Int(3)).unwrap(), 3.0);
+        assert_eq!(to_float(&Value::Bool(true)).unwrap(), 1.0);
+        assert!(to_float(&Value::from("nan")).unwrap().is_nan());
+        assert_eq!(
+            to_float(&Value::from("x")).unwrap_err().described(),
+            "ValueError: could not convert string to float: 'x'"
+        );
+        assert_eq!(
+            to_float(&Value::Array(vec![])).unwrap_err().described(),
+            "TypeError: float() argument must be a string or a real number, not 'list'"
+        );
+        assert_eq!(number(&Value::Bool(true), "-").unwrap(), 1.0);
+        assert_eq!(number(&Value::Int(7), "-").unwrap(), 7.0);
+        assert_eq!(
+            number(&Value::from("7"), "-").unwrap_err().described(),
+            "TypeError: unsupported operand type(s) for -: 'float' and 'str'"
+        );
+    }
 }
