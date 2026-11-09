@@ -4,9 +4,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const sourcePath = path.join(__dirname, '../recog/web/static/user-profile.js');
+const sourcePath = path.join(__dirname, '../crates/recog-web/static/user-profile.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
-const html = fs.readFileSync(path.join(__dirname, '../recog/web/static/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../crates/recog-web/static/index.html'), 'utf8');
 const payload = (name = '', application_state = 'applied', suggested_name = '') => ({
     profile: { name, aliases: [], configured: !!name, revision: name || 'unconfigured' },
     application_state, suggested_name,

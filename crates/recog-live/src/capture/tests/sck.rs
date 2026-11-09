@@ -41,7 +41,7 @@ fn tools(swiftc: bool, result: (i32, &'static str), rebuild: Option<PathBuf>) ->
 /// A prebuilt helper older than its source.
 fn stale(root: &Path) -> (PathBuf, PathBuf) {
     let binary = root.join("sck_audio_capture");
-    let source = root.join("recog/native/macos/sck_audio_capture.swift");
+    let source = root.join("crates/recog-live/macos/sck_audio_capture.swift");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
     fs::write(&binary, b"prebuilt").unwrap();
     fs::write(&source, "// newer than the binary").unwrap();
@@ -115,7 +115,7 @@ fn stale_helper_with_a_broken_swiftc_find_or_build_reuses_it_untouched() {
 #[test]
 fn source_only_without_swiftc_find_or_build_names_swiftc() {
     let root = tempfile::tempdir().unwrap();
-    let source = root.path().join("recog/native/macos/sck_audio_capture.swift");
+    let source = root.path().join("crates/recog-live/macos/sck_audio_capture.swift");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
     fs::write(&source, "// source only").unwrap();
     let e = find_or_build_sck_utility(root.path(), &tools(false, (0, ""), None), &log().0).unwrap_err();

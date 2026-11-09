@@ -2,7 +2,7 @@
 //! layout"), in place of `recog/web/`: the HTTP API over the meetings, increments,
 //! titles, meeting chat, user profile, privacy and AI settings; the live stream and
 //! the per-meeting watch WebSockets; the bidirectional link to the bridge; and the
-//! static web UI, served unchanged from `recog/web/static/`.
+//! static web UI, served unchanged from `crates/recog-web/static/`.
 //!
 //! The route list is in [`router`]. Bodies, status codes, the headers that matter
 //! (content type and length, ETag, ranges, cache control) and the frames on the

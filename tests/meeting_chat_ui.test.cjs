@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const staticDir = path.join(__dirname, '../recog/web/static');
+const staticDir = path.join(__dirname, '../crates/recog-web/static');
 const chatPath = path.join(staticDir, 'meeting-chat.js');
 const appPath = path.join(staticDir, 'app.js');
 const chatSource = fs.readFileSync(chatPath, 'utf8');

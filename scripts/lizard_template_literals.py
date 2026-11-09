@@ -4,7 +4,7 @@ lizard 1.24.0 matches a JavaScript/TypeScript template literal with the regex
 `.*?` (up to the next backtick). A template inside another's `${...}` ends that
 match in the middle of the expression, the braces stop balancing, and the
 enclosing function silently absorbs every function after it: the gate measured
-47 of the 189 functions of recog/web/static/app.js. This scanner finds the
+47 of the 189 functions of crates/recog-web/static/app.js. This scanner finds the
 literal's real end and then yields the same pieces lizard yields for a literal
 it reads correctly, so sources without nested templates tokenize exactly as
 before. The quality gate installs it at import, which also reaches crapkit's

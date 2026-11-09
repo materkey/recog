@@ -2,7 +2,7 @@
 //! `recog/zoom_app.py`.
 //!
 //! The Zoom application is not a web page, so the Chrome extension cannot see it. The
-//! Swift helper `recog/native/macos/zoom_ax_probe.swift` reads its Accessibility tree
+//! Swift helper `crates/recog-zoom/macos/zoom_ax_probe.swift` reads its Accessibility tree
 //! and writes one JSON snapshot per line; this crate turns the snapshots into the
 //! frames the extension sends to the bridge (`meeting_join`, `participants_update`,
 //! `speaker_update`, `meeting_leave`), so the bridge, attribution, Copilot and

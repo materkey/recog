@@ -217,7 +217,7 @@ fn live_session_config(
             ..BridgeConfig::default()
         },
         policy: Arc::new(recog_bridge::ai::AiSettingsPolicy::new(data_dir)),
-        increments: Some(ai_increments(repo_root.join("recog").join("prompts"))),
+        increments: Some(ai_increments(repo_root.join("crates").join("recog-ai").join("prompts"))),
         storage,
         golden_record: config.live.golden_record,
     }

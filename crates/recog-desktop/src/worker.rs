@@ -24,7 +24,7 @@ pub const CLEANUP_TIMEOUT: f64 = 5.0;
 
 /// The code evaluated inside the application, unchanged from the Python module's
 /// directory.
-pub const BOOTSTRAP_JS: &str = include_str!("../../../recog/desktop/bootstrap.js");
+pub const BOOTSTRAP_JS: &str = include_str!("../bootstrap.js");
 
 /// `REQUIRE`: `require` in the main process whatever module system it runs.
 pub const REQUIRE: &str = "(typeof require === 'function' ? require :

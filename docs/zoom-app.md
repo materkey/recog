@@ -28,7 +28,7 @@ pipeline, run `cargo run --release -p recog-zoom --bin recog-zoom-app` from the 
 
 The Accessibility tree is read by a small helper application, **Recog Zoom
 Helper** (`RecogZoomHelper.app` in the checkout, built on first use from
-`recog/native/macos/zoom_ax_probe.swift`; needs `swiftc`). The permission
+`crates/recog-zoom/macos/zoom_ax_probe.swift`; needs `swiftc`). The permission
 belongs to that application, not to Python or the terminal, so it is granted
 once and is the same for the service and for a manual run.
 

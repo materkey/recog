@@ -4,7 +4,7 @@
 //! the short-lived inspector worker ([`worker`]), the process checks ([`processes`],
 //! psutil's role through [`system`]), the private state and extension snapshots
 //! ([`storage`]) and `recog desktop {enable,disable,attach,status}` ([`cli`], the
-//! `recog-desktop` binary). `recog/desktop/bootstrap.js` stays JavaScript and is
+//! `recog-desktop` binary). `crates/recog-desktop/bootstrap.js` stays JavaScript and is
 //! embedded unchanged.
 //!
 //! The files under `<data dir>/desktop/` are Python's byte for byte, so an installation

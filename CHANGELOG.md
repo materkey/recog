@@ -20,6 +20,18 @@ reasoning.
   --workspace`), a relative `CARGO_TARGET_DIR` counts from the root, and the
   optional ASR server's programs are built into `target/release/`: a unit that
   starts them from `rust/target/release/` must name the new place.
+- **The web UI, the prompts and the Swift sources lie in their crates.** What
+  `recog/` held went to the crate it belongs to: `recog/web/static/` is
+  `crates/recog-web/static/`, `recog/prompts/` is `crates/recog-ai/prompts/`,
+  `recog/desktop/bootstrap.js` is `crates/recog-desktop/bootstrap.js`, and the Swift
+  sources of `recog/native/macos/` are in `crates/recog-live/macos/` (the
+  ScreenCaptureKit helper, the launcher) and `crates/recog-zoom/macos/` (the Zoom
+  helper). The running services read the web UI and the prompts where they were, so
+  the web page and the AI summaries fail between `git pull` and the restart: run
+  `./setup.sh` right after the pull (it rebuilds and restarts what was running). A
+  prompt of your own kept in `recog/prompts/` must move to `crates/recog-ai/prompts/`.
+  The Swift code did not change: `Recog.app` and `RecogZoomHelper.app` are not rebuilt
+  and keep their permissions; `sck_audio_capture` is compiled once more.
 - **The quality gate measures Rust.** `RECOG_QUALITY_BASE=… ./scripts/check.sh` and
   `scripts/quality.py` (docs/quality.md) now score the CRAP and duplicates of the
   production Rust under `crates/<crate>/src/` (test modules left out) next to the

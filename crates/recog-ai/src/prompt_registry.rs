@@ -1,4 +1,4 @@
-//! Prompt definitions in `recog/prompts/*.md` (`recog/prompt_registry.py`).
+//! Prompt definitions in `crates/recog-ai/prompts/*.md` (`recog/prompt_registry.py`).
 //!
 //! Each file has a frontmatter with `name` and `filter` (a regular expression for the
 //! meeting title, or null for every meeting) and a template body with `{user_name}`,

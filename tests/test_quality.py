@@ -373,7 +373,7 @@ def test_style_only_when_javascript_changes_then_only_new_eslint_findings_fail(
 ):
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda packages=None: {})
-    script = repository / "recog/web/static/page.js"
+    script = repository / "crates/recog-web/static/page.js"
     script.parent.mkdir(parents=True)
     old = "function inner() {\n  const unused = 1;\n}\n"
     script.write_text(old)
@@ -383,7 +383,7 @@ def test_style_only_when_javascript_changes_then_only_new_eslint_findings_fail(
     assert quality.main(["--base", "HEAD", "--style-only", "--output", str(output)]) == code
     printed = capsys.readouterr().out
     assert "no-unused-vars" not in printed
-    assert ("recog/web/static/page.js:" in printed) == bool(code)
+    assert ("crates/recog-web/static/page.js:" in printed) == bool(code)
     if reported:
         assert reported in printed
 
@@ -404,7 +404,7 @@ def test_real_baseline_when_web_script_gets_uncovered_function_then_gate_fails(
     # The Rust side is measured by the tests above; here its coverage is given.
     covered = {"crates/demo/src/lib.rs": ({1: 1, 2: 1, 3: 1}, {})}
     monkeypatch.setattr(quality, "rust_coverage", lambda *args: covered)
-    script = repository / "recog/web/static/page.js"
+    script = repository / "crates/recog-web/static/page.js"
     script.parent.mkdir(parents=True)
     script.write_text("function answer() {\n  return 42;\n}\n")
     (repository / "tests/page.test.cjs").write_text(
@@ -413,7 +413,7 @@ def test_real_baseline_when_web_script_gets_uncovered_function_then_gate_fails(
         "const fs = require('node:fs');\n"
         "const path = require('node:path');\n"
         "const vm = require('node:vm');\n"
-        "const sourcePath = path.join(__dirname, '../recog/web/static/page.js');\n"
+        "const sourcePath = path.join(__dirname, '../crates/recog-web/static/page.js');\n"
         "test('answer', () => {\n"
         "  const context = vm.createContext({});\n"
         "  vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context,"
@@ -437,8 +437,8 @@ def test_real_baseline_when_web_script_gets_uncovered_function_then_gate_fails(
     assert result["status"] == "fail", result
     failures = [item for item in result["failures"] if item["kind"] == "crap"]
     assert [item["function"].split("::")[0] for item in failures] == [
-        "recog/web/static/page.js",
-        "recog/web/static/page.js",
+        "crates/recog-web/static/page.js",
+        "crates/recog-web/static/page.js",
     ]
     assert all(item["baseline"] is None for item in failures)
     answers = [row for row in result["head"]["functions"] if row["path"].endswith("page.js")]

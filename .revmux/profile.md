@@ -93,7 +93,7 @@ the concrete consequence decides.
   meeting is debounced (~6 s) so a transient DOM gap (Picture-in-Picture handover, a re-render) does not
   send `meeting_leave`. A change that guesses on unknown UI state, or ends a meeting on a single
   missing element, is a finding.
-- **The Zoom application helper only reports the Accessibility tree** (`recog/native/macos/zoom_ax_probe.swift`);
+- **The Zoom application helper only reports the Accessibility tree** (`crates/recog-zoom/macos/zoom_ax_probe.swift`);
   what a tab group means is decided in Python (`recog/zoom_app.py`). Any change to the helper's code
   changes its signature and costs the user the Accessibility grant, so moving logic into the helper is
   a regression, not a cleanup. Rebuild freshness is the source's sha256 kept beside the bundle, not
@@ -111,7 +111,7 @@ the concrete consequence decides.
   (lost audio, no marker), not the breadth of the catch.
 - **`os._exit(0)` in teardown** after state is flushed: daemon threads and MPS make a clean interpreter
   shutdown unreliable.
-- **Vanilla JS + a hand-written SPA** in `recog/web/static/`, no build step, no framework. The Chrome
+- **Vanilla JS + a hand-written SPA** in `crates/recog-web/static/`, no build step, no framework. The Chrome
   extension is the only thing with a webpack build.
 
 ## Where the rules live
@@ -123,7 +123,7 @@ changes. A code change that contradicts a current ADR or `CLAUDE.md` is a real f
 
 Prose is minor by default. These documents are executed by an agent or a script and are rated by what
 their consumer does wrong:
-- `recog/prompts/*.md` — LLM prompts for meeting analysis;
+- `crates/recog-ai/prompts/*.md` — LLM prompts for meeting analysis;
 - `.claude/skills/copilot-mode/SKILL.md` and `.claude/agents/copilot-session.md` — the copilot
   session's playbook;
 - `.claude/skills/recog-meetings/SKILL.md`;

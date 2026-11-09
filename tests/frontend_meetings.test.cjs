@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const sourcePath = path.join(__dirname, '../recog/web/static/app.js');
+const sourcePath = path.join(__dirname, '../crates/recog-web/static/app.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
 const CACHE_KEY = 'recog.meetings.v1';
 const row = (title) => ({ id: title, title, source: 'ktalk', created_at: '2026-09-01T10:00:00Z' });

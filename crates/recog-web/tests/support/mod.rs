@@ -54,8 +54,8 @@ pub fn config(dir: &Path) -> Config {
     .map(|(k, v)| (k.to_owned(), v))
     .collect();
     let mut config = Config::from_environ(&fake_repo, &environ, "127.0.0.1", 0).unwrap();
-    config.static_dir = repo_root().join("recog/web/static");
-    config.prompts_dir = repo_root().join("recog/prompts");
+    config.static_dir = repo_root().join("crates/recog-web/static");
+    config.prompts_dir = repo_root().join("crates/recog-ai/prompts");
     config
 }
 

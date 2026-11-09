@@ -9,7 +9,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createDocument, makeEvent } = require('./fake_dom.cjs');
 
-const STATIC = path.join(__dirname, '../recog/web/static');
+const STATIC = path.join(__dirname, '../crates/recog-web/static');
 const MARKUP = fs.readFileSync(path.join(STATIC, 'index.html'), 'utf8');
 const ALL_SCRIPTS = ['datepicker.js', 'user-profile.js', 'ai-settings.js', 'desktop-status.js', 'meeting-chat.js', 'app.js'];
 

@@ -125,7 +125,8 @@ signatures are blanked; its functions must then match the syntax tree's `fn`
 items by name and last line (lizard alone may add the functions of a
 `macro_rules!` template), or the run stops.
 
-**JavaScript** is the web UI under `recog/` and what the extension loads
+**JavaScript** is the web UI (`crates/recog-web/static/`), the desktop bootstrap
+script (`crates/recog-desktop/bootstrap.js`) and what the extension loads
 (`browser-extension/src/`, `content.js`, `popup.js`). Tests, scripts, build
 configuration, generated bundles and ignored files are not included. The
 extension's coverage comes from its jest suite (`--coverageProvider=babel`); the

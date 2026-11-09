@@ -45,10 +45,10 @@ pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").filter(|home| !home.is_empty()).map(PathBuf::from).or_else(std::env::home_dir)
 }
 
-/// The shipped prompts, `recog/prompts/` of the checkout this crate was built from (the
+/// The shipped prompts, `crates/recog-ai/prompts/` of the checkout this crate was built from (the
 /// default `prompts_dir` of `AiSettingsStore` and `IncrementGenerator`).
 pub fn default_prompts_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../recog/prompts")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("prompts")
 }
 
 /// The legacy model and effort variables the AI settings still honour below the saved

@@ -4,9 +4,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const sourcePath = path.join(__dirname, '../recog/web/static/ai-settings.js');
+const sourcePath = path.join(__dirname, '../crates/recog-web/static/ai-settings.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
-const html = fs.readFileSync(path.join(__dirname, '../recog/web/static/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../crates/recog-web/static/index.html'), 'utf8');
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => copy(data) });
 const task = (id, fields = {}) => ({

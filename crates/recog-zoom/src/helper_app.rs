@@ -20,7 +20,7 @@ pub const HELPER_APP: &str = "RecogZoomHelper.app";
 /// What the permission is recorded under: it must not change.
 pub const HELPER_BUNDLE_ID: &str = "com.recog.zoom-helper";
 pub const HELPER_NAME: &str = "Recog Zoom Helper";
-pub const HELPER_SOURCE: &str = "recog/native/macos/zoom_ax_probe.swift";
+pub const HELPER_SOURCE: &str = "crates/recog-zoom/macos/zoom_ax_probe.swift";
 /// Hash of the source the bundle was built from. Kept next to the bundle, not in it:
 /// everything inside is sealed by the signature, so a stamp there would make any edit
 /// of the source, even a comment, change the signature and lose the permission.

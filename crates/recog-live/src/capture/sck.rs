@@ -1,5 +1,5 @@
 //! The ScreenCaptureKit helper `sck_audio_capture`: found at the repository root, or
-//! compiled from `recog/native/macos/sck_audio_capture.swift`, in place of
+//! compiled from `crates/recog-live/macos/sck_audio_capture.swift`, in place of
 //! `find_or_build_sck_utility`.
 //!
 //! A helper older than its source is rebuilt; when that fails for any reason (no
@@ -110,7 +110,7 @@ fn compile(
 /// No helper and no way to build one ([`SckError`]).
 pub fn find_or_build_sck_utility(repo_root: &Path, tools: &dyn Toolchain, log: &Logger) -> Result<String, SckError> {
     let utility = repo_root.join("sck_audio_capture");
-    let source = repo_root.join("recog/native/macos/sck_audio_capture.swift");
+    let source = repo_root.join("crates/recog-live/macos/sck_audio_capture.swift");
     if utility.exists() {
         if source.exists() {
             let stale =

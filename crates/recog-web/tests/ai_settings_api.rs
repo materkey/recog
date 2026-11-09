@@ -401,7 +401,7 @@ impl AiStore for PausingStore {
 async fn old_connection_given_an_ack_read_in_flight_when_reconnected_then_the_stale_ack_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(PausingStore {
-        inner: AiSettingsStore::new(dir.path(), Some(support::repo_root().join("recog/prompts")))
+        inner: AiSettingsStore::new(dir.path(), Some(support::repo_root().join("crates/recog-ai/prompts")))
             .with_legacy_env(LegacyEnv::default()),
         armed: Mutex::new(false),
         gate: (Mutex::new((false, false)), Condvar::new()),

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const sourcePath = path.join(__dirname, '../recog/web/static/app.js');
+const sourcePath = path.join(__dirname, '../crates/recog-web/static/app.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
 const response = (enabled, configured = true) => ({ ok: true, json: async () => ({ enabled, configured }) });
 

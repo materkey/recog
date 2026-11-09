@@ -1,4 +1,4 @@
-// recog/desktop/bootstrap.js as recog-desktop evaluates it in the KTalk desktop
+// crates/recog-desktop/bootstrap.js as recog-desktop evaluates it in the KTalk desktop
 // application's main process: the script's text, then a call of its top-level
 // `attachDesktop` with the bundle directory, its digest, the runtime status
 // file and the target (crates/recog-desktop/src/worker.rs, `bootstrap`). The
@@ -12,7 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const sourcePath = path.join(__dirname, '../recog/desktop/bootstrap.js');
+const sourcePath = path.join(__dirname, '../crates/recog-desktop/bootstrap.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
 
 const DIGEST = 'sha256-of-bundle';

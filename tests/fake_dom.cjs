@@ -1,6 +1,6 @@
 // A small DOM for the web UI's node:test suites: enough of elements, markup
 // parsing, simple selectors and bubbling events to run the classic scripts of
-// recog/web/static against the real index.html and read back what a user sees.
+// crates/recog-web/static against the real index.html and read back what a user sees.
 
 const VOID_TAGS = new Set(['area', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'wbr']);
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', times: '×', larr: '←' };

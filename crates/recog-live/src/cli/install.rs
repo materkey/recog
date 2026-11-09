@@ -28,7 +28,7 @@ pub const LAUNCHER_APP: &str = "Recog.app";
 pub const LAUNCHER_BUNDLE_ID: &str = "com.recog.live";
 pub const LAUNCHER_NAME: &str = "Recog";
 pub const LAUNCHER_EXECUTABLE: &str = "recog_launcher";
-pub const LAUNCHER_SOURCE: &str = "recog/native/macos/recog_launcher.swift";
+pub const LAUNCHER_SOURCE: &str = "crates/recog-live/macos/recog_launcher.swift";
 /// Beside the bundle, not in it: everything inside is sealed by the signature.
 pub const LAUNCHER_STAMP: &str = "Recog.source-sha256";
 
@@ -49,7 +49,7 @@ pub fn print(outcome: Printed) -> i32 {
 }
 
 fn prompts_dir(repo_root: &Path) -> PathBuf {
-    repo_root.join("recog").join("prompts")
+    repo_root.join("crates").join("recog-ai").join("prompts")
 }
 
 /// The data directory with the legacy warning collected for stderr.

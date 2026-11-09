@@ -128,8 +128,8 @@ def repo(tmp_path):
     helper = dst / "sck_audio_capture"
     helper.write_text("#!/bin/sh\nexit 0\n")
     helper.chmod(0o755)
-    (dst / "recog/native/macos").mkdir(parents=True, exist_ok=True)
-    (dst / "recog/native/macos/sck_audio_capture.swift").write_text("// stub\n")
+    (dst / "crates/recog-live/macos").mkdir(parents=True, exist_ok=True)
+    (dst / "crates/recog-live/macos/sck_audio_capture.swift").write_text("// stub\n")
     # The live job's program: the darwin readiness probe wants it executable.
     launcher = dst / "Recog.app/Contents/MacOS/recog_launcher"
     launcher.parent.mkdir(parents=True)

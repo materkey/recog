@@ -320,7 +320,7 @@ fn a_checkout_without_the_launcher_source_when_building_the_launcher_then_the_er
     let (stdout, stderr, code) = sandbox.run(&["launcher"]);
     // then
     assert_eq!((stdout.as_str(), code), ("", 1));
-    let source = repo.join("recog/native/macos/recog_launcher.swift");
+    let source = repo.join("crates/recog-live/macos/recog_launcher.swift");
     assert!(stderr.starts_with(&format!("cannot read {}: ", source.display())), "{stderr}");
 }
 

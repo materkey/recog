@@ -2,9 +2,9 @@
 
 The programs are a Rust workspace: its manifest `Cargo.toml` is at the root and
 `crates/` holds one crate per responsibility
-([the move to Rust](plans/2026-11-07-rust-migration.md)). `recog/` keeps the parts
-that are not Rust: the static web UI, prompts, Swift sources and the desktop
-bootstrap script. Browser code has its own
+([the move to Rust](plans/2026-11-07-rust-migration.md)). A crate keeps what
+belongs to it beside its code, whatever the language: the static web UI, the
+prompts, the Swift sources and the desktop bootstrap script. Browser code has its own
 top-level directory. Installation inputs, development tools and design records
 are grouped separately, making it clear where a new file belongs.
 
@@ -12,10 +12,11 @@ are grouped separately, making it clear where a new file belongs.
 | --- | --- |
 | `crates/` | `recog-live` (the `recog` binary: live process with the bridge, `meetings`, `replay`, the installation helpers), `recog-web`, `recog-copilot` (supervisor and MCP channel), `recog-desktop`, `recog-mic`, `recog-asr-server` (the optional ASR server's gateway and GigaAM backend, launched independently of the client services), and the libraries `recog-core`, `recog-ai`, `recog-bridge`, `recog-zoom`, `speexdsp-aec` |
 | `bin/` | Gitignored: the programs `setup.sh` installs from `target/release` and the units run |
-| `recog/web/static/` | The web UI the `recog-web` binary serves |
-| `recog/desktop/bootstrap.js` | The script the KTalk desktop integration evaluates in the application |
-| `recog/prompts/` | Shared AI summary templates |
-| `recog/native/macos/` | Swift sources: ScreenCaptureKit helper, Recog.app launcher, Zoom helper |
+| `crates/recog-web/static/` | The web UI the `recog-web` binary serves |
+| `crates/recog-desktop/bootstrap.js` | The script the KTalk desktop integration evaluates in the application |
+| `crates/recog-ai/prompts/` | Shared AI summary templates |
+| `crates/recog-live/macos/`, `crates/recog-zoom/macos/` | Swift sources: ScreenCaptureKit helper and Recog.app launcher; Zoom helper |
+| `recog/web/.env.example` | The example `setup.sh` copies to `recog/web/.env` on a first install |
 | `browser-extension/` | Chrome extension source, platform adapters, build and tests |
 | `deploy/python/` | Requirements of the quality tools |
 | `deploy/node/` | Pinned JavaScript quality tools (ESLint) for `scripts/quality.py` |

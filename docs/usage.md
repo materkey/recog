@@ -205,7 +205,7 @@ interpreter as its child. macOS attributes Screen Recording and the
 microphone to the program the job starts, so without the launcher the dialogs
 would name `python3.12` and a Homebrew upgrade of the interpreter would void
 the grant of the running service. `Recog.app` is rebuilt only when
-`recog/native/macos/recog_launcher.swift` changes, and macOS then asks once
+`crates/recog-live/macos/recog_launcher.swift` changes, and macOS then asks once
 more.
 
 BlackHole still works as an alternative if you prefer a loopback device:

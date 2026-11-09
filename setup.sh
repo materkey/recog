@@ -337,7 +337,7 @@ if [ "$HOST_OS" = "darwin" ]; then
     step "System audio helper (ScreenCaptureKit)"
 
     if deps_have swiftc && swiftc -o "$REPO_DIR/sck_audio_capture" \
-            "$REPO_DIR/recog/native/macos/sck_audio_capture.swift" \
+            "$REPO_DIR/crates/recog-live/macos/sck_audio_capture.swift" \
             -framework ScreenCaptureKit -framework CoreMedia -framework AVFoundation; then
         info "Built sck_audio_capture"
     elif deps_sck_helper_ok; then

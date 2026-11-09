@@ -4,9 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const sourcePath = path.join(__dirname, '../recog/web/static/app.js');
+const sourcePath = path.join(__dirname, '../crates/recog-web/static/app.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
-const markup = fs.readFileSync(path.join(__dirname, '../recog/web/static/index.html'), 'utf8');
+const markup = fs.readFileSync(path.join(__dirname, '../crates/recog-web/static/index.html'), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const response = data => ({ ok: true, json: async () => data });
 const meta = (version = 1, extra = {}) => ({

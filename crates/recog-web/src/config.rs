@@ -24,7 +24,7 @@ pub const KTALK_DEBUG_FILE: &str = protocol::KTALK_DEBUG_FILE;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// The checkout: `recog/web/static` and `recog/prompts` are under it.
+    /// The checkout: `crates/recog-web/static` and `crates/recog-ai/prompts` are under it.
     pub repo_root: PathBuf,
     pub static_dir: PathBuf,
     pub prompts_dir: PathBuf,
@@ -78,8 +78,8 @@ impl Config {
             .map_or_else(|| PathBuf::from(KTALK_DEBUG_FILE), PathBuf::from);
         Ok(Config {
             repo_root: repo_root.to_path_buf(),
-            static_dir: repo_root.join("recog/web/static"),
-            prompts_dir: repo_root.join("recog/prompts"),
+            static_dir: repo_root.join("crates/recog-web/static"),
+            prompts_dir: repo_root.join("crates/recog-ai/prompts"),
             meetings_dir: data_dir.join("meetings"),
             data_dir,
             home,

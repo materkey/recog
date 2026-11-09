@@ -43,9 +43,10 @@ C8 = NODE_TOOLS / "node_modules/.bin/c8"
 EXTENSION = "browser-extension/"
 # The crates lie in `crates/`, beside the workspace manifest at the checkout's root.
 CRATES = "crates"
-# Until 2026-11-09 `rust/` held the manifest and the crates: a baseline from before
-# that is measured where it lies.
+# Until 2026-11-09 `rust/` held the manifest and the crates, and `recog/` the web UI
+# and the desktop bootstrap script: a baseline from before that is measured where it lies.
 FORMER_WORKSPACE = "rust"
+FORMER_JAVASCRIPT = "recog/"
 # What check.sh tests, minus the doctests (stable rustc does not instrument them): a
 # crate listed here runs only these targets, the echo canceller's parity tests
 # needing golden data CI does not have.
@@ -54,7 +55,9 @@ RUST_RESTRICTED_TESTS = {
 }
 # The web UI and what the extension loads; its tests and build tooling are not production.
 JAVASCRIPT_SOURCES = (
-    "recog/",
+    "crates/recog-web/static/",
+    "crates/recog-desktop/bootstrap.js",
+    FORMER_JAVASCRIPT,
     f"{EXTENSION}src/",
     f"{EXTENSION}content.js",
     f"{EXTENSION}popup.js",

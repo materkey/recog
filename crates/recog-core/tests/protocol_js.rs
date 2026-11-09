@@ -66,7 +66,7 @@ fn side_text(side: Side) -> String {
             sources(&root.join("browser-extension/src"), &mut files);
             files
         }
-        Side::WebUi => vec![root.join("recog/web/static/app.js")],
+        Side::WebUi => vec![root.join("crates/recog-web/static/app.js")],
     };
     assert!(!files.is_empty(), "no JavaScript for {side:?}");
     files.iter().map(|f| fs::read_to_string(f).unwrap_or_else(|e| panic!("{}: {e}", f.display()))).collect()
