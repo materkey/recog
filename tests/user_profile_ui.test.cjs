@@ -238,3 +238,53 @@ test('GET started before save - stale response arrives after PUT - saved revisio
     assert.equal(h.get('name').value, 'Новое имя');
     assert.match(h.get('notice').textContent, /ожидает/);
 });
+
+for (const name of ['', '  ', 'ME']) {
+    test(`welcome open - saving the name ${JSON.stringify(name)} - refused locally and the name field focused`, async () => {
+        const h = harness(async () => response(payload()));
+        await h.boot();
+        h.input('name', name);
+        await h.submit();
+        assert.equal(h.calls.some(([, options]) => options.method === 'PUT'), false);
+        assert.equal(h.get('error').textContent, 'Укажите ваше имя вместо «Me».');
+        assert.equal(h.document.activeElement, h.get('name'));
+    });
+}
+
+const failures = [
+    ['the request times out', () => { const error = new Error('aborted'); error.name = 'AbortError'; throw error; },
+        'Сервер не ответил вовремя. Проверьте профиль перед повторным сохранением.'],
+    ['the network is down', () => { throw new TypeError('Failed to fetch'); },
+        'Не удалось сохранить профиль. Проверьте подключение и попробуйте ещё раз.'],
+    ['the server fails', () => ({ ok: false, status: 500 }), 'Сервис профиля недоступен. Попробуйте ещё раз.'],
+    ['an error without a message', () => { throw new Error(''); }, 'Не удалось сохранить профиль. Попробуйте ещё раз.'],
+];
+for (const [cause, answer, message] of failures) {
+    test(`profile dialog open - save fails because ${cause} - the reason stays in the dialog`, async () => {
+        const h = harness(async (_url, options) => (options.method === 'PUT' ? answer() : response(payload())));
+        await h.boot();
+        h.input('name', 'Александр');
+        await h.submit();
+        assert.equal(h.get('dialog').open, true);
+        assert.equal(h.get('error').textContent, message);
+        assert.equal(h.get('notice').hidden, true);
+        assert.equal(h.get('save').textContent, 'Сохранить');
+    });
+}
+
+test('save in flight - dialog closed with Escape and the save fails - the reason is shown in the page notice', async () => {
+    let fail;
+    const h = harness(async (_url, options) => (options.method === 'PUT'
+        ? new Promise((resolve) => { fail = () => resolve({ ok: false, status: 503 }); })
+        : response(payload())));
+    await h.boot();
+    h.input('name', 'Александр');
+    const saving = h.submit();
+    h.get('dialog').listeners.cancel({ preventDefault() {} });
+    assert.equal(h.get('dialog').open, false);
+    fail();
+    await saving;
+    await flush();
+    assert.equal(h.get('notice').hidden, false);
+    assert.equal(h.get('notice').textContent, 'Сервис профиля недоступен. Попробуйте ещё раз.');
+});
