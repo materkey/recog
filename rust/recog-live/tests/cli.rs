@@ -2,6 +2,8 @@
 //! command, `meetings`, `replay` and `live`'s setup up to a whole run on a stand-in
 //! sound server, each in a sandbox of its own (data directory, home, configuration).
 //!
+//! The binary is installed into the sandbox's checkout (`repo/bin/recog`, as
+//! `setup.sh` installs it), so that checkout, not the one it was built in, is its own.
 //! A child keeps `LLVM_PROFILE_FILE`, so a coverage run counts what it executed.
 
 use std::io::BufReader;
@@ -16,15 +18,22 @@ use recog_live::cli::meetings;
 
 struct Sandbox {
     dir: tempfile::TempDir,
+    recog: PathBuf,
 }
 
 impl Sandbox {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        for sub in ["home", "repo", "bin"] {
+        for sub in ["home", "repo/bin", "bin"] {
             std::fs::create_dir_all(dir.path().join(sub)).unwrap();
         }
-        Self { dir }
+        std::fs::write(dir.path().join("repo/recog-service.sh"), "#!/bin/bash\n").unwrap();
+        let recog = dir.path().join("repo/bin/recog");
+        let built = Path::new(env!("CARGO_BIN_EXE_recog"));
+        if std::fs::hard_link(built, &recog).is_err() {
+            std::fs::copy(built, &recog).unwrap();
+        }
+        Self { dir, recog }
     }
 
     fn path(&self, sub: &str) -> PathBuf {
@@ -47,14 +56,13 @@ impl Sandbox {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_recog"));
+        let mut command = Command::new(&self.recog);
         command
             .args(args)
             .env_clear()
             .env("HOME", self.path("home"))
             .env("PATH", format!("{}:/usr/bin:/bin", self.path("bin").display()))
             .env("RECOG_CONFIG_FILE", self.path("none.toml"))
-            .env("RECOG_REPO_DIR", self.path("repo"))
             .env("RECOG_DATA_DIR", self.data())
             .env("MIC_SPEAKER_NAME", "Me")
             .env("TZ", "UTC")
@@ -219,6 +227,98 @@ fn an_unreadable_meeting_when_shown_then_the_storage_error_and_status_1() {
     // then
     assert_eq!(shown.code, 1, "{shown:?}");
     assert!(shown.stdout.is_empty() && shown.stderr.ends_with('\n') && shown.stderr.len() > 1, "{shown:?}");
+}
+
+#[test]
+fn valid_settings_when_checked_or_asked_for_the_data_dir_then_nothing_wrong_and_the_dir() {
+    // given
+    let sandbox = Sandbox::new();
+    // when
+    let checked = sandbox.run(&["check"]);
+    let data_dir = sandbox.run(&["config", "data-dir"]);
+    // then
+    assert_eq!(checked, (String::new(), String::new(), 0));
+    assert_eq!(data_dir, (format!("{}\n", sandbox.data().display()), String::new(), 0));
+}
+
+#[test]
+fn a_checkout_without_recog_desktop_when_running_desktop_then_how_to_build_it_and_status_2() {
+    // given
+    let sandbox = Sandbox::new();
+    let repo = std::fs::canonicalize(sandbox.path("repo")).unwrap();
+    // when
+    let (stdout, stderr, code) = sandbox.run(&["desktop", "status"]);
+    // then
+    assert_eq!((stdout.as_str(), code), ("", 2));
+    assert_eq!(
+        stderr,
+        format!(
+            "recog desktop runs {}, which is not built: ./setup.sh builds it\n",
+            repo.join("rust/target/release/recog-desktop").display()
+        )
+    );
+}
+
+/// The model's file where wavo's hub finds it in a Hugging Face cache.
+fn cached_model(cache: &Path) -> PathBuf {
+    let snapshot = cache.join("models--handy-computer--gigaam-v3-e2e-rnnt-gguf/snapshots/0123abc");
+    std::fs::create_dir_all(&snapshot).unwrap();
+    let model = snapshot.join("gigaam-v3-e2e-rnnt-Q8_0.gguf");
+    std::fs::write(&model, "stand-in").unwrap();
+    model
+}
+
+#[test]
+fn a_cached_model_when_prefetching_then_its_path_and_nothing_downloaded() {
+    // given
+    let sandbox = Sandbox::new();
+    let cache = sandbox.path("hf-hub");
+    let model = cached_model(&cache);
+    // when
+    let output = sandbox
+        .command(&["prefetch"])
+        .env("HF_HUB_CACHE", &cache)
+        .env("HF_ENDPOINT", "http://127.0.0.1:9")
+        .output()
+        .unwrap();
+    // then
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), format!("{}\n", model.display()));
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
+fn no_cached_model_and_no_hub_when_prefetching_then_the_download_fails_with_status_1() {
+    // given
+    let sandbox = Sandbox::new();
+    // when
+    let output = sandbox
+        .command(&["prefetch"])
+        .env("HF_HUB_CACHE", sandbox.path("hf-hub"))
+        .env("HF_ENDPOINT", "http://127.0.0.1:9")
+        .output()
+        .unwrap();
+    // then
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr.starts_with("Downloading the ASR model gigaam-v3...\nCould not download the ASR model: "),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_checkout_without_the_launcher_source_when_building_the_launcher_then_the_error_and_status_1() {
+    // given
+    let sandbox = Sandbox::new();
+    let repo = std::fs::canonicalize(sandbox.path("repo")).unwrap();
+    // when
+    let (stdout, stderr, code) = sandbox.run(&["launcher"]);
+    // then
+    assert_eq!((stdout.as_str(), code), ("", 1));
+    let source = repo.join("recog/native/macos/recog_launcher.swift");
+    assert!(stderr.starts_with(&format!("cannot read {}: ", source.display())), "{stderr}");
 }
 
 #[test]
