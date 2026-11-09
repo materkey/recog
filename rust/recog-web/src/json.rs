@@ -152,6 +152,19 @@ mod tests {
     }
 
     #[test]
+    fn control_characters_and_quotes_given_each_writer_when_dumped_then_python_escapes() {
+        let value = Value::from("q\"b\\n\nr\rt\tb\u{8}f\u{c}x\u{1}\u{1f} ~");
+        let escaped = r#""q\"b\\n\nr\rt\tb\bf\fx\u0001\u001f ~""#;
+
+        assert_eq!(ascii(&value), escaped);
+        assert_eq!(response(&value).unwrap(), escaped);
+        let keyed = object([("k\n", Value::from("é"))]);
+        // The escape is spelled in two pieces so that no editor turns it into the letter.
+        assert_eq!(ascii(&keyed), ["{\"k\\n\": \"", "\\", "u00e9\"}"].concat());
+        assert_eq!(response(&keyed).unwrap(), "{\"k\\n\":\"é\"}");
+    }
+
+    #[test]
     fn nan_given_response_writer_when_dumped_then_refused_like_allow_nan_false() {
         // given
         let value = pyjson::loads(r#"{"a": [NaN]}"#).unwrap();
