@@ -150,12 +150,7 @@ pub fn build_app(
     let _ = std::fs::remove_dir_all(&staging);
     let contents = staging.join("Contents");
     std::fs::create_dir_all(contents.join("MacOS")).map_err(|e| fail("cannot create the bundle", e))?;
-    let executable_name = info
-        .iter()
-        .find_map(|(key, value)| match (key, value) {
-            (&"CFBundleExecutable", PlistValue::String(name)) => Some(*name),
-            _ => None,
-        })
+    let executable_name = info_string(info, "CFBundleExecutable")
         .ok_or_else(|| BuildError("Info.plist names no CFBundleExecutable".into()))?;
     let executable = contents.join("MacOS").join(executable_name);
     let mut compile: Vec<OsString> =
@@ -167,13 +162,7 @@ pub fn build_app(
     // macOS recognizes the permission holder by its signature. "-" is an ad-hoc
     // signature, the hash of the bundle: it stays the same while the code does. A real
     // identity keeps the grant across code changes too.
-    let bundle_id = info
-        .iter()
-        .find_map(|(key, value)| match (key, value) {
-            (&"CFBundleIdentifier", PlistValue::String(id)) => Some(*id),
-            _ => None,
-        })
-        .unwrap_or_default();
+    let bundle_id = info_string(info, "CFBundleIdentifier").unwrap_or_default();
     let sign: Vec<OsString> = vec![
         "codesign".into(),
         "--force".into(),
@@ -184,18 +173,28 @@ pub fn build_app(
         staging.clone().into(),
     ];
     for command in [compile, sign] {
-        let tool = command[0].to_string_lossy().into_owned();
-        let outcome = toolchain.run(&command).map_err(|e| fail(&format!("cannot run {tool}"), e))?;
-        if !outcome.success {
-            return Err(BuildError(format!(
-                "Failed to build {} ({tool}): {}",
-                file_name(app),
-                py::strip(&outcome.stderr)
-            )));
-        }
+        run_build_step(toolchain, &command, app)?;
     }
     let _ = std::fs::remove_dir_all(app);
     std::fs::rename(&staging, app).map_err(|e| fail("cannot move the built bundle into place", e))
+}
+
+/// The text of a string entry `key` of `info`.
+fn info_string(info: &[(&str, PlistValue)], key: &str) -> Option<&'static str> {
+    info.iter().find_map(|(entry, value)| match value {
+        PlistValue::String(text) if *entry == key => Some(*text),
+        _ => None,
+    })
+}
+
+/// Run one step of building `app`; a failed step names its tool and what it said.
+fn run_build_step(toolchain: &impl Toolchain, command: &[OsString], app: &Path) -> Result<(), BuildError> {
+    let tool = command[0].to_string_lossy().into_owned();
+    let outcome = toolchain.run(command).map_err(|error| BuildError(format!("cannot run {tool}: {error}")))?;
+    if !outcome.success {
+        return Err(BuildError(format!("Failed to build {} ({tool}): {}", file_name(app), py::strip(&outcome.stderr))));
+    }
+    Ok(())
 }
 
 /// The application; `build(app, source)` runs when it is missing or its source changed.

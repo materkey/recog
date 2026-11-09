@@ -76,32 +76,49 @@ fn read_tiles(snapshot: &serde_json::Map<String, Value>, vocabulary: &Vocabulary
         Some(raws) => py::items(raws)?,
     };
     for raw in raws {
-        let fields = object(&raw)?;
-        let description = fields.get("description").cloned().unwrap_or_else(|| Value::from(""));
-        let Some(name) = tile::tile_name_value(&description, &buttons(fields)?)? else {
-            // Any other described tab group is not a tile; one that words a
-            // participant's state is a tile Zoom now names differently.
-            let words = tile::tokens(py::text(&description, "split")?);
-            let state_word = |word: &String| {
-                vocabulary.muted.contains(word)
-                    || vocabulary.unmuted.contains(word)
-                    || VIDEO_TOKENS.contains(&word.as_str())
-                    || word == ACTIVE_TOKEN
-            };
-            if words.iter().any(state_word) {
-                unread.push(raw.clone());
-            }
-            continue;
-        };
-        let description = py::text(&description, "startswith")?;
-        let parsed = tile::parse_tile(&name, description, vocabulary);
-        let merged = match tiles.iter().find(|(known, _)| *known == name) {
-            Some((_, known)) => merge(known, &parsed),
-            None => parsed,
-        };
-        upsert(&mut tiles, merged);
+        read_tile(&raw, vocabulary, &mut tiles, &mut unread)?;
     }
     Ok((tiles, unread))
+}
+
+/// One described tab group: a participant tile into `tiles`, or into `unread` when it
+/// words a participant's state but names nobody.
+fn read_tile(raw: &Value, vocabulary: &Vocabulary, tiles: &mut Tiles, unread: &mut Vec<Value>) -> PyResult<()> {
+    let fields = object(raw)?;
+    let description = fields.get("description").cloned().unwrap_or_else(|| Value::from(""));
+    let Some(name) = tile::tile_name_value(&description, &buttons(fields)?)? else {
+        // Any other described tab group is not a tile; one that words a
+        // participant's state is a tile Zoom now names differently.
+        if words_a_state(&description, vocabulary)? {
+            unread.push(raw.clone());
+        }
+        return Ok(());
+    };
+    let description = py::text(&description, "startswith")?;
+    add_tile(tiles, tile::parse_tile(&name, description, vocabulary));
+    Ok(())
+}
+
+/// Whether the description of a tab group that names nobody words a participant's
+/// state: a mute word, a video word or the speaker mark.
+fn words_a_state(description: &Value, vocabulary: &Vocabulary) -> PyResult<bool> {
+    let words = tile::tokens(py::text(description, "split")?);
+    let state_word = |word: &String| {
+        vocabulary.muted.contains(word)
+            || vocabulary.unmuted.contains(word)
+            || VIDEO_TOKENS.contains(&word.as_str())
+            || word == ACTIVE_TOKEN
+    };
+    Ok(words.iter().any(state_word))
+}
+
+/// Add a parsed tile, merged with a namesake already read from the same snapshot.
+fn add_tile(tiles: &mut Tiles, parsed: Tile) {
+    let merged = match tiles.iter().find(|(known, _)| *known == parsed.name) {
+        Some((_, known)) => merge(known, &parsed),
+        None => parsed,
+    };
+    upsert(tiles, merged);
 }
 
 /// Turns helper snapshots into bridge frames.
@@ -169,6 +186,19 @@ impl ZoomAppSession {
     /// The frames one snapshot calls for.
     pub fn frames(&mut self, snapshot: &Value, now: f64) -> PyResult<Vec<Frame>> {
         let snapshot = object(snapshot)?;
+        let menu = self.read_account_and_menu(snapshot)?;
+        self.state = get(snapshot, "state").cloned();
+        self.unread = Vec::new();
+        self.own_mic_unknown = menu && self.own_mic_muted.is_none();
+        if self.state.as_ref().and_then(Value::as_str) != Some("meeting") {
+            return Ok(self.leave_frames(now));
+        }
+        self.meeting_frames(snapshot, now)
+    }
+
+    /// The user's name and the meeting menu's word on their microphone; whether the
+    /// snapshot carried a menu bar.
+    fn read_account_and_menu(&mut self, snapshot: &serde_json::Map<String, Value>) -> PyResult<bool> {
         // Reported outside a meeting too; inside one the main window that carries
         // it is not always reachable.
         let menu = get(snapshot, "menu");
@@ -181,12 +211,11 @@ impl ZoomAppSession {
             self.menu_seen = true;
             self.own_mic_muted = tile::own_mic_muted_value(menu, &self.vocabulary)?;
         }
-        self.state = get(snapshot, "state").cloned();
-        self.unread = Vec::new();
-        self.own_mic_unknown = menu.is_some() && self.own_mic_muted.is_none();
-        if self.state.as_ref().and_then(Value::as_str) != Some("meeting") {
-            return Ok(self.leave_frames(now));
-        }
+        Ok(menu.is_some())
+    }
+
+    /// The frames of a snapshot the helper reports as a meeting.
+    fn meeting_frames(&mut self, snapshot: &serde_json::Map<String, Value>, now: f64) -> PyResult<Vec<Frame>> {
         let (tiles, unread) = read_tiles(snapshot, &self.vocabulary)?;
         self.unread = unread;
         let minimal = snapshot.get("view").and_then(Value::as_str) == Some("minimal");

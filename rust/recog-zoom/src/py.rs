@@ -158,23 +158,28 @@ fn str_repr(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
     let mut out = String::from(quote);
     for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                let _ = write!(out, "\\x{:02x}", c as u32);
-            }
-            c => out.push(c),
-        }
+        push_escaped(&mut out, c, quote);
     }
     out.push(quote);
     out
+}
+
+/// One character of `repr(str)` quoted with `quote`.
+fn push_escaped(out: &mut String, c: char, quote: char) {
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        c if c == quote => {
+            out.push('\\');
+            out.push(c);
+        }
+        c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+            let _ = write!(out, "\\x{:02x}", c as u32);
+        }
+        c => out.push(c),
+    }
 }
 
 fn repr(value: &Value) -> String {
