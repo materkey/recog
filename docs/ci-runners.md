@@ -48,7 +48,9 @@ The job adds clippy, rustfmt and llvm-tools-preview to the user's stable toolcha
 takes Python 3.12 from Homebrew (`/opt/homebrew/bin/python3.12`, `brew install
 python@3.12`) into a venv of its own: setup-python's macOS builds install only under
 `/Users/runner/hostedtoolcache`, which exists on hosted runners alone.
-A sleeping Mac leaves the macOS job queued (GitHub keeps a queued job for a day). The
+Both kinds of runner keep the workspace's build in `~/.cache/recog-ci/target` between
+jobs (a few GB; delete it to start clean) and update their stable Rust at the start
+of a job. A sleeping Mac leaves the macOS job queued (GitHub keeps a queued job for a day). The
 quality gate runs on Linux only (docs/quality.md), so the Mac builds the workspace
 once per job.
 
