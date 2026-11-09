@@ -22,25 +22,29 @@ pub const CACHE_CONTROL: &str = "no-cache";
 #[must_use]
 pub fn guess_type(path: &Path) -> &'static str {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
-    match ext.as_str() {
-        "js" | "mjs" => "text/javascript",
-        "css" => "text/css",
-        "html" | "htm" => "text/html",
-        "svg" => "image/svg+xml",
-        "json" => "application/json",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "ico" => "image/x-icon",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "ttf" => "font/ttf",
-        "wav" => "audio/x-wav",
-        "md" => "text/markdown",
-        _ => "text/plain",
-    }
+    MEDIA_TYPES.iter().find(|(known, _)| *known == ext).map_or("text/plain", |(_, media)| media)
 }
+
+const MEDIA_TYPES: [(&str, &str); 18] = [
+    ("js", "text/javascript"),
+    ("mjs", "text/javascript"),
+    ("css", "text/css"),
+    ("html", "text/html"),
+    ("htm", "text/html"),
+    ("svg", "image/svg+xml"),
+    ("json", "application/json"),
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("ico", "image/x-icon"),
+    ("woff", "font/woff"),
+    ("woff2", "font/woff2"),
+    ("ttf", "font/ttf"),
+    ("wav", "audio/x-wav"),
+    ("md", "text/markdown"),
+];
 
 /// The `Content-Type` of a media type: text types get `charset=utf-8`.
 #[must_use]
@@ -78,40 +82,34 @@ enum RangeError {
 }
 
 fn parse_ranges(range: &str, size: u64) -> Vec<(u64, u64)> {
-    let mut ranges = Vec::new();
-    for part in range.split(',') {
-        let part = part.trim();
-        if part.is_empty() || part == "-" || !part.contains('-') {
-            continue;
-        }
-        let (start, end) = part.split_once('-').unwrap_or_default();
-        let (start, end) = (start.trim(), end.trim());
-        let parse = |s: &str| -> Option<i128> { recog_core::py::parse_int(s).ok().map(i128::from) };
-        let size_i = i128::from(size);
-        let start_v = if start.is_empty() {
-            match parse(end) {
-                Some(e) => size_i - e,
-                None => continue,
-            }
-        } else {
-            match parse(start) {
-                Some(s) => s,
-                None => continue,
-            }
-        };
-        let end_v = if !start.is_empty() && !end.is_empty() {
-            match parse(end) {
-                Some(e) if e < size_i => e + 1,
-                Some(_) => size_i,
-                None => continue,
-            }
-        } else {
-            size_i
-        };
-        // Negative starts are kept for the satisfiability check below.
-        ranges.push((start_v, end_v));
+    // Negative starts are kept for the satisfiability check of the caller.
+    range
+        .split(',')
+        .filter_map(|part| parse_range(part.trim(), i128::from(size)))
+        .map(|(s, e)| (u64::try_from(s).unwrap_or(u64::MAX), u64::try_from(e).unwrap_or(0)))
+        .collect()
+}
+
+fn parse_int(s: &str) -> Option<i128> {
+    recog_core::py::parse_int(s).ok().map(i128::from)
+}
+
+/// One `start-end`, `start-` or `-suffix` range as a half-open interval; `None` for
+/// a part Starlette skips.
+fn parse_range(part: &str, size: i128) -> Option<(i128, i128)> {
+    if part.is_empty() || part == "-" {
+        return None;
     }
-    ranges.into_iter().map(|(s, e)| (u64::try_from(s).unwrap_or(u64::MAX), u64::try_from(e).unwrap_or(0))).collect()
+    let (start, end) = part.split_once('-')?;
+    let (start, end) = (start.trim(), end.trim());
+    if start.is_empty() {
+        return Some((size - parse_int(end)?, size));
+    }
+    let start = parse_int(start)?;
+    if end.is_empty() {
+        return Some((start, size));
+    }
+    Some((start, parse_int(end)?.saturating_add(1).min(size)))
 }
 
 fn parse_range_header(header: &str, size: u64) -> Result<Vec<(u64, u64)>, RangeError> {
@@ -195,77 +193,103 @@ pub fn serve(path: &Path, request: &HeaderMap, how: Serve) -> Option<Response> {
     set(&mut headers, header::LAST_MODIFIED, &stat.last_modified);
     set(&mut headers, header::ETAG, &stat.etag);
     let text = |name: header::HeaderName| request.get(name).and_then(|v| v.to_str().ok());
-    if how.conditional {
-        let not_modified = match text(header::IF_NONE_MATCH).filter(|v| !v.is_empty()) {
-            Some(tags) => {
-                tags.split(',').any(|tag| tag.trim_matches(|c| c == ' ' || c == 'W' || c == '/') == stat.etag)
-            }
-            None => text(header::IF_MODIFIED_SINCE).is_some_and(|since| not_modified_since(since, &stat.last_modified)),
-        };
-        if not_modified {
-            let mut response = Response::new(Body::empty());
-            *response.status_mut() = StatusCode::NOT_MODIFIED;
-            set(response.headers_mut(), header::ETAG, &stat.etag);
-            set(response.headers_mut(), header::CACHE_CONTROL, CACHE_CONTROL);
-            return Some(response);
-        }
-    }
-    let range = text(header::RANGE);
-    let if_range = text(header::IF_RANGE);
-    let use_range = match (range, if_range) {
-        (None, _) => false,
-        (Some(_), Some(tag)) => tag == stat.last_modified || tag == stat.etag,
-        (Some(_), None) => true,
-    };
-    let body_or_empty =
-        |data: std::io::Result<Vec<u8>>| if how.head { Body::empty() } else { Body::from(data.unwrap_or_default()) };
-    if !use_range {
-        let mut response = Response::new(body_or_empty(if how.head { Ok(Vec::new()) } else { std::fs::read(path) }));
-        *response.headers_mut() = headers;
+    if how.conditional && not_modified(text(header::IF_NONE_MATCH), text(header::IF_MODIFIED_SINCE), &stat) {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::NOT_MODIFIED;
+        set(response.headers_mut(), header::ETAG, &stat.etag);
+        set(response.headers_mut(), header::CACHE_CONTROL, CACHE_CONTROL);
         return Some(response);
     }
-    let ranges = match parse_range_header(range.unwrap_or_default(), stat.size) {
+    let Some(range) = text(header::RANGE).filter(|_| range_applies(text(header::IF_RANGE), &stat)) else {
+        let body = if how.head { Body::empty() } else { Body::from(std::fs::read(path).unwrap_or_default()) };
+        return Some(with_headers(Response::new(body), StatusCode::OK, headers));
+    };
+    let ranges = match parse_range_header(range, stat.size) {
         Ok(ranges) => ranges,
-        Err(RangeError::Malformed(message)) => {
-            return Some(responses::plain(StatusCode::BAD_REQUEST, message, &[]));
-        }
-        Err(RangeError::NotSatisfiable) => {
-            return Some(responses::plain(
-                StatusCode::RANGE_NOT_SATISFIABLE,
-                "",
-                &[(header::CONTENT_RANGE, format!("bytes */{}", stat.size))],
-            ));
-        }
+        Err(error) => return Some(range_error(error, stat.size)),
     };
-    if let [(start, end)] = ranges[..] {
-        set(&mut headers, header::CONTENT_RANGE, &format!("bytes {start}-{}/{}", end - 1, stat.size));
-        set(&mut headers, header::CONTENT_LENGTH, &(end - start).to_string());
-        let mut response = Response::new(body_or_empty(read_range(path, start, end)));
-        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
-        *response.headers_mut() = headers;
-        return Some(response);
+    let file = RangedFile { path, media: &media, size: stat.size, head: how.head };
+    Some(match ranges[..] {
+        [(start, end)] => file.single(start, end, headers),
+        _ => file.multipart(&ranges, headers),
+    })
+}
+
+/// `StaticFiles.is_not_modified`: a matching `If-None-Match` tag, else an
+/// `If-Modified-Since` not before `Last-Modified`.
+fn not_modified(if_none_match: Option<&str>, if_modified_since: Option<&str>, stat: &Stat) -> bool {
+    match if_none_match.filter(|v| !v.is_empty()) {
+        Some(tags) => tags.split(',').any(|tag| tag.trim_matches(|c| c == ' ' || c == 'W' || c == '/') == stat.etag),
+        None => if_modified_since.is_some_and(|since| not_modified_since(since, &stat.last_modified)),
     }
-    let boundary = uuid::Uuid::new_v4().simple().to_string()[..26].to_owned();
-    let mut body = Vec::new();
-    for (start, end) in &ranges {
-        body.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Type: {media}\r\nContent-Range: bytes {start}-{}/{}\r\n\r\n",
-                end - 1,
-                stat.size
-            )
-            .as_bytes(),
-        );
-        body.extend(read_range(path, *start, *end).unwrap_or_default());
-        body.extend_from_slice(b"\r\n");
+}
+
+/// Whether a `Range` is honoured: without `If-Range`, or when it names the current
+/// `Last-Modified` or ETag.
+fn range_applies(if_range: Option<&str>, stat: &Stat) -> bool {
+    if_range.is_none_or(|tag| tag == stat.last_modified || tag == stat.etag)
+}
+
+fn range_error(error: RangeError, size: u64) -> Response {
+    match error {
+        RangeError::Malformed(message) => responses::plain(StatusCode::BAD_REQUEST, message, &[]),
+        RangeError::NotSatisfiable => responses::plain(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "",
+            &[(header::CONTENT_RANGE, format!("bytes */{size}"))],
+        ),
     }
-    body.extend_from_slice(format!("--{boundary}--").as_bytes());
-    set(&mut headers, header::CONTENT_TYPE, &format!("multipart/byteranges; boundary={boundary}"));
-    set(&mut headers, header::CONTENT_LENGTH, &body.len().to_string());
-    let mut response = Response::new(if how.head { Body::empty() } else { Body::from(body) });
-    *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+}
+
+fn with_headers(mut response: Response, status: StatusCode, headers: HeaderMap) -> Response {
+    *response.status_mut() = status;
     *response.headers_mut() = headers;
-    Some(response)
+    response
+}
+
+/// A file answered with byte ranges.
+struct RangedFile<'a> {
+    path: &'a Path,
+    media: &'a str,
+    size: u64,
+    head: bool,
+}
+
+impl RangedFile<'_> {
+    fn body(&self, data: Vec<u8>) -> Body {
+        if self.head { Body::empty() } else { Body::from(data) }
+    }
+
+    /// One range: `206` with its `Content-Range`.
+    fn single(&self, start: u64, end: u64, mut headers: HeaderMap) -> Response {
+        set(&mut headers, header::CONTENT_RANGE, &format!("bytes {start}-{}/{}", end - 1, self.size));
+        set(&mut headers, header::CONTENT_LENGTH, &(end - start).to_string());
+        let body = self.body(read_range(self.path, start, end).unwrap_or_default());
+        with_headers(Response::new(body), StatusCode::PARTIAL_CONTENT, headers)
+    }
+
+    /// Several ranges: `206` with a `multipart/byteranges` body.
+    fn multipart(&self, ranges: &[(u64, u64)], mut headers: HeaderMap) -> Response {
+        let boundary = uuid::Uuid::new_v4().simple().to_string()[..26].to_owned();
+        let mut body = Vec::new();
+        for (start, end) in ranges {
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Type: {}\r\nContent-Range: bytes {start}-{}/{}\r\n\r\n",
+                    self.media,
+                    end - 1,
+                    self.size
+                )
+                .as_bytes(),
+            );
+            body.extend(read_range(self.path, *start, *end).unwrap_or_default());
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--").as_bytes());
+        set(&mut headers, header::CONTENT_TYPE, &format!("multipart/byteranges; boundary={boundary}"));
+        set(&mut headers, header::CONTENT_LENGTH, &body.len().to_string());
+        with_headers(Response::new(self.body(body)), StatusCode::PARTIAL_CONTENT, headers)
+    }
 }
 
 /// `StaticFiles.lookup_path`: the file under `directory`, or `None` for anything that
