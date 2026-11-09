@@ -278,6 +278,25 @@ mod tests {
     }
 
     #[test]
+    fn bracketed_hosts_when_split_then_ipvfuture_and_misplaced_brackets_checked_as_python() {
+        // given / when / then
+        assert!(urlsplit("https://[v1.x]/r").is_ok());
+        assert!(urlsplit("https://user@[vA.b:c]:80").is_ok());
+        for (url, message) in [
+            ("https://[v1]", "IPvFuture address is invalid"),
+            ("https://[vz.x]", "IPvFuture address is invalid"),
+            ("https://[v.x]", "IPvFuture address is invalid"),
+            ("https://[v1.]", "IPvFuture address is invalid"),
+            ("https://a[::1]", "Invalid IPv6 URL"),
+            ("https://[x@h]", "'h]' does not appear to be an IPv4 or IPv6 address"),
+            ("https://[]", "'' does not appear to be an IPv4 or IPv6 address"),
+            ("https://[::1%]", "'::1%' does not appear to be an IPv4 or IPv6 address"),
+        ] {
+            assert_eq!(urlsplit(url).unwrap_err(), message, "{url}");
+        }
+    }
+
+    #[test]
     fn urlparse_moves_the_last_segment_params_out_of_the_path() {
         // given / when
         let (split, params) = urlparse("https://h/a;x/b;y;z").unwrap();
