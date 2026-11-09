@@ -74,7 +74,30 @@ fn string(form: &FormData, name: &str, errors: &mut Vec<Value>) -> Option<String
 /// Every validation error, in FastAPI's order.
 pub fn transcription(form: &FormData, default_model: &str) -> Result<Transcription, Vec<Value>> {
     let mut errors = Vec::new();
-    let file = match value(form, "file") {
+    let file = file(form, &mut errors);
+    let model = string(form, "model", &mut errors);
+    let language = string(form, "language", &mut errors);
+    let response_format = string(form, "response_format", &mut errors);
+    let prompt = string(form, "prompt", &mut errors);
+    let temperature = number(form, "temperature", &mut errors);
+    let timestamp_granularities = string(form, "timestamp_granularities", &mut errors);
+    match file {
+        Some(file) if errors.is_empty() => Ok(Transcription {
+            file,
+            model: model.unwrap_or_else(|| default_model.to_owned()),
+            language,
+            response_format: response_format.unwrap_or_else(|| "json".to_owned()),
+            prompt,
+            temperature,
+            timestamp_granularities,
+        }),
+        _ => Err(errors),
+    }
+}
+
+/// `file: UploadFile = File(...)`.
+fn file(form: &FormData, errors: &mut Vec<Value>) -> Option<UploadFile> {
+    match value(form, "file") {
         None => {
             errors.push(missing("file"));
             None
@@ -90,47 +113,34 @@ pub fn transcription(form: &FormData, default_model: &str) -> Result<Transcripti
             None
         }
         Some(FormValue::File(file)) => Some(file.clone()),
-    };
-    let model = string(form, "model", &mut errors);
-    let language = string(form, "language", &mut errors);
-    let response_format = string(form, "response_format", &mut errors);
-    let prompt = string(form, "prompt", &mut errors);
-    let temperature = match value(form, "temperature") {
+    }
+}
+
+/// An optional `float` form field.
+fn number(form: &FormData, name: &str, errors: &mut Vec<Value>) -> Option<f64> {
+    match value(form, name) {
         None => None,
-        Some(FormValue::Text(t)) => match py::parse_float(t) {
-            Ok(x) => Some(x),
-            Err(_) => {
+        Some(FormValue::Text(t)) => {
+            let parsed = py::parse_float(t).ok();
+            if parsed.is_none() {
                 errors.push(object([
                     ("type", Value::from("float_parsing")),
-                    ("loc", loc("temperature")),
+                    ("loc", loc(name)),
                     ("msg", Value::from("Input should be a valid number, unable to parse string as a number")),
                     ("input", Value::from(t.as_str())),
                 ]));
-                None
             }
-        },
+            parsed
+        }
         Some(FormValue::File(file)) => {
             errors.push(object([
                 ("type", Value::from("float_type")),
-                ("loc", loc("temperature")),
+                ("loc", loc(name)),
                 ("msg", Value::from("Input should be a valid number")),
                 ("input", upload_input(file)),
             ]));
             None
         }
-    };
-    let timestamp_granularities = string(form, "timestamp_granularities", &mut errors);
-    match file {
-        Some(file) if errors.is_empty() => Ok(Transcription {
-            file,
-            model: model.unwrap_or_else(|| default_model.to_owned()),
-            language,
-            response_format: response_format.unwrap_or_else(|| "json".to_owned()),
-            prompt,
-            temperature,
-            timestamp_granularities,
-        }),
-        _ => Err(errors),
     }
 }
 
