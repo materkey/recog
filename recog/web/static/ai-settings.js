@@ -112,38 +112,46 @@
         el('enabled-row').hidden = task?.id !== 'copilot';
         el('enabled').checked = task?.enabled !== false;
         el('provenance').textContent = task?.customized ? 'Сценарий настроен вручную.' : 'Сценарий использует настройки по умолчанию.';
-        el('placeholders').textContent = task?.placeholders?.length
-            ? 'Подстановки: ' + task.placeholders.map((name) => '{' + name + '}').join(', ')
-                + '. Обязательные: ' + (task.required_placeholders || []).map((name) => '{' + name + '}').join(', ') + '.'
-            : 'Текст инструкций передаётся буквально, без подстановок.';
+        el('placeholders').textContent = placeholdersText(task);
         el('timing').textContent = timing(task);
         if (!task) return;
         for (const provider of task.allowed_providers) {
-            if (!PROVIDERS[provider]) continue;
-            const label = document.createElement('label');
-            const input = document.createElement('input');
-            input.type = task.multiple ? 'checkbox' : 'radio';
-            input.name = 'ai-settings-provider';
-            input.value = provider;
-            input.checked = task.providers.includes(provider);
-            input.addEventListener('change', () => {
-                markDirty('task');
-                updateReasoning();
-            });
-            const name = document.createElement('span');
-            name.textContent = PROVIDERS[provider];
-            label.append(input, name);
-            el('providers').append(label);
-            providerInputs.set(provider, input);
-            const field = modelField(provider, 'model', () => markDirty('task'));
-            field.input.value = task.model_overrides?.[provider] || '';
-            modelInputs.set(provider, field.input);
-            el('task-models').append(field.label);
+            if (PROVIDERS[provider]) addProviderChoice(task, provider);
         }
         updateModelHints();
         el('reasoning').value = task.reasoning_effort;
         el('claude-effort').value = task.claude_effort || '';
         updateReasoning();
+    }
+
+    function placeholdersText(task) {
+        return task?.placeholders?.length
+            ? 'Подстановки: ' + task.placeholders.map((name) => '{' + name + '}').join(', ')
+                + '. Обязательные: ' + (task.required_placeholders || []).map((name) => '{' + name + '}').join(', ') + '.'
+            : 'Текст инструкций передаётся буквально, без подстановок.';
+    }
+
+    // The provider's checkbox (or radio) and its scenario model field.
+    function addProviderChoice(task, provider) {
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = task.multiple ? 'checkbox' : 'radio';
+        input.name = 'ai-settings-provider';
+        input.value = provider;
+        input.checked = task.providers.includes(provider);
+        input.addEventListener('change', () => {
+            markDirty('task');
+            updateReasoning();
+        });
+        const name = document.createElement('span');
+        name.textContent = PROVIDERS[provider];
+        label.append(input, name);
+        el('providers').append(label);
+        providerInputs.set(provider, input);
+        const field = modelField(provider, 'model', () => markDirty('task'));
+        field.input.value = task.model_overrides?.[provider] || '';
+        modelInputs.set(provider, field.input);
+        el('task-models').append(field.label);
     }
 
     function updateReasoning() {
@@ -217,8 +225,7 @@
         try {
             const data = await request();
             if (current !== generation || !el('dialog').open) return;
-            if (dirty() && snapshot && (data.revision !== snapshot.revision
-                    || (taskDirty && !data.tasks.some((task) => task.id === selectedId)))) {
+            if (draftConflicts(data)) {
                 setConflict();
                 return;
             }
@@ -227,10 +234,20 @@
         } catch (failure) {
             if (current === generation) reportFailure(failure);
         } finally {
-            if (current === generation) {
-                busy = false;
-                controls();
-            }
+            finishRefresh(current);
+        }
+    }
+
+    // A draft was made on another revision, or its scenario no longer exists.
+    function draftConflicts(data) {
+        return dirty() && snapshot && (data.revision !== snapshot.revision
+            || (taskDirty && !data.tasks.some((task) => task.id === selectedId)));
+    }
+
+    function finishRefresh(current) {
+        if (current === generation) {
+            busy = false;
+            controls();
         }
     }
 
@@ -286,36 +303,9 @@
 
     async function save(kind) {
         if (busy || conflict || !snapshot) return;
-        let path, method = 'PUT', body;
-        if (kind === 'models') {
-            path = '/models';
-            body = { models: Object.fromEntries([...globalInputs].map(([key, input]) => [key, input.value.trim()])), revision: snapshot.revision };
-        } else {
-            if (!selectedTask()) return;
-            path = '/tasks/' + encodeURIComponent(selectedId);
-            if (kind === 'reset') {
-                if (!window.confirm('Сбросить промпт, провайдеры и модели выбранного сценария к настройкам по умолчанию? Несохранённые изменения сценария будут потеряны.')) return;
-                method = 'DELETE';
-                path += '?revision=' + encodeURIComponent(snapshot.revision);
-            } else {
-                const providers = [...providerInputs]
-                    .filter(([, input]) => input.checked)
-                    .map(([key]) => key);
-                if (!providers.length) { error('Выберите хотя бы одного провайдера.'); return; }
-                body = {
-                    prompt: el('prompt').value, providers,
-                    models: Object.fromEntries([...modelInputs].map(([key, input]) => [key, input.value.trim()])),
-                    revision: snapshot.revision,
-                };
-                if (selectedId === 'copilot') body.enabled = el('enabled').checked;
-                if (selectedTask().allowed_providers.includes('codex')) {
-                    body.reasoning_effort = el('reasoning').value;
-                }
-                if (selectedTask().allowed_providers.includes('claude')) {
-                    body.claude_effort = el('claude-effort').value;
-                }
-            }
-        }
+        const target = saveTarget(kind);
+        if (!target) return;
+        const { path, method, body } = target;
         busy = true;
         controls();
         error();
@@ -326,14 +316,54 @@
             if (kind === 'models') globalDirty = false;
             else taskDirty = false;
             render(data, { preserveGlobals: globalDirty, preserveTask: taskDirty });
-            el('status').textContent = kind === 'models' ? 'Общие модели сохранены. Новые запросы используют эти модели, Copilot — новая сессия.'
-                : (kind === 'reset' ? 'Настройки сценария сброшены.' : 'Настройки сценария сохранены.');
+            el('status').textContent = savedStatus(kind);
         } catch (failure) {
             reportFailure(failure);
         } finally {
             busy = false;
             controls();
         }
+    }
+
+    // The request a Save or Reset makes; null when it must not be made.
+    function saveTarget(kind) {
+        if (kind === 'models') {
+            const body = { models: Object.fromEntries([...globalInputs].map(([key, input]) => [key, input.value.trim()])), revision: snapshot.revision };
+            return { path: '/models', method: 'PUT', body };
+        }
+        if (!selectedTask()) return null;
+        const path = '/tasks/' + encodeURIComponent(selectedId);
+        if (kind === 'reset') {
+            if (!window.confirm('Сбросить промпт, провайдеры и модели выбранного сценария к настройкам по умолчанию? Несохранённые изменения сценария будут потеряны.')) return null;
+            return { path: path + '?revision=' + encodeURIComponent(snapshot.revision), method: 'DELETE', body: undefined };
+        }
+        const body = taskSaveBody();
+        return body ? { path, method: 'PUT', body } : null;
+    }
+
+    function taskSaveBody() {
+        const providers = [...providerInputs]
+            .filter(([, input]) => input.checked)
+            .map(([key]) => key);
+        if (!providers.length) { error('Выберите хотя бы одного провайдера.'); return null; }
+        const body = {
+            prompt: el('prompt').value, providers,
+            models: Object.fromEntries([...modelInputs].map(([key, input]) => [key, input.value.trim()])),
+            revision: snapshot.revision,
+        };
+        if (selectedId === 'copilot') body.enabled = el('enabled').checked;
+        if (selectedTask().allowed_providers.includes('codex')) {
+            body.reasoning_effort = el('reasoning').value;
+        }
+        if (selectedTask().allowed_providers.includes('claude')) {
+            body.claude_effort = el('claude-effort').value;
+        }
+        return body;
+    }
+
+    function savedStatus(kind) {
+        return kind === 'models' ? 'Общие модели сохранены. Новые запросы используют эти модели, Copilot — новая сессия.'
+            : (kind === 'reset' ? 'Настройки сценария сброшены.' : 'Настройки сценария сохранены.');
     }
 
     document.addEventListener('DOMContentLoaded', () => {
