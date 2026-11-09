@@ -41,30 +41,11 @@ fn meta_path(meta: &Map, track: &str) -> Result<Option<PathBuf>, Response> {
 
 /// Which file holds the segment's audio, or the 400 Python raises.
 fn audio_file(meta: &Map, meeting_path: &Path, track: &str) -> Result<PathBuf, Response> {
-    let side = |track: &str| match track {
-        "mic" => Some(meeting_path.join("audio_me.m4a")),
-        "system" => Some(meeting_path.join("audio_them.m4a")),
-        _ => None,
-    };
-    if let Some(path) = meta_path(meta, track)? {
-        return Ok(path);
-    }
-    let folder = meeting_path.join(format!("audio_{track}.wav"));
-    if folder.exists() {
-        return Ok(folder);
-    }
-    if let Some(path) = side(track).filter(|p| p.exists()) {
+    if let Some(path) = track_file(meta, meeting_path, track)? {
         return Ok(path);
     }
     let fallback = if track == "mic" { "system" } else { "mic" };
-    if let Some(path) = meta_path(meta, fallback)? {
-        return Ok(path);
-    }
-    let folder = meeting_path.join(format!("audio_{fallback}.wav"));
-    if folder.exists() {
-        return Ok(folder);
-    }
-    if let Some(path) = side(fallback).filter(|p| p.exists()) {
+    if let Some(path) = track_file(meta, meeting_path, fallback)? {
         return Ok(path);
     }
     let mix = meeting_path.join("audio_mix.m4a");
@@ -79,13 +60,31 @@ fn audio_file(meta: &Map, meeting_path: &Path, track: &str) -> Result<PathBuf, R
     }))
 }
 
+/// One track's file: the path in the metadata, the live WAV, or the phone call's
+/// file of that side.
+fn track_file(meta: &Map, meeting_path: &Path, track: &str) -> Result<Option<PathBuf>, Response> {
+    if let Some(path) = meta_path(meta, track)? {
+        return Ok(Some(path));
+    }
+    let folder = meeting_path.join(format!("audio_{track}.wav"));
+    if folder.exists() {
+        return Ok(Some(folder));
+    }
+    let side = match track {
+        "mic" => Some(meeting_path.join("audio_me.m4a")),
+        "system" => Some(meeting_path.join("audio_them.m4a")),
+        _ => None,
+    };
+    Ok(side.filter(|p| p.exists()))
+}
+
 /// `str(x / 1000)` of a millisecond value.
 fn seconds(ms: f64) -> String {
     float_repr(ms / 1000.0)
 }
 
-/// The route.
-pub async fn segment_audio(state: &Arc<AppState>, req: &Req) -> Reply {
+/// The segment index and the track parameter, or the 422.
+fn audio_params(req: &Req) -> Result<(Option<Value>, Option<Value>), Response> {
     let mut errors = Vec::new();
     let index = validation::validate_param(
         "path",
@@ -99,7 +98,11 @@ pub async fn segment_audio(state: &Arc<AppState>, req: &Req) -> Reply {
     if !errors.is_empty() {
         return Err(responses::invalid(&errors));
     }
-    let meeting_id = req.param("meeting_id");
+    Ok((index, track))
+}
+
+/// The meeting's metadata and rows, or the 400 of a path-like ID and the 404.
+fn stored_meeting(state: &AppState, meeting_id: &str) -> Result<(Map, Vec<Value>), Response> {
     if invalid_id(meeting_id) {
         return Err(bad_request("Invalid meeting ID"));
     }
@@ -115,40 +118,48 @@ pub async fn segment_audio(state: &Arc<AppState>, req: &Req) -> Reply {
         Some(Value::Array(rows)) => rows.clone(),
         _ => Vec::new(),
     };
-    let meeting_path = state.config.meetings_dir.join(meeting_id);
-    let index = match index {
-        Some(Value::Int(n)) if n >= 0 && usize::try_from(n).is_ok_and(|n| n < segments.len()) => {
-            usize::try_from(n).unwrap_or(0)
+    Ok((meta, segments))
+}
+
+/// The index of an existing row, or the 400.
+fn segment_index(index: Option<Value>, count: usize) -> Result<usize, Response> {
+    match index {
+        Some(Value::Int(n)) if n >= 0 && usize::try_from(n).is_ok_and(|n| n < count) => {
+            Ok(usize::try_from(n).unwrap_or(0))
         }
-        _ => return Err(bad_request("Invalid segment index")),
-    };
-    let segment = segments[index].as_object().cloned().unwrap_or_default();
-    let offset = match segment.get("audio_offset_ms") {
-        None | Some(Value::Null) => {
-            return Err(bad_request("Segment has no audio data (recorded before audio feature)"));
-        }
-        Some(Value::Int(n)) => *n as f64,
-        Some(Value::Float(x)) => *x,
-        Some(Value::Bool(b)) => f64::from(u8::from(*b)),
-        Some(_) => return Err(responses::internal_error()),
-    };
-    let track = match track {
+        _ => Err(bad_request("Invalid segment index")),
+    }
+}
+
+/// The segment's offset in its file, or the 400 of a segment recorded without one.
+fn segment_offset(segment: &Map) -> Result<f64, Response> {
+    match segment.get("audio_offset_ms") {
+        None | Some(Value::Null) => Err(bad_request("Segment has no audio data (recorded before audio feature)")),
+        Some(Value::Int(n)) => Ok(*n as f64),
+        Some(Value::Float(x)) => Ok(*x),
+        Some(Value::Bool(b)) => Ok(f64::from(u8::from(*b))),
+        Some(_) => Err(responses::internal_error()),
+    }
+}
+
+/// The named track, else the speaker's side.
+fn chosen_track(track: Option<Value>, segment: &Map) -> String {
+    match track {
         Some(track) => track.py_str(),
         None if segment.get("is_local").is_some_and(Value::truthy) => "mic".to_owned(),
         None => "system".to_owned(),
-    };
-    let audio_path = audio_file(&meta, &meeting_path, &track)?;
-    if !audio_path.exists() {
-        return Err(bad_request("Audio file not found (may have been cleaned up)"));
     }
-    let shared = audio_path.file_name().and_then(|n| n.to_str()) == Some("audio_mix.m4a");
-    let duration = compute_segment_duration_ms(&segments, index, shared);
+}
+
+/// The slice cut by ffmpeg into a 16 kHz mono WAV, or the 500 with the head of its
+/// error.
+async fn extract(ffmpeg: &std::ffi::OsStr, audio_path: &Path, offset: f64, duration: f64) -> Result<Vec<u8>, Response> {
     let temp = tempfile::Builder::new().suffix(".wav").tempfile().map_err(|_| responses::internal_error())?;
     let temp_path = temp.path().to_path_buf();
-    let output = tokio::process::Command::new(&state.config.ffmpeg)
+    let output = tokio::process::Command::new(ffmpeg)
         .arg("-y")
         .arg("-i")
-        .arg(&audio_path)
+        .arg(audio_path)
         .args(["-ss", &seconds(offset), "-t", &seconds(duration), "-ar", "16000", "-ac", "1"])
         .arg(&temp_path)
         .stdin(std::process::Stdio::null())
@@ -162,6 +173,25 @@ pub async fn segment_audio(state: &Arc<AppState>, req: &Req) -> Reply {
     }
     let data = std::fs::read(&temp_path).map_err(|_| responses::internal_error())?;
     drop(temp);
+    Ok(data)
+}
+
+/// The route.
+pub async fn segment_audio(state: &Arc<AppState>, req: &Req) -> Reply {
+    let (index, track) = audio_params(req)?;
+    let meeting_id = req.param("meeting_id");
+    let (meta, segments) = stored_meeting(state, meeting_id)?;
+    let meeting_path = state.config.meetings_dir.join(meeting_id);
+    let index = segment_index(index, segments.len())?;
+    let segment = segments[index].as_object().cloned().unwrap_or_default();
+    let offset = segment_offset(&segment)?;
+    let audio_path = audio_file(&meta, &meeting_path, &chosen_track(track, &segment))?;
+    if !audio_path.exists() {
+        return Err(bad_request("Audio file not found (may have been cleaned up)"));
+    }
+    let shared = audio_path.file_name().and_then(|n| n.to_str()) == Some("audio_mix.m4a");
+    let duration = compute_segment_duration_ms(&segments, index, shared);
+    let data = extract(&state.config.ffmpeg, &audio_path, offset, duration).await?;
     let length = data.len();
     let mut response = Response::new(Body::from(data));
     let headers = response.headers_mut();
