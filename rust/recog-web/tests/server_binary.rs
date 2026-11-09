@@ -10,9 +10,12 @@ use std::time::{Duration, Instant};
 /// dead port: nothing of the installation is read.
 fn command(dir: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_recog-web"));
+    command.args(args).env_clear();
+    // A coverage run collects the binary's profile through this variable.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     command
-        .args(args)
-        .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", dir)
         .env("RECOG_DATA_DIR", dir.join("data"))
