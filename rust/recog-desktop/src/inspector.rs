@@ -79,6 +79,66 @@ fn dechunk(raw: &[u8]) -> Result<Option<Vec<u8>>, Failure> {
     }
 }
 
+/// The status and body of the response, read until it is whole.
+async fn read_response(stream: &mut TcpStream) -> Result<(u16, Vec<u8>), Failure> {
+    let mut raw = Vec::new();
+    loop {
+        let mut buffer = [0u8; 8192];
+        let n = with_timeout(stream.read(&mut buffer)).await?;
+        raw.extend_from_slice(&buffer[..n]);
+        if let Some(response) = parse_response(&raw, n == 0)? {
+            return Ok(response);
+        }
+    }
+}
+
+/// The status and body once `raw` holds a whole response, None while more is to
+/// come (`closed`: the peer has sent everything it will).
+fn parse_response(raw: &[u8], closed: bool) -> Result<Option<(u16, Vec<u8>)>, Failure> {
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut response = httparse::Response::new(&mut headers);
+    let httparse::Status::Complete(head) = response.parse(raw).map_err(other)? else {
+        return if closed { Err(other("server disconnected without sending a response")) } else { Ok(None) };
+    };
+    let body = response_body(response.headers, &raw[head..], closed)?;
+    Ok(body.map(|body| (response.code.unwrap_or(0), body)))
+}
+
+fn header_value(headers: &[httparse::Header<'_>], name: &str) -> Option<String> {
+    headers.iter().find(|h| h.name.eq_ignore_ascii_case(name)).map(|h| String::from_utf8_lossy(h.value).into_owned())
+}
+
+/// The body as the headers frame it: chunked, sized, or until the peer closes.
+fn response_body(headers: &[httparse::Header<'_>], body: &[u8], closed: bool) -> Result<Option<Vec<u8>>, Failure> {
+    if header_value(headers, "transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
+        return chunked_body(body, closed);
+    }
+    match header_value(headers, "content-length") {
+        Some(length) => sized_body(body, &length, closed),
+        None => Ok((closed || body.len() > BODY_LIMIT).then(|| body.to_vec())),
+    }
+}
+
+fn chunked_body(body: &[u8], closed: bool) -> Result<Option<Vec<u8>>, Failure> {
+    match dechunk(body)? {
+        Some(body) => Ok(Some(body)),
+        None if closed => Err(other("incomplete chunked read")),
+        None => Ok(None),
+    }
+}
+
+/// The `Content-Length` bytes, or as many as arrived past the size limit.
+fn sized_body(body: &[u8], length: &str, closed: bool) -> Result<Option<Vec<u8>>, Failure> {
+    let length: usize = length.trim().parse().map_err(|_| other("invalid content-length"))?;
+    if body.len() >= length || body.len() > BODY_LIMIT {
+        return Ok(Some(body[..length.min(body.len())].to_vec()));
+    }
+    if closed {
+        return Err(other("peer closed connection without sending complete message body"));
+    }
+    Ok(None)
+}
+
 /// `GET http://127.0.0.1:<port>/json/list`, its status checked
 /// (`raise_for_status`), its size bounded and its body decoded as JSON.
 ///
@@ -91,50 +151,7 @@ pub async fn json_list(port: u16) -> Result<Value, Failure> {
          User-Agent: recog-desktop\r\n\r\n"
     );
     with_timeout(stream.write_all(request.as_bytes())).await?;
-    let mut raw = Vec::new();
-    let (status, body) = loop {
-        let mut buffer = [0u8; 8192];
-        let n = with_timeout(stream.read(&mut buffer)).await?;
-        raw.extend_from_slice(&buffer[..n]);
-        let mut headers = [httparse::EMPTY_HEADER; 64];
-        let mut response = httparse::Response::new(&mut headers);
-        let parsed = response.parse(&raw).map_err(other)?;
-        let httparse::Status::Complete(head) = parsed else {
-            if n == 0 {
-                return Err(other("server disconnected without sending a response"));
-            }
-            continue;
-        };
-        let status = response.code.unwrap_or(0);
-        let header = |name: &str| {
-            response
-                .headers
-                .iter()
-                .find(|h| h.name.eq_ignore_ascii_case(name))
-                .map(|h| String::from_utf8_lossy(h.value).into_owned())
-        };
-        let body = &raw[head..];
-        if header("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
-            match dechunk(body)? {
-                Some(body) => break (status, body),
-                None if n == 0 => return Err(other("incomplete chunked read")),
-                None => continue,
-            }
-        }
-        if let Some(length) = header("content-length") {
-            let length: usize = length.trim().parse().map_err(|_| other("invalid content-length"))?;
-            if body.len() >= length || body.len() > BODY_LIMIT {
-                break (status, body[..length.min(body.len())].to_vec());
-            }
-            if n == 0 {
-                return Err(other("peer closed connection without sending complete message body"));
-            }
-            continue;
-        }
-        if n == 0 || body.len() > BODY_LIMIT {
-            break (status, body.to_vec());
-        }
-    };
+    let (status, body) = read_response(&mut stream).await?;
     if !(200..300).contains(&status) {
         return Err(other(format!("HTTPStatusError: {status}")));
     }
@@ -187,39 +204,8 @@ fn read_reply(reply: &Value) -> Result<Option<Value>, Failure> {
 /// `inspector_evaluation_failed` for an error reply or a thrown exception, `Timeout`
 /// when the WebSocket does not open within a second, `Other` otherwise.
 pub async fn evaluate(url: &str, expression: &str) -> Result<Value, Failure> {
-    let mut config = WebSocketConfig::default();
-    config.max_message_size = Some(131_072);
-    config.max_frame_size = Some(131_072);
-    let opened =
-        tokio::time::timeout(IO_TIMEOUT, tokio_tungstenite::connect_async_with_config(url, Some(config), false)).await;
-    let (mut socket, _) = match opened {
-        Err(_) => return Err(Failure::Timeout),
-        Ok(Err(e)) => return Err(other(e)),
-        Ok(Ok(pair)) => pair,
-    };
-    let outcome = async {
-        socket.send(Message::text(evaluate_frame(expression))).await.map_err(other)?;
-        loop {
-            let message = match socket.next().await {
-                None => return Err(other("ConnectionClosed")),
-                Some(Err(e)) => return Err(other(e)),
-                Some(Ok(message)) => message,
-            };
-            let reply = match &message {
-                Message::Text(text) => py::loads_text(text.as_bytes()),
-                Message::Binary(bytes) => {
-                    recog_core::pyjson::loads_bytes(bytes).map_err(|e| PyErr::new("JSONDecodeError", e.0))
-                }
-                Message::Close(_) => return Err(other("ConnectionClosed")),
-                _ => continue,
-            };
-            let reply = reply.map_err(|e| other(e.described()))?;
-            if let Some(value) = read_reply(&reply)? {
-                return Ok(value);
-            }
-        }
-    }
-    .await;
+    let mut socket = open_socket(url).await?;
+    let outcome = converse(&mut socket, expression).await;
     // The closing handshake waits for the peer at most a second (close_timeout=1).
     let _ = tokio::time::timeout(IO_TIMEOUT, async {
         if socket.close(None).await.is_ok() {
@@ -228,6 +214,57 @@ pub async fn evaluate(url: &str, expression: &str) -> Result<Value, Failure> {
     })
     .await;
     outcome
+}
+
+type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+
+/// The WebSocket, opened within a second, messages bounded as websockets bounds
+/// them.
+async fn open_socket(url: &str) -> Result<Socket, Failure> {
+    let mut config = WebSocketConfig::default();
+    config.max_message_size = Some(131_072);
+    config.max_frame_size = Some(131_072);
+    let opened =
+        tokio::time::timeout(IO_TIMEOUT, tokio_tungstenite::connect_async_with_config(url, Some(config), false)).await;
+    match opened {
+        Err(_) => Err(Failure::Timeout),
+        Ok(Err(e)) => Err(other(e)),
+        Ok(Ok((socket, _))) => Ok(socket),
+    }
+}
+
+/// The evaluation sent, then the replies read until ours.
+async fn converse(socket: &mut Socket, expression: &str) -> Result<Value, Failure> {
+    socket.send(Message::text(evaluate_frame(expression))).await.map_err(other)?;
+    loop {
+        let message = next_message(socket).await?;
+        if let Some(reply) = decode_message(&message)?
+            && let Some(value) = read_reply(&reply)?
+        {
+            return Ok(value);
+        }
+    }
+}
+
+async fn next_message(socket: &mut Socket) -> Result<Message, Failure> {
+    match socket.next().await {
+        None => Err(other("ConnectionClosed")),
+        Some(Err(e)) => Err(other(e)),
+        Some(Ok(message)) => Ok(message),
+    }
+}
+
+/// A data frame's JSON; None for a control frame, which is skipped.
+fn decode_message(message: &Message) -> Result<Option<Value>, Failure> {
+    let reply = match message {
+        Message::Text(text) => py::loads_text(text.as_bytes()),
+        Message::Binary(bytes) => {
+            recog_core::pyjson::loads_bytes(bytes).map_err(|e| PyErr::new("JSONDecodeError", e.0))
+        }
+        Message::Close(_) => return Err(other("ConnectionClosed")),
+        _ => return Ok(None),
+    };
+    reply.map(Some).map_err(|e| other(e.described()))
 }
 
 #[cfg(test)]
