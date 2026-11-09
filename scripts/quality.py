@@ -85,6 +85,18 @@ def listed_files(root, *patterns):
     return sorted({name for name in names.split("\0") if name and (root / name).is_file()})
 
 
+def moved_files(tree, base, *, staged=False):
+    """{a file's name at `base`: its name in `tree`} for the files git reads as moved.
+
+    The index of `tree` is compared when `staged`, else its working files that git tracks.
+    """
+    arguments = ["diff", "--name-status", "-z", "-M", "-l0", "--diff-filter=R"]
+    if staged:
+        arguments.append("--cached")
+    fields = git(tree, *arguments, base).split("\0")
+    return {fields[index + 1]: fields[index + 2] for index in range(0, len(fields) - 2, 3)}
+
+
 def python_files(root):
     return listed_files(root, "*.py")
 
@@ -362,6 +374,23 @@ def structural(root, sources, rust, javascript):
     }
 
 
+def named_as_in_head(measured, moved):
+    """The baseline's measurement with its moved files under the head's names, so that
+    their functions and duplicate pairs are compared as the same ones."""
+
+    def name(path):
+        return moved.get(path, path)
+
+    for row in measured["functions"]:
+        row["path"] = name(row["path"])
+    for pair in measured["duplicates"]:
+        for function in pair["functions"]:
+            function["path"] = name(function["path"])
+    unbuilt = (item.partition("::") for item in measured["unbuilt"])
+    measured["unbuilt"] = [f"{name(path)}::{key}" for path, _, key in unbuilt]
+    return measured
+
+
 def scb(sources):
     """SCB's informational metrics of production Rust, read from a copy of the blanked sources.
 
@@ -439,17 +468,21 @@ def eslint(root, name, source):
     )
 
 
-def changed_files(baseline, head, names):
+def changed_files(baseline, head, names, moved):
+    """The files of the head that differ from the baseline's, a moved one from itself
+    under its former name."""
+    former = {new: old for old, new in moved.items()}
     for name in names:
         source = (head / name).read_text()
-        before = (baseline / name).read_text() if (baseline / name).is_file() else ""
+        old = baseline / former.get(name, name)
+        before = old.read_text() if old.is_file() else ""
         if source != before:
             yield name, before, source, unchanged_lines(before, source)
 
 
-def style(baseline, head):
+def style(baseline, head, moved):
     failures = []
-    for name, before, source, mapping in changed_files(baseline, head, python_files(head)):
+    for name, before, source, mapping in changed_files(baseline, head, python_files(head), moved):
         findings = lint_regressions(lint(baseline, name, before), lint(head, name, source), mapping)
         failures.extend({"kind": "lint", "path": name, **finding} for finding in findings)
         formatted = run(
@@ -471,7 +504,9 @@ def style(baseline, head):
             {"kind": "format", "path": name, "line": line}
             for line in format_regressions(source, formatted, mapping)
         )
-    for name, before, source, mapping in changed_files(baseline, head, javascript_files(head)):
+    for name, before, source, mapping in changed_files(
+        baseline, head, javascript_files(head), moved
+    ):
         findings = lint_regressions(
             eslint(baseline, name, before), eslint(head, name, source), mapping
         )
@@ -494,7 +529,7 @@ def style_only(base, output):
         versions({"ruff", "eslint", "@eslint/js", "globals"})
         merge_base = git(ROOT, "merge-base", "HEAD", base).strip()
         git(ROOT, "worktree", "add", "--detach", str(baseline), merge_base)
-        failures = style(baseline, ROOT)
+        failures = style(baseline, ROOT, moved_files(ROOT, merge_base))
     except Exception as error:
         print(f"quality: style check could not run: {type(error).__name__}: {error}")
         return 2
@@ -629,6 +664,7 @@ def main(argv=None):
         snapshot_head(head)
         if fingerprint(head) != data["source_fingerprint"]:
             raise ValueError("Head snapshot differs from the working tree; measurement refused")
+        moved = moved_files(head, data["base"], staged=True)
         for label, root in [("baseline", baseline), ("head", head)]:
             modules = ROOT / EXTENSION / "node_modules"
             if modules.exists() and (root / EXTENSION).is_dir():
@@ -638,9 +674,10 @@ def main(argv=None):
             javascript = javascript_coverage(root, output, label)
             sources = rust_sources(root)
             data[label] = {**structural(root, sources, rust, javascript), "scb": scb(sources)}
+        named_as_in_head(data["baseline"], moved)
         print(f"quality: running pytest; log in {output}", flush=True)
         tests(head, output)
-        data["failures"] = style(baseline, head)
+        data["failures"] = style(baseline, head, moved)
         data["failures"] += crap_regressions(
             data["baseline"]["functions"], data["head"]["functions"]
         )

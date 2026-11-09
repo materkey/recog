@@ -70,6 +70,11 @@ run also builds the dependencies with instrumentation.
   way: `eslint:recommended` from `scripts/quality-eslint.config.mjs`, compared
   against the merge base line by line like Ruff. There is no JavaScript
   formatter check. Generated bundles are excluded.
+- A file that git reads as moved since the merge base (`git diff -M`: renamed, at
+  least half of it unchanged) is compared with itself under its former name: its
+  functions and duplicate pairs are the baseline's, not new ones, and its existing
+  lint findings and formatting stay where they were. The fast style check sees the
+  moves git already tracks (`git mv`, `git add`).
 - Newly detected duplicate function pairs, Rust or JavaScript, fail until resolved
   or explicitly reviewed in `scripts/quality-exceptions.json`. An exception names
   exactly two canonical function identities and explains why keeping the

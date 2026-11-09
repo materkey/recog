@@ -213,6 +213,36 @@ def test_real_baseline_when_head_has_new_uncovered_function_then_gate_fails(
 
 
 @needs_rust_tools
+def test_real_baseline_when_head_moves_a_file_then_its_functions_are_not_new(
+    repository, tmp_path, monkeypatch
+):
+    """given: a baseline with an uncovered function over the ceiling in a module's file
+    when: the head renames that file
+    then: the function is the baseline's own, not a new one, and the gate passes"""
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda: {})
+    arms = "".join(
+        f"    if value == {index} {{\n        return {index};\n    }}\n" for index in range(5)
+    )
+    library = repository / "rust/demo/src/lib.rs"
+    library.write_text("pub mod heavy;\n" + library.read_text())
+    (repository / "rust/demo/src/heavy.rs").write_text(
+        f"pub fn uncovered(value: u32) -> u32 {{\n{arms}    9\n}}\n"
+    )
+    commit(repository, "an uncovered function")
+    quality.git(repository, "mv", "rust/demo/src/heavy.rs", "rust/demo/src/weighty.rs")
+    library.write_text(library.read_text().replace("pub mod heavy;", "pub mod weighty;"))
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "HEAD", "--output", str(output)]) == 0
+    result = json.loads(next(output.glob("run-*/report.json")).read_text())
+    assert result["status"] == "pass", result
+    assert {row["path"] for row in result["baseline"]["functions"]} == {
+        "rust/demo/src/lib.rs",
+        "rust/demo/src/weighty.rs",
+    }
+
+
+@needs_rust_tools
 def test_real_baseline_when_head_equals_it_then_gate_passes(repository, tmp_path, monkeypatch):
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda: {})
@@ -246,6 +276,33 @@ def test_style_only_when_changed_line_is_checked_then_only_ruff_decides(
     assert ("scripts/example.py:6: differs from ruff format" in printed) == bool(code)
     assert not list(output.glob("*/report.json"))
     assert not list(output.iterdir())
+
+
+@pytest.mark.skipif(importlib.util.find_spec("ruff") is None, reason="Needs ruff")
+@pytest.mark.parametrize(
+    ("addition", "code"),
+    [("", 0), ("\n\ndef added():\n    return [1,2]\n", 1)],
+)
+def test_style_only_when_a_file_moved_then_its_old_findings_are_not_new(
+    repository, tmp_path, monkeypatch, capsys, addition, code
+):
+    """given: a file with an unused import and unformatted code at the merge base
+    when: the file moves, with or without a badly formatted new line
+    then: only the new line fails; what the baseline had under the old name stays old"""
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda packages=None: {})
+    old = repository / "scripts/example.py"
+    old.write_text("import os\n\n\ndef answer():\n    return [4,2]\n")
+    commit(repository, "debt")
+    quality.git(repository, "mv", "scripts/example.py", "scripts/moved.py")
+    with (repository / "scripts/moved.py").open("a") as stream:
+        stream.write(addition)
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "HEAD", "--style-only", "--output", str(output)]) == code
+    printed = capsys.readouterr().out
+    assert "F401" not in printed
+    assert "scripts/moved.py:5:" not in printed
+    assert ("scripts/moved.py:9: differs from ruff format" in printed) == bool(code)
 
 
 def commit(root, message):
