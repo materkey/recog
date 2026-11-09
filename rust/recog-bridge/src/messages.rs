@@ -14,6 +14,7 @@ use crate::bridge::Bridge;
 use crate::client::Client;
 use crate::hooks::PcmChunk;
 use crate::json;
+use crate::speakers::SpeakerOutcome;
 
 /// Python's `int(x)` of a frame field.
 pub(crate) enum IntError {
@@ -133,6 +134,14 @@ fn div_1000(value: &Value) -> Result<f64, String> {
     json::as_f64(value).map(|x| x / 1000.0).ok_or_else(|| json::operand_error("/", value, "int"))
 }
 
+/// `data.get("timestamp", time.time() * 1000) / 1000`.
+fn raw_timestamp(data: &Map, now: f64) -> Result<f64, String> {
+    match data.get("timestamp") {
+        Some(ts) => div_1000(ts),
+        None => Ok(now * 1000.0 / 1000.0),
+    }
+}
+
 impl Bridge {
     /// `_frame_from_non_owner`: while a meeting has an owner, the call frames of other tabs
     /// (a second conference whose join was refused) do not count.
@@ -196,40 +205,51 @@ impl Bridge {
             return Ok(());
         }
         if let Some(seq) = data.get("seq").filter(|s| !s.is_null()) {
-            let mut st = self.st();
-            let (Some(new), Some(last)) = (json::as_f64(seq), json::as_f64(&st.last_seq)) else {
-                return Err(format!(
-                    "'<=' not supported between instances of '{}' and '{}'",
-                    seq.type_name(),
-                    st.last_seq.type_name()
-                ));
-            };
-            if new <= last {
-                let line = format!(
-                    "[KTalk Bridge] Out-of-order speaker_update: seq={}, last={}",
-                    seq.py_str(),
-                    st.last_seq.py_str()
-                );
-                drop(st);
-                self.log(&line);
-                st = self.st();
-            }
-            if new > last {
-                st.last_seq = seq.clone();
-            }
+            self.check_speaker_seq(seq)?;
         }
         let speaker = data.get("speaker");
         let now = self.now();
-        let raw_ts = match data.get("timestamp") {
-            Some(ts) => div_1000(ts)?,
-            None => now * 1000.0 / 1000.0,
-        };
+        let raw_ts = raw_timestamp(data, now)?;
         let outcome = {
             let mut st = self.st();
             let offset = st.clock_offset;
             let event_time = if offset == 0.0 { raw_ts } else { raw_ts + offset };
             st.speakers.speaker_update(speaker, event_time, now, offset)?
         };
+        self.report_speaker_outcome(&outcome);
+        Ok(())
+    }
+
+    /// `seq <= self._last_seq` (logged as out of order) and
+    /// `self._last_seq = max(self._last_seq, seq)`.
+    fn check_speaker_seq(&self, seq: &Value) -> Result<(), String> {
+        let mut st = self.st();
+        let (Some(new), Some(last)) = (json::as_f64(seq), json::as_f64(&st.last_seq)) else {
+            return Err(format!(
+                "'<=' not supported between instances of '{}' and '{}'",
+                seq.type_name(),
+                st.last_seq.type_name()
+            ));
+        };
+        if new <= last {
+            let line = format!(
+                "[KTalk Bridge] Out-of-order speaker_update: seq={}, last={}",
+                seq.py_str(),
+                st.last_seq.py_str()
+            );
+            drop(st);
+            self.log(&line);
+            st = self.st();
+        }
+        if new > last {
+            st.last_seq = seq.clone();
+        }
+        Ok(())
+    }
+
+    /// The log lines, the debug file and the live hooks of a `speaker_update`, outside
+    /// the lock.
+    fn report_speaker_outcome(&self, outcome: &SpeakerOutcome) {
         for line in &outcome.logs {
             self.log(line);
         }
@@ -240,7 +260,6 @@ impl Bridge {
                 live.segment_completed(segment);
             }
         }
-        Ok(())
     }
 
     fn on_participants_update(&self, data: &Map, client: Option<&Arc<Client>>) -> Result<(), String> {
