@@ -19,6 +19,7 @@ are grouped separately, making it clear where a new file belongs.
 | `deploy/python/` | Requirements of the quality tools |
 | `deploy/node/` | Pinned JavaScript quality tools (ESLint) for `scripts/quality.py` |
 | `deploy/macos/`, `deploy/linux/` | launchd and systemd service templates |
+| `deploy/ci/runner/` | Image of the self-hosted Linux CI runner (`docs/ci-runners.md`) |
 | `scripts/` | Setup/service helpers, data migration, enrollment and checks |
 | `scripts/benchmarks/` | Manually run benchmark and experiment programs |
 | `tests/` | Unit tests and E2E tools/fixtures |

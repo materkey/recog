@@ -21,6 +21,7 @@ the current implementation contracts and commands used by coding agents.
 | [Desktop KTalk](desktop-ktalk.md) | Enable, inspect and disable integration with the official desktop app |
 | [Zoom application](zoom-app.md) | Enable speaker detection for the native Zoom application on macOS; permission and limits |
 | [Quality gates](quality.md) | Run merge-base regression checks and interpret CRAP, duplication and structural reports |
+| [CI runners](ci-runners.md) | Set up the self-hosted Linux container and macOS runner the workflow selects by label |
 
 Completed plans and experiment reports describe the implementation and paths
 at the time of the work. Use the repository layout and current source for

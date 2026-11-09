@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # The repository's own runners (docs/ci-runners.md).
+  labels:
+    - recog

@@ -1,4 +1,6 @@
-# Runs scripts/check.sh on both supported hosts in a clean environment.
+# Runs scripts/check.sh on both supported hosts, on self-hosted runners
+# (docs/ci-runners.md): the repository is private, and hosted runners spend the
+# account's Actions minutes.
 #
 # recog itself is Rust (check.sh builds and tests the workspace); Python is only
 # the quality tools and the shell scripts' tests.
@@ -18,8 +20,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: linux
+            runner: [self-hosted, linux, recog]
+          - os: macos
+            runner: [self-hosted, macos, recog]
+    runs-on: ${{ matrix.runner }}
     env:
       # Debug information is most of a test build's size: with it, the tests'
       # build and the coverage-instrumented one of the quality gate ran out of
@@ -93,9 +99,9 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/gitleaks" gitleaks
           echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"
 
-      # The quality gate (two coverage runs of every test) runs on Linux only: the
-      # repository is private, where a macOS minute counts ten times against the
-      # Actions quota, and the gate took the macOS job from about 10 to 30 minutes.
+      # The quality gate (two coverage runs of every test) runs on Linux only: it
+      # took the macOS job from about 10 to 30 minutes and a second, instrumented
+      # build of the workspace, and the macOS runner is a laptop with little disk.
       # The macOS job still builds, lints and tests everything, including the
       # macOS-only code, through check.sh without RECOG_QUALITY_BASE.
       - name: Select quality baseline
@@ -142,7 +148,7 @@ jobs:
           if-no-files-found: error
 
   extension:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, recog]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

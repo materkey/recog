@@ -450,9 +450,14 @@ def _run_script(workflow):
     return "\n".join(step.get("run", "") for step in _steps(workflow))
 
 
-def test_ci_runs_on_both_supported_hosts(workflow):
-    matrix = workflow["jobs"]["check"]["strategy"]["matrix"]["os"]
-    assert set(matrix) == {"ubuntu-latest", "macos-latest"}
+def test_ci_hosts_when_listed_then_linux_and_macos_on_this_repository_s_runners(workflow):
+    hosts = workflow["jobs"]["check"]["strategy"]["matrix"]["include"]
+    assert {host["os"]: host["runner"] for host in hosts} == {
+        "linux": ["self-hosted", "linux", "recog"],
+        "macos": ["self-hosted", "macos", "recog"],
+    }
+    assert workflow["jobs"]["check"]["runs-on"] == "${{ matrix.runner }}"
+    assert workflow["jobs"]["extension"]["runs-on"] == ["self-hosted", "linux", "recog"]
 
 
 def test_ci_uses_python_312(workflow):

@@ -1,0 +1,56 @@
+# CI runners
+
+The repository is private, and GitHub's hosted runners spend the account's Actions
+minutes (a macOS minute counts ten). CI therefore runs on self-hosted runners
+registered to this repository only; `.github/workflows/ci.yml` selects them by
+labels, never by a hosted image.
+
+| Job | Labels | Runner |
+|---|---|---|
+| `check` on Linux, `extension` | `self-hosted`, `linux`, `recog` | a container of `deploy/ci/runner/` |
+| `check` on macOS | `self-hosted`, `macos`, `recog` | a Mac running the runner as its user |
+
+Each runner takes one job at a time; register more than one Linux container so the
+`extension` job does not wait for the Linux `check`.
+
+## Linux: the container
+
+`deploy/ci/runner/Dockerfile` is Ubuntu 24.04, the system the workflow was written
+for, with rustup (stable, clippy, rustfmt, llvm-tools-preview) inside the container,
+so the host's own Rust stays untouched, and the runner release checked against its
+published SHA-256. The container registers on its first start and keeps its
+registration in its own filesystem; recreating it needs a new token.
+
+```bash
+docker build -t recog-ci-runner:2.338.2 deploy/ci/runner
+token=$(gh api -X POST repos/<owner>/recog/actions/runners/registration-token -q .token)
+docker run -d --name recog-ci-runner --restart unless-stopped --cpus 24 --memory 64g \
+  -e RUNNER_URL=https://github.com/<owner>/recog -e RUNNER_NAME=<name> \
+  -e RUNNER_TOKEN="$token" recog-ci-runner:2.338.2
+```
+
+A new runner release: change `RUNNER_VERSION` and `RUNNER_SHA256` (from the release
+notes) and rebuild; the runner also updates itself between jobs.
+
+## macOS: the user's runner
+
+The job needs rustup, Xcode (the Swift helpers), Python 3.12 and Node, as the hosted
+image had them. Download `actions-runner-osx-arm64-<version>.tar.gz` into its own
+directory, check its SHA-256, then:
+
+```bash
+./config.sh --unattended --url https://github.com/<owner>/recog --token "$token" \
+  --name <name> --labels recog --work _work
+./svc.sh install && ./svc.sh start   # a LaunchAgent: it runs while the user is logged in
+```
+
+The job adds clippy, rustfmt and llvm-tools-preview to the user's stable toolchain.
+A sleeping Mac leaves the macOS job queued (GitHub keeps a queued job for a day). The
+quality gate runs on Linux only (docs/quality.md), so the Mac builds the workspace
+once per job.
+
+## Security
+
+A runner executes whatever a workflow run asks, as its user. It is registered to
+this private repository, whose runs come from its own pushes; do not register it to
+a public repository or allow workflows from forks.

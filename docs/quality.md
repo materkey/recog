@@ -104,8 +104,8 @@ function's coverage is that of the lines of the lcov export inside its span that
 belong to no function nested in it (branch hits are used when a toolchain records
 them). A function without a single line in the export was not compiled on this
 host (`#[cfg(target_os = "macos")]` on Linux): it is listed in the report as not
-built and not scored. CI runs the gate on Linux only (a macOS minute of a private
-repository's Actions quota counts ten), so macOS-only code is not scored: keep its
+built and not scored. CI runs the gate on Linux only (on the macOS runner it would
+double a 10-minute job and its disk use, docs/ci-runners.md), so macOS-only code is not scored: keep its
 untested shells at CC ≤ 2 and its decisions in portable, tested functions. Every crate must have at
 least one measured file, which also catches a report whose paths do not join.
 
