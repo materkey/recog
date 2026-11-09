@@ -1,10 +1,11 @@
 //! The real process table of this Mac (`system::table()`, psutil's macOS answers) on
-//! a child the test starts. The expected values are psutil's on the same process.
+//! processes the test owns: itself, a child it starts, one it reaped, and the kernel's
+//! own. The expected values are psutil's on the same processes.
 #![forbid(unsafe_code)]
 #![cfg(target_os = "macos")]
 
 use std::io::Read as _;
-use std::net::{Ipv6Addr, TcpListener};
+use std::net::{Ipv4Addr, Ipv6Addr, TcpListener, TcpStream, UdpSocket};
 use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -78,4 +79,72 @@ fn real_table_given_a_child_of_this_test_when_read_then_psutil_answers() {
     environment.sort();
     assert_eq!(environ, environment, "without the kernel's strings after the environment");
     assert_eq!(table.tcp_listeners(pid).unwrap(), [], "the parent's listener is not the child's");
+}
+
+#[test]
+fn real_table_given_sockets_of_this_process_when_listeners_read_then_its_tcp_listeners_only() {
+    // given: a loopback listener with an accepted connection and a UDP socket on its
+    // port, and an IPv6 loopback listener
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    let _accepted = listener.accept().unwrap();
+    let _udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+    let listener6 = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
+    let port6 = listener6.local_addr().unwrap().port();
+    // when
+    let listed = system::table().tcp_listeners(i64::from(std::process::id())).unwrap();
+    // then
+    let count = |address: &str, port: u16| listed.iter().filter(|(a, p)| a == address && *p == port).count();
+    assert_eq!(count("127.0.0.1", port), 1, "{listed:?}");
+    assert_eq!(count("::1", port6), 1, "{listed:?}");
+    assert_eq!(count("127.0.0.1", client.local_addr().unwrap().port()), 0, "{listed:?}");
+}
+
+#[test]
+fn real_table_given_a_reaped_child_when_read_then_no_such_process() {
+    // given
+    let mut child = Command::new("/usr/bin/true").spawn().unwrap();
+    child.wait().unwrap();
+    let pid = i64::from(child.id());
+    let table = system::table();
+    // when
+    let failures = [
+        table.open(pid).err(),
+        table.name(pid).err(),
+        table.uid_real(pid).err(),
+        table.create_time(pid).err(),
+        table.exe(pid).err(),
+        table.cmdline(pid).err(),
+        table.environ(pid).err(),
+        table.tcp_listeners(pid).err(),
+    ];
+    // then
+    assert_eq!(failures.map(|failure| failure.map(|e| e.kind)), [Some("NoSuchProcess"); 8]);
+    assert!(!table.pids().contains(&pid));
+}
+
+#[test]
+fn real_table_given_pids_out_of_range_when_opened_then_refused_like_psutil() {
+    // given
+    let table = system::table();
+    // when
+    let huge = [table.open(1 << 40).err(), table.exe(1 << 40).err()];
+    let negative = table.open(-1).unwrap_err();
+    // then
+    assert_eq!(huge.map(|failure| failure.map(|e| e.kind)), [Some("NoSuchProcess"); 2]);
+    assert_eq!((negative.kind, negative.message.as_str()), ("ValueError", "pid must be a positive integer (got -1)"));
+}
+
+#[test]
+fn real_table_given_the_kernel_task_when_read_then_named_and_its_executable_denied() {
+    // given
+    let table = system::table();
+    // when
+    let opened = table.open(0);
+    // then
+    assert_eq!(opened, Ok(()));
+    assert_eq!(table.name(0).unwrap(), "kernel_task");
+    assert_eq!(table.uid_real(0).unwrap(), 0);
+    assert_eq!(table.exe(0).unwrap_err().kind, "AccessDenied");
 }
