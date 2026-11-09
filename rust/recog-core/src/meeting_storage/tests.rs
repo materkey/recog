@@ -1,6 +1,7 @@
 //! The cases of tests/test_meeting_storage.py and the storage half of
 //! tests/test_audio_retention.py, against the port.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::*;
@@ -584,3 +585,38 @@ fn local_participants_without_a_name_when_listed_then_the_fallback_asked_for_nam
         Err(StorageError::Attribute(_))
     ));
 }
+
+/// What a storage printed, by stream.
+type Lines = Arc<Mutex<Vec<(Stream, String)>>>;
+
+/// A storage at the test clock with the alias `old-meet` → `jitsi`, meeting ids ending
+/// `00000001`, `00000002`, … and its printed lines kept.
+fn storage_with(dir: &Path, configure: impl FnOnce(&mut StorageOptions)) -> (MeetingStorage, Lines) {
+    let clock = Arc::new(TestClock(AtomicI64::new(NOW)));
+    let mut options = StorageOptions::new(&dir.join("home"));
+    options.clock = clock;
+    options.external_index_cache_dir = dir.join("cache");
+    options.source_aliases = vec![("old-meet".into(), "jitsi".into())];
+    let count = Arc::new(AtomicI64::new(0));
+    options.meeting_suffix = Arc::new(move || format!("{:08x}", count.fetch_add(1, Ordering::SeqCst) + 1));
+    let lines: Lines = Arc::default();
+    let sink = Arc::clone(&lines);
+    options.log = Arc::new(move |stream, line| sink.lock().unwrap().push((stream, line.to_owned())));
+    configure(&mut options);
+    (MeetingStorage::new(&dir.join("meetings"), options).unwrap(), lines)
+}
+
+fn put(root: &Path, id: &str, meta: &str) {
+    fs::create_dir_all(root.join(id)).unwrap();
+    fs::write(root.join(id).join("meta.json"), meta).unwrap();
+}
+
+fn printed(lines: &Lines) -> Vec<(Stream, String)> {
+    let mut printed = lines.lock().unwrap().clone();
+    printed.sort_by(|a, b| a.1.cmp(&b.1));
+    printed
+}
+
+mod lifecycle;
+mod listing;
+mod records;
