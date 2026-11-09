@@ -83,13 +83,32 @@ pub const EVENT_TYPES: [&str; 6] = [
 /// The Python exception class of a privacy failure, for the log line.
 fn privacy_error_class(error: &PrivacyError) -> &'static str {
     match error {
-        PrivacyError::Invalid(message) if message == "Invalid privacy setting" => "ValueError",
-        PrivacyError::Invalid(message) if message.starts_with("'utf-8' codec") => "UnicodeDecodeError",
-        PrivacyError::Invalid(_) => "JSONDecodeError",
-        PrivacyError::Io(message) if message.starts_with("[Errno 13]") => "PermissionError",
-        PrivacyError::Io(message) if message.starts_with("[Errno 21]") => "IsADirectoryError",
-        PrivacyError::Io(message) if message.starts_with("[Errno 20]") => "NotADirectoryError",
-        PrivacyError::Io(_) => "OSError",
+        PrivacyError::Invalid(message) => invalid_privacy_class(message),
+        PrivacyError::Io(message) => io_error_class(message),
+    }
+}
+
+/// The class of a settings file that does not hold a valid privacy setting.
+fn invalid_privacy_class(message: &str) -> &'static str {
+    if message == "Invalid privacy setting" {
+        "ValueError"
+    } else if message.starts_with("'utf-8' codec") {
+        "UnicodeDecodeError"
+    } else {
+        "JSONDecodeError"
+    }
+}
+
+/// The `OSError` subclass Python raises for the errno at the head of `message`.
+fn io_error_class(message: &str) -> &'static str {
+    if message.starts_with("[Errno 13]") {
+        "PermissionError"
+    } else if message.starts_with("[Errno 21]") {
+        "IsADirectoryError"
+    } else if message.starts_with("[Errno 20]") {
+        "NotADirectoryError"
+    } else {
+        "OSError"
     }
 }
 
@@ -312,15 +331,29 @@ async fn read_frames(
                 continue;
             }
         };
-        match frame {
-            Some(Ok(WsMessage::Text(text))) => handle_inbound(text.as_bytes(), link, server).await,
-            Some(Ok(WsMessage::Binary(bytes))) => handle_inbound(&bytes, link, server).await,
-            Some(Ok(WsMessage::Pong(_))) => keepalive.pong_due = None,
-            Some(Ok(WsMessage::Close(_))) | None => return None,
-            Some(Ok(_)) => {}
-            Some(Err(e)) => return Some(ws_error(&e)),
+        if let Some(end) = on_frame(frame, &mut keepalive, link, server).await {
+            return end;
         }
     }
+}
+
+/// One read from the bridge socket: the end of the connection (with its failure,
+/// `None` for a close), or `None` to read on.
+async fn on_frame(
+    frame: Option<Result<WsMessage, tokio_tungstenite::tungstenite::Error>>,
+    keepalive: &mut Keepalive,
+    link: &BridgeLink,
+    server: Option<&McpServer>,
+) -> Option<Option<String>> {
+    match frame {
+        Some(Ok(WsMessage::Text(text))) => handle_inbound(text.as_bytes(), link, server).await,
+        Some(Ok(WsMessage::Binary(bytes))) => handle_inbound(&bytes, link, server).await,
+        Some(Ok(WsMessage::Pong(_))) => keepalive.pong_due = None,
+        Some(Ok(WsMessage::Close(_))) | None => return Some(None),
+        Some(Ok(_)) => {}
+        Some(Err(e)) => return Some(Some(ws_error(&e))),
+    }
+    None
 }
 
 /// When the next keepalive ping is due, and the pong awaited for the last one.
@@ -433,5 +466,39 @@ mod tests {
             // when / then
             assert_eq!(privacy_error_class(&error), class, "{error}");
         }
+    }
+
+    fn link() -> (tempfile::TempDir, BridgeLink) {
+        let dir = tempfile::tempdir().unwrap();
+        let link = BridgeLink::new(recog_core::privacy::PrivacyStore::new(dir.path()));
+        (dir, link)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_awaited_pong_when_it_arrives_then_the_deadline_is_the_next_ping_and_reading_goes_on() {
+        // given
+        let (_dir, link) = link();
+        let mut keepalive = Keepalive::new();
+        keepalive.pong_due = Some(tokio::time::Instant::now() + Duration::from_secs(1));
+        // when
+        let end = on_frame(Some(Ok(WsMessage::Pong(Vec::new().into()))), &mut keepalive, &link, None).await;
+        // then
+        assert_eq!(end, None);
+        assert_eq!(keepalive.pong_due, None);
+        assert_eq!(keepalive.deadline(), keepalive.next_ping);
+    }
+
+    #[tokio::test]
+    async fn a_close_an_end_of_stream_or_an_error_when_read_then_the_connection_ends_with_its_failure() {
+        // given
+        let (_dir, link) = link();
+        let mut keepalive = Keepalive::new();
+        let error = tokio_tungstenite::tungstenite::Error::ConnectionClosed;
+        let expected = ws_error(&tokio_tungstenite::tungstenite::Error::ConnectionClosed);
+        // when / then
+        assert_eq!(on_frame(Some(Ok(WsMessage::Close(None))), &mut keepalive, &link, None).await, Some(None));
+        assert_eq!(on_frame(None, &mut keepalive, &link, None).await, Some(None));
+        assert_eq!(on_frame(Some(Err(error)), &mut keepalive, &link, None).await, Some(Some(expected)));
+        assert_eq!(on_frame(Some(Ok(WsMessage::Ping(Vec::new().into()))), &mut keepalive, &link, None).await, None);
     }
 }
