@@ -880,60 +880,45 @@ impl Shared {
         save_json(&meta_path, &meta)
     }
 
+    /// A transcript row: spoken at its capture time, else now.
+    fn segment_row(&self, segment_id: i64, segment: &NewSegment, now: &PyDateTime) -> Value {
+        let spoken = segment.captured_at.map_or(*now, time::from_timestamp);
+        let mut row = Map::new();
+        row.insert("id", Value::from(segment_id));
+        row.insert("ts", Value::from(spoken.isoformat()));
+        row.insert("ts_display", Value::from(time::hms(spoken.local_wall(self.options.clock.as_ref()))));
+        row.insert("speaker", Value::from(segment.speaker.as_str()));
+        row.insert("speaker_id", Value::from(segment.speaker_id.as_str()));
+        row.insert("text", Value::from(segment.text.as_str()));
+        row.insert("is_local", Value::Bool(segment.is_local));
+        row.insert("cont", Value::Bool(segment.is_continuation));
+        row.insert("uncertain", Value::Bool(segment.uncertain));
+        row.insert("uncertain_reason", Value::from(segment.uncertain_reason.as_str()));
+        row.insert("audio_offset_ms", Value::from(segment.audio_offset_ms));
+        row.insert("refined", Value::Bool(false));
+        Value::Object(row)
+    }
+
     fn update_index(&self, meta: &Value) -> Result<()> {
         let index_path = self.base_path.join("index.json");
-        let mut index = if index_path.exists() {
-            read_json(&index_path)?
-        } else {
-            pyjson::loads(r#"{"meetings": []}"#).unwrap_or(Value::Null)
-        };
-        let id = item(meta, "id")?;
-        let mut meetings = match item(&index, "meetings")? {
-            Value::Array(list) => {
-                let mut kept = Vec::new();
-                for m in list {
-                    if !item(m, "id")?.py_eq(id) {
-                        kept.push(m.clone());
-                    }
-                }
-                kept
-            }
-            other => return Err(StorageError::Type(format!("'{}' object is not iterable", other.type_name()))),
-        };
+        let (index, id, mut meetings) = index_without(&index_path, meta)?;
         let stats = item(meta, "stats")?;
         if pyops::equals_int(item(stats, "segment_count")?, 0) {
-            set(&mut index, "meetings", Value::Array(meetings))?;
-            save_json(&index_path, &index)?;
-            let meeting_path = self.base_path.join(id.py_str());
-            if meeting_path.exists() {
-                let _ = fs::remove_dir_all(&meeting_path);
-            }
+            save_index_rows(&index_path, index, meetings)?;
+            self.remove_meeting_dir(id);
             return Ok(());
         }
-        let empty = Value::Object(Map::new());
-        let conference = match get(meta, "conference")? {
-            Some(c) => c,
-            None => get_or_empty(meta, "ktalk", &empty)?,
-        };
-        let names = items(item(meta, "participants")?, "values")?
-            .values()
-            .map(|p| item(p, "name").cloned())
-            .collect::<Result<Vec<_>>>()?;
-        let mut entry = Map::new();
-        entry.insert("id", id.clone());
-        entry.insert("created_at", item(meta, "created_at")?.clone());
-        entry.insert("ended_at", item(meta, "ended_at")?.clone());
-        entry.insert("duration_seconds", item(stats, "duration_seconds")?.clone());
-        entry.insert("title", item(meta, "title")?.clone());
-        entry.insert("source", item(meta, "source")?.clone());
-        entry.insert("end_reason", item(meta, "end_reason")?.clone());
-        entry.insert("ktalk_live_url", get(conference, "live_url")?.cloned().unwrap_or(Value::Null));
-        entry.insert("segment_count", item(stats, "segment_count")?.clone());
-        entry.insert("participants", Value::Array(names));
-        meetings.push(Value::Object(entry));
+        meetings.push(index_entry(meta, id, stats)?);
         sort_desc(&mut meetings, |m| item(m, "created_at").cloned())?;
-        set(&mut index, "meetings", Value::Array(meetings))?;
-        save_json(&index_path, &index)
+        save_index_rows(&index_path, index, meetings)
+    }
+
+    /// An ended meeting without segments is not kept.
+    fn remove_meeting_dir(&self, id: &Value) {
+        let meeting_path = self.base_path.join(id.py_str());
+        if meeting_path.exists() {
+            let _ = fs::remove_dir_all(&meeting_path);
+        }
     }
 }
 
@@ -1173,10 +1158,287 @@ fn orphan_segments(meta: &Value) -> Result<Option<Value>> {
 /// The conference's title, kept only by a meeting without one.
 fn adopt_title(meta: &mut Value, title: &str, platform: &str) -> Result<()> {
     if !get(meta, "title")?.is_some_and(Value::truthy) {
-        set(meta, "title", Value::from(title))?;
-        set(meta, "title_source", Value::from(platform))?;
+        set_title(meta, title, platform)?;
     }
     Ok(())
+}
+
+fn set_title(meta: &mut Value, title: &str, source: &str) -> Result<()> {
+    set(meta, "title", Value::from(title))?;
+    set(meta, "title_source", Value::from(source))
+}
+
+/// No title yet, or the "Joining…" a conference shows before its name.
+fn has_placeholder_title(meta: &Value) -> Result<bool> {
+    let current = match get(meta, "title")? {
+        Some(t) if t.truthy() => t.clone(),
+        _ => Value::from(""),
+    };
+    match &current {
+        Value::Str(s) => Ok(s.is_empty() || s.starts_with("Joining")),
+        other => Err(pyops::attribute_error(other, "startswith")),
+    }
+}
+
+/// `index.json` (a new one when missing), the meeting's id, and the index's rows
+/// other than the meeting's.
+fn index_without<'a>(index_path: &Path, meta: &'a Value) -> Result<(Value, &'a Value, Vec<Value>)> {
+    let index = if index_path.exists() {
+        read_json(index_path)?
+    } else {
+        pyjson::loads(r#"{"meetings": []}"#).unwrap_or(Value::Null)
+    };
+    let id = item(meta, "id")?;
+    let kept = match item(&index, "meetings")? {
+        Value::Array(list) => rows_without(list, id)?,
+        other => return Err(not_iterable(other)),
+    };
+    Ok((index, id, kept))
+}
+
+fn rows_without(rows: &[Value], id: &Value) -> Result<Vec<Value>> {
+    let mut kept = Vec::new();
+    for m in rows {
+        if !item(m, "id")?.py_eq(id) {
+            kept.push(m.clone());
+        }
+    }
+    Ok(kept)
+}
+
+fn save_index_rows(index_path: &Path, mut index: Value, rows: Vec<Value>) -> Result<()> {
+    set(&mut index, "meetings", Value::Array(rows))?;
+    save_json(index_path, &index)
+}
+
+/// The `index.json` row of an ended meeting.
+fn index_entry(meta: &Value, id: &Value, stats: &Value) -> Result<Value> {
+    let empty = Value::Object(Map::new());
+    let conference = conference_of(meta, &empty)?;
+    let names = participant_names(item(meta, "participants")?)?;
+    let mut entry = index_fields(meta, id, stats, conference)?;
+    entry.insert("participants", Value::Array(names));
+    Ok(Value::Object(entry))
+}
+
+/// An index row's fields from `id` to `segment_count`, every one required but the URL.
+fn index_fields(meta: &Value, id: &Value, stats: &Value, conference: &Value) -> Result<Map> {
+    let mut entry = Map::new();
+    entry.insert("id", id.clone());
+    entry.insert("created_at", item(meta, "created_at")?.clone());
+    entry.insert("ended_at", item(meta, "ended_at")?.clone());
+    entry.insert("duration_seconds", item(stats, "duration_seconds")?.clone());
+    entry.insert("title", item(meta, "title")?.clone());
+    entry.insert("source", item(meta, "source")?.clone());
+    entry.insert("end_reason", item(meta, "end_reason")?.clone());
+    entry.insert("ktalk_live_url", get(conference, "live_url")?.cloned().unwrap_or(Value::Null));
+    entry.insert("segment_count", item(stats, "segment_count")?.clone());
+    Ok(entry)
+}
+
+/// The stats of a meeting after a segment: its count, the words added.
+fn count_segment(meta: &mut Value, segment_id: i64, text: &str, now: &PyDateTime) -> Result<()> {
+    let words = i64::try_from(py::split_whitespace(text).count()).unwrap_or(i64::MAX);
+    let stats = item_mut(meta, "stats")?;
+    set(stats, "segment_count", Value::from(segment_id))?;
+    let total = add_int(item(stats, "words_count")?, words)?;
+    set(stats, "words_count", total)?;
+    set(meta, "updated_at", Value::from(now.isoformat()))
+}
+
+/// The segment's speaker among the participants: added, renamed by id, or, for a
+/// second local id, the local participant already known renamed.
+fn register_speaker(participants: &mut Value, segment: &NewSegment, first_seen: &Value) -> Result<()> {
+    let (speaker, speaker_id) = (segment.speaker.as_str(), segment.speaker_id.as_str());
+    if pyops::contains(participants, speaker_id)? {
+        return rename_speaker(item_mut(participants, speaker_id)?, speaker);
+    }
+    let local = if segment.is_local { first_local(participants)?.filter(|pid| !pid.is_empty()) } else { None };
+    let Some(local) = local else {
+        let mut p = Map::new();
+        p.insert("name", Value::from(speaker));
+        p.insert("is_local", Value::Bool(segment.is_local));
+        p.insert("first_seen", first_seen.clone());
+        return set(participants, speaker_id, Value::Object(p));
+    };
+    // Already a local participant: rename it instead of adding another.
+    if speaker.is_empty() {
+        return Ok(());
+    }
+    rename_speaker(item_mut(participants, &local)?, speaker)
+}
+
+fn rename_speaker(entry: &mut Value, speaker: &str) -> Result<()> {
+    if *item(entry, "name")? != Value::from(speaker) {
+        set(entry, "name", Value::from(speaker))?;
+    }
+    Ok(())
+}
+
+/// The id of the first local participant.
+fn first_local(participants: &Value) -> Result<Option<String>> {
+    for (pid, p) in items(participants, "items")?.iter() {
+        if get(p, "is_local")?.is_some_and(Value::truthy) {
+            return Ok(Some(pid.clone()));
+        }
+    }
+    Ok(None)
+}
+
+/// A participant the conference reports, merged into the stored ones.
+fn merge_participant(stored: &mut Value, pid: &str, pinfo: &Value, is_local: Value, now: &Value) -> Result<()> {
+    if pyops::contains(stored, pid)? {
+        return rename_participant(stored, pid, pinfo);
+    }
+    if is_local.truthy() && merge_into_local(stored, pid, pinfo)? {
+        return Ok(());
+    }
+    let mut p = Map::new();
+    p.insert("name", get(pinfo, "name")?.cloned().unwrap_or_else(|| Value::from(format!("Participant_{pid}"))));
+    p.insert("is_local", is_local);
+    p.insert("first_seen", now.clone());
+    set(stored, pid, Value::Object(p))
+}
+
+/// A known participant takes the conference's name, when it reports one.
+fn rename_participant(stored: &mut Value, pid: &str, pinfo: &Value) -> Result<()> {
+    if let Some(name) = get(pinfo, "name")?.filter(|n| n.truthy()) {
+        let entry = item_mut(stored, pid)?;
+        if !name.py_eq(item(entry, "name")?) {
+            set(entry, "name", name.clone())?;
+        }
+    }
+    Ok(())
+}
+
+/// Another id of the local user renames the local participant already known instead
+/// of adding one; true when merged.
+fn merge_into_local(stored: &mut Value, pid: &str, pinfo: &Value) -> Result<bool> {
+    let Some(existing) = first_local(stored)?.filter(|id| !id.is_empty() && id != pid) else { return Ok(false) };
+    // The conference's name of the local user is the more accurate.
+    if let Some(name) = get(pinfo, "name")?.filter(|n| n.truthy()) {
+        set(item_mut(stored, &existing)?, "name", name.clone())?;
+    }
+    Ok(true)
+}
+
+/// The transcript's lines with the updates applied (the last update of an id wins),
+/// blank lines dropped and lines that are not JSON kept; and the words gained.
+fn rewrite_rows(content: &str, updates: &[SegmentUpdate]) -> Result<(Vec<String>, i64)> {
+    let mut new_lines = Vec::new();
+    let mut words_delta: i64 = 0;
+    for line in py::strip(content).split('\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(mut segment) = pyjson::loads(line) else {
+            new_lines.push(line.to_owned());
+            continue;
+        };
+        let id = get(&segment, "id")?.cloned().unwrap_or(Value::Null);
+        if let Some(update) = updates.iter().rev().find(|u| pyops::equals_int(&id, u.segment_id)) {
+            words_delta += apply_update(&mut segment, update)?;
+        }
+        new_lines.push(pyjson::dumps(&segment, None));
+    }
+    Ok((new_lines, words_delta))
+}
+
+/// One update on its row; the words its text gains.
+fn apply_update(segment: &mut Value, update: &SegmentUpdate) -> Result<i64> {
+    apply_labels(segment, update)?;
+    match &update.text {
+        Some(text) => refine_text(segment, text),
+        None => Ok(0),
+    }
+}
+
+fn apply_labels(segment: &mut Value, update: &SegmentUpdate) -> Result<()> {
+    if let Some(speaker) = &update.speaker {
+        set(segment, "speaker", Value::from(speaker.as_str()))?;
+        set(segment, "speaker_id", Value::from(speaker.as_str()))?;
+    }
+    if let Some(uncertain) = update.uncertain {
+        set(segment, "uncertain", Value::Bool(uncertain))?;
+    }
+    if let Some(reason) = &update.uncertain_reason {
+        set(segment, "uncertain_reason", Value::from(reason.as_str()))?;
+    }
+    Ok(())
+}
+
+/// A refined text replaces the row's; the words it gains.
+fn refine_text(segment: &mut Value, text: &str) -> Result<i64> {
+    let old = get(segment, "text")?.map_or_else(String::new, Value::py_str);
+    let delta = py::split_whitespace(text).count() as i64 - py::split_whitespace(&old).count() as i64;
+    set(segment, "text", Value::from(text))?;
+    set(segment, "refined", Value::Bool(true))?;
+    Ok(delta)
+}
+
+/// `stats.words_count` moved by `delta`, never below zero, when the meeting has a
+/// meta.
+fn add_words(meta_path: &Path, delta: i64) -> Result<()> {
+    if !meta_path.exists() {
+        return Ok(());
+    }
+    let mut meta = read_json(meta_path)?;
+    let stats = stats_setdefault(&mut meta)?;
+    let current = pyops::to_int(get(stats, "words_count")?.unwrap_or(&Value::Int(0)))?;
+    set(stats, "words_count", Value::from((current + delta).max(0)))?;
+    save_json(meta_path, &meta)
+}
+
+/// `meta.setdefault("stats", {})`.
+fn stats_setdefault(meta: &mut Value) -> Result<&mut Value> {
+    let stats = items(meta, "setdefault")?.get("stats").cloned();
+    if stats.is_none() {
+        set(meta, "stats", Value::Object(Map::new()))?;
+    }
+    item_mut(meta, "stats")
+}
+
+/// The meta of a meeting about to be deleted, None without one; one still being
+/// recorded cannot be deleted.
+fn ended_meta(meta_path: &Path) -> Result<Option<Value>> {
+    if !meta_path.exists() {
+        return Ok(None);
+    }
+    let meta = read_json(meta_path)?;
+    if get(&meta, "ended_at")?.is_none_or(Value::is_null) {
+        return Err(StorageError::Value("Cannot delete an active meeting".into()));
+    }
+    Ok(Some(meta))
+}
+
+/// Index rows whose `id` is not `meeting_id` (rows without one kept).
+fn rows_other_than(rows: &[Value], meeting_id: &str) -> Result<Vec<Value>> {
+    let mut kept = Vec::new();
+    for m in rows {
+        if get(m, "id")?.is_none_or(|id| *id != Value::from(meeting_id)) {
+            kept.push(m.clone());
+        }
+    }
+    Ok(kept)
+}
+
+/// The neighbour's `field` names `own` (missing counts when `own` is null).
+fn links_to(other: &Value, field: &str, own: &Value) -> Result<bool> {
+    Ok(get(other, field)?.is_some_and(|v| v.py_eq(own)) || (get(other, field)?.is_none() && own.is_null()))
+}
+
+/// The meeting's WAVs last written before `cutoff` (Unix seconds).
+fn stale_tracks(meeting_dir: &Path, cutoff: f64) -> Vec<(&'static str, PathBuf)> {
+    let mut stale = Vec::new();
+    for track in ["mic", "system"] {
+        let wav = meeting_dir.join(format!("audio_{track}.wav"));
+        if let Ok(meta) = fs::metadata(&wav)
+            && mtime_seconds(&meta).is_some_and(|m| m < cutoff)
+        {
+            stale.push((track, wav));
+        }
+    }
+    stale
 }
 
 /// The first index row of `meeting_id` takes `title`.
@@ -1375,66 +1637,13 @@ impl MeetingStorage {
         inner.segment_counter += 1;
         let segment_id = inner.segment_counter;
         let now = shared.now();
-        let spoken = segment.captured_at.map_or(now, time::from_timestamp);
-        let mut row = Map::new();
-        row.insert("id", Value::from(segment_id));
-        row.insert("ts", Value::from(spoken.isoformat()));
-        row.insert("ts_display", Value::from(time::hms(spoken.local_wall(shared.options.clock.as_ref()))));
-        row.insert("speaker", Value::from(segment.speaker.as_str()));
-        row.insert("speaker_id", Value::from(segment.speaker_id.as_str()));
-        row.insert("text", Value::from(segment.text.as_str()));
-        row.insert("is_local", Value::Bool(segment.is_local));
-        row.insert("cont", Value::Bool(segment.is_continuation));
-        row.insert("uncertain", Value::Bool(segment.uncertain));
-        row.insert("uncertain_reason", Value::from(segment.uncertain_reason.as_str()));
-        row.insert("audio_offset_ms", Value::from(segment.audio_offset_ms));
-        row.insert("refined", Value::Bool(false));
-        append_line(&meeting_path.join("transcript.jsonl"), &pyjson::dumps(&Value::Object(row), None))?;
+        let row = shared.segment_row(segment_id, segment, &now);
+        append_line(&meeting_path.join("transcript.jsonl"), &pyjson::dumps(&row, None))?;
 
         let meta_path = meeting_path.join("meta.json");
         let mut meta = read_json(&meta_path)?;
-        let words = i64::try_from(py::split_whitespace(&segment.text).count()).unwrap_or(i64::MAX);
-        let stats = item_mut(&mut meta, "stats")?;
-        set(stats, "segment_count", Value::from(segment_id))?;
-        let total = add_int(item(stats, "words_count")?, words)?;
-        set(stats, "words_count", total)?;
-        set(&mut meta, "updated_at", Value::from(now.isoformat()))?;
-        let first_seen = Value::from(now.isoformat());
-        let (speaker, speaker_id) = (segment.speaker.as_str(), segment.speaker_id.as_str());
-        let participants = item_mut(&mut meta, "participants")?;
-        let known = pyops::contains(participants, speaker_id)?;
-        let new_participant = || {
-            let mut p = Map::new();
-            p.insert("name", Value::from(speaker));
-            p.insert("is_local", Value::Bool(segment.is_local));
-            p.insert("first_seen", first_seen.clone());
-            Value::Object(p)
-        };
-        if segment.is_local && !known {
-            let mut existing_local = None;
-            for (pid, p) in items(participants, "items")?.iter() {
-                if get(p, "is_local")?.is_some_and(Value::truthy) {
-                    existing_local = Some(pid.clone());
-                    break;
-                }
-            }
-            if let Some(local) = existing_local.filter(|pid| !pid.is_empty()) {
-                // Already a local participant: rename it instead of adding another.
-                let entry = item_mut(participants, &local)?;
-                if !speaker.is_empty() && *item(entry, "name")? != Value::from(speaker) {
-                    set(entry, "name", Value::from(speaker))?;
-                }
-            } else {
-                set(participants, speaker_id, new_participant())?;
-            }
-        } else if !known {
-            set(participants, speaker_id, new_participant())?;
-        } else {
-            let entry = item_mut(participants, speaker_id)?;
-            if *item(entry, "name")? != Value::from(speaker) {
-                set(entry, "name", Value::from(speaker))?;
-            }
-        }
+        count_segment(&mut meta, segment_id, &segment.text, &now)?;
+        register_speaker(item_mut(&mut meta, "participants")?, segment, &Value::from(now.isoformat()))?;
         save_json(&meta_path, &meta)?;
         Ok(segment_id)
     }
@@ -1445,10 +1654,7 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn update_segments(&self, updates: &[SegmentUpdate], meeting_path: Option<&Path>) -> Result<()> {
-        let target = match meeting_path {
-            Some(path) => Some(path.to_path_buf()),
-            None => self.shared.lock().current_meeting_path.clone(),
-        };
+        let target = meeting_path.map(Path::to_path_buf).or_else(|| self.shared.lock().current_meeting_path.clone());
         let Some(target) = target else { return Ok(()) };
         if updates.is_empty() {
             return Ok(());
@@ -1458,56 +1664,13 @@ impl MeetingStorage {
         if !transcript_path.exists() {
             return Ok(());
         }
-        let find = |id: &Value| updates.iter().rev().find(|u| pyops::equals_int(id, u.segment_id));
         let content = read_text(&transcript_path)?;
-        let mut new_lines = Vec::new();
-        let mut words_delta: i64 = 0;
-        for line in py::strip(&content).split('\n') {
-            if line.is_empty() {
-                continue;
-            }
-            let Ok(mut segment) = pyjson::loads(line) else {
-                new_lines.push(line.to_owned());
-                continue;
-            };
-            let id = get(&segment, "id")?.cloned().unwrap_or(Value::Null);
-            if let Some(update) = find(&id) {
-                if let Some(speaker) = &update.speaker {
-                    set(&mut segment, "speaker", Value::from(speaker.as_str()))?;
-                    set(&mut segment, "speaker_id", Value::from(speaker.as_str()))?;
-                }
-                if let Some(uncertain) = update.uncertain {
-                    set(&mut segment, "uncertain", Value::Bool(uncertain))?;
-                }
-                if let Some(reason) = &update.uncertain_reason {
-                    set(&mut segment, "uncertain_reason", Value::from(reason.as_str()))?;
-                }
-                if let Some(text) = &update.text {
-                    let old = get(&segment, "text")?.map_or_else(String::new, Value::py_str);
-                    let delta = py::split_whitespace(text).count() as i64 - py::split_whitespace(&old).count() as i64;
-                    words_delta += delta;
-                    set(&mut segment, "text", Value::from(text.as_str()))?;
-                    set(&mut segment, "refined", Value::Bool(true))?;
-                }
-            }
-            new_lines.push(pyjson::dumps(&segment, None));
-        }
+        let (new_lines, words_delta) = rewrite_rows(&content, updates)?;
         let temp = target.join("transcript.jsonl.tmp");
         fs::write(&temp, format!("{}\n", new_lines.join("\n"))).map_err(|e| StorageError::os(&e, &temp))?;
         fs::rename(&temp, &transcript_path).map_err(|e| StorageError::os(&e, &transcript_path))?;
         if words_delta != 0 {
-            let meta_path = target.join("meta.json");
-            if meta_path.exists() {
-                let mut meta = read_json(&meta_path)?;
-                let stats = items(&meta, "setdefault")?.get("stats").cloned();
-                if stats.is_none() {
-                    set(&mut meta, "stats", Value::Object(Map::new()))?;
-                }
-                let stats = item_mut(&mut meta, "stats")?;
-                let current = pyops::to_int(get(stats, "words_count")?.unwrap_or(&Value::Int(0)))?;
-                set(stats, "words_count", Value::from((current + words_delta).max(0)))?;
-                save_json(&meta_path, &meta)?;
-            }
+            add_words(&target.join("meta.json"), words_delta)?;
         }
         Ok(())
     }
@@ -1522,17 +1685,8 @@ impl MeetingStorage {
             return Ok(());
         }
         let mut meta = Shared::load_meta(&inner)?;
-        let current = match get(&meta, "title")? {
-            Some(t) if t.truthy() => t.clone(),
-            _ => Value::from(""),
-        };
-        let placeholder = match &current {
-            Value::Str(s) => s.is_empty() || s.starts_with("Joining"),
-            other => return Err(pyops::attribute_error(other, "startswith")),
-        };
-        if placeholder {
-            set(&mut meta, "title", Value::from(title))?;
-            set(&mut meta, "title_source", Value::from("ktalk"))?;
+        if has_placeholder_title(&meta)? {
+            set_title(&mut meta, title, "ktalk")?;
             set(&mut meta, "updated_at", self.shared.now_iso())?;
             Shared::save_meta(&inner, &meta)?;
         }
@@ -1553,38 +1707,7 @@ impl MeetingStorage {
         let now = self.shared.now_iso();
         for (pid, pinfo) in participants.iter() {
             let is_local = get(pinfo, "is_local")?.cloned().unwrap_or(Value::Bool(false));
-            let stored = item_mut(&mut meta, "participants")?;
-            if !pyops::contains(stored, pid)? {
-                if is_local.truthy() {
-                    let mut existing = None;
-                    for (id, p) in items(stored, "items")?.iter() {
-                        if get(p, "is_local")?.is_some_and(Value::truthy) {
-                            existing = Some(id.clone());
-                            break;
-                        }
-                    }
-                    if let Some(existing) = existing.filter(|id| !id.is_empty() && id != pid) {
-                        // The conference's name of the local user is the more accurate.
-                        if let Some(name) = get(pinfo, "name")?.filter(|n| n.truthy()) {
-                            set(item_mut(stored, &existing)?, "name", name.clone())?;
-                        }
-                        continue;
-                    }
-                }
-                let mut p = Map::new();
-                p.insert(
-                    "name",
-                    get(pinfo, "name")?.cloned().unwrap_or_else(|| Value::from(format!("Participant_{pid}"))),
-                );
-                p.insert("is_local", is_local);
-                p.insert("first_seen", now.clone());
-                set(stored, pid, Value::Object(p))?;
-            } else if let Some(name) = get(pinfo, "name")?.filter(|n| n.truthy()) {
-                let entry = item_mut(stored, pid)?;
-                if !name.py_eq(item(entry, "name")?) {
-                    set(entry, "name", name.clone())?;
-                }
-            }
+            merge_participant(item_mut(&mut meta, "participants")?, pid, pinfo, is_local, &now)?;
         }
         set(&mut meta, "updated_at", now)?;
         Shared::save_meta(&inner, &meta)
@@ -1937,36 +2060,11 @@ impl MeetingStorage {
         let cutoff = now - retention_hours * 3600.0;
         let mut deleted = 0;
         for meeting_dir in is_dir_entries(&self.shared.base_path)? {
-            let mut stale = Vec::new();
-            for track in ["mic", "system"] {
-                let wav = meeting_dir.join(format!("audio_{track}.wav"));
-                if let Ok(meta) = fs::metadata(&wav)
-                    && mtime_seconds(&meta).is_some_and(|m| m < cutoff)
-                {
-                    stale.push((track, wav));
-                }
-            }
+            let stale = stale_tracks(&meeting_dir, cutoff);
             if stale.is_empty() {
                 continue;
             }
-            let attempt = (|| -> Result<()> {
-                for (_, wav) in &stale {
-                    fs::remove_file(wav).map_err(|e| StorageError::os(&e, wav))?;
-                    deleted += 1;
-                }
-                let meta_path = meeting_dir.join("meta.json");
-                if meta_path.exists() {
-                    let mut meta = read_json(&meta_path)?;
-                    for (track, _) in &stale {
-                        set(&mut meta, &format!("audio_{track}_path"), Value::Null)?;
-                    }
-                    set(&mut meta, "audio_deleted_at", self.shared.now_iso())?;
-                    set(&mut meta, "updated_at", self.shared.now_iso())?;
-                    save_json(&meta_path, &meta)?;
-                }
-                Ok(())
-            })();
-            match attempt {
+            match self.forget_audio(&meeting_dir, &stale, &mut deleted) {
                 Ok(()) => {}
                 Err(e @ (StorageError::Json(_) | StorageError::Os(_))) => {
                     self.shared.print(&format!("Warning: Cleanup error for {}: {e}", dir_name(&meeting_dir)));
@@ -1981,6 +2079,29 @@ impl MeetingStorage {
         Ok(deleted)
     }
 
+    /// The stale WAVs deleted, each counted, and their paths nulled in the meta.
+    fn forget_audio(&self, meeting_dir: &Path, stale: &[(&str, PathBuf)], deleted: &mut usize) -> Result<()> {
+        for (_, wav) in stale {
+            fs::remove_file(wav).map_err(|e| StorageError::os(&e, wav))?;
+            *deleted += 1;
+        }
+        let meta_path = meeting_dir.join("meta.json");
+        if meta_path.exists() {
+            self.null_audio_paths(&meta_path, stale)?;
+        }
+        Ok(())
+    }
+
+    fn null_audio_paths(&self, meta_path: &Path, stale: &[(&str, PathBuf)]) -> Result<()> {
+        let mut meta = read_json(meta_path)?;
+        for (track, _) in stale {
+            set(&mut meta, &format!("audio_{track}_path"), Value::Null)?;
+        }
+        set(&mut meta, "audio_deleted_at", self.shared.now_iso())?;
+        set(&mut meta, "updated_at", self.shared.now_iso())?;
+        save_json(meta_path, &meta)
+    }
+
     /// `delete_meeting(meeting_id)`: the directory and its index entry; false for an
     /// unknown (or external) meeting.
     ///
@@ -1991,42 +2112,29 @@ impl MeetingStorage {
         if !meeting_path.is_dir() {
             return Ok(false);
         }
-        let meta_path = meeting_path.join("meta.json");
-        let meta = if meta_path.exists() {
-            let meta = read_json(&meta_path)?;
-            if get(&meta, "ended_at")?.is_none_or(Value::is_null) {
-                return Err(StorageError::Value("Cannot delete an active meeting".into()));
-            }
-            Some(meta)
-        } else {
-            None
-        };
-        if let Some(meta) = &meta {
-            self.relink_neighbors(meta)?;
+        if let Some(meta) = ended_meta(&meeting_path.join("meta.json"))? {
+            self.relink_neighbors(&meta)?;
         }
-        let index_path = self.shared.base_path.join("index.json");
-        if index_path.exists() {
-            let mut index = read_json(&index_path)?;
-            let all = match get(&index, "meetings")? {
-                Some(Value::Array(list)) => list.clone(),
-                None => Vec::new(),
-                Some(other) => {
-                    return Err(StorageError::Type(format!("'{}' object is not iterable", other.type_name())));
-                }
-            };
-            let mut kept = Vec::new();
-            for m in &all {
-                if get(m, "id")?.is_none_or(|id| *id != Value::from(meeting_id)) {
-                    kept.push(m.clone());
-                }
-            }
-            if kept.len() != all.len() {
-                set(&mut index, "meetings", Value::Array(kept))?;
-                save_json(&index_path, &index)?;
-            }
-        }
+        self.unindex_deleted(meeting_id)?;
         let _ = fs::remove_dir_all(&meeting_path);
         Ok(true)
+    }
+
+    /// A deleted meeting's row leaves `index.json`; an index without it is not
+    /// rewritten.
+    fn unindex_deleted(&self, meeting_id: &str) -> Result<()> {
+        let index_path = self.shared.base_path.join("index.json");
+        if !index_path.exists() {
+            return Ok(());
+        }
+        let mut index = read_json(&index_path)?;
+        let all = index_rows(&index)?;
+        let kept = rows_other_than(&all, meeting_id)?;
+        if kept.len() != all.len() {
+            set(&mut index, "meetings", Value::Array(kept))?;
+            save_json(&index_path, &index)?;
+        }
+        Ok(())
     }
 
     fn relink_neighbors(&self, meta: &Value) -> Result<()> {
@@ -2034,18 +2142,24 @@ impl MeetingStorage {
         let next = get(meta, "next_meeting_id")?.cloned().unwrap_or(Value::Null);
         let own = get(meta, "id")?.cloned().unwrap_or(Value::Null);
         for (neighbor, field, target) in [(&prev, "next_meeting_id", &next), (&next, "prev_meeting_id", &prev)] {
-            if !neighbor.truthy() {
-                continue;
-            }
-            let path = self.shared.base_path.join(neighbor.py_str()).join("meta.json");
-            if !path.exists() {
-                continue;
-            }
-            let mut other = read_json(&path)?;
-            if get(&other, field)?.is_some_and(|v| v.py_eq(&own)) || (get(&other, field)?.is_none() && own.is_null()) {
-                set(&mut other, field, target.clone())?;
-                save_json(&path, &other)?;
-            }
+            self.relink(neighbor, field, target, &own)?;
+        }
+        Ok(())
+    }
+
+    /// A neighbour that linked to the deleted meeting links past it.
+    fn relink(&self, neighbor: &Value, field: &str, target: &Value, own: &Value) -> Result<()> {
+        if !neighbor.truthy() {
+            return Ok(());
+        }
+        let path = self.shared.base_path.join(neighbor.py_str()).join("meta.json");
+        if !path.exists() {
+            return Ok(());
+        }
+        let mut other = read_json(&path)?;
+        if links_to(&other, field, own)? {
+            set(&mut other, field, target.clone())?;
+            save_json(&path, &other)?;
         }
         Ok(())
     }
