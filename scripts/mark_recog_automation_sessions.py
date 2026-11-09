@@ -17,7 +17,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The marker recog's AI calls put on their prompts (rust/recog-ai, provider.rs; once
+# The marker recog's AI calls put on their prompts (crates/recog-ai, provider.rs; once
 # recog/ai_provider.py).
 CCS_AUTOMATION_MARKER_PREFIX = "<!-- ccs-automation:recog"
 

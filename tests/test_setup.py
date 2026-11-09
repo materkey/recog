@@ -124,7 +124,6 @@ def repo(tmp_path):
             dst / rel,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
-    (dst / "rust").mkdir()
     # A prebuilt macOS helper: the darwin readiness probe wants it executable.
     helper = dst / "sck_audio_capture"
     helper.write_text("#!/bin/sh\nexit 0\n")

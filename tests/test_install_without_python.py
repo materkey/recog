@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BUILT_RECOG = REPO_ROOT / "rust/target/debug/recog"
+BUILT_RECOG = REPO_ROOT / "target/debug/recog"
 PROGRAMS = (
     "recog",
     "recog-web",

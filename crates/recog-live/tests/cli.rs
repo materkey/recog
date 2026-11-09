@@ -257,7 +257,7 @@ fn a_checkout_without_recog_desktop_when_running_desktop_then_how_to_build_it_an
         stderr,
         format!(
             "recog desktop runs {}, which is not built: ./setup.sh builds it\n",
-            repo.join("rust/target/release/recog-desktop").display()
+            repo.join("target/release/recog-desktop").display()
         )
     );
 }

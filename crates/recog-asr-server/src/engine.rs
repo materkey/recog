@@ -2,7 +2,7 @@
 //! word_timestamps=…)` gives the Python backend, segments and words in float seconds.
 //!
 //! [`WavoTranscriber`] runs GigaAM v3 on the wavo crate (Q8_0 GGUF, the GPU through
-//! wgpu), as `rust/recog-live` does. GigaAM's longform mode cuts the audio at pyannote
+//! wgpu), as `crates/recog-live` does. GigaAM's longform mode cuts the audio at pyannote
 //! VAD's speech segments; wavo has no VAD, so the audio is cut with `wavo::split` at its
 //! quietest moments into pieces of at most the model's window (25 s), and each piece
 //! that has text is one segment, from its first to its last sample. Words come from the

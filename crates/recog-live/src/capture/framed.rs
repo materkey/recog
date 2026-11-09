@@ -1,6 +1,6 @@
 //! Captures that read framed audio from a child process, in place of
 //! `recog/mic_capture.py`: the microphone worker (`recog/mic_worker.py` or
-//! `rust/recog-mic`) and, with echo cancellation on, the system audio with its time
+//! `crates/recog-mic`) and, with echo cancellation on, the system audio with its time
 //! stamps as the stage's reference (`sck_audio_capture --frames`).
 //!
 //! Both are a [`SubprocessCapture`] with their own [`Decoder`]; restart, loss and

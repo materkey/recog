@@ -1,7 +1,7 @@
 // recog/desktop/bootstrap.js as recog-desktop evaluates it in the KTalk desktop
 // application's main process: the script's text, then a call of its top-level
 // `attachDesktop` with the bundle directory, its digest, the runtime status
-// file and the target (rust/recog-desktop/src/worker.rs, `bootstrap`). The
+// file and the target (crates/recog-desktop/src/worker.rs, `bootstrap`). The
 // main process is a vm context with fakes for Electron; each window's page is
 // a context of its own, where `executeJavaScript` runs the page code.
 

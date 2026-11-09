@@ -113,7 +113,7 @@
 
 [install]
 # RECOG_INSTALL_RUNTIME: "rust", the only installation: ./setup.sh builds the
-# programs of rust/ with cargo into bin/ and the units run them. "python" is
+# programs of crates/ with cargo into bin/ and the units run them. "python" is
 # gone and makes setup.sh stop. setup.sh and recog-service.sh read this key
 # from this file or the calling shell, never from .env.
 # runtime = "rust"

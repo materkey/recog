@@ -7,7 +7,7 @@
 #
 # Works on macOS (launchd, ScreenCaptureKit) and Linux (systemd --user,
 # PulseAudio/PipeWire). Idempotent: re-running it is how you update after a
-# `git pull` — cargo rebuilds the programs of rust/ into bin/, the model cache
+# `git pull` — cargo rebuilds the programs of crates/ into bin/, the model cache
 # is reused, previously running services are explicitly restarted so they pick
 # up the new programs and units. There is no Python: cargo builds everything.
 #
@@ -24,7 +24,7 @@
 #
 # Environment (read from the calling shell, NOT from .env — .env is created by
 # this script, later than these are needed):
-#   CARGO_TARGET_DIR        where cargo builds (default rust/target)
+#   CARGO_TARGET_DIR        where cargo builds (default target)
 #   RECOG_HOST_OS           override the detected OS (tests)
 #   RECOG_HOST_ARCH         override the detected CPU architecture (tests)
 #   RECOG_SERVICE_OS        override the service backend (tests)
@@ -97,7 +97,7 @@ case "$INSTALL_RUNTIME" in
 esac
 
 # The programs cargo builds, each with its package, and where
-# cargo puts them (CARGO_TARGET_DIR is relative to rust/, where cargo runs).
+# cargo puts them (CARGO_TARGET_DIR is relative to the checkout, where cargo runs).
 RUST_BUILD_ARGS=(-p recog-live --bin recog -p recog-web --bin recog-web
     -p recog-copilot --bin recog-copilot-supervisor --bin recog-copilot-channel
     -p recog-desktop --bin recog-desktop)
@@ -107,7 +107,7 @@ fi
 RUST_RELEASE_DIR="${CARGO_TARGET_DIR:-target}"
 case "$RUST_RELEASE_DIR" in
     /*) RUST_RELEASE_DIR="$RUST_RELEASE_DIR/release" ;;
-    *)  RUST_RELEASE_DIR="$REPO_DIR/rust/$RUST_RELEASE_DIR/release" ;;
+    *)  RUST_RELEASE_DIR="$REPO_DIR/$RUST_RELEASE_DIR/release" ;;
 esac
 
 # The service backend follows the host unless a test pins it.
@@ -140,7 +140,7 @@ echo "=== recog setup ($HOST_OS) ==="
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "Dry run — installation plan only; dependencies and readiness are not verified."
     echo "Would check cargo and the system dependencies."
-    echo "Would build with cargo (release) in rust/: ${RUST_BUILD_ARGS[*]}"
+    echo "Would build with cargo (release): ${RUST_BUILD_ARGS[*]}"
     echo "Would check the configuration with the built recog, then install the programs into $BIN_DIR"
     if [ "$DO_ENV" -eq 1 ]; then
         for config in "$REPO_DIR/.env" "$REPO_DIR/recog/web/.env"; do
@@ -214,7 +214,7 @@ else
     check_cmd tmux required "Copilot sessions"
     check_cmd claude required "Copilot sessions (sign in with claude before first use)"
 fi
-check_cmd cargo required "builds the programs of rust/"
+check_cmd cargo required "builds the programs of crates/"
 if [ "$HOST_OS" = "linux" ]; then
     check_cmd parec required "system audio capture and the microphone"
     check_cmd pactl required "default-sink discovery"
@@ -234,7 +234,7 @@ while IFS=$'\t' read -r name note; do
 done <<< "$(deps_optional_list)"
 
 # ---------------------------------------------------------------------------
-# 2-4. The programs of rust/: built, checked, then installed into bin/
+# 2-4. The programs of crates/: built, checked, then installed into bin/
 # ---------------------------------------------------------------------------
 
 step "Rust programs"
@@ -242,8 +242,8 @@ step "Rust programs"
 # Without cargo or with a failed build there is nothing to install, so stop
 # before anything is touched.
 deps_have cargo || fail "cargo not found — recog builds its programs with it: $(deps_hint cargo), then rerun ./setup.sh"
-# From rust/, the workspace.
-(cd "$REPO_DIR/rust" && cargo build --release "${RUST_BUILD_ARGS[@]}") \
+# From the checkout's root, the workspace.
+(cd "$REPO_DIR" && cargo build --release "${RUST_BUILD_ARGS[@]}") \
     || fail "cargo build failed — nothing was installed or restarted; fix the build and rerun ./setup.sh"
 for program in $(deps_rust_programs); do
     [ -x "$RUST_RELEASE_DIR/$program" ] || fail "cargo built no $RUST_RELEASE_DIR/$program — nothing was installed or restarted (is build.target-dir set elsewhere? set CARGO_TARGET_DIR)"
@@ -263,7 +263,7 @@ runtime_problem="$(DEPS_BIN_DIR="$RUST_RELEASE_DIR" deps_install_runtime_problem
 info "Configuration OK"
 
 # Copied, then renamed over the old one: a running service keeps the file
-# it was started from, and rust/target can be cleaned without touching them.
+# it was started from, and target can be cleaned without touching them.
 mkdir -p "$BIN_DIR"
 for program in $(deps_rust_programs); do
     staged="$BIN_DIR/.$program.$$"

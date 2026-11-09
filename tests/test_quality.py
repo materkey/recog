@@ -138,12 +138,12 @@ def repository(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     (root / "tests").mkdir()
-    (root / "rust/demo/src").mkdir(parents=True)
-    (root / "rust/Cargo.toml").write_text('[workspace]\nresolver = "3"\nmembers = ["demo"]\n')
-    (root / "rust/demo/Cargo.toml").write_text(
+    (root / "crates/demo/src").mkdir(parents=True)
+    (root / "Cargo.toml").write_text('[workspace]\nresolver = "3"\nmembers = ["crates/demo"]\n')
+    (root / "crates/demo/Cargo.toml").write_text(
         '[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2024"\n'
     )
-    (root / "rust/demo/src/lib.rs").write_text(LIBRARY)
+    (root / "crates/demo/src/lib.rs").write_text(LIBRARY)
     (root / "scripts/example.py").write_text("def answer():\n    return 42\n")
     (root / "tests/test_example.py").write_text("def test_answer():\n    assert 6 * 7 == 42\n")
     (root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\ntarget/\nCargo.lock\n")
@@ -192,7 +192,7 @@ def test_real_baseline_when_head_has_new_uncovered_function_then_gate_fails(
     arms = "".join(
         f"    if value == {index} {{\n        return {index};\n    }}\n" for index in range(5)
     )
-    library = repository / "rust/demo/src/lib.rs"
+    library = repository / "crates/demo/src/lib.rs"
     library.write_text(
         library.read_text() + f"\npub fn uncovered(value: u32) -> u32 {{\n{arms}    9\n}}\n"
     )
@@ -201,7 +201,7 @@ def test_real_baseline_when_head_has_new_uncovered_function_then_gate_fails(
     result = json.loads(next(output.glob("run-*/report.json")).read_text())
     assert result["status"] == "fail", result
     failures = [item for item in result["failures"] if item["kind"] == "crap"]
-    assert [item["function"].split("::")[0] for item in failures] == ["rust/demo/src/lib.rs"]
+    assert [item["function"].split("::")[0] for item in failures] == ["crates/demo/src/lib.rs"]
     assert failures[0]["baseline"] is None
     # The test module's function is not production code.
     assert [row["long_name"] for row in result["baseline"]["functions"]] == ["answer"]
@@ -224,22 +224,57 @@ def test_real_baseline_when_head_moves_a_file_then_its_functions_are_not_new(
     arms = "".join(
         f"    if value == {index} {{\n        return {index};\n    }}\n" for index in range(5)
     )
-    library = repository / "rust/demo/src/lib.rs"
+    library = repository / "crates/demo/src/lib.rs"
     library.write_text("pub mod heavy;\n" + library.read_text())
-    (repository / "rust/demo/src/heavy.rs").write_text(
+    (repository / "crates/demo/src/heavy.rs").write_text(
         f"pub fn uncovered(value: u32) -> u32 {{\n{arms}    9\n}}\n"
     )
     commit(repository, "an uncovered function")
-    quality.git(repository, "mv", "rust/demo/src/heavy.rs", "rust/demo/src/weighty.rs")
+    quality.git(repository, "mv", "crates/demo/src/heavy.rs", "crates/demo/src/weighty.rs")
     library.write_text(library.read_text().replace("pub mod heavy;", "pub mod weighty;"))
     output = tmp_path / "reports"
     assert quality.main(["--base", "HEAD", "--output", str(output)]) == 0
     result = json.loads(next(output.glob("run-*/report.json")).read_text())
     assert result["status"] == "pass", result
     assert {row["path"] for row in result["baseline"]["functions"]} == {
-        "rust/demo/src/lib.rs",
-        "rust/demo/src/weighty.rs",
+        "crates/demo/src/lib.rs",
+        "crates/demo/src/weighty.rs",
     }
+
+
+@needs_rust_tools
+def test_baseline_with_its_workspace_in_rust_when_head_has_it_at_the_root_then_gate_passes(
+    repository, tmp_path, monkeypatch
+):
+    """given: a baseline from before the workspace moved to the checkout's root, with an
+    uncovered function over the ceiling
+    when: the head holds the same crate under crates/
+    then: the baseline is measured where it lies, and the function is its own, not new"""
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda: {})
+    arms = "".join(
+        f"    if value == {index} {{\n        return {index};\n    }}\n" for index in range(5)
+    )
+    library = repository / "crates/demo/src/lib.rs"
+    library.write_text(
+        library.read_text() + f"\npub fn uncovered(value: u32) -> u32 {{\n{arms}    9\n}}\n"
+    )
+    quality.git(repository, "mv", "crates", "rust")
+    quality.git(repository, "mv", "Cargo.toml", "rust/Cargo.toml")
+    (repository / "rust/Cargo.toml").write_text('[workspace]\nresolver = "3"\nmembers = ["demo"]\n')
+    commit(repository, "the workspace in rust/")
+    quality.git(repository, "mv", "rust/Cargo.toml", "Cargo.toml")
+    quality.git(repository, "mv", "rust", "crates")
+    (repository / "Cargo.toml").write_text(
+        '[workspace]\nresolver = "3"\nmembers = ["crates/demo"]\n'
+    )
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "HEAD", "--output", str(output)]) == 0
+    result = json.loads(next(output.glob("run-*/report.json")).read_text())
+    assert result["status"] == "pass", result
+    assert [
+        (row["path"], row["long_name"].split()[0]) for row in result["baseline"]["functions"]
+    ] == [("crates/demo/src/lib.rs", "answer"), ("crates/demo/src/lib.rs", "uncovered")]
 
 
 @needs_rust_tools
@@ -367,7 +402,7 @@ def test_real_baseline_when_web_script_gets_uncovered_function_then_gate_fails(
     metrics = {"total_loc": 1, "verbosity": 0, "erosion": 0, "cog_erosion": 0}
     monkeypatch.setattr(quality, "scb", lambda sources: metrics)
     # The Rust side is measured by the tests above; here its coverage is given.
-    covered = {"rust/demo/src/lib.rs": ({1: 1, 2: 1, 3: 1}, {})}
+    covered = {"crates/demo/src/lib.rs": ({1: 1, 2: 1, 3: 1}, {})}
     monkeypatch.setattr(quality, "rust_coverage", lambda *args: covered)
     script = repository / "recog/web/static/page.js"
     script.parent.mkdir(parents=True)
@@ -485,7 +520,7 @@ def test_missing_rust_tools_when_gate_starts_then_measurement_names_them(monkeyp
         quality.rust_tools()
 
 
-SCB_SOURCES = {"rust/a/src/lib.rs": "pub fn a() {}\n", "rust/a/src/b.rs": "", "page.js": ""}
+SCB_SOURCES = {"crates/a/src/lib.rs": "pub fn a() {}\n", "crates/a/src/b.rs": "", "page.js": ""}
 
 
 @pytest.mark.parametrize(
@@ -516,7 +551,7 @@ def test_scb_findings_when_report_is_valid_then_return_one_is_accepted(monkeypat
         assert kwargs["accepted"] == (0, 1)
         # Only the production Rust, outside any repository whose .gitignore could hide it.
         names = {path.relative_to(cwd).as_posix() for path in cwd.rglob("*") if path.is_file()}
-        assert names == {"rust/a/src/lib.rs", "rust/a/src/b.rs"}
+        assert names == {"crates/a/src/lib.rs", "crates/a/src/b.rs"}
         assert not any((parent / ".git").exists() for parent in cwd.parents)
         return json.dumps(payload)
 
@@ -544,7 +579,7 @@ needs_tree_sitter_rust = pytest.mark.skipif(
 
 
 @needs_tree_sitter_rust
-@pytest.mark.parametrize("source", ["/elsewhere/rust/demo/src/lib.rs", None])
+@pytest.mark.parametrize("source", ["/elsewhere/crates/demo/src/lib.rs", None])
 def test_coverage_report_when_paths_do_not_join_then_measurement_fails(
     repository, tmp_path, monkeypatch, source
 ):
@@ -559,11 +594,11 @@ def test_coverage_report_when_paths_join_then_production_files_are_returned(
     repository, tmp_path, monkeypatch
 ):
     calls = []
-    lcov = f"SF:{repository}/rust/demo/src/lib.rs\nDA:1,3\nDA:2,0\nend_of_record\n"
+    lcov = f"SF:{repository}/crates/demo/src/lib.rs\nDA:1,3\nDA:2,0\nend_of_record\n"
     lcov += "SF:/registry/serde/src/lib.rs\nDA:1,1\nend_of_record\n"
     monkeypatch.setattr(quality, "run", fake_cargo(lcov, calls))
     assert quality.rust_coverage(repository, tmp_path, "head") == {
-        "rust/demo/src/lib.rs": ({1: 3, 2: 0}, {})
+        "crates/demo/src/lib.rs": ({1: 3, 2: 0}, {})
     }
     assert calls[:2] == [
         ["cargo", "llvm-cov", "clean", "--workspace"],
@@ -576,12 +611,12 @@ def test_listed_test_target_absent_from_a_tree_when_measured_then_left_out(
     repository, tmp_path, monkeypatch
 ):
     # a baseline older than a target the list names (the gate runs its own list on both trees)
-    (repository / "rust/speexdsp-aec/src").mkdir(parents=True)
-    (repository / "rust/speexdsp-aec/tests").mkdir()
+    (repository / "crates/speexdsp-aec/src").mkdir(parents=True)
+    (repository / "crates/speexdsp-aec/tests").mkdir()
     for target in ("properties", "cli"):
-        (repository / f"rust/speexdsp-aec/tests/{target}.rs").write_text("")
+        (repository / f"crates/speexdsp-aec/tests/{target}.rs").write_text("")
     calls = []
-    lcov = f"SF:{repository}/rust/demo/src/lib.rs\nDA:1,1\nend_of_record\n"
+    lcov = f"SF:{repository}/crates/demo/src/lib.rs\nDA:1,1\nend_of_record\n"
     monkeypatch.setattr(quality, "run", fake_cargo(lcov, calls))
     quality.rust_coverage(repository, tmp_path, "baseline")
     assert calls[2] == [
@@ -602,12 +637,12 @@ def test_listed_test_target_absent_from_a_tree_when_measured_then_left_out(
 def test_crate_with_data_bound_tests_when_measured_then_only_its_listed_targets_run(
     repository, tmp_path, monkeypatch
 ):
-    (repository / "rust/speexdsp-aec/src").mkdir(parents=True)
-    (repository / "rust/speexdsp-aec/tests").mkdir()
+    (repository / "crates/speexdsp-aec/src").mkdir(parents=True)
+    (repository / "crates/speexdsp-aec/tests").mkdir()
     for target in ("properties", "cli", "adapted_golden"):
-        (repository / f"rust/speexdsp-aec/tests/{target}.rs").write_text("")
+        (repository / f"crates/speexdsp-aec/tests/{target}.rs").write_text("")
     calls = []
-    lcov = f"SF:{repository}/rust/demo/src/lib.rs\nDA:1,1\nend_of_record\n"
+    lcov = f"SF:{repository}/crates/demo/src/lib.rs\nDA:1,1\nend_of_record\n"
     monkeypatch.setattr(quality, "run", fake_cargo(lcov, calls))
     quality.rust_coverage(repository, tmp_path, "head")
     assert calls[1] == ["cargo", "llvm-cov", "--no-report", "--workspace", "--exclude=speexdsp-aec"]
@@ -639,10 +674,10 @@ def test_baseline_failure_when_head_would_pass_then_gate_does_not_substitute_hea
 ):
     monkeypatch.setattr(quality, "ROOT", repository)
     monkeypatch.setattr(quality, "versions", lambda: {})
-    test = repository / "rust/demo/src/lib.rs"
+    test = repository / "crates/demo/src/lib.rs"
     correct = test.read_text()
     test.write_text(correct.replace("answer(), 42", "answer(), 43"))
-    quality.git(repository, "add", "rust/demo/src/lib.rs")
+    quality.git(repository, "add", "crates/demo/src/lib.rs")
     quality.git(
         repository,
         "-c",
@@ -790,7 +825,7 @@ def test_attribute_when_read_then_test_code_is_recognised(attribute, test):
 
 
 CRATE = {
-    "rust/c/src/lib.rs": (
+    "crates/c/src/lib.rs": (
         "pub mod a;\n"
         "#[cfg(test)]\n"
         "mod tests;\n"
@@ -810,40 +845,44 @@ CRATE = {
         "#[cfg(not(test))]\n"
         "fn production_only() {}\n"
     ),
-    "rust/c/src/a.rs": (
+    "crates/c/src/a.rs": (
         "pub fn a() -> char {\n    'é'\n}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"
     ),
-    "rust/c/src/tests.rs": "mod nested;\nfn shared() {}\n",
-    "rust/c/src/tests/nested.rs": "fn deep() {}\n",
-    "rust/c/src/whole.rs": "#![cfg(test)]\nfn inside() {}\n",
-    "rust/c/src/bin/tool.rs": "#[cfg(test)]\nmod tool_tests;\nfn main() {}\n",
-    "rust/c/src/bin/tool_tests.rs": "fn checked() {}\n",
+    "crates/c/src/tests.rs": "mod nested;\nfn shared() {}\n",
+    "crates/c/src/tests/nested.rs": "fn deep() {}\n",
+    "crates/c/src/whole.rs": "#![cfg(test)]\nfn inside() {}\n",
+    "crates/c/src/bin/tool.rs": "#[cfg(test)]\nmod tool_tests;\nfn main() {}\n",
+    "crates/c/src/bin/tool_tests.rs": "fn checked() {}\n",
 }
 
 
 @needs_tree_sitter_rust
 def test_crate_sources_when_read_then_test_code_is_blanked_and_test_files_left_out():
     production = rust.production_sources(CRATE)
-    assert set(production) == {"rust/c/src/lib.rs", "rust/c/src/a.rs", "rust/c/src/bin/tool.rs"}
+    assert set(production) == {
+        "crates/c/src/lib.rs",
+        "crates/c/src/a.rs",
+        "crates/c/src/bin/tool.rs",
+    }
     for name, code in production.items():
         assert code.count("\n") == CRATE[name].count("\n")
         assert len(code.encode()) == len(CRATE[name].encode())
-    library = production["rust/c/src/lib.rs"]
+    library = production["crates/c/src/lib.rs"]
     for kept in ("pub mod a;", "pub fn kept() -> u8 {", "fn production_only() {}"):
         assert kept in library
     for gone in ("mod tests;", "helper", "test_only", "loose", "unix_only", "#[test]", "cfg(test)"):
         assert gone not in library
     assert library.splitlines()[7] == "pub fn kept() -> u8 {"
-    assert "fn t()" not in production["rust/c/src/a.rs"]
-    assert "'é'" in production["rust/c/src/a.rs"]
+    assert "fn t()" not in production["crates/c/src/a.rs"]
+    assert "'é'" in production["crates/c/src/a.rs"]
 
 
 @needs_tree_sitter_rust
 @pytest.mark.parametrize(
     "files",
     [
-        {"rust/c/src/lib.rs": "#[cfg(test)]\nmod missing;\n"},
-        {"rust/c/src/lib.rs": "#[cfg(test)]\nmod a;\n", "rust/c/src/a.rs": "mod b;\n"},
+        {"crates/c/src/lib.rs": "#[cfg(test)]\nmod missing;\n"},
+        {"crates/c/src/lib.rs": "#[cfg(test)]\nmod a;\n", "crates/c/src/a.rs": "mod b;\n"},
     ],
 )
 def test_test_module_when_its_file_cannot_be_found_then_refused(files):
@@ -854,7 +893,7 @@ def test_test_module_when_its_file_cannot_be_found_then_refused(files):
 @needs_tree_sitter_rust
 def test_unparsable_source_when_read_then_refused():
     with pytest.raises(ValueError, match="does not parse"):
-        rust.production_sources({"rust/c/src/lib.rs": "fn broken( {\n"})
+        rust.production_sources({"crates/c/src/lib.rs": "fn broken( {\n"})
 
 
 LIZARD_HAZARDS = """pub fn word(byte: u8) -> bool {
@@ -884,8 +923,8 @@ NEUTRALISED = [("word", 1, 3), ("raw", 5, 8), ("doubled", 12, 14)]
 def test_lizard_hazards_when_neutralised_then_each_function_keeps_its_own_span():
     from crapkit.analyze import analyze_source
 
-    production = rust.production_sources({"rust/c/src/lib.rs": LIZARD_HAZARDS})
-    production = production["rust/c/src/lib.rs"]
+    production = rust.production_sources({"crates/c/src/lib.rs": LIZARD_HAZARDS})
+    production = production["crates/c/src/lib.rs"]
 
     def functions(code):
         rows = analyze_source("a.rs", code)
@@ -938,12 +977,12 @@ def test_function_without_instrumented_lines_when_scored_then_left_out_as_not_bu
         return InventoryRow("production", path, name, start, end, 1, 1, 1, 3, 0, 0)
 
     rows = [
-        row("rust/c/src/lib.rs", "built", 1, 3),
-        row("rust/c/src/lib.rs", "macos_only", 5, 7),
+        row("crates/c/src/lib.rs", "built", 1, 3),
+        row("crates/c/src/lib.rs", "macos_only", 5, 7),
         row("page.js", "answer", 1, 3),
     ]
-    rust_lines = {"rust/c/src/lib.rs": ({1: 1, 2: 0}, {})}
+    rust_lines = {"crates/c/src/lib.rs": ({1: 1, 2: 0}, {})}
     measured, unbuilt = quality.rust_function_coverage(rows, rust_lines)
     assert unbuilt == [rows[1]]
-    assert [(fn.name, fn.coverage) for fn in measured["rust/c/src/lib.rs"]] == [("built", 0.5)]
+    assert [(fn.name, fn.coverage) for fn in measured["crates/c/src/lib.rs"]] == [("built", 0.5)]
     assert "page.js" not in measured

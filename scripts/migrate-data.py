@@ -14,7 +14,7 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 
 
 # What recog/config.py held before the Python modules were deleted; the recog
-# binary resolves the same (rust/recog-core, data_dir.rs). Run with the services'
+# binary resolves the same (crates/recog-core, data_dir.rs). Run with the services'
 # RECOG_DATA_DIR in the environment: .env is not read.
 def data_entries(root: Path) -> list[Path]:
     """Переносимые данные, включая старые базы спикеров, без .env."""

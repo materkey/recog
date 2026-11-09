@@ -15,8 +15,8 @@
 
 DEPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPS_REPO_DIR="${DEPS_REPO_DIR:-$(cd "$DEPS_DIR/.." && pwd)}"
-# The installation's programs, copied there from rust/target/release by
-# setup.sh (a cargo cache may clean rust/target while a
+# The installation's programs, copied there from target/release by
+# setup.sh (a cargo cache may clean target while a
 # service runs the binary). recog_core::install names the same directory. A
 # caller may name another one for the questions asked of `recog` (setup.sh
 # before installing, check.sh in a checkout without bin/); the units always run
@@ -184,7 +184,7 @@ deps_hint() {
 
 # The Swift helper is a build artifact, not a package: it is either compiled
 # by setup.sh or shipped by a previous build. `-x` is the whole contract with
-# the live process (rust/recog-live, capture), which execs it.
+# the live process (crates/recog-live, capture), which execs it.
 deps_sck_helper_ok() {
     [ -x "$DEPS_REPO_DIR/sck_audio_capture" ]
 }

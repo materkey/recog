@@ -4,7 +4,7 @@ Python's str methods follow the Unicode database of the interpreter (15.0.0 for 
 Rust's std follows its own. The ported code needs Python's answer, so the tables come
 from Python itself:
 
-    venv-gigaam/bin/python rust/recog-core/gen_unicode_tables.py
+    venv-gigaam/bin/python crates/recog-core/gen_unicode_tables.py
 """
 
 import sys

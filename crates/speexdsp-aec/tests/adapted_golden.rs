@@ -13,12 +13,12 @@
 //!
 //! The fixture was written on Linux x86_64 with pyaec 1.0.1 from PyPI (the
 //! `py3-none-manylinux_2_17_x86_64` wheel; the digest of its `libaec.so` is in the
-//! fixture's header), from `rust/`:
+//! fixture's header), from the checkout's root:
 //!
 //! ```text
 //! SPEEXDSP_AEC_CASES_OUT=$PWD/cases cargo test -p speexdsp-aec --test adapted_golden -- --ignored
 //! python3 -m venv pyaec && pyaec/bin/pip install pyaec==1.0.1
-//! pyaec/bin/python speexdsp-aec/tests/fixtures/adapted_golden.py cases > speexdsp-aec/tests/fixtures/adapted_golden.txt
+//! pyaec/bin/python crates/speexdsp-aec/tests/fixtures/adapted_golden.py cases > crates/speexdsp-aec/tests/fixtures/adapted_golden.txt
 //! ```
 //!
 //! pyaec's macOS arm64 build (`libaec.dylib` sha256 `8e84101e…`, the one the port was

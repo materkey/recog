@@ -153,7 +153,7 @@ or is a shipped script's arithmetic. Coverage as an end in itself is not a findi
 Reviewers find the round's `report.md` and `report.json` in the context directory (thresholds and
 policy in `docs/quality.md`). If they are absent, show a measurement error, or the context does not
 say they were generated for the head under review, metrics are unverified: never infer coverage or
-scores. The reports cover production Rust (`rust/<crate>/src/`, test code left out) and production
+scores. The reports cover production Rust (`crates/<crate>/src/`, test code left out) and production
 JavaScript; a Rust function not compiled on the measuring host is listed as not built and has no
 score there. Verifiers do not receive the context and judge a
 finding by the code alone.

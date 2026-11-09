@@ -1,7 +1,7 @@
 # Optional ASR server
 
 Recog includes two independently runnable HTTP services, both built from the
-crate `rust/recog-asr-server`:
+crate `crates/recog-asr-server`:
 
 - `recog-asr-gigaam`: GigaAM transcription, default `127.0.0.1:9002`.
 - `recog-asr-gateway`: an OpenAI-compatible proxy, default `0.0.0.0:8770`. It
@@ -18,11 +18,11 @@ Install Rust (<https://rustup.rs>) and put `ffmpeg` on `PATH`; the backend
 decodes every upload with it. Build both programs from the repository:
 
 ```bash
-cd rust && cargo build --release -p recog-asr-server
+cargo build --release -p recog-asr-server
 ```
 
-The programs are `rust/target/release/recog-asr-gigaam` and
-`rust/target/release/recog-asr-gateway`; copy them anywhere, they read nothing
+The programs are `target/release/recog-asr-gigaam` and
+`target/release/recog-asr-gateway`; copy them anywhere, they read nothing
 from the checkout. Qwen is an external backend: this repository neither
 installs nor starts it.
 
@@ -41,10 +41,10 @@ manager to run these same commands:
 
 ```bash
 # Backend first: it loads the model before it listens.
-GIGAAM_DIARIZATION=0 rust/target/release/recog-asr-gigaam
+GIGAAM_DIARIZATION=0 target/release/recog-asr-gigaam
 
 # Gateway: use a loopback bind for a local-only installation.
-ASR_GATEWAY_HOST=127.0.0.1 rust/target/release/recog-asr-gateway
+ASR_GATEWAY_HOST=127.0.0.1 target/release/recog-asr-gateway
 ```
 
 Settings are read from the process environment when each program starts; they
@@ -135,11 +135,11 @@ FastAPI's own answers included (422 validation details, 400 for an unreadable
 form, 404, 405 with `Allow`, the 307 of a trailing slash). The frozen tests
 (`gateway_frozen`, `backend_frozen`) hold both programs to the answers the
 Python server gave to the same requests, recorded in
-`rust/recog-asr-server/tests/fixtures/`, against one fake backend and a fake
+`crates/recog-asr-server/tests/fixtures/`, against one fake backend and a fake
 model, without loading a model:
 
 ```bash
-cd rust && cargo test -p recog-asr-server
+cargo test -p recog-asr-server
 ```
 
 These tests do not validate GPU inference or model access on the target host;

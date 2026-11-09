@@ -8,7 +8,7 @@ Tests speaker attribution through the full pipeline: real KTalk conference → C
 2. **BlackHole** virtual audio device installed
 3. **Chrome extension** built: `cd browser-extension && npm run build`
 4. **The `recog` binary**: `bin/recog` of an installation with `[install] runtime = "rust"`,
-   else `cd rust && cargo build --release -p recog-live` (`rust/target/release/recog`)
+   else `cargo build --release -p recog-live` (`target/release/recog`)
 5. **Test tools** in any Python 3.12 (the suite does not import the recog package):
    `pip install pytest pytest-timeout playwright websocket-client numpy soundfile && playwright install chromium`
 6. **Audio fixtures**: `python tests/e2e/prepare_fixtures.py`

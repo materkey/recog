@@ -104,40 +104,37 @@ else
     "$GITLEAKS" dir "${GITLEAKS_ARGS[@]}" .
 fi
 
-# The Rust workspace (rust/Cargo.toml): format, lint, the tests that need no data.
+# The Rust workspace (Cargo.toml): format, lint, the tests that need no data.
 # The parity tests against pyaec need the port's golden data, named by
-# SPEEXDSP_AEC_GOLDEN (rust/speexdsp-aec/README.md). Run from rust/, the workspace.
-if [ -f rust/Cargo.toml ]; then
+# SPEEXDSP_AEC_GOLDEN (crates/speexdsp-aec/README.md).
+if [ -f Cargo.toml ]; then
     step "rust"
     if ! command -v cargo > /dev/null 2>&1; then
         echo "check: cargo not found (install Rust with rustup, https://rustup.rs)" >&2
         exit 1
     fi
-    (
-        cd rust
-        cargo fmt --check
-        cargo clippy --workspace --all-targets -- -D warnings
-        cargo test -p speexdsp-aec --lib --test properties --test cli --test adapted_golden
-        cargo test -p speexdsp-aec --doc
-        cargo test -p recog-mic
-        cargo test -p recog-copilot
-        cargo test -p recog-zoom
-        cargo test -p recog-core
-        cargo test -p recog-ai
-        cargo test -p recog-live
-        cargo test -p recog-bridge
-        cargo test -p recog-web
-        cargo test -p recog-desktop
-        cargo test -p recog-asr-server
-        if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
-            cargo test -p speexdsp-aec --test parity --test fft_parity
-        fi
-    )
+    cargo fmt --check
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test -p speexdsp-aec --lib --test properties --test cli --test adapted_golden
+    cargo test -p speexdsp-aec --doc
+    cargo test -p recog-mic
+    cargo test -p recog-copilot
+    cargo test -p recog-zoom
+    cargo test -p recog-core
+    cargo test -p recog-ai
+    cargo test -p recog-live
+    cargo test -p recog-bridge
+    cargo test -p recog-web
+    cargo test -p recog-desktop
+    cargo test -p recog-asr-server
+    if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
+        cargo test -p speexdsp-aec --test parity --test fft_parity
+    fi
 fi
 
 step "CLI help"
-if [ -f rust/Cargo.toml ]; then
-    (cd rust && cargo run -q -p recog-live --bin recog -- --help > /dev/null)
+if [ -f Cargo.toml ]; then
+    cargo run -q -p recog-live --bin recog -- --help > /dev/null
 fi
 
 step "service units render"
@@ -145,10 +142,10 @@ RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "$RENDER_DIR"' EXIT
 # Rendering asks recog for the data directory: the installed one, else the debug
 # build the Rust tests above made (a checkout setup.sh has not installed, CI).
-if [ -x bin/recog ] || [ ! -x "${CARGO_TARGET_DIR:-rust/target}/debug/recog" ]; then
+if [ -x bin/recog ] || [ ! -x "${CARGO_TARGET_DIR:-target}/debug/recog" ]; then
     ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
 else
-    DEPS_BIN_DIR="$(cd "${CARGO_TARGET_DIR:-rust/target}/debug" && pwd)" \
+    DEPS_BIN_DIR="$(cd "${CARGO_TARGET_DIR:-target}/debug" && pwd)" \
         ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
 fi
 echo "  rendered $(find "$RENDER_DIR" -type f | wc -l | tr -d ' ') $(uname -s) units"

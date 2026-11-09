@@ -408,7 +408,7 @@ cmd_claude() {
     # for the manual launch: the project-scope entry in ~/.claude.json
     # disappeared, so without these flags Claude Code starts with no `copilot`
     # server (channel push is a no-op). This mirrors what the supervisor spawns
-    # (rust/recog-copilot's supervisor) — built-ins + copilot
+    # (crates/recog-copilot's supervisor) — built-ins + copilot
     # only, no user MCP servers. URL overridable via RECOG_COPILOT_MCP_URL.
     # The model and the effort ("auto" without one), on two lines.
     local copilot_launch copilot_model copilot_effort

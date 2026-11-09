@@ -47,12 +47,12 @@ def _executable(path: Path) -> Path:
 
 def _built_binary():
     """The real `recog`: the checkout's, else a cargo build of it (CARGO_TARGET_DIR
-    or rust/target, release or debug — `cargo test -p recog-live` builds debug)."""
+    or target, release or debug — `cargo test -p recog-live` builds debug)."""
     found = find_binary(REPO_ROOT)
     if found is not None:
         return found
     targets = [Path(os.environ["CARGO_TARGET_DIR"])] if os.environ.get("CARGO_TARGET_DIR") else []
-    targets.append(REPO_ROOT / "rust/target")
+    targets.append(REPO_ROOT / "target")
     for target in targets:
         for profile in ("release", "debug"):
             candidate = target / profile / "recog"
@@ -91,7 +91,7 @@ def _row(speaker, text, ts="12:00:00", speaker_id=None, **extra):
 
 
 def test_installed_and_built_binary_when_finding_the_binary_then_installed_one_wins(tmp_path):
-    built = _executable(tmp_path / "rust/target/release/recog")
+    built = _executable(tmp_path / "target/release/recog")
     assert find_binary(tmp_path) == built
     installed = _executable(tmp_path / "bin/recog")
     assert find_binary(tmp_path) == installed

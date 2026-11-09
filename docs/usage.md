@@ -50,7 +50,7 @@ Flags: `--dry-run` (show the plan without changes; does not verify readiness),
 These are read from the calling shell, not from `.env` (`.env` is created by
 setup itself, later than these are needed):
 
-- `CARGO_TARGET_DIR` — where cargo builds (default `rust/target`); setup takes
+- `CARGO_TARGET_DIR` — where cargo builds (default `target`); setup takes
   the programs from its `release/`.
 - `RECOG_SKIP_COPILOT_CHECK=1` — skip the tmux/claude checks when Copilot is not
   needed.
@@ -58,7 +58,7 @@ setup itself, later than these are needed):
 
 ### Installing without Python
 
-Every service is a program of `rust/`, and recog has no Python. `./setup.sh`:
+Every service is a program of `crates/`, and recog has no Python. `./setup.sh`:
 
 1. builds `recog`, `recog-web`, `recog-copilot-supervisor`, `recog-copilot-channel`,
    `recog-desktop` and, on macOS, `recog-mic` with `cargo build --release` (the first
@@ -68,7 +68,7 @@ Every service is a program of `rust/`, and recog has no Python. `./setup.sh`:
    problem;
 3. copies the programs into `bin/` of the checkout (gitignored), each renamed over
    the old one, so a running service keeps the file it started from, and a cleaned
-   `rust/target` cannot take them away;
+   `target` cannot take them away;
 4. builds the extension (the hosts come from `bin/recog config conferences`),
    `sck_audio_capture` and `Recog.app` (`bin/recog launcher`, rebuilt only when its
    source changed, so the permissions of "Recog" stay), downloads the ASR model
@@ -257,7 +257,7 @@ On Linux, add `loginctl enable-linger $USER` so the user services survive
 logout — `status` prints the reminder. After rebuilding the extension, reload
 it in `chrome://extensions`.
 
-After changing code in `rust/` run `./setup.sh --no-extension` (it rebuilds and
+After changing code in `crates/` run `./setup.sh --no-extension` (it rebuilds and
 reinstalls `bin/`) and `./recog-service.sh restart`; for the supervisor alone,
 `./recog-service.sh restart-supervisor` is enough.
 
@@ -319,7 +319,7 @@ restarted supervisor re-adopts it. An explicit Stop in the web UI (or
 
 Instead of running GigaAM locally the live process can send speech to your own
 OpenAI-Whisper-compatible ASR gateway. The optional server implementation is
-the crate `rust/recog-asr-server`; see the [ASR server guide](asr-server.md) for
+the crate `crates/recog-asr-server`; see the [ASR server guide](asr-server.md) for
 installation and configuration:
 
 ```dotenv
@@ -383,7 +383,7 @@ still overrides it. The ones you are most likely to touch:
 - `RECOG_PULSE_MONITOR_SOURCE` — pin one PulseAudio monitor (Linux).
 - `RECOG_EXTRA_WS_ORIGINS` — comma-separated extra origins allowed to open the
   bridge / live-stream WebSockets. The shipped conference hosts are built in
-  (`rust/recog-core/src/ws_origin.rs`, mirroring the extension's `manifest.json`); if your
+  (`crates/recog-core/src/ws_origin.rs`, mirroring the extension's `manifest.json`); if your
   conferences live on another host, add it **both** here and to the extension's
   `manifest.json` (that is a separate rebuild).
 - `RECOG_ASR_BACKEND`, `RECOG_ASR_REMOTE_URL` — see [Remote ASR](#remote-asr) and
@@ -531,7 +531,7 @@ data root, the [installation configuration](configuration.md) `config.toml`
 `scripts/check.sh` is what CI runs on macOS and Linux: `compileall` of what is
 left in Python, `bash -n` and shellcheck over the shell scripts, actionlint over
 the CI workflow, a gitleaks secret scan, `cargo fmt`, clippy and the tests of
-`rust/`, the CLI smoke test (`recog --help`), a dry-run render of the service
+`crates/`, the CLI smoke test (`recog --help`), a dry-run render of the service
 units, and the Python suite (the shell scripts' and the quality tools' tests). The linters come from the quality tools in
 [docs/quality.md](quality.md). It starts no service, captures no audio and loads no
 model weights — those belong to manual acceptance on a real host.
@@ -539,7 +539,7 @@ model weights — those belong to manual acceptance on a real host.
 The individual steps:
 
 ```bash
-(cd rust && cargo test --workspace)      # the Rust tests
+cargo test --workspace                   # the Rust tests
 python -m pytest tests/ -v -m "not e2e"  # the Python tests
-(cd rust && cargo run -q -p recog-live --bin recog -- --help)  # CLI smoke test
+cargo run -q -p recog-live --bin recog -- --help  # CLI smoke test
 ```

@@ -1,6 +1,7 @@
 # Repository layout
 
-The programs are the Rust workspace `rust/`, one crate per responsibility
+The programs are a Rust workspace: its manifest `Cargo.toml` is at the root and
+`crates/` holds one crate per responsibility
 ([the move to Rust](plans/2026-11-07-rust-migration.md)). `recog/` keeps the parts
 that are not Rust: the static web UI, prompts, Swift sources and the desktop
 bootstrap script. Browser code has its own
@@ -9,8 +10,8 @@ are grouped separately, making it clear where a new file belongs.
 
 | Path | Responsibility |
 | --- | --- |
-| `rust/` | `recog-live` (the `recog` binary: live process with the bridge, `meetings`, `replay`, the installation helpers), `recog-web`, `recog-copilot` (supervisor and MCP channel), `recog-desktop`, `recog-mic`, `recog-asr-server` (the optional ASR server's gateway and GigaAM backend, launched independently of the client services), and the libraries `recog-core`, `recog-ai`, `recog-bridge`, `recog-zoom`, `speexdsp-aec` |
-| `bin/` | Gitignored: the programs `setup.sh` installs from `rust/target/release` and the units run |
+| `crates/` | `recog-live` (the `recog` binary: live process with the bridge, `meetings`, `replay`, the installation helpers), `recog-web`, `recog-copilot` (supervisor and MCP channel), `recog-desktop`, `recog-mic`, `recog-asr-server` (the optional ASR server's gateway and GigaAM backend, launched independently of the client services), and the libraries `recog-core`, `recog-ai`, `recog-bridge`, `recog-zoom`, `speexdsp-aec` |
+| `bin/` | Gitignored: the programs `setup.sh` installs from `target/release` and the units run |
 | `recog/web/static/` | The web UI the `recog-web` binary serves |
 | `recog/desktop/bootstrap.js` | The script the KTalk desktop integration evaluates in the application |
 | `recog/prompts/` | Shared AI summary templates |

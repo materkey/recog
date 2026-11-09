@@ -11,9 +11,18 @@ reasoning.
 
 ### Action required
 
+- **The Rust workspace is at the checkout's root.** `Cargo.toml` and `Cargo.lock`
+  moved there from `rust/`, and the crates to `crates/`. After `git pull` run
+  `./setup.sh` as usual: cargo now builds into `target/` at the root and compiles
+  everything once more. To keep the dependencies' builds, move the old directory
+  first (`mv rust/target target`); otherwise delete it, nothing reads it any more
+  (`rm -rf rust`). cargo runs from the root without `cd rust` (`cargo test
+  --workspace`), a relative `CARGO_TARGET_DIR` counts from the root, and the
+  optional ASR server's programs are built into `target/release/`: a unit that
+  starts them from `rust/target/release/` must name the new place.
 - **The quality gate measures Rust.** `RECOG_QUALITY_BASE=… ./scripts/check.sh` and
   `scripts/quality.py` (docs/quality.md) now score the CRAP and duplicates of the
-  production Rust under `rust/<crate>/src/` (test modules left out) next to the
+  production Rust under `crates/<crate>/src/` (test modules left out) next to the
   JavaScript, with coverage from `cargo llvm-cov` over the workspace's tests; the
   Python coverage is gone and pytest runs once, pass or fail. A contributor running
   the gate needs `cargo install cargo-llvm-cov` (CI pins 0.9.1) and `rustup component

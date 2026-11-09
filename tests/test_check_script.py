@@ -225,8 +225,7 @@ def test_linter_finding_when_checking_then_run_stops_before_the_suite(repo, stub
 
 
 def add_rust_workspace(repo):
-    (repo / "rust").mkdir()
-    (repo / "rust/Cargo.toml").write_text("[workspace]\n")
+    (repo / "Cargo.toml").write_text("[workspace]\n")
 
 
 def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_before_pytest(

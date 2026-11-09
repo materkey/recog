@@ -66,7 +66,7 @@ State the web UI writes (`ai-settings.json`,
 `user-profile.json`, `privacy.json` under the data directory) is not
 configuration and stays where it is.
 
-One parser reads the file, `rust/recog-core` (the port of the former
+One parser reads the file, `crates/recog-core` (the port of the former
 `recog/install_config.py`). The extension build takes the conference hosts from
 `bin/recog config conferences`; in a checkout setup.sh has not built, it builds
 with the built-in hosts when there is no configuration file and fails when there

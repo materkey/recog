@@ -1,0 +1,29 @@
+# The Rust code of recog, one crate per responsibility in crates/
+# (docs/repository-layout.md). Build and test from the checkout's root;
+# crates/speexdsp-aec/README.md says which tests need its golden data.
+[workspace]
+resolver = "3"
+members = [
+    "crates/recog-ai",
+    "crates/recog-asr-server",
+    "crates/recog-bridge",
+    "crates/recog-copilot",
+    "crates/recog-core",
+    "crates/recog-desktop",
+    "crates/recog-live",
+    "crates/recog-mic",
+    "crates/recog-web",
+    "crates/recog-zoom",
+    "crates/speexdsp-aec",
+]
+# The ASR benchmark's harness builds on its own, with its own lock file.
+exclude = ["scripts/benchmarks/rust_asr/harness"]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+# The parity tests replay minutes of audio: optimise them, keep overflow checks (a
+# plain `+` that C would wrap panics there instead of silently diverging).
+[profile.test]
+opt-level = 3

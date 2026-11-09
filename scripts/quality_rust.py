@@ -1,6 +1,6 @@
 """The production part of the Rust workspace and its line coverage, for the quality gate.
 
-Production Rust is `rust/<crate>/src/**/*.rs` without its test code. Test code is
+Production Rust is `crates/<crate>/src/**/*.rs` without its test code. Test code is
 found in the syntax tree (tree-sitter-rust, pinned), not by name: an item carrying
 `#[test]` (or `#[<runner>::test]`) or a `#[cfg(...)]` that cannot hold without
 `test` is blanked out of the source, keeping every line where it was, and a file
@@ -25,10 +25,10 @@ _CFG_TOKEN = re.compile(r'\s*(?:(\w+)|("(?:[^"\\]|\\.)*")|([(),=]))')
 _SKIPPED = {"attribute_item", "line_comment", "block_comment"}
 
 
-def is_production_path(name):
-    """`rust/<crate>/src/**/*.rs`: the crate's own sources, not tests/, benches/ or build.rs."""
+def is_production_path(name, crates="crates"):
+    """`crates/<crate>/src/**/*.rs`: the crate's own sources, not tests/, benches/ or build.rs."""
     parts = PurePosixPath(name).parts
-    return len(parts) >= 4 and parts[0] == "rust" and parts[2] == "src" and name.endswith(".rs")
+    return len(parts) >= 4 and parts[0] == crates and parts[2] == "src" and name.endswith(".rs")
 
 
 def _cfg_tokens(text):

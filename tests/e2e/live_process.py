@@ -7,7 +7,7 @@ Nothing here imports the recog package, so the suite needs only its test tools
 (pytest, playwright, websocket-client).
 
 The bridge port is fixed in the binary (8766, `BridgeConfig::default()` in
-rust/recog-bridge) and the extension connects to that same port
+crates/recog-bridge) and the extension connects to that same port
 (`WS_URL` in browser-extension/src/state.js), so an e2e run still needs the
 installed live service stopped (tests/e2e/conftest.py). For the same reason
 the bridge's debug file, `/tmp/ktalk_debug.json`, is the run's own while it
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-# Written by the bridge at most once a second (rust/recog-bridge/src/debug.rs).
+# Written by the bridge at most once a second (crates/recog-bridge/src/debug.rs).
 DEBUG_FILE = Path("/tmp/ktalk_debug.json")
 # Printed once the model is loaded and the bridge listens (session::run).
 READY_LINE = "KTalk bridge started"
@@ -39,7 +39,7 @@ def find_binary(repo_root: Path = REPO_ROOT) -> Optional[Path]:
     when it is executable, else the release build; None when neither exists."""
     for candidate in (
         repo_root / "bin" / "recog",
-        repo_root / "rust" / "target" / "release" / "recog",
+        repo_root / "target" / "release" / "recog",
     ):
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate

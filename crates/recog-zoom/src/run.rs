@@ -115,7 +115,7 @@ impl Options {
     }
 }
 
-/// The checkout this crate was built from (`rust/recog-zoom/../..`).
+/// The checkout this crate was built from (`crates/recog-zoom/../..`).
 pub fn default_repo_root() -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     std::fs::canonicalize(&root).unwrap_or(root)

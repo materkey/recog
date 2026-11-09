@@ -25,7 +25,7 @@ use crate::log::Logger;
 use args::{Command, LiveArgs, ReplayArgs};
 
 /// The checkout the binary belongs to: `<repo>/bin/recog` (installed by setup.sh) or
-/// `rust/target/<profile>/recog` four levels down, else `RECOG_REPO_DIR`, else the
+/// `<repo>/target/<profile>/recog` (built by cargo), else `RECOG_REPO_DIR`, else the
 /// checkout it was built from.
 #[must_use]
 pub fn repo_root() -> PathBuf {
@@ -51,14 +51,13 @@ fn repo_root_of(exe: Option<&Path>, repo_dir: Option<std::ffi::OsString>) -> Pat
     std::fs::canonicalize(&built).unwrap_or(built)
 }
 
-/// The checkout of a program built at `<checkout>/rust/target/<profile>/<name>`.
+/// The checkout of a program built at `<checkout>/target/<profile>/<name>`.
 fn build_checkout(exe: &Path) -> Option<PathBuf> {
     let mut ancestors = exe.ancestors();
-    let (profile, target, rust) = (ancestors.nth(1), ancestors.next(), ancestors.next());
-    if let (Some(_), Some(target), Some(rust)) = (profile, target, rust)
+    let (profile, target, root) = (ancestors.nth(1), ancestors.next(), ancestors.next());
+    if let (Some(_), Some(target), Some(root)) = (profile, target, root)
         && target.file_name().is_some_and(|n| n == "target")
-        && rust.file_name().is_some_and(|n| n == "rust")
-        && let Some(root) = rust.parent()
+        && recog_core::install::is_checkout(root)
     {
         return Some(root.to_path_buf());
     }
@@ -464,19 +463,19 @@ mod tests {
         let elsewhere = Path::new("/opt/tools/recog");
         // when
         let from_bin = repo_root_of(Some(&installed.join("bin/recog")), Some("/ignored".into()));
-        let from_target = repo_root_of(Some(Path::new("/src/recog/rust/target/release/recog")), None);
+        let from_target = repo_root_of(Some(&installed.join("target/release/recog")), None);
         let from_env = repo_root_of(Some(elsewhere), Some("/srv/recog".into()));
         let from_build = repo_root_of(None, None);
         // then
         assert_eq!(from_bin, installed);
-        assert_eq!(from_target, Path::new("/src/recog"));
+        assert_eq!(from_target, installed);
         assert_eq!(from_env, Path::new("/srv/recog"));
         let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         assert_eq!(from_build, std::fs::canonicalize(&built).unwrap());
     }
 
     #[test]
-    fn a_target_dir_not_under_rust_when_finding_the_build_checkout_then_none() {
+    fn a_target_dir_outside_a_checkout_when_finding_the_build_checkout_then_none() {
         // given / when / then
         assert_eq!(build_checkout(Path::new("/cache/recog-target/debug/recog")), None);
         assert_eq!(build_checkout(Path::new("/src/target/debug/recog")), None);

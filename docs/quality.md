@@ -49,7 +49,7 @@ policy tests without the optional quality tools; real analyzer integration tests
 require them (the Rust ones also `cargo llvm-cov`, on a one-function crate).
 
 Both revisions build into one target directory, `CARGO_TARGET_DIR` (relative to
-`rust/`) or else `rust/target`, under its `llvm-cov-target/`: the dependencies are
+the checkout) or else `target`, under its `llvm-cov-target/`: the dependencies are
 compiled once, and only the workspace's own crates again for each tree. On a
 32-core Linux machine with the dependencies already built, the whole gate took
 about 7.5 minutes, most of it the two instrumented builds and test runs; the first
@@ -86,7 +86,7 @@ run also builds the dependencies with instrumentation.
 
 Structural analysis covers production Rust and production JavaScript.
 
-**Rust** is every `rust/<crate>/src/**/*.rs` (binaries under `src/bin/` included)
+**Rust** is every `crates/<crate>/src/**/*.rs` (binaries under `src/bin/` included)
 without its test code; a crate's `tests/`, `benches/` and build script are outside
 `src/` and never read (`src/live/build.rs` of recog-live is a module, not a build
 script, and is measured). Test code is found in the syntax tree
@@ -158,12 +158,12 @@ sha256; locally install it from a package manager (`brew install gitleaks`).
 
 ## Rust checks
 
-With the `rust/` workspace present, `scripts/check.sh` runs `cargo fmt --check`,
-`cargo clippy --workspace --all-targets -- -D warnings` and the echo canceller's
-tests that need no data, from `rust/`, then every crate's tests. The parity tests that
+With the Rust workspace present (`Cargo.toml` at the root), `scripts/check.sh` runs
+`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and the
+echo canceller's tests that need no data, then every crate's tests. The parity tests that
 ran the deleted Python modules beside their ports went with them.
 With `SPEEXDSP_AEC_GOLDEN` set it also runs
-the parity tests against pyaec (`rust/speexdsp-aec/README.md`). cargo comes from
+the parity tests against pyaec (`crates/speexdsp-aec/README.md`). cargo comes from
 rustup (https://rustup.rs) with the clippy and rustfmt components; CI uses the
 runner's stable toolchain, so a new clippy lint can fail a run that passed before.
 

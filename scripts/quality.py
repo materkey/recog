@@ -41,6 +41,11 @@ NODE_TOOLS = ROOT / "deploy/node"
 ESLINT = NODE_TOOLS / "node_modules/.bin/eslint"
 C8 = NODE_TOOLS / "node_modules/.bin/c8"
 EXTENSION = "browser-extension/"
+# The crates lie in `crates/`, beside the workspace manifest at the checkout's root.
+CRATES = "crates"
+# Until 2026-11-09 `rust/` held the manifest and the crates: a baseline from before
+# that is measured where it lies.
+FORMER_WORKSPACE = "rust"
 # What check.sh tests, minus the doctests (stable rustc does not instrument them): a
 # crate listed here runs only these targets, the echo canceller's parity tests
 # needing golden data CI does not have.
@@ -105,10 +110,17 @@ def javascript_files(root):
     return listed_files(root, "*.js", "*.cjs", "*.mjs")
 
 
+def crates_directory(root):
+    return CRATES if (root / "Cargo.toml").is_file() else FORMER_WORKSPACE
+
+
 def rust_sources(root):
-    """Production Rust (`rust/<crate>/src/`) with its test code blanked; see quality_rust."""
+    """Production Rust (`crates/<crate>/src/`) with its test code blanked; see quality_rust."""
+    crates = crates_directory(root)
     names = [
-        name for name in listed_files(root, "rust/*.rs") if quality_rust.is_production_path(name)
+        name
+        for name in listed_files(root, f"{crates}/*.rs")
+        if quality_rust.is_production_path(name, crates)
     ]
     return quality_rust.production_sources({name: (root / name).read_text() for name in names})
 
@@ -196,7 +208,7 @@ def tests(root, output):
 
 def cargo_target_dir():
     """One target directory for both trees, so the dependencies are built once."""
-    return (ROOT / "rust" / os.environ.get("CARGO_TARGET_DIR", "target")).resolve()
+    return (ROOT / os.environ.get("CARGO_TARGET_DIR", "target")).resolve()
 
 
 def present_targets(crate):
@@ -220,15 +232,16 @@ def present_targets(crate):
 
 def rust_coverage(root, output, label):
     """{production file: (line hits, branch hits)} of the workspace's tests from cargo llvm-cov."""
-    workspace = root / "rust"
+    crates = crates_directory(root)
+    workspace = root if crates == CRATES else root / crates
     artifact = output / f"{label}-rust.lcov"
     env = {**os.environ, "CARGO_TARGET_DIR": str(cargo_target_dir())}
-    restricted = [name for name in RUST_RESTRICTED_TESTS if (workspace / name).is_dir()]
+    restricted = [name for name in RUST_RESTRICTED_TESTS if (root / crates / name).is_dir()]
     steps = [
         ("clean", ["clean", "--workspace"]),
         ("tests", ["--no-report", "--workspace", *(f"--exclude={name}" for name in restricted)]),
         *(
-            (name, ["--no-report", "-p", name, *present_targets(workspace / name)])
+            (name, ["--no-report", "-p", name, *present_targets(root / crates / name)])
             for name in restricted
         ),
         ("report", ["report", "--lcov", "--output-path", str(artifact)]),
@@ -241,13 +254,13 @@ def rust_coverage(root, output, label):
     for source, hits in quality_rust.parse_lcov(artifact.read_text()).items():
         path = Path(source).resolve()
         name = path.relative_to(resolved).as_posix() if path.is_relative_to(resolved) else ""
-        if quality_rust.is_production_path(name):
+        if quality_rust.is_production_path(name, crates):
             measured[name] = hits
     # Every crate has code built on every host: a crate without a measured file
     # means its tests did not run or the report's paths did not join.
-    crates = {name.split("/")[1] for name in rust_sources(root)}
-    missing = sorted(crates - {name.split("/")[1] for name in measured})
-    if not crates or missing:
+    expected = {name.split("/")[1] for name in rust_sources(root)}
+    missing = sorted(expected - {name.split("/")[1] for name in measured})
+    if not expected or missing:
         raise ValueError(f"Missing Rust coverage of crates: {missing or 'no crates found'}")
     return measured
 
@@ -403,10 +416,12 @@ def scb(sources):
         for name, code in rust.items():
             (tree / name).parent.mkdir(parents=True, exist_ok=True)
             (tree / name).write_text(code)
+        # The one directory the tree keeps its crates in.
+        (crates,) = {name.split("/")[0] for name in rust}
         command = [
             str(executable),
             "check",
-            "rust",
+            crates,
             "--output-format",
             "json",
             "--config",

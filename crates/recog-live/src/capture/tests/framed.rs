@@ -2,7 +2,7 @@
 //! tests/test_mic_child.py.
 //!
 //! Not ported here: the worker-side tests (`device_is_found_by_name…`, `worker_*`):
-//! they test `recog/mic_worker.py`, which rust/recog-mic replaces with its own tests;
+//! they test `recog/mic_worker.py`, which crates/recog-mic replaces with its own tests;
 //! `macos_microphone_runs_in_a_child…`, `macos_default_input_has_no_name…` and
 //! `linux_microphone_stays_in_process` test `create_mic_capture` and the
 //! `create_echo_stage` cases test the stage's construction, both in `live.py`.

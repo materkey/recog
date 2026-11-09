@@ -22,7 +22,7 @@ RECOG_ZOOM_APP=1
 ```
 
 `live --zoom-app` does the same for a manual run. For a check without the live
-pipeline, run `cargo run --release -p recog-zoom --bin recog-zoom-app` from `rust/` while the live service is up.
+pipeline, run `cargo run --release -p recog-zoom --bin recog-zoom-app` from the checkout's root while the live service is up.
 
 ### Accessibility permission
 
@@ -61,7 +61,7 @@ one. To keep such changes rare the helper only reports what the tree says —
 the described tab groups with their children, the title of the meeting
 window, the account button and, during a meeting, the titles of the menu
 bar's items; what any of it means is decided in
-`rust/recog-zoom`, so a change in Zoom's wording is followed without
+`crates/recog-zoom`, so a change in Zoom's wording is followed without
 touching the helper.
 
 A signature that survives code changes needs a certificate macOS trusts for

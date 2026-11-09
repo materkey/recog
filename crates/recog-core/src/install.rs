@@ -1,16 +1,22 @@
 //! Where an installation keeps its programs: `<repo>/bin/`, which `setup.sh` fills
-//! from `rust/target/release/` under `[install] runtime = "rust"` and the service units
+//! from `target/release/` under `[install] runtime = "rust"` and the service units
 //! run. The directory sits in the checkout because the programs need it anyway (the
 //! static UI, the prompts, the Swift helpers and `Recog.app`), and outside
-//! `rust/target/`, which a cargo cache may clean while a service runs the binary.
+//! `target/`, which a cargo cache may clean while a service runs the binary.
 
 use std::path::{Path, PathBuf};
 
 /// The installation's program directory, relative to the checkout.
 pub const BIN_DIR: &str = "bin";
 
+/// Whether `dir` is a checkout: the directory holding `recog-service.sh`.
+#[must_use]
+pub fn is_checkout(dir: &Path) -> bool {
+    dir.join("recog-service.sh").is_file()
+}
+
 /// The checkout an installed program at `exe` (a canonical path) belongs to:
-/// `<repo>/bin/<name>`, where `<repo>` is the directory holding `recog-service.sh`.
+/// `<repo>/bin/<name>`.
 #[must_use]
 pub fn installed_repo_of(exe: &Path) -> Option<PathBuf> {
     let bin = exe.parent()?;
@@ -18,7 +24,7 @@ pub fn installed_repo_of(exe: &Path) -> Option<PathBuf> {
         return None;
     }
     let repo = bin.parent()?;
-    repo.join("recog-service.sh").is_file().then(|| repo.to_path_buf())
+    is_checkout(repo).then(|| repo.to_path_buf())
 }
 
 /// The checkout of the running program when it is installed in one's `bin/`.
@@ -34,14 +40,14 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// The program `name` of the checkout at `repo_root`: the installed one in `bin/`
-/// when it is executable, else the release build under `rust/target/release/`.
+/// when it is executable, else the release build under `target/release/`.
 #[must_use]
 pub fn program(repo_root: &Path, name: &str) -> PathBuf {
     let installed = repo_root.join(BIN_DIR).join(name);
     if is_executable(&installed) {
         return installed;
     }
-    repo_root.join("rust").join("target").join("release").join(name)
+    repo_root.join("target").join("release").join(name)
 }
 
 #[cfg(test)]
@@ -63,7 +69,7 @@ mod tests {
         std::fs::write(repo.join("recog-service.sh"), "").unwrap();
         // when / then
         assert_eq!(installed_repo_of(&repo.join("bin/recog")), Some(repo.clone()));
-        assert_eq!(installed_repo_of(&repo.join("rust/target/release/recog")), None);
+        assert_eq!(installed_repo_of(&repo.join("target/release/recog")), None);
         assert_eq!(installed_repo_of(&repo.join("other/recog")), None);
     }
 
@@ -79,7 +85,7 @@ mod tests {
     fn installed_and_built_program_when_looking_up_then_the_installed_one_wins() {
         // given
         let dir = tempfile::tempdir().unwrap();
-        let built = dir.path().join("rust/target/release/recog-mic");
+        let built = dir.path().join("target/release/recog-mic");
         executable(&built);
         // when / then
         assert_eq!(program(dir.path(), "recog-mic"), built);

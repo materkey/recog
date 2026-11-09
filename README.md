@@ -81,7 +81,7 @@ git clone https://github.com/materkey/recog.git && cd recog
 их и запустите её снова. Подробнее в разделе
 [требования и варианты установки](docs/usage.md#requirements).
 
-Установка соберёт программы из `rust/` в `bin/` и запустит сервисы на них
+Установка соберёт программы из `crates/` в `bin/` и запустит сервисы на них
 ([как устроена установка](docs/usage.md#installing-without-python)).
 
 1. Откройте `chrome://extensions`, включите **Режим разработчика** (Developer mode),

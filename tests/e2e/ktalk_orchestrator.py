@@ -511,7 +511,7 @@ class KTalkOrchestrator:
         if binary is None:
             return (
                 "No recog binary: build it with `cargo build --release -p recog-live` "
-                'in rust/ (or install with [install] runtime = "rust")'
+                '(or install with [install] runtime = "rust")'
             )
         if self.data_dir is None:
             self.data_dir = Path(tempfile.mkdtemp(prefix="recog-e2e-"))
