@@ -29,25 +29,40 @@ use args::{Command, LiveArgs, ReplayArgs};
 /// checkout it was built from.
 #[must_use]
 pub fn repo_root() -> PathBuf {
-    if let Some(repo) = recog_core::install::installed_repo() {
-        return repo;
-    }
-    if let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) {
-        let mut ancestors = exe.ancestors();
-        let (profile, target, rust) = (ancestors.nth(1), ancestors.next(), ancestors.next());
-        if let (Some(_), Some(target), Some(rust)) = (profile, target, rust)
-            && target.file_name().is_some_and(|n| n == "target")
-            && rust.file_name().is_some_and(|n| n == "rust")
-            && let Some(root) = rust.parent()
-        {
-            return root.to_path_buf();
+    let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
+    repo_root_of(exe.as_deref(), std::env::var_os("RECOG_REPO_DIR"))
+}
+
+/// [`repo_root`] of the program at `exe` (canonical), `repo_dir` being
+/// `RECOG_REPO_DIR`.
+fn repo_root_of(exe: Option<&Path>, repo_dir: Option<std::ffi::OsString>) -> PathBuf {
+    if let Some(exe) = exe {
+        if let Some(repo) = recog_core::install::installed_repo_of(exe) {
+            return repo;
+        }
+        if let Some(root) = build_checkout(exe) {
+            return root;
         }
     }
-    if let Some(dir) = std::env::var_os("RECOG_REPO_DIR") {
+    if let Some(dir) = repo_dir {
         return PathBuf::from(dir);
     }
     let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     std::fs::canonicalize(&built).unwrap_or(built)
+}
+
+/// The checkout of a program built at `<checkout>/rust/target/<profile>/<name>`.
+fn build_checkout(exe: &Path) -> Option<PathBuf> {
+    let mut ancestors = exe.ancestors();
+    let (profile, target, rust) = (ancestors.nth(1), ancestors.next(), ancestors.next());
+    if let (Some(_), Some(target), Some(rust)) = (profile, target, rust)
+        && target.file_name().is_some_and(|n| n == "target")
+        && rust.file_name().is_some_and(|n| n == "rust")
+        && let Some(root) = rust.parent()
+    {
+        return Some(root.to_path_buf());
+    }
+    None
 }
 
 /// `MIC_SPEAKER_NAME` of the environment (after `.env`), or `Me`.
@@ -437,6 +452,35 @@ mod tests {
             ("device:1", "device:MacBook Pro Microphone")
         );
         assert_eq!((named.mic, named.mic_display.as_str()), (MicChoice::Named("USB Mic".into()), "USB Mic"));
+    }
+
+    #[test]
+    fn a_binary_installed_built_or_elsewhere_when_finding_its_checkout_then_that_checkout_or_the_fallbacks() {
+        // given
+        let dir = tempfile::tempdir().unwrap();
+        let installed = dir.path().join("checkout");
+        std::fs::create_dir_all(installed.join("bin")).unwrap();
+        std::fs::write(installed.join("recog-service.sh"), "#!/bin/bash\n").unwrap();
+        let elsewhere = Path::new("/opt/tools/recog");
+        // when
+        let from_bin = repo_root_of(Some(&installed.join("bin/recog")), Some("/ignored".into()));
+        let from_target = repo_root_of(Some(Path::new("/src/recog/rust/target/release/recog")), None);
+        let from_env = repo_root_of(Some(elsewhere), Some("/srv/recog".into()));
+        let from_build = repo_root_of(None, None);
+        // then
+        assert_eq!(from_bin, installed);
+        assert_eq!(from_target, Path::new("/src/recog"));
+        assert_eq!(from_env, Path::new("/srv/recog"));
+        let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_eq!(from_build, std::fs::canonicalize(&built).unwrap());
+    }
+
+    #[test]
+    fn a_target_dir_not_under_rust_when_finding_the_build_checkout_then_none() {
+        // given / when / then
+        assert_eq!(build_checkout(Path::new("/cache/recog-target/debug/recog")), None);
+        assert_eq!(build_checkout(Path::new("/src/target/debug/recog")), None);
+        assert_eq!(build_checkout(Path::new("/recog")), None);
     }
 
     #[test]
