@@ -41,11 +41,6 @@ impl ErrorItem {
         Self { kind, loc: loc.to_vec(), msg: msg.into(), input: input.clone(), ctx: None }
     }
 
-    fn with_ctx(mut self, ctx: Value) -> Self {
-        self.ctx = Some(ctx);
-        self
-    }
-
     /// The error as FastAPI serializes it in `{"detail": [...]}`.
     #[must_use]
     pub fn to_json(&self) -> Value {
@@ -117,31 +112,31 @@ const BOOL_FALSE: [&str; 6] = ["0", "off", "f", "false", "n", "no"];
 /// pydantic's string-to-integer rule: surrounding whitespace, a sign, digits with
 /// single underscores between them, and an optional all-zero fraction.
 fn parse_int_str(raw: &str) -> Option<i128> {
-    let s = py::strip(raw);
-    let (sign, rest) = match s.as_bytes().first() {
-        Some(b'+') => (1, &s[1..]),
-        Some(b'-') => (-1, &s[1..]),
-        _ => (1, s),
-    };
-    let (digits, fraction) = match rest.split_once('.') {
-        Some((d, f)) => (d, Some(f)),
-        None => (rest, None),
-    };
-    if let Some(f) = fraction
-        && !f.bytes().all(|b| b == b'0')
-    {
-        return None;
-    }
-    if digits.is_empty()
-        || !digits.bytes().all(|b| b.is_ascii_digit() || b == b'_')
-        || digits.starts_with('_')
-        || digits.ends_with('_')
-        || digits.contains("__")
-    {
+    let (sign, rest) = split_sign(py::strip(raw));
+    let (digits, fraction) = rest.split_once('.').unwrap_or((rest, ""));
+    if !fraction.bytes().all(|b| b == b'0') || !well_formed_digits(digits) {
         return None;
     }
     let n: i128 = digits.replace('_', "").parse().ok()?;
     Some(sign * n)
+}
+
+/// The sign of an integer's text and the rest.
+fn split_sign(s: &str) -> (i128, &str) {
+    match s.as_bytes().first() {
+        Some(b'+') => (1, &s[1..]),
+        Some(b'-') => (-1, &s[1..]),
+        _ => (1, s),
+    }
+}
+
+/// Digits with single underscores between them.
+fn well_formed_digits(digits: &str) -> bool {
+    !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit() || b == b'_')
+        && !digits.starts_with('_')
+        && !digits.ends_with('_')
+        && !digits.contains("__")
 }
 
 fn parse_bool_str(raw: &str) -> Option<bool> {
@@ -161,162 +156,172 @@ fn plural(n: usize, word: &str) -> String {
 
 /// Validates one value; the coerced value, or the errors pushed onto `errors`.
 pub fn validate(ty: &Ty, input: &Value, loc: &[Loc], errors: &mut Vec<ErrorItem>) -> Option<Value> {
-    match ty {
-        Ty::Str => match input {
-            Value::Str(_) => Some(input.clone()),
-            _ => {
-                errors.push(ErrorItem::new("string_type", loc, "Input should be a valid string", input));
-                None
-            }
-        },
-        Ty::ConStr { strip, min, max } => {
-            let Value::Str(s) = input else {
-                errors.push(ErrorItem::new("string_type", loc, "Input should be a valid string", input));
-                return None;
-            };
-            let value = if *strip { py::strip(s) } else { s.as_str() };
-            let length = value.chars().count();
-            if length < *min {
-                errors.push(
-                    ErrorItem::new(
-                        "string_too_short",
-                        loc,
-                        format!("String should have at least {}", plural(*min, "character")),
-                        input,
-                    )
-                    .with_ctx(json::object([("min_length", Value::Int(*min as i128))])),
-                );
-                return None;
-            }
-            if length > *max {
-                errors.push(
-                    ErrorItem::new(
-                        "string_too_long",
-                        loc,
-                        format!("String should have at most {}", plural(*max, "character")),
-                        input,
-                    )
-                    .with_ctx(json::object([("max_length", Value::Int(*max as i128))])),
-                );
-                return None;
-            }
-            Some(Value::from(value))
-        }
-        Ty::StrictBool => match input {
-            Value::Bool(_) => Some(input.clone()),
-            _ => {
-                errors.push(ErrorItem::new("bool_type", loc, "Input should be a valid boolean", input));
-                None
-            }
-        },
-        Ty::Bool => {
-            let parsed = match input {
-                Value::Bool(b) => Ok(*b),
-                Value::Int(0) => Ok(false),
-                Value::Int(1) => Ok(true),
-                Value::Int(_) => Err("bool_parsing"),
-                Value::Float(x) if *x == 0.0 => Ok(false),
-                Value::Float(x) if *x == 1.0 => Ok(true),
-                Value::Str(s) => parse_bool_str(s).ok_or("bool_parsing"),
-                _ => Err("bool_type"),
-            };
-            match parsed {
-                Ok(b) => Some(Value::Bool(b)),
-                Err("bool_parsing") => {
-                    errors.push(ErrorItem::new(
-                        "bool_parsing",
-                        loc,
-                        "Input should be a valid boolean, unable to interpret input",
-                        input,
-                    ));
-                    None
-                }
-                Err(_) => {
-                    errors.push(ErrorItem::new("bool_type", loc, "Input should be a valid boolean", input));
-                    None
-                }
-            }
-        }
-        Ty::Int => {
-            let parsed = match input {
-                Value::Int(n) => Ok(*n),
-                Value::Bool(b) => Ok(i128::from(*b)),
-                Value::Float(x) if !x.is_finite() => Err(("finite_number", "Input should be a finite number")),
-                Value::Float(x) if x.fract() == 0.0 => Ok(*x as i128),
-                Value::Float(_) => {
-                    Err(("int_from_float", "Input should be a valid integer, got a number with a fractional part"))
-                }
-                Value::Str(s) => parse_int_str(s)
-                    .ok_or(("int_parsing", "Input should be a valid integer, unable to parse string as an integer")),
-                _ => Err(("int_type", "Input should be a valid integer")),
-            };
-            match parsed {
-                Ok(n) => Some(Value::Int(n)),
-                Err((kind, msg)) => {
-                    errors.push(ErrorItem::new(kind, loc, msg, input));
-                    None
-                }
-            }
-        }
-        Ty::Literal(options) => match input {
-            Value::Str(s) if options.contains(&s.as_str()) => Some(input.clone()),
-            _ => {
-                let expected = options.iter().map(|o| format!("'{o}'")).collect::<Vec<_>>();
-                let expected = match expected.len() {
-                    0 | 1 => expected.join(""),
-                    n => format!("{} or {}", expected[..n - 1].join(", "), expected[n - 1]),
-                };
-                errors.push(
-                    ErrorItem::new("literal_error", loc, format!("Input should be {expected}"), input)
-                        .with_ctx(json::object([("expected", Value::from(expected))])),
-                );
-                None
-            }
-        },
-        Ty::Optional(inner) => match input {
-            Value::Null => Some(Value::Null),
-            _ => validate(inner, input, loc, errors),
-        },
-        Ty::List(inner) => {
-            let Value::Array(items) = input else {
-                errors.push(ErrorItem::new("list_type", loc, "Input should be a valid list", input));
-                return None;
-            };
-            let before = errors.len();
-            let mut out = Vec::with_capacity(items.len());
-            for (i, item) in items.iter().enumerate() {
-                let mut item_loc = loc.to_vec();
-                item_loc.push(Loc::Index(i));
-                if let Some(v) = validate(inner, item, &item_loc, errors) {
-                    out.push(v);
-                }
-            }
-            (errors.len() == before).then_some(Value::Array(out))
-        }
-        Ty::AnyDict => match input {
-            Value::Object(_) => Some(input.clone()),
-            _ => {
-                errors.push(ErrorItem::new("dict_type", loc, "Input should be a valid dictionary", input));
-                None
-            }
-        },
-        Ty::Dict(inner) => {
-            let Value::Object(map) = input else {
-                errors.push(ErrorItem::new("dict_type", loc, "Input should be a valid dictionary", input));
-                return None;
-            };
-            let before = errors.len();
-            let mut out = Map::new();
-            for (k, v) in map.iter() {
-                let mut item_loc = loc.to_vec();
-                item_loc.push(Loc::Key(k.clone()));
-                if let Some(v) = validate(inner, v, &item_loc, errors) {
-                    out.insert(k.clone(), v);
-                }
-            }
-            (errors.len() == before).then_some(Value::Object(out))
+    let checked = match ty {
+        Ty::Optional(inner) if !input.is_null() => return validate(inner, input, loc, errors),
+        Ty::List(inner) => return validate_list(inner, input, loc, errors),
+        Ty::Dict(inner) => return validate_dict(inner, input, loc, errors),
+        scalar => validate_scalar(scalar, input),
+    };
+    match checked {
+        Ok(value) => Some(value),
+        Err(failure) => {
+            errors.push(failure.at(loc, input));
+            None
         }
     }
+}
+
+/// An error before its position and input are known.
+struct Failure {
+    kind: &'static str,
+    msg: String,
+    ctx: Option<Value>,
+}
+
+impl Failure {
+    fn new(kind: &'static str, msg: impl Into<String>) -> Self {
+        Self { kind, msg: msg.into(), ctx: None }
+    }
+
+    fn with_ctx(mut self, ctx: Value) -> Self {
+        self.ctx = Some(ctx);
+        self
+    }
+
+    fn at(self, loc: &[Loc], input: &Value) -> ErrorItem {
+        ErrorItem { kind: self.kind, loc: loc.to_vec(), msg: self.msg, input: input.clone(), ctx: self.ctx }
+    }
+}
+
+/// A value of a type without items: the coerced value or its error.
+fn validate_scalar(ty: &Ty, input: &Value) -> Result<Value, Failure> {
+    match ty {
+        Ty::Str => string(input).map(|_| input.clone()),
+        Ty::ConStr { strip, min, max } => constrained(input, *strip, *min, *max),
+        Ty::StrictBool => match input {
+            Value::Bool(_) => Ok(input.clone()),
+            _ => Err(Failure::new("bool_type", "Input should be a valid boolean")),
+        },
+        Ty::Bool => lax_bool(input).map(Value::Bool),
+        Ty::Int => lax_int(input).map(Value::Int),
+        Ty::Literal(options) => literal(options, input),
+        // A null `Optional`; lists and dictionaries of a type are validated by item.
+        Ty::Optional(_) | Ty::List(_) | Ty::Dict(_) => Ok(Value::Null),
+        Ty::AnyDict => match input {
+            Value::Object(_) => Ok(input.clone()),
+            _ => Err(Failure::new("dict_type", "Input should be a valid dictionary")),
+        },
+    }
+}
+
+fn string(input: &Value) -> Result<&str, Failure> {
+    match input {
+        Value::Str(s) => Ok(s),
+        _ => Err(Failure::new("string_type", "Input should be a valid string")),
+    }
+}
+
+/// `StringConstraints`: the (stripped) text within its length bounds.
+fn constrained(input: &Value, strip: bool, min: usize, max: usize) -> Result<Value, Failure> {
+    let s = string(input)?;
+    let value = if strip { py::strip(s) } else { s };
+    let length = value.chars().count();
+    if length < min {
+        return Err(Failure::new(
+            "string_too_short",
+            format!("String should have at least {}", plural(min, "character")),
+        )
+        .with_ctx(json::object([("min_length", Value::Int(min as i128))])));
+    }
+    if length > max {
+        return Err(Failure::new(
+            "string_too_long",
+            format!("String should have at most {}", plural(max, "character")),
+        )
+        .with_ctx(json::object([("max_length", Value::Int(max as i128))])));
+    }
+    Ok(Value::from(value))
+}
+
+/// pydantic's lax boolean: `0`/`1` as numbers, the words of `BOOL_TRUE` and
+/// `BOOL_FALSE`.
+fn lax_bool(input: &Value) -> Result<bool, Failure> {
+    let unparsable = || Failure::new("bool_parsing", "Input should be a valid boolean, unable to interpret input");
+    match input {
+        Value::Bool(b) => Ok(*b),
+        Value::Int(n @ (0 | 1)) => Ok(*n == 1),
+        Value::Int(_) => Err(unparsable()),
+        Value::Float(x) if *x == 0.0 || *x == 1.0 => Ok(*x == 1.0),
+        Value::Str(s) => parse_bool_str(s).ok_or_else(unparsable),
+        _ => Err(Failure::new("bool_type", "Input should be a valid boolean")),
+    }
+}
+
+/// pydantic's lax integer: booleans, integral finite floats and integer text.
+fn lax_int(input: &Value) -> Result<i128, Failure> {
+    match input {
+        Value::Int(n) => Ok(*n),
+        Value::Bool(b) => Ok(i128::from(*b)),
+        Value::Float(x) if !x.is_finite() => Err(Failure::new("finite_number", "Input should be a finite number")),
+        Value::Float(x) if x.fract() == 0.0 => Ok(*x as i128),
+        Value::Float(_) => {
+            Err(Failure::new("int_from_float", "Input should be a valid integer, got a number with a fractional part"))
+        }
+        Value::Str(s) => parse_int_str(s).ok_or_else(|| {
+            Failure::new("int_parsing", "Input should be a valid integer, unable to parse string as an integer")
+        }),
+        _ => Err(Failure::new("int_type", "Input should be a valid integer")),
+    }
+}
+
+/// One of the literal's options.
+fn literal(options: &[&str], input: &Value) -> Result<Value, Failure> {
+    match input {
+        Value::Str(s) if options.contains(&s.as_str()) => Ok(input.clone()),
+        _ => {
+            let expected = options.iter().map(|o| format!("'{o}'")).collect::<Vec<_>>();
+            let expected = match expected.len() {
+                0 | 1 => expected.join(""),
+                n => format!("{} or {}", expected[..n - 1].join(", "), expected[n - 1]),
+            };
+            Err(Failure::new("literal_error", format!("Input should be {expected}"))
+                .with_ctx(json::object([("expected", Value::from(expected))])))
+        }
+    }
+}
+
+fn validate_list(inner: &Ty, input: &Value, loc: &[Loc], errors: &mut Vec<ErrorItem>) -> Option<Value> {
+    let Value::Array(items) = input else {
+        errors.push(ErrorItem::new("list_type", loc, "Input should be a valid list", input));
+        return None;
+    };
+    let before = errors.len();
+    let mut out = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        let mut item_loc = loc.to_vec();
+        item_loc.push(Loc::Index(i));
+        if let Some(v) = validate(inner, item, &item_loc, errors) {
+            out.push(v);
+        }
+    }
+    (errors.len() == before).then_some(Value::Array(out))
+}
+
+fn validate_dict(inner: &Ty, input: &Value, loc: &[Loc], errors: &mut Vec<ErrorItem>) -> Option<Value> {
+    let Value::Object(map) = input else {
+        errors.push(ErrorItem::new("dict_type", loc, "Input should be a valid dictionary", input));
+        return None;
+    };
+    let before = errors.len();
+    let mut out = Map::new();
+    for (k, v) in map.iter() {
+        let mut item_loc = loc.to_vec();
+        item_loc.push(Loc::Key(k.clone()));
+        if let Some(v) = validate(inner, v, &item_loc, errors) {
+            out.insert(k.clone(), v);
+        }
+    }
+    (errors.len() == before).then_some(Value::Object(out))
 }
 
 /// Validates a model: the given fields (coerced) in declaration order, or the errors.
