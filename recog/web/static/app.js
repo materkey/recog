@@ -1760,181 +1760,117 @@ function handleCopilotAgentState(next) {
     updateCopilotControls();
 }
 
-function handleCopilotStatus(data) {
-    const status = (data && data.status) || 'unknown';
-    const requestId = data && data.request_id;
+// A per-request failure of this tab: the spawn or stop click it answers
+// becomes clickable again (retry affordance), or the chat placeholder it
+// answers shows the failure. False when no request of this tab matches.
+function copilotFailRequest(requestId, text, placeholderText) {
+    if (!requestId) return false;
+    if (requestId === copilotState.spawnPendingId) {
+        copilotState.spawnPendingId = null;
+    } else if (requestId === copilotState.stopPendingId) {
+        copilotState.stopPendingId = null;
+    } else {
+        return copilotFailPlaceholder(requestId, placeholderText || text);
+    }
+    updateCopilotControls();
+    appendCopilotMessage({ kind: 'error', text });
+    return true;
+}
 
-    if (status === 'agent_state') {
-        handleCopilotAgentState(data && data.agent_state);
+function copilotFailPlaceholder(requestId, text) {
+    const pending = copilotState.pending.get(requestId);
+    if (!pending) return false;
+    updateCopilotMessage(pending.assistantId, {
+        kind: 'error',
+        text,
+        status: 'error',
+        time: copilotNowDisplay()
+    });
+    copilotState.pending.delete(requestId);
+    return true;
+}
+
+function handleCopilotAgentStateFrame(data) {
+    handleCopilotAgentState(data.agent_state);
+}
+
+function handleCopilotChannelConnected() {
+    // Channel-level recovery signal — no dedicated indicator in the
+    // webapp panel; must not fall through to placeholder handling.
+}
+
+function handleCopilotConferenceActive(data) {
+    // Spawn rejected: the bridge refuses manual spawn while a
+    // conference meeting is active.
+    if (data.request_id) {
+        if (data.request_id !== copilotState.spawnPendingId) return;
+        copilotState.spawnPendingId = null;
+        updateCopilotControls();
+    }
+    appendCopilotMessage({ kind: 'status', text: 'занято конференцией' });
+}
+
+function handleCopilotManualPreempted() {
+    appendCopilotMessage({ kind: 'status', text: 'сессия переключена на конференцию' });
+}
+
+function handleCopilotLinkDown(data, status) {
+    const label = status === 'bridge_disconnected' ? 'Bridge offline' : 'Supervisor offline';
+    if (copilotFailRequest(data.request_id, `${label}: запрос не доставлен.`, `${label}: сообщение не доставлено.`)) {
         return;
     }
+    // Another tab's request-scoped failure.
+    if (data.request_id) return;
+    appendCopilotMessage({ kind: 'error', text: `${label}: запрос не доставлен.` });
+}
 
-    if (status === 'channel_connected') {
-        // Channel-level recovery signal — no dedicated indicator in the
-        // webapp panel; must not fall through to placeholder handling.
+function handleCopilotChannelDown(data) {
+    const text = 'Channel offline: Claude не подключён.';
+    // Defensive: a per-request frame carrying a spawn/stop id must not
+    // leave the input bricked at 'запускается…'/'останавливается…'.
+    if (copilotFailRequest(data.request_id, text)) return;
+    if (data.request_id) {
+        // Another tab's per-request echo fanned out through the shared
+        // subscriber socket — nothing of ours to resolve, drop it.
         return;
     }
-
-    if (status === 'conference_active') {
-        // Spawn rejected: the bridge refuses manual spawn while a
-        // conference meeting is active.
-        if (requestId) {
-            if (requestId !== copilotState.spawnPendingId) return;
-            copilotState.spawnPendingId = null;
-            updateCopilotControls();
+    if (copilotState.pending.size > 0) {
+        // Channel died mid-flight with no specific request_id: flip
+        // every stranded placeholder instead of one vague bubble.
+        for (const requestId of [...copilotState.pending.keys()]) {
+            copilotFailPlaceholder(requestId, text);
         }
-        appendCopilotMessage({ kind: 'status', text: 'занято конференцией' });
         return;
     }
+    appendCopilotMessage({ kind: 'error', text });
+}
 
-    if (status === 'manual_preempted') {
-        appendCopilotMessage({ kind: 'status', text: 'сессия переключена на конференцию' });
-        return;
+function handleCopilotError(data) {
+    const message = data.message || 'Claude не смог ответить.';
+    // Defensive: same spawn/stop unbricking as bridge/supervisor errors.
+    if (!copilotFailRequest(data.request_id, message)) {
+        appendCopilotMessage({ kind: 'error', text: message });
     }
+}
 
-    if (status === 'bridge_disconnected' || status === 'supervisor_disconnected') {
-        const label = status === 'bridge_disconnected' ? 'Bridge offline' : 'Supervisor offline';
-        if (requestId && requestId === copilotState.spawnPendingId) {
-            // Spawn failed — button becomes clickable again (retry).
-            copilotState.spawnPendingId = null;
-            updateCopilotControls();
-            appendCopilotMessage({ kind: 'error', text: `${label}: запрос не доставлен.` });
-            return;
-        }
-        if (requestId && requestId === copilotState.stopPendingId) {
-            // Stop failed — Stop stays enabled (retry affordance).
-            copilotState.stopPendingId = null;
-            updateCopilotControls();
-            appendCopilotMessage({ kind: 'error', text: `${label}: запрос не доставлен.` });
-            return;
-        }
-        const pending = requestId ? copilotState.pending.get(requestId) : null;
-        if (pending) {
-            updateCopilotMessage(pending.assistantId, {
-                kind: 'error',
-                text: `${label}: сообщение не доставлено.`,
-                status: 'error',
-                time: copilotNowDisplay()
-            });
-            copilotState.pending.delete(requestId);
-            return;
-        }
-        if (requestId) {
-            // Another tab's request-scoped failure.
-            return;
-        }
-        appendCopilotMessage({ kind: 'error', text: `${label}: запрос не доставлен.` });
-        return;
-    }
-
-    if (status === 'channel_disconnected') {
-        // Defensive: a per-request frame carrying a spawn/stop id must not
-        // leave the input bricked at 'запускается…'/'останавливается…'.
-        if (requestId && requestId === copilotState.spawnPendingId) {
-            copilotState.spawnPendingId = null;
-            updateCopilotControls();
-            appendCopilotMessage({
-                kind: 'error',
-                text: 'Channel offline: Claude не подключён.'
-            });
-            return;
-        }
-        if (requestId && requestId === copilotState.stopPendingId) {
-            copilotState.stopPendingId = null;
-            updateCopilotControls();
-            appendCopilotMessage({
-                kind: 'error',
-                text: 'Channel offline: Claude не подключён.'
-            });
-            return;
-        }
-        const pending = requestId ? copilotState.pending.get(requestId) : null;
-        if (pending) {
-            updateCopilotMessage(pending.assistantId, {
-                kind: 'error',
-                text: 'Channel offline: Claude не подключён.',
-                status: 'error',
-                time: copilotNowDisplay()
-            });
-            copilotState.pending.delete(requestId);
-            return;
-        }
-        if (requestId) {
-            // Another tab's per-request echo fanned out through the shared
-            // subscriber socket — nothing of ours to resolve, drop it.
-            return;
-        }
-        if (copilotState.pending.size > 0) {
-            // Channel died mid-flight with no specific request_id: flip
-            // every stranded placeholder instead of one vague bubble.
-            copilotState.pending.forEach((p) => {
-                if (p && p.assistantId) {
-                    updateCopilotMessage(p.assistantId, {
-                        kind: 'error',
-                        text: 'Channel offline: Claude не подключён.',
-                        status: 'error',
-                        time: copilotNowDisplay()
-                    });
-                }
-            });
-            copilotState.pending.clear();
-            return;
-        }
-        appendCopilotMessage({
-            kind: 'error',
-            text: 'Channel offline: Claude не подключён.'
+function handleCopilotDone(data) {
+    // No-op if the reply already landed (pending gone by then).
+    const pending = data.request_id ? copilotState.pending.get(data.request_id) : null;
+    if (pending) {
+        updateCopilotMessage(pending.assistantId, {
+            kind: 'status',
+            text: data.message || 'Запрос завершён без ответа.',
+            status: 'done',
+            time: copilotNowDisplay()
         });
-        return;
+        copilotState.pending.delete(data.request_id);
     }
+}
 
-    if (status === 'error') {
-        const message = (data && data.message) || 'Claude не смог ответить.';
-        // Defensive: same spawn/stop unbricking as bridge/supervisor errors.
-        if (requestId && requestId === copilotState.spawnPendingId) {
-            copilotState.spawnPendingId = null;
-            updateCopilotControls();
-            appendCopilotMessage({ kind: 'error', text: message });
-            return;
-        }
-        if (requestId && requestId === copilotState.stopPendingId) {
-            copilotState.stopPendingId = null;
-            updateCopilotControls();
-            appendCopilotMessage({ kind: 'error', text: message });
-            return;
-        }
-        const pending = requestId ? copilotState.pending.get(requestId) : null;
-        if (pending) {
-            updateCopilotMessage(pending.assistantId, {
-                kind: 'error',
-                text: message,
-                status: 'error',
-                time: copilotNowDisplay()
-            });
-            copilotState.pending.delete(requestId);
-        } else {
-            appendCopilotMessage({ kind: 'error', text: message });
-        }
-        return;
-    }
-
-    if (status === 'done') {
-        // No-op if the reply already landed (pending gone by then).
-        const pending = requestId ? copilotState.pending.get(requestId) : null;
-        if (pending) {
-            updateCopilotMessage(pending.assistantId, {
-                kind: 'status',
-                text: (data && data.message) || 'Запрос завершён без ответа.',
-                status: 'done',
-                time: copilotNowDisplay()
-            });
-            copilotState.pending.delete(requestId);
-        }
-        return;
-    }
-
-    // queued / working / unknown per-request status: mutate the matching
-    // placeholder only; no bubble is created without a pending match.
-    const pending = requestId ? copilotState.pending.get(requestId) : null;
+// queued / working / unknown per-request status: mutate the matching
+// placeholder only; no bubble is created without a pending match.
+function handleCopilotRequestProgress(data, status) {
+    const pending = data.request_id ? copilotState.pending.get(data.request_id) : null;
     if (pending) {
         updateCopilotMessage(pending.assistantId, {
             status: status,
@@ -1942,6 +1878,25 @@ function handleCopilotStatus(data) {
             time: copilotNowDisplay()
         });
     }
+}
+
+const COPILOT_STATUS_HANDLERS = new Map([
+    ['agent_state', handleCopilotAgentStateFrame],
+    ['channel_connected', handleCopilotChannelConnected],
+    ['conference_active', handleCopilotConferenceActive],
+    ['manual_preempted', handleCopilotManualPreempted],
+    ['bridge_disconnected', handleCopilotLinkDown],
+    ['supervisor_disconnected', handleCopilotLinkDown],
+    ['channel_disconnected', handleCopilotChannelDown],
+    ['error', handleCopilotError],
+    ['done', handleCopilotDone]
+]);
+
+function handleCopilotStatus(data) {
+    const frame = data || {};
+    const status = frame.status || 'unknown';
+    const handler = COPILOT_STATUS_HANDLERS.get(status) || handleCopilotRequestProgress;
+    handler(frame, status);
 }
 
 // WS closed (view switch or connection drop): a reply broadcast while this
