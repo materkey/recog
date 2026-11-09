@@ -476,4 +476,93 @@ mod tests {
         assert_eq!(kind(check(&ty, "\"abcd\"")), "string_too_long");
         assert_eq!(check(&ty, "\" ab \"").unwrap(), Value::from("ab"));
     }
+
+    #[test]
+    fn constrained_text_without_strip_or_of_another_type_when_validated_then_counted_as_given() {
+        let ty = Ty::ConStr { strip: false, min: 2, max: 4 };
+
+        assert_eq!(check(&ty, "\" ab \"").unwrap(), Value::from(" ab "));
+        let short = check(&ty, "\"a\"").unwrap_err();
+        assert_eq!(text(&short[0], "msg"), "String should have at least 2 characters");
+        let long = check(&ty, "\"abcde\"").unwrap_err();
+        assert_eq!(text(&long[0], "msg"), "String should have at most 4 characters");
+        assert_eq!(pyjson::dumps(long[0].as_object().unwrap().get("ctx").unwrap(), None), r#"{"max_length": 4}"#);
+        assert_eq!(kind(check(&ty, "5")), "string_type");
+        assert_eq!(kind(check(&Ty::Str, "5")), "string_type");
+        assert_eq!(kind(check(&Ty::Str, "\"x\"")), "\"x\"");
+    }
+
+    fn text(error: &Value, key: &str) -> String {
+        error.as_object().unwrap().get(key).unwrap().py_str()
+    }
+
+    #[test]
+    fn literal_with_one_or_several_options_when_validated_then_pydantic_expected_text() {
+        for (options, expected) in [
+            (&["a"][..], "'a'"),
+            (&["a", "b"][..], "'a' or 'b'"),
+            (&["a", "b", "c"][..], "'a', 'b' or 'c'"),
+            (&[][..], ""),
+        ] {
+            let errors = check(&Ty::Literal(options), "\"z\"").unwrap_err();
+
+            assert_eq!(text(&errors[0], "msg"), format!("Input should be {expected}"), "{options:?}");
+            assert_eq!(text(&errors[0], "type"), "literal_error");
+        }
+        assert_eq!(check(&Ty::Literal(&["a", "b"]), "\"b\"").unwrap(), Value::from("b"));
+        assert_eq!(kind(check(&Ty::Literal(&["1"]), "1")), "literal_error");
+    }
+
+    #[test]
+    fn containers_with_bad_items_when_validated_then_an_error_per_item_at_its_position() {
+        let list = Ty::List(Box::new(Ty::Int));
+        let errors = check(&list, r#"[1, "x", 3, null]"#).unwrap_err();
+        let locs: Vec<String> =
+            errors.iter().map(|e| pyjson::dumps(e.as_object().unwrap().get("loc").unwrap(), None)).collect();
+        assert_eq!(locs, ["[1]", "[3]"]);
+        assert_eq!(check(&list, r#"[1, "2"]"#).unwrap(), pyjson::loads("[1, 2]").unwrap());
+        assert_eq!(kind(check(&list, "{}")), "list_type");
+
+        assert_eq!(kind(check(&Ty::AnyDict, "[]")), "dict_type");
+        assert_eq!(kind(check(&Ty::AnyDict, r#"{"a": [1]}"#)), r#"{"a": [1]}"#);
+        assert_eq!(kind(check(&Ty::Dict(Box::new(Ty::Str)), "5")), "dict_type");
+        assert_eq!(kind(check(&Ty::Dict(Box::new(Ty::Str)), r#"{"a": "b"}"#)), r#"{"a": "b"}"#);
+        assert_eq!(kind(check(&Ty::Optional(Box::new(Ty::Int)), "null")), "null");
+        assert_eq!(kind(check(&Ty::Optional(Box::new(Ty::Int)), "\"x\"")), "int_parsing");
+    }
+
+    #[test]
+    fn integer_text_with_misplaced_underscores_or_signs_when_validated_then_int_parsing() {
+        for input in ["\"_1\"", "\"1_\"", "\"1__0\"", "\"-\"", "\"+\"", "\"1-2\"", "\"0x10\"", "\".0\""] {
+            assert_eq!(kind(check(&Ty::Int, input)), "int_parsing", "{input}");
+        }
+        assert_eq!(kind(check(&Ty::Int, "\"-1_0.00\"")), "-10");
+        assert_eq!(kind(check(&Ty::Int, "\"7.\"")), "7");
+    }
+
+    #[test]
+    fn query_parameter_when_absent_or_given_then_missing_only_when_required() {
+        let mut errors = Vec::new();
+
+        assert_eq!(validate_param("query", "q", &Ty::Int, None, false, &mut errors), None);
+        assert!(errors.is_empty());
+        assert_eq!(validate_param("query", "q", &Ty::Int, Some("4"), true, &mut errors), Some(Value::Int(4)));
+        assert_eq!(validate_param("query", "q", &Ty::Int, None, true, &mut errors), None);
+        assert_eq!(
+            pyjson::dumps(&errors[0].to_json(), None),
+            r#"{"type": "missing", "loc": ["query", "q"], "msg": "Field required", "input": null}"#
+        );
+    }
+
+    #[test]
+    fn model_that_is_not_an_object_or_lacks_optional_fields_when_validated_then_its_error_or_the_given_fields() {
+        let fields = [field("a", Ty::Int, false), field("b", Ty::Str, true)];
+        let mut errors = Vec::new();
+
+        assert!(validate_model(&pyjson::loads("[1]").unwrap(), &fields, false, &[], &mut errors).is_none());
+        assert_eq!(errors[0].kind, "model_attributes_type");
+        let mut errors = Vec::new();
+        let out = validate_model(&pyjson::loads(r#"{"b": "x", "c": 1}"#).unwrap(), &fields, false, &[], &mut errors);
+        assert_eq!(out.map(|m| pyjson::dumps(&Value::Object(m), None)).as_deref(), Some(r#"{"b": "x"}"#));
+    }
 }
