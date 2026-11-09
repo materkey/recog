@@ -57,13 +57,19 @@ fn coreaudio_devices() -> Vec<DeviceInfo> {
                         name: device.description().map(|d| d.name().to_owned()).unwrap_or_default(),
                         inputs,
                         outputs,
-                        default_input: id.is_some() && id == default_in,
-                        default_output: id.is_some() && id == default_out,
+                        default_input: is_default(id.as_ref(), default_in.as_ref()),
+                        default_output: is_default(id.as_ref(), default_out.as_ref()),
                     }
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Whether a device is the default one: both ids known and equal.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn is_default<T: PartialEq>(id: Option<&T>, default: Option<&T>) -> bool {
+    id.is_some() && id == default
 }
 
 /// `find_default_mic`: on a Mac the built-in MacBook microphone (or a built-in or
@@ -252,5 +258,14 @@ mod tests {
         assert_eq!(err, vec!["\n(pactl list short sources завершился с кодом 3)"]);
         let (out, _) = pulse_sources(&|_| Command::new("sh").args(["-c", "printf '0\\tmon\\n'"]).output());
         assert_eq!(out, vec!["", "Источники PulseAudio/PipeWire (pactl list short sources):", "0\tmon"]);
+    }
+
+    #[test]
+    fn device_ids_known_or_not_when_compared_with_the_default_then_only_a_known_equal_id_is_it() {
+        // given / when / then
+        assert!(is_default(Some(&7), Some(&7)));
+        assert!(!is_default(Some(&7), Some(&8)));
+        assert!(!is_default(Some(&7), None));
+        assert!(!is_default::<i32>(None, None));
     }
 }
