@@ -49,6 +49,10 @@ reasoning.
   tore down and rebuilt every participant's transcript audio, dropping what had
   not yet been sent. It now attaches once and again only when the call changes or
   ends. Rebuild and reload the extension as above.
+- **`meetings/.lock` in the data directory.** The live process and the web server
+  now rewrite a meeting's `meta.json` and `index.json` in turn, under an `flock` of
+  this empty file, so a title stored from the web UI no longer undoes what the live
+  process wrote at the same moment, or the reverse. Nothing to do; leave the file.
 
 ## 2026-11-08
 

@@ -33,11 +33,11 @@
 //! - with the title thread, which Python runs on an executor too, the lines a title
 //!   prints may come before or after the operation's own lines.
 
+mod lock;
 mod pyops;
 
 use std::fs;
 use std::io::{self, Write as _};
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -51,6 +51,9 @@ use crate::pyjson::{self, Map, Value};
 use crate::time::{self, Clock, PyDateTime, SystemClock, TimeError};
 use crate::url::urlparse;
 
+use lock::Locked;
+#[cfg(test)]
+use lock::unlocked_save_json as save_json;
 use pyops::{add_int, compare_int, get, get_or_empty, item, item_mut, items, set, sort_desc};
 
 /// Rejoining a room reopens its ended meeting only within this window: it covers
@@ -318,23 +321,6 @@ fn read_json(path: &Path) -> Result<Value> {
     loads(&read_text(path)?)
 }
 
-/// `_save_json`: a unique temp file beside the target, created with the target's
-/// mode (so a restrictive mode also protects the temp while it is written), renamed
-/// over it.
-fn save_json(path: &Path, data: &Value) -> Result<()> {
-    let mode = match fs::metadata(path) {
-        Ok(meta) => Some(meta.permissions().mode() & 0o7777),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-        Err(e) => return Err(StorageError::os(&e, path)),
-    };
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let temp = paths::create_unique(dir, &format!("{name}."), ".tmp", mode.unwrap_or(0o666))
-        .map_err(|e| StorageError::os(&e, dir))?;
-    paths::replace_with(path, temp, pyjson::dumps(data, Some(2)).as_bytes(), false, mode)
-        .map_err(|e| StorageError::os(&e, path))
-}
-
 fn is_dir_entries(path: &Path) -> Result<Vec<PathBuf>> {
     let entries = fs::read_dir(path).map_err(|e| StorageError::os(&e, path))?;
     Ok(entries.filter_map(std::result::Result::ok).map(|e| e.path()).filter(|p| p.is_dir()).collect())
@@ -351,8 +337,14 @@ fn mtime_seconds(meta: &fs::Metadata) -> Option<f64> {
 }
 
 impl Shared {
-    fn lock(&self) -> MutexGuard<'_, Inner> {
+    /// The state alone, for reading it.
+    fn state(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The state and the cross-process lock, for an operation that rewrites files.
+    fn lock(&self) -> Result<Locked<'_>> {
+        Locked::acquire(&self.base_path, &self.inner)
     }
 
     fn print(&self, line: &str) {
@@ -400,8 +392,8 @@ impl Shared {
         read_json(&Self::meta_path(inner)?)
     }
 
-    fn save_meta(inner: &Inner, meta: &Value) -> Result<()> {
-        save_json(&Self::meta_path(inner)?, meta)
+    fn save_meta(inner: &Locked, meta: &Value) -> Result<()> {
+        inner.save_json(&Self::meta_path(inner)?, meta)
     }
 
     fn wants_generated_title(&self, meta: &Value) -> Result<bool> {
@@ -416,14 +408,14 @@ impl Shared {
 
     // ---- lifecycle ----
 
-    fn close_stale_sessions(&self) -> Result<()> {
+    fn close_stale_sessions(&self, locked: &Locked) -> Result<()> {
         let mut closed = 0;
         for meeting_dir in is_dir_entries(&self.base_path)? {
             let meta_path = meeting_dir.join("meta.json");
             if !meta_path.exists() {
                 continue;
             }
-            match self.close_stale(&meta_path) {
+            match self.close_stale(locked, &meta_path) {
                 Ok(true) => closed += 1,
                 Ok(false) => {}
                 Err(e) if skipped_by_scan(&e) => {
@@ -439,18 +431,18 @@ impl Shared {
     }
 
     /// Ends a session an earlier run left open; false for one already ended.
-    fn close_stale(&self, meta_path: &Path) -> Result<bool> {
+    fn close_stale(&self, locked: &Locked, meta_path: &Path) -> Result<bool> {
         let mut meta = read_json(meta_path)?;
         if get(&meta, "ended_at")?.is_some_and(|v| !v.is_null()) {
             return Ok(false);
         }
         end_as_stale(&mut meta, &self.now())?;
-        save_json(meta_path, &meta)?;
-        self.update_index(&meta)?;
+        locked.save_json(meta_path, &meta)?;
+        self.update_index(locked, &meta)?;
         Ok(true)
     }
 
-    fn create_meeting(&self, inner: &mut Inner, source: &str, prev_meeting_id: Option<&str>) -> Result<String> {
+    fn create_meeting(&self, inner: &mut Locked, source: &str, prev_meeting_id: Option<&str>) -> Result<String> {
         let now = self.now();
         let meeting_id =
             format!("{}_{}", time::format_wall(now.wall_micros, "%Y-%m-%d_%H%M%S"), (self.options.meeting_suffix)());
@@ -479,7 +471,7 @@ impl Shared {
             .map(|k| ((*k).to_owned(), Value::Int(0)))
             .collect();
         meta.insert("stats", Value::Object(stats));
-        save_json(&meeting_path.join("meta.json"), &Value::Object(meta))?;
+        inner.save_json(&meeting_path.join("meta.json"), &Value::Object(meta))?;
         let transcript = meeting_path.join("transcript.jsonl");
         fs::OpenOptions::new()
             .create(true)
@@ -491,7 +483,7 @@ impl Shared {
             if prev_path.exists() {
                 let mut prev_meta = read_json(&prev_path)?;
                 set(&mut prev_meta, "next_meeting_id", Value::from(meeting_id.as_str()))?;
-                save_json(&prev_path, &prev_meta)?;
+                inner.save_json(&prev_path, &prev_meta)?;
             }
         }
         inner.current_meeting_id = Some(meeting_id.clone());
@@ -585,7 +577,7 @@ impl Shared {
         Ok(time::wall_date(created_at.local_wall(self.options.clock.as_ref())) == today)
     }
 
-    fn reopen_meeting(&self, inner: &mut Inner, meeting_id: &str) -> Result<bool> {
+    fn reopen_meeting(&self, inner: &mut Locked, meeting_id: &str) -> Result<bool> {
         let meeting_path = self.base_path.join(meeting_id);
         let meta_path = meeting_path.join("meta.json");
         if !meta_path.exists() {
@@ -593,8 +585,8 @@ impl Shared {
         }
         let mut meta = read_json(&meta_path)?;
         self.reset_for_reopen(&mut meta, inner.chunk_duration_ms)?;
-        save_json(&meta_path, &meta)?;
-        self.unindex_reopened(meeting_id)?;
+        inner.save_json(&meta_path, &meta)?;
+        self.unindex_reopened(inner, meeting_id)?;
         let transcript = meeting_path.join("transcript.jsonl");
         inner.current_meeting_id = Some(meeting_id.to_owned());
         inner.current_meeting_path = Some(meeting_path);
@@ -618,7 +610,7 @@ impl Shared {
     }
 
     /// A reopened meeting leaves `index.json`, which lists ended ones.
-    fn unindex_reopened(&self, meeting_id: &str) -> Result<()> {
+    fn unindex_reopened(&self, locked: &Locked, meeting_id: &str) -> Result<()> {
         let index_path = self.base_path.join("index.json");
         if !index_path.exists() {
             return Ok(());
@@ -636,12 +628,12 @@ impl Shared {
             other => return Err(not_iterable(other)),
         };
         set(&mut index, "meetings", Value::Array(kept))?;
-        save_json(&index_path, &index)
+        locked.save_json(&index_path, &index)
     }
 
     /// What a join does to the current meeting; true when a meeting must then be
     /// opened or reopened for the conference.
-    fn leave_for_join(self: &Arc<Self>, inner: &mut Inner, live_id: &str, host: &str, platform: &str) -> Result<bool> {
+    fn leave_for_join(self: &Arc<Self>, inner: &mut Locked, live_id: &str, host: &str, platform: &str) -> Result<bool> {
         let mut meta = Self::load_meta(inner)?;
         match self.join_step(&meta, live_id, host, platform)? {
             JoinStep::End(reason) => {
@@ -686,7 +678,7 @@ impl Shared {
     /// the orphan goes, or the orphan becomes the conference's meeting.
     fn adopt_orphan(
         self: &Arc<Self>,
-        inner: &mut Inner,
+        inner: &mut Locked,
         meta: &mut Value,
         live_id: &str,
         host: &str,
@@ -707,7 +699,7 @@ impl Shared {
     }
 
     /// The room's meeting left minutes ago reopens, or a new one is created.
-    fn open_for_join(&self, inner: &mut Inner, live_id: &str, host: &str, platform: &str) -> Result<()> {
+    fn open_for_join(&self, inner: &mut Locked, live_id: &str, host: &str, platform: &str) -> Result<()> {
         if let Some(existing) = self.find_same_day_meeting(live_id, platform, host)? {
             self.reopen_meeting(inner, &existing)?;
             self.print(&format!("Reopened same-day meeting: {existing}"));
@@ -720,7 +712,7 @@ impl Shared {
     /// The conference's URL, room and host, and its title when the meeting has none.
     fn record_conference(
         &self,
-        inner: &Inner,
+        inner: &Locked,
         url: &str,
         live_id: &str,
         host: &str,
@@ -739,13 +731,13 @@ impl Shared {
         Self::save_meta(inner, &meta)
     }
 
-    fn end_current_meeting(self: &Arc<Self>, inner: &mut Inner, end_reason: &str) -> Result<Option<String>> {
+    fn end_current_meeting(self: &Arc<Self>, inner: &mut Locked, end_reason: &str) -> Result<Option<String>> {
         let Some(meeting_path) = inner.current_meeting_path.clone() else { return Ok(None) };
         let mut meta = Self::load_meta(inner)?;
         self.pause_conference(inner, &meta, end_reason)?;
         end_now(&mut meta, &self.now(), end_reason)?;
         Self::save_meta(inner, &meta)?;
-        self.update_index(&meta)?;
+        self.update_index(inner, &meta)?;
         // AI work must not delay a lifecycle transition; pin the closed recording.
         if self.wants_generated_title(&meta)? {
             self.submit_title(inner, meeting_path);
@@ -754,7 +746,7 @@ impl Shared {
     }
 
     /// A conference that may be reopened gets a pause marker, unless the session ends.
-    fn pause_conference(&self, inner: &mut Inner, meta: &Value, end_reason: &str) -> Result<()> {
+    fn pause_conference(&self, inner: &mut Locked, meta: &Value, end_reason: &str) -> Result<()> {
         if self.is_conference(get(meta, "source")?) && end_reason != "session_end" {
             self.append_system_event(inner, "session_pause", "Сессия приостановлена")?;
         }
@@ -793,15 +785,15 @@ impl Shared {
     /// The title into the meta and the index, unless the meeting was reopened or
     /// titled meanwhile.
     fn persist_title(&self, meeting_path: &Path, title: GeneratedTitle) -> Result<()> {
-        let _inner = self.lock();
+        let locked = self.lock()?;
         let meta_path = meeting_path.join("meta.json");
         let mut meta = read_json(&meta_path)?;
         if !get(&meta, "ended_at")?.is_some_and(Value::truthy) || get(&meta, "title")?.is_some_and(Value::truthy) {
             return Ok(());
         }
         set_generated_title(&mut meta, title)?;
-        save_json(&meta_path, &meta)?;
-        self.update_index(&meta)
+        locked.save_json(&meta_path, &meta)?;
+        self.update_index(&locked, &meta)
     }
 
     fn generate_title_for_meeting(&self, meeting_path: &Path) -> Option<GeneratedTitle> {
@@ -855,7 +847,7 @@ impl Shared {
         })
     }
 
-    fn append_system_event(&self, inner: &mut Inner, event_type: &str, message: &str) -> Result<()> {
+    fn append_system_event(&self, inner: &mut Locked, event_type: &str, message: &str) -> Result<()> {
         let Some(meeting_path) = inner.current_meeting_path.clone() else { return Ok(()) };
         inner.segment_counter += 1;
         let segment_id = inner.segment_counter;
@@ -877,7 +869,7 @@ impl Shared {
         let mut meta = read_json(&meta_path)?;
         set(item_mut(&mut meta, "stats")?, "segment_count", Value::from(segment_id))?;
         set(&mut meta, "updated_at", Value::from(now.isoformat()))?;
-        save_json(&meta_path, &meta)
+        inner.save_json(&meta_path, &meta)
     }
 
     /// A transcript row: spoken at its capture time, else now.
@@ -899,18 +891,18 @@ impl Shared {
         Value::Object(row)
     }
 
-    fn update_index(&self, meta: &Value) -> Result<()> {
+    fn update_index(&self, locked: &Locked, meta: &Value) -> Result<()> {
         let index_path = self.base_path.join("index.json");
         let (index, id, mut meetings) = index_without(&index_path, meta)?;
         let stats = item(meta, "stats")?;
         if pyops::equals_int(item(stats, "segment_count")?, 0) {
-            save_index_rows(&index_path, index, meetings)?;
+            save_index_rows(locked, &index_path, index, meetings)?;
             self.remove_meeting_dir(id);
             return Ok(());
         }
         meetings.push(index_entry(meta, id, stats)?);
         sort_desc(&mut meetings, |m| item(m, "created_at").cloned())?;
-        save_index_rows(&index_path, index, meetings)
+        save_index_rows(locked, &index_path, index, meetings)
     }
 
     /// An ended meeting without segments is not kept.
@@ -1214,9 +1206,9 @@ fn rows_without(rows: &[Value], id: &Value) -> Result<Vec<Value>> {
     Ok(kept)
 }
 
-fn save_index_rows(index_path: &Path, mut index: Value, rows: Vec<Value>) -> Result<()> {
+fn save_index_rows(locked: &Locked, index_path: &Path, mut index: Value, rows: Vec<Value>) -> Result<()> {
     set(&mut index, "meetings", Value::Array(rows))?;
-    save_json(index_path, &index)
+    locked.save_json(index_path, &index)
 }
 
 /// The `index.json` row of an ended meeting.
@@ -1384,9 +1376,28 @@ fn refine_text(segment: &mut Value, text: &str) -> Result<i64> {
     Ok(delta)
 }
 
+/// The meeting's transcript with the updates applied, replaced through
+/// `transcript.jsonl.tmp` and a rename, and the words it gained counted; nothing
+/// without a transcript.
+fn rewrite_transcript(locked: &Locked, target: &Path, updates: &[SegmentUpdate]) -> Result<()> {
+    let transcript_path = target.join("transcript.jsonl");
+    if !transcript_path.exists() {
+        return Ok(());
+    }
+    let content = read_text(&transcript_path)?;
+    let (new_lines, words_delta) = rewrite_rows(&content, updates)?;
+    let temp = target.join("transcript.jsonl.tmp");
+    fs::write(&temp, format!("{}\n", new_lines.join("\n"))).map_err(|e| StorageError::os(&e, &temp))?;
+    fs::rename(&temp, &transcript_path).map_err(|e| StorageError::os(&e, &transcript_path))?;
+    if words_delta != 0 {
+        add_words(locked, &target.join("meta.json"), words_delta)?;
+    }
+    Ok(())
+}
+
 /// `stats.words_count` moved by `delta`, never below zero, when the meeting has a
 /// meta.
-fn add_words(meta_path: &Path, delta: i64) -> Result<()> {
+fn add_words(locked: &Locked, meta_path: &Path, delta: i64) -> Result<()> {
     if !meta_path.exists() {
         return Ok(());
     }
@@ -1394,7 +1405,7 @@ fn add_words(meta_path: &Path, delta: i64) -> Result<()> {
     let stats = stats_setdefault(&mut meta)?;
     let current = pyops::to_int(get(stats, "words_count")?.unwrap_or(&Value::Int(0)))?;
     set(stats, "words_count", Value::from((current + delta).max(0)))?;
-    save_json(meta_path, &meta)
+    locked.save_json(meta_path, &meta)
 }
 
 /// `meta.setdefault("stats", {})`.
@@ -1484,12 +1495,12 @@ impl MeetingStorage {
 
     #[must_use]
     pub fn current_meeting_id(&self) -> Option<String> {
-        self.shared.lock().current_meeting_id.clone()
+        self.shared.state().current_meeting_id.clone()
     }
 
     #[must_use]
     pub fn current_meeting_path(&self) -> Option<PathBuf> {
-        self.shared.lock().current_meeting_path.clone()
+        self.shared.state().current_meeting_path.clone()
     }
 
     /// `is_conference_source(source)`.
@@ -1504,9 +1515,9 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn start_session(&self, mode: &SessionMode) -> Result<String> {
-        self.shared.close_stale_sessions()?;
-        self.cleanup_old_audio(24.0)?;
-        let mut inner = self.shared.lock();
+        let mut inner = self.shared.lock()?;
+        self.shared.close_stale_sessions(&inner)?;
+        self.cleanup_audio(&inner, 24.0)?;
         let mut map = Map::new();
         map.insert("mic", Value::Bool(mode.mic));
         map.insert("system_audio", Value::Bool(mode.system_audio));
@@ -1534,8 +1545,8 @@ impl MeetingStorage {
     /// As Python raises.
     pub fn on_meeting_join(&self, url: &str, title: Option<&str>, platform: &str) -> Result<Option<String>> {
         let shared = &self.shared;
-        let mut guard = shared.lock();
-        let inner = &mut *guard;
+        let mut guard = shared.lock()?;
+        let inner = &mut guard;
         let (parsed, _) = urlparse(url).map_err(StorageError::Value)?;
         let live_id = live_id_of(url, &parsed.path);
         let host = parsed.netloc.clone();
@@ -1561,8 +1572,8 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn on_ktalk_leave(&self, reason: &str) -> Result<String> {
-        let mut guard = self.shared.lock();
-        let inner = &mut *guard;
+        let mut guard = self.shared.lock()?;
+        let inner = &mut guard;
         if inner.current_meeting_path.is_none() {
             return self.shared.create_meeting(inner, "orphan", None);
         }
@@ -1575,8 +1586,8 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn split_on_silence_timeout(&self) -> Result<Option<String>> {
-        let mut guard = self.shared.lock();
-        let inner = &mut *guard;
+        let mut guard = self.shared.lock()?;
+        let inner = &mut guard;
         if inner.current_meeting_path.is_none() {
             return Ok(None);
         }
@@ -1597,8 +1608,8 @@ impl MeetingStorage {
     /// As Python raises.
     pub fn end_session(&self) -> Result<Option<String>> {
         let (meeting_id, titles) = {
-            let mut guard = self.shared.lock();
-            let inner = &mut *guard;
+            let mut guard = self.shared.lock()?;
+            let inner = &mut guard;
             // A failure leaves the meeting current, as Python's exception skips the rest.
             let meeting_id = if inner.current_meeting_path.is_some() {
                 self.shared.end_current_meeting(inner, "session_end")?
@@ -1621,7 +1632,7 @@ impl MeetingStorage {
     pub fn drain_titles(&self) {
         let (done, wait) = mpsc::channel();
         {
-            let inner = self.shared.lock();
+            let inner = self.shared.state();
             let Some(worker) = inner.titles.as_ref() else { return };
             if worker.jobs.send(TitleJob::Barrier(done)).is_err() {
                 return;
@@ -1636,8 +1647,8 @@ impl MeetingStorage {
     /// As Python raises.
     pub fn append_segment(&self, segment: &NewSegment) -> Result<i64> {
         let shared = &self.shared;
-        let mut guard = shared.lock();
-        let inner = &mut *guard;
+        let mut guard = shared.lock()?;
+        let inner = &mut guard;
         if inner.current_meeting_path.is_none() {
             shared.create_meeting(inner, "orphan", None)?;
         }
@@ -1652,7 +1663,7 @@ impl MeetingStorage {
         let mut meta = read_json(&meta_path)?;
         count_segment(&mut meta, segment_id, &segment.text, &now)?;
         register_speaker(item_mut(&mut meta, "participants")?, segment, &Value::from(now.isoformat()))?;
-        save_json(&meta_path, &meta)?;
+        inner.save_json(&meta_path, &meta)?;
         Ok(segment_id)
     }
 
@@ -1662,25 +1673,12 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn update_segments(&self, updates: &[SegmentUpdate], meeting_path: Option<&Path>) -> Result<()> {
-        let target = meeting_path.map(Path::to_path_buf).or_else(|| self.shared.lock().current_meeting_path.clone());
+        let target = meeting_path.map(Path::to_path_buf).or_else(|| self.shared.state().current_meeting_path.clone());
         let Some(target) = target else { return Ok(()) };
         if updates.is_empty() {
             return Ok(());
         }
-        let _guard = self.shared.lock();
-        let transcript_path = target.join("transcript.jsonl");
-        if !transcript_path.exists() {
-            return Ok(());
-        }
-        let content = read_text(&transcript_path)?;
-        let (new_lines, words_delta) = rewrite_rows(&content, updates)?;
-        let temp = target.join("transcript.jsonl.tmp");
-        fs::write(&temp, format!("{}\n", new_lines.join("\n"))).map_err(|e| StorageError::os(&e, &temp))?;
-        fs::rename(&temp, &transcript_path).map_err(|e| StorageError::os(&e, &transcript_path))?;
-        if words_delta != 0 {
-            add_words(&target.join("meta.json"), words_delta)?;
-        }
-        Ok(())
+        rewrite_transcript(&self.shared.lock()?, &target, updates)
     }
 
     /// `update_title(title)`: only an unset title or a "Joining…" placeholder changes.
@@ -1688,7 +1686,7 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn update_title(&self, title: &str) -> Result<()> {
-        let inner = self.shared.lock();
+        let inner = self.shared.lock()?;
         if inner.current_meeting_path.is_none() || title.is_empty() {
             return Ok(());
         }
@@ -1707,7 +1705,7 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn update_participants(&self, participants: &Map) -> Result<()> {
-        let inner = self.shared.lock();
+        let inner = self.shared.lock()?;
         if inner.current_meeting_path.is_none() {
             return Ok(());
         }
@@ -1727,7 +1725,7 @@ impl MeetingStorage {
     /// # Errors
     /// No current meeting (Python's `TypeError`), or the file cannot be read or parsed.
     pub fn load_meta(&self) -> Result<Value> {
-        Shared::load_meta(&self.shared.lock())
+        Shared::load_meta(&self.shared.state())
     }
 
     /// `get_current_transcript()`.
@@ -1956,7 +1954,7 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn set_recording_active(&self, active: bool) -> Result<()> {
-        let inner = self.shared.lock();
+        let inner = self.shared.lock()?;
         if inner.current_meeting_path.is_none() {
             return Ok(());
         }
@@ -1972,7 +1970,7 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn set_audio_paths(&self, mic: Option<&str>, system: Option<&str>, meeting_path: Option<&Path>) -> Result<()> {
-        let inner = self.shared.lock();
+        let inner = self.shared.lock()?;
         let Some(path) = meeting_path.map(Path::to_path_buf).or_else(|| inner.current_meeting_path.clone()) else {
             return Ok(());
         };
@@ -1988,7 +1986,7 @@ impl MeetingStorage {
             set(&mut meta, "audio_system_path", Value::from(system))?;
         }
         set(&mut meta, "updated_at", self.shared.now_iso())?;
-        save_json(&meta_path, &meta)
+        inner.save_json(&meta_path, &meta)
     }
 
     /// `get_audio_paths(meeting_id)`: the recorded WAVs that still exist.
@@ -2015,6 +2013,7 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn create_transcript_backup(&self, meeting_id: &str) -> Result<Option<PathBuf>> {
+        let locked = self.shared.lock()?;
         let meeting_path = self.shared.base_path.join(meeting_id);
         let transcript = meeting_path.join("transcript.jsonl");
         let backup = meeting_path.join("transcript.jsonl.backup");
@@ -2029,7 +2028,7 @@ impl MeetingStorage {
         let mut meta = read_json(&meta_path)?;
         set(&mut meta, "transcript_backup_path", Value::from(backup.to_string_lossy().into_owned()))?;
         set(&mut meta, "updated_at", self.shared.now_iso())?;
-        save_json(&meta_path, &meta)?;
+        locked.save_json(&meta_path, &meta)?;
         Ok(Some(backup))
     }
 
@@ -2038,6 +2037,7 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn restore_transcript_backup(&self, meeting_id: &str) -> Result<bool> {
+        let locked = self.shared.lock()?;
         let meeting_path = self.shared.base_path.join(meeting_id);
         let backup = meeting_path.join("transcript.jsonl.backup");
         if !backup.exists() {
@@ -2045,15 +2045,20 @@ impl MeetingStorage {
         }
         copy2(&backup, &meeting_path.join("transcript.jsonl"))?;
         fs::remove_file(&backup).map_err(|e| StorageError::os(&e, &backup))?;
-        let meta_path = meeting_path.join("meta.json");
-        let mut meta = read_json(&meta_path)?;
+        self.forget_backup(&locked, &meeting_path.join("meta.json"))?;
+        Ok(true)
+    }
+
+    /// A restored transcript's meta: no backup, no diarization of the transcript it
+    /// replaced.
+    fn forget_backup(&self, locked: &Locked, meta_path: &Path) -> Result<()> {
+        let mut meta = read_json(meta_path)?;
         let map = meta.as_object_mut().ok_or_else(|| pyops::attribute_error(&Value::Null, "pop"))?;
         for key in ["diarization_mic", "diarization_system", "transcript_backup_path"] {
             map.remove(key);
         }
         set(&mut meta, "updated_at", self.shared.now_iso())?;
-        save_json(&meta_path, &meta)?;
-        Ok(true)
+        locked.save_json(meta_path, &meta)
     }
 
     /// `cleanup_old_audio(retention_hours)`: delete WAVs whose last write is older
@@ -2063,6 +2068,11 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn cleanup_old_audio(&self, retention_hours: f64) -> Result<usize> {
+        self.cleanup_audio(&self.shared.lock()?, retention_hours)
+    }
+
+    /// `cleanup_old_audio` under the lock already held.
+    fn cleanup_audio(&self, locked: &Locked, retention_hours: f64) -> Result<usize> {
         #[allow(clippy::cast_precision_loss)]
         let now = self.shared.options.clock.now_micros() as f64 / 1e6;
         let cutoff = now - retention_hours * 3600.0;
@@ -2072,7 +2082,7 @@ impl MeetingStorage {
             if stale.is_empty() {
                 continue;
             }
-            match self.forget_audio(&meeting_dir, &stale, &mut deleted) {
+            match self.forget_audio(locked, &meeting_dir, &stale, &mut deleted) {
                 Ok(()) => {}
                 Err(e @ (StorageError::Json(_) | StorageError::Os(_))) => {
                     self.shared.print(&format!("Warning: Cleanup error for {}: {e}", dir_name(&meeting_dir)));
@@ -2088,26 +2098,32 @@ impl MeetingStorage {
     }
 
     /// The stale WAVs deleted, each counted, and their paths nulled in the meta.
-    fn forget_audio(&self, meeting_dir: &Path, stale: &[(&str, PathBuf)], deleted: &mut usize) -> Result<()> {
+    fn forget_audio(
+        &self,
+        locked: &Locked,
+        meeting_dir: &Path,
+        stale: &[(&str, PathBuf)],
+        deleted: &mut usize,
+    ) -> Result<()> {
         for (_, wav) in stale {
             fs::remove_file(wav).map_err(|e| StorageError::os(&e, wav))?;
             *deleted += 1;
         }
         let meta_path = meeting_dir.join("meta.json");
         if meta_path.exists() {
-            self.null_audio_paths(&meta_path, stale)?;
+            self.null_audio_paths(locked, &meta_path, stale)?;
         }
         Ok(())
     }
 
-    fn null_audio_paths(&self, meta_path: &Path, stale: &[(&str, PathBuf)]) -> Result<()> {
+    fn null_audio_paths(&self, locked: &Locked, meta_path: &Path, stale: &[(&str, PathBuf)]) -> Result<()> {
         let mut meta = read_json(meta_path)?;
         for (track, _) in stale {
             set(&mut meta, &format!("audio_{track}_path"), Value::Null)?;
         }
         set(&mut meta, "audio_deleted_at", self.shared.now_iso())?;
         set(&mut meta, "updated_at", self.shared.now_iso())?;
-        save_json(meta_path, &meta)
+        locked.save_json(meta_path, &meta)
     }
 
     /// `delete_meeting(meeting_id)`: the directory and its index entry; false for an
@@ -2116,21 +2132,22 @@ impl MeetingStorage {
     /// # Errors
     /// `ValueError` for a meeting still being recorded, and what Python raises.
     pub fn delete_meeting(&self, meeting_id: &str) -> Result<bool> {
+        let locked = self.shared.lock()?;
         let meeting_path = self.shared.base_path.join(meeting_id);
         if !meeting_path.is_dir() {
             return Ok(false);
         }
         if let Some(meta) = ended_meta(&meeting_path.join("meta.json"))? {
-            self.relink_neighbors(&meta)?;
+            self.relink_neighbors(&locked, &meta)?;
         }
-        self.unindex_deleted(meeting_id)?;
+        self.unindex_deleted(&locked, meeting_id)?;
         let _ = fs::remove_dir_all(&meeting_path);
         Ok(true)
     }
 
     /// A deleted meeting's row leaves `index.json`; an index without it is not
     /// rewritten.
-    fn unindex_deleted(&self, meeting_id: &str) -> Result<()> {
+    fn unindex_deleted(&self, locked: &Locked, meeting_id: &str) -> Result<()> {
         let index_path = self.shared.base_path.join("index.json");
         if !index_path.exists() {
             return Ok(());
@@ -2140,23 +2157,23 @@ impl MeetingStorage {
         let kept = rows_other_than(&all, meeting_id)?;
         if kept.len() != all.len() {
             set(&mut index, "meetings", Value::Array(kept))?;
-            save_json(&index_path, &index)?;
+            locked.save_json(&index_path, &index)?;
         }
         Ok(())
     }
 
-    fn relink_neighbors(&self, meta: &Value) -> Result<()> {
+    fn relink_neighbors(&self, locked: &Locked, meta: &Value) -> Result<()> {
         let prev = get(meta, "prev_meeting_id")?.cloned().unwrap_or(Value::Null);
         let next = get(meta, "next_meeting_id")?.cloned().unwrap_or(Value::Null);
         let own = get(meta, "id")?.cloned().unwrap_or(Value::Null);
         for (neighbor, field, target) in [(&prev, "next_meeting_id", &next), (&next, "prev_meeting_id", &prev)] {
-            self.relink(neighbor, field, target, &own)?;
+            self.relink(locked, neighbor, field, target, &own)?;
         }
         Ok(())
     }
 
     /// A neighbour that linked to the deleted meeting links past it.
-    fn relink(&self, neighbor: &Value, field: &str, target: &Value, own: &Value) -> Result<()> {
+    fn relink(&self, locked: &Locked, neighbor: &Value, field: &str, target: &Value, own: &Value) -> Result<()> {
         if !neighbor.truthy() {
             return Ok(());
         }
@@ -2167,7 +2184,7 @@ impl MeetingStorage {
         let mut other = read_json(&path)?;
         if links_to(&other, field, own)? {
             set(&mut other, field, target.clone())?;
-            save_json(&path, &other)?;
+            locked.save_json(&path, &other)?;
         }
         Ok(())
     }
@@ -2177,6 +2194,7 @@ impl MeetingStorage {
     /// # Errors
     /// As Python raises.
     pub fn set_diarization_result(&self, meeting_id: &str, track: &str, speakers_found: i64) -> Result<()> {
+        let locked = self.shared.lock()?;
         let meta_path = self.shared.base_path.join(meeting_id).join("meta.json");
         if !meta_path.exists() {
             return Ok(());
@@ -2187,7 +2205,7 @@ impl MeetingStorage {
         result.insert("speakers_found", Value::from(speakers_found));
         set(&mut meta, &format!("diarization_{track}"), Value::Object(result))?;
         set(&mut meta, "updated_at", self.shared.now_iso())?;
-        save_json(&meta_path, &meta)
+        locked.save_json(&meta_path, &meta)
     }
 
     /// The web's generated title: `fields` (the title and its provenance) merged into
@@ -2196,13 +2214,13 @@ impl MeetingStorage {
     /// meeting has ended. Both files go through `save_json`, so a reader never sees half
     /// a file. No `meta.json`: nothing is written.
     ///
-    /// Another process (the live one) may rewrite the same `meta.json` between the read
-    /// and the write here; the later write wins.
+    /// The live process rewrites the same `meta.json`: both go through the storage's
+    /// lock, so neither drops the other's change.
     ///
     /// # Errors
     /// As Python raises.
     pub fn store_title(&self, meeting_id: &str, fields: &Map) -> Result<()> {
-        let _inner = self.shared.lock();
+        let locked = self.shared.lock()?;
         let meta_path = self.shared.base_path.join(meeting_id).join("meta.json");
         if !meta_path.exists() {
             return Ok(());
@@ -2214,16 +2232,16 @@ impl MeetingStorage {
         let clock = self.shared.options.clock.as_ref();
         let now = PyDateTime { wall_micros: self.shared.now().local_wall(clock), offset_micros: None };
         set(&mut meta, "updated_at", Value::from(now.isoformat()))?;
-        save_json(&meta_path, &meta)?;
+        locked.save_json(&meta_path, &meta)?;
         if !get(&meta, "ended_at")?.is_some_and(Value::truthy) {
             return Ok(());
         }
-        self.title_into_index(meeting_id, fields.get("title").cloned().unwrap_or(Value::Null))
+        self.title_into_index(&locked, meeting_id, fields.get("title").cloned().unwrap_or(Value::Null))
     }
 
     /// The stored title copied into the meeting's `index.json` row, when there is an
     /// index.
-    fn title_into_index(&self, meeting_id: &str, title: Value) -> Result<()> {
+    fn title_into_index(&self, locked: &Locked, meeting_id: &str, title: Value) -> Result<()> {
         let index_path = self.shared.base_path.join("index.json");
         if !index_path.exists() {
             return Ok(());
@@ -2234,7 +2252,7 @@ impl MeetingStorage {
         } else if let Some(other) = get(&index, "meetings")? {
             return Err(not_iterable(other));
         }
-        save_json(&index_path, &index)
+        locked.save_json(&index_path, &index)
     }
 }
 
@@ -2273,7 +2291,7 @@ pub fn local_participant_names(meta: &Value, unnamed: UnnamedLocal) -> Result<Ve
 impl Drop for MeetingStorage {
     fn drop(&mut self) {
         // Python's executor thread outlives nothing either: let queued titles finish.
-        let titles = self.shared.lock().titles.take();
+        let titles = self.shared.state().titles.take();
         if let Some(worker) = titles {
             drop(worker.jobs);
             let _ = worker.thread.join();

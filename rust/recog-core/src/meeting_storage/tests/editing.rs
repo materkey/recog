@@ -244,7 +244,7 @@ fn ended_meetings_when_indexed_then_replaced_by_id_newest_first_and_empty_ones_r
     };
     fs::create_dir_all(base.join("m")).unwrap();
     // when
-    storage.shared.update_index(&meta(2)).unwrap();
+    storage.shared.update_index(&storage.shared.lock().unwrap(), &meta(2)).unwrap();
     // then
     assert_eq!(
         fs::read_to_string(base.join("index.json")).unwrap(),
@@ -256,7 +256,7 @@ fn ended_meetings_when_indexed_then_replaced_by_id_newest_first_and_empty_ones_r
         )
     );
     // when the meeting has no segments
-    storage.shared.update_index(&meta(0)).unwrap();
+    storage.shared.update_index(&storage.shared.lock().unwrap(), &meta(0)).unwrap();
     // then
     assert_eq!(
         fs::read_to_string(base.join("index.json")).unwrap(),
@@ -266,7 +266,7 @@ fn ended_meetings_when_indexed_then_replaced_by_id_newest_first_and_empty_ones_r
     let mut broken = meta(1);
     set(&mut broken, "participants", Value::Array(Vec::new())).unwrap();
     assert_eq!(
-        storage.shared.update_index(&broken),
+        storage.shared.update_index(&storage.shared.lock().unwrap(), &broken),
         Err(StorageError::Attribute("'list' object has no attribute 'values'".into()))
     );
 }

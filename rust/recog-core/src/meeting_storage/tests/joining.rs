@@ -245,7 +245,7 @@ fn a_meeting_when_reopened_directly_then_absent_is_false_and_a_broken_index_rais
     let base = storage.base_path().to_path_buf();
     put(&base, "m", r#"{"id": "m", "ended_at": "2026-07-04T09:00:00+00:00", "stats": {"segment_count": 0}}"#);
     let reopen = |id: &str| {
-        let mut inner = storage.shared.lock();
+        let mut inner = storage.shared.lock().unwrap();
         storage.shared.reopen_meeting(&mut inner, id)
     };
     // when / then

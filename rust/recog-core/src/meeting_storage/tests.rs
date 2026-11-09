@@ -1,6 +1,7 @@
 //! The cases of tests/test_meeting_storage.py and the storage half of
 //! tests/test_audio_retention.py, against the port.
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -547,7 +548,10 @@ fn a_stored_title_when_written_then_the_old_files_are_replaced_by_rename_not_rew
     assert_eq!(fs::read_to_string(dir.path().join("index.before")).unwrap(), STORED_INDEX);
     assert_ne!(fs::read_to_string(meeting.join("meta.json")).unwrap(), STORED_META);
     assert_eq!(fs::read_dir(&meeting).unwrap().count(), 1);
-    assert_eq!(fs::read_dir(storage.base_path()).unwrap().count(), 2);
+    let mut names: Vec<String> =
+        fs::read_dir(storage.base_path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    names.sort();
+    assert_eq!(names, [".lock", "index.json", "m1"]);
 }
 
 #[test]
@@ -626,4 +630,5 @@ mod editing;
 mod joining;
 mod lifecycle;
 mod listing;
+mod locking;
 mod records;
