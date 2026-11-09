@@ -211,31 +211,32 @@ impl Session {
     /// Where a message from the server goes: a response to its request's stream, a
     /// server-initiated message to the GET stream; without one it is dropped.
     fn route(&self, message: &ServerJsonRpcMessage) {
-        let json = match serde_json::to_string(message) {
-            Ok(json) => json,
-            Err(e) => {
-                log::line(&format!("{} cannot serialise a message: {e}", log::PREFIX));
-                return;
-            }
-        };
-        let mut state = self.state();
-        let id = match message {
-            JsonRpcMessage::Response(response) => Some(&response.id),
-            JsonRpcMessage::Error(error) => error.id.as_ref(),
-            JsonRpcMessage::Request(_) | JsonRpcMessage::Notification(_) => None,
-        };
-        if matches!(message, JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)) {
-            let Some(id) = id else { return };
-            let key = IdKey::of(id);
-            if state.cancelled.remove(&key) {
-                return;
-            }
-            state.in_flight.remove(&key);
-            if let Some(stream) = state.request_streams.remove(&key.stream_key()) {
-                let _ = stream.send(Event { json, last: true });
-            }
-        } else if let Some((_, stream)) = &state.get_stream {
+        let serialised = serde_json::to_string(message)
+            .map_err(|e| log::line(&format!("{} cannot serialise a message: {e}", log::PREFIX)));
+        let Ok(json) = serialised else { return };
+        match answered_request(message) {
+            Some(Some(id)) => self.answer(&IdKey::of(id), json),
+            Some(None) => {}
+            None => self.send_on_get_stream(json),
+        }
+    }
+
+    /// A message of the server's own: on the GET stream, dropped without one.
+    fn send_on_get_stream(&self, json: String) {
+        if let Some((_, stream)) = &self.state().get_stream {
             let _ = stream.send(Event { json, last: false });
+        }
+    }
+
+    /// Ends request `key`'s stream with its answer, unless the request was cancelled.
+    fn answer(&self, key: &IdKey, json: String) {
+        let mut state = self.state();
+        if state.cancelled.remove(key) {
+            return;
+        }
+        state.in_flight.remove(key);
+        if let Some(stream) = state.request_streams.remove(&key.stream_key()) {
+            let _ = stream.send(Event { json, last: true });
         }
     }
 
@@ -254,6 +255,16 @@ impl Session {
         if let Some(stream) = self.state().request_streams.remove(&key.stream_key()) {
             let _ = stream.send(Event { json, last: true });
         }
+    }
+}
+
+/// The request a server message answers: `None` for a request or a notification of
+/// the server's own, `Some(None)` for an error that names no request.
+fn answered_request(message: &ServerJsonRpcMessage) -> Option<Option<&RequestId>> {
+    match message {
+        JsonRpcMessage::Response(response) => Some(Some(&response.id)),
+        JsonRpcMessage::Error(error) => Some(error.id.as_ref()),
+        JsonRpcMessage::Request(_) | JsonRpcMessage::Notification(_) => None,
     }
 }
 
@@ -348,6 +359,57 @@ fn params_valid(method: &str, params: &Value) -> bool {
     }
 }
 
+/// What `ServerSession` does with a request before (and instead of) its handler.
+enum Verdict {
+    Invalid,
+    MethodNotFound,
+    /// A ping before the server started, answered by the transport.
+    Pong,
+    Forward(Box<ClientJsonRpcMessage>),
+}
+
+/// `ClientRequest` validation, the ping before initialization, "request before
+/// initialization", "method not found", in mcp 1.27's order. `parsed` is the
+/// message as rmcp reads it, `None` when it cannot (or its id does not fit).
+fn request_verdict(
+    method: &str,
+    params: &Value,
+    started: bool,
+    initialized: bool,
+    parsed: Option<ClientJsonRpcMessage>,
+) -> Verdict {
+    if !known_request(method, params) {
+        return Verdict::Invalid;
+    }
+    if method == "ping" && !started {
+        return Verdict::Pong;
+    }
+    if method != "initialize" && !initialized {
+        return Verdict::Invalid;
+    }
+    if !HANDLED_METHODS.contains(&method) {
+        return Verdict::MethodNotFound;
+    }
+    parsed.map_or(Verdict::Invalid, |parsed| Verdict::Forward(Box::new(parsed)))
+}
+
+fn known_request(method: &str, params: &Value) -> bool {
+    CLIENT_REQUEST_METHODS.contains(&method) && params_valid(method, params)
+}
+
+/// An error answer to the request, when its id can be written back.
+fn reply_error(
+    request_id: Option<RequestId>,
+    reply: impl Fn(ServerJsonRpcMessage),
+    code: i32,
+    message: &str,
+    data: Option<serde_json::Value>,
+) {
+    if let Some(request_id) = request_id {
+        reply(JsonRpcMessage::error(ErrorData::new(ErrorCode(code), message.to_owned(), data), Some(request_id)));
+    }
+}
+
 fn header<'a>(request: &'a Request<Incoming>, name: &str) -> Option<&'a str> {
     request.headers().get(name).and_then(|v| v.to_str().ok())
 }
@@ -393,6 +455,47 @@ fn python_utc_now() -> String {
     } else {
         format!("{}.{micros:06}+00:00", now.format("%Y-%m-%d %H:%M:%S"))
     }
+}
+
+/// A POST body as its text and JSON-RPC message, or the error answer: a body that
+/// cannot be read or decoded, JSON that does not parse, a message that fails
+/// `JSONRPCMessage` validation.
+async fn read_message(session: &Session, request: Request<Incoming>) -> Result<(String, Message), Box<Response<Body>>> {
+    let fail = |status, code, message: &str| Box::new(json_error(status, code, message, Some(&session.id)));
+    let raw =
+        request.into_body().collect().await.map_err(|e| {
+            fail(StatusCode::INTERNAL_SERVER_ERROR, -32603, &format!("Error handling POST request: {e}"))
+        })?;
+    let text = decode_body(&raw.to_bytes()).map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, -32603, &e))?;
+    let value =
+        pyjson::loads(&text).map_err(|e| fail(StatusCode::BAD_REQUEST, -32700, &format!("Parse error: {e}")))?;
+    let message =
+        classify(&value).map_err(|e| fail(StatusCode::BAD_REQUEST, -32602, &format!("Validation error: {e}")))?;
+    Ok((text, message))
+}
+
+/// The body as UTF-8 text without a leading BOM.
+fn decode_body(raw: &[u8]) -> Result<String, String> {
+    let raw = raw.strip_prefix(b"\xef\xbb\xbf").unwrap_or(raw);
+    std::str::from_utf8(raw)
+        .map(str::to_owned)
+        .map_err(|e| format!("Error handling POST request: {}", pyjson::utf8_error_message(raw, &e)))
+}
+
+/// The answer to a path other than `/mcp`: Starlette's redirect from `/mcp/`, else
+/// its plain 404.
+fn outside_endpoint(request: &Request<Incoming>) -> Option<Response<Body>> {
+    let path = request.uri().path();
+    if path == "/mcp" {
+        return None;
+    }
+    if path == "/mcp/" {
+        let host = header(request, "host").unwrap_or("").to_owned();
+        let query = request.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+        let location = format!("http://{host}/mcp{query}");
+        return Some(with_header(full(StatusCode::TEMPORARY_REDIRECT, Bytes::new()), "location", &location));
+    }
+    Some(with_header(full(StatusCode::NOT_FOUND, "Not Found"), "content-type", "text/plain; charset=utf-8"))
 }
 
 /// Drops the GET stream registration when its response ends.
@@ -505,29 +608,12 @@ impl McpServer {
 
     /// One HTTP request.
     pub async fn handle(self: Arc<Self>, request: Request<Incoming>) -> Response<Body> {
-        let path = request.uri().path();
-        if path != "/mcp" {
-            if path == "/mcp/" {
-                let host = header(&request, "host").unwrap_or("").to_owned();
-                let query = request.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
-                let location = format!("http://{host}/mcp{query}");
-                return with_header(full(StatusCode::TEMPORARY_REDIRECT, Bytes::new()), "location", &location);
-            }
-            return with_header(full(StatusCode::NOT_FOUND, "Not Found"), "content-type", "text/plain; charset=utf-8");
+        if let Some(response) = outside_endpoint(&request) {
+            return response;
         }
-        let session = match request.headers().get(SESSION_HEADER) {
-            None => {
-                let session = Arc::new(Session::new(uuid::Uuid::new_v4().simple().to_string()));
-                self.sessions().push(session.clone());
-                session
-            }
-            Some(value) => {
-                let found = value.to_str().ok().and_then(|id| self.sessions().iter().find(|s| s.id == id).cloned());
-                match found {
-                    Some(session) => session,
-                    None => return json_error(StatusCode::NOT_FOUND, -32600, "Session not found", None),
-                }
-            }
+        let session = match self.session_for(&request) {
+            Ok(session) => session,
+            Err(response) => return *response,
         };
         if let Some(response) = self.security_check(&request) {
             return response;
@@ -540,6 +626,22 @@ impl McpServer {
                 Some(&session.id),
             );
         }
+        self.by_method(session, request).await
+    }
+
+    /// The session a request names, or a new one when it names none, whatever the
+    /// method.
+    fn session_for(&self, request: &Request<Incoming>) -> Result<Arc<Session>, Box<Response<Body>>> {
+        let Some(value) = request.headers().get(SESSION_HEADER) else {
+            let session = Arc::new(Session::new(uuid::Uuid::new_v4().simple().to_string()));
+            self.sessions().push(session.clone());
+            return Ok(session);
+        };
+        let found = value.to_str().ok().and_then(|id| self.sessions().iter().find(|s| s.id == id).cloned());
+        found.ok_or_else(|| Box::new(json_error(StatusCode::NOT_FOUND, -32600, "Session not found", None)))
+    }
+
+    async fn by_method(&self, session: Arc<Session>, request: Request<Incoming>) -> Response<Body> {
         match *request.method() {
             Method::POST => self.post(session, request).await,
             Method::GET => self.get(session, &request),
@@ -595,75 +697,61 @@ impl McpServer {
     }
 
     async fn post(&self, session: Arc<Session>, request: Request<Incoming>) -> Response<Body> {
-        let accept = header(&request, "accept").unwrap_or("");
-        let types: Vec<&str> = accept.split(',').map(str::trim).collect();
-        let has_json = types.iter().any(|t| t.starts_with("application/json"));
-        let has_sse = types.iter().any(|t| t.starts_with("text/event-stream"));
-        if !(has_json && has_sse) {
-            return json_error(
-                StatusCode::NOT_ACCEPTABLE,
-                -32600,
-                "Not Acceptable: Client must accept both application/json and text/event-stream",
-                Some(&session.id),
-            );
-        }
-        let content_type = header(&request, "content-type").unwrap_or("");
-        let main = content_type.split(';').next().unwrap_or("");
-        if !main.split(',').any(|part| part.trim() == "application/json") {
-            return json_error(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                -32600,
-                "Unsupported Media Type: Content-Type must be application/json",
-                Some(&session.id),
-            );
+        if let Some(response) = Self::post_headers_error(&session, &request) {
+            return response;
         }
         let headers_error = Self::validate_headers(&session, &request);
-        let raw = match request.into_body().collect().await {
-            Ok(body) => body.to_bytes(),
-            Err(e) => {
-                let message = format!("Error handling POST request: {e}");
-                return json_error(StatusCode::INTERNAL_SERVER_ERROR, -32603, &message, Some(&session.id));
-            }
-        };
-        let raw = raw.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&raw);
-        let text = match std::str::from_utf8(raw) {
-            Ok(text) => text,
-            Err(e) => {
-                let message = format!("Error handling POST request: {}", pyjson::utf8_error_message(raw, &e));
-                return json_error(StatusCode::INTERNAL_SERVER_ERROR, -32603, &message, Some(&session.id));
-            }
-        };
-        let value = match pyjson::loads(text) {
-            Ok(value) => value,
-            Err(e) => {
-                return json_error(StatusCode::BAD_REQUEST, -32700, &format!("Parse error: {e}"), Some(&session.id));
-            }
-        };
-        let message = match classify(&value) {
-            Ok(message) => message,
-            Err(e) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    -32602,
-                    &format!("Validation error: {e}"),
-                    Some(&session.id),
-                );
-            }
+        let (text, message) = match read_message(&session, request).await {
+            Ok(read) => read,
+            Err(response) => return *response,
         };
         let is_initialize = matches!(&message, Message::Request { method, .. } if method == "initialize");
         if !is_initialize && let Some(response) = headers_error {
             return response;
         }
+        self.accept_message(&session, message, &text)
+    }
+
+    /// What a POST must accept and send: both JSON and SSE answers, a JSON body.
+    fn post_headers_error(session: &Session, request: &Request<Incoming>) -> Option<Response<Body>> {
+        let accept = header(request, "accept").unwrap_or("");
+        let types: Vec<&str> = accept.split(',').map(str::trim).collect();
+        let has_json = types.iter().any(|t| t.starts_with("application/json"));
+        let has_sse = types.iter().any(|t| t.starts_with("text/event-stream"));
+        if !(has_json && has_sse) {
+            return Some(json_error(
+                StatusCode::NOT_ACCEPTABLE,
+                -32600,
+                "Not Acceptable: Client must accept both application/json and text/event-stream",
+                Some(&session.id),
+            ));
+        }
+        let content_type = header(request, "content-type").unwrap_or("");
+        let main = content_type.split(';').next().unwrap_or("");
+        if !main.split(',').any(|part| part.trim() == "application/json") {
+            return Some(json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                -32600,
+                "Unsupported Media Type: Content-Type must be application/json",
+                Some(&session.id),
+            ));
+        }
+        None
+    }
+
+    /// A request opens its SSE stream and goes to dispatch; anything else is accepted
+    /// with an empty 202.
+    fn accept_message(&self, session: &Arc<Session>, message: Message, text: &str) -> Response<Body> {
         match message {
             Message::Request { id, method, params } => {
                 let (sender, receiver) = mpsc::unbounded_channel();
                 session.state().request_streams.insert(id.stream_key(), sender);
                 let response = sse_response(receiver, self.ping_interval, &session.id, None);
-                self.dispatch_request(&session, &id, &method, &params, text);
+                self.dispatch_request(session, &id, &method, &params, text);
                 response
             }
             Message::Notification { method, params } => {
-                self.dispatch_notification(&session, &method, &params, text);
+                self.dispatch_notification(session, &method, &params, text);
                 json_empty(StatusCode::ACCEPTED, &session.id)
             }
             Message::Other => json_empty(StatusCode::ACCEPTED, &session.id),
@@ -676,33 +764,34 @@ impl McpServer {
             IdKey::Int(n) => i64::try_from(*n).map(NumberOrString::Number).ok(),
             IdKey::Str(s) => Some(NumberOrString::String(s.as_str().into())),
         };
-        let reply_error = |code: i32, message: &str, data: Option<serde_json::Value>| {
-            if let Some(request_id) = &request_id {
-                let error = ErrorData::new(ErrorCode(code), message.to_owned(), data);
-                session.reply(id, &JsonRpcMessage::error(error, Some(request_id.clone())));
-            }
-        };
-        let invalid = || reply_error(-32602, "Invalid request parameters", Some(serde_json::Value::from("")));
-        if !CLIENT_REQUEST_METHODS.contains(&method) || !params_valid(method, params) {
-            return invalid();
-        }
         let parsed = serde_json::from_str::<ClientJsonRpcMessage>(raw).ok().filter(|_| request_id.is_some());
-        let started = session.state().to_server.is_some();
-        if method == "ping" && !started {
-            if let Some(request_id) = &request_id {
-                let pong: ServerJsonRpcMessage =
-                    JsonRpcMessage::response(rmcp::model::ServerResult::EmptyResult(().into()), request_id.clone());
-                session.reply(id, &pong);
+        let (started, initialized) = {
+            let state = session.state();
+            (state.to_server.is_some(), state.initialized)
+        };
+        let reply = |message: ServerJsonRpcMessage| session.reply(id, &message);
+        match request_verdict(method, params, started, initialized, parsed) {
+            Verdict::Invalid => reply_error(request_id, reply, -32602, "Invalid request parameters", Some("".into())),
+            Verdict::MethodNotFound => reply_error(request_id, reply, -32601, "Method not found", None),
+            Verdict::Pong => {
+                if let Some(request_id) = request_id {
+                    reply(JsonRpcMessage::response(rmcp::model::ServerResult::EmptyResult(().into()), request_id));
+                }
             }
-            return;
+            Verdict::Forward(parsed) => self.forward_request(session, id, method, *parsed, started),
         }
-        if method != "initialize" && !session.state().initialized {
-            return invalid();
-        }
-        if !HANDLED_METHODS.contains(&method) {
-            return reply_error(-32601, "Method not found", None);
-        }
-        let Some(parsed) = parsed else { return invalid() };
+    }
+
+    /// Hands a request to the session's rmcp server, starting it on the first
+    /// `initialize`.
+    fn forward_request(
+        &self,
+        session: &Arc<Session>,
+        id: &IdKey,
+        method: &str,
+        parsed: ClientJsonRpcMessage,
+        started: bool,
+    ) {
         if method == "initialize" && !started {
             self.start_server(session);
         }
