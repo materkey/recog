@@ -423,16 +423,22 @@ const HYPHEN: u8 = b'-';
 enum State {
     Start,
     StartBoundary,
-    HeaderFieldStart,
-    HeaderField,
-    HeaderValueStart,
-    HeaderValue,
-    HeaderValueAlmostDone,
-    HeadersAlmostDone,
+    Header(HeaderState),
     PartDataStart,
     PartData,
     EndBoundary,
     End,
+}
+
+/// The states of one part's headers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderState {
+    FieldStart,
+    Field,
+    ValueStart,
+    Value,
+    ValueAlmostDone,
+    HeadersAlmostDone,
 }
 
 /// python-multipart's limits of one part's headers.
@@ -440,263 +446,360 @@ const MAX_HEADER_COUNT: usize = 8;
 const MAX_HEADER_SIZE: usize = 4096 + 128;
 const MAX_BOUNDARY_LENGTH: usize = 256;
 
+/// What a state did with the byte at `i`.
+enum Step {
+    /// On to the next byte (`i += 1` of the Python loop).
+    Next,
+    /// From `i` as it is now: the same byte again in the new state (`i -= 1`), or
+    /// where the state moved it (`continue`).
+    Stay,
+    /// The parse is over (`break`).
+    Stop,
+}
+
+/// `MultipartParseError`, the answer to every byte python-multipart refuses.
+fn expect(ok: bool) -> Result<(), Failure> {
+    if ok { Ok(()) } else { Err(Failure::Parse) }
+}
+
+/// python-multipart's `MultipartParser` over one body: the state, the position and
+/// the marks of the data a callback has not had yet.
+struct Multipart<'a> {
+    /// `\r\n--` and the boundary.
+    boundary: Vec<u8>,
+    data: &'a [u8],
+    i: usize,
+    state: State,
+    index: usize,
+    part_boundary: bool,
+    last_boundary: bool,
+    header_count: usize,
+    header_size: usize,
+    header_mark: Option<usize>,
+    value_mark: Option<usize>,
+    data_mark: Option<usize>,
+}
+
 /// python-multipart's `MultipartParser._internal_write` over the whole body, the
 /// callbacks going to `parts`.
 fn run_multipart(boundary: &[u8], data: &[u8], parts: &mut Parts) -> Result<(), Failure> {
     if boundary.len() > MAX_BOUNDARY_LENGTH {
         return Err(Failure::Parse);
     }
-    let boundary: Vec<u8> = [b"\r\n--".as_slice(), boundary].concat();
-    let blen = boundary.len();
-    let length = data.len();
-    let mut state = State::Start;
-    let mut index: usize = 0;
-    let (mut part_boundary, mut last_boundary) = (false, false);
-    let (mut header_count, mut header_size) = (0usize, 0usize);
-    let mut header_mark: Option<usize> = None;
-    let mut value_mark: Option<usize> = None;
-    let mut data_mark: Option<usize> = None;
-    let mut i: usize = 0;
-    let advance = |size: &mut usize, amount: usize| -> Result<(), Failure> {
-        *size += amount;
-        if *size > MAX_HEADER_SIZE { Err(Failure::Parse) } else { Ok(()) }
-    };
+    let mut parser = Multipart::new(boundary, data);
+    while parser.i < data.len() {
+        match parser.step(parts)? {
+            Step::Next => parser.i += 1,
+            Step::Stay => {}
+            Step::Stop => break,
+        }
+    }
+    parser.flush(parts)
+}
 
-    while i < length {
-        let mut c = data[i];
-        // `i -= 1` of the Python loop: the same byte again in the next state.
-        let mut again = false;
+impl<'a> Multipart<'a> {
+    fn new(boundary: &[u8], data: &'a [u8]) -> Self {
+        Self {
+            boundary: [b"\r\n--".as_slice(), boundary].concat(),
+            data,
+            i: 0,
+            state: State::Start,
+            index: 0,
+            part_boundary: false,
+            last_boundary: false,
+            header_count: 0,
+            header_size: 0,
+            header_mark: None,
+            value_mark: None,
+            data_mark: None,
+        }
+    }
+
+    /// The byte at `i` in the current state.
+    fn step(&mut self, parts: &mut Parts) -> Result<Step, Failure> {
+        let c = self.data[self.i];
+        match self.state {
+            State::Start => Ok(self.start(c)),
+            State::StartBoundary => self.start_boundary(c, parts),
+            State::Header(header) => self.header(header, c, parts),
+            State::PartDataStart => Ok(self.part_data_start()),
+            State::PartData => self.part_data(parts),
+            State::EndBoundary => self.end_boundary(c),
+            State::End => Ok(Step::Stop),
+        }
+    }
+
+    fn header(&mut self, state: HeaderState, c: u8, parts: &mut Parts) -> Result<Step, Failure> {
         match state {
-            State::Start => {
-                if c == CR || c == LF {
-                    match data[i..].iter().position(|&b| b == HYPHEN) {
-                        Some(at) => {
-                            i += at;
-                            continue;
-                        }
-                        None => break,
-                    }
-                }
-                index = 0;
-                state = State::StartBoundary;
-                again = true;
-            }
-            State::StartBoundary => {
-                if index == 0 && data[i..].starts_with(&boundary[2..]) {
-                    index = blen - 2;
-                    i += index;
-                    continue;
-                }
-                if index == blen - 2 {
-                    if c == HYPHEN {
-                        state = State::EndBoundary;
-                    } else if c != CR {
-                        return Err(Failure::Parse);
-                    }
-                    index += 1;
-                } else if index == blen - 1 {
-                    if c != LF {
-                        return Err(Failure::Parse);
-                    }
-                    index = 0;
-                    parts.part_begin();
-                    (header_count, header_size) = (0, 0);
-                    state = State::HeaderFieldStart;
-                } else {
-                    if c != boundary[index + 2] {
-                        return Err(Failure::Parse);
-                    }
-                    index += 1;
-                }
-            }
-            State::HeaderFieldStart => {
-                index = 0;
-                if c != CR {
-                    header_count += 1;
-                    if header_count > MAX_HEADER_COUNT {
-                        return Err(Failure::Parse);
-                    }
-                    header_size = 0;
-                }
-                header_mark = Some(i);
-                state = State::HeaderField;
-                again = true;
-            }
-            State::HeaderField => {
-                if c == CR && index == 0 {
-                    header_mark = None;
-                    state = State::HeadersAlmostDone;
-                    i += 1;
-                    continue;
-                }
-                let colon = data[i..].iter().position(|&b| b == b':').map(|p| i + p);
-                let end = colon.unwrap_or(length);
-                advance(&mut header_size, if colon.is_some() { end - i + 1 } else { end - i })?;
-                if !data[i..end].iter().all(|&b| is_token(b)) {
-                    return Err(Failure::Parse);
-                }
-                index += end - i;
-                match colon {
-                    None => {
-                        i = length;
-                        continue;
-                    }
-                    Some(colon) => {
-                        if index == 0 {
-                            return Err(Failure::Parse);
-                        }
-                        i = colon;
-                        if let Some(r) = marked(&mut header_mark, i) {
-                            parts.header_name.extend_from_slice(&data[r]);
-                        }
-                        state = State::HeaderValueStart;
-                    }
-                }
-            }
-            State::HeaderValueStart => {
-                if c == b' ' {
-                    advance(&mut header_size, 1)?;
-                    i += 1;
-                    continue;
-                }
-                value_mark = Some(i);
-                state = State::HeaderValue;
-                again = true;
-            }
-            State::HeaderValue => {
-                let cr = data[i..].iter().position(|&b| b == CR).map(|p| i + p);
-                let end = cr.unwrap_or(length);
-                advance(&mut header_size, end - i)?;
-                match cr {
-                    Some(cr) => {
-                        i = cr;
-                        if let Some(r) = marked(&mut value_mark, i) {
-                            parts.header_value.extend_from_slice(&data[r]);
-                        }
-                        parts.header_end();
-                        header_size = 0;
-                        state = State::HeaderValueAlmostDone;
-                    }
-                    None => {
-                        i = length;
-                        continue;
-                    }
-                }
-            }
-            State::HeaderValueAlmostDone => {
-                if c != LF {
-                    return Err(Failure::Parse);
-                }
-                state = State::HeaderFieldStart;
-            }
-            State::HeadersAlmostDone => {
-                if c != LF {
-                    return Err(Failure::Parse);
-                }
-                parts.headers_finished()?;
-                state = State::PartDataStart;
-            }
-            State::PartDataStart => {
-                data_mark = Some(i);
-                state = State::PartData;
-                again = true;
-            }
-            State::PartData => {
-                let prev_index = index;
-                if index == 0 {
-                    match find(data, &boundary, i) {
-                        Some(i0) => {
-                            index = blen - 1;
-                            i = i0 + blen - 1;
-                            c = data[i];
-                        }
-                        None => {
-                            // A boundary cut off by the end of this chunk.
-                            let from = i.max((length + 1).saturating_sub(blen));
-                            if let Some(k) = data[from..].iter().rposition(|&b| b == boundary[0]).map(|p| from + p)
-                                && boundary.starts_with(&data[k..])
-                            {
-                                index = length - k;
-                            }
-                            i = length;
-                            continue;
-                        }
-                    }
-                }
-                if index < blen {
-                    if boundary[index] == c {
-                        index += 1;
-                    } else {
-                        index = 0;
-                    }
-                } else if index == blen {
-                    index += 1;
-                    if c == CR {
-                        part_boundary = true;
-                    } else if c == HYPHEN {
-                        last_boundary = true;
-                    } else {
-                        index = 0;
-                    }
-                } else if index == blen + 1 {
-                    if part_boundary {
-                        if c == LF {
-                            part_boundary = false;
-                            if let Some(r) = marked(&mut data_mark, i.saturating_sub(index)) {
-                                parts.part_data(&data[r])?;
-                            }
-                            parts.part_end();
-                            parts.part_begin();
-                            (header_count, header_size) = (0, 0);
-                            index = 0;
-                            state = State::HeaderFieldStart;
-                            i += 1;
-                            continue;
-                        }
-                        index = 0;
-                        part_boundary = false;
-                    } else if last_boundary {
-                        if c == HYPHEN {
-                            if let Some(r) = marked(&mut data_mark, i.saturating_sub(index)) {
-                                parts.part_data(&data[r])?;
-                            }
-                            parts.part_end();
-                            state = State::End;
-                        } else {
-                            index = 0;
-                        }
-                    }
-                }
-                if index == 0 && prev_index > 0 {
-                    again = true;
-                }
-            }
-            State::EndBoundary => {
-                if index == blen - 1 {
-                    if c != HYPHEN {
-                        return Err(Failure::Parse);
-                    }
-                    index += 1;
-                    state = State::End;
-                }
-            }
-            State::End => break,
-        }
-        if !again {
-            i += 1;
+            HeaderState::FieldStart => self.header_field_start(c),
+            HeaderState::Field => self.header_field(c, parts),
+            HeaderState::ValueStart => self.header_value_start(c),
+            HeaderState::Value => self.header_value(parts),
+            HeaderState::ValueAlmostDone => self.header_value_almost_done(c),
+            HeaderState::HeadersAlmostDone => self.headers_almost_done(c, parts),
         }
     }
-    // The data of a field, a header or a part cut off by the end of the body.
-    if let Some(r) = marked(&mut header_mark, length) {
-        parts.header_name.extend_from_slice(&data[r]);
+
+    /// Newlines before the first boundary are skipped up to its first hyphen; a body
+    /// of newlines only ends the parse.
+    fn start(&mut self, c: u8) -> Step {
+        if c == CR || c == LF {
+            return match self.data[self.i..].iter().position(|&b| b == HYPHEN) {
+                Some(at) => {
+                    self.i += at;
+                    Step::Stay
+                }
+                None => Step::Stop,
+            };
+        }
+        self.index = 0;
+        self.state = State::StartBoundary;
+        Step::Stay
     }
-    if let Some(r) = marked(&mut value_mark, length) {
-        parts.header_value.extend_from_slice(&data[r]);
+
+    fn start_boundary(&mut self, c: u8, parts: &mut Parts) -> Result<Step, Failure> {
+        if self.index == 0 && self.data[self.i..].starts_with(&self.boundary[2..]) {
+            self.index = self.boundary.len() - 2;
+            self.i += self.index;
+            return Ok(Step::Stay);
+        }
+        self.start_boundary_byte(c, parts)?;
+        Ok(Step::Next)
     }
-    if let Some(r) = marked(&mut data_mark, length.saturating_sub(index)) {
-        parts.part_data(&data[r])?;
+
+    /// One byte of the first boundary line, matched byte by byte: `--boundary`, then
+    /// `\r\n` (the first part's headers follow) or `-` (the closing boundary).
+    fn start_boundary_byte(&mut self, c: u8, parts: &mut Parts) -> Result<(), Failure> {
+        let blen = self.boundary.len();
+        if self.index == blen - 1 {
+            expect(c == LF)?;
+            self.begin_part(parts);
+            return Ok(());
+        }
+        if self.index == blen - 2 {
+            expect(c == HYPHEN || c == CR)?;
+            if c == HYPHEN {
+                self.state = State::EndBoundary;
+            }
+        } else {
+            expect(c == self.boundary[self.index + 2])?;
+        }
+        self.index += 1;
+        Ok(())
     }
-    Ok(())
+
+    /// `on_part_begin`, and the headers of the new part to read.
+    fn begin_part(&mut self, parts: &mut Parts) {
+        parts.part_begin();
+        (self.header_count, self.header_size) = (0, 0);
+        self.index = 0;
+        self.state = State::Header(HeaderState::FieldStart);
+    }
+
+    /// Counts `amount` more bytes of the current header against its limit.
+    fn advance(&mut self, amount: usize) -> Result<(), Failure> {
+        self.header_size += amount;
+        expect(self.header_size <= MAX_HEADER_SIZE)
+    }
+
+    fn header_field_start(&mut self, c: u8) -> Result<Step, Failure> {
+        self.index = 0;
+        if c != CR {
+            self.header_count += 1;
+            expect(self.header_count <= MAX_HEADER_COUNT)?;
+            self.header_size = 0;
+        }
+        self.header_mark = Some(self.i);
+        self.state = State::Header(HeaderState::Field);
+        Ok(Step::Stay)
+    }
+
+    /// A header's name up to its colon, or the blank line that ends the headers.
+    fn header_field(&mut self, c: u8, parts: &mut Parts) -> Result<Step, Failure> {
+        let (data, i) = (self.data, self.i);
+        if c == CR && self.index == 0 {
+            self.header_mark = None;
+            self.state = State::Header(HeaderState::HeadersAlmostDone);
+            return Ok(Step::Next);
+        }
+        let colon = data[i..].iter().position(|&b| b == b':').map(|p| i + p);
+        let end = colon.unwrap_or(data.len());
+        self.advance(end - i + usize::from(colon.is_some()))?;
+        expect(data[i..end].iter().all(|&b| is_token(b)))?;
+        self.index += end - i;
+        let Some(colon) = colon else {
+            self.i = data.len();
+            return Ok(Step::Stay);
+        };
+        expect(self.index != 0)?;
+        self.i = colon;
+        if let Some(r) = marked(&mut self.header_mark, colon) {
+            parts.header_name.extend_from_slice(&data[r]);
+        }
+        self.state = State::Header(HeaderState::ValueStart);
+        Ok(Step::Next)
+    }
+
+    fn header_value_start(&mut self, c: u8) -> Result<Step, Failure> {
+        if c == b' ' {
+            self.advance(1)?;
+            return Ok(Step::Next);
+        }
+        self.value_mark = Some(self.i);
+        self.state = State::Header(HeaderState::Value);
+        Ok(Step::Stay)
+    }
+
+    /// A header's value up to its CR: `on_header_value` and `on_header_end`.
+    fn header_value(&mut self, parts: &mut Parts) -> Result<Step, Failure> {
+        let (data, i) = (self.data, self.i);
+        let cr = data[i..].iter().position(|&b| b == CR).map(|p| i + p);
+        self.advance(cr.unwrap_or(data.len()) - i)?;
+        let Some(cr) = cr else {
+            self.i = data.len();
+            return Ok(Step::Stay);
+        };
+        self.i = cr;
+        if let Some(r) = marked(&mut self.value_mark, cr) {
+            parts.header_value.extend_from_slice(&data[r]);
+        }
+        parts.header_end();
+        self.header_size = 0;
+        self.state = State::Header(HeaderState::ValueAlmostDone);
+        Ok(Step::Next)
+    }
+
+    fn header_value_almost_done(&mut self, c: u8) -> Result<Step, Failure> {
+        expect(c == LF)?;
+        self.state = State::Header(HeaderState::FieldStart);
+        Ok(Step::Next)
+    }
+
+    fn headers_almost_done(&mut self, c: u8, parts: &mut Parts) -> Result<Step, Failure> {
+        expect(c == LF)?;
+        parts.headers_finished()?;
+        self.state = State::PartDataStart;
+        Ok(Step::Next)
+    }
+
+    fn part_data_start(&mut self) -> Step {
+        self.data_mark = Some(self.i);
+        self.state = State::PartData;
+        Step::Stay
+    }
+
+    /// A part's data: skipped up to the next boundary, whose bytes are then matched
+    /// one by one; a mismatch makes them data and reads the byte again.
+    fn part_data(&mut self, parts: &mut Parts) -> Result<Step, Failure> {
+        let prev_index = self.index;
+        if self.index == 0 && !self.skip_to_boundary() {
+            return Ok(Step::Stay);
+        }
+        if self.boundary_byte(self.data[self.i], parts)? {
+            return Ok(Step::Next);
+        }
+        Ok(if self.index == 0 && prev_index > 0 { Step::Stay } else { Step::Next })
+    }
+
+    /// Moves `i` to the last byte of the next boundary; without one, to the end of the
+    /// body, `index` counting a boundary cut off by it.
+    fn skip_to_boundary(&mut self) -> bool {
+        let (data, blen) = (self.data, self.boundary.len());
+        if let Some(at) = find(data, &self.boundary, self.i) {
+            self.index = blen - 1;
+            self.i = at + blen - 1;
+            return true;
+        }
+        // A boundary cut off by the end of this chunk.
+        let from = self.i.max((data.len() + 1).saturating_sub(blen));
+        if let Some(k) = data[from..].iter().rposition(|&b| b == self.boundary[0]).map(|p| from + p)
+            && self.boundary.starts_with(&data[k..])
+        {
+            self.index = data.len() - k;
+        }
+        self.i = data.len();
+        false
+    }
+
+    /// One byte at `index` of a boundary in the data; true once it began a new part.
+    fn boundary_byte(&mut self, c: u8, parts: &mut Parts) -> Result<bool, Failure> {
+        let blen = self.boundary.len();
+        if self.index < blen {
+            self.index = if self.boundary[self.index] == c { self.index + 1 } else { 0 };
+        } else if self.index == blen {
+            self.after_boundary(c);
+        } else if self.index == blen + 1 {
+            return self.boundary_end(c, parts);
+        }
+        Ok(false)
+    }
+
+    /// The byte after a whole boundary: CR for another part, `-` for the last one.
+    fn after_boundary(&mut self, c: u8) {
+        self.index += 1;
+        match c {
+            CR => self.part_boundary = true,
+            HYPHEN => self.last_boundary = true,
+            _ => self.index = 0,
+        }
+    }
+
+    /// The second byte after a boundary: LF begins the next part, `-` ends the body.
+    fn boundary_end(&mut self, c: u8, parts: &mut Parts) -> Result<bool, Failure> {
+        if self.part_boundary {
+            self.part_boundary = false;
+            if c != LF {
+                self.index = 0;
+                return Ok(false);
+            }
+            self.end_part(parts)?;
+            self.begin_part(parts);
+            return Ok(true);
+        }
+        if self.last_boundary {
+            if c == HYPHEN {
+                self.end_part(parts)?;
+                self.state = State::End;
+            } else {
+                self.index = 0;
+            }
+        }
+        Ok(false)
+    }
+
+    /// The second hyphen of a closing boundary that came first.
+    fn end_boundary(&mut self, c: u8) -> Result<Step, Failure> {
+        if self.index == self.boundary.len() - 1 {
+            expect(c == HYPHEN)?;
+            self.index += 1;
+            self.state = State::End;
+        }
+        Ok(Step::Next)
+    }
+
+    /// `on_part_data` up to the boundary just read, and `on_part_end`.
+    fn end_part(&mut self, parts: &mut Parts) -> Result<(), Failure> {
+        if let Some(r) = marked(&mut self.data_mark, self.i.saturating_sub(self.index)) {
+            parts.part_data(&self.data[r])?;
+        }
+        parts.part_end();
+        Ok(())
+    }
+
+    /// The data of a field, a header or a part cut off by the end of the body.
+    fn flush(&mut self, parts: &mut Parts) -> Result<(), Failure> {
+        let length = self.data.len();
+        if let Some(r) = marked(&mut self.header_mark, length) {
+            parts.header_name.extend_from_slice(&self.data[r]);
+        }
+        if let Some(r) = marked(&mut self.value_mark, length) {
+            parts.header_value.extend_from_slice(&self.data[r]);
+        }
+        if let Some(r) = marked(&mut self.data_mark, length.saturating_sub(self.index)) {
+            parts.part_data(&self.data[r])?;
+        }
+        Ok(())
+    }
 }
 
 /// `data_callback(name, end_i)`: the marked bytes up to `end`, the mark dropped.
