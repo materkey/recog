@@ -631,7 +631,13 @@ def test_no_quality_base_when_origin_main_is_absent_then_plain_pytest_runs(repo,
     assert any("-m pytest" in call for call in result.calls)
 
 
-def test_ci_quality_steps_when_matrix_has_two_hosts_then_both_hosts_run_the_gate(workflow):
-    for name in ("Select quality baseline", "Summarize quality delta", "Publish quality reports"):
-        step = next(s for s in _steps(workflow) if s.get("name") == name)
+def test_ci_quality_steps_when_matrix_has_two_hosts_then_only_linux_runs_the_gate(workflow):
+    steps = _steps(workflow)
+    for name in ("Select quality baseline", "Publish quality reports"):
+        step = next(s for s in steps if s.get("name") == name)
+        assert "runner.os == 'Linux'" in str(step.get("if", "")), name
+    coverage_tool = next(s for s in steps if "taiki-e/install-action" in str(s.get("uses", "")))
+    assert "runner.os == 'Linux'" in str(coverage_tool.get("if", ""))
+    for name in ("Run checks", "Summarize quality delta"):
+        step = next(s for s in steps if s.get("name") == name)
         assert "runner.os" not in str(step.get("if", "")), name

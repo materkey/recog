@@ -40,7 +40,9 @@ jobs:
         shell: bash
         run: rustup component add clippy rustfmt llvm-tools-preview
 
+      # The quality gate runs on Linux only (see "Select quality baseline").
       - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
         with:
           tool: cargo-llvm-cov@0.9.1
 
@@ -91,7 +93,13 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/gitleaks" gitleaks
           echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"
 
+      # The quality gate (two coverage runs of every test) runs on Linux only: the
+      # repository is private, where a macOS minute counts ten times against the
+      # Actions quota, and the gate took the macOS job from about 10 to 30 minutes.
+      # The macOS job still builds, lints and tests everything, including the
+      # macOS-only code, through check.sh without RECOG_QUALITY_BASE.
       - name: Select quality baseline
+        if: runner.os == 'Linux'
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
@@ -122,7 +130,7 @@ jobs:
           done
 
       - name: Publish quality reports
-        if: always()
+        if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: quality-reports-${{ runner.os }}

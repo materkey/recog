@@ -103,7 +103,9 @@ function's coverage is that of the lines of the lcov export inside its span that
 belong to no function nested in it (branch hits are used when a toolchain records
 them). A function without a single line in the export was not compiled on this
 host (`#[cfg(target_os = "macos")]` on Linux): it is listed in the report as not
-built and not scored, and the other CI host scores it. Every crate must have at
+built and not scored. CI runs the gate on Linux only (a macOS minute of a private
+repository's Actions quota counts ten), so macOS-only code is not scored: keep its
+untested shells at CC ≤ 2 and its decisions in portable, tested functions. Every crate must have at
 least one measured file, which also catches a report whose paths do not join.
 
 lizard 1.24.0 misreads Rust in two ways the gate works around before handing it a
