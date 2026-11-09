@@ -27,24 +27,31 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Parsed, String> {
     let mut device = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
-        let (name, inline) = match arg.split_once('=') {
-            Some((name, value)) if name.starts_with("--") => (name.to_owned(), Some(value.to_owned())),
-            _ => (arg.clone(), None),
-        };
+        let (name, inline) = split_inline(&arg);
         let mut value = |name: &str| inline.clone().or_else(|| args.next()).ok_or(format!("{name} needs a value"));
         match name.as_str() {
             "-h" | "--help" => return Ok(Parsed::Help),
-            "--sample-rate" => {
-                let raw = value("--sample-rate")?;
-                let rate = raw.parse::<u32>().ok().filter(|rate| *rate > 0);
-                sample_rate = Some(rate.ok_or(format!("--sample-rate: not a positive integer: {raw:?}"))?);
-            }
+            "--sample-rate" => sample_rate = Some(positive_rate(&value("--sample-rate")?)?),
             "--device" => device = Some(value("--device")?),
             _ => return Err(format!("unrecognized argument: {arg}")),
         }
     }
     let sample_rate = sample_rate.ok_or("the following arguments are required: --sample-rate")?;
     Ok(Parsed::Run(Args { sample_rate, device }))
+}
+
+/// `--opt=value` as the option and its value; any other argument as it is.
+fn split_inline(arg: &str) -> (String, Option<String>) {
+    match arg.split_once('=') {
+        Some((name, value)) if name.starts_with("--") => (name.to_owned(), Some(value.to_owned())),
+        _ => (arg.to_owned(), None),
+    }
+}
+
+/// The value of `--sample-rate`, which must be a positive integer.
+fn positive_rate(raw: &str) -> Result<u32, String> {
+    let rate = raw.parse::<u32>().ok().filter(|rate| *rate > 0);
+    rate.ok_or(format!("--sample-rate: not a positive integer: {raw:?}"))
 }
 
 #[cfg(test)]
@@ -85,6 +92,15 @@ mod tests {
         assert!(run(&["--sample-rate", "fast"]).is_err());
         assert!(run(&["--sample-rate"]).is_err());
         assert!(run(&["--sample-rate", "16000", "--loud"]).unwrap_err().contains("--loud"));
+    }
+
+    #[test]
+    fn a_refused_call_says_why_in_argparses_words() {
+        // given / when / then
+        assert_eq!(run(&["--sample-rate=fast"]), Err("--sample-rate: not a positive integer: \"fast\"".into()));
+        assert_eq!(run(&["--sample-rate", "16000", "--device"]), Err("--device needs a value".into()));
+        assert_eq!(run(&["-x=1"]), Err("unrecognized argument: -x=1".into()));
+        assert_eq!(run(&[]), Err("the following arguments are required: --sample-rate".into()));
     }
 
     #[test]
