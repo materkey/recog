@@ -423,29 +423,10 @@ impl Shared {
             if !meta_path.exists() {
                 continue;
             }
-            let attempt = (|| -> Result<bool> {
-                let mut meta = read_json(&meta_path)?;
-                if get(&meta, "ended_at")?.is_some_and(|v| !v.is_null()) {
-                    return Ok(false);
-                }
-                let now = self.now();
-                let created = parse_iso(item(&meta, "created_at")?)?;
-                let ended = match get(&meta, "updated_at")? {
-                    Some(v) if v.truthy() => v.clone(),
-                    _ => Value::from(now.isoformat()),
-                };
-                set(&mut meta, "ended_at", ended)?;
-                set(&mut meta, "end_reason", Value::from("stale_session"))?;
-                let duration = parse_iso(item(&meta, "ended_at")?)?.minus(&created)?;
-                set(item_mut(&mut meta, "stats")?, "duration_seconds", Value::from(duration / 1_000_000))?;
-                save_json(&meta_path, &meta)?;
-                self.update_index(&meta)?;
-                Ok(true)
-            })();
-            match attempt {
+            match self.close_stale(&meta_path) {
                 Ok(true) => closed += 1,
                 Ok(false) => {}
-                Err(e) if e.is_value_error() || matches!(e, StorageError::Key(_)) => {
+                Err(e) if skipped_by_scan(&e) => {
                     self.print(&format!("Warning: Could not close stale session {}: {e}", dir_name(&meeting_dir)));
                 }
                 Err(e) => return Err(e),
@@ -455,6 +436,18 @@ impl Shared {
             self.print(&format!("Closed {closed} stale session(s) from previous runs"));
         }
         Ok(())
+    }
+
+    /// Ends a session an earlier run left open; false for one already ended.
+    fn close_stale(&self, meta_path: &Path) -> Result<bool> {
+        let mut meta = read_json(meta_path)?;
+        if get(&meta, "ended_at")?.is_some_and(|v| !v.is_null()) {
+            return Ok(false);
+        }
+        end_as_stale(&mut meta, &self.now())?;
+        save_json(meta_path, &meta)?;
+        self.update_index(&meta)?;
+        Ok(true)
     }
 
     fn create_meeting(&self, inner: &mut Inner, source: &str, prev_meeting_id: Option<&str>) -> Result<String> {
@@ -530,51 +523,66 @@ impl Shared {
         if live_id.is_empty() {
             return Ok(None);
         }
-        let clock = self.options.clock.as_ref();
         let now = self.now();
-        let today = time::wall_date(now.local_wall(clock));
-        let empty = Value::Object(Map::new());
+        let today = time::wall_date(now.local_wall(self.options.clock.as_ref()));
         for meeting_dir in is_dir_entries(&self.base_path)? {
             let meta_path = meeting_dir.join("meta.json");
             if !meta_path.exists() {
                 continue;
             }
-            let attempt = (|| -> Result<Option<String>> {
-                let meta = read_json(&meta_path)?;
-                if get(&meta, "ended_at")?.is_none_or(Value::is_null) {
-                    return Ok(None);
-                }
-                let source = self.canonical(get(&meta, "source")?.unwrap_or(&Value::Null));
-                if source != Value::from(self.canonical_str(platform)) {
-                    return Ok(None);
-                }
-                if get(get_or_empty(&meta, "conference", &empty)?, "live_id")?
-                    .is_none_or(|v| *v != Value::from(live_id))
-                {
-                    return Ok(None);
-                }
-                let conference = get_or_empty(&meta, "conference", &empty)?;
-                if self.stored_host(conference)? != Value::from(host) {
-                    return Ok(None);
-                }
-                let ended_at = parse_iso(item(&meta, "ended_at")?)?;
-                if now.minus(&ended_at)? > SAME_ROOM_REOPEN_WINDOW_MICROS {
-                    return Ok(None);
-                }
-                let created_at = parse_iso(item(&meta, "created_at")?)?;
-                if time::wall_date(created_at.local_wall(clock)) == today {
-                    return Ok(Some(item(&meta, "id")?.py_str()));
-                }
-                Ok(None)
-            })();
-            match attempt {
+            match read_json(&meta_path)
+                .and_then(|meta| self.same_day_match(&meta, live_id, platform, host, &now, today))
+            {
                 Ok(Some(id)) => return Ok(Some(id)),
                 Ok(None) => {}
-                Err(e) if e.is_value_error() || matches!(e, StorageError::Key(_)) => {}
+                Err(e) if skipped_by_scan(&e) => {}
                 Err(e) => return Err(e),
             }
         }
         Ok(None)
+    }
+
+    /// The id of an ended meeting of the same room that may be reopened.
+    fn same_day_match(
+        &self,
+        meta: &Value,
+        live_id: &str,
+        platform: &str,
+        host: &str,
+        now: &PyDateTime,
+        today: (i32, u32, u32),
+    ) -> Result<Option<String>> {
+        if get(meta, "ended_at")?.is_none_or(Value::is_null)
+            || !self.same_room(meta, live_id, platform, host)?
+            || !self.ended_recently_today(meta, now, today)?
+        {
+            return Ok(None);
+        }
+        Ok(Some(item(meta, "id")?.py_str()))
+    }
+
+    /// The same platform (aliases resolved), room and host.
+    fn same_room(&self, meta: &Value, live_id: &str, platform: &str, host: &str) -> Result<bool> {
+        let empty = Value::Object(Map::new());
+        let source = self.canonical(get(meta, "source")?.unwrap_or(&Value::Null));
+        if source != Value::from(self.canonical_str(platform)) {
+            return Ok(false);
+        }
+        let conference = get_or_empty(meta, "conference", &empty)?;
+        if get(conference, "live_id")?.is_none_or(|v| *v != Value::from(live_id)) {
+            return Ok(false);
+        }
+        Ok(self.stored_host(conference)? == Value::from(host))
+    }
+
+    /// Ended within the reopen window, and created on the local `today`.
+    fn ended_recently_today(&self, meta: &Value, now: &PyDateTime, today: (i32, u32, u32)) -> Result<bool> {
+        let ended_at = parse_iso(item(meta, "ended_at")?)?;
+        if now.minus(&ended_at)? > SAME_ROOM_REOPEN_WINDOW_MICROS {
+            return Ok(false);
+        }
+        let created_at = parse_iso(item(meta, "created_at")?)?;
+        Ok(time::wall_date(created_at.local_wall(self.options.clock.as_ref())) == today)
     }
 
     fn reopen_meeting(&self, inner: &mut Inner, meeting_id: &str) -> Result<bool> {
@@ -584,59 +592,158 @@ impl Shared {
             return Ok(false);
         }
         let mut meta = read_json(&meta_path)?;
-        set(&mut meta, "ended_at", Value::Null)?;
-        set(&mut meta, "end_reason", Value::Null)?;
-        set(&mut meta, "updated_at", self.now_iso())?;
-        // Keep the original chunk duration so old segments stay aligned.
-        if let Some(chunk) = inner.chunk_duration_ms
-            && !pyops::contains(&meta, "chunk_duration_ms")?
-        {
-            set(&mut meta, "chunk_duration_ms", Value::from(chunk))?;
-        }
+        self.reset_for_reopen(&mut meta, inner.chunk_duration_ms)?;
         save_json(&meta_path, &meta)?;
-        let index_path = self.base_path.join("index.json");
-        if index_path.exists() {
-            let mut index = read_json(&index_path)?;
-            let kept = match item(&index, "meetings")? {
-                Value::Array(meetings) => meetings
-                    .iter()
-                    .map(|m| item(m, "id").map(|id| (m, *id != Value::from(meeting_id))))
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .filter(|(_, keep)| *keep)
-                    .map(|(m, _)| m.clone())
-                    .collect(),
-                other => return Err(StorageError::Type(format!("'{}' object is not iterable", other.type_name()))),
-            };
-            set(&mut index, "meetings", Value::Array(kept))?;
-            save_json(&index_path, &index)?;
-        }
+        self.unindex_reopened(meeting_id)?;
         let transcript = meeting_path.join("transcript.jsonl");
         inner.current_meeting_id = Some(meeting_id.to_owned());
         inner.current_meeting_path = Some(meeting_path);
-        inner.segment_counter = if transcript.exists() {
-            let content = read_text(&transcript)?;
-            let content = py::strip(&content);
-            if content.is_empty() { 0 } else { i64::try_from(content.split('\n').count()).unwrap_or(i64::MAX) }
-        } else {
-            0
-        };
+        inner.segment_counter = count_lines(&transcript)?;
         self.append_system_event(inner, "session_resume", "Сессия возобновлена")?;
         Ok(true)
+    }
+
+    /// The meta of a reopened meeting: not ended, updated now, its chunk duration kept.
+    fn reset_for_reopen(&self, meta: &mut Value, chunk_duration_ms: Option<i64>) -> Result<()> {
+        set(meta, "ended_at", Value::Null)?;
+        set(meta, "end_reason", Value::Null)?;
+        set(meta, "updated_at", self.now_iso())?;
+        // Keep the original chunk duration so old segments stay aligned.
+        if let Some(chunk) = chunk_duration_ms
+            && !pyops::contains(meta, "chunk_duration_ms")?
+        {
+            set(meta, "chunk_duration_ms", Value::from(chunk))?;
+        }
+        Ok(())
+    }
+
+    /// A reopened meeting leaves `index.json`, which lists ended ones.
+    fn unindex_reopened(&self, meeting_id: &str) -> Result<()> {
+        let index_path = self.base_path.join("index.json");
+        if !index_path.exists() {
+            return Ok(());
+        }
+        let mut index = read_json(&index_path)?;
+        let kept = match item(&index, "meetings")? {
+            Value::Array(meetings) => meetings
+                .iter()
+                .map(|m| item(m, "id").map(|id| (m, *id != Value::from(meeting_id))))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .filter(|(_, keep)| *keep)
+                .map(|(m, _)| m.clone())
+                .collect(),
+            other => return Err(not_iterable(other)),
+        };
+        set(&mut index, "meetings", Value::Array(kept))?;
+        save_json(&index_path, &index)
+    }
+
+    /// What a join does to the current meeting; true when a meeting must then be
+    /// opened or reopened for the conference.
+    fn leave_for_join(self: &Arc<Self>, inner: &mut Inner, live_id: &str, host: &str, platform: &str) -> Result<bool> {
+        let mut meta = Self::load_meta(inner)?;
+        match self.join_step(&meta, live_id, host, platform)? {
+            JoinStep::End(reason) => {
+                self.end_current_meeting(inner, reason)?;
+                Ok(true)
+            }
+            JoinStep::AdoptOrphan => {
+                self.adopt_orphan(inner, &mut meta, live_id, host, platform)?;
+                Ok(false)
+            }
+            JoinStep::Keep => Ok(false),
+        }
+    }
+
+    /// Another conference ends the current one, an orphan with speech ends before the
+    /// conference, an empty orphan becomes it.
+    fn join_step(&self, meta: &Value, live_id: &str, host: &str, platform: &str) -> Result<JoinStep> {
+        if self.conference_changed(meta, live_id, host, platform)? {
+            return Ok(JoinStep::End("changed_meeting"));
+        }
+        let Some(segment_count) = orphan_segments(meta)? else { return Ok(JoinStep::Keep) };
+        if compare_int(&segment_count, 0, ">")?.is_gt() {
+            return Ok(JoinStep::End("meeting_join"));
+        }
+        Ok(if pyops::equals_int(&segment_count, 0) { JoinStep::AdoptOrphan } else { JoinStep::Keep })
+    }
+
+    /// The current meeting records another room, host or platform.
+    fn conference_changed(&self, meta: &Value, live_id: &str, host: &str, platform: &str) -> Result<bool> {
+        let empty = Value::Object(Map::new());
+        let conference = get_or_empty(meta, "conference", &empty)?;
+        let current_live_id = get(conference, "live_id")?.cloned().unwrap_or(Value::Null);
+        let current_host = self.stored_host(conference)?;
+        Ok(current_live_id.truthy()
+            && (current_live_id != Value::from(live_id)
+                || current_host != Value::from(host)
+                || self.canonical(get(meta, "source")?.unwrap_or(&Value::Null))
+                    != Value::from(self.canonical_str(platform))))
+    }
+
+    /// An empty orphan joining a room: the room's meeting left minutes ago reopens and
+    /// the orphan goes, or the orphan becomes the conference's meeting.
+    fn adopt_orphan(
+        self: &Arc<Self>,
+        inner: &mut Inner,
+        meta: &mut Value,
+        live_id: &str,
+        host: &str,
+        platform: &str,
+    ) -> Result<()> {
+        if let Some(existing) = self.find_same_day_meeting(live_id, platform, host)? {
+            let orphan_path = inner.current_meeting_path.clone();
+            self.reopen_meeting(inner, &existing)?;
+            if let Some(path) = orphan_path.filter(|p| p.exists()) {
+                let _ = fs::remove_dir_all(path);
+            }
+            self.print(&format!("Reopened same-day meeting: {existing}"));
+        } else {
+            set(meta, "source", Value::from(self.canonical_str(platform)))?;
+            Self::save_meta(inner, meta)?;
+        }
+        Ok(())
+    }
+
+    /// The room's meeting left minutes ago reopens, or a new one is created.
+    fn open_for_join(&self, inner: &mut Inner, live_id: &str, host: &str, platform: &str) -> Result<()> {
+        if let Some(existing) = self.find_same_day_meeting(live_id, platform, host)? {
+            self.reopen_meeting(inner, &existing)?;
+            self.print(&format!("Reopened same-day meeting: {existing}"));
+        } else {
+            self.create_meeting(inner, platform, None)?;
+        }
+        Ok(())
+    }
+
+    /// The conference's URL, room and host, and its title when the meeting has none.
+    fn record_conference(
+        &self,
+        inner: &Inner,
+        url: &str,
+        live_id: &str,
+        host: &str,
+        title: Option<&str>,
+        platform: &str,
+    ) -> Result<()> {
+        let mut meta = Self::load_meta(inner)?;
+        let conference = item_mut(&mut meta, "conference")?;
+        set(conference, "live_url", Value::from(url))?;
+        set(conference, "live_id", Value::from(live_id))?;
+        set(conference, "host", Value::from(host))?;
+        if let Some(title) = title.filter(|t| !t.is_empty()) {
+            adopt_title(&mut meta, title, platform)?;
+        }
+        set(&mut meta, "updated_at", self.now_iso())?;
+        Self::save_meta(inner, &meta)
     }
 
     fn end_current_meeting(self: &Arc<Self>, inner: &mut Inner, end_reason: &str) -> Result<Option<String>> {
         let Some(meeting_path) = inner.current_meeting_path.clone() else { return Ok(None) };
         let mut meta = Self::load_meta(inner)?;
-        if self.is_conference(get(&meta, "source")?) && end_reason != "session_end" {
-            self.append_system_event(inner, "session_pause", "Сессия приостановлена")?;
-        }
-        let now = self.now();
-        set(&mut meta, "ended_at", Value::from(now.isoformat()))?;
-        set(&mut meta, "end_reason", Value::from(end_reason))?;
-        let created = parse_iso(item(&meta, "created_at")?)?;
-        let duration = now.minus(&created)? / 1_000_000;
-        set(item_mut(&mut meta, "stats")?, "duration_seconds", Value::from(duration))?;
+        self.pause_conference(inner, &meta, end_reason)?;
+        end_now(&mut meta, &self.now(), end_reason)?;
         Self::save_meta(inner, &meta)?;
         self.update_index(&meta)?;
         // AI work must not delay a lifecycle transition; pin the closed recording.
@@ -644,6 +751,14 @@ impl Shared {
             self.submit_title(inner, meeting_path);
         }
         Ok(inner.current_meeting_id.clone())
+    }
+
+    /// A conference that may be reopened gets a pause marker, unless the session ends.
+    fn pause_conference(&self, inner: &mut Inner, meta: &Value, end_reason: &str) -> Result<()> {
+        if self.is_conference(get(meta, "source")?) && end_reason != "session_end" {
+            self.append_system_event(inner, "session_pause", "Сессия приостановлена")?;
+        }
+        Ok(())
     }
 
     fn submit_title(self: &Arc<Self>, inner: &mut Inner, meeting_path: PathBuf) {
@@ -669,24 +784,24 @@ impl Shared {
     }
 
     fn finish_meeting_title(&self, meeting_path: &Path) {
-        let result = (|| -> Result<()> {
-            let Some(title) = self.generate_title_for_meeting(meeting_path) else { return Ok(()) };
-            let _inner = self.lock();
-            let meta_path = meeting_path.join("meta.json");
-            let mut meta = read_json(&meta_path)?;
-            if !get(&meta, "ended_at")?.is_some_and(Value::truthy) || get(&meta, "title")?.is_some_and(Value::truthy) {
-                return Ok(());
-            }
-            set(&mut meta, "title", Value::from(title.title))?;
-            set(&mut meta, "title_source", Value::from(title.provider))?;
-            set(&mut meta, "title_model", title.model)?;
-            set(&mut meta, "title_settings_revision", title.settings_revision)?;
-            save_json(&meta_path, &meta)?;
-            self.update_index(&meta)
-        })();
-        if let Err(e) = result {
+        let Some(title) = self.generate_title_for_meeting(meeting_path) else { return };
+        if let Err(e) = self.persist_title(meeting_path, title) {
             self.eprint(&format!("Warning: Title persistence failed: {e}"));
         }
+    }
+
+    /// The title into the meta and the index, unless the meeting was reopened or
+    /// titled meanwhile.
+    fn persist_title(&self, meeting_path: &Path, title: GeneratedTitle) -> Result<()> {
+        let _inner = self.lock();
+        let meta_path = meeting_path.join("meta.json");
+        let mut meta = read_json(&meta_path)?;
+        if !get(&meta, "ended_at")?.is_some_and(Value::truthy) || get(&meta, "title")?.is_some_and(Value::truthy) {
+            return Ok(());
+        }
+        set_generated_title(&mut meta, title)?;
+        save_json(&meta_path, &meta)?;
+        self.update_index(&meta)
     }
 
     fn generate_title_for_meeting(&self, meeting_path: &Path) -> Option<GeneratedTitle> {
@@ -694,39 +809,7 @@ impl Shared {
             self.print("Warning: title_generator not available");
             return None;
         };
-        let attempt = (|| -> Result<Option<GeneratedTitle>, String> {
-            let transcript = transcript_as_text(meeting_path).map_err(|e| e.to_string())?;
-            if transcript.is_empty() {
-                return Ok(None);
-            }
-            let meta = read_json(&meeting_path.join("meta.json")).map_err(|e| e.to_string())?;
-            let empty = Value::Object(Map::new());
-            let participants = get_or_empty(&meta, "participants", &empty).map_err(|e| e.to_string())?;
-            let mut user_names = Vec::new();
-            let mut names = Vec::new();
-            for (pid, info) in items(participants, "items").map_err(|e| e.to_string())?.iter() {
-                let name =
-                    get(info, "name").map_err(|e| e.to_string())?.cloned().unwrap_or_else(|| Value::from(pid.as_str()));
-                if get(info, "is_local").map_err(|e| e.to_string())?.is_some_and(Value::truthy) {
-                    user_names.push(name.clone());
-                }
-                names.push(name);
-            }
-            let request = TitleRequest {
-                data_dir: self.base_path.parent().unwrap_or(Path::new("")).to_path_buf(),
-                meeting_path: meeting_path.to_path_buf(),
-                transcript,
-                user_name: pyops::join_strings(&user_names).map_err(|e| e.to_string())?,
-                participants: pyops::join_strings(&names).map_err(|e| e.to_string())?,
-                meeting_title: match get(&meta, "title").map_err(|e| e.to_string())? {
-                    Some(title) if title.truthy() => title.py_str(),
-                    _ => String::new(),
-                },
-            };
-            let title = generator.generate(&request)?;
-            Ok(title.filter(|t| !t.title.is_empty()))
-        })();
-        match attempt {
+        match self.ask_for_title(generator.as_ref(), meeting_path) {
             Ok(Some(title)) => {
                 self.print(&format!("Generated title: {}", title.title));
                 Some(title)
@@ -737,6 +820,39 @@ impl Shared {
                 None
             }
         }
+    }
+
+    /// The hook's title for a meeting with speech; None without speech or for an
+    /// empty title.
+    fn ask_for_title(
+        &self,
+        generator: &dyn TitleGenerator,
+        meeting_path: &Path,
+    ) -> Result<Option<GeneratedTitle>, String> {
+        let transcript = transcript_as_text(meeting_path).map_err(|e| e.to_string())?;
+        if transcript.is_empty() {
+            return Ok(None);
+        }
+        let request = self.title_request(meeting_path, transcript).map_err(|e| e.to_string())?;
+        let title = generator.generate(&request)?;
+        Ok(title.filter(|t| !t.title.is_empty()))
+    }
+
+    fn title_request(&self, meeting_path: &Path, transcript: String) -> Result<TitleRequest> {
+        let meta = read_json(&meeting_path.join("meta.json"))?;
+        let empty = Value::Object(Map::new());
+        let (user_names, names) = local_and_all_names(get_or_empty(&meta, "participants", &empty)?)?;
+        Ok(TitleRequest {
+            data_dir: self.base_path.parent().unwrap_or(Path::new("")).to_path_buf(),
+            meeting_path: meeting_path.to_path_buf(),
+            transcript,
+            user_name: pyops::join_strings(&user_names)?,
+            participants: pyops::join_strings(&names)?,
+            meeting_title: match get(&meta, "title")? {
+                Some(title) if title.truthy() => title.py_str(),
+                _ => String::new(),
+            },
+        })
     }
 
     fn append_system_event(&self, inner: &mut Inner, event_type: &str, message: &str) -> Result<()> {
@@ -959,6 +1075,110 @@ fn mtime_of(path: &Path) -> Option<f64> {
     mtime_seconds(&fs::metadata(path).ok()?)
 }
 
+/// What a scan of meeting directories skips a meeting for: Python's `except
+/// (ValueError, KeyError)`.
+fn skipped_by_scan(error: &StorageError) -> bool {
+    error.is_value_error() || matches!(error, StorageError::Key(_))
+}
+
+/// A session left open: ended at its last update (now without one), as stale.
+fn end_as_stale(meta: &mut Value, now: &PyDateTime) -> Result<()> {
+    let created = parse_iso(item(meta, "created_at")?)?;
+    let ended = match get(meta, "updated_at")? {
+        Some(v) if v.truthy() => v.clone(),
+        _ => Value::from(now.isoformat()),
+    };
+    set(meta, "ended_at", ended)?;
+    set(meta, "end_reason", Value::from("stale_session"))?;
+    set_duration_to_end(meta, &created)
+}
+
+/// `stats.duration_seconds` from `created` to the stored `ended_at`.
+fn set_duration_to_end(meta: &mut Value, created: &PyDateTime) -> Result<()> {
+    let duration = parse_iso(item(meta, "ended_at")?)?.minus(created)?;
+    set(item_mut(meta, "stats")?, "duration_seconds", Value::from(duration / 1_000_000))
+}
+
+/// A meeting ended `now` for `end_reason`, its duration counted from its creation.
+fn end_now(meta: &mut Value, now: &PyDateTime, end_reason: &str) -> Result<()> {
+    set(meta, "ended_at", Value::from(now.isoformat()))?;
+    set(meta, "end_reason", Value::from(end_reason))?;
+    let created = parse_iso(item(meta, "created_at")?)?;
+    let duration = now.minus(&created)? / 1_000_000;
+    set(item_mut(meta, "stats")?, "duration_seconds", Value::from(duration))
+}
+
+/// The rows of a transcript, which a reopened meeting's ids continue.
+fn count_lines(transcript: &Path) -> Result<i64> {
+    if !transcript.exists() {
+        return Ok(0);
+    }
+    let content = read_text(transcript)?;
+    let content = py::strip(&content);
+    Ok(if content.is_empty() { 0 } else { i64::try_from(content.split('\n').count()).unwrap_or(i64::MAX) })
+}
+
+fn set_generated_title(meta: &mut Value, title: GeneratedTitle) -> Result<()> {
+    set(meta, "title", Value::from(title.title))?;
+    set(meta, "title_source", Value::from(title.provider))?;
+    set(meta, "title_model", title.model)?;
+    set(meta, "title_settings_revision", title.settings_revision)
+}
+
+/// The local participants' names and everyone's, a missing name read as the id.
+fn local_and_all_names(participants: &Value) -> Result<(Vec<Value>, Vec<Value>)> {
+    let mut user_names = Vec::new();
+    let mut names = Vec::new();
+    for (pid, info) in items(participants, "items")?.iter() {
+        let name = get(info, "name")?.cloned().unwrap_or_else(|| Value::from(pid.as_str()));
+        if get(info, "is_local")?.is_some_and(Value::truthy) {
+            user_names.push(name.clone());
+        }
+        names.push(name);
+    }
+    Ok((user_names, names))
+}
+
+/// What a join does to the current meeting.
+enum JoinStep {
+    /// End it for this reason; the conference opens after it.
+    End(&'static str),
+    /// An empty orphan: the conference takes it over.
+    AdoptOrphan,
+    Keep,
+}
+
+/// The room of a conference URL: the last path segment, else the `#/room/<id>` of
+/// an Element URL.
+fn live_id_of(url: &str, path: &str) -> String {
+    let live_id = path.trim_matches('/').rsplit('/').next().unwrap_or("").to_owned();
+    if !live_id.is_empty() {
+        return live_id;
+    }
+    // re.search(r"#/room/([^/?]+)", url): the first occurrence with a room.
+    url.match_indices("#/room/")
+        .map(|(at, _)| url[at + 7..].chars().take_while(|c| *c != '/' && *c != '?').collect::<String>())
+        .find(|room| !room.is_empty())
+        .unwrap_or(live_id)
+}
+
+/// An orphan's segment count, None for a meeting that is not an orphan.
+fn orphan_segments(meta: &Value) -> Result<Option<Value>> {
+    if *item(meta, "source")? != Value::from("orphan") {
+        return Ok(None);
+    }
+    Ok(Some(item(item(meta, "stats")?, "segment_count")?.clone()))
+}
+
+/// The conference's title, kept only by a meeting without one.
+fn adopt_title(meta: &mut Value, title: &str, platform: &str) -> Result<()> {
+    if !get(meta, "title")?.is_some_and(Value::truthy) {
+        set(meta, "title", Value::from(title))?;
+        set(meta, "title_source", Value::from(platform))?;
+    }
+    Ok(())
+}
+
 /// The first index row of `meeting_id` takes `title`.
 fn retitle_row(rows: &mut [Value], meeting_id: &str, title: Value) -> Result<()> {
     for row in rows.iter_mut() {
@@ -1047,75 +1267,14 @@ impl MeetingStorage {
         let mut guard = shared.lock();
         let inner = &mut *guard;
         let (parsed, _) = urlparse(url).map_err(StorageError::Value)?;
-        let mut live_id = parsed.path.trim_matches('/').rsplit('/').next().unwrap_or("").to_owned();
-        if live_id.is_empty() {
-            // re.search(r"#/room/([^/?]+)", url): the first occurrence with a room.
-            if let Some(room) = url
-                .match_indices("#/room/")
-                .map(|(at, _)| url[at + 7..].chars().take_while(|c| *c != '/' && *c != '?').collect::<String>())
-                .find(|room| !room.is_empty())
-            {
-                live_id = room;
-            }
-        }
+        let live_id = live_id_of(url, &parsed.path);
         let host = parsed.netloc.clone();
-        let empty = Value::Object(Map::new());
-        let mut need_new_or_reopen = false;
-        if inner.current_meeting_path.is_none() {
-            need_new_or_reopen = true;
-        } else {
-            let mut meta = Shared::load_meta(inner)?;
-            let current_live_id =
-                get(get_or_empty(&meta, "conference", &empty)?, "live_id")?.cloned().unwrap_or(Value::Null);
-            let current_host = shared.stored_host(get_or_empty(&meta, "conference", &empty)?)?;
-            let changed = current_live_id.truthy()
-                && (current_live_id != Value::from(live_id.as_str())
-                    || current_host != Value::from(host.as_str())
-                    || shared.canonical(get(&meta, "source")?.unwrap_or(&Value::Null))
-                        != Value::from(shared.canonical_str(platform)));
-            let orphan = || -> Result<bool> { Ok(*item(&meta, "source")? == Value::from("orphan")) };
-            let segment_count = || -> Result<Value> { Ok(item(item(&meta, "stats")?, "segment_count")?.clone()) };
-            if changed {
-                shared.end_current_meeting(inner, "changed_meeting")?;
-                need_new_or_reopen = true;
-            } else if orphan()? && compare_int(&segment_count()?, 0, ">")?.is_gt() {
-                shared.end_current_meeting(inner, "meeting_join")?;
-                need_new_or_reopen = true;
-            } else if orphan()? && pyops::equals_int(&segment_count()?, 0) {
-                if let Some(existing) = shared.find_same_day_meeting(&live_id, platform, &host)? {
-                    let orphan_path = inner.current_meeting_path.clone();
-                    shared.reopen_meeting(inner, &existing)?;
-                    if let Some(path) = orphan_path.filter(|p| p.exists()) {
-                        let _ = fs::remove_dir_all(path);
-                    }
-                    shared.print(&format!("Reopened same-day meeting: {existing}"));
-                } else {
-                    set(&mut meta, "source", Value::from(shared.canonical_str(platform)))?;
-                    Shared::save_meta(inner, &meta)?;
-                }
-            }
-        }
+        let need_new_or_reopen =
+            inner.current_meeting_path.is_none() || shared.leave_for_join(inner, &live_id, &host, platform)?;
         if need_new_or_reopen {
-            if let Some(existing) = shared.find_same_day_meeting(&live_id, platform, &host)? {
-                shared.reopen_meeting(inner, &existing)?;
-                shared.print(&format!("Reopened same-day meeting: {existing}"));
-            } else {
-                shared.create_meeting(inner, platform, None)?;
-            }
+            shared.open_for_join(inner, &live_id, &host, platform)?;
         }
-        let mut meta = Shared::load_meta(inner)?;
-        let conference = item_mut(&mut meta, "conference")?;
-        set(conference, "live_url", Value::from(url))?;
-        set(conference, "live_id", Value::from(live_id))?;
-        set(conference, "host", Value::from(host))?;
-        if let Some(title) = title.filter(|t| !t.is_empty())
-            && !get(&meta, "title")?.is_some_and(Value::truthy)
-        {
-            set(&mut meta, "title", Value::from(title))?;
-            set(&mut meta, "title_source", Value::from(platform))?;
-        }
-        set(&mut meta, "updated_at", shared.now_iso())?;
-        Shared::save_meta(inner, &meta)?;
+        shared.record_conference(inner, url, &live_id, &host, title, platform)?;
         Ok(inner.current_meeting_id.clone())
     }
 
