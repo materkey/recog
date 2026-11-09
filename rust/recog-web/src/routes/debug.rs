@@ -331,3 +331,94 @@ pub(super) fn set_debug_ai_context(state: &AppState, req: &Req) -> Reply {
         ("set_at", json::opt_str(context.set_at.as_deref())),
     ])))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meeting(dir: &Path, name: &str, meta: &str) {
+        std::fs::create_dir_all(dir.join(name)).unwrap();
+        std::fs::write(dir.join(name).join("meta.json"), meta).unwrap();
+    }
+
+    fn found(dir: &Path, title: &str) -> Option<String> {
+        find_meeting_by_title(dir, title).unwrap().map(|v| v.py_str())
+    }
+
+    #[test]
+    fn exact_and_partial_titles_when_searched_then_the_exact_one_wins_whatever_its_age() {
+        let dir = tempfile::tempdir().unwrap();
+        meeting(dir.path(), "a", r#"{"id": "a", "title": " Обзор ", "created_at": "2026-01-01T10:00:00+00:00"}"#);
+        meeting(dir.path(), "b", r#"{"id": "b", "title": "Обзор дизайна", "created_at": "2026-05-01T10:00:00+00:00"}"#);
+
+        assert_eq!(found(dir.path(), "обзор").as_deref(), Some("a"));
+        assert_eq!(found(dir.path(), "дизайн").as_deref(), Some("b"));
+        assert_eq!(found(dir.path(), "бюджет"), None);
+        assert_eq!(found(dir.path(), ""), None);
+    }
+
+    #[test]
+    fn several_matches_when_searched_then_the_newest_with_a_time_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        meeting(dir.path(), "old", r#"{"id": "old", "title": "Sync", "created_at": "2026-01-01T10:00:00+00:00"}"#);
+        meeting(dir.path(), "new", r#"{"id": "new", "title": "sync", "created_at": "2026-03-01T10:00:00+00:00"}"#);
+        meeting(dir.path(), "undated", r#"{"id": "undated", "title": "SYNC", "created_at": "soon"}"#);
+        meeting(
+            dir.path(),
+            "p-old",
+            r#"{"id": "p-old", "title": "Sync up", "created_at": "2026-01-01T10:00:00+00:00"}"#,
+        );
+        meeting(
+            dir.path(),
+            "p-new",
+            r#"{"id": "p-new", "title": "Re sync", "created_at": "2026-02-01T10:00:00+00:00"}"#,
+        );
+
+        assert_eq!(found(dir.path(), "SYNC").as_deref(), Some("new"));
+        assert_eq!(found(dir.path(), "sync u").as_deref(), Some("p-old"));
+    }
+
+    #[test]
+    fn only_undated_matches_when_searched_then_one_of_them_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        meeting(dir.path(), "x", r#"{"id": "x", "title": "Sync"}"#);
+
+        assert_eq!(found(dir.path(), "sync").as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn exact_match_without_an_id_when_searched_then_the_partial_one_is_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        meeting(dir.path(), "a", r#"{"title": "Sync", "created_at": "2026-01-01T10:00:00+00:00"}"#);
+        meeting(dir.path(), "b", r#"{"id": "b", "title": "Sync two", "created_at": "2026-01-01T10:00:00+00:00"}"#);
+
+        assert_eq!(found(dir.path(), "sync").as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn entries_that_are_not_meetings_when_searched_then_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.json"), "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join("no-meta")).unwrap();
+        meeting(dir.path(), "broken", "{broken");
+        meeting(dir.path(), "untitled", r#"{"id": "untitled", "title": null}"#);
+        meeting(dir.path(), "blank", r#"{"id": "blank", "title": "   "}"#);
+        meeting(dir.path(), "ok", r#"{"id": "ok", "title": "Sync"}"#);
+
+        assert_eq!(found(dir.path(), "sync").as_deref(), Some("ok"));
+        assert_eq!(found(dir.path(), "yn").as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn title_that_is_not_text_or_times_that_do_not_compare_when_searched_then_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        meeting(dir.path(), "n", r#"{"id": "n", "title": 5}"#);
+        assert_eq!(find_meeting_by_title(dir.path(), "x").unwrap_err(), "'int' object has no attribute 'strip'");
+
+        let dir = tempfile::tempdir().unwrap();
+        meeting(dir.path(), "a", r#"{"id": "a", "title": "Sync", "created_at": "2026-01-01T10:00:00"}"#);
+        meeting(dir.path(), "b", r#"{"id": "b", "title": "Sync", "created_at": "2026-01-01T10:00:00+00:00"}"#);
+        assert!(find_meeting_by_title(dir.path(), "sync").is_err());
+        assert!(find_meeting_by_title(&dir.path().join("absent"), "sync").is_err());
+    }
+}
