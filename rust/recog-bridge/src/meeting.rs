@@ -6,6 +6,7 @@
 //! not a string reaches the storage as its `str()` (Python passes the value, and a
 //! non-string url raises inside `urlparse`; here it is refused with an error).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use recog_core::protocol;
@@ -14,11 +15,41 @@ use recog_core::pyjson::{Map, Value};
 use crate::bridge::Bridge;
 use crate::client::Client;
 use crate::copilot::TickState;
+use crate::hooks::{LiveEvents, MeetingStore};
 use crate::json::{self, dumps, dumps_ascii};
 use crate::obj;
 
 fn text_of(value: &Value) -> String {
     json::py_str(value)
+}
+
+/// `str(title)` of a title that is not None.
+fn title_arg(title: &Value) -> Option<String> {
+    match title {
+        Value::Null => None,
+        other => Some(text_of(other)),
+    }
+}
+
+/// The `source` of a meta.json that is an object.
+fn meta_source(meta: Result<Value, String>) -> Option<Value> {
+    match meta {
+        Ok(Value::Object(map)) => map.get("source").cloned(),
+        _ => None,
+    }
+}
+
+/// What a join changed in the storage, for the rest of the join.
+struct JoinSwitch {
+    meeting_id: Option<String>,
+    prev_meeting_id: Option<String>,
+    new_path: Option<PathBuf>,
+    /// The storage moved to another meeting directory.
+    path_changed: bool,
+    /// The same directory, which only now becomes a live meeting (an orphan reused,
+    /// or a `ktalk_only` installation that was not recording).
+    became_active: bool,
+    live: Option<Arc<dyn LiveEvents>>,
 }
 
 impl Bridge {
@@ -34,6 +65,14 @@ impl Bridge {
             }
         }
         count
+    }
+
+    /// [`Bridge::mark_stale`], logged with `when` when it marked any.
+    fn mark_stale_logged(&self, meeting_id: Option<&str>, skip_stale: bool, when: &str) {
+        let stale = self.mark_stale(meeting_id, skip_stale);
+        if stale > 0 {
+            self.log(&format!("[KTalk Bridge] Marked {stale} copilot request(s) stale {when}"));
+        }
     }
 
     fn clear_transcript_buffer(&self) {
@@ -53,134 +92,136 @@ impl Bridge {
         let title = data.get("title").cloned().unwrap_or(Value::Null);
         let platform = data.get("platform").map_or_else(|| "ktalk".to_owned(), text_of);
         if self.config.ktalk_only && platform != "ktalk" {
-            if let Some(client) = client {
-                let frame = obj! {"type" => protocol::MEETING_JOIN_REJECTED, "reason" => "ktalk_only"};
-                client.sink.send(dumps_ascii(&frame)).await.map_err(|e| e.0)?;
-            }
-            return Ok(());
+            return self.reject_other_platform(client).await;
         }
         let Some(storage) = self.storage() else { return Ok(()) };
-        if !url.truthy() {
-            return Ok(());
-        }
-        let owner_blocks = {
-            let st = self.st();
-            match (st.meeting_owner, client) {
-                (Some(owner), c) => c.is_none_or(|c| c.id != owner) && st.clients.connected.contains(&owner),
-                (None, _) => false,
-            }
-        };
-        if owner_blocks && storage.current_meeting_path().is_some() {
-            let owner_addr = {
-                let st = self.st();
-                st.meeting_owner.and_then(|o| st.clients.all.get(&o).map(|c| c.remote_address.clone()))
-            };
-            self.log(&format!(
-                "[KTalk Bridge] Rejecting meeting_join from second tab (url={}); owner={} still active",
-                text_of(&url),
-                owner_addr.as_deref().unwrap_or("unknown")
-            ));
-            if let Some(client) = client {
-                let frame = obj! {
-                    "type" => protocol::MEETING_JOIN_REJECTED,
-                    "reason" => "another_tab_active",
-                    "active_meeting_id" => storage.current_meeting_id(),
-                };
-                let _ = client.sink.send(dumps(&frame)).await;
-            }
+        if !url.truthy() || self.reject_second_tab(storage.as_ref(), &url, client).await {
             return Ok(());
         }
         let Value::Str(url) = &url else {
             return Err(format!("'{}' object has no attribute 'decode'", url.type_name()));
         };
+        let switch = self.switch_join_meeting(storage.as_ref(), url, &title, &platform)?;
+        if self.config.ktalk_only && !self.start_ktalk_capture(&switch, client).await? {
+            return Ok(());
+        }
+        self.enter_meeting(&switch, title, client).await
+    }
+
+    /// `ktalk_only`: a conference of another platform is refused.
+    async fn reject_other_platform(&self, client: Option<&Arc<Client>>) -> Result<(), String> {
+        if let Some(client) = client {
+            let frame = obj! {"type" => protocol::MEETING_JOIN_REJECTED, "reason" => "ktalk_only"};
+            client.sink.send(dumps_ascii(&frame)).await.map_err(|e| e.0)?;
+        }
+        Ok(())
+    }
+
+    /// While the owner's tab is connected, another tab's join is refused (a second
+    /// conference in the same browser). True when refused.
+    async fn reject_second_tab(&self, storage: &dyn MeetingStore, url: &Value, client: Option<&Arc<Client>>) -> bool {
+        if !self.owner_blocks_join(client) || storage.current_meeting_path().is_none() {
+            return false;
+        }
+        let owner_addr = {
+            let st = self.st();
+            st.meeting_owner.and_then(|o| st.clients.all.get(&o).map(|c| c.remote_address.clone()))
+        };
+        self.log(&format!(
+            "[KTalk Bridge] Rejecting meeting_join from second tab (url={}); owner={} still active",
+            text_of(url),
+            owner_addr.as_deref().unwrap_or("unknown")
+        ));
+        if let Some(client) = client {
+            let frame = obj! {
+                "type" => protocol::MEETING_JOIN_REJECTED,
+                "reason" => "another_tab_active",
+                "active_meeting_id" => storage.current_meeting_id(),
+            };
+            let _ = client.sink.send(dumps(&frame)).await;
+        }
+        true
+    }
+
+    /// An owner is set, still connected, and `client` is not it.
+    fn owner_blocks_join(&self, client: Option<&Arc<Client>>) -> bool {
+        let st = self.st();
+        match (st.meeting_owner, client) {
+            (Some(owner), c) => c.is_none_or(|c| c.id != owner) && st.clients.connected.contains(&owner),
+            (None, _) => false,
+        }
+    }
+
+    /// The storage joins the meeting, the speakers of the previous one cleared and
+    /// the live side warned first.
+    fn switch_join_meeting(
+        &self,
+        storage: &dyn MeetingStore,
+        url: &str,
+        title: &Value,
+        platform: &str,
+    ) -> Result<JoinSwitch, String> {
         let was_recording = self.is_recording_active();
         let old_path = storage.current_meeting_path();
         let prev_meeting_id = storage.current_meeting_id();
-        let prev_source = if old_path.is_some() {
-            storage.load_meta().ok().and_then(|m| match m {
-                Value::Object(map) => map.get("source").cloned(),
-                Value::Null => None,
-                _ => None,
-            })
-        } else {
-            None
-        };
+        let prev_source = if old_path.is_some() { meta_source(storage.load_meta()) } else { None };
         self.clear_speaker_state();
         let live = self.wired().live;
         if let Some(live) = &live {
             live.before_meeting_switch();
         }
-        let title_arg = match &title {
-            Value::Null => None,
-            other => Some(text_of(other)),
-        };
-        let meeting_id = storage.on_meeting_join(url, title_arg.as_deref(), &platform)?;
+        let meeting_id = storage.on_meeting_join(url, title_arg(title).as_deref(), platform)?;
         self.log(&format!("[KTalk Bridge] Joined {platform} meeting: {url}"));
         let new_path = storage.current_meeting_path();
         let path_changed = new_path != old_path;
         let became_active =
             !path_changed && (prev_source == Some(Value::from("orphan")) || (self.config.ktalk_only && !was_recording));
-        if self.config.ktalk_only {
-            let started = (|| {
-                if let Some(live) = &live {
-                    live.meeting_changed(meeting_id.as_deref(), new_path.as_deref())?;
-                }
-                self.set_meeting_capture_active(true)
-            })();
-            if let Err(e) = started {
-                self.st().meeting_owner = None;
-                if let Err(cleanup) = self.set_meeting_capture_active(false) {
-                    self.log(&format!("[KTalk Bridge] Capture cleanup failed: {cleanup}"));
-                }
-                self.log(&format!("[KTalk Bridge] Capture start failed: {e}"));
-                if let Some(client) = client {
-                    let frame = obj! {"type" => protocol::MEETING_JOIN_REJECTED, "reason" => "capture_unavailable"};
-                    self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
-                }
-                return Ok(());
+        Ok(JoinSwitch { meeting_id, prev_meeting_id, new_path, path_changed, became_active, live })
+    }
+
+    /// `ktalk_only`: the live side moves to the meeting and the capture starts; when
+    /// either fails the capture is closed again and the join refused. True when the
+    /// capture runs.
+    async fn start_ktalk_capture(&self, switch: &JoinSwitch, client: Option<&Arc<Client>>) -> Result<bool, String> {
+        let started = (|| {
+            if let Some(live) = &switch.live {
+                live.meeting_changed(switch.meeting_id.as_deref(), switch.new_path.as_deref())?;
             }
+            self.set_meeting_capture_active(true)
+        })();
+        let Err(e) = started else {
             self.st().meeting_owner = client.map(|c| c.id);
+            return Ok(true);
+        };
+        self.st().meeting_owner = None;
+        if let Err(cleanup) = self.set_meeting_capture_active(false) {
+            self.log(&format!("[KTalk Bridge] Capture cleanup failed: {cleanup}"));
         }
-        if path_changed || became_active {
-            if path_changed
-                && !self.config.ktalk_only
-                && let Some(live) = &live
-            {
-                live.meeting_changed(meeting_id.as_deref(), new_path.as_deref())?;
-            }
-            // A direct switch to another meeting strands the old meeting's requests:
-            // their late replies must not reach the new meeting's Copilot tab.
-            if prev_meeting_id.as_deref().is_some_and(|p| !p.is_empty()) && prev_meeting_id != meeting_id {
-                let stale = self.mark_stale(prev_meeting_id.as_deref(), false);
-                if stale > 0 {
-                    self.log(&format!(
-                        "[KTalk Bridge] Marked {stale} copilot request(s) stale on meeting_join transition"
-                    ));
-                }
-            }
-            // Segment ids restart at 1 per meeting.
-            self.clear_transcript_buffer();
-            let started = obj! {
-                "type" => protocol::MEETING_STARTED,
-                "meeting_id" => meeting_id.as_deref(),
-                "meeting_title" => title.clone(),
-                "created_at" => Value::Float(self.now() * 1000.0),
-            };
-            // The manual mirror and its requests go before the first send can let a
-            // late reply in; the webapp hears of it after the lifecycle.
-            let preempted = self.preempt_manual_copilot(false).await;
-            self.emit_lifecycle(started).await;
-            if preempted {
-                self.notify_manual_copilot_preempted().await;
-            }
-            self.st().tick = Some(TickState::new(meeting_id.clone(), title, self.now()));
+        self.log(&format!("[KTalk Bridge] Capture start failed: {e}"));
+        if let Some(client) = client {
+            let frame = obj! {"type" => protocol::MEETING_JOIN_REJECTED, "reason" => "capture_unavailable"};
+            self.send_bounded(client, &dumps_ascii(&frame)).await.map_err(|e| e.0)?;
+        }
+        Ok(false)
+    }
+
+    /// A new (or newly live) meeting starts; a reconnect keeps its state. The joining
+    /// tab becomes the owner and gets the history.
+    async fn enter_meeting(
+        self: &Arc<Self>,
+        switch: &JoinSwitch,
+        title: Value,
+        client: Option<&Arc<Client>>,
+    ) -> Result<(), String> {
+        if switch.path_changed || switch.became_active {
+            self.start_joined_meeting(switch, title).await?;
         } else {
             // A reconnect keeps the tick counters, but re-arms them when a spurious
             // leave cleared them or they point at another meeting.
             let now = self.now();
             let mut st = self.st();
-            if st.tick.as_ref().is_none_or(|t| t.meeting_id != meeting_id) {
-                st.tick = Some(TickState::new(meeting_id.clone(), title, now));
+            if st.tick.as_ref().is_none_or(|t| t.meeting_id != switch.meeting_id) {
+                st.tick = Some(TickState::new(switch.meeting_id.clone(), title, now));
             }
         }
         if let Some(client) = client {
@@ -189,6 +230,41 @@ impl Bridge {
         // History to the joining tab only: a broadcast would move a sibling tab's
         // `currentMeetingId` into this meeting.
         self.send_transcript_history(client).await
+    }
+
+    /// `meeting_started` for a joined meeting: the live side's writers move (unless
+    /// `ktalk_only` moved them before the capture), the previous meeting's requests go
+    /// stale, and a manual Copilot is preempted.
+    async fn start_joined_meeting(self: &Arc<Self>, switch: &JoinSwitch, title: Value) -> Result<(), String> {
+        if switch.path_changed
+            && !self.config.ktalk_only
+            && let Some(live) = &switch.live
+        {
+            live.meeting_changed(switch.meeting_id.as_deref(), switch.new_path.as_deref())?;
+        }
+        // A direct switch to another meeting strands the old meeting's requests:
+        // their late replies must not reach the new meeting's Copilot tab.
+        let prev_meeting_id = switch.prev_meeting_id.as_deref();
+        if prev_meeting_id.is_some_and(|p| !p.is_empty()) && switch.prev_meeting_id != switch.meeting_id {
+            self.mark_stale_logged(prev_meeting_id, false, "on meeting_join transition");
+        }
+        // Segment ids restart at 1 per meeting.
+        self.clear_transcript_buffer();
+        let started = obj! {
+            "type" => protocol::MEETING_STARTED,
+            "meeting_id" => switch.meeting_id.as_deref(),
+            "meeting_title" => title.clone(),
+            "created_at" => Value::Float(self.now() * 1000.0),
+        };
+        // The manual mirror and its requests go before the first send can let a
+        // late reply in; the webapp hears of it after the lifecycle.
+        let preempted = self.preempt_manual_copilot(false).await;
+        self.emit_lifecycle(started).await;
+        if preempted {
+            self.notify_manual_copilot_preempted().await;
+        }
+        self.st().tick = Some(TickState::new(switch.meeting_id.clone(), title, self.now()));
+        Ok(())
     }
 
     pub(crate) async fn on_meeting_leave(
@@ -221,22 +297,14 @@ impl Bridge {
         if let Some(live) = &live {
             live.meeting_changed(Some(&new_meeting_id), storage.current_meeting_path().as_deref())?;
         }
-        let stale = self.mark_stale(prev_meeting_id.as_deref(), true);
-        if stale > 0 {
-            self.log(&format!("[KTalk Bridge] Marked {stale} copilot request(s) stale on meeting_leave"));
-        }
+        self.mark_stale_logged(prev_meeting_id.as_deref(), true, "on meeting_leave");
         let ended = self.meeting_ended_frame(prev_meeting_id.as_deref());
         self.st().tick = None;
         self.clear_transcript_buffer();
         self.emit_lifecycle(ended).await;
         // `new_meeting` resets the tab's state: only the tab that left.
         let frame = obj! {"type" => "new_meeting", "meeting_id" => new_meeting_id.as_str()};
-        match client {
-            Some(client) => {
-                let _ = client.sink.send(dumps(&frame)).await;
-            }
-            None => self.broadcast_message(&frame).await,
-        }
+        self.send_to_tab_or_extensions(client, &frame).await;
         Ok(())
     }
 
@@ -250,17 +318,7 @@ impl Bridge {
         self.set_meeting_capture_active(false)?;
         self.clear_speaker_state();
         let Some(storage) = self.storage() else { return Ok(()) };
-        if storage.current_meeting_path().is_none() {
-            return Ok(());
-        }
-        let meta = match storage.load_meta() {
-            Ok(meta) => meta,
-            Err(e) => {
-                self.log(&format!("[KTalk Bridge] _load_meta failed during disconnect cleanup: {e}"));
-                return Ok(());
-            }
-        };
-        if !Self::is_conference_meta(storage.as_ref(), &meta) {
+        if !self.in_conference_meeting(storage.as_ref()) {
             return Ok(());
         }
         let prev_meeting_id = storage.current_meeting_id();
@@ -274,10 +332,7 @@ impl Bridge {
             live.meeting_changed(Some(&new_meeting_id), storage.current_meeting_path().as_deref())?;
         }
         self.start_increments(prev_meeting_id.as_deref(), prev_meeting_path);
-        let stale = self.mark_stale(prev_meeting_id.as_deref(), true);
-        if stale > 0 {
-            self.log(&format!("[KTalk Bridge] Marked {stale} copilot request(s) stale on extension disconnect"));
-        }
+        self.mark_stale_logged(prev_meeting_id.as_deref(), true, "on extension disconnect");
         self.st().tick = None;
         self.clear_transcript_buffer();
         if prev_meeting_id.as_deref().is_some_and(|m| !m.is_empty()) {
@@ -286,6 +341,32 @@ impl Bridge {
         }
         self.log("[KTalk Bridge] Ended KTalk meeting due to client disconnect");
         Ok(())
+    }
+
+    /// The storage is in a conference meeting; a meta.json that cannot be read is
+    /// logged and counts as none.
+    fn in_conference_meeting(&self, storage: &dyn MeetingStore) -> bool {
+        if storage.current_meeting_path().is_none() {
+            return false;
+        }
+        match storage.load_meta() {
+            Ok(meta) => Self::is_conference_meta(storage, &meta),
+            Err(e) => {
+                self.log(&format!("[KTalk Bridge] _load_meta failed during disconnect cleanup: {e}"));
+                false
+            }
+        }
+    }
+
+    /// A frame to `client`, or to every extension without one; a failed send to the
+    /// client is ignored.
+    async fn send_to_tab_or_extensions(&self, client: Option<&Arc<Client>>, frame: &Value) {
+        match client {
+            Some(client) => {
+                let _ = client.sink.send(dumps(frame)).await;
+            }
+            None => self.broadcast_message(frame).await,
+        }
     }
 
     /// `_send_transcript_history(websocket)`: to that client, or to every extension
@@ -299,12 +380,7 @@ impl Bridge {
             "meeting_id" => meeting_id.as_deref(),
             "segments" => Value::Array(segments),
         };
-        match client {
-            Some(client) => {
-                let _ = client.sink.send(dumps(&frame)).await;
-            }
-            None => self.broadcast_message(&frame).await,
-        }
+        self.send_to_tab_or_extensions(client, &frame).await;
         Ok(())
     }
 
