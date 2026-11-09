@@ -23,7 +23,7 @@ use tokio::process::Command;
 
 use crate::defaults::{DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL};
 use crate::error::{AiError, Result};
-use crate::json::Json;
+use crate::json::{Json, Map};
 use crate::pytext;
 use crate::settings::ResolvedTask;
 
@@ -448,45 +448,8 @@ impl ClaudeCliProvider {
         let mut call = Streaming::start(&self.command(true), &call_env(&self.env)?, marked.into_bytes())?;
         let mut full_text = String::new();
         while let Some(line) = call.next_line().await? {
-            let line = pytext::strip(&line);
-            if line.is_empty() {
-                continue;
-            }
-            let Ok(event) = Json::parse(line) else {
-                continue;
-            };
-            let Json::Object(event) = &event else {
-                return Err(AiError::no_get(event.type_name()));
-            };
-            match event.get("type").and_then(Json::as_str) {
-                Some("assistant") => {
-                    let empty = Json::Object(Default::default());
-                    let message = event.get("message").unwrap_or(&empty);
-                    let Json::Object(message) = message else {
-                        return Err(AiError::no_get(message.type_name()));
-                    };
-                    let no_content = Json::Array(Vec::new());
-                    for block in iterate(message.get("content").unwrap_or(&no_content))? {
-                        let Json::Object(block) = &block else {
-                            return Err(AiError::no_get(block.type_name()));
-                        };
-                        if block.get("type").and_then(Json::as_str) != Some("text") {
-                            continue;
-                        }
-                        let text = block.get("text").cloned().unwrap_or(Json::from(""));
-                        if text.truthy() {
-                            // Claude sends the full text each time.
-                            full_text = chunk_text(&text);
-                            sink(full_text.clone(), false);
-                        }
-                    }
-                }
-                Some("result") => {
-                    let result = event.get("result").map_or_else(|| full_text.clone(), chunk_text);
-                    sink(result, true);
-                    return Ok(());
-                }
-                _ => {}
+            if claude_stream_line(&line, &mut full_text, sink)? {
+                return Ok(());
             }
         }
         call.finish("Claude").await?;
@@ -495,6 +458,55 @@ impl ClaudeCliProvider {
         }
         Ok(())
     }
+}
+
+/// One line of `claude --output-format stream-json`: texts go to the sink as they come;
+/// `true` after the final `result`, which ends the answer.
+fn claude_stream_line(line: &str, full_text: &mut String, sink: &mut ChunkSink<'_>) -> Result<bool> {
+    let line = pytext::strip(line);
+    if line.is_empty() {
+        return Ok(false);
+    }
+    let Ok(event) = Json::parse(line) else {
+        return Ok(false);
+    };
+    let Json::Object(event) = &event else {
+        return Err(AiError::no_get(event.type_name()));
+    };
+    match event.get("type").and_then(Json::as_str) {
+        Some("assistant") => claude_assistant_texts(event, full_text, sink).map(|()| false),
+        Some("result") => {
+            let result = event.get("result").map_or_else(|| full_text.clone(), chunk_text);
+            sink(result, true);
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// The text blocks of an `assistant` event; each nonempty one is the full text so far.
+fn claude_assistant_texts(event: &Map, full_text: &mut String, sink: &mut ChunkSink<'_>) -> Result<()> {
+    let empty = Json::Object(Default::default());
+    let message = event.get("message").unwrap_or(&empty);
+    let Json::Object(message) = message else {
+        return Err(AiError::no_get(message.type_name()));
+    };
+    let no_content = Json::Array(Vec::new());
+    for block in iterate(message.get("content").unwrap_or(&no_content))? {
+        let Json::Object(block) = &block else {
+            return Err(AiError::no_get(block.type_name()));
+        };
+        if block.get("type").and_then(Json::as_str) != Some("text") {
+            continue;
+        }
+        let text = block.get("text").cloned().unwrap_or(Json::from(""));
+        if text.truthy() {
+            // Claude sends the full text each time.
+            *full_text = chunk_text(&text);
+            sink(full_text.clone(), false);
+        }
+    }
+    Ok(())
 }
 
 /// `for block in value`: a list's items, a string's characters, a dict's keys.
@@ -632,20 +644,8 @@ impl CodexCliProvider {
         let mut call = Streaming::start(&self.command(), &call_env(&self.env)?, marked.into_bytes())?;
         let mut full_text = String::new();
         while let Some(line) = call.next_line().await? {
-            match codex_event(&line)? {
-                None => {}
-                Some(CodexEvent::Done) => {
-                    sink(full_text, true);
-                    return Ok(());
-                }
-                Some(CodexEvent::Message(text)) if text.truthy() => {
-                    let Json::Str(text) = text else {
-                        return Err(AiError::Type(format!("agent message text is a {}", text.type_name())));
-                    };
-                    full_text = text.clone();
-                    sink(text, false);
-                }
-                Some(CodexEvent::Message(_)) => {}
+            if codex_stream_line(&line, &mut full_text, sink)? {
+                return Ok(());
             }
         }
         call.finish("Codex").await?;
@@ -654,6 +654,58 @@ impl CodexCliProvider {
         }
         Ok(())
     }
+}
+
+/// One line of a streamed `codex exec --json`: a nonempty agent message goes to the
+/// sink; `true` after `turn.completed`, which sends the last message as final.
+fn codex_stream_line(line: &str, full_text: &mut String, sink: &mut ChunkSink<'_>) -> Result<bool> {
+    match codex_event(line)? {
+        None => Ok(false),
+        Some(CodexEvent::Done) => {
+            sink(std::mem::take(full_text), true);
+            Ok(true)
+        }
+        Some(CodexEvent::Message(text)) if text.truthy() => {
+            let Json::Str(text) = text else {
+                return Err(AiError::Type(format!("agent message text is a {}", text.type_name())));
+            };
+            full_text.clone_from(&text);
+            sink(text, false);
+            Ok(false)
+        }
+        Some(CodexEvent::Message(_)) => Ok(false),
+    }
+}
+
+/// The answer of a finished `codex exec --json`: its agent messages, one per line.
+fn codex_answer(stdout: &str) -> Result<String> {
+    let mut parts = Vec::new();
+    for line in pytext::splitlines(stdout) {
+        if let Some(CodexEvent::Message(text)) = codex_event(line)? {
+            parts.push(text);
+        }
+    }
+    if parts.is_empty() {
+        return Err(AiError::Provider("No response from Codex".to_owned()));
+    }
+    join_texts(parts)
+}
+
+/// `"\n".join(parts)`, with Python's error for an item that is not a string.
+fn join_texts(parts: Vec<Json>) -> Result<String> {
+    let mut texts = Vec::with_capacity(parts.len());
+    for (index, part) in parts.into_iter().enumerate() {
+        match part {
+            Json::Str(text) => texts.push(text),
+            other => {
+                return Err(AiError::Type(format!(
+                    "sequence item {index}: expected str instance, {} found",
+                    other.type_name()
+                )));
+            }
+        }
+    }
+    Ok(texts.join("\n"))
 }
 
 impl AiProvider for CodexCliProvider {
@@ -684,29 +736,7 @@ impl AiProvider for CodexCliProvider {
             if !finished.status.success() {
                 return Err(AiError::Provider(format!("Codex CLI error: {}", failure_text(&finished.stderr)?)));
             }
-            let stdout = decode(&finished.stdout)?;
-            let mut parts = Vec::new();
-            for line in pytext::splitlines(&stdout) {
-                if let Some(CodexEvent::Message(text)) = codex_event(line)? {
-                    parts.push(text);
-                }
-            }
-            if parts.is_empty() {
-                return Err(AiError::Provider("No response from Codex".to_owned()));
-            }
-            let mut texts = Vec::with_capacity(parts.len());
-            for (index, part) in parts.into_iter().enumerate() {
-                match part {
-                    Json::Str(text) => texts.push(text),
-                    other => {
-                        return Err(AiError::Type(format!(
-                            "sequence item {index}: expected str instance, {} found",
-                            other.type_name()
-                        )));
-                    }
-                }
-            }
-            Ok(texts.join("\n"))
+            codex_answer(&decode(&finished.stdout)?)
         })
     }
 
