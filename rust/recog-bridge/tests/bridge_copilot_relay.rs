@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use common::{Harness, NOW, field, json, settle};
 use recog_bridge::copilot::{COPILOT_TICK_INTERVAL_SECONDS, TRANSCRIPT_BUFFER_CAP, TickState};
-use recog_bridge::testing::{FakeStore, RecordingSink};
+use recog_bridge::testing::{FakeStore, RecordingSink, SendMode};
 use recog_bridge::{Client, ClientId, RefineUpdate, Role, TranscriptLine};
 use recog_core::pyjson::Value;
 
@@ -1219,4 +1219,141 @@ async fn given_snapshot_sent_when_buffer_entry_refined_afterwards_then_response_
     assert_eq!(segments.len(), 1);
     assert_eq!(field(&segments[0], "text").as_str(), Some("live text"));
     assert_eq!(field(&segments[0], "refined"), &Value::Bool(false));
+}
+
+// ---- edges of the relay (the scenario copilot_channel.json) ----
+
+#[tokio::test]
+async fn given_window_fields_of_the_wrong_type_when_recent_transcript_requested_then_python_defaults_apply() {
+    // given: a segment 170 s old, one 200 s old, and a refined one now
+    let h = Harness::new();
+    h.bridge.set_meeting_storage(storage_for_meeting("m-1"));
+    h.clock.set(NOW - 200.0);
+    h.bridge.send_transcript(&line("Alice", "old", "09:56:40", 1));
+    h.clock.set(NOW - 170.0);
+    h.bridge.send_transcript(&line("Bob", "recent", "09:57:10", 2));
+    h.clock.set(NOW);
+    h.bridge.send_transcript(&line("Alice", "now", "10:00:00", 3));
+    h.bridge.send_refine(&[refine(3, "now refined")], None);
+    for request in [
+        r#"{"type": "get_recent_transcript_request", "request_id": "r"}"#,
+        r#"{"type": "get_recent_transcript_request", "request_id": "r", "window_seconds": "600"}"#,
+        r#"{"type": "get_recent_transcript_request", "request_id": "r", "window_seconds": -5}"#,
+        r#"{"type": "get_recent_transcript_request", "request_id": "r", "since_segment_id": "1", "include_refined": 0}"#,
+    ] {
+        let (channel, channel_ws) = unregistered(1);
+        // when
+        h.process(request, Some(&channel_ws)).await.unwrap();
+        // then: 180 s, every id, refined included
+        let responses = channel.of_type("get_recent_transcript_response");
+        assert_eq!(responses.len(), 1, "{request}");
+        assert_eq!(segment_ids(&responses[0]), [2, 3], "{request}");
+    }
+    // when: a bool since_segment_id is an int
+    let (channel, channel_ws) = unregistered(1);
+    h.process(
+        r#"{"type": "get_recent_transcript_request", "request_id": "r", "window_seconds": 600, "since_segment_id": true}"#,
+        Some(&channel_ws),
+    )
+    .await
+    .unwrap();
+    // then
+    assert_eq!(segment_ids(&channel.of_type("get_recent_transcript_response")[0]), [2, 3]);
+}
+
+#[tokio::test]
+async fn given_no_socket_or_a_dead_one_when_recent_transcript_requested_then_response_dropped_with_a_log() {
+    // given
+    let h = Harness::new();
+    h.bridge.set_meeting_storage(storage_for_meeting("m-1"));
+    let request = r#"{"type": "get_recent_transcript_request", "request_id": "r"}"#;
+    // when
+    h.process(request, None).await.unwrap();
+    // then
+    assert!(h.logged("[KTalk Bridge] get_recent_transcript_request without websocket — response dropped"));
+    // when
+    let dead = Client::new(ClientId(u64::MAX), RecordingSink::with_mode(SendMode::Fail("gone".into())), "x");
+    h.process(request, Some(&dead)).await.unwrap();
+    // then
+    assert!(h.logged("[KTalk Bridge] Failed to send get_recent_transcript_response: gone"));
+}
+
+#[tokio::test]
+async fn given_no_channel_when_chat_arrives_without_socket_or_on_a_dead_one_then_dropped_with_a_log() {
+    // given
+    let h = Harness::new();
+    let chat = r#"{"type": "copilot_chat_message", "request_id": "q1", "text": "Hi"}"#;
+    // when
+    h.process(chat, None).await.unwrap();
+    // then
+    assert!(h.logged("[KTalk Bridge] copilot_chat_message dropped — no channel client and no originator socket"));
+    // when
+    let dead = Client::new(ClientId(u64::MAX), RecordingSink::with_mode(SendMode::Fail("gone".into())), "x");
+    h.process(chat, Some(&dead)).await.unwrap();
+    // then
+    assert!(h.logged("[KTalk Bridge] Failed to send channel_disconnected status: gone"));
+    assert!(h.bridge.pending_requests().is_empty());
+}
+
+#[tokio::test]
+async fn given_dead_channel_when_chat_forwarded_then_failure_logged_and_request_tracked() {
+    // given
+    let h = Harness::new();
+    let dead = RecordingSink::with_mode(SendMode::Fail("gone".into()));
+    let _channel = h.bridge.add_client(Role::Channel, dead, "x");
+    let (subscriber, _s) = h.add(Role::Subscriber);
+    // when
+    h.process(r#"{"type": "copilot_chat_message", "request_id": "q1", "text": "Hi", "created_at": 5}"#, None)
+        .await
+        .unwrap();
+    // then
+    assert!(h.logged("[KTalk Bridge] Failed to forward copilot_chat_message to channel client: gone"));
+    assert_eq!(h.bridge.pending_requests(), [("q1".to_owned(), String::new())]);
+    assert_eq!(
+        sent(&subscriber),
+        [r#"{"type": "copilot_chat_echo", "request_id": "q1", "text": "Hi", "created_at": 5}"#]
+    );
+}
+
+#[tokio::test]
+async fn given_manual_request_gone_stale_when_its_reply_arrives_then_error_names_the_interrupted_session() {
+    // given
+    let h = Harness::new();
+    let (extension, _e) = h.add(Role::Extension);
+    h.bridge.set_pending_request("q1", "stale:");
+    // when
+    h.process(r#"{"type": "copilot_channel_reply", "request_id": "q1", "text": "Late", "kind": "answer"}"#, None)
+        .await
+        .unwrap();
+    // then
+    assert_eq!(
+        sent(&extension),
+        [
+            r#"{"type": "copilot_status", "request_id": "q1", "status": "error", "message": "Ответ не доставлен: ручная сессия copilot была прервана."}"#
+        ]
+    );
+    assert!(h.bridge.pending_requests().is_empty());
+}
+
+#[tokio::test]
+async fn given_pending_requests_when_settings_switch_copilot_off_then_each_fails_with_status_before_request_id() {
+    // given
+    let h = Harness::new();
+    let (subscriber, sub) = h.add(Role::Subscriber);
+    h.bridge.set_pending_request("q1", "m1");
+    h.bridge.set_pending_request("q2", "");
+    h.policy.set_enabled(false);
+    // when
+    h.process(r#"{"type": "ai_settings_refresh"}"#, Some(&sub)).await.unwrap();
+    // then
+    let sent = sent(&subscriber);
+    assert_eq!(
+        sent[..2],
+        [
+            r#"{"type": "copilot_status", "status": "error", "request_id": "q1", "message": "Copilot выключен в настройках."}"#,
+            r#"{"type": "copilot_status", "status": "error", "request_id": "q2", "message": "Copilot выключен в настройках."}"#,
+        ]
+    );
+    assert!(h.bridge.pending_requests().is_empty());
+    assert_eq!(subscriber.of_type("ai_settings_applied").len(), 1);
 }
