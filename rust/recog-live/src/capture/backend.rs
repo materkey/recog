@@ -54,27 +54,40 @@ pub fn resolve_system_audio_backend(
         Some(s) if s.starts_with("device:") => return Ok(s.to_owned()),
         Some(s) => s,
     };
-    let is_darwin = platform == "darwin";
-    let is_linux = platform.starts_with("linux");
+    let backend = choose_backend(spec, platform)?;
+    if backend == "pulse" && which("parec").is_none() {
+        return Err(BackendError::Runtime(
+            "parec not found — install it: `apt install pulseaudio-utils` (Debian/Ubuntu) or `pacman -S libpulse` (Arch/Manjaro)"
+                .into(),
+        ));
+    }
+    Ok(backend)
+}
+
+/// The backend this platform captures with: ScreenCaptureKit on a Mac, the sound
+/// server on Linux.
+fn native_backend(platform: &str) -> Option<&'static str> {
+    if platform == "darwin" {
+        Some("screencapture")
+    } else if platform.starts_with("linux") {
+        Some("pulse")
+    } else {
+        None
+    }
+}
+
+/// `spec` (`auto` or a backend's name) checked against the platform.
+fn choose_backend(spec: &str, platform: &str) -> Result<String, BackendError> {
+    let native = native_backend(platform);
     let platform_repr = recog_core::py::repr(platform);
-    let require_parec = || {
-        if which("parec").is_none() {
-            return Err(BackendError::Runtime(
-                "parec not found — install it: `apt install pulseaudio-utils` (Debian/Ubuntu) or `pacman -S libpulse` (Arch/Manjaro)"
-                    .into(),
-            ));
-        }
-        Ok(())
-    };
     match spec {
-        "auto" if is_darwin => Ok("screencapture".into()),
-        "auto" if is_linux => require_parec().map(|()| "pulse".into()),
-        "auto" => Err(BackendError::Runtime(format!("no system-audio backend for platform {platform_repr}"))),
-        "screencapture" if is_darwin => Ok("screencapture".into()),
+        "auto" => native
+            .map(str::to_owned)
+            .ok_or_else(|| BackendError::Runtime(format!("no system-audio backend for platform {platform_repr}"))),
+        "screencapture" | "pulse" if native == Some(spec) => Ok(spec.to_owned()),
         "screencapture" => Err(BackendError::Runtime(format!(
             "the screencapture backend needs macOS (ScreenCaptureKit), got platform {platform_repr} — use --system-audio pulse"
         ))),
-        "pulse" if is_linux => require_parec().map(|()| "pulse".into()),
         "pulse" => Err(BackendError::Runtime(format!(
             "the pulse backend needs Linux (PulseAudio/PipeWire), got platform {platform_repr} — use --system-audio screencapture"
         ))),
