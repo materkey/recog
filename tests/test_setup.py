@@ -108,7 +108,7 @@ COPY_FILES = (
     "recog-service.sh",
     ".env.example",
 )
-COPY_TREES = ("scripts", "deploy", "recog")
+COPY_TREES = ("scripts", "deploy")
 
 
 @pytest.fixture
@@ -350,6 +350,8 @@ def test_fresh_install_when_dry_run_then_no_commands_or_files_change(repo, stubs
     assert "Would download the ASR model gigaam-v3" in result.stdout
     assert "Would install " + host_os + " service units" in result.stdout
     assert "readiness are not verified" in result.stdout
+    assert f"Would copy {repo}/.env.example to {repo}/.env" in result.stdout
+    assert result.stdout.count("Would copy") == 1
     assert ("Would build sck_audio_capture" in result.stdout) is (host_os == "Darwin")
 
 
@@ -398,20 +400,21 @@ def test_the_extension_when_built_then_npm_runs(repo, stubs):
 # ---------------------------------------------------------------------------
 
 
-def test_creates_config_files_from_the_examples(repo, stubs):
-    run_setup(repo, stubs, *offline_args("--no-services"))
+def test_first_install_when_setup_runs_then_the_root_environment_file_is_the_only_one(repo, stubs):
+    result = run_setup(repo, stubs, *offline_args("--no-services"))
 
+    assert result.returncode == 0, result.stdout + result.stderr
     assert (repo / ".env").read_text() == (repo / ".env.example").read_text()
-    assert (repo / "recog/web/.env").is_file()
+    assert "web/.env" not in result.stdout + result.stderr
+    assert not (repo / "recog").exists()
     assert not (repo.parent / "home/.recog/speakers_ecapa.json").exists()
 
 
-def test_no_env_when_config_files_are_absent_then_neither_is_created(repo, stubs):
+def test_no_env_when_the_environment_file_is_absent_then_it_is_not_created(repo, stubs):
     result = run_setup(repo, stubs, *offline_args("--no-services", "--no-env"))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (repo / ".env").exists()
-    assert not (repo / "recog/web/.env").exists()
 
 
 def install_unit(repo, name="recog-live.service"):
@@ -420,15 +423,14 @@ def install_unit(repo, name="recog-live.service"):
     (unit_dir / name).write_text("[Service]\n")
 
 
-def test_installed_services_when_config_files_are_absent_then_neither_is_created(repo, stubs):
-    """An installation that runs without environment files keeps running without them."""
+def test_installed_services_when_the_environment_file_is_absent_then_it_is_not_created(repo, stubs):
+    """An installation that runs without an environment file keeps running without it."""
     install_unit(repo)
 
     result = run_setup(repo, stubs, *offline_args("--no-services"))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (repo / ".env").exists()
-    assert not (repo / "recog/web/.env").exists()
     assert "services are already installed" in result.stdout
 
 

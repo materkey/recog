@@ -16,7 +16,6 @@ are grouped separately, making it clear where a new file belongs.
 | `crates/recog-desktop/bootstrap.js` | The script the KTalk desktop integration evaluates in the application |
 | `crates/recog-ai/prompts/` | Shared AI summary templates |
 | `crates/recog-live/macos/`, `crates/recog-zoom/macos/` | Swift sources: ScreenCaptureKit helper and Recog.app launcher; Zoom helper |
-| `recog/web/.env.example` | The example `setup.sh` copies to `recog/web/.env` on a first install |
 | `browser-extension/` | Chrome extension source, platform adapters, build and tests |
 | `deploy/python/` | Requirements of the quality tools |
 | `deploy/node/` | Pinned JavaScript quality tools (ESLint) for `scripts/quality.py` |
@@ -37,7 +36,7 @@ configuration, environment examples and the main README/agent instructions.
 configuration directories retain their tool-required locations.
 
 The generated `sck_audio_capture` binary remains at the root to preserve
-installed paths. Existing `.env` and `recog/web/.env` files remain local
+installed paths. An existing `.env` remains local
 configuration. Meetings, logs and speaker databases belong in the data root
 `bin/recog config data-dir` prints (normally `~/.recog`, or `RECOG_DATA_DIR`). Moving code does not migrate that data; the separate
 [data migration procedure](usage.md#personal-data-outside-the-checkout)

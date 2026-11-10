@@ -34,7 +34,7 @@ git clone https://github.com/materkey/recog.git && cd recog
 `./setup.sh` builds the programs with cargo into `bin/`, copies `.env.example` →
 `.env`, builds the Chrome extension, downloads the ASR model, renders the service
 units and starts them. It is idempotent: re-running it is how you
-update after a `git pull`. Existing environment files are preserved.
+update after a `git pull`. An existing `.env` is preserved.
 
 If something required is missing, setup renders the units but **does not
 activate anything** and exits non-zero (previously running services are left
@@ -43,7 +43,7 @@ running). Install what it lists and run `./setup.sh` again.
 Flags: `--dry-run` (show the plan without changes; does not verify readiness),
 `--no-services` (prepare only, do not touch launchd/systemd),
 `--no-prefetch` (skip the model download), `--no-extension`,
-`--no-env` (keep existing environment files, do not create them from the examples).
+`--no-env` (keep an existing `.env`, do not create it from the example).
 
 ### Install-time environment variables
 
@@ -476,8 +476,8 @@ the [installation configuration](conference-hosts.md), rebuild the extension
 New installs store meetings in `~/.recog/meetings`, service logs in
 `~/.recog/logs`, and profile/AI settings in the same data directory.
 `RECOG_DATA_DIR` overrides that root; use an absolute path (or `~/…`), since
-data paths must not depend on the caller's working directory. `.env` and
-`recog/web/.env` stay in the checkout. Historical speaker database files are
+data paths must not depend on the caller's working directory. `.env` stays
+in the checkout. Historical speaker database files are
 preserved by data migration and backup.
 
 Existing installs continue using their entire old data root and print a

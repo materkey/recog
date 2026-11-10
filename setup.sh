@@ -16,11 +16,11 @@
 #   --no-services    prepare everything, do not touch launchd / systemd
 #   --no-prefetch    skip the GigaAM weight-cache preparation
 #   --no-extension   skip the Chrome extension build
-#   --no-env         do not create environment files from examples
+#   --no-env         do not create .env from its example
 #
-# Environment files are created only on a first install. Once the service
-# units exist, a missing .env is left missing: the examples are not neutral
-# (they switch meeting auto-start off and set models).
+# .env is created only on a first install. Once the service units exist, a
+# missing .env is left missing: the example is not neutral (it switches meeting
+# auto-start off and sets models).
 #
 # Environment (read from the calling shell, NOT from .env — .env is created by
 # this script, later than these are needed):
@@ -120,7 +120,7 @@ fi
 
 # Service units already on disk mean this run updates a working installation.
 # A missing environment file is then part of its configuration (settings may
-# live in unit drop-ins), so the examples must not be copied in.
+# live in unit drop-ins), so the example must not be copied in.
 services_already_installed() {
     (
         SVC_REPO_DIR="$REPO_DIR"
@@ -143,17 +143,16 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "Would build with cargo (release): ${RUST_BUILD_ARGS[*]}"
     echo "Would check the configuration with the built recog, then install the programs into $BIN_DIR"
     if [ "$DO_ENV" -eq 1 ]; then
-        for config in "$REPO_DIR/.env" "$REPO_DIR/recog/web/.env"; do
-            if [ -f "$config" ]; then
-                echo "Would keep existing $config"
-            elif services_already_installed; then
-                echo "Would leave $config absent — services are already installed"
-            else
-                echo "Would copy $config.example to $config if the example exists"
-            fi
-        done
+        config="$REPO_DIR/.env"
+        if [ -f "$config" ]; then
+            echo "Would keep existing $config"
+        elif services_already_installed; then
+            echo "Would leave $config absent — services are already installed"
+        else
+            echo "Would copy $config.example to $config if the example exists"
+        fi
     else
-        echo "Skipped environment files (--no-env)"
+        echo "Skipped the environment file (--no-env)"
     fi
     echo "Would resolve the data directory and create it if missing (existing data is not migrated)."
     if [ "$DO_EXTENSION" -eq 1 ]; then
@@ -296,9 +295,8 @@ copy_example() {
 
 if [ "$DO_ENV" -eq 1 ]; then
     copy_example "$REPO_DIR/.env" "$REPO_DIR/.env.example"
-    copy_example "$REPO_DIR/recog/web/.env" "$REPO_DIR/recog/web/.env.example"
 else
-    echo "Skipped environment files (--no-env)"
+    echo "Skipped the environment file (--no-env)"
 fi
 DATA_DIR="$(bash "$REPO_DIR/scripts/data-dir.sh")"
 mkdir -p "$DATA_DIR"

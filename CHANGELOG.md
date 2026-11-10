@@ -7,6 +7,19 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-10
+
+### Changed
+
+- **`setup.sh` no longer creates `recog/web/.env`.** No program reads that file:
+  only the `.env` at the checkout's root is loaded. Its example
+  `recog/web/.env.example` is gone, and with it the last tracked file of `recog/`.
+  An existing `recog/web/.env` has no effect: `CLAUDE_MODEL`, `CODEX_MODEL` or
+  `CODEX_REASONING_EFFORT` you meant to set there belong in the root `.env`, and
+  `AI_PROVIDER` and the `OPENROUTER_*` keys are read by nothing. You may delete the
+  file and the `recog/` directory, where only Python's `__pycache__` can remain;
+  `scripts/backup-data.sh` still copies the file while it exists.
+
 ## 2026-11-09
 
 ### Action required
