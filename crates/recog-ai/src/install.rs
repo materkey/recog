@@ -7,6 +7,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use recog_core::install_config::{Environ, InstallConfig};
+
 use crate::error::{AiError, Result};
 use crate::pytext;
 
@@ -51,8 +53,9 @@ pub fn default_prompts_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("prompts")
 }
 
-/// The legacy model and effort variables the AI settings still honour below the saved
-/// values (`.env` or the environment; `recog-core` loads `.env`).
+/// What the installation gives the AI settings below the saved values: the models of
+/// `[ai]` in config.toml (or `CLAUDE_MODEL` / `CODEX_MODEL`, which override it) and the
+/// legacy effort variable (`.env` or the environment; `recog-core` loads `.env`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LegacyEnv {
     pub claude_model: Option<String>,
@@ -61,6 +64,17 @@ pub struct LegacyEnv {
 }
 
 impl LegacyEnv {
+    /// From the loaded installation configuration and the environment
+    /// `install_config::load` filled from `.env`.
+    pub fn of_install(config: &InstallConfig, environ: &Environ) -> LegacyEnv {
+        let model = |model: &String| Some(model.clone()).filter(|model| !model.is_empty());
+        LegacyEnv {
+            claude_model: model(&config.ai.claude_model),
+            codex_model: model(&config.ai.codex_model),
+            codex_reasoning_effort: environ.get("CODEX_REASONING_EFFORT").cloned(),
+        }
+    }
+
     /// The variables of this process, read at the moment of the call as Python does.
     pub fn from_process() -> LegacyEnv {
         LegacyEnv::from_vars(std::env::vars_os())
@@ -95,6 +109,25 @@ impl LegacyEnv {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_models_and_effort_variable_when_collected_then_empty_models_are_absent() {
+        // given
+        let mut config = InstallConfig::default();
+        config.ai.codex_model = "installed-codex".into();
+        let environ: Environ = [("CODEX_REASONING_EFFORT".to_owned(), "low".to_owned())].into_iter().collect();
+        // when
+        let legacy = LegacyEnv::of_install(&config, &environ);
+        // then
+        assert_eq!(
+            legacy,
+            LegacyEnv {
+                claude_model: None,
+                codex_model: Some("installed-codex".into()),
+                codex_reasoning_effort: Some("low".into()),
+            }
+        );
+    }
 
     #[test]
     fn no_override_given_home_when_resolved_then_dot_recog() {

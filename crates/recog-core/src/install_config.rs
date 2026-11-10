@@ -228,6 +228,17 @@ section!(
 );
 
 section!(
+    /// `[ai]`.
+    AiSettings, "ai" {
+        /// The Claude model of the AI scenarios until Settings saves one; empty leaves
+        /// the shipped default.
+        claude_model: String = ("CLAUDE_MODEL", Text, String::new()),
+        /// The same for Codex.
+        codex_model: String = ("CODEX_MODEL", Text, String::new()),
+    }
+);
+
+section!(
     /// `[web]`.
     WebSettings, "web" {
         bridge_ws_url: String = ("RECOG_BRIDGE_WS_URL", Text, "ws://localhost:8766".into()),
@@ -258,7 +269,7 @@ section!(
 );
 
 /// The section tables in the order Python declares them.
-pub const SECTIONS: [&str; 6] = ["asr", "live", "copilot", "web", "macos", "install"];
+pub const SECTIONS: [&str; 7] = ["asr", "live", "copilot", "ai", "web", "macos", "install"];
 
 /// Every setting of every section.
 pub fn all_settings() -> impl Iterator<Item = &'static Setting> {
@@ -266,6 +277,7 @@ pub fn all_settings() -> impl Iterator<Item = &'static Setting> {
         .iter()
         .chain(LiveSettings::SETTINGS)
         .chain(CopilotSettings::SETTINGS)
+        .chain(AiSettings::SETTINGS)
         .chain(WebSettings::SETTINGS)
         .chain(MacosSettings::SETTINGS)
         .chain(InstallSettings::SETTINGS)
@@ -290,6 +302,7 @@ pub struct InstallConfig {
     pub asr: AsrSettings,
     pub live: LiveSettings,
     pub copilot: CopilotSettings,
+    pub ai: AiSettings,
     pub web: WebSettings,
     pub macos: MacosSettings,
     pub install: InstallSettings,
@@ -305,6 +318,7 @@ impl InstallConfig {
             "asr" => self.asr.get(key),
             "live" => self.live.get(key),
             "copilot" => self.copilot.get(key),
+            "ai" => self.ai.get(key),
             "web" => self.web.get(key),
             "macos" => self.macos.get(key),
             "install" => self.install.get(key),
@@ -317,6 +331,7 @@ impl InstallConfig {
             "asr" => self.asr.set(key, value),
             "live" => self.live.set(key, value),
             "copilot" => self.copilot.set(key, value),
+            "ai" => self.ai.set(key, value),
             "web" => self.web.set(key, value),
             "macos" => self.macos.set(key, value),
             "install" => self.install.set(key, value),
@@ -537,6 +552,7 @@ fn settings_of(table_name: &str) -> &'static [Setting] {
         "asr" => AsrSettings::SETTINGS,
         "live" => LiveSettings::SETTINGS,
         "copilot" => CopilotSettings::SETTINGS,
+        "ai" => AiSettings::SETTINGS,
         "web" => WebSettings::SETTINGS,
         "macos" => MacosSettings::SETTINGS,
         "install" => InstallSettings::SETTINGS,

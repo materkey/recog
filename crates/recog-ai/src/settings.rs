@@ -5,8 +5,8 @@
 //! overrides. Every write takes an `flock` on the stable `ai-settings.lock`, checks the
 //! caller's revision, validates, and replaces the file atomically (private temporary
 //! file, fsync, rename) with a new UUID revision. Reading never changes the file.
-//! Model precedence: scenario > saved global > legacy `CLAUDE_MODEL`/`CODEX_MODEL` >
-//! shipped default.
+//! Model precedence: scenario > saved global > the installation's (`[ai]` of
+//! config.toml, `CLAUDE_MODEL`/`CODEX_MODEL` over it) > shipped default.
 
 use std::borrow::Cow;
 use std::fs::{File, OpenOptions, Permissions};

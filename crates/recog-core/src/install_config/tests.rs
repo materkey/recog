@@ -155,7 +155,22 @@ fn setting_keys_when_naming_a_variable_then_its_table_and_key_are_given() {
     assert_eq!(setting_key("ASR_PENDING_BUFFER_CAP_S").as_deref(), Some("[asr] pending_buffer_cap_s"));
     assert_eq!(setting_key("NOT_A_SETTING"), None);
     assert_eq!(setting_key("RECOG_INSTALL_RUNTIME").as_deref(), Some("[install] runtime"));
-    assert_eq!(all_settings().count(), 27);
+    assert_eq!(setting_key("CODEX_MODEL").as_deref(), Some("[ai] codex_model"));
+    assert_eq!(all_settings().count(), 29);
+}
+
+#[test]
+fn ai_models_when_parsing_and_overlaying_then_file_default_and_variable_apply() {
+    // given
+    let config = parse("[ai]\nclaude_model = \"file-claude\"\ncodex_model = \"file-codex\"\n").unwrap();
+    // when
+    let (resolved, overridden) =
+        with_environment(&config, &environ(&[("CLAUDE_MODEL", "env-claude"), ("CODEX_MODEL", "")])).unwrap();
+    // then
+    assert_eq!(InstallConfig::default().ai, AiSettings { claude_model: String::new(), codex_model: String::new() });
+    assert_eq!((resolved.ai.claude_model.as_str(), resolved.ai.codex_model.as_str()), ("env-claude", "file-codex"));
+    assert_eq!(overridden, vec!["CLAUDE_MODEL"]);
+    assert!(parse("[ai]\nclaude_model = 5\n").unwrap_err().contains("ai.claude_model has the wrong type"));
 }
 
 #[test]

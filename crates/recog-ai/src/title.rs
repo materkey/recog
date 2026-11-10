@@ -224,7 +224,7 @@ fn meeting_variables(meta: &Json) -> Result<Variables> {
 }
 
 async fn try_meeting_title(
-    data_dir: &Path,
+    store: &AiSettingsStore,
     meeting_path: &Path,
     factory: &dyn ProviderFactory,
 ) -> Result<Option<TitleUpdate>> {
@@ -232,7 +232,7 @@ async fn try_meeting_title(
     if transcript.is_empty() {
         return Ok(None);
     }
-    let settings = AiSettingsStore::new(data_dir, None).resolve_task("title", None, Fallback::default())?;
+    let settings = store.resolve_task("title", None, Fallback::default())?;
     let meta = read_meta(meeting_path)?;
     let variables = meeting_variables(&meta)?;
     let Some(title) = generate_title(&transcript, None, Some(&settings), &variables, factory).await else {
@@ -249,14 +249,15 @@ async fn try_meeting_title(
 }
 
 /// `_generate_title_for_meeting`: a title for the meeting at `meeting_path` from the
-/// settings of `data_dir` (the parent of the meetings directory), with its provenance.
-/// A failure, including unreadable settings, is printed and gives `None`.
+/// settings of `store` (the data directory's, the parent of the meetings directory),
+/// with its provenance. A failure, including unreadable settings, is printed and gives
+/// `None`.
 pub async fn meeting_title_update(
-    data_dir: &Path,
+    store: &AiSettingsStore,
     meeting_path: &Path,
     factory: &dyn ProviderFactory,
 ) -> Option<TitleUpdate> {
-    match try_meeting_title(data_dir, meeting_path, factory).await {
+    match try_meeting_title(store, meeting_path, factory).await {
         Ok(update) => update,
         Err(error) => {
             println!("Warning: Title generation failed: {error}");

@@ -197,7 +197,7 @@ async fn orphan_title_when_generated_then_actual_provider_model_revision_returne
         ],
     );
     let factory = FakeFactory::new("claude", "meeting-model", None, "Архитектура системы");
-    let update = meeting_title_update(dir.path(), &meeting, &*factory).await.unwrap();
+    let update = meeting_title_update(&store, &meeting, &*factory).await.unwrap();
     assert_eq!(update.title, "Архитектура системы");
     assert_eq!(update.title_source, "claude");
     assert_eq!(update.title_model, "meeting-model");
@@ -217,7 +217,7 @@ async fn corrupt_title_settings_when_orphan_ends_then_no_title_and_no_provider()
         &[r#"{"id": 1, "speaker": "User", "text": "Обсуждаем архитектуру системы и все необходимые изменения."}"#],
     );
     let factory = FakeFactory::new("claude", "m", None, "Title");
-    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await, None);
+    assert_eq!(meeting_title_update(&store(dir.path()), &meeting, &*factory).await, None);
     assert!(factory.calls().is_empty());
 }
 
@@ -232,7 +232,7 @@ async fn meeting_names_and_title_when_orphan_titled_then_prompt_variables_follow
     let meta = r#"{"title": "Old", "participants": {"local": {"name": "User", "is_local": true}, "p2": {"name": "Пётр"}, "p3": {"is_local": 1}}}"#;
     write_meeting(&meeting, meta, &[LONG_ROW]);
     let factory = FakeFactory::new("codex", "m", None, "New title");
-    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await.unwrap().title, "New title");
+    assert_eq!(meeting_title_update(&store(dir.path()), &meeting, &*factory).await.unwrap().title, "New title");
     assert!(factory.prompts()[0].starts_with("U=User, p3 P=User, Пётр, p3 T=Old [12:00:00] User: Обсуждаем"));
 }
 
@@ -244,7 +244,7 @@ async fn meta_without_participants_when_orphan_titled_then_names_are_empty() {
     let meeting = dir.path().join("meetings/m1");
     write_meeting(&meeting, r#"{"title": "Old"}"#, &[LONG_ROW]);
     let factory = FakeFactory::new("codex", "m", None, "New title");
-    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await.unwrap().title, "New title");
+    assert_eq!(meeting_title_update(&store(dir.path()), &meeting, &*factory).await.unwrap().title, "New title");
     assert!(factory.prompts()[0].starts_with("U=[] P=[] [12:00:00] User: Обсуждаем"), "{}", factory.prompts()[0]);
 }
 
@@ -263,7 +263,7 @@ async fn unreadable_meta_when_orphan_titled_then_no_title_and_no_provider() {
         let meeting = dir.path().join("meetings/m1");
         write_meeting(&meeting, meta, &[LONG_ROW]);
         let factory = FakeFactory::new("codex", "m", None, "Title");
-        assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await, None, "{meta}");
+        assert_eq!(meeting_title_update(&store(dir.path()), &meeting, &*factory).await, None, "{meta}");
         assert!(factory.calls().is_empty(), "{meta}");
     }
     let dir = tempfile::tempdir().unwrap();
@@ -271,7 +271,7 @@ async fn unreadable_meta_when_orphan_titled_then_no_title_and_no_provider() {
     write_meeting(&meeting, "{}", &[LONG_ROW]);
     std::fs::remove_file(meeting.join("meta.json")).unwrap();
     let factory = FakeFactory::new("codex", "m", None, "Title");
-    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await, None);
+    assert_eq!(meeting_title_update(&store(dir.path()), &meeting, &*factory).await, None);
     assert!(factory.calls().is_empty());
 }
 
@@ -283,6 +283,6 @@ async fn no_transcript_when_orphan_titled_then_no_title_even_with_broken_setting
     std::fs::create_dir_all(&meeting).unwrap();
     std::fs::write(meeting.join("meta.json"), "{}").unwrap();
     let factory = FakeFactory::new("codex", "m", None, "Title");
-    assert_eq!(meeting_title_update(dir.path(), &meeting, &*factory).await, None);
+    assert_eq!(meeting_title_update(&store(dir.path()), &meeting, &*factory).await, None);
     assert!(factory.calls().is_empty());
 }

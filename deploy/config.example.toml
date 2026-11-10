@@ -92,6 +92,14 @@
 # bin/recog-copilot-*; still accepted from older configurations.
 # runtime = "rust"
 
+[ai]
+# CLAUDE_MODEL, CODEX_MODEL: the model each provider's scenarios (summaries,
+# titles, questions about a meeting, Copilot) run on until Settings saves one;
+# a model saved there, for all scenarios or for one, wins. Unset, the shipped
+# defaults below apply.
+# claude_model = "claude-opus-5-5"
+# codex_model = "gpt-6-astra"
+
 [web]
 # EXTERNAL_MEETINGS_PATHS: read-only meeting directories of other sources,
 # each "path" or "path:source".

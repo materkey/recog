@@ -7,6 +7,7 @@ pub mod meetings;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use recog_ai::install::LegacyEnv;
 use recog_bridge::BridgeConfig;
 use recog_core::install_config::{self, Environ, InstallConfig};
 use recog_core::meeting_storage::{MeetingStorage, StorageOptions, external_paths};
@@ -209,7 +210,8 @@ fn live_session_config(
     legacy_mic_name: String,
 ) -> SessionConfig {
     let mut storage = storage_options(config, environ);
-    storage.title_generator = Some(Arc::new(AiTitles));
+    let legacy = LegacyEnv::of_install(config, environ);
+    storage.title_generator = Some(Arc::new(AiTitles { legacy: legacy.clone() }));
     SessionConfig {
         bridge: BridgeConfig {
             extra_origins: config.web.extra_ws_origins.clone(),
@@ -217,7 +219,7 @@ fn live_session_config(
             ..BridgeConfig::default()
         },
         policy: Arc::new(recog_bridge::ai::AiSettingsPolicy::new(data_dir)),
-        increments: Some(ai_increments(repo_root.join("crates").join("recog-ai").join("prompts"))),
+        increments: Some(ai_increments(repo_root.join("crates").join("recog-ai").join("prompts"), legacy)),
         storage,
         golden_record: config.live.golden_record,
     }

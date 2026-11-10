@@ -70,12 +70,7 @@ pub fn load(repo_root: &Path, env: Env) -> Result<Settings, String> {
     let mut from_dotenv: Vec<(String, String)> =
         environ.iter().filter(|(k, _)| !env.vars.contains_key(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
     from_dotenv.sort();
-    let get = |key: &str| environ.get(key).cloned();
-    let legacy = LegacyEnv {
-        claude_model: get("CLAUDE_MODEL"),
-        codex_model: get("CODEX_MODEL"),
-        codex_reasoning_effort: get("CODEX_REASONING_EFFORT"),
-    };
+    let legacy = LegacyEnv::of_install(&config, &environ);
     let session_env = SESSION_ENV_KEYS
         .iter()
         .filter_map(|key| environ.get(*key).filter(|v| !v.is_empty()).map(|v| ((*key).to_owned(), v.clone())))

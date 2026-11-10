@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
+use recog_ai::install::LegacyEnv;
+use recog_ai::settings::AiSettingsStore;
 use recog_bridge::hooks::{
     GoldenTap, IdentitySource, IncrementGenerator, LiveEvents, MeetingCapture, PcmChunk as BridgePcmChunk, PolicySource,
 };
@@ -496,10 +498,12 @@ pub fn run(live: &Arc<Live>, mut config: SessionConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// The data directory's `meetings` and the repository's prompts, for the increments.
-pub fn ai_increments(prompts_dir: PathBuf) -> IncrementsFactory {
+/// The data directory's `meetings`, the repository's prompts and the installation's
+/// models, for the increments.
+pub fn ai_increments(prompts_dir: PathBuf, legacy: LegacyEnv) -> IncrementsFactory {
     Box::new(move |meetings: &Path| {
-        let mut generator = recog_ai::increment::IncrementGenerator::new(meetings, Some(prompts_dir.clone()));
+        let mut generator = recog_ai::increment::IncrementGenerator::new(meetings, Some(prompts_dir.clone()))
+            .with_legacy_env(legacy.clone());
         generator.set_callback(Arc::new(|meeting_id: &str, version: i64, prompt_id: &str| {
             eprintln!("[increment] ready: {meeting_id} v{version} ({prompt_id})");
         }));
@@ -509,14 +513,17 @@ pub fn ai_increments(prompts_dir: PathBuf) -> IncrementsFactory {
 
 /// Meeting titles from the configured provider (`_generate_title_for_meeting`), run on
 /// the storage's title thread.
-pub struct AiTitles;
+pub struct AiTitles {
+    /// The installation's models, below the ones Settings saved.
+    pub legacy: LegacyEnv,
+}
 
 impl TitleGenerator for AiTitles {
     fn generate(&self, request: &TitleRequest) -> Result<Option<GeneratedTitle>, String> {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
         let factory = recog_ai::provider::CliProviderFactory::default();
-        let update =
-            runtime.block_on(recog_ai::title::meeting_title_update(&request.data_dir, &request.meeting_path, &factory));
+        let store = AiSettingsStore::new(&request.data_dir, None).with_legacy_env(self.legacy.clone());
+        let update = runtime.block_on(recog_ai::title::meeting_title_update(&store, &request.meeting_path, &factory));
         Ok(update.map(|u| GeneratedTitle {
             title: u.title,
             provider: u.title_source,

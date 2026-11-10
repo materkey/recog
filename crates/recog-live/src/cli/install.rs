@@ -12,7 +12,8 @@
 use std::path::{Path, PathBuf};
 
 use recog_ai::install::LegacyEnv;
-use recog_ai::settings::{AiSettingsStore, Fallback};
+use recog_ai::json::{self, Json};
+use recog_ai::settings::{AiSettingsStore, Fallback, validate_models};
 use recog_core::data_dir::get_data_dir;
 use recog_core::install_config::{self, Environ, InstallConfig};
 use recog_core::user_profile::UserProfileStore;
@@ -91,6 +92,11 @@ pub fn check(repo_root: &Path, config: &InstallConfig, environ: &Environ) -> Pri
     if let Err(e) = AiSettingsStore::new(&data_dir, Some(prompts_dir(repo_root))).read() {
         return printed(line(format!("Invalid AI settings: {e}")), warnings, 1);
     }
+    for (provider, model) in [("claude", &config.ai.claude_model), ("codex", &config.ai.codex_model)] {
+        if let Err(e) = validate_models(&json::object([(provider, Json::from(model.as_str()))])) {
+            return printed(line(format!("Invalid [ai] {provider}_model: {e}")), warnings, 1);
+        }
+    }
     if config.asr.backend == "remote" && recog_core::py::strip(&config.asr.remote_url).is_empty() {
         let problem = "RECOG_ASR_BACKEND=remote but RECOG_ASR_REMOTE_URL is empty — add the gateway URL as [asr] \
                        remote_url to config.toml (build_asr() refuses to fall back to the local model silently: \
@@ -114,19 +120,19 @@ pub fn config(query: ConfigQuery, repo_root: &Path, config: &InstallConfig, envi
         ConfigQuery::ConfigPath => printed(line(install_config::config_path(repo_root, environ).display()), "", 0),
         ConfigQuery::Conferences => printed(line(config.hosts_json()), "", 0),
         ConfigQuery::InstallRuntime => printed(line(&config.install.runtime), "", 0),
-        ConfigQuery::CopilotLaunch => copilot_launch(repo_root, environ),
+        ConfigQuery::CopilotLaunch => copilot_launch(repo_root, config, environ),
     }
 }
 
 /// The Copilot's Claude model and effort (`auto` without one) on two lines, as
 /// `./recog-service.sh claude` read them from Python; status 1 when Copilot is off.
-fn copilot_launch(repo_root: &Path, environ: &Environ) -> Printed {
+fn copilot_launch(repo_root: &Path, config: &InstallConfig, environ: &Environ) -> Printed {
     let mut warnings = String::new();
     let data_dir = match data_dir(repo_root, environ, &mut warnings) {
         Ok(dir) => dir,
         Err(e) => return printed("", warnings + &line(e), 1),
     };
-    let legacy = LegacyEnv::from_vars(environ.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let legacy = LegacyEnv::of_install(config, environ);
     let store = AiSettingsStore::new(&data_dir, Some(prompts_dir(repo_root))).with_legacy_env(legacy);
     let task = match store.resolve_task("copilot", None, Fallback::default()) {
         Ok(task) => task,
@@ -365,12 +371,33 @@ mod tests {
     }
 
     #[test]
+    fn model_of_the_configuration_with_a_space_when_checked_then_its_key_and_status_1() {
+        // given
+        let repo = tempfile::tempdir().unwrap();
+        let data = repo.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let env = environ(&[("RECOG_DATA_DIR", data.to_str().unwrap())]);
+        let mut spaced = InstallConfig::default();
+        spaced.ai.codex_model = "gpt 6".into();
+        let mut named = InstallConfig::default();
+        named.ai.codex_model = "gpt-6".into();
+        // when
+        let invalid = check(repo.path(), &spaced, &env);
+        let valid = check(repo.path(), &named, &env);
+        // then
+        assert!(invalid.stdout.starts_with("Invalid [ai] codex_model: Model must be "), "{}", invalid.stdout);
+        assert_eq!((invalid.code, valid.code, valid.stdout.as_str()), (1, 0, ""));
+    }
+
+    #[test]
     fn copilot_switched_off_or_on_when_asked_for_its_launch_then_refused_or_model_and_effort() {
         // given
         let repo = tempfile::tempdir().unwrap();
         let data = repo.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
-        let env = environ(&[("RECOG_DATA_DIR", data.to_str().unwrap()), ("CLAUDE_MODEL", "legacy-model")]);
+        let env = environ(&[("RECOG_DATA_DIR", data.to_str().unwrap())]);
+        let mut installed = InstallConfig::default();
+        installed.ai.claude_model = "installed-model".into();
         let settings = |copilot: &str| {
             format!(
                 r#"{{"version":1,"revision":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","models":{{}},"tasks":{{"copilot":{copilot}}}}}"#
@@ -378,11 +405,11 @@ mod tests {
         };
         // when
         std::fs::write(data.join("ai-settings.json"), settings(r#"{"enabled":false}"#)).unwrap();
-        let off = config(ConfigQuery::CopilotLaunch, repo.path(), &InstallConfig::default(), &env);
+        let off = config(ConfigQuery::CopilotLaunch, repo.path(), &installed, &env);
         std::fs::write(data.join("ai-settings.json"), settings(r#"{"claude_effort":"high"}"#)).unwrap();
-        let on = config(ConfigQuery::CopilotLaunch, repo.path(), &InstallConfig::default(), &env);
+        let on = config(ConfigQuery::CopilotLaunch, repo.path(), &installed, &env);
         // then
         assert_eq!((off.code, off.stdout.as_str(), off.stderr.as_str()), (1, "", "Copilot выключен в настройках.\n"));
-        assert_eq!((on.code, on.stdout.as_str()), (0, "legacy-model\nhigh\n"));
+        assert_eq!((on.code, on.stdout.as_str()), (0, "installed-model\nhigh\n"));
     }
 }

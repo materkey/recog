@@ -11,6 +11,17 @@ reasoning.
 
 ### Changed
 
+- **The installation's Claude and Codex models are settings of `config.toml`.**
+  `[ai] claude_model` and `codex_model` name the model each provider's scenarios
+  run on until Settings saves one; `CLAUDE_MODEL` and `CODEX_MODEL`, from the
+  environment or `.env`, still override them, so nothing has to be moved. The
+  summary and the title written when a meeting ends now use these models too:
+  the live process read neither `.env` nor the file and ran on the shipped
+  defaults, while the web server honoured `.env`. `.env.example` no longer sets
+  `CODEX_MODEL`, so a new installation runs Codex on the shipped model. A `.env`
+  created from the earlier example still holds the line: delete it if those
+  summaries and titles should stay on the shipped model. A model with a space or
+  a leading dash stops `./recog-service.sh start` with the key's name.
 - **`setup.sh` no longer creates `recog/web/.env`.** No program reads that file:
   only the `.env` at the checkout's root is loaded. Its example
   `recog/web/.env.example` is gone, and with it the last tracked file of `recog/`.

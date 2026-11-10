@@ -69,7 +69,7 @@ impl Config {
                 cli_env.set(key.as_str(), environ[key].as_str());
             }
         }
-        let legacy_env = LegacyEnv::from_vars(environ.iter().map(|(k, v)| (k.clone(), v.clone())));
+        let legacy_env = LegacyEnv::of_install(&install, &environ);
         let mic = py::strip(environ.get("MIC_SPEAKER_NAME").map_or("", String::as_str));
         let ffmpeg = which("ffmpeg", &cli_env).map_or_else(|| OsString::from("ffmpeg"), PathBuf::into_os_string);
         let ktalk_debug_file = environ

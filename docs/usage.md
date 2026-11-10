@@ -390,15 +390,16 @@ still overrides it. The ones you are most likely to touch:
   [ASR on wavo](#asr-on-wavo).
 - `RECOG_COPILOT_AUTOSPAWN`, `RECOG_COPILOT_GRACE_S`, `RECOG_COPILOT_MCP_URL` —
   see [Copilot](#copilot).
-- `CLAUDE_MODEL` and `CODEX_MODEL` — legacy
-  defaults when no corresponding AI settings override has been saved.
+- `CLAUDE_MODEL` and `CODEX_MODEL` (`[ai] claude_model` and `codex_model` of
+  `config.toml`) — the installation's models, used when no corresponding AI
+  settings override has been saved.
 
 Open **Settings → Промпты и модели** to configure every LLM scenario: AI
 Analysis, meeting titles, saved summary templates and live Copilot.
 Set common model defaults, then override the prompt, provider and model for
 individual scenarios. Claude defaults to `claude-opus-5-5`, Codex to
-`gpt-6-astra`; existing environment defaults remain effective until overridden
-in Settings. Claude and Codex continue to use their CLI subscription login.
+`gpt-6-astra`; the installation's models (`[ai]` of `config.toml`) remain
+effective until overridden in Settings. Claude and Codex continue to use their CLI subscription login.
 
 The **Инкремент** scenario configures both new analysis and saved increments.
 New analysis compares the selected providers; a saved version uses Codex when

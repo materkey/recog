@@ -29,8 +29,8 @@ phone = "Phone"
 ```
 
 `deploy/config.example.toml` lists every setting with its explanation. Besides
-the tables above it has `[asr]`, `[live]`, `[copilot]`, `[web]`, `[macos]` and
-`[install]`:
+the tables above it has `[asr]`, `[live]`, `[copilot]`, `[ai]`, `[web]`,
+`[macos]` and `[install]`:
 each key is the default of one environment variable the code reads (for example
 `[asr] backend` of `RECOG_ASR_BACKEND`, `[web] external_meetings_paths` of
 `EXTERNAL_MEETINGS_PATHS`), typed as in the example: `true`/`false` for flags,
