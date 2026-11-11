@@ -7,6 +7,14 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-11
+
+### Changed
+
+- **The Privacy button shows again whether it is on.** Pressed, it is filled with
+  the accent colour on the meeting page and on the live page. The setting itself
+  was saved all along; only the colour was missing. Reload the open page once.
+
 ## 2026-11-10
 
 ### Changed

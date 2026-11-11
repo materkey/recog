@@ -81,3 +81,10 @@ test('old GET pending - toggle succeeds first - delayed GET cannot undo privacy'
     await loading;
     assert.equal(h.cached(), 'true');
 });
+
+test('privacy on - button marked active - stylesheet paints it differently from the inactive one', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../crates/recog-web/static/style.css'), 'utf8');
+    const rule = /\.btn-privacy\.active\s*\{([^}]*)\}/.exec(css);
+    assert.ok(rule, 'style.css has no rule for .btn-privacy.active');
+    assert.match(rule[1], /background\s*:/);
+});

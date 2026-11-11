@@ -951,7 +951,8 @@ a:hover {
     color: var(--text-secondary);
 }
 
-.btn-follow.active {
+.btn-follow.active,
+.btn-privacy.active {
     background: var(--accent);
     border-color: var(--accent);
     color: white;
