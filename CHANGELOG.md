@@ -18,6 +18,10 @@ reasoning.
   small.** Delete on the meeting page, "Очистить профиль", "Сбросить сценарий"
   and the Copilot's Stop looked like ordinary buttons; Stop and "Открепить" were
   as large as the buttons of a page.
+- **Every meeting's source is shown as a badge.** In the meetings list a source
+  without a colour of its own (`callrec`, `obs-export`, `zoom-export`, `jitsi`,
+  `vas3k`, any importer's) was plain text; it now has the grey badge that a
+  meeting without a source had.
 
 ## 2026-11-10
 

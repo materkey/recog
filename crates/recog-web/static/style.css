@@ -514,6 +514,9 @@ a:hover {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
+    /* A source without a colour of its own. */
+    background: rgba(160, 160, 184, 0.2);
+    color: var(--text-secondary);
 }
 
 .source-ktalk {
@@ -549,11 +552,6 @@ a:hover {
 .source-zoom {
     background: rgba(45, 140, 255, 0.2);
     color: var(--source-zoom);
-}
-
-.source-unknown {
-    background: rgba(160, 160, 184, 0.2);
-    color: var(--text-secondary);
 }
 
 .meeting-date {
