@@ -12,6 +12,7 @@ function harness(fetch, cached = 'false') {
     const buttons = new Map(['privacy-mode-btn', 'live-privacy-btn'].map(id => [id, {
         disabled: false, active: false,
         classList: { toggle(_name, on) { buttons.get(id).active = on; } },
+        setAttribute(name, value) { buttons.get(id)[name] = value; },
     }]));
     const alerts = [], calls = [];
     const context = vm.createContext({
@@ -87,4 +88,17 @@ test('privacy on - button marked active - stylesheet paints it differently from 
     const rule = /\.btn-privacy\.active\s*\{([^}]*)\}/.exec(css);
     assert.ok(rule, 'style.css has no rule for .btn-privacy.active');
     assert.match(rule[1], /background\s*:/);
+});
+
+test('privacy turned on then off - both buttons - report pressed and not pressed to assistive technology', async () => {
+    let enabled = false;
+    const h = harness(async (_url, options) => {
+        if (options.method) enabled = JSON.parse(options.body).enabled;
+        return response(enabled);
+    });
+    await h.context.loadPrivacy();
+    await h.context.togglePrivacy();
+    for (const button of h.buttons.values()) assert.equal(button['aria-pressed'], 'true');
+    await h.context.togglePrivacy();
+    for (const button of h.buttons.values()) assert.equal(button['aria-pressed'], 'false');
 });

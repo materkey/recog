@@ -2246,6 +2246,7 @@ function syncPrivacyButtons() {
         const btn = document.getElementById(id);
         if (btn) {
             btn.classList.toggle('active', on);
+            btn.setAttribute('aria-pressed', String(on));
             btn.disabled = !privacyReady || privacySaving;
         }
     }

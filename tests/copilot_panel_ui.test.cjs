@@ -36,6 +36,7 @@ function element(tags = []) {
         closest: selector => (selector.split(',').some(part => tags.includes(part.trim())) ? self : null),
         querySelector: () => element(),
         setPointerCapture() {},
+        setAttribute() {},
         appendChild() {},
         remove() {},
     };
