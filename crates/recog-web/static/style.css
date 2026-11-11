@@ -270,6 +270,22 @@ a:hover {
     border-color: var(--accent);
 }
 
+.btn-small {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.btn-danger {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+}
+
+.btn-danger:hover {
+    background: rgba(239, 68, 68, 0.25);
+    border-color: #ef4444;
+}
+
 .btn-back {
     padding: 8px 12px;
     background: transparent;

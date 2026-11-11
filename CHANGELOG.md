@@ -14,6 +14,10 @@ reasoning.
 - **The Privacy button shows again whether it is on.** Pressed, it is filled with
   the accent colour on the meeting page and on the live page. The setting itself
   was saved all along; only the colour was missing. Reload the open page once.
+- **Buttons that delete or stop are red again, and the Copilot panel's buttons
+  small.** Delete on the meeting page, "Очистить профиль", "Сбросить сценарий"
+  and the Copilot's Stop looked like ordinary buttons; Stop and "Открепить" were
+  as large as the buttons of a page.
 
 ## 2026-11-10
 
