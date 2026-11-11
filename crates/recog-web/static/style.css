@@ -278,7 +278,7 @@ a:hover {
 .btn-danger {
     background: rgba(239, 68, 68, 0.15);
     border-color: rgba(239, 68, 68, 0.3);
-    color: #ef4444;
+    color: #f87171;
 }
 
 .btn-danger:hover {
