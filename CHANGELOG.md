@@ -22,6 +22,10 @@ reasoning.
   stayed 🟢 online and a question waited for an answer that never came. Switch the
   Copilot's model in Settings, or `/model` in its session; the chip turns green
   with the next answer.
+- **A summary or other AI result that Claude refused says why.** It showed
+  "Claude CLI error: Unknown error" when Claude was out of usage or did not know the
+  model, because Claude prints the reason where its answer would go; that reason is
+  now the error, e.g. "You've reached your Fable limit".
 
 ## 2026-11-11
 

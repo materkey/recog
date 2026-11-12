@@ -369,6 +369,21 @@ async fn claude_exits_nonzero_when_completing_then_stderr_is_raised() {
 }
 
 #[tokio::test]
+async fn claude_refusing_on_stdout_when_completing_then_its_reason_is_raised_not_stderr() {
+    // given: claude -p prints why it failed where its answer would go (as on 2026-11-12)
+    let limit = "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.";
+    let quiet = stubbed("claude", &format!("{limit}\n"), "", 1);
+    let warned =
+        stubbed("claude", "There's an issue with the selected model.\n", "[claude-code:unrecognized_model]\n", 1);
+    // when
+    let quiet = claude(&quiet, "analysis", None).complete("hello").await.unwrap_err();
+    let warned = claude(&warned, "analysis", None).complete("hello").await.unwrap_err();
+    // then
+    assert_eq!(quiet.to_string(), format!("Claude CLI error: {limit}"));
+    assert_eq!(warned.to_string(), "Claude CLI error: There's an issue with the selected model.");
+}
+
+#[tokio::test]
 async fn streaming_analysis_when_spawning_claude_then_safe_mode_preserves_auth_and_disables_skills() {
     let stdout = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"answer\"}]}}\n{\"type\":\"result\",\"result\":\"answer\"}\n";
     let stub = stubbed("claude", stdout, "", 0);

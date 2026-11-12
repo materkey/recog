@@ -359,6 +359,15 @@ fn failure_text(stderr: &[u8]) -> Result<String> {
     if stderr.is_empty() { Ok("Unknown error".to_owned()) } else { Ok(pytext::strip(&decode(stderr)?).to_owned()) }
 }
 
+/// Why `claude -p` failed: it prints the reason where its answer would go (a usage
+/// limit, an unknown model) and leaves stderr empty or holding only warnings; stderr
+/// counts when stdout says nothing.
+fn claude_failure_text(stdout: &[u8], stderr: &[u8]) -> Result<String> {
+    let said = decode(stdout)?;
+    let said = pytext::strip(&said);
+    if said.is_empty() { failure_text(stderr) } else { Ok(said.to_owned()) }
+}
+
 /// A streamed call: stdin fed and stderr collected in the background, stdout by line.
 struct Streaming {
     child: tokio::process::Child,
@@ -553,7 +562,8 @@ impl AiProvider for ClaudeCliProvider {
             let marked = mark_ccs_automation(prompt, &self.task);
             let finished = communicate(&self.command(false), &call_env(&self.env)?, marked.as_bytes()).await?;
             if !finished.status.success() {
-                return Err(AiError::Provider(format!("Claude CLI error: {}", failure_text(&finished.stderr)?)));
+                let reason = claude_failure_text(&finished.stdout, &finished.stderr)?;
+                return Err(AiError::Provider(format!("Claude CLI error: {reason}")));
             }
             Ok(pytext::strip(&decode(&finished.stdout)?).to_owned())
         })
