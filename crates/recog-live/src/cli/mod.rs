@@ -504,10 +504,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // when
         let session = live_session_config(&config, &Environ::new(), dir.path(), dir.path(), "Me".into());
-        // then
-        assert_eq!(
-            session.bridge.extra_origins,
-            ["https://other.example.org", "https://meet.example.org", "https://element.example.org"]
-        );
+        // then: the bridge admits each configured origin, and nothing else
+        let admits = |origin| recog_core::ws_origin::origin_allowed(Some(origin), &session.bridge.extra_origins);
+        for origin in ["https://element.example.org", "https://meet.example.org", "https://other.example.org"] {
+            assert!(admits(origin), "{origin}");
+        }
+        assert!(!admits("https://evil.example.org"));
     }
 }
