@@ -34,6 +34,14 @@ fn each_fixture_screen_classifies_as_python_does() {
 }
 
 #[test]
+fn a_turn_refused_for_usage_when_classified_then_blocked_until_the_model_replies_again() {
+    // given: the refusals alone, then the same refusals with a reply below them
+    // when / then: a reply quoting a limit opening outside a notice does not count
+    assert_eq!(classify_screen(Some(USAGE_LIMIT_SCREEN)), AgentState::Blocked);
+    assert_eq!(classify_screen(Some(REPLY_AFTER_USAGE_LIMIT_SCREEN)), AgentState::Online);
+}
+
+#[test]
 fn each_agent_state_when_reported_then_bridge_status_word() {
     // given
     let cases = [
@@ -258,6 +266,20 @@ async fn unknown_dialog_reports_blocked_and_is_not_answered() {
     // given
     let runner = WatchdogRunner::new(true, MODEL_DIALOG_SCREEN);
     let host = Host::new(State::Spawning, Some("A"));
+    let (_clock, mut watchdog) = fake_clock();
+    // when
+    watchdog.tick(&host, &runner).await.unwrap();
+    // then
+    assert_eq!(host.statuses(), vec![AgentState::Blocked]);
+    assert!(runner.keys().is_empty());
+}
+
+#[tokio::test]
+async fn usage_limit_below_a_reply_with_dialog_words_reports_blocked_and_is_not_answered() {
+    // given: an earlier reply quotes the words of the startup dialogs
+    let screen = format!("⏺ Обсуждали, trust this folder или local development.\n\n{USAGE_LIMIT_SCREEN}");
+    let runner = WatchdogRunner::new(true, &screen);
+    let host = Host::new(State::Running, Some("A"));
     let (_clock, mut watchdog) = fake_clock();
     // when
     watchdog.tick(&host, &runner).await.unwrap();

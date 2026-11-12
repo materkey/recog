@@ -473,3 +473,28 @@ Claude Code'll be able to read, edit, and execute files here.\n\n \
 ⚠ This folder pre-approves 1 tool permission in .claude/settings.local.json:\n   \
 mcp__plugin_mem0_mem0__search_memories\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n \
 Enter to confirm · Esc to cancel\n";
+/// Captured live on claude 2.1.322 (2026-11-12): the session's model out of usage,
+/// every channel event refused, the prompt idle below.
+pub const USAGE_LIMIT_SCREEN: &str = "← copilot: Privacy mode: use speaker_N labels instead of real names. T…\n  \
+⎿  You've reached your Fable limit. Run /usage-credits to continue or switch\n     \
+models with /model.\n\n✻ Brewed for 0s · done 12:26 PM\n\n\
+← copilot: Privacy mode: use speaker_N labels instead of real names. T…\n  \
+⎿  You've reached your Fable limit. Run /usage-credits to continue or switch\n     \
+models with /model.\n\n✻ Churned for 0s · done 12:26 PM\n\n\
+──────────────────────────────────────────────────── copilot-session ─\n\
+❯ \n\
+──────────────────────────────────────────────────────────────────────\n  \
+⎇ main (1569e07) · ctx: 0% · Fable 5.2 [high] · /Users/user/projects/r…\n  \
+⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent\n";
+/// The same session after `/model`: the refusals still on screen, a reply below them.
+pub const REPLY_AFTER_USAGE_LIMIT_SCREEN: &str = "← copilot: Privacy mode: use speaker_N labels instead of real names. T…\n  \
+⎿  You've reached your Fable limit. Run /usage-credits to continue or switch\n     \
+models with /model.\n\n✻ Churned for 0s · done 12:26 PM\n\n\
+❯ /model claude-opus-5-5\n  ⎿  Set model to Opus 5.5\n\n\
+← copilot: Privacy mode: use speaker_N labels instead of real names. T…\n\n\
+⏺ Called copilot\n\n⏺ Ответил в чат Copilot: обсуждают PR с Gradle-флагом;\n  \
+you've hit your target only if CI runs coverage.\n\n✻ Cogitated for 23s · done 12:27 PM\n\n\
+──────────────────────────────────────────────────── copilot-session ─\n\
+❯ \n\
+──────────────────────────────────────────────────────────────────────\n  \
+⎇ main (1569e07) · ctx: 23% · Opus 5.5 [high] · /Users/user/projects/r…\n";

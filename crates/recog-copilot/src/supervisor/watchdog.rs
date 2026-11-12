@@ -117,7 +117,7 @@ impl Watchdog {
         }
         let text = runner.capture().await?;
         let state = classify_screen(Some(&text));
-        // Only a dialog is answered, whatever else blocks the pane.
+        // Only a dialog is answered: a pane blocked for usage may quote anything.
         let lowered = text.to_lowercase();
         if dialog_shown(&lowered)
             && let Some(marker) = AUTO_DISMISS_MARKERS.iter().find(|m| lowered.contains(*m))

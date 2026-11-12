@@ -17,6 +17,11 @@ reasoning.
   `[conferences]` (`Rejected WS connection: disallowed origin` in the live log):
   a call on your own Jitsi or Element had no transcript. Run `./setup.sh`, which
   rebuilds `bin/` and restarts the services.
+- **A Copilot whose model is out of usage shows 🔴 blocked.** When Claude refused
+  every message for a usage limit (`You've reached your Fable limit`), the chip
+  stayed 🟢 online and a question waited for an answer that never came. Switch the
+  Copilot's model in Settings, or `/model` in its session; the chip turns green
+  with the next answer.
 
 ## 2026-11-11
 
