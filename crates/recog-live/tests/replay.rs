@@ -173,8 +173,11 @@ fn the_frozen_ktalk_call_when_replayed_then_every_asr_call_answered_and_both_rem
     let (log, _stderr) = Logger::capture(ManualClock::new(0.0).shared());
     let stdout = Arc::new(Mutex::new(String::new()));
     let sink = stdout.clone();
+    // an installation that records its own sessions
+    let mut config = InstallConfig::default();
+    config.live.golden_record = true;
     let settings = ReplaySettings {
-        config: InstallConfig::default(),
+        config,
         legacy_mic_name: "Me".into(),
         profile: Some(saved.join("user-profile.json")),
         tail_s: 3.0,
@@ -205,6 +208,8 @@ fn the_frozen_ktalk_call_when_replayed_then_every_asr_call_answered_and_both_rem
         rows.iter().filter(|r| r.get("is_local") == Some(&Value::Bool(true))).map(|r| str_of(r, "speaker")).collect();
     assert!(!local.is_empty() && local.iter().all(|s| *s == "Вера"), "{local:?}");
     assert!(stdout.lock().unwrap().contains(" LIVE TRANSCRIPTION\n"));
+    // and the replay records no session of its own
+    assert!(!out.join("data/golden").exists());
 }
 
 #[test]
