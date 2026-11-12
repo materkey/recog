@@ -366,11 +366,8 @@ pub fn replay(session: &Path, out: &Path, settings: ReplaySettings) -> Result<Va
     let system = Arc::new(ReplayCapture::default());
     let asr = Arc::new(ReplayAsr::from_events(&events));
     let port = free_port().map_err(|e| e.to_string())?;
-    let mut config = settings.config.clone();
-    config.live.golden_record = false;
-    config.live.echo_cancel = false;
-    let live = replay_live(&config, &data_dir, &settings, asr.clone(), &mic, &system)?;
-    let session_config = replay_session_config(&config, &data_dir, out, port, &settings);
+    let live = replay_live(&settings.config, &data_dir, &settings, asr.clone(), &mic, &system)?;
+    let session_config = replay_session_config(&settings.config, &data_dir, out, port, &settings);
     let start = settings.clock.wall();
     let recorded_start_wall = number(&events[0], "wall");
     let event_count = events.len();
