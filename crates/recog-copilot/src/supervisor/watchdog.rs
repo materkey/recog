@@ -10,7 +10,9 @@
 //! [`SPAWN_DEADLINE_S`] is reported `blocked`: fail-visible, a respawn would not help.
 
 use super::lifecycle::State;
-use super::screen::{AUTO_DISMISS_MARKERS, AgentState, TRUST_DIALOG_MARKERS, classify_screen, trust_dialog_keys};
+use super::screen::{
+    AUTO_DISMISS_MARKERS, AgentState, TRUST_DIALOG_MARKERS, classify_screen, dialog_shown, trust_dialog_keys,
+};
 use super::tmux::{Error, Runner};
 
 pub const POLL_INTERVAL_S: f64 = 2.0;
@@ -115,12 +117,13 @@ impl Watchdog {
         }
         let text = runner.capture().await?;
         let state = classify_screen(Some(&text));
-        if state == AgentState::Blocked {
-            let lowered = text.to_lowercase();
-            if let Some(marker) = AUTO_DISMISS_MARKERS.iter().find(|m| lowered.contains(*m)) {
-                self.dismiss(runner, marker, &text).await?;
-                return Ok(AgentState::Spawning);
-            }
+        // Only a dialog is answered, whatever else blocks the pane.
+        let lowered = text.to_lowercase();
+        if dialog_shown(&lowered)
+            && let Some(marker) = AUTO_DISMISS_MARKERS.iter().find(|m| lowered.contains(*m))
+        {
+            self.dismiss(runner, marker, &text).await?;
+            return Ok(AgentState::Spawning);
         }
         self.dismissed_dialog = None;
         Ok(state)

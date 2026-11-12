@@ -63,13 +63,19 @@ pub fn trust_dialog_keys(text: &str) -> Vec<String> {
     keys
 }
 
+/// Whether a dialog waits for a choice (its footer or a numbered cursor), given the
+/// lower-cased pane.
+pub fn dialog_shown(lowered: &str) -> bool {
+    BLOCKED_MARKERS.iter().any(|marker| lowered.contains(marker))
+}
+
 /// The agent state a captured pane shows. First match wins: no session → dialog
 /// footer → spinner → prompt → transitional. `None` means the tmux session is gone;
 /// an empty pane is a startup screen, not offline.
 pub fn classify_screen(text: Option<&str>) -> AgentState {
     let Some(text) = text else { return AgentState::Offline };
     let lowered = text.to_lowercase();
-    if BLOCKED_MARKERS.iter().any(|marker| lowered.contains(marker)) {
+    if dialog_shown(&lowered) {
         return AgentState::Blocked;
     }
     if lowered.contains(WORKING_MARKER) {
