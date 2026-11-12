@@ -12,14 +12,22 @@ pub fn repo_root() -> PathBuf {
     fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap()
 }
 
-/// The built `recog` placed at `program` as a file of its own (on APFS a clone, no
-/// bytes copied). Not a hard link: every test's link would share one inode, and
-/// macOS's execution policy, scanning a fresh build on its first runs, may read that
-/// inode through another test's path; once that test has removed its directory the
-/// scan fails and the waiting process is killed (status -1, "Terminating process due
-/// to Malware rejection" in the system log).
+/// The built `recog` placed at `program`; each platform has its own race to avoid.
+///
+/// macOS: a file of its own (on APFS a clone, no bytes copied). With hard links every
+/// test's program shares one inode, and the execution policy, scanning a fresh build
+/// on its first runs, may read it through another test's path; once that test has
+/// removed its directory the scan fails and the waiting process is killed (status -1,
+/// "Terminating process due to Malware rejection" in the system log).
+///
+/// Elsewhere: a hard link, a copy only across file systems. A copy is written through
+/// a descriptor that a child forked meanwhile by another test's thread inherits, and
+/// until that child execs, running the copy fails with "Text file busy".
 pub fn place_recog(program: &Path) {
-    fs::copy(env!("CARGO_BIN_EXE_recog"), program).unwrap();
+    let built = Path::new(env!("CARGO_BIN_EXE_recog"));
+    if cfg!(target_os = "macos") || fs::hard_link(built, program).is_err() {
+        fs::copy(built, program).unwrap();
+    }
 }
 
 /// An interpreter for the stub children of the process tests (plain stdlib
