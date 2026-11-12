@@ -2,20 +2,19 @@
 //! `[install] runtime = "rust"`: it takes that checkout as its own (its `.env`, its
 //! legacy data root) and answers the shell scripts' questions there.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A checkout with `recog` in its `bin/`: a hard link, else a copy, since a symlink
-/// would resolve back to the build directory.
+/// A checkout with `recog` in its `bin/`: a file of its own, since a symlink would
+/// resolve back to the build directory.
 fn installed(repo: &Path) -> PathBuf {
     std::fs::write(repo.join("recog-service.sh"), "#!/bin/bash\n").unwrap();
     let bin = repo.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let program = bin.join("recog");
-    let built = Path::new(env!("CARGO_BIN_EXE_recog"));
-    if std::fs::hard_link(built, &program).is_err() {
-        std::fs::copy(built, &program).unwrap();
-    }
+    common::place_recog(&program);
     program
 }
 

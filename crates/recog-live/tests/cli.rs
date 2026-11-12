@@ -6,6 +6,8 @@
 //! `setup.sh` installs it), so that checkout, not the one it was built in, is its own.
 //! A child keeps `LLVM_PROFILE_FILE`, so a coverage run counts what it executed.
 
+mod common;
+
 #[cfg(target_os = "linux")]
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -31,10 +33,7 @@ impl Sandbox {
         }
         std::fs::write(dir.path().join("repo/recog-service.sh"), "#!/bin/bash\n").unwrap();
         let recog = dir.path().join("repo/bin/recog");
-        let built = Path::new(env!("CARGO_BIN_EXE_recog"));
-        if std::fs::hard_link(built, &recog).is_err() {
-            std::fs::copy(built, &recog).unwrap();
-        }
+        common::place_recog(&recog);
         Self { dir, recog }
     }
 

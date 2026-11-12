@@ -12,6 +12,16 @@ pub fn repo_root() -> PathBuf {
     fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap()
 }
 
+/// The built `recog` placed at `program` as a file of its own (on APFS a clone, no
+/// bytes copied). Not a hard link: every test's link would share one inode, and
+/// macOS's execution policy, scanning a fresh build on its first runs, may read that
+/// inode through another test's path; once that test has removed its directory the
+/// scan fails and the waiting process is killed (status -1, "Terminating process due
+/// to Malware rejection" in the system log).
+pub fn place_recog(program: &Path) {
+    fs::copy(env!("CARGO_BIN_EXE_recog"), program).unwrap();
+}
+
 /// An interpreter for the stub children of the process tests (plain stdlib
 /// scripts): the executable behind `python3` on PATH, so that a version manager's
 /// shim does not slow every child's start past the tests' timing. None skips them.
