@@ -214,7 +214,7 @@ fn live_session_config(
     storage.title_generator = Some(Arc::new(AiTitles { legacy: legacy.clone() }));
     SessionConfig {
         bridge: BridgeConfig {
-            extra_origins: config.web.extra_ws_origins.clone(),
+            extra_origins: recog_core::ws_origin::extra_origins(config),
             legacy_mic_name,
             ..BridgeConfig::default()
         },
@@ -493,5 +493,21 @@ mod tests {
         let audio = resolve_audio(&args, &[], "linux", &no_parec);
         // then
         assert!(audio.unwrap_err().starts_with("parec not found"));
+    }
+
+    #[test]
+    fn configured_conference_hosts_when_building_the_live_session_then_the_bridge_admits_their_origins() {
+        // given: an Element Call iframe's origin is its configured matrix host
+        let mut config = InstallConfig { jitsi: vec!["https://meet.example.org".into()], ..Default::default() };
+        config.matrix = vec!["https://element.example.org".into()];
+        config.web.extra_ws_origins = vec!["https://other.example.org".into()];
+        let dir = tempfile::tempdir().unwrap();
+        // when
+        let session = live_session_config(&config, &Environ::new(), dir.path(), dir.path(), "Me".into());
+        // then
+        assert_eq!(
+            session.bridge.extra_origins,
+            ["https://other.example.org", "https://meet.example.org", "https://element.example.org"]
+        );
     }
 }

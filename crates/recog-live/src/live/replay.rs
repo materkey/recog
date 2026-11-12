@@ -451,7 +451,7 @@ fn replay_session_config(
     SessionConfig {
         bridge: BridgeConfig {
             port,
-            extra_origins: config.web.extra_ws_origins.clone(),
+            extra_origins: recog_core::ws_origin::extra_origins(config),
             debug_file: Some(out.join("ktalk_debug.json")),
             legacy_mic_name: settings.legacy_mic_name.clone(),
             ..BridgeConfig::default()

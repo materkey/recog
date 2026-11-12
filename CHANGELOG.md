@@ -7,6 +7,17 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-12
+
+### Changed
+
+- **Calls on the conference hosts of `config.toml` are transcribed again.** Since
+  the live process became Rust (2026-11-08) its bridge admitted only the built-in
+  hosts and `[web] extra_ws_origins`, and refused the extension on every host of
+  `[conferences]` (`Rejected WS connection: disallowed origin` in the live log):
+  a call on your own Jitsi or Element had no transcript. Run `./setup.sh`, which
+  rebuilds `bin/` and restarts the services.
+
 ## 2026-11-11
 
 ### Changed
