@@ -92,6 +92,30 @@ def render(target_os, out_dir):
 
 
 @pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
+def test_both_renderers_when_given_the_same_installation_then_unit_bytes_match(tmp_path, target_os):
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or "target")
+    built = SOURCE_ROOT / target / "debug/recog"
+    if not built.is_file():
+        pytest.skip("needs cargo build -p recog-live")
+    repo = make_checkout(tmp_path / "Recog & tools")
+    (repo / "crates/recog-live").mkdir(parents=True)
+    (repo / "crates/recog-live/Cargo.toml").touch()
+    program = repo / "bin/recog"
+    shutil.copy2(built, program)
+    env = {
+        "HOME": str(tmp_path), "PATH": os.environ["PATH"],
+        "RECOG_SERVICE_OS": target_os, "RECOG_DATA_DIR": str(tmp_path / "Meeting & data"),
+        "RECOG_CONFIG_FILE": str(tmp_path / "absent.toml"),
+    }
+    shell, rust = tmp_path / "shell", tmp_path / "rust"
+    subprocess.run([repo / "recog-service.sh", "render", "--dry-run", shell], env=env, check=True)
+    subprocess.run([program, "service", "render", rust], env=env, check=True, cwd=tmp_path)
+    assert sorted(p.name for p in rust.iterdir()) == sorted(UNIT_FILES[target_os])
+    for name in UNIT_FILES[target_os]:
+        assert (rust / name).read_bytes() == (shell / name).read_bytes()
+
+
+@pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
 def test_custom_cli_directories_when_rendering_then_service_path_can_run_copilot(
     target_os, tmp_path
 ):

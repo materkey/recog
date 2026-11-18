@@ -49,6 +49,24 @@ pub fn print(outcome: Printed) -> i32 {
     outcome.code
 }
 
+pub(super) fn render_units(root: &Path, environ: &Environ, dest: &Path) -> Result<Vec<PathBuf>, String> {
+    use recog_install::units::{Backend, Layout};
+    let backend = match std::env::var("RECOG_SERVICE_OS").as_deref() {
+        Ok("Darwin") => Backend::Launchd,
+        Ok("Linux") => Backend::Systemd,
+        Err(_) | Ok("") if cfg!(target_os = "macos") => Backend::Launchd,
+        Err(_) | Ok("") if cfg!(target_os = "linux") => Backend::Systemd,
+        _ => return Err("Unsupported service OS (expected Darwin or Linux)".into()),
+    };
+    let home = std::env::var_os("HOME").ok_or("HOME is missing")?;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let data = get_data_dir(root, environ, &mut |warning| eprintln!("{warning}")).map_err(|e| e.to_string())?;
+    let logs = data.join("logs");
+    backend
+        .render(&Layout { root, home: Path::new(&home), data: &data, logs: &logs, search_path: &path }, dest)
+        .map_err(|e| e.to_string())
+}
+
 fn prompts_dir(repo_root: &Path) -> PathBuf {
     repo_root.join("crates").join("recog-ai").join("prompts")
 }

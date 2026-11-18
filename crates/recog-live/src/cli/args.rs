@@ -90,6 +90,7 @@ pub enum Command {
     Replay(ReplayArgs),
     /// The KTalk desktop subcommands with their arguments, run by `recog-desktop`.
     Desktop(Vec<String>),
+    ServiceRender(String),
     /// Whether the settings can serve: what `scripts/deps.sh` asked Python.
     Check,
     /// One value for the shell scripts.
@@ -110,7 +111,8 @@ pub struct Exit {
     pub code: i32,
 }
 
-pub const MAIN_USAGE: &str = "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch} ...";
+pub const MAIN_USAGE: &str =
+    "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,service} ...";
 
 const CHECK_USAGE: &str = "usage: recog check [-h]";
 
@@ -137,7 +139,7 @@ pub fn main_help() -> String {
 CLI-утилита для live-транскрибирования и управления митингами
 
 positional arguments:
-  {{live,meetings,replay,desktop,check,config,launcher,prefetch}}
+  {{live,meetings,replay,desktop,check,config,launcher,prefetch,service}}
                         Доступные команды
     live                Live транскрипция с микрофона и/или системного звука
     meetings            Просмотр сохранённых митингов
@@ -147,6 +149,7 @@ positional arguments:
     config              Напечатать значение для скриптов установки
     launcher            Собрать Recog.app, если её исходник изменился (macOS)
     prefetch            Скачать модель ASR в кэш Hugging Face
+    service render DIR  Записать файлы служб в каталог DIR
 
 options:
   -h, --help            show this help message and exit
@@ -538,6 +541,16 @@ pub fn parse(argv: &[String], mic_default: &str) -> Result<Command, Exit> {
         "meetings" => parse_meetings(rest),
         "replay" => parse_replay(rest),
         "desktop" => Ok(Command::Desktop(rest.to_vec())),
+        "service" => match rest {
+            [action, dir] if action == "render" && !dir.starts_with('-') => Ok(Command::ServiceRender(dir.clone())),
+            [action, flag] if action == "render" && matches!(flag.as_str(), "-h" | "--help") => {
+                Err(Exit { stdout: "usage: recog service render DIR\n".into(), stderr: String::new(), code: 0 })
+            }
+            [flag] if matches!(flag.as_str(), "-h" | "--help") => {
+                Err(Exit { stdout: "usage: recog service render DIR\n".into(), stderr: String::new(), code: 0 })
+            }
+            _ => Err(error("usage: recog service render DIR", "recog service", "expected render DIR")),
+        },
         "config" => parse_config(rest),
         "check" | "launcher" | "prefetch" => parse_helper(first, rest),
         other => Err(unknown_command(other)),
@@ -562,7 +575,7 @@ fn unknown_command(other: &str) -> Exit {
         "recog",
         &format!(
             "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop', \
-             'check', 'config', 'launcher', 'prefetch')",
+             'check', 'config', 'launcher', 'prefetch', 'service')",
             py_repr(other)
         ),
     )

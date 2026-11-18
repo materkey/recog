@@ -121,6 +121,7 @@ if [ -f Cargo.toml ]; then
     cargo test -p recog-copilot
     cargo test -p recog-zoom
     cargo test -p recog-core
+    cargo test -p recog-install
     cargo test -p recog-ai
     cargo test -p recog-live
     cargo test -p recog-bridge

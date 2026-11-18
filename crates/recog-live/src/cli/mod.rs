@@ -372,6 +372,18 @@ fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo
         Command::Meetings(meetings) => run_meetings(&meetings, config, environ, repo_root),
         Command::Replay(replay) => run_replay(&replay, config, environ),
         Command::Desktop(args) => install::desktop(repo_root, &args),
+        Command::ServiceRender(dir) => match install::render_units(repo_root, environ, Path::new(&dir)) {
+            Ok(paths) => {
+                for path in paths {
+                    println!("{}", path.display());
+                }
+                0
+            }
+            Err(message) => {
+                eprintln!("{message}");
+                1
+            }
+        },
         Command::Check => install::print(install::check(repo_root, config, environ)),
         Command::Config(query) => install::print(install::config(query, repo_root, config, environ)),
         Command::Launcher => install::print(install::launcher(repo_root, config)),

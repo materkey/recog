@@ -11,6 +11,8 @@ reasoning.
 
 ### Changed
 
+- Run `recog service render DIR` after rebuilding to preview the four service
+  definitions in a directory without contacting the service manager.
 - Setup and service activation now work without tmux or Claude Code. After
   `git pull`, run `./setup.sh` as usual. Only Copilot needs these tools.
 

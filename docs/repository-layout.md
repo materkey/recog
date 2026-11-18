@@ -10,7 +10,7 @@ are grouped separately, making it clear where a new file belongs.
 
 | Path | Responsibility |
 | --- | --- |
-| `crates/` | `recog-live` (the `recog` binary: live process with the bridge, `meetings`, `replay`, the installation helpers), `recog-web`, `recog-copilot` (supervisor and MCP channel), `recog-desktop`, `recog-mic`, `recog-asr-server` (the optional ASR server's gateway and GigaAM backend, launched independently of the client services), and the libraries `recog-core`, `recog-ai`, `recog-bridge`, `recog-zoom`, `speexdsp-aec` |
+| `crates/` | `recog-live` (the `recog` binary: live process with the bridge, `meetings`, `replay`, the installation helpers), `recog-web`, `recog-copilot` (supervisor and MCP channel), `recog-desktop`, `recog-mic`, `recog-asr-server` (the optional ASR server's gateway and GigaAM backend, launched independently of the client services), and the libraries `recog-install` (service definitions), `recog-core`, `recog-ai`, `recog-bridge`, `recog-zoom`, `speexdsp-aec` |
 | `bin/` | Gitignored: the programs `setup.sh` installs from `target/release` and the units run |
 | `crates/recog-web/static/` | The web UI the `recog-web` binary serves |
 | `crates/recog-desktop/bootstrap.js` | The script the KTalk desktop integration evaluates in the application |

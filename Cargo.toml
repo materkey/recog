@@ -10,6 +10,7 @@ members = [
     "crates/recog-copilot",
     "crates/recog-core",
     "crates/recog-desktop",
+    "crates/recog-install",
     "crates/recog-live",
     "crates/recog-mic",
     "crates/recog-web",

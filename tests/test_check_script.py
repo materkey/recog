@@ -251,6 +251,7 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
         "cargo test -p recog-copilot",
         "cargo test -p recog-zoom",
         "cargo test -p recog-core",
+        "cargo test -p recog-install",
         "cargo test -p recog-ai",
         "cargo test -p recog-live",
         "cargo test -p recog-bridge",
