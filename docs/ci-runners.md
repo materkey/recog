@@ -1,9 +1,14 @@
 # CI runners
 
-The repository is private, and GitHub's hosted runners spend the account's Actions
-minutes (a macOS minute counts ten). CI therefore runs on self-hosted runners
-registered to this repository only; `.github/workflows/ci.yml` selects them by
-labels, never by a hosted image.
+Pull requests and every workflow run in the public repository use GitHub-hosted Linux
+and macOS machines. Trusted pushes and manual runs in a private repository can use
+the following dedicated runners.
+
+Before making `materkey/recog` public, remove its repository-level runner
+registrations and any access through organization runner groups. The public repository
+must have no access to these machines even if a contributor changes a workflow.
+Register trusted builders only to a private build repository, and build reviewed
+revisions there.
 
 | Job | Labels | Runner |
 |---|---|---|

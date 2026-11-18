@@ -1,6 +1,5 @@
-# Runs scripts/check.sh on both supported hosts, on self-hosted runners
-# (docs/ci-runners.md): the repository is private, and hosted runners spend the
-# account's Actions minutes.
+# Public checks and all pull requests run on GitHub-hosted machines. Private
+# trusted builds can use the dedicated runners described in docs/ci-runners.md.
 #
 # recog itself is Rust (check.sh builds and tests the workspace); Python is only
 # the quality tools and the shell scripts' tests.
@@ -15,6 +14,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     strategy:
@@ -22,10 +24,12 @@ jobs:
       matrix:
         include:
           - os: linux
-            runner: [self-hosted, linux, recog]
+            hosted: ubuntu-24.04
+            trusted: '["self-hosted","linux","recog"]'
           - os: macos
-            runner: [self-hosted, macos, recog]
-    runs-on: ${{ matrix.runner }}
+            hosted: macos-latest
+            trusted: '["self-hosted","macos","recog"]'
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && fromJSON(matrix.trusted) || matrix.hosted }}
     env:
       # Debug information is most of a test build's size: with it, the tests'
       # build and the coverage-instrumented one of the quality gate ran out of
@@ -37,7 +41,7 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
-        if: runner.os == 'Linux'
+        if: runner.environment == 'github-hosted' || runner.os == 'Linux'
         with:
           python-version: "3.12"
 
@@ -45,7 +49,7 @@ jobs:
       # which exists on hosted runners alone: the Mac runner's Python 3.12 is
       # Homebrew's, in a venv of this job (pip refuses Homebrew's own environment).
       - name: Python 3.12 on the Mac runner
-        if: runner.os == 'macOS'
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
         shell: bash
         run: |
           /opt/homebrew/bin/python3.12 -m venv "$RUNNER_TEMP/python"
@@ -71,6 +75,7 @@ jobs:
       # so the build lives outside it. (No rust-cache: on a runner that keeps its
       # home it removed rustup itself from ~/.cargo/bin after a job.)
       - name: Keep the Rust build between jobs
+        if: runner.environment == 'self-hosted'
         shell: bash
         run: echo "CARGO_TARGET_DIR=$HOME/.cache/recog-ci/target" >> "$GITHUB_ENV"
 
@@ -166,7 +171,7 @@ jobs:
           if-no-files-found: error
 
   extension:
-    runs-on: [self-hosted, linux, recog]
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && fromJSON('["self-hosted","linux","recog"]') || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
