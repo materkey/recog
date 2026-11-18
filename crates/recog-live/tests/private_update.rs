@@ -31,6 +31,7 @@ esac
         Command::new(root.join("bin/recog"))
             .arg("update")
             .env_clear()
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
             .env("PATH", dir.path())
             .env("HOME", dir.path().join("home"))
             .env("LATEST", tag)
@@ -46,8 +47,17 @@ esac
     };
     let current = run("v1.0.0");
     assert!(current.status.success(), "{}", String::from_utf8_lossy(&current.stderr));
+    let oversized = run(&"v".repeat(2048));
+    assert!(!oversized.status.success());
+    assert!(String::from_utf8_lossy(&oversized.stderr).contains("size limit"));
     let corrupt = run("v1.0.1");
     assert!(!corrupt.status.success());
     assert!(String::from_utf8_lossy(&corrupt.stderr).contains("checksum mismatch"));
+    fs::write(&gh, "#!/bin/sh\nexit 1\n").unwrap();
+    let denied = run("v1.0.1");
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("repository access"));
+    fs::remove_file(&gh).unwrap();
+    let missing = run("v1.0.1");
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("Install GitHub CLI"));
     assert_eq!(fs::read_to_string(root.join("recog-release")).unwrap(), "v1.0.0");
 }
