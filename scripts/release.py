@@ -123,9 +123,10 @@ def archive(tag, output, binaries):
         print(result)
 
 
-def formula(tag, directory):
+def formula(tag, directory, revision=0):
     name = asset(tag, "macos-arm64")
     checksum = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+    revision_line = f"  revision {revision}\n" if revision else ""
     return f'''require "download_strategy"
 
 class RecogReleaseDownloadStrategy < AbstractFileDownloadStrategy
@@ -160,17 +161,21 @@ class Recog < Formula
   version "{tag[1:]}"
   sha256 "{checksum}"
   license "MIT"
-  depends_on arch: :arm64
+{revision_line}  depends_on arch: :arm64
   depends_on :macos
   depends_on "ffmpeg"
 
   def install
     libexec.install Dir["*", ".env.example", ".claude"]
+    # Homebrew preserves libexec metadata when the prefix already has its license.
+    cp libexec/"LICENSE", prefix/"LICENSE"
     (libexec/"recog-homebrew").write("1\\n")
     bin.install_symlink libexec/"bin/recog"
   end
 
   test do
+    assert_predicate libexec/"CHANGELOG.md", :file?
+    assert_predicate libexec/"LICENSE", :file?
     assert_match "recog", shell_output("#{{bin}}/recog --help")
   end
 end
@@ -183,8 +188,9 @@ if __name__ == "__main__":
     parser.add_argument("tag", type=release_tag)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--binaries", type=Path)
+    parser.add_argument("--revision", type=int, default=0)
     args = parser.parse_args()
     if args.action == "archive":
         archive(args.tag, args.directory.resolve(), args.binaries)
     else:
-        print(formula(args.tag, args.directory), end="")
+        print(formula(args.tag, args.directory, args.revision), end="")
