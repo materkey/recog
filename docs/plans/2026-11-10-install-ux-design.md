@@ -91,15 +91,10 @@ existing `materkey/homebrew-ccs`) repeats the name: `materkey/ccs/ccs`.
 
 ### Release distribution
 
-On 2026-11-18 the owner chose public distribution for the first release. Publish the source in
-`materkey/recog`. For each release tag, build one binary archive per supported
-operating system and architecture and attach the archives to that tag's GitHub Release
-in `materkey/recog`.
-
-The public tap `materkey/homebrew-apps` carries the formula. At release time, update
-it with the versioned archive URLs and checksums. Homebrew installs the matching
-archive on both first install and upgrade. Users can download it anonymously and
-install the Rust programs without a local Rust build.
+Only the shared Homebrew tap `materkey/homebrew-apps` is public for now.
+Keep the source and tagged binary releases in the private repository
+`materkey/recog`. A formula for a private release needs a verified download
+using the installing user's repository access before it goes into the public tap.
 
 On macOS, `recog setup` builds the small `Recog.app` launcher locally with `swiftc`
 from the Command Line Tools, as today. The launcher is rebuilt only when its source
@@ -114,7 +109,7 @@ the user through Developer mode and Load unpacked at `chrome://extensions`.
 | Step | What | Needs from the owner |
 |------|------|----------------------|
 | 1 | Everything the scripts do moves into `recog`; the installation is still a checkout. Designed below. | Nothing |
-| 2 | Public source and tagged binary releases in `materkey/recog`; installation from the release archives without a checkout. | Create the public tap `materkey/homebrew-apps` |
+| 2 | Private tagged releases in `materkey/recog`; install prebuilt archives through the public tap. | Nothing |
 | 3 | A guided first run: the permissions one at a time in `recog setup`, a readiness list in the web UI from the checks of `recog doctor`. | Nothing |
 
 Known for step 2 already: `recog_launcher` takes the program to run as its argument, so
@@ -276,5 +271,4 @@ port first, the deletion of the scripts last).
 
 None of them blocks step 1.
 
-- Creating `materkey/homebrew-apps` (step 2).
 - A paid Apple Developer ID, only if `Recog.app` is to be shipped ready (then a cask).

@@ -28,10 +28,8 @@ replacements pass the same checks.
    Zoom helper. Report readiness in the terminal and web interface. Verify on a
    fresh Mac through the first transcript and an upgrade. Check Linux user services
    on Z270XX.
-8. Publish the source and platform archives in `materkey/recog`, and the formula
-   with verified release checksums in `materkey/homebrew-apps`. Before visibility
-   changes, detach personal runners from the public repository. External changes
-   run on GitHub's machines; private builders take only reviewed revisions.
+8. Keep release archives in the private source repository. Publish the formula in
+   `materkey/homebrew-apps` once installation from a private release is verified.
 
 ## Acceptance evidence, 2026-11-18
 
@@ -47,6 +45,4 @@ replacements pass the same checks.
   archive and recording mode. All four Rust services and the web readiness route
   responded. Setup separately detected the missing microphone and system audio
   grants. Verifying a first transcript with both grants still requires a test call.
-- Public distribution is pending. Old commit identifiers still resolve in the
-  existing private hosting repository, including identifiers in retained design
-  documents. Resolve the publication approach before changing visibility.
+- The shared Homebrew tap is public. The source repository remains private.
