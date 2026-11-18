@@ -11,6 +11,8 @@ reasoning.
 
 ### Changed
 
+- `recog migrate-data` previews a move of legacy data out of the checkout.
+  After stopping writers, `--apply` moves the entries on the same filesystem.
 - New installations open audio capture only during supported conferences. Setup
   keeps the recording flag of an installed live unit. After `git pull`, rebuild
   with `./setup.sh` to use `recog live --conferences-only`.

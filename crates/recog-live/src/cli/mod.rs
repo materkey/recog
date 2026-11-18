@@ -337,6 +337,13 @@ fn run_replay(args: &ReplayArgs, config: &InstallConfig, environ: &Environ) -> i
 pub fn main(argv: &[String]) -> i32 {
     let repo_root = repo_root();
     let mut environ: Environ = std::env::vars().collect();
+    // Migration must also work when the two data roots currently conflict.
+    // Its destination comes from the calling environment, before loading .env.
+    if let Some((name, args)) = argv.split_first()
+        && name == "migrate-data"
+    {
+        return install::migrate(&repo_root, &environ, args);
+    }
     match load_command(argv, &repo_root, &mut environ) {
         Ok((command, config)) => run_command(command, &config, &environ, &repo_root),
         Err(code) => code,

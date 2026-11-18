@@ -49,6 +49,44 @@ pub fn print(outcome: Printed) -> i32 {
     outcome.code
 }
 
+pub(super) fn migrate(repo: &Path, environ: &Environ, args: &[String]) -> i32 {
+    const HELP: &str = "usage: recog migrate-data [--apply]\nStop services and manual writers before --apply.";
+    let apply = match args {
+        [] => false,
+        [arg] if arg == "--apply" => true,
+        [arg] if arg == "--help" || arg == "-h" => {
+            println!("{HELP}");
+            return 0;
+        }
+        _ => {
+            eprintln!("{HELP}");
+            return 2;
+        }
+    };
+    let moves = recog_core::data_dir::data_dir_target(environ)
+        .map_err(|e| e.to_string())
+        .and_then(|target| recog_install::migrate::migrate(repo, &target, apply).map_err(|e| e.to_string()));
+    match moves {
+        Ok(moves) => {
+            for (source, dest) in &moves {
+                println!("{} {} -> {}", if apply { "Moved" } else { "Would move" }, source.display(), dest.display());
+            }
+            if moves.is_empty() {
+                println!("No legacy data to move.");
+            } else if apply {
+                println!("Reinstall and restart the services to use the new paths.");
+            } else {
+                println!("Dry run only. Stop services and manual writers, then repeat with --apply.");
+            }
+            0
+        }
+        Err(message) => {
+            eprintln!("Migration refused: {message}");
+            1
+        }
+    }
+}
+
 pub(super) fn render_units(root: &Path, environ: &Environ, dest: &Path) -> Result<Vec<PathBuf>, String> {
     use recog_install::units::{Backend, Layout};
     let backend = match std::env::var("RECOG_SERVICE_OS").as_deref() {

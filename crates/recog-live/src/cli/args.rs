@@ -115,7 +115,7 @@ pub struct Exit {
 }
 
 pub const MAIN_USAGE: &str =
-    "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,service,copilot} ...";
+    "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,service,copilot,migrate-data} ...";
 
 const CHECK_USAGE: &str = "usage: recog check [-h]";
 
@@ -142,7 +142,7 @@ pub fn main_help() -> String {
 CLI-утилита для live-транскрибирования и управления митингами
 
 positional arguments:
-  {{live,meetings,replay,desktop,check,config,launcher,prefetch,service,copilot}}
+  {{live,meetings,replay,desktop,check,config,launcher,prefetch,service,copilot,migrate-data}}
                         Доступные команды
     live                Live транскрипция с микрофона и/или системного звука
     meetings            Просмотр сохранённых митингов
@@ -154,6 +154,7 @@ positional arguments:
     prefetch            Скачать модель ASR в кэш Hugging Face
     service render DIR  Записать файлы служб в каталог DIR
     copilot             Запустить Claude Code в текущем терминале
+    migrate-data        Перенести старые данные из каталога исходников
 
 options:
   -h, --help            show this help message and exit
@@ -585,7 +586,7 @@ fn unknown_command(other: &str) -> Exit {
         "recog",
         &format!(
             "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop', \
-             'check', 'config', 'launcher', 'prefetch', 'service', 'copilot')",
+             'check', 'config', 'launcher', 'prefetch', 'service', 'copilot', 'migrate-data')",
             py_repr(other)
         ),
     )
