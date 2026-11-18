@@ -78,9 +78,10 @@ def archive(tag, output, binaries):
                 shutil.copy2(ROOT / name, tree / name)
         if target == "macos-arm64":
             mac = tree / "crates/recog-live/macos"
+            swift = ["swiftc", "-target", "arm64-apple-macosx13.0"]
             subprocess.run(
                 [
-                    "swiftc",
+                    *swift,
                     mac / "sck_audio_capture.swift",
                     "-o",
                     tree / "sck_audio_capture",
@@ -95,7 +96,7 @@ def archive(tag, output, binaries):
             )
             subprocess.run(
                 [
-                    "swiftc",
+                    *swift,
                     mac / "recog_permission_probe.swift",
                     "-o",
                     tree / "bin/recog-permission-probe",
@@ -162,7 +163,7 @@ class Recog < Formula
   sha256 "{checksum}"
   license "MIT"
 {revision_line}  depends_on arch: :arm64
-  depends_on :macos
+  depends_on macos: :ventura
   depends_on "ffmpeg"
 
   def install

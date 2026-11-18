@@ -11,6 +11,9 @@ reasoning.
 
 ### Changed
 
+- The prebuilt macOS audio and permission helpers target macOS 13 on Apple
+  Silicon, independently of the release builder’s macOS version.
+
 - A conference now records the default microphone alongside system audio on
   Linux. Previously an install using the default input opened only the output
   monitor. After upgrading, both tracks start when the conference joins.
