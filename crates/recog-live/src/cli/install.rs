@@ -227,6 +227,14 @@ pub fn prefetch() -> Printed {
     }
 }
 
+pub(super) fn copilot(repo_root: &Path) -> i32 {
+    use std::os::unix::process::CommandExt as _;
+    let program = recog_core::install::program(repo_root, "recog-copilot-supervisor");
+    let error = std::process::Command::new(&program).args(["foreground", "--repo-root"]).arg(repo_root).exec();
+    eprintln!("recog copilot: cannot run {}: {error}", program.display());
+    1
+}
+
 /// `recog desktop …`: becomes `recog-desktop` of the same installation with the
 /// checkout and the arguments; returns only when it cannot run.
 #[must_use]

@@ -384,6 +384,7 @@ fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo
                 1
             }
         },
+        Command::Copilot => install::copilot(repo_root),
         Command::Check => install::print(install::check(repo_root, config, environ)),
         Command::Config(query) => install::print(install::config(query, repo_root, config, environ)),
         Command::Launcher => install::print(install::launcher(repo_root, config)),

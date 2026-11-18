@@ -11,6 +11,9 @@ reasoning.
 
 ### Changed
 
+- Run `bin/recog copilot` after setup to launch Claude Code in the terminal with
+  the same agent, model and channel as a meeting session. Answer startup prompts
+  directly in the terminal.
 - Run `recog service render DIR` after rebuilding to preview the four service
   definitions in a directory without contacting the service manager.
 - Setup and service activation now work without tmux or Claude Code. After

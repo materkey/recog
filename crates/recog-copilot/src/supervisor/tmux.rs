@@ -129,6 +129,28 @@ pub fn which(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
+/// Arguments shared by foreground Claude and the meeting session in tmux.
+/// The foreground caller passes them directly to the executable.
+pub fn claude_arguments(settings: &dyn CopilotSettings, url: &str) -> Result<Vec<String>, Error> {
+    let mcp_config = py::json_dumps(&json!({"mcpServers": {"copilot": {"type": "http", "url": url}}}));
+    let task = settings.resolve().map_err(Error)?;
+    if !task.enabled {
+        return Err(Error("Copilot выключен в настройках.".to_owned()));
+    }
+    let mut args = vec!["claude".to_owned(), "--agent".into(), "copilot-session".into(), "--model".into(), task.model];
+    if !task.claude_effort.is_empty() {
+        args.extend(["--effort".to_owned(), task.claude_effort]);
+    }
+    args.extend([
+        "--strict-mcp-config".to_owned(),
+        "--mcp-config".into(),
+        mcp_config,
+        "--dangerously-load-development-channels".into(),
+        "server:copilot".into(),
+    ]);
+    Ok(args)
+}
+
 /// The tmux driver; every verb targets the current session's name.
 pub struct TmuxRunner<C: CommandRunner> {
     pub repo_root: PathBuf,
@@ -266,24 +288,7 @@ impl<C: CommandRunner> TmuxRunner<C> {
     /// `--strict-mcp-config --mcp-config` limits the session to the built-ins and the
     /// copilot daemon; the dev-channels flag lets the daemon's pushes reach the TUI.
     pub fn build_claude_command(&self) -> Result<String, Error> {
-        let mcp_config = py::json_dumps(&json!({"mcpServers": {"copilot": {"type": "http", "url": self.mcp_url}}}));
-        let task = self.settings.resolve().map_err(Error)?;
-        if !task.enabled {
-            return Err(Error("Copilot выключен в настройках.".to_owned()));
-        }
-        let mut args =
-            vec!["claude".to_owned(), "--agent".into(), "copilot-session".into(), "--model".into(), task.model];
-        if !task.claude_effort.is_empty() {
-            args.extend(["--effort".to_owned(), task.claude_effort]);
-        }
-        args.extend([
-            "--strict-mcp-config".to_owned(),
-            "--mcp-config".into(),
-            mcp_config,
-            "--dangerously-load-development-channels".into(),
-            "server:copilot".into(),
-        ]);
-        Ok(py::shlex_join(&args))
+        Ok(py::shlex_join(&claude_arguments(self.settings.as_ref(), &self.mcp_url)?))
     }
 
     fn sibling_of(&self, name: &str) -> String {

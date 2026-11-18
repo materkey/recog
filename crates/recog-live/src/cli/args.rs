@@ -91,6 +91,7 @@ pub enum Command {
     /// The KTalk desktop subcommands with their arguments, run by `recog-desktop`.
     Desktop(Vec<String>),
     ServiceRender(String),
+    Copilot,
     /// Whether the settings can serve: what `scripts/deps.sh` asked Python.
     Check,
     /// One value for the shell scripts.
@@ -112,7 +113,7 @@ pub struct Exit {
 }
 
 pub const MAIN_USAGE: &str =
-    "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,service} ...";
+    "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,service,copilot} ...";
 
 const CHECK_USAGE: &str = "usage: recog check [-h]";
 
@@ -139,7 +140,7 @@ pub fn main_help() -> String {
 CLI-утилита для live-транскрибирования и управления митингами
 
 positional arguments:
-  {{live,meetings,replay,desktop,check,config,launcher,prefetch,service}}
+  {{live,meetings,replay,desktop,check,config,launcher,prefetch,service,copilot}}
                         Доступные команды
     live                Live транскрипция с микрофона и/или системного звука
     meetings            Просмотр сохранённых митингов
@@ -150,6 +151,7 @@ positional arguments:
     launcher            Собрать Recog.app, если её исходник изменился (macOS)
     prefetch            Скачать модель ASR в кэш Hugging Face
     service render DIR  Записать файлы служб в каталог DIR
+    copilot             Запустить Claude Code в текущем терминале
 
 options:
   -h, --help            show this help message and exit
@@ -551,6 +553,9 @@ pub fn parse(argv: &[String], mic_default: &str) -> Result<Command, Exit> {
             }
             _ => Err(error("usage: recog service render DIR", "recog service", "expected render DIR")),
         },
+        "copilot" => {
+            parse_bare(rest, "usage: recog copilot [-h]", "Запустить Copilot в текущем терминале", Command::Copilot)
+        }
         "config" => parse_config(rest),
         "check" | "launcher" | "prefetch" => parse_helper(first, rest),
         other => Err(unknown_command(other)),
@@ -575,7 +580,7 @@ fn unknown_command(other: &str) -> Exit {
         "recog",
         &format!(
             "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop', \
-             'check', 'config', 'launcher', 'prefetch', 'service')",
+             'check', 'config', 'launcher', 'prefetch', 'service', 'copilot')",
             py_repr(other)
         ),
     )

@@ -4,6 +4,7 @@
 //! else the working directory (the service units set it).
 #![forbid(unsafe_code)]
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
@@ -13,7 +14,8 @@ use recog_copilot::cli;
 use recog_copilot::config::{self, DEFAULT_BRIDGE_URL, Env};
 use recog_copilot::supervisor::{ProcessRunner, Supervisor, TmuxRunner, Tunables, tmux};
 
-const USAGE: &str = "usage: recog-copilot-supervisor [-h] [--bridge-url BRIDGE_URL] [--repo-root REPO_ROOT]
+const USAGE: &str =
+    "usage: recog-copilot-supervisor [foreground] [-h] [--bridge-url BRIDGE_URL] [--repo-root REPO_ROOT]
 
 Auto-spawn the Copilot Claude session per KTalk meeting
 
@@ -25,12 +27,15 @@ options:
                         the recog checkout (default: the working directory)";
 
 struct Args {
+    foreground: bool,
     bridge_url: String,
     repo_root: Option<PathBuf>,
 }
 
 fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
-    let mut args = Args { bridge_url: DEFAULT_BRIDGE_URL.to_owned(), repo_root: None };
+    let mut argv = argv.peekable();
+    let foreground = argv.next_if(|arg| arg == "foreground").is_some();
+    let mut args = Args { foreground, bridge_url: DEFAULT_BRIDGE_URL.to_owned(), repo_root: None };
     let complete = cli::parse_options(argv, &["--bridge-url", "--repo-root"], |flag, value| {
         if flag == "--bridge-url" {
             args.bridge_url = value;
@@ -66,6 +71,12 @@ fn main() -> ExitCode {
 fn run(args: Args) -> Result<(), String> {
     let repo_root = cli::repo_root(args.repo_root)?;
     let settings = config::load(&repo_root, Env::from_process())?;
+    if args.foreground {
+        let ai = AiSettingsFile::new(&settings.data_dir, settings.legacy);
+        let argv = tmux::claude_arguments(&ai, &settings.mcp_url).map_err(|error| error.to_string())?;
+        let error = std::process::Command::new(&argv[0]).args(&argv[1..]).current_dir(&repo_root).exec();
+        return Err(format!("cannot run Claude Code: {error}"));
+    }
     let supervisor = build(&args.bridge_url, &repo_root, &settings);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

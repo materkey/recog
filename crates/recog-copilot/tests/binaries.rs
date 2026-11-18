@@ -111,7 +111,7 @@ fn bad_supervisor_argument_when_given_then_one_usage_line_and_error_with_status_
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         text(&output.stderr),
-        "usage: recog-copilot-supervisor [-h] [--bridge-url BRIDGE_URL] [--repo-root REPO_ROOT]\n\
+        "usage: recog-copilot-supervisor [foreground] [-h] [--bridge-url BRIDGE_URL] [--repo-root REPO_ROOT]\n\
          recog-copilot-supervisor: error: unrecognized arguments: --mcp-port\n"
     );
 }
@@ -157,6 +157,28 @@ fn relative_data_dir_when_starting_then_named_error_and_status_1() {
             "{binary}"
         );
     }
+}
+
+#[test]
+fn foreground_copilot_when_started_then_claude_runs_in_the_checkout_and_owns_the_exit_code() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let claude = dir.path().join("claude");
+    std::fs::write(&claude, "#!/bin/sh\npwd -P\nprintf '%s\\n' \"$@\"\nexit 17\n").unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = command(SUPERVISOR, dir.path())
+        .env("PATH", dir.path())
+        .args(["foreground", "--repo-root"])
+        .arg(&repo)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(17), "{}", text(&output.stderr));
+    let stdout = text(&output.stdout);
+    assert_eq!(stdout.lines().next(), repo.canonicalize().unwrap().to_str());
+    assert!(stdout.contains("--agent\ncopilot-session\n"));
+    assert!(stdout.contains("--strict-mcp-config\n--mcp-config\n"));
+    assert!(stdout.ends_with("server:copilot\n"));
 }
 
 fn free_port() -> u16 {
