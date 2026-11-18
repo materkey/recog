@@ -1,0 +1,54 @@
+name: Release archives
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            asset: macos-arm64
+          - runner: ubuntu-24.04
+            asset: linux-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build public archive
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 scripts/release.py archive "$TAG" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recog-${{ matrix.asset }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  draft:
+    needs: archive
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: recog-*
+          path: dist
+          merge-multiple: true
+      - name: Prepare release with platform archives and formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 scripts/release.py formula "$TAG" dist > dist/recog.rb
+          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+          gh release create "$TAG" --verify-tag --draft --generate-notes dist/*

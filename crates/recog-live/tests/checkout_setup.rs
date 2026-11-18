@@ -27,6 +27,7 @@ fn checkout_when_setup_runs_then_build_is_handed_off_and_no_services_flag_preser
         &stubs.join("cargo"),
         "#!/bin/sh\ncase $1 in build) exit 0;; metadata) printf '{\"target_directory\":\"%s\"}\\n' \"$TEST_TARGET\";; *) exit 12;; esac\n",
     );
+    fs::write(root.join("crates/recog-live/macos/recog_permission_probe.swift"), "print(1)").unwrap();
     let run = |args: &[&str]| {
         Command::new(release.join("recog"))
             .env_clear()

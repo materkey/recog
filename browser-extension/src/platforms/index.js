@@ -17,7 +17,10 @@ import { ElementCallAdapter } from './matrix.js';
 import { GoogleMeetAdapter } from './gmeet.js';
 import { ZoomAdapter } from './zoom.js';
 
-const conferenceHosts = typeof __RECOG_CONFERENCE_HOSTS__ === 'undefined'
+const installedPlatform = typeof document === 'undefined' ? null : document.currentScript?.dataset.recogPlatform;
+const conferenceHosts = installedPlatform === 'matrix' || installedPlatform === 'jitsi'
+  ? { jitsi: [], matrix: [], [installedPlatform]: [window.location.origin] }
+  : typeof __RECOG_CONFERENCE_HOSTS__ === 'undefined'
   ? { jitsi: [], matrix: [] }
   : __RECOG_CONFERENCE_HOSTS__;
 

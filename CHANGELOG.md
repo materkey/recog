@@ -1,6 +1,6 @@
 # Changelog
 
-Recog has no releases: every installation runs `main`. This file lists, newest
+This file lists, newest
 first, what an update asks of an existing installation after `git pull`
 (**Action required**) and changes of behaviour you would notice (**Changed**).
 Refactors and fixes without a visible effect stay in `git log`. An entry is
@@ -11,6 +11,8 @@ reasoning.
 
 ### Changed
 
+- Release archives include the programs and unpacked Chrome extension. Their
+  `bin/recog setup` installs into a stable user directory.
 - Open Settings → Готовность установки in the web interface to check capture
   permissions, required programs and services.
 - On macOS, `recog setup --permissions` walks through microphone and system

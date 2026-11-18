@@ -215,6 +215,11 @@ pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[
     }
     guard(root, config, env, has("--force"))?;
     install_programs(root)?;
+    finish(root, config, env, args, false)
+}
+
+fn finish(root: &Path, config: &InstallConfig, env: &Environ, args: &[String], packaged: bool) -> Result<()> {
+    let has = |flag: &str| args.iter().any(|a| a == flag);
     let manager = manager()?;
     let installed = NAMES.iter().any(|n| manager.unit(n).is_file());
     if !installed && !has("--no-env") {
@@ -223,10 +228,18 @@ pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[
     let data = recog_core::data_dir::get_data_dir_process(root)?;
     fs::create_dir_all(&data)?;
     let bin = root.join("bin/recog");
-    link_command(root, &recog_core::paths::expanduser("~", env))?;
+    if !packaged || !root.join("recog-homebrew").is_file() {
+        link_command(root, &recog_core::paths::expanduser("~", env))?;
+    }
     if !has("--no-extension") {
         let ext = root.join("browser-extension");
-        if ext.is_dir() {
+        if packaged {
+            recog_install::distribution::configure_extension(root, &config.jitsi, &config.matrix)?;
+            println!(
+                "Chrome: chrome://extensions → Developer mode → Load unpacked → {} (Reload after changes)",
+                ext.join("dist").display()
+            );
+        } else if ext.is_dir() {
             run(Command::new("npm")
                 .arg(if ext.join("package-lock.json").is_file() { "ci" } else { "install" })
                 .current_dir(&ext))?;
@@ -239,9 +252,12 @@ pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[
     }
     if cfg!(target_os = "macos") {
         use crate::capture::sck::{self, OsToolchain};
-        sck::find_or_build_sck_utility(root, &OsToolchain, &crate::log::Logger::stderr()).map_err(|e| e.to_string())?;
+        if !packaged {
+            sck::find_or_build_sck_utility(root, &OsToolchain, &crate::log::Logger::stderr())
+                .map_err(|e| e.to_string())?;
+        }
         run(Command::new(&bin).arg("launcher"))?;
-        if !has("--no-services") {
+        if !packaged {
             let probe = tempfile::tempdir_in(root.join("bin"))?;
             let target = probe.path().join("recog-permission-probe");
             run(Command::new("swiftc")
@@ -249,6 +265,8 @@ pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[
                 .arg("-o")
                 .arg(&target))?;
             fs::rename(target, root.join("bin/recog-permission-probe"))?;
+        }
+        if !has("--no-services") {
             guide_permissions(root, config.live.zoom_app)?;
         }
     }
@@ -280,6 +298,57 @@ pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[
     Ok(())
 }
 
+pub(super) fn archive_setup(
+    package: &Path,
+    root: &Path,
+    config: &InstallConfig,
+    env: &Environ,
+    args: &[String],
+) -> Result<()> {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{HELP}");
+        return Ok(());
+    }
+    if args == ["--permissions"] {
+        return guide_permissions(root, config.live.zoom_app);
+    }
+    if !args.iter().all(|a| {
+        matches!(
+            a.as_str(),
+            "--force" | "--no-services" | "--no-env" | "--no-extension" | "--no-prefetch" | "--dry-run"
+        )
+    }) {
+        return Err(HELP.into());
+    }
+    if args.iter().any(|a| a == "--dry-run") {
+        println!(
+            "Would install release {} in {}",
+            fs::read_to_string(package.join("recog-release"))?.trim(),
+            root.display()
+        );
+        return Ok(());
+    }
+    let existing = manager()?.unit("live");
+    if existing.is_file() {
+        let unit = fs::read_to_string(existing)?;
+        let path = root.display().to_string();
+        let xml = path.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        let owns = unit
+            .lines()
+            .any(|line| line == format!("WorkingDirectory={path}") || line.trim() == format!("<string>{xml}</string>"));
+        if !owns {
+            return Err("The installed live service belongs to another checkout. Update it there with recog update. Preserve its settings and data before switching installations.".into());
+        }
+    }
+    let checked = install::check(root, config, env);
+    if checked.code != 0 {
+        return Err(format!("{}{}", checked.stdout, checked.stderr).into());
+    }
+    guard(root, config, env, args.iter().any(|a| a == "--force"))?;
+    recog_install::distribution::prepare(package, root, !args.iter().any(|a| a == "--no-extension"))?;
+    finish(root, config, env, args, true)
+}
+
 pub(super) fn update(root: &Path, config: &InstallConfig, env: &Environ, args: &[String]) -> Result<()> {
     if args == ["--help"] || args == ["-h"] {
         println!("usage: recog update [--force]");
@@ -289,6 +358,19 @@ pub(super) fn update(root: &Path, config: &InstallConfig, env: &Environ, args: &
         return Err("usage: recog update [--force]".into());
     }
     guard(root, config, env, args == ["--force"])?;
+    if recog_install::distribution::is_release(root) {
+        if root.join("recog-homebrew").is_file() {
+            run(Command::new("brew").arg("update"))?;
+            run(Command::new("brew").args(["upgrade", "materkey/apps/recog"]))?;
+            let prefix = Command::new("brew").args(["--prefix", "recog"]).output()?;
+            if !prefix.status.success() {
+                return Err("Cannot locate the Homebrew installation".into());
+            }
+            let program = Path::new(std::str::from_utf8(&prefix.stdout)?.trim()).join("libexec/bin/recog");
+            return run(Command::new(program).arg("setup").args(args));
+        }
+        return super::release_update::update(root, args);
+    }
     let old = Command::new("git").args(["rev-parse", "HEAD"]).current_dir(root).output()?;
     if !old.status.success() {
         return Err("Cannot resolve checkout revision".into());

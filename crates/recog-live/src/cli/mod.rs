@@ -3,6 +3,7 @@
 pub mod args;
 pub mod install;
 pub mod meetings;
+mod release_update;
 mod services;
 mod setup;
 
@@ -337,7 +338,12 @@ fn run_replay(args: &ReplayArgs, config: &InstallConfig, environ: &Environ) -> i
 /// `main()` of `recog/cli.py`: the exit code.
 #[must_use]
 pub fn main(argv: &[String]) -> i32 {
-    let repo_root = repo_root();
+    let mut repo_root = repo_root();
+    let package_root = repo_root.clone();
+    if recog_install::distribution::is_release(&package_root) {
+        let home = std::env::home_dir().unwrap_or_default();
+        repo_root = recog_install::distribution::runtime(&home);
+    }
     let mut environ: Environ = std::env::vars().collect();
     // Migration must also work when the two data roots currently conflict.
     // Its destination comes from the calling environment, before loading .env.
@@ -352,6 +358,10 @@ pub fn main(argv: &[String]) -> i32 {
         return services::command(&repo_root, &InstallConfig::default(), &environ, &argv[1..]);
     }
     match load_command(argv, &repo_root, &mut environ) {
+        Ok((Command::Setup(args, false), config)) if recog_install::distribution::is_release(&package_root) => {
+            command_status(setup::archive_setup(&package_root, &repo_root, &config, &environ, &args))
+        }
+
         Ok((command, config)) => run_command(command, &config, &environ, &repo_root),
         Err(code) => code,
     }

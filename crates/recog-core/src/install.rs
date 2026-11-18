@@ -24,7 +24,7 @@ pub fn installed_repo_of(exe: &Path) -> Option<PathBuf> {
         return None;
     }
     let repo = bin.parent()?;
-    is_checkout(repo).then(|| repo.to_path_buf())
+    (is_checkout(repo) || repo.join("recog-release").is_file()).then(|| repo.to_path_buf())
 }
 
 /// The checkout of the running program when it is installed in one's `bin/`.

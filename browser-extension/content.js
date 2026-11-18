@@ -16,6 +16,13 @@
 
     const script = document.createElement('script');
     script.src = chrome.runtime.getURL('injected.js');
+    // Unpacked release builds carry per-installation hosts in the manifest.
+    // Give this page's adapter the matching platform, without exposing the host list.
+    const origin = window.location.origin;
+    for (const entry of chrome.runtime.getManifest().content_scripts) {
+      if (entry.matches.includes(origin + '/widgets/element-call/*')) script.dataset.recogPlatform = 'matrix';
+      else if (entry.matches.includes(origin + '/*')) script.dataset.recogPlatform = 'jitsi';
+    }
     script.onload = function() {
       this.remove();
     };

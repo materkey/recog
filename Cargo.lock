@@ -1929,6 +1929,7 @@ dependencies = [
  "chrono",
  "recog-core",
  "rustix",
+ "serde_json",
  "tempfile",
 ]
 
