@@ -71,6 +71,7 @@ pub struct AppState {
     pub privacy: PrivacyStore,
     pub copilot: Mutex<CopilotRelay>,
     pub debug_ai: Mutex<DebugAiContext>,
+    pub readiness: tokio::sync::Mutex<Option<(std::time::Instant, recog_core::pyjson::Value)>>,
 }
 
 impl AppState {
@@ -114,6 +115,7 @@ impl AppState {
             ai_settings,
             copilot: Mutex::new(CopilotRelay::default()),
             debug_ai: Mutex::new(DebugAiContext::default()),
+            readiness: Default::default(),
         })
     }
 

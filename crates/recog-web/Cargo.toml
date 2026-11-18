@@ -13,6 +13,7 @@ name = "recog-web"
 path = "src/main.rs"
 
 [dependencies]
+recog-install = { path = "../recog-install" }
 axum = { version = "0.8.9", features = ["ws"] }
 futures-util = { version = "0.3.31", default-features = false, features = ["sink", "std"] }
 form_urlencoded = "1.2"

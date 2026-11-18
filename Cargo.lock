@@ -1985,6 +1985,7 @@ dependencies = [
  "recog-ai",
  "recog-core",
  "recog-desktop",
+ "recog-install",
  "tempfile",
  "tokio",
  "tokio-tungstenite",

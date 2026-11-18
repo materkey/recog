@@ -69,6 +69,7 @@ pub async fn handle(state: &Arc<AppState>, route: Route, req: Req) -> Reply {
         | Route::ClearChat
         | Route::AskChat
         | Route::SegmentAudio => question_route(state, route, &req).await,
+        Route::Readiness => debug::readiness(state).await,
         Route::DesktopStatus => desktop_status(state).await,
         Route::Root => Ok(root_response(&state.config.static_dir, &req.headers)),
     }

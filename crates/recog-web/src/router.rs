@@ -50,6 +50,7 @@ use percent_encoding::percent_decode_str;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {
     DesktopStatus,
+    Readiness,
     GetAiSettings,
     SaveAiModels,
     SaveAiTask,
@@ -117,6 +118,7 @@ const HTTP_ROUTES: &[(&str, &str, Route)] = &[
     ("POST", "/api/meetings/{meeting_id}/generate-title", Route::GenerateTitle),
     ("GET", "/api/live/status", Route::LiveStatus),
     ("GET", "/api/pcm-diagnostics", Route::PcmDiagnostics),
+    ("GET", "/api/readiness", Route::Readiness),
     ("GET", "/api/debug", Route::Debug),
     ("GET", "/api/debug/ai-context", Route::GetDebugAiContext),
     ("POST", "/api/debug/ai-context", Route::SetDebugAiContext),

@@ -86,26 +86,8 @@ fn run(root: &Path, config: &InstallConfig, env: &Environ, args: &[String]) -> R
         "status" => show_status(&manager, &names).map(|_| ()),
         "doctor" | "start" | "restart" => {
             let mut rows = checks(root, &std::env::var_os("PATH").unwrap_or_default(), backend);
-            if action == "doctor" && backend == recog_install::units::Backend::Launchd {
-                match recog_install::permissions::probe(root, None) {
-                    Ok(grants) => {
-                        for (name, state) in [("Microphone", grants.microphone), ("System audio", grants.system_audio)]
-                        {
-                            rows.push(Check {
-                                name: name.into(),
-                                ready: state == "granted",
-                                required: true,
-                                hint: format!("{state}; run recog setup --permissions"),
-                            });
-                        }
-                    }
-                    Err(e) => rows.push(Check {
-                        name: "macOS capture permissions".into(),
-                        ready: false,
-                        required: true,
-                        hint: e.to_string(),
-                    }),
-                }
+            if action == "doctor" {
+                rows.extend(recog_install::readiness::permission_checks(root, backend));
             }
             let checked = install::check(root, config, env);
             rows.push(Check {

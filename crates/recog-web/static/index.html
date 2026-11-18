@@ -22,6 +22,10 @@
                 <div class="profile-settings-menu">
                     <button type="button" id="profile-open">Мой профиль</button>
                     <button type="button" id="ai-settings-open">Промпты и модели</button>
+                    <details id="installation-readiness">
+                        <summary>Готовность установки</summary>
+                        <ul id="installation-checks" aria-live="polite"></ul>
+                    </details>
                     <p id="desktop-status" class="desktop-status" role="status">KTalk Desktop: проверка…</p>
                 </div>
             </details>
@@ -278,6 +282,7 @@
     <script src="/static/datepicker.js"></script>
     <script src="/static/user-profile.js"></script>
     <script src="/static/ai-settings.js"></script>
+    <script src="/static/installation-readiness.js"></script>
     <script src="/static/desktop-status.js"></script>
     <script src="/static/meeting-chat.js"></script>
     <script src="/static/app.js"></script>

@@ -410,6 +410,66 @@ pub(super) fn set_debug_ai_context(state: &AppState, req: &Req) -> Reply {
     ])))
 }
 
+/// Coalesce checks across open tabs. Permission checks never ask for a grant.
+pub(super) async fn readiness(state: &AppState) -> Reply {
+    let mut cached = state.readiness.lock().await;
+    if let Some((time, value)) = cached.as_ref()
+        && time.elapsed() < std::time::Duration::from_secs(10)
+    {
+        return Ok(responses::json(value));
+    }
+    let root = state.config.repo_root.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        use recog_install::{
+            readiness,
+            services::{Manager, NAMES, State},
+            units::Backend,
+        };
+        let backend = if cfg!(target_os = "macos") { Backend::Launchd } else { Backend::Systemd };
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let mut rows = readiness::checks(&root, &path, backend);
+        rows.extend(readiness::permission_checks(&root, backend));
+        let check = std::process::Command::new(root.join("bin/recog")).arg("check").output();
+        rows.push(readiness::Check {
+            name: "Настройки".into(),
+            required: true,
+            ready: check.is_ok_and(|o| o.status.success()),
+            hint: "recog doctor".into(),
+        });
+        if let Some(home) = std::env::home_dir() {
+            let manager = Manager { backend, dir: backend.unit_dir(&home) };
+            for name in NAMES {
+                rows.push(readiness::Check {
+                    name: name.into(),
+                    required: matches!(name, "live" | "frontend"),
+                    ready: matches!(manager.state(name), Ok(State::Running(_))),
+                    hint: "recog service status".into(),
+                });
+            }
+        }
+        Value::Array(
+            rows.into_iter()
+                .map(|row| {
+                    json::object([
+                        (
+                            "name",
+                            Value::from(row.name.strip_prefix(&format!("{}/", root.display())).unwrap_or(&row.name)),
+                        ),
+                        ("ready", Value::Bool(row.ready)),
+                        ("required", Value::Bool(row.required)),
+                        ("hint", Value::from(if row.ready { String::new() } else { row.hint })),
+                    ])
+                })
+                .collect(),
+        )
+    })
+    .await
+    .map_err(|_| responses::internal_error())?;
+    let response = responses::json(&rows);
+    *cached = Some((std::time::Instant::now(), rows));
+    Ok(response)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

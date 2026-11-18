@@ -11,6 +11,8 @@ reasoning.
 
 ### Changed
 
+- Open Settings → Готовность установки in the web interface to check capture
+  permissions, required programs and services.
 - On macOS, `recog setup --permissions` walks through microphone and system
   audio access under the installed Recog launcher. `recog doctor` reports each
   grant separately. Run setup once to install the permission probe.

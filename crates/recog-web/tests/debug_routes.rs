@@ -451,3 +451,14 @@ async fn context_set_when_cleared_then_inactive_again() {
     let (_, read) = app.json("GET", "/api/debug/ai-context", None).await;
     assert_eq!(get(&read, "active"), &Value::Bool(false));
 }
+
+#[tokio::test]
+async fn unprepared_installation_when_readiness_is_opened_then_missing_programs_are_named() {
+    let app = app();
+    let (status, body) = app.json("GET", "/api/readiness", None).await;
+    assert_eq!(status, 200);
+    let Value::Array(rows) = body else {
+        panic!("expected checks");
+    };
+    assert!(rows.iter().any(|r| text(r, "name") == "bin/recog" && get(r, "ready") == &Value::Bool(false)));
+}

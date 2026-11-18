@@ -56,3 +56,23 @@ pub fn checks(root: &Path, path: &OsStr, backend: Backend) -> Vec<Check> {
     }));
     rows
 }
+
+pub fn permission_checks(root: &Path, backend: Backend) -> Vec<Check> {
+    if backend != Backend::Launchd {
+        return Vec::new();
+    }
+    match crate::permissions::probe(root, None) {
+        Ok(grants) => [("Микрофон", grants.microphone), ("Системный звук", grants.system_audio)]
+            .into_iter()
+            .map(|(name, state)| Check {
+                name: name.into(),
+                ready: state == "granted",
+                required: true,
+                hint: format!("{state}; recog setup --permissions"),
+            })
+            .collect(),
+        Err(e) => {
+            vec![Check { name: "Разрешения macOS".into(), ready: false, required: true, hint: e.to_string() }]
+        }
+    }
+}
