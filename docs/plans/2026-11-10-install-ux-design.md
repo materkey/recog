@@ -89,7 +89,7 @@ existing `materkey/homebrew-ccs`) repeats the name: `materkey/ccs/ccs`.
 
 ### Release distribution
 
-On 2026-11-18 the owner chose public distribution for step 2. Publish the source in
+On 2026-11-18 the owner chose public distribution for the first release. Publish the source in
 `materkey/recog`. For each release tag, build one binary archive per supported
 operating system and architecture and attach the archives to that tag's GitHub Release
 in `materkey/recog`.
@@ -105,6 +105,9 @@ changes, so ordinary binary updates preserve the macOS permission grants.
 
 ## Route
 
+Steps 1–4 are implementation milestones. The first public release ships once all
+four work together, including installation of the extension from the Chrome Web Store.
+
 | Step | What | Needs from the owner |
 |------|------|----------------------|
 | 1 | Everything the scripts do moves into `recog`; the installation is still a checkout. Designed below. | Nothing |
@@ -116,6 +119,26 @@ Known for step 2 already: `recog_launcher` takes the program to run as its argum
 `Recog.app` can sit at a stable path outside Homebrew's versioned directory and its
 bytes do not change with an update. The permissions then survive without a paid
 signature.
+
+### First public release acceptance on macOS
+
+On a clean Mac, install the release through Homebrew and run `recog setup`. Verify
+the following through the installed service launched by `Recog.app`:
+
+- Setup asks for Microphone and Screen Recording one at a time. Each step names
+  **Recog** as the app to authorize and explains what it captures. Screen Recording
+  is needed to hear the other side of a call through system audio.
+- Deny each permission in turn and rerun setup. It identifies the missing permission,
+  shows the matching System Settings pane and entry, and lets the user continue
+  after granting access. Check microphone input with a spoken phrase and system
+  audio with a playing clip. Setup, `recog doctor` and the web readiness list report
+  the two results separately.
+- Enable native Zoom integration and grant Accessibility to **Recog Zoom Helper**.
+  Verify that the helper picks up the grant. With native Zoom disabled, basic
+  transcription works without that grant.
+- Install the extension from the store and join a supported call. Verify that the
+  first transcript appears. Perform an ordinary update with unchanged helper
+  signatures and repeat the capture checks with the existing grants.
 
 ## Step 1: the scripts' work moves into `recog`
 
