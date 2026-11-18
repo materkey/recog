@@ -405,6 +405,7 @@ fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo
         },
         Command::Service(args) => services::command(repo_root, config, environ, &args),
         Command::Doctor => services::command(repo_root, config, environ, &["doctor".into()]),
+        Command::Backup(args) => install::backup(repo_root, environ, &args),
         Command::Copilot => install::copilot(repo_root),
         Command::Check => install::print(install::check(repo_root, config, environ)),
         Command::Config(query) => install::print(install::config(query, repo_root, config, environ)),

@@ -49,6 +49,47 @@ pub fn print(outcome: Printed) -> i32 {
     outcome.code
 }
 
+pub(super) fn backup(root: &Path, env: &Environ, args: &[String]) -> i32 {
+    const HELP: &str = "usage: recog backup [--dest DIR] [--remote HOST:DIR] [--with-logs]";
+    let home = recog_core::paths::expanduser("~", env);
+    let mut opts = recog_install::backup::Backup::new(&home);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--with-logs" => opts.with_logs = true,
+            "-h" | "--help" => {
+                println!("{HELP}");
+                return 0;
+            }
+            "--dest" | "--remote" => {
+                let Some(value) = it.next().filter(|s| !s.is_empty() && !s.starts_with("--")) else {
+                    eprintln!("{HELP}");
+                    return 2;
+                };
+                if arg == "--dest" {
+                    opts.destination = value.into();
+                } else {
+                    opts.remote = Some(value.clone());
+                }
+            }
+            _ => {
+                eprintln!("{HELP}");
+                return 2;
+            }
+        }
+    }
+    let config = install_config::config_path(root, env);
+    match super::data_dir(root, env)
+        .and_then(|data| recog_install::backup::snapshot(root, &data, &config, &opts).map_err(|e| e.to_string()))
+    {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Backup failed: {e}");
+            1
+        }
+    }
+}
+
 pub(super) fn migrate(repo: &Path, environ: &Environ, args: &[String]) -> i32 {
     const HELP: &str = "usage: recog migrate-data [--apply]\nStop services and manual writers before --apply.";
     let apply = match args {

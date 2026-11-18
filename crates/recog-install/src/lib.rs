@@ -1,5 +1,6 @@
 //! Installation and management of Recog user services.
 
+pub mod backup;
 pub mod migrate;
 pub mod readiness;
 pub mod services;

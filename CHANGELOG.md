@@ -14,6 +14,8 @@ reasoning.
 - After rebuilding, `recog service` can install, start, stop and restart the user
   services, display status and follow logs. `recog doctor` checks the installed
   programs, configuration and running transcription services.
+- `recog backup` creates a snapshot of meetings and private settings. The
+  `--with-logs`, `--dest` and `--remote` options are available after rebuilding.
 - `recog migrate-data` previews a move of legacy data out of the checkout.
   After stopping writers, `--apply` moves the entries on the same filesystem.
 - New installations open audio capture only during supported conferences. Setup
