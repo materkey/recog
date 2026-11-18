@@ -7,7 +7,7 @@ crate `crates/recog-asr-server`:
 - `recog-asr-gateway`: an OpenAI-compatible proxy, default `0.0.0.0:8770`. It
   routes GigaAM and Qwen aliases to configured backend URLs.
 
-These services are optional. `setup.sh` and `recog-service.sh` do not build,
+These services are optional. `cargo setup` and `recog service` do not build,
 install, start, or manage them. Installing the normal Recog application does
 not start an ASR server or reserve GPU memory. They need neither Python,
 PyTorch nor pyannote, and have no speaker diarization (see below).

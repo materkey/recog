@@ -118,7 +118,7 @@ To enable end-to-end locally:
 
 ```bash
 # 1. Flip the server-side flag and restart the bridge + live pipeline.
-RECOG_PCM_TRANSPORT=1 ./recog-service.sh restart
+RECOG_PCM_TRANSPORT=1 recog service restart
 
 # 2. Rebuild the extension if you changed src/.
 cd browser-extension

@@ -36,7 +36,7 @@ function configFiles(env, root) {
 
 // The installation config has one parser, the recog binary's; the build asks
 // bin/recog for the configured hosts instead of validating the file again. A
-// checkout setup.sh has not built (CI) has no bin/recog: with no configuration
+// checkout cargo setup has not built (CI) has no bin/recog: with no configuration
 // file either, the built-in hosts are all there is.
 export function loadConferenceHosts(env = process.env, root = projectRoot) {
   const recog = path.join(root, 'bin/recog');
@@ -48,7 +48,7 @@ export function loadConferenceHosts(env = process.env, root = projectRoot) {
   }
   const present = configFiles(env, root).filter(file => fs.existsSync(file));
   if (present.length) {
-    throw new Error(`${present[0]} needs ${recog} to be read: run ./setup.sh first`);
+    throw new Error(`${present[0]} needs ${recog} to be read: run cargo setup first`);
   }
   return { jitsi: [], matrix: [] };
 }

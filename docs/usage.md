@@ -16,7 +16,7 @@ Commands below run from the repository root.
 | Disk | ~0.3 GB for the model, ~3 GB for the Rust build | same |
 | GPU | Metal | Vulkan |
 
-`./setup.sh` prints a found/missing table for all of the above with the install
+`cargo setup` prints a found/missing table for all of the above with the install
 command for your package manager (apt / pacman / brew), so you do not have to
 pre-install anything by hand — run it first and let it tell you what is
 missing. There is no Python to install.
@@ -25,20 +25,20 @@ missing. There is no Python to install.
 
 ```bash
 git clone https://github.com/materkey/recog.git && cd recog
-./setup.sh
+cargo setup
 # → chrome://extensions → Developer mode → Load unpacked →
 #   browser-extension/dist
 # → open http://127.0.0.1:9080
 ```
 
-`./setup.sh` builds the programs with cargo into `bin/`, copies `.env.example` →
+`cargo setup` builds the programs with cargo into `bin/`, copies `.env.example` →
 `.env`, builds the Chrome extension, downloads the ASR model, renders the service
 units and starts them. It is idempotent: re-running it is how you
 update after a `git pull`. An existing `.env` is preserved.
 
 If something required is missing, setup renders the units but **does not
 activate anything** and exits non-zero (previously running services are left
-running). Install what it lists and run `./setup.sh` again.
+running). Install what it lists and run `cargo setup` again.
 
 Flags: `--dry-run` (show the plan without changes; does not verify readiness),
 `--no-services` (prepare only, do not touch launchd/systemd),
@@ -56,7 +56,7 @@ setup itself, later than these are needed):
 
 ### Installing without Python
 
-Every service is a program of `crates/`, and recog has no Python. `./setup.sh`:
+Every service is a program of `crates/`, and recog has no Python. `cargo setup`:
 
 1. builds `recog`, `recog-web`, `recog-copilot-supervisor`, `recog-copilot-channel`,
    `recog-desktop` and, on macOS, `recog-mic` with `cargo build --release` (the first
@@ -77,21 +77,12 @@ The units then run the binaries: the live one as
 `Recog.app/Contents/MacOS/recog_launcher bin/recog live --system-audio auto --ktalk`
 on macOS, the web server as `bin/recog-web --host 127.0.0.1 --port 9080 --repo
 <checkout>`, the Copilot ones as `bin/recog-copilot-{supervisor,channel} --repo-root
-<checkout>`. `recog-service.sh` and its readiness check ask `bin/recog` what they
-asked Python (`recog check`, `recog config data-dir`, `recog config copilot-launch`),
-and `recog desktop …` runs `bin/recog-desktop`.
-
-`[live] runtime`, `[web] runtime`, `[copilot] runtime` and `[live] mic_worker` are
-still accepted from older configurations and do nothing, and ASR runs on wavo, or on
-the gateway with wavo as the fallback for `[asr] backend = "remote"`: `local` is
-ignored with a line in the live log. `[install] runtime` is `"rust"`; `setup.sh`,
-`recog-service.sh` and `scripts/deps.sh` read it themselves, from the calling shell
-or a plain `runtime = "..."` line under `[install]`, never from `.env`. `"python"`,
-the removed installation, stops setup, and the readiness check refuses to start the
-services when the parser reads something else.
+<checkout>`. `recog doctor` reports readiness and `recog service` manages units.
+The configuration parser accepts legacy per-service runtime keys. The installation
+runtime must be `rust`.
 
 An installation that ran on Python: install Rust, delete `[install] runtime =
-"python"` if you set it, run `./setup.sh` and check `./recog-service.sh status`;
+"python"` if you set it, run `cargo setup` and check `recog service status`;
 `venv-gigaam` can then be deleted.
 
 ## Usage
@@ -205,8 +196,8 @@ Recording** permission (System Settings → Privacy & Security → Screen
 Recording) — without it the helper produces silence.
 
 The service asks as **Recog**: its launchd job starts `Recog.app`, a small
-launcher that `./setup.sh` builds and signs, and the launcher runs the Python
-interpreter as its child. macOS attributes Screen Recording and the
+launcher that `cargo setup` builds and signs, and the launcher runs the Rust live program
+as its child. macOS attributes Screen Recording and the
 microphone to the program the job starts, so without the launcher the dialogs
 would name `python3.12` and a Homebrew upgrade of the interpreter would void
 the grant of the running service. `Recog.app` is rebuilt only when
@@ -237,34 +228,34 @@ With the override set, the automatic follow-the-default-sink behaviour is off.
 
 ## Services
 
-`./recog-service.sh` manages four permanent services — live transcription, the
+`recog service` manages four permanent services — live transcription, the
 web UI, the copilot MCP channel and the copilot supervisor — through launchd on
 macOS and `systemd --user` on Linux. The units are rendered from the templates
 in `deploy/{macos,linux}/` with your repo path, the programs in `bin/` and log
 directory substituted in.
 
 ```bash
-./recog-service.sh install    # render + register the units, WITHOUT starting them
-./recog-service.sh start      # start (after a dependency readiness check)
-./recog-service.sh status     # PIDs of all installed services
-./recog-service.sh restart    # pick up new code / a re-rendered unit
-./recog-service.sh logs       # tail live transcription logs (logs-web, logs-supervisor, …)
-./recog-service.sh uninstall  # stop and remove
+recog service install    # render + register the units, WITHOUT starting them
+recog service start      # start (after a dependency readiness check)
+recog service status     # PIDs of all installed services
+recog service restart    # pick up new code / a re-rendered unit
+recog service logs       # tail live transcription logs (logs frontend, logs copilot-supervisor, …)
+recog service uninstall  # stop and remove
 ```
 
-`install` deliberately never activates anything — that is what lets `setup.sh`
+`install` deliberately never activates anything — that is what lets `cargo setup`
 verify dependencies before starting a pipeline that cannot work. `start`,
-`restart` and the targeted `restart-web` / `restart-live` / `restart-copilot` /
-`restart-supervisor` all run the same readiness probes as setup and refuse to
+`restart` and the targeted `restart frontend` / `restart live` / `restart copilot-channel` /
+`restart copilot-supervisor` all run the same readiness probes as setup and refuse to
 activate an incomplete install rather than take a working one down.
 
 On Linux, add `loginctl enable-linger $USER` so the user services survive
 logout — `status` prints the reminder. After rebuilding the extension, reload
 it in `chrome://extensions`.
 
-After changing code in `crates/` run `./setup.sh --no-extension` (it rebuilds and
-reinstalls `bin/`) and `./recog-service.sh restart`; for the supervisor alone,
-`./recog-service.sh restart-supervisor` is enough.
+After changing code in `crates/` run `cargo setup --no-extension` (it rebuilds and
+reinstalls `bin/`) and `recog service restart`; for the supervisor alone,
+`recog service restart copilot-supervisor` is enough.
 
 ## Questions about a meeting
 
@@ -303,20 +294,20 @@ To use Copilot, install `tmux` and Claude Code and make both commands available
 on `PATH`. Setup preserves their discovered directories in the service PATH,
 including a custom npm prefix. Run `claude` interactively as the same user to
 sign in before starting Copilot; setup checks CLI availability, not authentication.
-After moving or installing a CLI in a new directory, rerun `./setup.sh`.
+After moving or installing a CLI in a new directory, rerun `cargo setup`.
 
 Setup reports missing Copilot tools as optional. Transcription and service management
 work without them.
 
 To enable auto-spawn: put `tmux` and the `claude` CLI on `PATH`, set
 `RECOG_COPILOT_AUTOSPAWN=1` in `.env`, then
-`./recog-service.sh restart-supervisor`.
+`recog service restart copilot-supervisor`.
 
-On both operating systems `restart` and `restart-supervisor` keep a live
+On both operating systems `restart` and `restart copilot-supervisor` keep a live
 copilot session — on Linux the session runs in its own transient
 `recog-copilot-session.service`, outside the supervisor's cgroup, and the
 restarted supervisor re-adopts it. An explicit Stop in the web UI (or
-`./recog-service.sh stop` / `uninstall`) ends it.
+`recog service stop` / `uninstall`) ends it.
 
 ## Remote ASR
 
@@ -340,7 +331,7 @@ real LAN (`ping` RTT < 5 ms).
 
 The live process runs GigaAM v3 e2e_rnnt on [wavo](https://crates.io/crates/wavo),
 a Rust runtime, on the GPU: Metal on macOS, Vulkan on Linux, for every `[asr]
-backend` but `remote`, where it is the gateway's fallback. `./setup.sh` downloads the model (274 MB, Q8_0 GGUF) into the
+backend` but `remote`, where it is the gateway's fallback. `cargo setup` downloads the model (274 MB, Q8_0 GGUF) into the
 Hugging Face cache (`bin/recog prefetch`); without it the first start does.
 
 Measured against the PyTorch model (`docs/experiments/2026-11-07-rust-asr-runtimes.md`):
@@ -447,27 +438,15 @@ matters.
 
 **No system audio (macOS).** Check Screen Recording permission for **Recog**
 (the service) or for the terminal (a manual run), and that `sck_audio_capture`
-and `Recog.app` exist — `./setup.sh` builds both when `swiftc` is available.
-
-**It runs on CPU instead of CUDA.** `RECOG_ASR_DEVICE=cuda` makes the mismatch
-loud (it raises instead of falling back). If torch itself has no CUDA, you
-installed the CPU wheels — re-run setup with
-`RECOG_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 ./setup.sh`.
-
-**"CUDA out of memory … retrying on cpu" in the logs.** With `RECOG_ASR_DEVICE`
-left at `auto`, a busy or small card demotes the model to CPU instead of
-crash-looping the service. That is a working mode, not a broken one: measured
-RTF is 0.05–0.2 (a 3 s chunk takes 0.15–0.6 s), which keeps up with live
-transcription. Free the card or set the device explicitly if you want the
-failure to be loud instead.
+and `Recog.app` exist — `cargo setup` builds both when `swiftc` is available.
 
 **Setup says the install is not complete.** Nothing was activated on purpose.
 Missing `ffmpeg`, `parec`/`pactl`, PortAudio, or a macOS helper that will not
 build (`swiftc`) all block activation, as does `RECOG_ASR_BACKEND=remote` with
-an empty URL. Fix what it lists and re-run `./setup.sh`. The same probes gate
-`./recog-service.sh start|restart|restart-*`; if you deliberately want a subset
+an empty URL. Fix what it lists and re-run `cargo setup`. The same probes gate
+`recog service start|restart|restart-*`; if you deliberately want a subset
 (the web UI on a box with no audio stack, say), `RECOG_SKIP_READINESS=1
-./recog-service.sh start` bypasses the gate.
+recog service start` bypasses the gate.
 
 **The extension never connects.** The WS handshake is Origin-gated. If your
 conference host is not one of the built-in ones, add its exact HTTPS origin to
@@ -487,7 +466,7 @@ preserved by data migration and backup.
 Existing installs continue using their entire old data root and print a
 migration hint. If both the checkout and `~/.recog` contain data, startup
 refuses to choose silently. An explicit `RECOG_DATA_DIR` selects that root
-without legacy detection. The shell scripts use the same resolver as Python;
+without legacy detection. All programs share the data-root resolver;
 service installation records the resolved root in the units, so re-run
 `install` and `restart` after changing it.
 
@@ -496,17 +475,17 @@ manually launched recording or speaker-enrollment commands, then run:
 
 ```bash
 bin/recog migrate-data  # inspect the proposed moves
-./recog-service.sh stop
+recog service stop
 bin/recog migrate-data --apply
-./recog-service.sh install
-./recog-service.sh restart
+recog service install
+recog service restart
 ```
 
 Migration moves `meetings/`, `logs/`, and every `speakers*.json` using renames
 on the same filesystem. It leaves no old directories or symlinks, does not
 copy data, and refuses collisions or a destination inside the checkout.
 An interrupted migration can be re-run to move the remaining entries; it
-never merges two meeting archives or overwrites a database. `setup.sh` does
+never merges two meeting archives or overwrites a database. `cargo setup` does
 not migrate existing data. `recog backup` backs up the resolved
 data root, the [installation configuration](configuration.md) `config.toml`
 (as `config.toml` in the snapshot) and the environment files in the checkout
@@ -518,11 +497,11 @@ data root, the [installation configuration](configuration.md) `config.toml`
    Its **Action required** items say what each update asks of an existing
    installation: moved settings or files, a new dependency, a setup or service
    step.
-2. `git pull && ./setup.sh` — cargo rebuilds the programs into `bin/` (a running
+2. `recog update` — cargo rebuilds the programs into `bin/` (a running
    service keeps its file until it is restarted) and the model cache is reused.
    Setup also rebuilds the extension: reload it in `chrome://extensions`.
-3. Do the changelog's steps, then `./recog-service.sh restart`. If you skipped
-   services during setup, run `./recog-service.sh install` first: the units are
+3. Do the changelog's steps, then `recog service restart`. If you skipped
+   services during setup, run `recog service install` first: the units are
    rendered from the templates. Startup reports a malformed setting or a
    setting `.env` overrides in `config.toml`.
 

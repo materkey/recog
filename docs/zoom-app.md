@@ -18,7 +18,7 @@ RECOG_ZOOM_APP=1
 ```
 
 ```bash
-./recog-service.sh restart
+recog service restart
 ```
 
 `live --zoom-app` does the same for a manual run. For a check without the live

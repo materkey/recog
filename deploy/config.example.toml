@@ -120,8 +120,8 @@
 # codesign_identity = "Developer ID Application: ..."
 
 [install]
-# RECOG_INSTALL_RUNTIME: "rust", the only installation: ./setup.sh builds the
+# RECOG_INSTALL_RUNTIME: "rust", the only installation: cargo setup builds the
 # programs of crates/ with cargo into bin/ and the units run them. "python" is
-# gone and makes setup.sh stop. setup.sh and recog-service.sh read this key
+# gone and makes cargo setup stop. cargo setup and recog service read this key
 # from this file or the calling shell, never from .env.
 # runtime = "rust"

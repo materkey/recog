@@ -11,7 +11,7 @@ are grouped separately, making it clear where a new file belongs.
 | Path | Responsibility |
 | --- | --- |
 | `crates/` | `recog-live` (the `recog` binary: live process with the bridge, `meetings`, `replay`, the installation helpers), `recog-web`, `recog-copilot` (supervisor and MCP channel), `recog-desktop`, `recog-mic`, `recog-asr-server` (the optional ASR server's gateway and GigaAM backend, launched independently of the client services), and the libraries `recog-install` (service definitions), `recog-core`, `recog-ai`, `recog-bridge`, `recog-zoom`, `speexdsp-aec` |
-| `bin/` | Gitignored: the programs `setup.sh` installs from `target/release` and the units run |
+| `bin/` | Gitignored: the programs `cargo setup` installs from `target/release` and the units run |
 | `crates/recog-web/static/` | The web UI the `recog-web` binary serves |
 | `crates/recog-desktop/bootstrap.js` | The script the KTalk desktop integration evaluates in the application |
 | `crates/recog-ai/prompts/` | Shared AI summary templates |
@@ -21,7 +21,7 @@ are grouped separately, making it clear where a new file belongs.
 | `deploy/node/` | Pinned JavaScript quality tools (ESLint) for `scripts/quality.py` |
 | `deploy/macos/`, `deploy/linux/` | launchd and systemd service templates |
 | `deploy/ci/runner/` | Image of the self-hosted Linux CI runner (`docs/ci-runners.md`) |
-| `scripts/` | Setup/service helpers, data migration, enrollment and checks |
+| `scripts/` | Release packaging, development checks and benchmarks |
 | `scripts/benchmarks/` | Manually run benchmark and experiment programs |
 | `tests/` | Unit tests and E2E tools/fixtures |
 | `assets/readme/` | Images embedded in the main README |
@@ -29,7 +29,7 @@ are grouped separately, making it clear where a new file belongs.
 | `docs/bmad/`, `openspec/` | BMAD artifacts and OpenSpec specifications/change records |
 | `.local/examples/` | Gitignored sample recordings and transcripts |
 
-The root keeps the entry scripts `setup.sh` and `recog-service.sh`, project
+The root keeps the Cargo workspace and alias for `cargo setup`, project
 configuration, environment examples and the main README/agent instructions.
 `AGENTS.md` points to `CLAUDE.md`. BMAD still expects `_bmad/` and
 `_bmad-output`; the latter is a relative symlink to `docs/bmad/`. Other agent
@@ -48,16 +48,16 @@ After updating the checkout, re-render all four service units so they use the
 new module paths, then restart them:
 
 ```bash
-./recog-service.sh install
-./recog-service.sh restart
-./recog-service.sh status
+recog service install
+recog service restart
+recog service status
 ```
 
 `install` registers units without starting them; `restart` runs the existing
 dependency readiness checks before activation. These steps reuse the current
 venv and model cache. The directory reorganization itself does not install or
 upgrade dependencies, change the ML stack, or enable the optional ASR server.
-For a full dependency/setup update, use `./setup.sh` as described in the main
+For a full dependency/setup update, use `cargo setup` as described in the main
 README.
 
 Run manual commands from the repository root:

@@ -71,7 +71,7 @@ pub enum ConfigQuery {
     Conferences,
     /// `[install] runtime` as the parser reads it.
     InstallRuntime,
-    /// The Copilot's Claude model and effort (`./recog-service.sh claude`).
+    /// The Copilot's Claude model and effort (`recog copilot`).
     CopilotLaunch,
 }
 
@@ -155,7 +155,7 @@ positional arguments:
     meetings            Просмотр сохранённых митингов
     replay              Воспроизвести golden-сессию в live-процессе
     desktop             KTalk desktop (recog-desktop)
-    check               Проверить настройки установки (для scripts/deps.sh)
+    check               Проверить настройки установки
     config              Напечатать значение для скриптов установки
     launcher            Собрать Recog.app, если её исходник изменился (macOS)
     prefetch            Скачать модель ASR в кэш Hugging Face

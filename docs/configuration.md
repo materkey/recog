@@ -48,17 +48,13 @@ over it once at startup and gives the typed result (`config.asr.backend`,
 `config.copilot.grace_s`, ...): code reads that, never the environment. Each field
 declares its variable, type and default there. `RECOG_CONFIG_FILE` may be set in `.env` too.
 
-`[install] runtime` (`RECOG_INSTALL_RUNTIME`) is the one setting the shell
-scripts read themselves, before any program exists: `setup.sh`, `recog-service.sh`
-and `scripts/deps.sh` take it from the calling shell or from a plain
-`runtime = "rust"` line under `[install]` in this file, never from `.env`. The
-readiness check compares that with what the parser reads and refuses to start
-services when they differ (a value in `.env`, or a form the line reader does not
-understand), naming both.
+`[install] runtime` is read by the same configuration parser as every other
+setting. The supported value is `rust`. `recog check` reports a legacy Python
+installation before setup activates its services.
 
 Unknown tables or keys are errors, not ignored, so a typo cannot silently drop
 a setting. A malformed file stops the services at startup
-(`./recog-service.sh start` reports it before activating anything) and fails
+(`recog service start` reports it before activating anything) and fails
 the extension build.
 
 Secrets, and the legacy fallbacks `.env.example` still ships, stay in `.env`.
@@ -68,7 +64,7 @@ configuration and stays where it is.
 
 One parser reads the file, `crates/recog-core` (the port of the former
 `recog/install_config.py`). The extension build takes the conference hosts from
-`bin/recog config conferences`; in a checkout setup.sh has not built, it builds
+`bin/recog config conferences`; in a checkout cargo setup has not built, it builds
 with the built-in hosts when there is no configuration file and fails when there
 is one.
 
@@ -76,7 +72,7 @@ is one.
 
 After a change, rebuild the extension when conference hosts changed
 (`npm run build --prefix browser-extension`) and restart the services
-(`./recog-service.sh restart`).
+(`recog service restart`).
 
 ## Moving from `.local/conference-hosts.json`
 

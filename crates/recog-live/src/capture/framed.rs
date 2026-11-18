@@ -130,7 +130,7 @@ fn is_executable(path: &Path) -> bool {
 pub fn mic_worker_argv(repo_root: &Path, device_name: Option<&str>, sample_rate: u32, log: &Logger) -> Vec<String> {
     let binary = rust_mic_worker(repo_root);
     if !is_executable(&binary) {
-        log.line(&format!("[mic] {} is not built: ./setup.sh builds it", binary.display()));
+        log.line(&format!("[mic] {} is not built: cargo setup builds it", binary.display()));
     }
     let mut argv = vec![binary.display().to_string(), "--sample-rate".into(), sample_rate.to_string()];
     if let Some(name) = device_name {

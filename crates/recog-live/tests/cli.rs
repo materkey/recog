@@ -3,7 +3,7 @@
 //! sound server, each in a sandbox of its own (data directory, home, configuration).
 //!
 //! The binary is installed into the sandbox's checkout (`repo/bin/recog`, as
-//! `setup.sh` installs it), so that checkout, not the one it was built in, is its own.
+//! `cargo setup` installs it), so that checkout, not the one it was built in, is its own.
 //! A child keeps `LLVM_PROFILE_FILE`, so a coverage run counts what it executed.
 
 mod common;
@@ -255,7 +255,7 @@ fn a_checkout_without_recog_desktop_when_running_desktop_then_how_to_build_it_an
     assert_eq!(
         stderr,
         format!(
-            "recog desktop runs {}, which is not built: ./setup.sh builds it\n",
+            "recog desktop runs {}, which is not built: cargo setup builds it\n",
             repo.join("target/release/recog-desktop").display()
         )
     );

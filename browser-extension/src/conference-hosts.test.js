@@ -48,10 +48,10 @@ test('no recog and no installation config - loading for the build - uses built-i
 
 test('no recog but an installation config - loading for the build - fails naming setup', () => {
   fs.writeFileSync(path.join(directory, 'config.toml'), '[conferences]\n');
-  expect(() => loadConferenceHosts(environment({ config: 'config.toml' }), checkout())).toThrow(/setup\.sh/);
+  expect(() => loadConferenceHosts(environment({ config: 'config.toml' }), checkout())).toThrow(/cargo setup/);
 });
 
 test('no recog but a legacy hosts file - loading for the build - fails naming setup', () => {
   fs.writeFileSync(path.join(directory, 'hosts.json'), '{}');
-  expect(() => loadConferenceHosts(environment({ legacy: 'hosts.json' }), checkout())).toThrow(/setup\.sh/);
+  expect(() => loadConferenceHosts(environment({ legacy: 'hosts.json' }), checkout())).toThrow(/cargo setup/);
 });

@@ -1,7 +1,7 @@
 //! What the shell scripts of an installation without Python (`[install] runtime =
 //! "rust"`) ask the `recog` binary instead of the interpreter: the readiness check of
 //! `scripts/deps.sh` (`recog check`), the values `scripts/data-dir.sh`,
-//! `scripts/config-path.sh`, `recog-service.sh claude` and the extension build print
+//! `scripts/config-path.sh`, `recog copilot` and the extension build print
 //! (`recog config …`), the build of `Recog.app` (`recog launcher`, in place of
 //! `python -m recog.macos_launcher`), the model download (`recog prefetch`) and the
 //! KTalk desktop subcommands (`recog desktop …`, run by `recog-desktop`).
@@ -232,7 +232,7 @@ pub fn config(query: ConfigQuery, repo_root: &Path, config: &InstallConfig, envi
 }
 
 /// The Copilot's Claude model and effort (`auto` without one) on two lines, as
-/// `./recog-service.sh claude` read them from Python; status 1 when Copilot is off.
+/// `recog copilot` read them from Python; status 1 when Copilot is off.
 fn copilot_launch(repo_root: &Path, config: &InstallConfig, environ: &Environ) -> Printed {
     let mut warnings = String::new();
     let data_dir = match data_dir(repo_root, environ, &mut warnings) {
@@ -331,7 +331,7 @@ pub fn desktop(repo_root: &Path, args: &[String]) -> i32 {
     use std::os::unix::process::CommandExt as _;
     let program = recog_core::install::program(repo_root, "recog-desktop");
     if !program.is_file() {
-        eprintln!("recog desktop runs {}, which is not built: ./setup.sh builds it", program.display());
+        eprintln!("recog desktop runs {}, which is not built: cargo setup builds it", program.display());
         return 2;
     }
     let error = std::process::Command::new(&program).arg("--repo-root").arg(repo_root).args(args).exec();

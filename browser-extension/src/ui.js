@@ -842,7 +842,7 @@ export function createTranscriptContent() {
             Start recog with:
           </div>
           <div class="ktalk-transcript-empty-cmd">
-            ./recog-service.sh start
+            recog service start
           </div>
         </div>
       </div>
@@ -2106,7 +2106,7 @@ function updateTranscriptUI() {
             Start recog with:
           </div>
           <div class="ktalk-transcript-empty-cmd">
-            ./recog-service.sh start
+            recog service start
           </div>
         </div>
       `);

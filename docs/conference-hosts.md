@@ -26,7 +26,7 @@ After changing the host list:
 
 ```bash
 npm run build --prefix browser-extension
-./recog-service.sh restart
+recog service restart
 ```
 
 Load or reload **`browser-extension/dist/`** in `chrome://extensions`.

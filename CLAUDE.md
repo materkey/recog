@@ -20,9 +20,9 @@ bootstrap script (`crates/recog-desktop/bootstrap.js`). The optional ASR server 
 Chrome extension is `browser-extension/`; OS service templates are under
 `deploy/{macos,linux}/`, and benchmarks under `scripts/benchmarks/`.
 
-`./setup.sh` builds the programs into `bin/` and the units run them from there;
-after a change of the units run `./recog-service.sh install` followed by
-`./recog-service.sh restart`. Keep the generated `sck_audio_capture` binary at
+`cargo setup` builds the programs into `bin/` and the units run them from there;
+after a change of the units run `recog service install` followed by
+`recog service restart`. Keep the generated `sck_audio_capture` binary at
 the root for installed-machine compatibility. Local sample recordings belong in gitignored `.local/examples/`;
 meeting data uses `get_data_dir()` below. Never edit existing environment files.
 
@@ -69,7 +69,7 @@ the quality check passed. See `.revmux/profile.md` for reviewer interpretation.
 # into bin/, then config files, extension build, Swift helpers, the ASR model
 # and the service units. Idempotent — this is also how you update after a git
 # pull. Needs cargo (rustup), no Python.
-./setup.sh
+cargo setup
 
 # Flags: --no-services | --no-prefetch | --no-extension | --no-env (keep
 # an existing .env, do not create it from the example)
@@ -83,13 +83,8 @@ the quality check passed. See `.revmux/profile.md` for reviewer interpretation.
 checks the configuration before anything is installed; the programs are then
 copied into `<repo>/bin/` (gitignored, outside `target`, which a cargo cache
 cleaned twice under running services; `recog_core::install` makes a binary there
-take that checkout as its own), each renamed over the old one. The scripts ask
-`recog` what they need: `recog check` (`deps_asr_config_check`), `recog config
-data-dir|config-path|conferences|install-runtime|copilot-launch`, `recog launcher`
-(Recog.app), `recog prefetch` (the wavo model), `recog desktop …` (execs
-`recog-desktop`). `[install] runtime` is "rust"; `scripts/deps.sh` reads it itself
-(calling shell or a plain line in config.toml, never `.env`) and "python", the
-removed installation, stops setup. The per-service `runtime` keys and `[live]
+take that checkout as its own), each renamed over the old one. The configuration reader is `recog_core::install_config`. The same settings
+feed `recog check`, `recog doctor`, setup and service activation. The per-service `runtime` keys and `[live]
 mic_worker` are still accepted and do nothing.
 
 ### Running
@@ -115,44 +110,36 @@ bin/recog-web --port 9080  # http://127.0.0.1:9080
 
 ### Services (launchd / systemd --user)
 ```bash
-./recog-service.sh install            # Render + register the 4 units (live + frontend + copilot-channel + copilot-supervisor) WITHOUT starting them
-./recog-service.sh start              # Start all installed services (readiness-gated)
-./recog-service.sh status             # Show service status
-./recog-service.sh logs               # Tail live transcription logs
-./recog-service.sh restart            # Restart after code changes
-./recog-service.sh restart-supervisor # Restart copilot supervisor daemon only
-./recog-service.sh logs-supervisor    # Tail copilot supervisor daemon logs
-./recog-service.sh render --dry-run D # Render units into D only (tests/CI)
+recog service install            # Render + register the 4 units (live + frontend + copilot-channel + copilot-supervisor) WITHOUT starting them
+recog service start              # Start all installed services (readiness-gated)
+recog service status             # Show service status
+recog service logs               # Tail live transcription logs
+recog service restart            # Restart after code changes
+recog service restart copilot-supervisor # Restart copilot supervisor daemon only
+recog service logs copilot-supervisor    # Tail copilot supervisor daemon logs
+recog service render D # Render units into D only (tests/CI)
 ```
 
-The units' commands come from `svc_command` in `scripts/service/common.sh`
-(`@COMMAND@` in the templates): `bin/recog live …`, `bin/recog-web --host
-127.0.0.1 --port 9080 --repo <repo>`, `bin/recog-copilot-* --repo-root <repo>`.
+The units' commands and templates are rendered by `crates/recog-install/src/units.rs`.
 
 On macOS the live unit's program is `Recog.app/Contents/MacOS/recog_launcher`
 (bundle id `com.recog.live`, source `crates/recog-live/macos/recog_launcher.swift`,
-built by `setup.sh` through `bin/recog launcher` with recog-zoom's bundle builder,
+built by `cargo setup` through `bin/recog launcher` with recog-zoom's bundle builder,
 sha256 stamp `Recog.source-sha256` beside the bundle), which runs `bin/recog` as
 its child: macOS attributes Screen Recording and the microphone to the job's
-program, so the permissions belong to "Recog". `scripts/deps.sh` refuses to start
+program, so the permissions belong to "Recog". the installer refuses to start
 without it.
 
-The backend is chosen from `uname -s` (`RECOG_SERVICE_OS` overrides it, which
-only changes which templates/verbs are used, so a Mac can render Linux units):
-launchd on macOS, `systemd --user` on Linux. Units are rendered from
-`deploy/{macos,linux}/*.in` by `scripts/service/{common,launchd,systemd}.sh`
-behind the `svc_*` contract. `install` never activates anything — that split is
-what lets `setup.sh` verify dependencies before starting a pipeline that cannot
-serve; `start`/`restart`/`restart-*` run the same probes (`scripts/deps.sh`) and
-refuse to activate an incomplete install rather than stop a working one
-(`RECOG_SKIP_READINESS=1` bypasses the gate). On Linux the
-services need `loginctl enable-linger $USER` to survive logout (`status` prints
-the reminder).
+The installer uses launchd on macOS and user systemd on Linux. `RECOG_SERVICE_OS`
+selects the manager for rendering and tests. `install` stages the unit files.
+`start` and `restart` check the programs and settings before activation.
+`RECOG_SKIP_READINESS=1` bypasses the readiness check for an intentional subset.
+On Linux, enable lingering to keep user services running after logout.
 
-**Important**: After changing Rust code, run `./setup.sh --no-extension` (it
-rebuilds and reinstalls bin/) and `./recog-service.sh restart`.
+**Important**: After changing Rust code, run `cargo setup --no-extension` (it
+rebuilds and reinstalls bin/) and `recog service restart`.
 
-Manual copilot launch (`./recog-service.sh claude`) stays available for debugging; it now passes the same `--strict-mcp-config --mcp-config` flags the supervisor uses, so the `copilot` MCP server is registered.
+Manual copilot launch (`recog copilot`) stays available for debugging; it now passes the same `--strict-mcp-config --mcp-config` flags the supervisor uses, so the `copilot` MCP server is registered.
 
 ### Chrome Extension (KTalk speaker detection)
 ```bash
@@ -262,7 +249,7 @@ was deleted it was held to it by golden replay of synthetic and recorded session
 (same rows, markers and `meta.json` fields); the recorder and the player keep their
 own tests (`tests/golden.rs`).
 
-`crates/recog-mic` is the only worker (built by `setup.sh`; a missing build is said
+`crates/recog-mic` is the only worker (built by `cargo setup`; a missing build is said
 in the log; `[live] mic_worker` is still accepted and does nothing), with the
 arguments, frames and exit codes of the former Python worker. Its cpal callback takes no lock and only copies into
 wait-free `rtrb` rings; the main thread writes every 20 ms. cpal sets the device's
@@ -320,7 +307,7 @@ deleted, and their ports keep the structure, names and log lines described here.
 `recog.config.get_data_dir()` resolves the shared data root: `~/.recog`, or
 the absolute/`~/…` `RECOG_DATA_DIR` override. Meetings, logs and `speakers*.json`
 live under it; `.env` stays in the checkout. Python consumers, setup, backup
-and service rendering share this resolver via `scripts/data-dir.sh`.
+and service rendering share this resolver in `recog_core::data_dir`.
 Without an explicit override, legacy data keeps the entire root in the
 checkout with a migration warning; data in both roots is a fatal conflict.
 Service units pin the resolved root in their environment; re-render and
@@ -329,8 +316,8 @@ restart after changing it. Working directories still point at code.
 `recog migrate-data` defaults to a dry run; `--apply` requires stopped
 services and manual writers, then renames all data on the same filesystem
 without overwriting or merging entries. Re-run after an interruption to
-finish remaining moves, then `./recog-service.sh install` and
-`./recog-service.sh restart`. `setup.sh` never migrates existing data.
+finish remaining moves, then `recog service install` and
+`recog service restart`. `cargo setup` never migrates existing data.
 
 ### Local user profile
 
@@ -358,7 +345,7 @@ historical transcript labels or stop the session.
 Speaker identification comes from conference participant signals via the Chrome extension. Microphone audio uses the user profile; system audio without conference identity stays uncertain. The former dual-venv pyannote subprocess architecture (ADR-0006) is obsolete.
 
 ### Remote ASR offload (opt-in)
-`FallbackAsr` (`crates/recog-live/src/asr/remote.rs`) runs the three GigaAM paths of the live process (`transcribe_batch` per-speaker, `transcribe_with_timestamps` refine, and the direct mic/mixed `transcribe_chunk`) over a network gateway (OpenAI-Whisper-compatible); the Python client's offline `transcribe_simple` had no caller and was not ported. ASR comes exclusively from `build_asr()` (`crates/recog-live/src/live/build.rs`): `RECOG_ASR_BACKEND="auto"` (committed default) and `"wavo"` return `WavoAsr`; `"remote"` returns a `FallbackAsr` over a `RemoteAsrClient` with `WavoAsr` as the local model; `"local"` (PyTorch, gone) runs on wavo with a line in the log. `FallbackAsr` loads the local model **lazily in a background thread** — triggered by the first remote failure. While neither backend can serve (circuit open + local still loading) it raises `ASRTemporarilyUnavailable` and exposes `available=False`; consumers (`_process_chunk`, `PerSpeakerIngest.tick`, `RefineWorker`) gate on it and keep their audio buffered instead of dropping chunks (see `docs/plans/2026-06-02-asr-fallback-buffering-design.md`). Live (chunk/batch) and background (refine/offline) requests have independent circuit breakers sharing one lazy local model. Each breaker is thread-safe and trips after `RECOG_ASR_CIRCUIT_FAILS` failures within the last 60 seconds (open for `RECOG_ASR_CIRCUIT_OPEN_S`, then one half-open probe). Live chunk/batch requests use the shorter `RECOG_ASR_LIVE_TIMEOUT_S`; refine/offline keep `RECOG_ASR_REMOTE_TIMEOUT_S`. The optional server is `crates/recog-asr-server` (binaries `recog-asr-gateway` and `recog-asr-gigaam`); installation and configuration are described in the [ASR server guide](docs/asr-server.md). These server processes are separate from the four client services and are not started by `setup.sh`.
+`FallbackAsr` (`crates/recog-live/src/asr/remote.rs`) runs the three GigaAM paths of the live process (`transcribe_batch` per-speaker, `transcribe_with_timestamps` refine, and the direct mic/mixed `transcribe_chunk`) over a network gateway (OpenAI-Whisper-compatible); the Python client's offline `transcribe_simple` had no caller and was not ported. ASR comes exclusively from `build_asr()` (`crates/recog-live/src/live/build.rs`): `RECOG_ASR_BACKEND="auto"` (committed default) and `"wavo"` return `WavoAsr`; `"remote"` returns a `FallbackAsr` over a `RemoteAsrClient` with `WavoAsr` as the local model; `"local"` (PyTorch, gone) runs on wavo with a line in the log. `FallbackAsr` loads the local model **lazily in a background thread** — triggered by the first remote failure. While neither backend can serve (circuit open + local still loading) it raises `ASRTemporarilyUnavailable` and exposes `available=False`; consumers (`_process_chunk`, `PerSpeakerIngest.tick`, `RefineWorker`) gate on it and keep their audio buffered instead of dropping chunks (see `docs/plans/2026-06-02-asr-fallback-buffering-design.md`). Live (chunk/batch) and background (refine/offline) requests have independent circuit breakers sharing one lazy local model. Each breaker is thread-safe and trips after `RECOG_ASR_CIRCUIT_FAILS` failures within the last 60 seconds (open for `RECOG_ASR_CIRCUIT_OPEN_S`, then one half-open probe). Live chunk/batch requests use the shorter `RECOG_ASR_LIVE_TIMEOUT_S`; refine/offline keep `RECOG_ASR_REMOTE_TIMEOUT_S`. The optional server is `crates/recog-asr-server` (binaries `recog-asr-gateway` and `recog-asr-gigaam`); installation and configuration are described in the [ASR server guide](docs/asr-server.md). These server processes are separate from the four client services and are not started by `cargo setup`.
 
 ### ASR fallback buffering (always-on)
 No speech is lost when ASR is temporarily unavailable (remote down + local loading): capture buffers (`SingleDeviceCapture`, `SubprocessPCMCapture`) are not consumed while `asr.available` is False (capped at `ASR_PENDING_BUFFER_CAP_S`), `get_chunk()` returns `(chunk, capture_start_ts)` so backlog segments get spoken-time timestamps (while the buffer holds ≤ `CAPTURE_RESYNC_MAX_S` the start timestamp is re-anchored to wall-clock on every captured block — sample counting alone drifts forever because the 0.5 s overlap never lets the buffer empty), and a chunk caught mid-failure is held in a single-slot retry (`SourceState.pending_chunk`, mirrors `PerSpeakerIngest._pending_retry_batch`) and re-dispatched first once ASR recovers — without re-writing it to the meeting WAV. Live dedup applies only within `DEDUP_MAX_GAP_S` of the previous segment (a phrase repeated after a pause is real speech). Swallowed ASR exceptions are logged via `crates/recog-live/src/log.rs` (rate-limited).
@@ -400,18 +387,18 @@ On refine arrival the webapp renders tier-1 (opacity 0.6, dashed border) → tie
 See `docs/plans/completed/2026-04-24-per-speaker-refine-backend.md`, `openspec/changes/per-speaker-stream-refine/`, and ADR-0019 for the decisions table and task breakdown.
 
 ### Auto-spawn Copilot supervisor (meeting-triggered; code default on, `.env.example` ships it off)
-A service daemon (`deploy/macos/com.recog.copilot-supervisor.plist.in` or `deploy/linux/recog-copilot-supervisor.service.in` → `crates/recog-copilot/src/supervisor/`) spawns a fresh headless Claude Code copilot session per conference meeting (any `is_conference_source`: KTalk / Jitsi vas3k·jitsi / Matrix / Google Meet / Zoom) and tears it down after the meeting, so the manual `./recog-service.sh claude` step disappears. Lifecycle model is "по триггеру" (variant B): fresh session per meeting, zero cost between meetings, ~6–10 s cold start.
+A service daemon (`deploy/macos/com.recog.copilot-supervisor.plist.in` or `deploy/linux/recog-copilot-supervisor.service.in` → `crates/recog-copilot/src/supervisor/`) spawns a fresh headless Claude Code copilot session per conference meeting (any `is_conference_source`: KTalk / Jitsi vas3k·jitsi / Matrix / Google Meet / Zoom) and tears it down after the meeting, so the manual `recog copilot` step disappears. Lifecycle model is "по триггеру" (variant B): fresh session per meeting, zero cost between meetings, ~6–10 s cold start.
 
 - `claude -p` is impossible (`--dangerously-load-development-channels` isn't parsed by print mode, `channel_enable` needs a marketplace plugin) — the only path is an interactive TUI in a PTY. The supervisor runs it in a detached tmux on a dedicated socket (`tmux -L recog-copilot`) so its env is deterministic (from the service unit) and isolated from the personal tmux.
 - **State machine** (`SessionLifecycle`, pure/no-I/O): `IDLE → SPAWNING → RUNNING → GRACE`. Inputs `meeting_started(id)/meeting_ended(id)/timer/session_died/stop_now(id)` yield commands `spawn(id)/kill/none`. A flap (`meeting_ended` then `meeting_started` with the **same** id within grace — guaranteed by `meeting_storage._find_same_day_meeting`) keeps the session alive; a different id kills + respawns. `RECOG_COPILOT_GRACE_S` (default 90) is the kill delay after `meeting_ended`; an explicit webapp Stop (`stop_now`) kills immediately with no grace — the grace window only shields conference rejoin flaps.
 - **BridgeClient**: WS to `ktalk_bridge` (default `ws://127.0.0.1:8766`) with reconnect/backoff. On connect sends `supervisor_hello`; bridge replies `meeting_state {active, meeting_id, meeting_title}` for reconciliation. `active` means a copilot session should exist: either an `is_conference_source(meta["source"])` meeting (ktalk / vas3k / jitsi / matrix / gmeet / zoom) with a live extension client, or the bridge's armed manual-session mirror — never merely `current_meeting_path`, which is always populated. Reconcile branches: live session + no meeting → synthetic `meeting_ended` → GRACE (not instant kill, so a bridge restart mid-meeting doesn't kill the copilot — rejoin returns the same id); no session + active meeting → spawn; live session + active meeting → adopt (no respawn).
 - **Watchdog** (~2 s while a session should live): `classify_screen(text) → spawning|online|working|blocked|offline` by fixed-order rules; the known startup dialogs (dev-channels, workspace-trust) are auto-dismissed tmux-natively (dev-channels: `send-keys 1`; trust: cursor moved to the accept option + `Enter`, since claude 2.1.270 starts it on "No, exit" without option numbers; per-dialog latch, resent every 10 s while the dialog stays up); `spawning` past a 60 s deadline → `blocked` (fail-visible); a turn refused for usage (one of Claude Code's own limit notices, `You've reached your Fable limit`, under `⎿` below the last `⏺` reply) → `blocked` too, and only a dialog is ever answered with keys. Reports `copilot_agent_status {status, meeting_id}` on change + a ~5 s heartbeat; `offline` feeds `session_died` → respawn with backoff (5/15/30 s, ≤3/meeting).
 - **Status merge lives in bridge (D4)**: two authors — supervisor (screen) via `copilot_agent_status`, and `crates/recog-copilot/src/channel/` (MCP-session count) via `claude_sessions {count|null}` (`null` = unknown, not a confident 0). Bridge computes the effective status (`offline` if the supervisor is silent > 10 s OR a debounced `sessions==0` while either a conference or manual session should be alive) and broadcasts `copilot_status {status: "agent_state", ...}` to extension and subscriber clients only on effective-status change. The extension and webapp render their chips (🟢 online / 🟡 working / 🔴 blocked / ⚫ offline) independently of per-request indicators.
-- **Linux session lifecycle (independent of the supervisor)**: on Linux `TmuxRunner` wraps `tmux new-session -d` in a transient user unit — `systemd-run --user --collect --unit=recog-copilot-session --property=Type=oneshot --property=RemainAfterExit=yes --property=KillMode=control-group` — so the session lives outside the supervisor's cgroup and `systemctl --user restart recog-copilot-supervisor` does not take a live Copilot down with it; the restarted supervisor re-adopts it through the usual `alive()` probe. `Type=oneshot` + `RemainAfterExit=yes` match `tmux new-session -d` (it forks the server and returns, so without them the unit would be considered finished and garbage-collected the moment tmux detaches); no `Restart=` — respawn is the supervisor's decision. Env the user manager would not otherwise pass is forwarded explicitly (`SESSION_ENV_KEYS`: PATH, HOME, TERM, SHELL, LANG). A `RemainAfterExit` unit stays *loaded* after its session dies and `systemd-run` refuses to reuse a loaded name, so `_reset_session_unit()` stops it and waits for the name to drop before the next spawn. The unit is never installed or enabled; `restart`/`restart-supervisor` do not touch it, explicit Stop/`uninstall` clear it plus both tmux names. Detection is `platform.system() == "Linux" and shutil.which("systemd-run")` (`_linux_session_manager`), so a systemd-less Linux falls back to plain tmux; macOS keeps the plain tmux path unchanged. The watchdog still probes tmux, not the oneshot unit's `active` state.
+- **Linux session lifecycle (independent of the supervisor)**: on Linux `TmuxRunner` wraps `tmux new-session -d` in a transient user unit — `systemd-run --user --collect --unit=recog-copilot-session --property=Type=oneshot --property=RemainAfterExit=yes --property=KillMode=control-group` — so the session lives outside the supervisor's cgroup and `systemctl --user restart recog-copilot-supervisor` does not take a live Copilot down with it; the restarted supervisor re-adopts it through the usual `alive()` probe. `Type=oneshot` + `RemainAfterExit=yes` match `tmux new-session -d` (it forks the server and returns, so without them the unit would be considered finished and garbage-collected the moment tmux detaches); no `Restart=` — respawn is the supervisor's decision. Env the user manager would not otherwise pass is forwarded explicitly (`SESSION_ENV_KEYS`: PATH, HOME, TERM, SHELL, LANG). A `RemainAfterExit` unit stays *loaded* after its session dies and `systemd-run` refuses to reuse a loaded name, so `_reset_session_unit()` stops it and waits for the name to drop before the next spawn. The unit is never installed or enabled; `restart`/`restart copilot-supervisor` do not touch it, explicit Stop/`uninstall` clear it plus both tmux names. Detection is `platform.system() == "Linux" and shutil.which("systemd-run")` (`_linux_session_manager`), so a systemd-less Linux falls back to plain tmux; macOS keeps the plain tmux path unchanged. The watchdog still probes tmux, not the oneshot unit's `active` state.
 - **Master switch** `RECOG_COPILOT_AUTOSPAWN=1|0` (default 1) keeps the daemon connected; `0` makes only the meeting frames (`meeting_started`/`meeting_state`/`meeting_ended`) inert — manual spawn/stop and crash-respawn (`on_session_died`) work regardless of the flag (webapp plan D3).
 - **Manual sessions from the webapp** (`#/live`): a "Recog Copilot" button with agent-state chip + chat panel in `crates/recog-web/static/app.js`. Spawn/stop travel as `copilot_spawn_request {request_id}` / `copilot_stop_request {request_id}` (browser → `/api/live/stream` → frontend server → bidirectional `BridgeSubscriber` → bridge → supervisor); the supervisor maps them onto the constant synthetic lifecycle id `"manual"` (`MANUAL_MEETING_ID`, defined once in `crates/recog-core/src/protocol.rs` with the other protocol words shared by the bridge, web, Copilot and Zoom crates), so a repeated spawn is the existing same-id flap (an explicit click also resets the respawn backoff budget when no retry is pending — Start revives a session parked after 3 exhausted respawn attempts) and Stop is `stop_now` → immediate kill (no grace; the webapp reports a stop as lost if no ⚫ offline arrives within 15 s). Closing or reloading the tab does NOT stop the session — the browser holds no session state and no stop frame is sent on WS close. The dialog is shared by all tabs: the bridge echoes each delivered question to subscribers as `copilot_chat_echo`, and the frontend server keeps the last 200 echo and `copilot_reply` frames in memory (`_copilot_dialog`, stamped with a `dialog_id`) and replays them as `copilot_history` after `init`; a tab shows each `dialog_id` once. The panel moves by its header and resizes by its edges, its place saved in `localStorage` (`recog.copilot-panel.rect`); **Открепить** moves the panel's DOM into a Document Picture-in-Picture window, so panel lookups go through `copilotEl()`, its buttons use listeners rather than `onclick` attributes (which would compile in the floating document), and the live stream stays open while detached, whatever view the tab shows. Error echoes bound to the originating click's `request_id`: `bridge_disconnected` (frontend server, bridge link down), `supervisor_disconnected` (bridge, no supervisor client), `conference_active` (bridge rejects spawn — never forwarded while a conference is already active; a conference starting mid-relay may see the frame delivered, but the manual flag is not armed and the originator still gets `conference_active`). Shared-audience Copilot broadcasts (`copilot_reply` plus broadcast `copilot_status` frames) fan out to `_subscriber_clients` as well as extension clients; per-request rejection echoes remain originator-only and `manual_preempted` is subscriber-only. Manual chat captures `meeting_id` as None when no conference is active, so an orphan-meeting silence-split rotation cannot drop the reply as stale.
 - **Conference precedence & known v1 desync**: with meeting-driven autospawn enabled, a conference `meeting_started` preempts a live manual session (kill + respawn under the meeting); the bridge clears `_manual_copilot_active` and broadcasts `copilot_status {status: "manual_preempted"}` to subscriber clients. With `AUTOSPAWN=0` the supervisor ignores meeting frames, so on preemption the bridge still clears its flag and emits the notice but the `"manual"` tmux session lingers untracked — only killable via explicit Stop (documented v1 limitation).
-- **Manual-session restart recovery (webapp plan D5)**: manual-session truth has one runtime owner — the supervisor (it physically holds the tmux session). `supervisor_hello` carries `current_meeting_id` — the id of a session the supervisor intends to keep alive (SPAWNING/RUNNING; GRACE and IDLE report null); a hello with `"manual"` and no active conference re-arms the bridge's `_manual_copilot_active` BEFORE `meeting_state` is computed, so reconcile replies `{active: true, meeting_id: "manual"}` and adopts instead of killing. This covers a bridge-only restart while the supervisor stays alive. A full `./recog-service.sh restart` is covered too (DW-9): the manual session carries its kind in its tmux session name — manual spawns create `copilot-manual`, every meeting-driven spawn keeps `copilot` — and the fresh supervisor probes the manual name at startup and reads the type back: `copilot-manual` alive (and `copilot` dead) → `lifecycle.adopt("manual")` + runner rebinds, so hello reports `"manual"`; both names alive → conference wins and the stale `copilot-manual` is killed. `tmux -L recog-copilot ls` therefore shows `copilot` or `copilot-manual` depending on the session kind; `./recog-service.sh stop`/`uninstall` reap both names. (The former residual — a supervisor restart during the manual-stop grace window resurrecting a stopped session — is gone: manual Stop kills immediately, so a stopped session leaves no tmux marker to re-adopt.)
+- **Manual-session restart recovery (webapp plan D5)**: manual-session truth has one runtime owner — the supervisor (it physically holds the tmux session). `supervisor_hello` carries `current_meeting_id` — the id of a session the supervisor intends to keep alive (SPAWNING/RUNNING; GRACE and IDLE report null); a hello with `"manual"` and no active conference re-arms the bridge's `_manual_copilot_active` BEFORE `meeting_state` is computed, so reconcile replies `{active: true, meeting_id: "manual"}` and adopts instead of killing. This covers a bridge-only restart while the supervisor stays alive. A full `recog service restart` is covered too (DW-9): the manual session carries its kind in its tmux session name — manual spawns create `copilot-manual`, every meeting-driven spawn keeps `copilot` — and the fresh supervisor probes the manual name at startup and reads the type back: `copilot-manual` alive (and `copilot` dead) → `lifecycle.adopt("manual")` + runner rebinds, so hello reports `"manual"`; both names alive → conference wins and the stale `copilot-manual` is killed. `tmux -L recog-copilot ls` therefore shows `copilot` or `copilot-manual` depending on the session kind; `recog service stop`/`uninstall` reap both names. (The former residual — a supervisor restart during the manual-stop grace window resurrecting a stopped session — is gone: manual Stop kills immediately, so a stopped session leaves no tmux marker to re-adopt.)
 - **No proactive ticks in manual sessions (webapp plan D4)**: `_copilot_tick_state` is seeded only on conference join paths (the `meeting_started` emit and the same-meeting reconnect re-arm) — never by manual frames, so a manual session gets manual chat only; transcript context still flows via `get_recent_transcript`.
 
 See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state machine diagram, decisions table (D1–D7), and known v1 limitations (one copilot per machine, unknown startup screen → `blocked`, positive classifiers frozen on claude 2.1.197). See `docs/plans/completed/20260724-webapp-copilot-live.md` for the webapp manual-session decisions (D1–D5) and protocol frames.
@@ -460,7 +447,7 @@ See `docs/plans/completed/2026-07-02-auto-copilot-session.md` for the state mach
 
 ## Environment Variables
 
-Non-secret settings belong in the installation configuration `~/.config/recog/config.toml` (`deploy/config.example.toml`, `docs/configuration.md`): each key of its `[asr]`, `[live]`, `[copilot]`, `[ai]`, `[web]` and `[macos]` tables is one variable below, and the process environment and `.env` still override it; a different value in both places is reported on stderr at startup. `crates/recog-core/src/install_config.rs` loads `.env`, resolves file + environment once at import into the typed `INSTALL_CONFIG` (`INSTALL_CONFIG.asr.backend`, each field declaring its variable, type and default), and code reads that, never `os.environ`; tests monkeypatch a field (`monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "local")`). A malformed value stops startup with its name. `.env` keeps secrets and legacy fallbacks. Copy `.env.example` → `.env` (`setup.sh` does it). `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL`/`RECOG_GIGAAM_REF`/`RECOG_GIGAAM_EDITABLE` are deliberately **not** in `.env`: `.env` is read by Python (`load_dotenv` in `crates/recog-core/src/install_config.rs`), no shell script reads it, and `setup.sh` needs those variables before it creates `.env` — they are call-shell variables (`RECOG_TORCH_INDEX_URL=… ./setup.sh`).
+Non-secret settings belong in the installation configuration `~/.config/recog/config.toml` (`deploy/config.example.toml`, `docs/configuration.md`): each key of its `[asr]`, `[live]`, `[copilot]`, `[ai]`, `[web]` and `[macos]` tables is one variable below, and the process environment and `.env` still override it; a different value in both places is reported on stderr at startup. `crates/recog-core/src/install_config.rs` loads `.env`, resolves file + environment once at import into the typed `INSTALL_CONFIG` (`INSTALL_CONFIG.asr.backend`, each field declaring its variable, type and default), and code reads that, never `os.environ`; tests monkeypatch a field (`monkeypatch.setattr(INSTALL_CONFIG.asr, "backend", "local")`). A malformed value stops startup with its name. `.env` keeps secrets and legacy fallbacks. Copy `.env.example` → `.env` (`cargo setup` does it). `RECOG_TORCH_INDEX_URL`, `RECOG_GIGAAM_URL`/`RECOG_GIGAAM_REF`/`RECOG_GIGAAM_EDITABLE` are deliberately **not** in `.env`: `.env` is read by Python (`load_dotenv` in `crates/recog-core/src/install_config.rs`), no shell script reads it, and `cargo setup` needs those variables before it creates `.env` — they are call-shell variables (`RECOG_TORCH_INDEX_URL=… cargo setup`).
 
 - `HF_TOKEN` - HuggingFace token (optional, was required for pyannote diarization which is now removed)
 - `CLAUDE_MODEL` / `CODEX_MODEL` - the installation's models (`[ai] claude_model` / `codex_model`), used by every process until Settings saves a model; empty leaves the shipped default. `recog check` refuses a malformed one.
@@ -479,7 +466,7 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 - `RECOG_BRIDGE_WS_URL` - Overrides the bridge WebSocket URL the frontend subscriber connects to (default `ws://localhost:8766`). Used by `crates/recog-web/src/bridge_subscriber.rs` to forward `transcript_refine` events from `crates/recog-bridge` to webapp clients (D10 — JSONL tail cannot see refine rewrites).
 - `RECOG_WEB_RUNTIME` - no effect: the web server is always `bin/recog-web --host 127.0.0.1 --port 9080 --repo <checkout>`, which also runs the KTalk desktop integration's observer; still accepted from older configurations.
 - `RECOG_ASR_BACKEND` - `auto` (default) | `wavo`: GigaAM on the Rust runtime wavo inside the live process (`crates/recog-live/src/asr/wavo.rs`; no batch, refine not abortable mid-decode) | `remote` (offload GigaAM to a configured ASR gateway through `FallbackAsr` in `crates/recog-live/src/asr/remote.rs`, built by `build_asr()`, with wavo as the lazy local fallback + circuit breaker) | `local` (the PyTorch model, gone: runs on wavo with a line in the log).
-- `RECOG_ASR_REMOTE_URL` - Gateway base URL. **No default**: `RECOG_ASR_BACKEND=remote` with an empty URL makes `build_asr()` raise at startup instead of silently serving from the local model (different RAM and latency). `scripts/deps.sh` checks the pair before any service is activated.
+- `RECOG_ASR_REMOTE_URL` - Gateway base URL. **No default**: `RECOG_ASR_BACKEND=remote` with an empty URL makes `build_asr()` raise at startup instead of silently serving from the local model (different RAM and latency). the installer checks the pair before any service is activated.
 - `RECOG_ASR_REMOTE_MODEL` - Model alias sent to the gateway (default `gigaam`).
 - `RECOG_ASR_REMOTE_TIMEOUT_S` - Per-request HTTP timeout (default `15`).
 - `RECOG_ASR_CIRCUIT_FAILS` - Remote failures within the last 60 seconds before the circuit opens (default `3`); intermittent successes do not erase recent failures.
@@ -494,10 +481,8 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 
 ### Call-shell variables (read by the scripts, never from `.env`)
 
-- `RECOG_SKIP_READINESS=1` - bypass the `scripts/deps.sh` gate that `recog-service.sh start` / `restart` / `restart-*` run before touching a service. For deliberately running a subset, and for tests driving stub service managers.
+- `RECOG_SKIP_READINESS=1` - bypass the the installer gate that `recog service start` / `restart` / `restart-*` run before touching a service. For deliberately running a subset, and for tests driving stub service managers.
 - `RECOG_SERVICE_OS` - overrides the `uname -s` backend choice (which templates and `svc_*` verbs are used), so a Mac can render Linux units.
-- `RECOG_PYTHON` - the interpreter baked into the rendered units (`scripts/service/common.sh`). Deliberately **not** `DEPS_PYTHON`, which only selects the interpreter `scripts/deps.sh` uses for its library probes.
-- `RECOG_HOST_OS` - overrides `uname -s` for the `scripts/deps.sh` probes (lets a Mac exercise the Linux ones).
 - `RECOG_CHECK_PYTHON` - interpreter override for `scripts/check.sh`.
 - `RECOG_QUALITY_BASE` - when set, `scripts/check.sh` runs the full merge-base quality gate (`scripts/quality.py`: baseline and head coverage of Rust with `cargo llvm-cov` and of JavaScript, then pytest once, `docs/quality.md`) instead of plain pytest; CI sets it on Linux only (the macOS job runs check.sh without it; CI runs on self-hosted runners, `docs/ci-runners.md`). Unset, `check.sh` runs pytest once plus only the gate's Ruff and ESLint check of lines changed since the local `origin/main` (`quality.py --style-only`, no fetch; skipped when that ref is absent). Either way it runs shellcheck, actionlint and gitleaks first (`docs/quality.md`); ESLint needs `npm ci --prefix deploy/node`, the full gate's JavaScript coverage also `npm ci --prefix browser-extension` and its Rust coverage `cargo-llvm-cov` with the `llvm-tools-preview` component, gitleaks a package-manager install.
 - `RECOG_QUALITY_OUTPUT` - output root for those quality runs (default `.local/quality`).
@@ -517,7 +502,7 @@ RECOG_QUALITY_BASE=origin/main ./scripts/check.sh   # what CI runs: the full qua
 
 cargo test --workspace                    # the Rust tests
 python -m pytest tests/ -q -m "not e2e"   # the shell scripts' and quality tools' tests
-./recog-service.sh render --dry-run "$(mktemp -d)"   # unit templates, both backends via RECOG_SERVICE_OS
+recog service render "$(mktemp -d)"   # unit templates, both backends via RECOG_SERVICE_OS
 ```
 
 ## ADR Documents

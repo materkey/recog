@@ -11,6 +11,9 @@ reasoning.
 
 ### Changed
 
+- **Action required after pulling this update:** run `cargo setup` once. Use
+  `recog service start|stop|restart|status`, `recog service logs [name]` and
+  `recog copilot` in place of `./recog-service.sh`.
 - Release archives include the programs and unpacked Chrome extension. Their
   `bin/recog setup` installs into a stable user directory.
 - Open Settings → Готовность установки in the web interface to check capture
