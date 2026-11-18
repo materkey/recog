@@ -108,6 +108,14 @@ pub fn build_captures(system_audio: &str, mic: &MicChoice, settings: &CaptureSet
         MicChoice::Default => Some(create_mic_capture(None, echo.clone(), settings)?),
         MicChoice::Named(name) => Some(create_mic_capture(Some(name), echo.clone(), settings)?),
     };
+    Ok((microphone, system_input(system_audio, echo, settings)?))
+}
+
+fn system_input(
+    system_audio: &str,
+    echo: Option<Arc<dyn EchoSink>>,
+    settings: &CaptureSettings<'_>,
+) -> Result<Option<Arc<dyn LiveCapture>>, String> {
     let system: Option<Arc<dyn LiveCapture>> = if system_audio == "screencapture" || system_audio == "pulse" {
         Some(Arc::new(create_system_capture(
             system_audio,
@@ -125,7 +133,7 @@ pub fn build_captures(system_audio: &str, mic: &MicChoice, settings: &CaptureSet
     } else {
         None
     };
-    Ok((microphone, system))
+    Ok(system)
 }
 
 /// `build_asr`: the ASR `[asr] backend` asks for. `remote` is the gateway with wavo as
