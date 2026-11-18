@@ -217,3 +217,31 @@ mod tests {
         assert_eq!(substitute("path @ROOT@", |_| Some("/tmp/@HOME@".into())).unwrap(), "path /tmp/@HOME@");
     }
 }
+
+#[cfg(test)]
+mod shell_parity {
+    use super::*;
+    #[test]
+    fn reference_installation_when_rendered_then_both_backends_match_the_original_shell_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout {
+            root: Path::new("/opt/Recog & Tools"),
+            data: Path::new("/srv/Recog data"),
+            logs: Path::new("/srv/Recog data/logs"),
+            home: Path::new("/home/example"),
+            search_path: std::ffi::OsStr::new("/nonexistent"),
+            unit_dir: dir.path(),
+        };
+        for (backend, fixture) in [(Backend::Launchd, "launchd"), (Backend::Systemd, "systemd")] {
+            let reference = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(fixture);
+            for file in backend.render(&layout, &dir.path().join(fixture)).unwrap() {
+                assert_eq!(
+                    fs::read(reference.join(file.file_name().unwrap())).unwrap(),
+                    fs::read(&file).unwrap(),
+                    "{}",
+                    file.display()
+                );
+            }
+        }
+    }
+}

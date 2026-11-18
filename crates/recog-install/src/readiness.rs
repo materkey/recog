@@ -76,3 +76,29 @@ pub fn permission_checks(root: &Path, backend: Backend) -> Vec<Check> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    #[test]
+    fn missing_programs_when_checking_each_platform_then_only_platform_dependencies_block_activation() {
+        let dir = tempfile::tempdir().unwrap();
+        for backend in [Backend::Systemd, Backend::Launchd] {
+            let rows = checks(dir.path(), OsStr::new("/nonexistent"), backend);
+            for name in PROGRAMS {
+                assert!(rows.iter().any(|r| r.name.ends_with(&format!("/bin/{name}")) && !r.ready && r.required));
+            }
+            for name in ["tmux", "claude"] {
+                assert!(rows.iter().any(|r| r.name == name && !r.required));
+            }
+            assert_eq!(rows.iter().any(|r| r.name == "parec"), backend == Backend::Systemd);
+            assert_eq!(rows.iter().any(|r| r.name.ends_with("recog_launcher")), backend == Backend::Launchd);
+        }
+        let fake = dir.path().join("ffmpeg");
+        fs::write(&fake, "fixture").unwrap();
+        assert!(!available("ffmpeg", dir.path().as_os_str()));
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(available("ffmpeg", dir.path().as_os_str()));
+    }
+}

@@ -1,0 +1,18 @@
+[Unit]
+Description=Recog copilot channel daemon (MCP HTTP <-> bridge WS)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Recog & Tools
+Environment="HOME=/home/example"
+Environment="RECOG_DATA_DIR=/srv/Recog data"
+Environment="PATH=/usr/bin:/opt/homebrew/bin:/home/example/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ExecStart="/opt/Recog & Tools/bin/recog-copilot-channel" --repo-root "/opt/Recog & Tools"
+Restart=always
+RestartSec=5
+StandardOutput=append:/srv/Recog data/logs/copilot-channel.stdout.log
+StandardError=append:/srv/Recog data/logs/copilot-channel.stderr.log
+
+[Install]
+WantedBy=default.target

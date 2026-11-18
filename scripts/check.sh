@@ -141,14 +141,9 @@ fi
 step "service units render"
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "$RENDER_DIR"' EXIT
-# Rendering asks recog for the data directory: the installed one, else the debug
-# build the Rust tests above made (a checkout setup.sh has not installed, CI).
-if [ -x bin/recog ] || [ ! -x "${CARGO_TARGET_DIR:-target}/debug/recog" ]; then
-    ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
-else
-    DEPS_BIN_DIR="$(cd "${CARGO_TARGET_DIR:-target}/debug" && pwd)" \
-        ./recog-service.sh render --dry-run "$RENDER_DIR" > /dev/null
-fi
+# Use the binary built by this check, including when services run an older release.
+RENDER_RECOG="${CARGO_TARGET_DIR:-target}/debug/recog"
+"$RENDER_RECOG" service render "$RENDER_DIR" > /dev/null
 echo "  rendered $(find "$RENDER_DIR" -type f | wc -l | tr -d ' ') $(uname -s) units"
 
 # RECOG_QUALITY_BASE runs the full quality gate (docs/quality.md), which

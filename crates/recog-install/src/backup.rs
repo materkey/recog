@@ -138,6 +138,10 @@ mod snapshot_tests {
 
     #[test]
     fn optional_settings_when_backed_up_then_confidential_files_are_private_and_logs_follow_the_flag() {
+        if !crate::readiness::available("rsync", &std::env::var_os("PATH").unwrap_or_default()) {
+            eprintln!("rsync unavailable; skipping external copy check");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         let data = dir.path().join("data");

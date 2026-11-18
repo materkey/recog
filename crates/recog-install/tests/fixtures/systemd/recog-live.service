@@ -1,0 +1,21 @@
+[Unit]
+Description=Recog live transcription (system audio + mic + KTalk bridge)
+# StartLimitIntervalSec belongs in [Unit], not [Service] — systemd ignores it
+# there with "Unknown key" while systemd-analyze verify still exits 0. Zero
+# disables the rate limiter, matching launchd KeepAlive: never give up.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Recog & Tools
+Environment="HOME=/home/example"
+Environment="RECOG_DATA_DIR=/srv/Recog data"
+Environment="PATH=/usr/bin:/opt/homebrew/bin:/home/example/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ExecStart="/opt/Recog & Tools/bin/recog" live --system-audio auto --conferences-only
+Restart=always
+RestartSec=5
+StandardOutput=append:/srv/Recog data/logs/live.stdout.log
+StandardError=append:/srv/Recog data/logs/live.stderr.log
+
+[Install]
+WantedBy=default.target

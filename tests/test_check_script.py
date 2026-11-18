@@ -34,7 +34,7 @@ exit 0
 """
 
 SERVICE_STUB = r"""#!/bin/sh
-printf '%s\n' "recog-service.sh $*" >> "$STUB_LOG"
+printf '%s\n' "recog $*" >> "$STUB_LOG"
 exit "${STUB_RENDER_RC:-0}"
 """
 
@@ -57,8 +57,9 @@ def repo(tmp_path):
     shutil.copy2(REPO_ROOT / "scripts/check.sh", dst / "scripts/check.sh")
     (dst / "scripts/check.sh").chmod(0o755)
 
-    (dst / "recog-service.sh").write_text(SERVICE_STUB)
-    (dst / "recog-service.sh").chmod(0o755)
+    (dst / "target/debug").mkdir(parents=True)
+    (dst / "target/debug/recog").write_text(SERVICE_STUB)
+    (dst / "target/debug/recog").chmod(0o755)
 
     for pkg in ("recog",):
         (dst / pkg).mkdir()
@@ -144,8 +145,7 @@ def test_checks_the_syntax_of_every_shell_script(repo, stub_bin):
     result = run_check(repo, stub_bin)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    for rel in ("scripts/check.sh", "recog-service.sh", "extra.sh",
-                "nested/deep.sh"):
+    for rel in ("scripts/check.sh", "extra.sh", "nested/deep.sh"):
         assert f"bash -n {rel}" in result.stdout
 
 
@@ -174,8 +174,8 @@ def test_ignored_scripts_are_not_checked(repo, stub_bin):
 def test_renders_the_units_into_a_throwaway_dir_and_removes_it(repo, stub_bin):
     result = run_check(repo, stub_bin)
 
-    render = next(c for c in result.calls if c.startswith("recog-service.sh"))
-    assert render.startswith("recog-service.sh render --dry-run ")
+    render = next(c for c in result.calls if c.startswith("recog service render"))
+    assert render.startswith("recog service render ")
     render_dir = Path(render.split()[-1])
     assert repo not in render_dir.parents
     assert not render_dir.exists()

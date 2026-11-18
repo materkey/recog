@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.recog.copilot-supervisor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/Recog &amp; Tools/bin/recog-copilot-supervisor</string>
+        <string>--repo-root</string>
+        <string>/opt/Recog &amp; Tools</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/opt/Recog &amp; Tools</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/srv/Recog data/logs/copilot-supervisor.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/srv/Recog data/logs/copilot-supervisor.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- /opt/homebrew/bin:/home/example/.local/bin carries $HOME/.local/bin, where `claude` lives; the
+             supervisor spawns it via `tmux -L recog-copilot` and the tmux child
+             inherits this PATH. TERM is pinned so Ink does not emit kitty-only
+             DCS queries. -->
+        <key>PATH</key>
+        <string>/usr/bin:/opt/homebrew/bin:/home/example/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/home/example</string>
+        <key>RECOG_DATA_DIR</key>
+        <string>/srv/Recog data</string>
+        <key>TERM</key>
+        <string>xterm-256color</string>
+    </dict>
+</dict>
+</plist>

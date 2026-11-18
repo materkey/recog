@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.recog.live</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/Recog &amp; Tools/Recog.app/Contents/MacOS/recog_launcher</string>
+        <string>/opt/Recog &amp; Tools/bin/recog</string>
+        <string>live</string>
+        <string>--system-audio</string>
+        <string>auto</string>
+        <string>--conferences-only</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/opt/Recog &amp; Tools</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/srv/Recog data/logs/live.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/srv/Recog data/logs/live.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/opt/homebrew/bin:/home/example/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/home/example</string>
+        <key>RECOG_DATA_DIR</key>
+        <string>/srv/Recog data</string>
+    </dict>
+</dict>
+</plist>

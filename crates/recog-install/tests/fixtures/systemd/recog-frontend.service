@@ -1,0 +1,19 @@
+[Unit]
+Description=Recog web UI (FastAPI on http://127.0.0.1:9080)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Recog & Tools
+Environment="HOME=/home/example"
+Environment="RECOG_DATA_DIR=/srv/Recog data"
+Environment="PATH=/usr/bin:/opt/homebrew/bin:/home/example/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+ExecStart="/opt/Recog & Tools/bin/recog-web" --host 127.0.0.1 --port 9080 --repo "/opt/Recog & Tools"
+# Mirrors launchd KeepAlive.SuccessfulExit=false — a clean exit is intentional.
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/srv/Recog data/logs/frontend.stdout.log
+StandardError=append:/srv/Recog data/logs/frontend.stderr.log
+
+[Install]
+WantedBy=default.target

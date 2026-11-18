@@ -83,7 +83,16 @@ fn run(root: &Path, config: &InstallConfig, env: &Environ, args: &[String]) -> R
             println!("{}", recog_core::pyjson::dumps(&value, Some(2)));
             Ok(())
         }
-        "status" => show_status(&manager, &names).map(|_| ()),
+        "status" => {
+            show_status(&manager, &names)?;
+            if manager.backend == recog_install::units::Backend::Systemd {
+                println!(
+                    "To keep user services running after logout: loginctl enable-linger {}",
+                    std::env::var("USER").unwrap_or_else(|_| "$USER".into())
+                );
+            }
+            Ok(())
+        }
         "doctor" | "start" | "restart" => {
             let mut rows = checks(root, &std::env::var_os("PATH").unwrap_or_default(), backend);
             if action == "doctor" {

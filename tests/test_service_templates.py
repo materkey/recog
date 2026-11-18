@@ -1,15 +1,4 @@
-"""Service-layer tests: template rendering and the install/start lifecycle.
-
-`recog-service.sh render --dry-run <dir>` renders the units of one backend
-without touching the service manager, and RECOG_SERVICE_OS selects that backend
-independently of the host — so both the launchd and the systemd units are
-covered from either OS. The lifecycle tests drive the real script against stub
-`launchctl` / `systemctl` binaries on PATH.
-
-The scripts run from a copy of the checkout whose bin/ holds stub programs:
-rendering asks `bin/recog config data-dir`, which the stub answers as the real
-binary does (RECOG_DATA_DIR, else ~/.recog).
-"""
+"""Installed service commands and rendered units, using isolated user directories."""
 
 import atexit
 import os
@@ -24,38 +13,28 @@ from pathlib import Path
 import pytest
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
-PROGRAM_STUB = """#!/bin/sh
-if [ -n "$STUB_LOG" ]; then printf '%s\\n' "$(basename "$0") $*" >> "$STUB_LOG"; fi
-if [ "$*" = "config data-dir" ]; then printf '%s\\n' "${RECOG_DATA_DIR:-$HOME/.recog}"; fi
-exit 0
-"""
-RUST_PROGRAMS = (
-    "recog",
-    "recog-web",
-    "recog-copilot-supervisor",
-    "recog-copilot-channel",
-    "recog-desktop",
-    "recog-mic",
-)
+BUILT_RECOG = SOURCE_ROOT / (os.environ.get("CARGO_TARGET_DIR") or "target") / "debug/recog"
+
+
+if not BUILT_RECOG.is_file():
+    pytest.skip("build recog before running the service integration suite", allow_module_level=True)
 
 
 def make_checkout(repo):
-    """A copy of what the service scripts read, with stub programs in bin/."""
-    repo.mkdir(parents=True)
-    shutil.copy2(SOURCE_ROOT / "recog-service.sh", repo / "recog-service.sh")
-    for tree in ("scripts", "deploy"):
-        shutil.copytree(SOURCE_ROOT / tree, repo / tree)
+    (repo / "crates/recog-live").mkdir(parents=True)
+    (repo / "crates/recog-live/Cargo.toml").touch()
     (repo / "bin").mkdir()
-    for name in RUST_PROGRAMS:
-        (repo / "bin" / name).write_text(PROGRAM_STUB)
-        (repo / "bin" / name).chmod(0o755)
+    try:
+        os.link(BUILT_RECOG, repo / "bin/recog")
+    except OSError:
+        shutil.copy2(BUILT_RECOG, repo / "bin/recog")
     return repo
 
 
 _CHECKOUT_DIR = tempfile.mkdtemp(prefix="recog-units-")
 atexit.register(shutil.rmtree, _CHECKOUT_DIR, True)
 REPO_ROOT = make_checkout(Path(_CHECKOUT_DIR).resolve() / "recog")
-SERVICE_SH = REPO_ROOT / "recog-service.sh"
+SERVICE = REPO_ROOT / "bin/recog"
 
 SERVICES = ("live", "frontend", "copilot-channel", "copilot-supervisor")
 UNIT_FILES = {
@@ -65,7 +44,7 @@ UNIT_FILES = {
 PLACEHOLDER_RE = re.compile(r"@[A-Z_]+@")
 
 
-def run_service_sh(*args, env_extra=None, check=True, script=SERVICE_SH):
+def run_service(*args, env_extra=None, check=True, program=SERVICE):
     env = {**os.environ}
     if args[0] == "render" and "HOME" not in (env_extra or {}):
         env["SVC_UNIT_DIR"] = str(REPO_ROOT / "unused-units")
@@ -75,7 +54,7 @@ def run_service_sh(*args, env_extra=None, check=True, script=SERVICE_SH):
     env.pop("RECOG_INSTALL_RUNTIME", None)
     env.update(env_extra or {})
     return subprocess.run(
-        ["bash", str(script), *args],
+        [str(program), "service", *args],
         capture_output=True,
         text=True,
         check=check,
@@ -84,9 +63,8 @@ def run_service_sh(*args, env_extra=None, check=True, script=SERVICE_SH):
 
 
 def render(target_os, out_dir):
-    run_service_sh(
+    run_service(
         "render",
-        "--dry-run",
         str(out_dir),
         env_extra={"RECOG_SERVICE_OS": target_os},
     )
@@ -94,44 +72,19 @@ def render(target_os, out_dir):
 
 
 @pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
-def test_both_renderers_when_given_the_same_installation_then_unit_bytes_match(tmp_path, target_os):
-    target = Path(os.environ.get("CARGO_TARGET_DIR") or "target")
-    built = SOURCE_ROOT / target / "debug/recog"
-    if not built.is_file():
-        pytest.skip("needs cargo build -p recog-live")
-    repo = make_checkout(tmp_path / "Recog & tools")
-    (repo / "crates/recog-live").mkdir(parents=True)
-    (repo / "crates/recog-live/Cargo.toml").touch()
-    program = repo / "bin/recog"
-    shutil.copy2(built, program)
-    env = {
-        "HOME": str(tmp_path),
-        "PATH": os.environ["PATH"],
-        "RECOG_SERVICE_OS": target_os,
-        "RECOG_DATA_DIR": str(tmp_path / "Meeting & data"),
-        "RECOG_CONFIG_FILE": str(tmp_path / "absent.toml"),
-    }
-    shell, rust = tmp_path / "shell", tmp_path / "rust"
-    subprocess.run([repo / "recog-service.sh", "render", "--dry-run", shell], env=env, check=True)
-    subprocess.run([program, "service", "render", rust], env=env, check=True, cwd=tmp_path)
-    assert sorted(p.name for p in rust.iterdir()) == sorted(UNIT_FILES[target_os])
-    for name in UNIT_FILES[target_os]:
-        assert (rust / name).read_bytes() == (shell / name).read_bytes()
-
-    live_unit = UNIT_FILES[target_os][0]
-    fresh = (shell / live_unit).read_text()
+def test_installed_recording_policy_when_rendering_then_preserved(tmp_path, target_os):
+    unit_dir = tmp_path / "installed"
+    out = tmp_path / "out"
+    unit_dir.mkdir()
+    env = {"SVC_UNIT_DIR": str(unit_dir), "RECOG_SERVICE_OS": target_os, "HOME": str(tmp_path)}
+    live = UNIT_FILES[target_os][0]
+    run_service("render", str(out), env_extra=env)
+    fresh = (out / live).read_text()
     assert "--conferences-only" in fresh
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    env["SVC_UNIT_DIR"] = str(installed)
     for flag in ("--ktalk", "--ktalk-only", "--conferences-only"):
-        (installed / live_unit).write_text(fresh.replace("--conferences-only", flag))
-        subprocess.run(
-            [repo / "recog-service.sh", "render", "--dry-run", shell], env=env, check=True
-        )
-        subprocess.run([program, "service", "render", rust], env=env, check=True)
-        assert (rust / live_unit).read_text() == (installed / live_unit).read_text()
-        assert (shell / live_unit).read_bytes() == (rust / live_unit).read_bytes()
+        (unit_dir / live).write_text(fresh.replace("--conferences-only", flag))
+        run_service("render", str(out), env_extra=env)
+        assert (out / live).read_bytes() == (unit_dir / live).read_bytes()
 
 
 @pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
@@ -145,9 +98,8 @@ def test_custom_cli_directories_when_rendering_then_service_path_can_run_copilot
         cli.write_text(f"#!/bin/sh\necho {name}-ready\n")
         cli.chmod(0o755)
     out = tmp_path / "units"
-    run_service_sh(
+    run_service(
         "render",
-        "--dry-run",
         str(out),
         env_extra={
             "RECOG_SERVICE_OS": target_os,
@@ -172,9 +124,14 @@ def test_custom_data_root_when_rendering_then_env_and_logs_share_it(target_os, t
     """Сервис не должен читать один архив, пока CLI и логи используют другой."""
     data = tmp_path / "My data & archive"
     out = tmp_path / "out"
-    run_service_sh("render", "--dry-run", str(out), env_extra={
-        "RECOG_SERVICE_OS": target_os, "RECOG_DATA_DIR": str(data),
-    })
+    run_service(
+        "render",
+        str(out),
+        env_extra={
+            "RECOG_SERVICE_OS": target_os,
+            "RECOG_DATA_DIR": str(data),
+        },
+    )
     for path in out.iterdir():
         if target_os == "Darwin":
             unit = plistlib.loads(path.read_bytes())
@@ -197,11 +154,7 @@ def stub_bin(tmp_path, names=("launchctl", "systemctl", "tmux")):
     for name in names:
         stub = bin_dir / name
         exit_code = 1 if name == "tmux" else 0
-        stub.write_text(
-            "#!/bin/sh\n"
-            f'printf "%s\\n" "{name} $*" >> "$STUB_LOG"\n'
-            f"exit {exit_code}\n"
-        )
+        stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "{name} $*" >> "$STUB_LOG"\nexit {exit_code}\n')
         stub.chmod(0o755)
     return bin_dir, log
 
@@ -302,8 +255,9 @@ def test_render_survives_a_home_with_a_space_and_an_xml_character(target_os, tmp
     home = tmp_path / "My Home & Co"
     home.mkdir()
     out = tmp_path / "out"
-    run_service_sh(
-        "render", "--dry-run", str(out),
+    run_service(
+        "render",
+        str(out),
         env_extra={"RECOG_SERVICE_OS": target_os, "HOME": str(home)},
     )
     units = {path.name: path for path in sorted(out.iterdir())}
@@ -318,39 +272,12 @@ def test_render_survives_a_home_with_a_space_and_an_xml_character(target_os, tmp
         for name, path in units.items():
             text = path.read_text()
             assert f'Environment="HOME={home}"' in text, name
-            exec_start = next(
-                line for line in text.splitlines() if line.startswith("ExecStart=")
-            )
+            exec_start = next(line for line in text.splitlines() if line.startswith("ExecStart="))
             assert exec_start.startswith('ExecStart="'), name
             path_line = next(
                 line for line in text.splitlines() if line.startswith('Environment="PATH=')
             )
             assert path_line.endswith('"'), name
-
-
-def test_render_rejects_a_template_with_an_unknown_placeholder(tmp_path):
-    """given: a template carrying a placeholder the renderer does not know
-    when: it is rendered
-    then: rendering fails and leaves no output file behind
-    """
-    src = tmp_path / "broken.in"
-    src.write_text("ExecStart=@PYTHON@ @NOT_A_REAL_TOKEN@\n")
-    dst = tmp_path / "broken.out"
-
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            f'SVC_REPO_DIR="{REPO_ROOT}" source "{REPO_ROOT}/scripts/service/common.sh" '
-            f'&& svc_render_template "{src}" "{dst}"',
-        ],
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert "@NOT_A_REAL_TOKEN@" in result.stderr
-    assert not dst.exists()
 
 
 def test_macos_live_unit_starts_the_binary_through_the_recog_application(tmp_path):
@@ -378,16 +305,12 @@ def test_rendered_plists_are_valid_property_lists(tmp_path):
     units = render("Darwin", tmp_path / "out")
 
     for path in units.values():
-        result = subprocess.run(
-            ["plutil", "-lint", str(path)], capture_output=True, text=True
-        )
+        result = subprocess.run(["plutil", "-lint", str(path)], capture_output=True, text=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert "OK" in result.stdout
 
 
-@pytest.mark.skipif(
-    shutil.which("systemd-analyze") is None, reason="systemd-analyze not installed"
-)
+@pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="systemd-analyze not installed")
 def test_rendered_systemd_units_have_no_unknown_keys(tmp_path):
     """`systemd-analyze verify` exits 0 even when it reports an unknown key,
     so the assertion is on the output, not the return code."""
@@ -421,7 +344,7 @@ def test_install_stages_units_without_activating_them(target_os, unit_dir, tmp_p
     env, log, home = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = target_os
 
-    run_service_sh("install", env_extra=env)
+    run_service("install", env_extra=env)
 
     for name in UNIT_FILES[target_os]:
         assert (home / unit_dir / name).is_file()
@@ -439,9 +362,9 @@ def test_launchd_start_loads_every_installed_agent(tmp_path):
     env, log, _ = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Darwin"
 
-    run_service_sh("install", env_extra=env)
+    run_service("install", env_extra=env)
     log.write_text("")
-    run_service_sh("start", env_extra=env)
+    run_service("start", env_extra=env)
 
     calls = log.read_text()
     for name in SERVICES:
@@ -456,7 +379,7 @@ def test_launchd_start_reloads_a_loaded_but_stopped_agent(tmp_path):
     env, log, home = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Darwin"
 
-    run_service_sh("install", env_extra=env)
+    run_service("install", env_extra=env)
 
     launchctl = Path(env["PATH"].split(os.pathsep)[0]) / "launchctl"
     launchctl.write_text(
@@ -472,24 +395,22 @@ def test_launchd_start_reloads_a_loaded_but_stopped_agent(tmp_path):
     launchctl.chmod(0o755)
 
     log.write_text("")
-    run_service_sh("start", env_extra=env)
+    run_service("start", env_extra=env)
 
-    calls = log.read_text().splitlines()
+    calls = log.read_text().splitlines() if log.exists() else []
     for name in SERVICES:
         plist = f"{home}/Library/LaunchAgents/com.recog.{name}.plist"
         assert f"launchctl unload {plist}" in calls
-        assert calls.index(f"launchctl unload {plist}") < calls.index(
-            f"launchctl load {plist}"
-        )
+        assert calls.index(f"launchctl unload {plist}") < calls.index(f"launchctl load {plist}")
 
 
 def test_systemd_start_enables_and_starts_every_installed_unit(tmp_path):
     env, log, _ = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Linux"
 
-    run_service_sh("install", env_extra=env)
+    run_service("install", env_extra=env)
     log.write_text("")
-    run_service_sh("start", env_extra=env)
+    run_service("start", env_extra=env)
 
     calls = log.read_text()
     for name in SERVICES:
@@ -502,9 +423,9 @@ def test_systemd_restart_restarts_instead_of_reloading(tmp_path):
     env, log, _ = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Linux"
 
-    run_service_sh("install", env_extra=env)
+    run_service("install", env_extra=env)
     log.write_text("")
-    run_service_sh("restart", env_extra=env)
+    run_service("restart", env_extra=env)
 
     calls = log.read_text()
     for name in SERVICES:
@@ -518,25 +439,23 @@ def test_launchd_restart_unloads_before_loading(tmp_path):
     env, log, home = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Darwin"
 
-    run_service_sh("install", env_extra=env)
+    run_service("install", env_extra=env)
     log.write_text("")
-    run_service_sh("restart-live", env_extra=env)
+    run_service("restart", "live", env_extra=env)
 
-    calls = log.read_text().splitlines()
+    calls = log.read_text().splitlines() if log.exists() else []
     plist = f"{home}/Library/LaunchAgents/com.recog.live.plist"
-    assert calls.index(f"launchctl unload {plist}") < calls.index(
-        f"launchctl load {plist}"
-    )
+    assert calls.index(f"launchctl unload {plist}") < calls.index(f"launchctl load {plist}")
 
 
 def test_start_without_install_fails_loudly(tmp_path):
     env, _, _ = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Linux"
 
-    result = run_service_sh("start", env_extra=env, check=False)
+    result = run_service("start", env_extra=env, check=False)
 
     assert result.returncode != 0
-    assert "install" in result.stdout
+    assert "install" in result.stderr
 
 
 def test_restart_keeps_the_copilot_session_alive(tmp_path):
@@ -545,9 +464,9 @@ def test_restart_keeps_the_copilot_session_alive(tmp_path):
     env, log, _ = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Linux"
 
-    run_service_sh("install", env_extra=env)
+    run_service("install", env_extra=env)
     log.write_text("")
-    run_service_sh("restart", env_extra=env)
+    run_service("restart", env_extra=env)
 
     calls = log.read_text()
     assert "kill-session" not in calls
@@ -564,9 +483,9 @@ def test_stop_reaps_the_linux_transient_copilot_unit(tmp_path):
     env, log, _ = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Linux"
 
-    run_service_sh("install", env_extra=env)
+    run_service("install", env_extra=env)
     log.write_text("")
-    run_service_sh("stop", env_extra=env)
+    run_service("stop", env_extra=env)
 
     assert "systemctl --user stop recog-copilot-session.service" in log.read_text()
 
@@ -577,7 +496,7 @@ def test_linux_status_hints_at_lingering(tmp_path):
     env, _, _ = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Linux"
 
-    result = run_service_sh("status", env_extra=env)
+    result = run_service("status", env_extra=env)
 
     assert "enable-linger" in result.stdout
 
@@ -586,24 +505,22 @@ def test_macos_status_has_no_linger_hint(tmp_path):
     env, _, _ = stub_env(tmp_path)
     env["RECOG_SERVICE_OS"] = "Darwin"
 
-    result = run_service_sh("status", env_extra=env)
+    result = run_service("status", env_extra=env)
 
     assert "enable-linger" not in result.stdout
 
 
-def test_render_requires_the_dry_run_flag_and_a_directory(tmp_path):
-    for args in (["render"], ["render", str(tmp_path / "out")], ["render", "--dry-run"]):
-        result = run_service_sh(*args, check=False)
-        assert result.returncode != 0, args
+def test_render_requires_a_directory(tmp_path):
+    for args in (["render"], ["render", "--dry-run"], ["render", "one", "two"]):
+        result = run_service(*args, check=False)
+        assert result.returncode != 0
 
 
 def test_unsupported_os_is_rejected():
-    result = run_service_sh(
-        "status", env_extra={"RECOG_SERVICE_OS": "Plan9"}, check=False
-    )
+    result = run_service("status", env_extra={"RECOG_SERVICE_OS": "Plan9"}, check=False)
 
     assert result.returncode != 0
-    assert "Unsupported OS" in result.stderr
+    assert "Unsupported service OS" in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -613,23 +530,7 @@ def test_unsupported_os_is_rejected():
 
 @pytest.fixture
 def rust_checkout(tmp_path):
-    """A copy of what rendering reads, with stub programs in bin/; its path has a
-    space and `&`, which each unit format must keep in one argument. `recog config
-    data-dir` answers as the real binary does; a python on PATH would log."""
-    repo = tmp_path / "check & out"
-    repo.mkdir()
-    shutil.copy2(SOURCE_ROOT / "recog-service.sh", repo / "recog-service.sh")
-    for tree in ("scripts", "deploy"):
-        shutil.copytree(SOURCE_ROOT / tree, repo / tree)
-    bin_dir = repo / "bin"
-    bin_dir.mkdir()
-    for name in RUST_PROGRAMS:
-        (bin_dir / name).write_text(
-            "#!/bin/sh\n"
-            'printf "%s\\n" "$(basename "$0") $*" >> "$STUB_LOG"\n'
-            'if [ "$*" = "config data-dir" ]; then printf "%s\\n" "$TEST_DATA_DIR"; fi\n'
-        )
-        (bin_dir / name).chmod(0o755)
+    repo = make_checkout(tmp_path / "check & out")
     stubs = tmp_path / "stubs"
     stubs.mkdir()
     for name in ("python", "python3", "python3.12"):
@@ -638,7 +539,7 @@ def rust_checkout(tmp_path):
     log = tmp_path / "stub.log"
     env = {
         "RECOG_INSTALL_RUNTIME": "rust",
-        "TEST_DATA_DIR": str(tmp_path / "data"),
+        "RECOG_DATA_DIR": str(tmp_path / "data"),
         "STUB_LOG": str(log),
         "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
     }
@@ -646,12 +547,11 @@ def rust_checkout(tmp_path):
 
 
 def render_rust(repo, env, target_os, out):
-    run_service_sh(
+    run_service(
         "render",
-        "--dry-run",
         str(out),
         env_extra={**env, "RECOG_SERVICE_OS": target_os},
-        script=repo / "recog-service.sh",
+        program=repo / "bin/recog",
     )
     return {path.name: path for path in sorted(Path(out).iterdir())}
 
@@ -700,9 +600,9 @@ def test_installation_without_python_when_rendering_launchd_then_units_run_the_b
         str(repo),
     ]
     data = plistlib.loads(units["com.recog.live.plist"].read_bytes())["EnvironmentVariables"]
-    assert data["RECOG_DATA_DIR"] == env["TEST_DATA_DIR"]
-    calls = log.read_text().splitlines()
-    assert calls and not [c for c in calls if c.startswith("python")], calls
+    assert data["RECOG_DATA_DIR"] == env["RECOG_DATA_DIR"]
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert not [c for c in calls if c.startswith("python")], calls
 
 
 def test_installation_without_python_when_rendering_systemd_then_exec_start_runs_the_binaries(
@@ -731,28 +631,7 @@ def test_installation_without_python_when_rendering_systemd_then_exec_start_runs
     )
     for path in units.values():
         assert not PLACEHOLDER_RE.search(path.read_text()), path.name
-    assert not [c for c in log.read_text().splitlines() if c.startswith("python")]
-
-
-@pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
-def test_installation_without_python_and_no_binary_when_rendering_then_it_fails_naming_setup(
-    rust_checkout, target_os, tmp_path
-):
-    repo, env, _ = rust_checkout
-    (repo / "bin/recog").unlink()
-
-    result = run_service_sh(
-        "render",
-        "--dry-run",
-        str(tmp_path / "out"),
-        env_extra={**env, "RECOG_SERVICE_OS": target_os},
-        script=repo / "recog-service.sh",
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "bin/recog is not installed" in result.stderr
-    assert "./setup.sh" in result.stderr
+    assert not log.exists()
 
 
 def test_install_runtime_in_config_file_when_rendering_then_it_decides(rust_checkout, tmp_path):

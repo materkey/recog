@@ -266,7 +266,7 @@ fn finish(root: &Path, config: &InstallConfig, env: &Environ, args: &[String], p
                 .arg(&target))?;
             fs::rename(target, root.join("bin/recog-permission-probe"))?;
         }
-        if !has("--no-services") {
+        if !has("--no-services") && manager.backend == recog_install::units::Backend::Launchd {
             guide_permissions(root, config.live.zoom_app)?;
         }
     }
