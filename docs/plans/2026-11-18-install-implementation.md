@@ -58,3 +58,15 @@ replacements pass the same checks.
   reported missing Accessibility when enabled. The denial/recovery checks and
   the Mac test call before and after upgrade still require an interactive session.
 - The shared Homebrew tap is public. The source repository remains private.
+
+## Private release update verification, 2026-11-19
+
+- Homebrew upgraded 0.1.0 to 0.1.3 from the published formula. Setup in the same
+  isolated home retained the launcher inode and digest and the unpacked extension
+  directory. This checks launcher identity; the interactive macOS grant and call
+  checks above remain outstanding.
+- On Z270XX the standalone 0.1.1 updater fetched 0.1.3 using the installing
+  account, installed it and restarted four isolated user services. The web live
+  status responded, and a second update reported the installed version as current.
+- Both release asset digests matched GitHub. The bundled Swift helpers target
+  macOS 13. The formula is public and an anonymous release asset request returned 404.
