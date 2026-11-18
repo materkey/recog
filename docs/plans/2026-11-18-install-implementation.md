@@ -38,11 +38,19 @@ replacements pass the same checks.
   conference. Service rendering matches frozen shell output for all eight units.
 - The macOS release archive installed into an empty temporary home, applied
   custom extension hosts, and preserved the launcher on repeated setup. Homebrew
-  installed and tested the generated formula using a local archive URL.
-- On Linux x86-64, the archive was built from the release candidate, installed
-  without a checkout, and its rendered user units passed systemd verification.
+  installed the public formula and fetched the matching private archive with
+  the installing user’s GitHub login. An anonymous request returned 404.
+- On Z270XX, the Linux x86-64 release archive for v0.1.2 ran a real two-participant
+  Jitsi call in an isolated network. The installed unpacked extension opened
+  capture on join, displayed the first transcript and closed capture on leave.
+  Separate Russian clips played through a virtual microphone and the system
+  output produced distinct local and remote transcript rows. Both audio files
+  stopped growing after leave. The default microphone regression this exercise
+  found is covered in `crates/recog-live/tests/live_policy.rs`.
 - The Mac acceptance host upgraded from the Python installation and kept its
   archive and recording mode. All four Rust services and the web readiness route
-  responded. Setup separately detected the missing microphone and system audio
-  grants. Verifying a first transcript with both grants still requires a test call.
+  responded. The installed launcher saw the microphone grant after the interactive
+  request. The system audio grant is pending. The native Zoom helper separately
+  reported missing Accessibility when enabled. The denial/recovery checks and
+  the Mac test call before and after upgrade still require an interactive session.
 - The shared Homebrew tap is public. The source repository remains private.
