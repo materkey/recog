@@ -61,20 +61,7 @@ pub fn permission_checks(root: &Path, backend: Backend, zoom: bool) -> Vec<Check
     if backend != Backend::Launchd {
         return Vec::new();
     }
-    let mut rows: Vec<Check> = match crate::permissions::probe(root, None) {
-        Ok(grants) => [("Микрофон", grants.microphone), ("Системный звук", grants.system_audio)]
-            .into_iter()
-            .map(|(name, state)| Check {
-                name: name.into(),
-                ready: state == "granted",
-                required: true,
-                hint: format!("{state}; recog setup --permissions"),
-            })
-            .collect(),
-        Err(e) => {
-            vec![Check { name: "Разрешения macOS".into(), ready: false, required: true, hint: e.to_string() }]
-        }
-    };
+    let mut rows = capture_grants(crate::permissions::probe(root, None));
     if zoom {
         let app = root.join(recog_zoom::helper_app::HELPER_APP);
         let result = recog_zoom::helper_link::accessibility(&app, false);
@@ -88,10 +75,39 @@ pub fn permission_checks(root: &Path, backend: Backend, zoom: bool) -> Vec<Check
     rows
 }
 
+fn capture_grants(probe: std::io::Result<crate::permissions::Grants>) -> Vec<Check> {
+    match probe {
+        Ok(grants) => [("Микрофон", grants.microphone), ("Системный звук", grants.system_audio)]
+            .into_iter()
+            .map(|(name, state)| Check {
+                name: name.into(),
+                ready: state == "granted",
+                required: true,
+                hint: format!("{state}; recog setup --permissions"),
+            })
+            .collect(),
+        Err(e) => {
+            vec![Check { name: "Разрешения macOS".into(), ready: false, required: true, hint: e.to_string() }]
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn grants_when_reporting_readiness_then_each_capture_is_reported_separately() {
+        for (mic, system) in [("granted", "not-granted"), ("denied", "granted")] {
+            let checks =
+                capture_grants(Ok(crate::permissions::Grants { microphone: mic.into(), system_audio: system.into() }));
+            assert_eq!((checks[0].ready, checks[1].ready), (mic == "granted", system == "granted"));
+            assert!(checks.iter().all(|c| c.required));
+        }
+        let failed = capture_grants(Err(std::io::Error::other("launcher unavailable")));
+        assert!(!failed[0].ready && failed[0].hint.contains("unavailable"));
+    }
+
     #[test]
     fn missing_programs_when_checking_each_platform_then_only_platform_dependencies_block_activation() {
         let dir = tempfile::tempdir().unwrap();

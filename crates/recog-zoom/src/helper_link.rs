@@ -169,10 +169,14 @@ pub async fn helper_lines(
 /// Ask the helper itself about Accessibility. Its first snapshot is enough:
 /// closing the private socket makes this probe instance exit.
 pub fn accessibility(app: &Path, prompt: bool) -> Result<bool, LaunchError> {
+    accessibility_with(app, prompt, &OpenLauncher)
+}
+
+fn accessibility_with(app: &Path, prompt: bool, launcher: &impl Launcher) -> Result<bool, LaunchError> {
     let runtime =
         tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| LaunchError(e.to_string()))?;
     runtime.block_on(async {
-        let mut lines = helper_lines(app, prompt, &OpenLauncher, HELPER_CONNECT).await?;
+        let mut lines = helper_lines(app, prompt, launcher, HELPER_CONNECT).await?;
         let line = tokio::time::timeout(HELPER_CONNECT, lines.next_line())
             .await
             .map_err(|_| LaunchError("Zoom permission probe timed out".into()))?
@@ -215,6 +219,25 @@ impl Drop for AbortGuard {
 #[cfg(test)]
 mod permission_tests {
     use super::*;
+    struct Snapshot(&'static [u8]);
+    impl Launcher for Snapshot {
+        async fn launch(&self, command: Vec<String>) -> std::io::Result<CommandOutcome> {
+            use tokio::io::AsyncWriteExt;
+            let index = command.iter().position(|p| p == "--socket").unwrap() + 1;
+            let mut writer = tokio::net::UnixStream::connect(&command[index]).await?;
+            writer.write_all(self.0).await?;
+            Ok(CommandOutcome { success: true, stderr: String::new() })
+        }
+    }
+
+    #[test]
+    fn helper_connection_when_checking_access_then_reads_its_first_snapshot_and_detects_disconnect() {
+        let app = Path::new("RecogZoomHelper.app");
+        assert!(!accessibility_with(app, false, &Snapshot(br#"{"state":"not_trusted"}"#)).unwrap());
+        assert!(accessibility_with(app, true, &Snapshot(br#"{"state":"idle"}"#)).unwrap());
+        assert!(accessibility_with(app, false, &Snapshot(b"")).is_err());
+    }
+
     #[test]
     fn helper_snapshot_when_checking_accessibility_then_only_known_trusted_states_pass() {
         for state in ["idle", "meeting", "zoom_not_running", "not_trusted"] {

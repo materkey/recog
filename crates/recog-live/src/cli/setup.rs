@@ -134,62 +134,73 @@ fn copy_initial_env(root: &Path) -> Result<()> {
     }
 }
 
-fn guide_permissions(root: &Path, config: &InstallConfig) -> Result<()> {
-    use recog_install::permissions::probe;
-    let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
-    let mut grants = probe(root, None)?;
-    for (key, title, reason, pane) in [
-        ("microphone", "Микрофон", "для вашей речи", "Microphone"),
-        ("system-audio", "Запись экрана и системного звука", "для звука других участников", "ScreenCapture"),
-    ] {
-        let granted = if key == "microphone" { &grants.microphone } else { &grants.system_audio };
-        println!("Recog — {title} ({reason}): {granted}");
-        if granted == "granted" {
-            continue;
-        }
-        if terminal {
-            print!("Нажмите Enter, чтобы запросить разрешение, или введите s, чтобы пропустить: ");
-            io::stdout().flush()?;
-            let mut answer = String::new();
-            if io::stdin().read_line(&mut answer)? > 0 && answer.trim().is_empty() {
-                grants = probe(root, Some(key))?;
-            }
-        }
-        let state = if key == "microphone" { &grants.microphone } else { &grants.system_audio };
-        if state != "granted" {
-            println!(
-                "Откройте Настройки системы → Конфиденциальность и безопасность → {title}, включите Recog и повторите recog setup --permissions. Ссылка: x-apple.systempreferences:com.apple.preference.security?Privacy_{pane}"
-            );
-        }
+fn confirm_permission() -> Result<bool> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Ok(false);
     }
-    if config.live.zoom_app {
-        let identity = &config.macos.codesign_identity;
-        let app = recog_zoom::helper_app::find_or_build_helper(
-            root,
-            if identity.is_empty() { "-" } else { identity },
-            &recog_zoom::helper_app::SystemToolchain,
-            &recog_zoom::log::Logger::stderr(),
-        )?;
-        if !recog_zoom::helper_link::accessibility(&app, false)? {
-            println!(
-                "Для настольного Zoom включите Recog Zoom Helper в Настройки системы → Конфиденциальность и безопасность → Универсальный доступ."
-            );
-            if terminal {
-                print!("Нажмите Enter для запроса или введите s, чтобы пропустить: ");
-                io::stdout().flush()?;
-                let mut answer = String::new();
-                if io::stdin().read_line(&mut answer)? > 0 && answer.trim().is_empty() {
-                    let granted = recog_zoom::helper_link::accessibility(&app, true)?;
-                    if !granted {
-                        println!("После выдачи доступа проверьте состояние через recog doctor.");
-                    }
-                }
-            }
-        } else {
-            println!("Recog Zoom Helper: универсальный доступ выдан.");
-        }
+    print!("Нажмите Enter для запроса или введите s, чтобы пропустить: ");
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    Ok(io::stdin().read_line(&mut answer)? > 0 && answer.trim().is_empty())
+}
+
+fn guide_grant(
+    label: &str,
+    granted: bool,
+    hint: &str,
+    confirm: impl FnOnce() -> Result<bool>,
+    request: impl FnOnce() -> Result<bool>,
+) -> Result<()> {
+    if granted {
+        println!("{label}: доступ выдан.");
+        return Ok(());
+    }
+    println!("{label}: требуется разрешение.");
+    if confirm()? && request()? {
+        println!("{label}: доступ выдан.");
+    } else {
+        println!("{hint}");
     }
     Ok(())
+}
+
+fn guide_permissions(root: &Path, config: &InstallConfig) -> Result<()> {
+    use recog_install::permissions::probe;
+    let grants = probe(root, None)?;
+    guide_grant(
+        "Recog — микрофон для вашей речи",
+        grants.microphone == "granted",
+        "Настройки системы → Конфиденциальность и безопасность → Микрофон → Recog. Затем повторите recog setup --permissions.",
+        confirm_permission,
+        || Ok(probe(root, Some("microphone"))?.microphone == "granted"),
+    )?;
+    guide_grant(
+        "Recog — запись экрана и системного звука для речи других участников",
+        grants.system_audio == "granted",
+        "Настройки системы → Конфиденциальность и безопасность → Запись экрана и системного звука → Recog. Затем повторите recog setup --permissions.",
+        confirm_permission,
+        || Ok(probe(root, Some("system-audio"))?.system_audio == "granted"),
+    )?;
+    if config.live.zoom_app {
+        guide_zoom_access(root, &config.macos.codesign_identity)?;
+    }
+    Ok(())
+}
+
+fn guide_zoom_access(root: &Path, identity: &str) -> Result<()> {
+    let app = recog_zoom::helper_app::find_or_build_helper(
+        root,
+        if identity.is_empty() { "-" } else { identity },
+        &recog_zoom::helper_app::SystemToolchain,
+        &recog_zoom::log::Logger::stderr(),
+    )?;
+    guide_grant(
+        "Recog Zoom Helper — универсальный доступ для настольного Zoom",
+        recog_zoom::helper_link::accessibility(&app, false)?,
+        "Настройки системы → Конфиденциальность и безопасность → Универсальный доступ → Recog Zoom Helper. Затем запустите recog doctor.",
+        confirm_permission,
+        || Ok(recog_zoom::helper_link::accessibility(&app, true)?),
+    )
 }
 
 pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[String], built: bool) -> Result<()> {
@@ -410,4 +421,33 @@ pub(super) fn update(root: &Path, config: &InstallConfig, env: &Environ, args: &
         ])
         .current_dir(root))?;
     run(Command::new("cargo").arg("setup").args(args).current_dir(root))
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::*;
+    #[test]
+    fn permission_step_when_granted_skipped_or_requested_then_only_a_confirmed_missing_grant_prompts() {
+        for (granted, confirm, expect_request) in [(true, false, false), (false, false, false), (false, true, true)] {
+            for answer in [false, true] {
+                let called = std::cell::Cell::new(false);
+                guide_grant(
+                    "Recog",
+                    granted,
+                    "settings",
+                    || {
+                        assert!(!granted);
+                        Ok(confirm)
+                    },
+                    || {
+                        called.set(true);
+                        Ok(answer)
+                    },
+                )
+                .unwrap();
+                assert_eq!(called.get(), expect_request);
+            }
+        }
+        assert!(guide_grant("Recog", false, "settings", || Ok(true), || Err("probe failed".into())).is_err());
+    }
 }
