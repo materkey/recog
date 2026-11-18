@@ -87,8 +87,8 @@ pub(super) fn migrate(repo: &Path, environ: &Environ, args: &[String]) -> i32 {
     }
 }
 
-pub(super) fn render_units(root: &Path, environ: &Environ, dest: &Path) -> Result<Vec<PathBuf>, String> {
-    use recog_install::units::{Backend, Layout};
+pub(super) fn service_backend() -> Result<recog_install::units::Backend, String> {
+    use recog_install::units::Backend;
     let backend = match std::env::var("RECOG_SERVICE_OS").as_deref() {
         Ok("Darwin") => Backend::Launchd,
         Ok("Linux") => Backend::Systemd,
@@ -96,6 +96,12 @@ pub(super) fn render_units(root: &Path, environ: &Environ, dest: &Path) -> Resul
         Err(_) | Ok("") if cfg!(target_os = "linux") => Backend::Systemd,
         _ => return Err("Unsupported service OS (expected Darwin or Linux)".into()),
     };
+    Ok(backend)
+}
+
+pub(super) fn render_units(root: &Path, environ: &Environ, dest: &Path) -> Result<Vec<PathBuf>, String> {
+    use recog_install::units::Layout;
+    let backend = service_backend()?;
     let home = std::env::var_os("HOME").ok_or("HOME is missing")?;
     let path = std::env::var_os("PATH").unwrap_or_default();
     let data = get_data_dir(root, environ, &mut |warning| eprintln!("{warning}")).map_err(|e| e.to_string())?;

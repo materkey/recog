@@ -3,6 +3,7 @@
 pub mod args;
 pub mod install;
 pub mod meetings;
+mod services;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -344,6 +345,11 @@ pub fn main(argv: &[String]) -> i32 {
     {
         return install::migrate(&repo_root, &environ, args);
     }
+    if argv.first().is_some_and(|a| a == "service")
+        && argv.get(1).is_some_and(|a| matches!(a.as_str(), "stop" | "uninstall"))
+    {
+        return services::command(&repo_root, &InstallConfig::default(), &environ, &argv[1..]);
+    }
     match load_command(argv, &repo_root, &mut environ) {
         Ok((command, config)) => run_command(command, &config, &environ, &repo_root),
         Err(code) => code,
@@ -397,6 +403,8 @@ fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo
                 1
             }
         },
+        Command::Service(args) => services::command(repo_root, config, environ, &args),
+        Command::Doctor => services::command(repo_root, config, environ, &["doctor".into()]),
         Command::Copilot => install::copilot(repo_root),
         Command::Check => install::print(install::check(repo_root, config, environ)),
         Command::Config(query) => install::print(install::config(query, repo_root, config, environ)),

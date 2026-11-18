@@ -93,6 +93,8 @@ pub enum Command {
     /// The KTalk desktop subcommands with their arguments, run by `recog-desktop`.
     Desktop(Vec<String>),
     ServiceRender(String),
+    Service(Vec<String>),
+    Doctor,
     Copilot,
     /// Whether the settings can serve: what `scripts/deps.sh` asked Python.
     Check,
@@ -114,8 +116,10 @@ pub struct Exit {
     pub code: i32,
 }
 
-pub const MAIN_USAGE: &str =
-    "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,service,copilot,migrate-data} ...";
+pub const MAIN_USAGE: &str = "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,service,doctor,copilot,migrate-data} ...";
+
+pub const SERVICE_USAGE: &str =
+    "usage: recog service install|uninstall|start|stop|restart|status|logs [name] [--stdout] | debug | render DIR";
 
 const CHECK_USAGE: &str = "usage: recog check [-h]";
 
@@ -142,7 +146,7 @@ pub fn main_help() -> String {
 CLI-утилита для live-транскрибирования и управления митингами
 
 positional arguments:
-  {{live,meetings,replay,desktop,check,config,launcher,prefetch,service,copilot,migrate-data}}
+  {{live,meetings,replay,desktop,check,config,launcher,prefetch,service,doctor,copilot,migrate-data}}
                         Доступные команды
     live                Live транскрипция с микрофона и/или системного звука
     meetings            Просмотр сохранённых митингов
@@ -152,7 +156,8 @@ positional arguments:
     config              Напечатать значение для скриптов установки
     launcher            Собрать Recog.app, если её исходник изменился (macOS)
     prefetch            Скачать модель ASR в кэш Hugging Face
-    service render DIR  Записать файлы служб в каталог DIR
+    service             Управление службами (см. recog service --help)
+    doctor              Проверить готовность установки
     copilot             Запустить Claude Code в текущем терминале
     migrate-data        Перенести старые данные из каталога исходников
 
@@ -551,14 +556,23 @@ pub fn parse(argv: &[String], mic_default: &str) -> Result<Command, Exit> {
         "desktop" => Ok(Command::Desktop(rest.to_vec())),
         "service" => match rest {
             [action, dir] if action == "render" && !dir.starts_with('-') => Ok(Command::ServiceRender(dir.clone())),
+            [flag] if matches!(flag.as_str(), "-h" | "--help") => {
+                Err(Exit { stdout: format!("{SERVICE_USAGE}\n"), stderr: String::new(), code: 0 })
+            }
             [action, flag] if action == "render" && matches!(flag.as_str(), "-h" | "--help") => {
                 Err(Exit { stdout: "usage: recog service render DIR\n".into(), stderr: String::new(), code: 0 })
             }
-            [flag] if matches!(flag.as_str(), "-h" | "--help") => {
-                Err(Exit { stdout: "usage: recog service render DIR\n".into(), stderr: String::new(), code: 0 })
+            [action, ..]
+                if matches!(
+                    action.as_str(),
+                    "install" | "uninstall" | "status" | "start" | "stop" | "restart" | "logs" | "debug"
+                ) =>
+            {
+                Ok(Command::Service(rest.to_vec()))
             }
-            _ => Err(error("usage: recog service render DIR", "recog service", "expected render DIR")),
+            _ => Err(error(SERVICE_USAGE, "recog service", "expected a service command")),
         },
+        "doctor" => parse_bare(rest, "usage: recog doctor [-h]", "Проверить готовность установки", Command::Doctor),
         "copilot" => {
             parse_bare(rest, "usage: recog copilot [-h]", "Запустить Copilot в текущем терминале", Command::Copilot)
         }
@@ -586,7 +600,7 @@ fn unknown_command(other: &str) -> Exit {
         "recog",
         &format!(
             "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop', \
-             'check', 'config', 'launcher', 'prefetch', 'service', 'copilot', 'migrate-data')",
+             'check', 'config', 'launcher', 'prefetch', 'service', 'doctor', 'copilot', 'migrate-data')",
             py_repr(other)
         ),
     )
