@@ -1,7 +1,7 @@
 # Installing and updating recog: one program, no shell scripts
 
 Status: proposed on 2026-11-10, nothing built. This document sets the route and designs
-its first step; steps 2 to 4 get their own designs when their turn comes.
+its first step; steps 2 and 3 get their own designs when their turn comes.
 
 ## Purpose
 
@@ -36,7 +36,7 @@ recog setup
 Afterwards, from any directory:
 
 ```
-recog update                                          # everything an update needs
+recog update                                          # updates files and reports any Chrome reload needed
 recog doctor                                          # what is missing, on one screen
 recog service start|stop|restart|status|logs [name]
 ```
@@ -48,7 +48,8 @@ From a checkout (developers; Linux until archives exist) the first command is
 
 Goals:
 
-- On macOS two commands lead to a working installation, and one command updates it.
+- On macOS two commands guide installation, including the manual Chrome steps.
+  One command updates the installation and prompts for Reload if the extension changed.
 - No shell script takes part in installing, updating or running recog.
 - One list of checks says what is missing: in the terminal (`recog doctor`), later in
   the web UI.
@@ -62,6 +63,7 @@ Non-goals:
 - Another service model: the four services under launchd / `systemd --user` stay.
 - Merging the six programs into one file.
 - Installing the optional ASR server.
+- Publishing the extension in the Chrome Web Store.
 
 Anti-goals:
 
@@ -105,15 +107,15 @@ changes, so ordinary binary updates preserve the macOS permission grants.
 
 ## Route
 
-Steps 1–4 are implementation milestones. The first public release ships once all
-four work together, including installation of the extension from the Chrome Web Store.
+The first public release ships once steps 1–3 work together. The release archive
+includes the built extension. Setup prints its stable installation path and guides
+the user through Developer mode and Load unpacked at `chrome://extensions`.
 
 | Step | What | Needs from the owner |
 |------|------|----------------------|
 | 1 | Everything the scripts do moves into `recog`; the installation is still a checkout. Designed below. | Nothing |
 | 2 | Public source and tagged binary releases in `materkey/recog`; installation from the release archives without a checkout. | Create the public tap `materkey/homebrew-apps` |
 | 3 | A guided first run: the permissions one at a time in `recog setup`, a readiness list in the web UI from the checks of `recog doctor`. | Nothing |
-| 4 | The extension without Load unpacked and Reload. | Publishing it in the Chrome Web Store |
 
 Known for step 2 already: `recog_launcher` takes the program to run as its argument, so
 `Recog.app` can sit at a stable path outside Homebrew's versioned directory and its
@@ -136,9 +138,10 @@ the following through the installed service launched by `Recog.app`:
 - Enable native Zoom integration and grant Accessibility to **Recog Zoom Helper**.
   Verify that the helper picks up the grant. With native Zoom disabled, basic
   transcription works without that grant.
-- Install the extension from the store and join a supported call. Verify that the
-  first transcript appears. Perform an ordinary update with unchanged helper
-  signatures and repeat the capture checks with the existing grants.
+- Load the unpacked extension from the path printed by setup and join a supported
+  call. Verify that the first transcript appears. Update to a release with changed
+  extension files and unchanged helper signatures. Follow the Reload prompt in
+  Chrome and repeat the capture checks with the existing grants.
 
 ## Step 1: the scripts' work moves into `recog`
 
@@ -270,5 +273,4 @@ port first, the deletion of the scripts last).
 None of them blocks step 1.
 
 - Creating `materkey/homebrew-apps` (step 2).
-- Publishing the extension in the Chrome Web Store (step 4).
 - A paid Apple Developer ID, only if `Recog.app` is to be shipped ready (then a cask).
