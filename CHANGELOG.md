@@ -11,6 +11,9 @@ reasoning.
 
 ### Changed
 
+- On macOS, `recog setup --permissions` walks through microphone and system
+  audio access under the installed Recog launcher. `recog doctor` reports each
+  grant separately. Run setup once to install the permission probe.
 - From a checkout, use `cargo setup` to build and install, and `recog update`
   for a fast-forward update. Both defer installation during a conference.
 - After rebuilding, `recog service` can install, start, stop and restart the user

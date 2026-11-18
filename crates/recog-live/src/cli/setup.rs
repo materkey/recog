@@ -1,6 +1,6 @@
 //! Build a checkout, then let its freshly built binary install it.
 use std::fs;
-use std::io;
+use std::io::{self, IsTerminal, Write};
 use std::os::unix::fs::symlink;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -14,8 +14,7 @@ use recog_install::services::{Manager, NAMES, State};
 use super::{install, storage_options};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const HELP: &str =
-    "usage: recog setup [--dry-run] [--no-services] [--no-extension] [--no-prefetch] [--no-env] [--force]";
+const HELP: &str = "usage: recog setup [--dry-run] [--no-services] [--no-extension] [--no-prefetch] [--no-env] [--force] | --permissions";
 
 fn run(cmd: &mut Command) -> Result<()> {
     let status = cmd.status()?;
@@ -135,10 +134,52 @@ fn copy_initial_env(root: &Path) -> Result<()> {
     }
 }
 
+fn guide_permissions(root: &Path, zoom: bool) -> Result<()> {
+    use recog_install::permissions::probe;
+    let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
+    let mut grants = probe(root, None)?;
+    for (key, title, reason, pane) in [
+        ("microphone", "Микрофон", "для вашей речи", "Microphone"),
+        ("system-audio", "Запись экрана и системного звука", "для звука других участников", "ScreenCapture"),
+    ] {
+        let granted = if key == "microphone" { &grants.microphone } else { &grants.system_audio };
+        println!("Recog — {title} ({reason}): {granted}");
+        if granted == "granted" {
+            continue;
+        }
+        if terminal {
+            print!("Нажмите Enter, чтобы запросить разрешение, или введите s, чтобы пропустить: ");
+            io::stdout().flush()?;
+            let mut answer = String::new();
+            if io::stdin().read_line(&mut answer)? > 0 && answer.trim().is_empty() {
+                grants = probe(root, Some(key))?;
+            }
+        }
+        let state = if key == "microphone" { &grants.microphone } else { &grants.system_audio };
+        if state != "granted" {
+            println!(
+                "Откройте Настройки системы → Конфиденциальность и безопасность → {title}, включите Recog и повторите recog setup --permissions. Ссылка: x-apple.systempreferences:com.apple.preference.security?Privacy_{pane}"
+            );
+        }
+    }
+    if zoom {
+        println!(
+            "Приложение Zoom: включите Recog Zoom Helper в Настройки системы → Конфиденциальность и безопасность → Универсальный доступ."
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[String], built: bool) -> Result<()> {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{HELP}");
         return Ok(());
+    }
+    if args == ["--permissions"] {
+        if cfg!(target_os = "macos") {
+            return guide_permissions(root, config.live.zoom_app);
+        }
+        return Err("macOS permission setup is available on a Mac".into());
     }
     if !args.iter().all(|a| {
         matches!(
@@ -200,6 +241,16 @@ pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[
         use crate::capture::sck::{self, OsToolchain};
         sck::find_or_build_sck_utility(root, &OsToolchain, &crate::log::Logger::stderr()).map_err(|e| e.to_string())?;
         run(Command::new(&bin).arg("launcher"))?;
+        if !has("--no-services") {
+            let probe = tempfile::tempdir_in(root.join("bin"))?;
+            let target = probe.path().join("recog-permission-probe");
+            run(Command::new("swiftc")
+                .arg(root.join("crates/recog-live/macos/recog_permission_probe.swift"))
+                .arg("-o")
+                .arg(&target))?;
+            fs::rename(target, root.join("bin/recog-permission-probe"))?;
+            guide_permissions(root, config.live.zoom_app)?;
+        }
     }
     if !has("--no-prefetch")
         && let Err(e) = run(Command::new(&bin).arg("prefetch"))

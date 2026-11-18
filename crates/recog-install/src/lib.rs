@@ -2,6 +2,7 @@
 
 pub mod backup;
 pub mod migrate;
+pub mod permissions;
 pub mod readiness;
 pub mod services;
 pub mod units;
