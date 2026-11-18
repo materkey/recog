@@ -453,11 +453,19 @@ def _run_script(workflow):
 def test_public_repo_or_pull_request_when_running_ci_then_use_hosted_machines(workflow):
     jobs = workflow["jobs"]
     hosts = jobs["check"]["strategy"]["matrix"]["include"]
-    assert {h["os"]: h["hosted"] for h in hosts} == {"linux": "ubuntu-24.04", "macos": "macos-latest"}
+    assert {h["os"]: h["hosted"] for h in hosts} == {
+        "linux": "ubuntu-24.04",
+        "macos": "macos-latest",
+    }
     trusted = "github.event.repository.private && github.event_name != 'pull_request'"
-    assert jobs["check"]["runs-on"] == "${{ " + trusted + " && fromJSON(matrix.trusted) || matrix.hosted }}"
+    assert (
+        jobs["check"]["runs-on"]
+        == "${{ " + trusted + " && fromJSON(matrix.trusted) || matrix.hosted }}"
+    )
     assert jobs["extension"]["runs-on"] == (
-        "${{ " + trusted + """ && fromJSON('["self-hosted","linux","recog"]') || 'ubuntu-24.04' }}"""
+        "${{ "
+        + trusted
+        + """ && fromJSON('["self-hosted","linux","recog"]') || 'ubuntu-24.04' }}"""
     )
 
 
