@@ -11,6 +11,9 @@ reasoning.
 
 ### Changed
 
+- With native Zoom enabled, setup now checks Accessibility through Recog Zoom
+  Helper itself. The terminal and web readiness checks show its current grant.
+
 - Archive installations now use the current GitHub CLI login to update from a
   private release. Install `gh` and sign in with repository read access. To
   upgrade from the 0.1.0 standalone archive, download the newer archive once

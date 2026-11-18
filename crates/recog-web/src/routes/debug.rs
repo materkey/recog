@@ -419,6 +419,7 @@ pub(super) async fn readiness(state: &AppState) -> Reply {
         return Ok(responses::json(value));
     }
     let root = state.config.repo_root.clone();
+    let zoom = state.config.install.live.zoom_app;
     let rows = tokio::task::spawn_blocking(move || {
         use recog_install::{
             readiness,
@@ -428,7 +429,7 @@ pub(super) async fn readiness(state: &AppState) -> Reply {
         let backend = if cfg!(target_os = "macos") { Backend::Launchd } else { Backend::Systemd };
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut rows = readiness::checks(&root, &path, backend);
-        rows.extend(readiness::permission_checks(&root, backend));
+        rows.extend(readiness::permission_checks(&root, backend, zoom));
         let check = std::process::Command::new(root.join("bin/recog")).arg("check").output();
         rows.push(readiness::Check {
             name: "Настройки".into(),

@@ -57,11 +57,11 @@ pub fn checks(root: &Path, path: &OsStr, backend: Backend) -> Vec<Check> {
     rows
 }
 
-pub fn permission_checks(root: &Path, backend: Backend) -> Vec<Check> {
+pub fn permission_checks(root: &Path, backend: Backend, zoom: bool) -> Vec<Check> {
     if backend != Backend::Launchd {
         return Vec::new();
     }
-    match crate::permissions::probe(root, None) {
+    let mut rows: Vec<Check> = match crate::permissions::probe(root, None) {
         Ok(grants) => [("Микрофон", grants.microphone), ("Системный звук", grants.system_audio)]
             .into_iter()
             .map(|(name, state)| Check {
@@ -74,7 +74,18 @@ pub fn permission_checks(root: &Path, backend: Backend) -> Vec<Check> {
         Err(e) => {
             vec![Check { name: "Разрешения macOS".into(), ready: false, required: true, hint: e.to_string() }]
         }
+    };
+    if zoom {
+        let app = root.join(recog_zoom::helper_app::HELPER_APP);
+        let result = recog_zoom::helper_link::accessibility(&app, false);
+        rows.push(Check {
+            name: "Recog Zoom Helper — Универсальный доступ".into(),
+            ready: matches!(result, Ok(true)),
+            required: false,
+            hint: result.err().map_or_else(|| "recog setup --permissions".into(), |e| e.to_string()),
+        });
     }
+    rows
 }
 
 #[cfg(test)]

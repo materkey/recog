@@ -1928,6 +1928,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "recog-core",
+ "recog-zoom",
  "rustix",
  "serde_json",
  "tempfile",

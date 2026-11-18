@@ -166,6 +166,31 @@ pub async fn helper_lines(
     })
 }
 
+/// Ask the helper itself about Accessibility. Its first snapshot is enough:
+/// closing the private socket makes this probe instance exit.
+pub fn accessibility(app: &Path, prompt: bool) -> Result<bool, LaunchError> {
+    let runtime =
+        tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| LaunchError(e.to_string()))?;
+    runtime.block_on(async {
+        let mut lines = helper_lines(app, prompt, &OpenLauncher, HELPER_CONNECT).await?;
+        let line = tokio::time::timeout(HELPER_CONNECT, lines.next_line())
+            .await
+            .map_err(|_| LaunchError("Zoom permission probe timed out".into()))?
+            .map_err(|e| LaunchError(e.to_string()))?
+            .ok_or_else(|| LaunchError("Zoom helper exited before reporting its state".into()))?;
+        accessibility_state(&line)
+    })
+}
+
+fn accessibility_state(line: &[u8]) -> Result<bool, LaunchError> {
+    let snapshot: serde_json::Value = serde_json::from_slice(line).map_err(|e| LaunchError(e.to_string()))?;
+    match snapshot["state"].as_str() {
+        Some("not_trusted") => Ok(false),
+        Some("zoom_not_running" | "idle" | "meeting") => Ok(true),
+        _ => Err(LaunchError("Zoom helper returned an unknown permission state".into())),
+    }
+}
+
 /// Aborts the accept task unless defused, so an early return stops listening.
 struct AbortGuard(Option<JoinHandle<()>>);
 
@@ -184,5 +209,20 @@ impl Drop for AbortGuard {
         if let Some(task) = self.0.take() {
             task.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    #[test]
+    fn helper_snapshot_when_checking_accessibility_then_only_known_trusted_states_pass() {
+        for state in ["idle", "meeting", "zoom_not_running", "not_trusted"] {
+            assert_eq!(
+                accessibility_state(format!(r#"{{"state":"{state}"}}"#).as_bytes()).unwrap(),
+                state != "not_trusted"
+            );
+        }
+        assert!(accessibility_state(b"{}").is_err());
     }
 }

@@ -96,7 +96,7 @@ fn run(root: &Path, config: &InstallConfig, env: &Environ, args: &[String]) -> R
         "doctor" | "start" | "restart" => {
             let mut rows = checks(root, &std::env::var_os("PATH").unwrap_or_default(), backend);
             if action == "doctor" {
-                rows.extend(recog_install::readiness::permission_checks(root, backend));
+                rows.extend(recog_install::readiness::permission_checks(root, backend, config.live.zoom_app));
             }
             let checked = install::check(root, config, env);
             rows.push(Check {

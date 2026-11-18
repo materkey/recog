@@ -134,7 +134,7 @@ fn copy_initial_env(root: &Path) -> Result<()> {
     }
 }
 
-fn guide_permissions(root: &Path, zoom: bool) -> Result<()> {
+fn guide_permissions(root: &Path, config: &InstallConfig) -> Result<()> {
     use recog_install::permissions::probe;
     let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
     let mut grants = probe(root, None)?;
@@ -162,10 +162,32 @@ fn guide_permissions(root: &Path, zoom: bool) -> Result<()> {
             );
         }
     }
-    if zoom {
-        println!(
-            "Приложение Zoom: включите Recog Zoom Helper в Настройки системы → Конфиденциальность и безопасность → Универсальный доступ."
-        );
+    if config.live.zoom_app {
+        let identity = &config.macos.codesign_identity;
+        let app = recog_zoom::helper_app::find_or_build_helper(
+            root,
+            if identity.is_empty() { "-" } else { identity },
+            &recog_zoom::helper_app::SystemToolchain,
+            &recog_zoom::log::Logger::stderr(),
+        )?;
+        if !recog_zoom::helper_link::accessibility(&app, false)? {
+            println!(
+                "Для настольного Zoom включите Recog Zoom Helper в Настройки системы → Конфиденциальность и безопасность → Универсальный доступ."
+            );
+            if terminal {
+                print!("Нажмите Enter для запроса или введите s, чтобы пропустить: ");
+                io::stdout().flush()?;
+                let mut answer = String::new();
+                if io::stdin().read_line(&mut answer)? > 0 && answer.trim().is_empty() {
+                    let granted = recog_zoom::helper_link::accessibility(&app, true)?;
+                    if !granted {
+                        println!("После выдачи доступа проверьте состояние через recog doctor.");
+                    }
+                }
+            }
+        } else {
+            println!("Recog Zoom Helper: универсальный доступ выдан.");
+        }
     }
     Ok(())
 }
@@ -177,7 +199,7 @@ pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[
     }
     if args == ["--permissions"] {
         if cfg!(target_os = "macos") {
-            return guide_permissions(root, config.live.zoom_app);
+            return guide_permissions(root, config);
         }
         return Err("macOS permission setup is available on a Mac".into());
     }
@@ -267,7 +289,7 @@ fn finish(root: &Path, config: &InstallConfig, env: &Environ, args: &[String], p
             fs::rename(target, root.join("bin/recog-permission-probe"))?;
         }
         if !has("--no-services") && manager.backend == recog_install::units::Backend::Launchd {
-            guide_permissions(root, config.live.zoom_app)?;
+            guide_permissions(root, config)?;
         }
     }
     if !has("--no-prefetch")
@@ -310,7 +332,7 @@ pub(super) fn archive_setup(
         return Ok(());
     }
     if args == ["--permissions"] {
-        return guide_permissions(root, config.live.zoom_app);
+        return guide_permissions(root, config);
     }
     if !args.iter().all(|a| {
         matches!(
