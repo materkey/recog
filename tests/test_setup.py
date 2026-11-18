@@ -473,15 +473,14 @@ def test_migrated_database_when_setup_runs_then_preserved_outside_checkout(repo,
 
 
 @pytest.mark.parametrize("missing", ["claude", "tmux"])
-def test_missing_copilot_cli_when_setup_runs_then_activation_is_blocked(repo, stubs, missing):
+def test_missing_copilot_cli_when_setup_runs_then_setup_warns_and_activates_services(repo, stubs, missing):
     (stubs[0] / missing).unlink()
 
     result = run_setup(repo, stubs, *offline_args())
 
-    assert result.returncode != 0
-    assert f"{missing} not found (Copilot)" in result.stderr
-    assert "RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh" in result.stderr
-    assert not [c for c in result.calls if "enable --now" in c or " restart " in c]
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert any(missing in line and "Copilot sessions" in line and "[absent]" in line for line in result.stdout.splitlines())
+    assert len([c for c in result.calls if "enable --now" in c]) == 4
 
 
 @pytest.mark.parametrize("missing_audio", [False, True])

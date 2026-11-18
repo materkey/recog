@@ -68,13 +68,12 @@ AI-анализ. Copilot запускается из веб-интерфейса
   **4 ГБ под модели**.
 - Для Copilot, необязательной сессии Claude Code, которая следит за встречей и
   отвечает в чате: **tmux + Claude Code**; один раз запустите `claude`, чтобы
-  войти. Установка требует их обоих, если не
-  [пропустить проверку Copilot](docs/usage.md#copilot).
+  войти.
 
 ```bash
 git clone https://github.com/materkey/recog.git && cd recog
 ./setup.sh --dry-run  # только предпросмотр: зависимости и готовность не проверяются
-./setup.sh            # без Copilot: RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh
+./setup.sh
 ```
 
 Установка покажет, каких зависимостей не хватает и как их поставить; поставьте

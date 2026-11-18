@@ -28,7 +28,6 @@
 #   RECOG_HOST_OS           override the detected OS (tests)
 #   RECOG_HOST_ARCH         override the detected CPU architecture (tests)
 #   RECOG_SERVICE_OS        override the service backend (tests)
-#   RECOG_SKIP_COPILOT_CHECK=1 skip tmux/claude checks when Copilot is not needed
 
 # No `set -u`: empty-array expansions ("${RUST_BUILD_ARGS[@]}") are an
 # unbound-variable error under bash 3.2, which is what /bin/bash still is on
@@ -207,12 +206,6 @@ check_cmd() {
 }
 
 check_cmd ffmpeg required "refine timestamps + segment playback"
-if [ "${RECOG_SKIP_COPILOT_CHECK:-0}" = "1" ]; then
-    info "Copilot CLI checks skipped (RECOG_SKIP_COPILOT_CHECK=1)"
-else
-    check_cmd tmux required "Copilot sessions"
-    check_cmd claude required "Copilot sessions (sign in with claude before first use)"
-fi
 check_cmd cargo required "builds the programs of crates/"
 if [ "$HOST_OS" = "linux" ]; then
     check_cmd parec required "system audio capture and the microphone"

@@ -11,8 +11,8 @@ Commands below run from the repository root.
 | Build | `cargo` from [rustup](https://rustup.rs) | the same |
 | System audio | ScreenCaptureKit — built in, needs `swiftc` (`xcode-select --install`) to build the helper | PulseAudio **or** PipeWire with `pipewire-pulse`, plus `parec`/`pactl` (`pulseaudio-utils` / `libpulse`) |
 | Microphone | built in (`recog-mic`) | `parec` on the default source |
-| Required | `ffmpeg`, `tmux`+`claude` (Copilot) | same |
-| Optional | `node`+`npm` (extension build, AI summaries), `jq` (`debug` output) | same |
+| Required | `ffmpeg` | same |
+| Optional | `tmux`+`claude` (Copilot), `node`+`npm` (extension build, AI summaries), `jq` (`debug` output) | same |
 | Disk | ~0.3 GB for the model, ~3 GB for the Rust build | same |
 | GPU | Metal | Vulkan |
 
@@ -52,8 +52,6 @@ setup itself, later than these are needed):
 
 - `CARGO_TARGET_DIR` — where cargo builds (default `target`); setup takes
   the programs from its `release/`.
-- `RECOG_SKIP_COPILOT_CHECK=1` — skip the tmux/claude checks when Copilot is not
-  needed.
 - `RECOG_INSTALL_RUNTIME` — `[install] runtime` for one run; only `rust` is left.
 
 ### Installing without Python
@@ -294,16 +292,14 @@ meeting: `.env.example` ships `RECOG_COPILOT_AUTOSPAWN=0`, so a fresh install
 never starts a Claude session unattended. The manual Start/Stop button and the
 agent-status chip in the web UI work regardless.
 
-Before setup, install `tmux` and Claude Code and make both commands available
+To use Copilot, install `tmux` and Claude Code and make both commands available
 on `PATH`. Setup preserves their discovered directories in the service PATH,
 including a custom npm prefix. Run `claude` interactively as the same user to
 sign in before starting Copilot; setup checks CLI availability, not authentication.
 After moving or installing a CLI in a new directory, rerun `./setup.sh`.
 
-If Copilot is not needed, run `RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh` to skip
-only its CLI checks. Use the same prefix for later service commands, for example
-`RECOG_SKIP_COPILOT_CHECK=1 ./recog-service.sh restart`. This is a per-command
-check override, not a persistent Copilot setting; audio dependency checks remain active.
+Setup reports missing Copilot tools as optional. Transcription and service management
+work without them.
 
 To enable auto-spawn: put `tmux` and the `claude` CLI on `PATH`, set
 `RECOG_COPILOT_AUTOSPAWN=1` in `.env`, then
@@ -459,7 +455,7 @@ transcription. Free the card or set the device explicitly if you want the
 failure to be loud instead.
 
 **Setup says the install is not complete.** Nothing was activated on purpose.
-Missing `ffmpeg`, `tmux`, `claude`, `parec`/`pactl`, PortAudio, or a macOS helper that will not
+Missing `ffmpeg`, `parec`/`pactl`, PortAudio, or a macOS helper that will not
 build (`swiftc`) all block activation, as does `RECOG_ASR_BACKEND=remote` with
 an empty URL. Fix what it lists and re-run `./setup.sh`. The same probes gate
 `./recog-service.sh start|restart|restart-*`; if you deliberately want a subset

@@ -75,7 +75,7 @@ the quality check passed. See `.revmux/profile.md` for reviewer interpretation.
 # an existing .env, do not create it from the example)
 # .env is created on a first install only: once the service
 # units exist, a missing .env stays missing (the example is not neutral).
-# Call-shell env (NOT .env): CARGO_TARGET_DIR, RECOG_SKIP_COPILOT_CHECK.
+# Call-shell env (NOT .env): CARGO_TARGET_DIR.
 ```
 
 `cargo build --release` builds `recog`, `recog-web`, the two Copilot binaries,

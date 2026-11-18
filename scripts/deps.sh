@@ -239,11 +239,6 @@ deps_readiness_problems() {
 
     # ffmpeg: segment playback in the web UI shells out to it.
     deps_have ffmpeg || echo "ffmpeg not found — $(deps_hint ffmpeg)"
-    if [ "${RECOG_SKIP_COPILOT_CHECK:-0}" != "1" ]; then
-        deps_have tmux || echo "tmux not found (Copilot) — $(deps_hint tmux); if Copilot is not needed: RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh"
-        deps_have claude || echo "claude not found (Copilot) — $(deps_hint claude); run claude interactively to sign in, then rerun ./setup.sh; if Copilot is not needed: RECOG_SKIP_COPILOT_CHECK=1 ./setup.sh"
-    fi
-
     if [ "$os" = "linux" ]; then
         deps_have parec || echo "parec not found — $(deps_hint parec)"
         deps_have pactl || echo "pactl not found — $(deps_hint pactl)"
@@ -269,6 +264,8 @@ deps_readiness_problems() {
 # Echoes "<name>\t<what breaks>" lines.
 deps_optional_list() {
     printf '%s\t%s\n' \
+        "tmux"   "Copilot sessions" \
+        "claude" "Copilot sessions (sign in with claude before first use)" \
         "npm"    "Chrome extension build (npm ci && npm run build)" \
         "node"   "AI providers and title generation (Claude Code and Codex CLIs)" \
         "jq"     "pretty-printed ./recog-service.sh debug"

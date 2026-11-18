@@ -7,6 +7,13 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-18
+
+### Changed
+
+- Setup and service activation now work without tmux or Claude Code. After
+  `git pull`, run `./setup.sh` as usual. Only Copilot needs these tools.
+
 ## 2026-11-12
 
 ### Changed
