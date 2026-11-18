@@ -2,30 +2,46 @@
 use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-const PROJECT: &str = "https://github.com/materkey/recog/releases";
-const LATEST: &str = "https://api.github.com/repos/materkey/recog/releases/latest";
+const REPO: &str = "github.com/materkey/recog";
 
-fn download(url: &str, limit: u64) -> Result<Vec<u8>> {
-    let agent =
-        ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(120))).build().new_agent();
-    let mut response = agent.get(url).header("User-Agent", "recog-update").call()?;
+/// gh owns authentication and redirect handling. Bound stdout before decoding
+/// metadata or unpacking an asset, including when the remote sends no length.
+fn gh(args: &[&str], limit: u64) -> Result<Vec<u8>> {
+    let mut child = Command::new("gh")
+        .args(["release"])
+        .args(args)
+        .args(["--repo", REPO])
+        .env("GH_PROMPT_DISABLED", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Cannot run gh ({e}). Install GitHub CLI and use gh auth login."))?;
     let mut bytes = Vec::new();
-    response.body_mut().as_reader().take(limit + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > limit {
+    let result = child.stdout.take().unwrap().take(limit + 1).read_to_end(&mut bytes);
+    if result.is_err() || bytes.len() as u64 > limit {
+        let _ = child.kill();
+        let _ = child.wait();
+        result?;
         return Err("Release asset exceeds its size limit".into());
+    }
+    if !child.wait()?.success() {
+        return Err("Could not read the private Recog release. Check gh auth status and repository access.".into());
     }
     Ok(bytes)
 }
 
+fn asset(tag: &str, name: &str, limit: u64) -> Result<Vec<u8>> {
+    gh(&["download", tag, "--pattern", name, "--output", "-"], limit)
+}
+
 pub(super) fn update(root: &Path, args: &[String]) -> Result<()> {
-    let metadata = recog_core::pyjson::loads(std::str::from_utf8(&download(LATEST, 2 << 20)?)?)?;
-    let tag =
-        metadata.as_object().and_then(|m| m.get("tag_name")).and_then(|v| v.as_str()).ok_or("Missing release tag")?;
+    let latest = gh(&["view", "--json", "tagName", "--jq", ".tagName"], 1024)?;
+    let tag = std::str::from_utf8(&latest)?.trim();
     if !tag.starts_with('v') || !tag.bytes().all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b)) {
         return Err("Invalid release tag".into());
     }
@@ -39,8 +55,7 @@ pub(super) fn update(root: &Path, args: &[String]) -> Result<()> {
         _ => return Err("No release archive for this platform".into()),
     };
     let name = format!("recog-{tag}-{platform}.tar.gz");
-    let base = format!("{PROJECT}/download/{tag}");
-    let sums = download(&format!("{base}/SHA256SUMS"), 1 << 20)?;
+    let sums = asset(tag, "SHA256SUMS", 1 << 20)?;
     let hash = std::str::from_utf8(&sums)?
         .lines()
         .find_map(|line| {
@@ -48,7 +63,7 @@ pub(super) fn update(root: &Path, args: &[String]) -> Result<()> {
             (file.trim().trim_start_matches("./") == name && hash.len() == 64).then_some(hash)
         })
         .ok_or("Release checksum is missing")?;
-    let archive = download(&format!("{base}/{name}"), 256 << 20)?;
+    let archive = asset(tag, &name, 256 << 20)?;
     if format!("{:x}", Sha256::digest(&archive)) != hash {
         return Err("Release checksum mismatch".into());
     }

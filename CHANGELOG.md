@@ -11,6 +11,11 @@ reasoning.
 
 ### Changed
 
+- Archive installations now use the current GitHub CLI login to update from a
+  private release. Install `gh` and sign in with repository read access. To
+  upgrade from the 0.1.0 standalone archive, download the newer archive once
+  with `gh release download` and run its `bin/recog setup`.
+
 - **Action required after pulling this update:** run `cargo setup` once. Use
   `recog service start|stop|restart|status`, `recog service logs [name]` and
   `recog copilot` in place of `./recog-service.sh`.
