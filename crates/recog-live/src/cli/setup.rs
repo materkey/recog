@@ -135,13 +135,19 @@ fn copy_initial_env(root: &Path) -> Result<()> {
 }
 
 fn confirm_permission() -> Result<bool> {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    read_confirmation(stdin.is_terminal() && stdout.is_terminal(), stdin.lock(), stdout.lock())
+}
+
+fn read_confirmation(interactive: bool, mut input: impl io::BufRead, mut output: impl Write) -> Result<bool> {
+    if !interactive {
         return Ok(false);
     }
-    print!("Нажмите Enter для запроса или введите s, чтобы пропустить: ");
-    io::stdout().flush()?;
+    write!(output, "Нажмите Enter для запроса или введите s, чтобы пропустить: ")?;
+    output.flush()?;
     let mut answer = String::new();
-    Ok(io::stdin().read_line(&mut answer)? > 0 && answer.trim().is_empty())
+    Ok(input.read_line(&mut answer)? > 0 && answer.trim().is_empty())
 }
 
 fn guide_grant(
@@ -182,12 +188,22 @@ fn guide_permissions(root: &Path, config: &InstallConfig) -> Result<()> {
         || Ok(probe(root, Some("system-audio"))?.system_audio == "granted"),
     )?;
     if config.live.zoom_app {
-        guide_zoom_access(root, &config.macos.codesign_identity)?;
+        guide_zoom_access(
+            root,
+            &config.macos.codesign_identity,
+            confirm_permission,
+            recog_zoom::helper_link::accessibility,
+        )?;
     }
     Ok(())
 }
 
-fn guide_zoom_access(root: &Path, identity: &str) -> Result<()> {
+fn guide_zoom_access(
+    root: &Path,
+    identity: &str,
+    confirm: impl FnOnce() -> Result<bool>,
+    probe: impl Fn(&Path, bool) -> std::result::Result<bool, recog_zoom::helper_link::LaunchError>,
+) -> Result<()> {
     let app = recog_zoom::helper_app::find_or_build_helper(
         root,
         if identity.is_empty() { "-" } else { identity },
@@ -196,10 +212,10 @@ fn guide_zoom_access(root: &Path, identity: &str) -> Result<()> {
     )?;
     guide_grant(
         "Recog Zoom Helper — универсальный доступ для настольного Zoom",
-        recog_zoom::helper_link::accessibility(&app, false)?,
+        probe(&app, false)?,
         "Настройки системы → Конфиденциальность и безопасность → Универсальный доступ → Recog Zoom Helper. Затем запустите recog doctor.",
-        confirm_permission,
-        || Ok(recog_zoom::helper_link::accessibility(&app, true)?),
+        confirm,
+        || Ok(probe(&app, true)?),
     )
 }
 
@@ -426,6 +442,46 @@ pub(super) fn update(root: &Path, config: &InstallConfig, env: &Environ, args: &
 #[cfg(test)]
 mod grant_tests {
     use super::*;
+    #[test]
+    fn terminal_input_when_reading_confirmation_then_only_enter_requests_a_grant() {
+        for (terminal, input, want) in
+            [(false, "\n", false), (true, "", false), (true, "s\n", false), (true, "\n", true)]
+        {
+            let mut out = Vec::new();
+            assert_eq!(read_confirmation(terminal, input.as_bytes(), &mut out).unwrap(), want);
+            assert_eq!(!out.is_empty(), terminal);
+        }
+    }
+
+    #[test]
+    fn installed_zoom_helper_when_access_is_missing_then_only_confirmation_requests_access() {
+        use recog_zoom::helper_app::{HELPER_APP, HELPER_SOURCE, HELPER_STAMP};
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join(HELPER_SOURCE);
+        let app = dir.path().join(HELPER_APP);
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(source, b"test").unwrap();
+        let signature = app.join("Contents/_CodeSignature/CodeResources");
+        fs::create_dir_all(signature.parent().unwrap()).unwrap();
+        fs::write(signature, b"fixture").unwrap();
+        fs::write(dir.path().join(HELPER_STAMP), format!("{:x}", Sha256::digest(b"test"))).unwrap();
+        for confirm in [false, true] {
+            let calls = std::cell::RefCell::new(Vec::new());
+            guide_zoom_access(
+                dir.path(),
+                "",
+                || Ok(confirm),
+                |path, prompt| {
+                    assert_eq!(path, app);
+                    calls.borrow_mut().push(prompt);
+                    Ok(prompt)
+                },
+            )
+            .unwrap();
+            assert_eq!(calls.into_inner(), if confirm { vec![false, true] } else { vec![false] });
+        }
+    }
     #[test]
     fn permission_step_when_granted_skipped_or_requested_then_only_a_confirmed_missing_grant_prompts() {
         for (granted, confirm, expect_request) in [(true, false, false), (false, false, false), (false, true, true)] {
