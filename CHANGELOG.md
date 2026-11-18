@@ -11,6 +11,9 @@ reasoning.
 
 ### Changed
 
+- New installations open audio capture only during supported conferences. Setup
+  keeps the recording flag of an installed live unit. After `git pull`, rebuild
+  with `./setup.sh` to use `recog live --conferences-only`.
 - Run `bin/recog copilot` after setup to launch Claude Code in the terminal with
   the same agent, model and channel as a meeting session. Answer startup prompts
   directly in the terminal.

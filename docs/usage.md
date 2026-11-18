@@ -127,6 +127,13 @@ The startup banner prints which sources are live, naming the resolved mic
 device and the backend in full, e.g.
 `Mode: DUAL (Mic: 3 + System: PulseAudio/PipeWire (parec))`.
 
+### Recording during conferences
+
+A newly installed live service runs with `--conferences-only`. Both audio inputs stay
+closed until a supported KTalk, Jitsi, Element Call, Google Meet or Zoom call joins.
+Leaving or disconnecting the owning conference closes both inputs. Updating an
+existing live service preserves its recording mode.
+
 ### Recording only during KTalk calls
 
 `--ktalk` alone records continuously, including between conferences.

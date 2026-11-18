@@ -62,8 +62,12 @@ pub(super) fn render_units(root: &Path, environ: &Environ, dest: &Path) -> Resul
     let path = std::env::var_os("PATH").unwrap_or_default();
     let data = get_data_dir(root, environ, &mut |warning| eprintln!("{warning}")).map_err(|e| e.to_string())?;
     let logs = data.join("logs");
+    let unit_dir = backend.unit_dir(home.as_ref());
     backend
-        .render(&Layout { root, home: Path::new(&home), data: &data, logs: &logs, search_path: &path }, dest)
+        .render(
+            &Layout { root, home: Path::new(&home), data: &data, logs: &logs, search_path: &path, unit_dir: &unit_dir },
+            dest,
+        )
         .map_err(|e| e.to_string())
 }
 

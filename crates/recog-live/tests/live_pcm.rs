@@ -449,7 +449,10 @@ fn ktalk_off_or_on_building_the_transcriber_sets_the_pcm_transport() {
         rig(RigOptions { options: LiveOptions { use_ktalk: true, ..LiveOptions::default() }, ..RigOptions::default() });
     assert!(on.live.use_pcm_transport());
     let only = rig(RigOptions {
-        options: LiveOptions { ktalk_only: true, ..LiveOptions::default() },
+        options: LiveOptions {
+            recording_policy: recog_core::platforms::RecordingPolicy::KTalkOnly,
+            ..LiveOptions::default()
+        },
         ..RigOptions::default()
     });
     assert!(only.live.use_ktalk() && only.live.use_pcm_transport());

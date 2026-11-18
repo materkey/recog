@@ -196,7 +196,13 @@ fn live_options(args: &LiveArgs, audio: ResolvedAudio) -> LiveOptions {
         chunk_duration: args.chunk_duration,
         output_file: args.output.as_ref().map(PathBuf::from),
         use_ktalk: args.ktalk,
-        ktalk_only: args.ktalk_only,
+        recording_policy: if args.ktalk_only {
+            recog_core::platforms::RecordingPolicy::KTalkOnly
+        } else if args.conferences_only {
+            recog_core::platforms::RecordingPolicy::ConferencesOnly
+        } else {
+            recog_core::platforms::RecordingPolicy::Continuous
+        },
         save_audio: !args.no_save_audio,
         mic_speaker_name: args.mic_speaker_name.clone(),
     }

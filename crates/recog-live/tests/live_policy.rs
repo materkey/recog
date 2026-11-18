@@ -41,8 +41,11 @@ struct KtalkOnly {
 
 impl KtalkOnly {
     fn new() -> Self {
+        Self::with_policy(recog_core::platforms::RecordingPolicy::KTalkOnly)
+    }
+    fn with_policy(policy: recog_core::platforms::RecordingPolicy) -> Self {
         let r = rig(RigOptions {
-            options: LiveOptions { ktalk_only: true, save_audio: true, ..LiveOptions::default() },
+            options: LiveOptions { recording_policy: policy, save_audio: true, ..LiveOptions::default() },
             ..RigOptions::default()
         });
         r.storage();
@@ -122,6 +125,22 @@ fn ktalk_only_a_join_records_and_a_leave_discards_the_buffers_and_closes_the_fil
     assert!(k.r.mic.as_ref().unwrap().get_chunk_count() == 0);
 }
 
+#[test]
+fn conference_only_installation_when_a_supported_call_joins_and_leaves_then_devices_and_writers_follow() {
+    for platform in recog_core::platforms::PLATFORMS {
+        let k = KtalkOnly::with_policy(recog_core::platforms::RecordingPolicy::ConferencesOnly);
+        assert!(k.idle());
+        k.join("unknown");
+        assert!(k.idle());
+        k.join(platform);
+        assert!(k.r.live.is_recording_active(), "{platform}");
+        assert!(k.r.live.wav_paths().0.is_some(), "{platform}");
+        k.send(r#"{"type": "meeting_leave"}"#);
+        assert!(k.idle(), "{platform}");
+        assert_eq!(k.r.live.wav_paths(), (None, None));
+    }
+}
+
 trait Count {
     fn get_chunk_count(&self) -> usize;
 }
@@ -163,7 +182,10 @@ fn ktalk_only_the_owner_tab_disconnecting_stops_the_capture() {
 fn captures_not_ready_switching_the_capture_on_fails() {
     // given
     let r = rig(RigOptions {
-        options: LiveOptions { ktalk_only: true, ..LiveOptions::default() },
+        options: LiveOptions {
+            recording_policy: recog_core::platforms::RecordingPolicy::KTalkOnly,
+            ..LiveOptions::default()
+        },
         ..RigOptions::default()
     });
     // when
@@ -176,7 +198,10 @@ fn captures_not_ready_switching_the_capture_on_fails() {
 fn a_device_that_will_not_start_switching_the_capture_on_rolls_back_and_says_why() {
     // given
     let r = rig(RigOptions {
-        options: LiveOptions { ktalk_only: true, ..LiveOptions::default() },
+        options: LiveOptions {
+            recording_policy: recog_core::platforms::RecordingPolicy::KTalkOnly,
+            ..LiveOptions::default()
+        },
         ..RigOptions::default()
     });
     r.storage();
@@ -247,7 +272,10 @@ fn a_minute_of_zeros_in_a_conference_checking_requests_a_restart_once_per_interv
 #[test]
 fn ktalk_only_idle_reopening_device_captures_leaves_them_alone() {
     let r = rig(RigOptions {
-        options: LiveOptions { ktalk_only: true, ..LiveOptions::default() },
+        options: LiveOptions {
+            recording_policy: recog_core::platforms::RecordingPolicy::KTalkOnly,
+            ..LiveOptions::default()
+        },
         ..RigOptions::default()
     });
     r.live.reopen_stopped_device_captures();
@@ -333,7 +361,11 @@ fn a_meeting_change_rotating_closes_the_old_files_into_their_meta_and_opens_new_
 fn ktalk_only_a_non_ktalk_meeting_rotating_opens_no_files() {
     // given
     let r = rig(RigOptions {
-        options: LiveOptions { save_audio: true, ktalk_only: true, ..LiveOptions::default() },
+        options: LiveOptions {
+            save_audio: true,
+            recording_policy: recog_core::platforms::RecordingPolicy::KTalkOnly,
+            ..LiveOptions::default()
+        },
         ..RigOptions::default()
     });
     let storage = r.storage();
@@ -492,7 +524,10 @@ fn an_unreadable_policy_setting_up_the_bridge_warns_and_runs_without_speaker_ide
 fn an_unreadable_policy_setting_up_a_ktalk_only_bridge_fails_with_its_error() {
     // given
     let r = rig(RigOptions {
-        options: LiveOptions { ktalk_only: true, ..LiveOptions::default() },
+        options: LiveOptions {
+            recording_policy: recog_core::platforms::RecordingPolicy::KTalkOnly,
+            ..LiveOptions::default()
+        },
         ..RigOptions::default()
     });
     let mut config = session_config();

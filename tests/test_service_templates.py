@@ -67,6 +67,8 @@ PLACEHOLDER_RE = re.compile(r"@[A-Z_]+@")
 
 def run_service_sh(*args, env_extra=None, check=True, script=SERVICE_SH):
     env = {**os.environ}
+    if args[0] == "render" and "HOME" not in (env_extra or {}):
+        env["SVC_UNIT_DIR"] = str(REPO_ROOT / "unused-units")
     env.pop("XDG_CONFIG_HOME", None)
     # The developer's own config.toml must not decide anything here.
     env["RECOG_CONFIG_FILE"] = "/nonexistent/recog/config.toml"
@@ -113,6 +115,19 @@ def test_both_renderers_when_given_the_same_installation_then_unit_bytes_match(t
     assert sorted(p.name for p in rust.iterdir()) == sorted(UNIT_FILES[target_os])
     for name in UNIT_FILES[target_os]:
         assert (rust / name).read_bytes() == (shell / name).read_bytes()
+
+    live_unit = UNIT_FILES[target_os][0]
+    fresh = (shell / live_unit).read_text()
+    assert "--conferences-only" in fresh
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    env["SVC_UNIT_DIR"] = str(installed)
+    for flag in ("--ktalk", "--ktalk-only", "--conferences-only"):
+        (installed / live_unit).write_text(fresh.replace("--conferences-only", flag))
+        subprocess.run([repo / "recog-service.sh", "render", "--dry-run", shell], env=env, check=True)
+        subprocess.run([program, "service", "render", rust], env=env, check=True)
+        assert (rust / live_unit).read_text() == (installed / live_unit).read_text()
+        assert (shell / live_unit).read_bytes() == (rust / live_unit).read_bytes()
 
 
 @pytest.mark.parametrize("target_os", ["Darwin", "Linux"])
@@ -240,7 +255,7 @@ def test_live_unit_selects_the_system_audio_backend_automatically(target_os, tmp
 
     assert "--system-audio" in live
     assert "auto" in live
-    assert "--ktalk" in live
+    assert "--conferences-only" in live
     assert "--screencapture" not in live
 
 
@@ -342,7 +357,7 @@ def test_macos_live_unit_starts_the_binary_through_the_recog_application(tmp_pat
 
     program = live["ProgramArguments"]
     assert program[0] == f"{REPO_ROOT}/Recog.app/Contents/MacOS/recog_launcher"
-    assert program[1:] == [f"{REPO_ROOT}/bin/recog", "live", "--system-audio", "auto", "--ktalk"]
+    assert program[1:] == [f"{REPO_ROOT}/bin/recog", "live", "--system-audio", "auto", "--conferences-only"]
 
 
 @pytest.mark.skipif(
@@ -653,7 +668,7 @@ def test_installation_without_python_when_rendering_launchd_then_units_run_the_b
         "live",
         "--system-audio",
         "auto",
-        "--ktalk",
+        "--conferences-only",
     ]
     assert program("frontend") == [
         f"{bin_dir}/recog-web",
@@ -691,7 +706,7 @@ def test_installation_without_python_when_rendering_systemd_then_exec_start_runs
         text = units[f"recog-{name}.service"].read_text()
         return next(line for line in text.splitlines() if line.startswith("ExecStart="))
 
-    assert exec_start("live") == f'ExecStart="{repo}/bin/recog" live --system-audio auto --ktalk'
+    assert exec_start("live") == f'ExecStart="{repo}/bin/recog" live --system-audio auto --conferences-only'
     assert exec_start("frontend") == (
         f'ExecStart="{repo}/bin/recog-web" --host 127.0.0.1 --port 9080 --repo "{repo}"'
     )

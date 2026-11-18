@@ -173,7 +173,7 @@ pub struct SessionMode {
     pub screencapture: bool,
     pub system_audio_backend: String,
     pub chunk_duration_ms: i64,
-    pub ktalk_only: bool,
+    pub recording_policy: crate::platforms::RecordingPolicy,
 }
 
 impl Default for SessionMode {
@@ -185,7 +185,7 @@ impl Default for SessionMode {
             screencapture: false,
             system_audio_backend: "none".into(),
             chunk_duration_ms: 3000,
-            ktalk_only: false,
+            recording_policy: Default::default(),
         }
     }
 }
@@ -1031,8 +1031,10 @@ fn listed_as_active(meta: &Value) -> Result<bool> {
     let empty = Value::Object(Map::new());
     // Live owns the capture state; a joined room alone does not mean its
     // devices started.
-    let ktalk_only = get(get_or_empty(meta, "mode", &empty)?, "ktalk_only")?.is_some_and(Value::truthy);
-    Ok(!(ktalk_only && !get(meta, "recording_active")?.is_some_and(Value::truthy)))
+    let mode = get_or_empty(meta, "mode", &empty)?;
+    let gated = get(mode, "ktalk_only")?.is_some_and(Value::truthy)
+        || get(mode, "conferences_only")?.is_some_and(Value::truthy);
+    Ok(!(gated && !get(meta, "recording_active")?.is_some_and(Value::truthy)))
 }
 
 /// `md5(f"{ext_path}:{source_override}")`'s first eight hex digits: the name of an
@@ -1524,8 +1526,8 @@ impl MeetingStorage {
         map.insert("ktalk", Value::Bool(mode.ktalk));
         map.insert("screencapture", Value::Bool(mode.screencapture));
         map.insert("system_audio_backend", Value::from(mode.system_audio_backend.as_str()));
-        if mode.ktalk_only {
-            map.insert("ktalk_only", Value::Bool(true));
+        if mode.recording_policy.gated() {
+            map.insert(mode.recording_policy.name(), Value::Bool(true));
         }
         inner.mode = map;
         inner.chunk_duration_ms = Some(mode.chunk_duration_ms);

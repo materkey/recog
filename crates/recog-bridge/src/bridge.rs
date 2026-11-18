@@ -46,7 +46,7 @@ pub struct BridgeConfig {
     /// 0 binds a free port.
     pub port: u16,
     /// Record only during a conference: joins switch the capture on.
-    pub ktalk_only: bool,
+    pub recording_policy: recog_core::platforms::RecordingPolicy,
     /// Exact origins admitted beside the built-in ones (`ws_origin.EXTRA_ORIGINS`).
     pub extra_origins: Vec<String>,
     /// The debug state file (`/tmp/ktalk_debug.json`); None writes none.
@@ -62,7 +62,7 @@ impl Default for BridgeConfig {
         Self {
             host: "localhost".to_owned(),
             port: 8766,
-            ktalk_only: false,
+            recording_policy: Default::default(),
             extra_origins: Vec::new(),
             debug_file: Some(PathBuf::from(protocol::KTALK_DEBUG_FILE)),
             send_timeout: Duration::from_secs(5),
@@ -428,14 +428,16 @@ impl Bridge {
     pub fn is_recording_active(&self) -> bool {
         match self.wired().capture {
             Some(capture) => capture.recording_active(),
-            None => !self.config.ktalk_only,
+            None => !self.config.recording_policy.gated(),
         }
     }
 
     pub fn set_meeting_capture_active(&self, active: bool) -> Result<(), String> {
         match self.wired().capture {
             Some(capture) => capture.set_capture(active),
-            None if active && self.config.ktalk_only => Err("No capture controller registered".to_owned()),
+            None if active && self.config.recording_policy.gated() => {
+                Err("No capture controller registered".to_owned())
+            }
             None => Ok(()),
         }
     }

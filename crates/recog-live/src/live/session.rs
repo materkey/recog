@@ -217,17 +217,17 @@ pub fn setup_bridge(live: &Arc<Live>, config: &mut SessionConfig) -> Result<Opti
     if !live.use_ktalk() {
         return Ok(None);
     }
-    let ktalk_only = live.options().ktalk_only;
+    let gated = live.options().recording_policy.gated();
     let mut bridge_config = config.bridge.clone();
-    bridge_config.ktalk_only = ktalk_only;
-    let built = Bridge::new(bridge_config, config.policy.clone())
-        .and_then(|bridge| wire_bridge(live, config, bridge, ktalk_only));
+    bridge_config.recording_policy = live.options().recording_policy;
+    let built =
+        Bridge::new(bridge_config, config.policy.clone()).and_then(|bridge| wire_bridge(live, config, bridge, gated));
     match built {
         Ok(bridge) => {
             live.set_conference(Some(Arc::new(bridge.clone()) as Arc<dyn Conference>));
             Ok(Some(bridge))
         }
-        Err(e) if ktalk_only => Err(e),
+        Err(e) if gated => Err(e),
         Err(e) => {
             live.env.log.line(&format!("Warning: KTalk bridge error: {e}, speaker identification unavailable"));
             live.set_use_ktalk(false);
@@ -241,10 +241,10 @@ fn wire_bridge(
     live: &Arc<Live>,
     config: &SessionConfig,
     bridge: Arc<Bridge>,
-    ktalk_only: bool,
+    gated: bool,
 ) -> Result<Arc<Bridge>, String> {
     let hooks = Arc::new(LiveHooks(Arc::downgrade(live)));
-    if ktalk_only {
+    if gated {
         bridge.set_meeting_capture(hooks.clone());
     }
     bridge.configure_user_profile(&live.user_identity(), hooks.clone())?;
@@ -371,8 +371,11 @@ fn banner(live: &Live) {
     live.println("Press Ctrl+C to stop");
     live.println(&"-".repeat(60));
     live.println("");
-    if live.options().ktalk_only {
-        live.println("Recording policy: KTalk meetings only; idle audio capture is off");
+    if live.options().recording_policy.gated() {
+        live.println(&format!(
+            "Recording policy: {}; idle audio capture is off",
+            live.options().recording_policy.name()
+        ));
     }
 }
 
@@ -425,7 +428,7 @@ pub fn teardown(live: &Live, bridge: Option<&Arc<Bridge>>) {
     live.println("Остановлено.");
     live.set_running(false);
     let log = &live.env.log;
-    if live.options().ktalk_only
+    if live.options().recording_policy.gated()
         && let Err(e) = live.close_conference_capture()
     {
         log.line(&format!("[LiveTranscriber] stopping the capture failed: {e}"));

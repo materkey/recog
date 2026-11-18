@@ -25,7 +25,7 @@ fn rig(source: &str) -> (Harness, Arc<FakeStore>, Arc<RecordingLive>) {
 }
 
 fn ktalk_only_rig() -> (Harness, Arc<FakeStore>, Arc<RecordingLive>, Arc<RecordingCapture>) {
-    let h = Harness::with(|c| c.ktalk_only = true);
+    let h = Harness::with(|c| c.recording_policy = recog_core::platforms::RecordingPolicy::KTalkOnly);
     let store = FakeStore::with_source("orphan");
     h.bridge.set_meeting_storage(store.clone());
     let live = RecordingLive::new();

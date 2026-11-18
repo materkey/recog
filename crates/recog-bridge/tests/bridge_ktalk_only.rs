@@ -57,7 +57,7 @@ struct Rig {
 }
 
 fn rig() -> Rig {
-    let h = Harness::with(|c| c.ktalk_only = true);
+    let h = Harness::with(|c| c.recording_policy = recog_core::platforms::RecordingPolicy::KTalkOnly);
     let store = FakeStore::with_source("orphan");
     h.bridge.set_meeting_storage(store.clone());
     let live = RecordingLive::new();
@@ -119,7 +119,7 @@ const PCM_CHUNK: &str = r#"{"type": "pcm_chunk", "pid": "p1", "speaker_name": "A
 async fn given_ktalk_only_bridge_when_no_meeting_joined_then_capture_is_never_switched_on() {
     // given
     let r = rig();
-    let bare = Harness::with(|c| c.ktalk_only = true);
+    let bare = Harness::with(|c| c.recording_policy = recog_core::platforms::RecordingPolicy::KTalkOnly);
     // when
     let (_sink, _tab) = r.h.add(Role::Extension);
     // then
@@ -389,7 +389,7 @@ async fn given_debug_file_when_meeting_joined_and_left_then_recording_status_fol
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("debug.json");
     let h = Harness::with(|c| {
-        c.ktalk_only = true;
+        c.recording_policy = recog_core::platforms::RecordingPolicy::KTalkOnly;
         c.debug_file = Some(path.clone());
     });
     let store = FakeStore::with_source("orphan");

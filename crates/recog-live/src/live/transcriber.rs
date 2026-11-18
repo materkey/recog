@@ -62,7 +62,7 @@ pub struct LiveOptions {
     pub output_file: Option<PathBuf>,
     /// Conference signals from the extension (`--ktalk`; implied by `ktalk_only`).
     pub use_ktalk: bool,
-    pub ktalk_only: bool,
+    pub recording_policy: recog_core::platforms::RecordingPolicy,
     pub save_audio: bool,
     /// `--mic-speaker-name`.
     pub mic_speaker_name: Option<String>,
@@ -76,7 +76,7 @@ impl Default for LiveOptions {
             chunk_duration: 3.0,
             output_file: None,
             use_ktalk: false,
-            ktalk_only: false,
+            recording_policy: Default::default(),
             save_audio: false,
             mic_speaker_name: None,
         }
@@ -239,12 +239,12 @@ impl Live {
                 .into());
         }
         let mut opts = opts;
-        opts.use_ktalk = opts.use_ktalk || opts.ktalk_only;
+        opts.use_ktalk = opts.use_ktalk || opts.recording_policy.gated();
         let profile_store = UserProfileStore::new(&env.data_dir);
         let identity = read_identity(&profile_store, &env.legacy_mic_name, opts.mic_speaker_name.as_deref())?;
         let name = identity_name(&identity);
         let use_ktalk = opts.use_ktalk;
-        let recording_allowed = !opts.ktalk_only;
+        let recording_allowed = !opts.recording_policy.gated();
         Ok(Arc::new(Self {
             opts,
             env,
@@ -524,7 +524,7 @@ impl Live {
     /// `is_recording_active`.
     #[must_use]
     pub fn is_recording_active(&self) -> bool {
-        !self.opts.ktalk_only || self.recording_allowed.load(Ordering::SeqCst)
+        !self.opts.recording_policy.gated() || self.recording_allowed.load(Ordering::SeqCst)
     }
 
     fn is_current_recording(&self, generation: i64) -> bool {
@@ -713,11 +713,11 @@ impl Live {
             system_audio_backend: self.opts.system_audio.clone(),
             #[allow(clippy::cast_possible_truncation)]
             chunk_duration_ms: (self.opts.chunk_duration * 1000.0) as i64,
-            ktalk_only: self.opts.ktalk_only,
+            recording_policy: self.opts.recording_policy,
         };
         let meeting_id = storage.start_session(&mode).map_err(storage_error)?;
         self.print(&format!("Meeting started: {meeting_id}"));
-        if self.opts.save_audio && !self.opts.ktalk_only {
+        if self.opts.save_audio && !self.opts.recording_policy.gated() {
             let meeting_path = storage.base_path().join(&meeting_id);
             let mut wav = lock(&self.wav);
             if self.mic_capture.is_some() {
@@ -778,7 +778,7 @@ impl Live {
             return Ok(());
         }
         self.close_audio_writers()?;
-        if self.opts.ktalk_only && !self.current_meeting_is_ktalk()? {
+        if self.opts.recording_policy.gated() && !self.current_meeting_is_allowed()? {
             return Ok(());
         }
         self.open_audio_writers(meeting_path, continuation)
@@ -797,10 +797,10 @@ impl Live {
     }
 
     /// Whether the current meeting's `meta.json` says it is a KTalk meeting.
-    fn current_meeting_is_ktalk(&self) -> Result<bool, String> {
+    fn current_meeting_is_allowed(&self) -> Result<bool, String> {
         let meta = self.storage().map(|s| s.load_meta().map_err(storage_error)).transpose()?;
         let source = meta.as_ref().and_then(|m| m.as_object()).and_then(|m| m.get("source")).cloned();
-        Ok(source == Some(Value::from("ktalk")))
+        Ok(source.as_ref().and_then(Value::as_str).is_some_and(|s| self.opts.recording_policy.accepts(s)))
     }
 
     /// `audio_<track>.wav` of the meeting, opened for writing.
@@ -819,7 +819,7 @@ impl Live {
 
     /// `_before_meeting_switch`.
     pub fn before_meeting_switch(&self) {
-        if self.opts.ktalk_only {
+        if self.opts.recording_policy.gated() {
             if let Err(e) = self.set_conference_capture(false) {
                 self.env.log.line(&format!("[LiveTranscriber] stopping the capture failed: {e}"));
             }
@@ -886,7 +886,7 @@ impl Live {
     pub fn start_audio_captures(&self) -> Result<(), String> {
         let _guard = self.capture_lock.lock();
         self.captures_ready.store(true, Ordering::SeqCst);
-        if self.opts.ktalk_only {
+        if self.opts.recording_policy.gated() {
             return Ok(());
         }
         self.open_audio_captures()
@@ -909,7 +909,14 @@ impl Live {
         } else {
             self.shut_conference_capture()?;
         }
-        self.print(if active { "KTalk recording active" } else { "Waiting for a KTalk meeting (audio capture off)" });
+        self.print(match (self.opts.recording_policy, active) {
+            (recog_core::platforms::RecordingPolicy::KTalkOnly, true) => "KTalk recording active",
+            (recog_core::platforms::RecordingPolicy::KTalkOnly, false) => {
+                "Waiting for a KTalk meeting (audio capture off)"
+            }
+            (_, true) => "Conference recording active",
+            (_, false) => "Waiting for a conference (audio capture off)",
+        });
         Ok(())
     }
 

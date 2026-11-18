@@ -75,11 +75,27 @@ svc_cli_path_prefix() {
     printf '%s' "$extra"
 }
 
+# Retain the mode of an installed live unit. Fresh installations wait for a
+# supported conference before opening either audio device.
+svc_recording_flag() {
+    local unit flag
+    unit="$(svc_unit_path live)"
+    if [ -f "$unit" ]; then
+        for flag in --ktalk-only --conferences-only --ktalk; do
+            if grep -Eq "(<string>${flag}</string>|^ExecStart=.* ${flag}([[:space:]]|$))" "$unit"; then
+                printf '%s\n' "$flag"
+                return
+            fi
+        done
+    fi
+    echo --conferences-only
+}
+
 # The program and arguments a service's unit runs, one per line: the binary in
 # bin/ with the checkout named.
 svc_command() {
     case "$1" in
-        live)               printf '%s\n' "$SVC_BIN_DIR/recog" live --system-audio auto --ktalk ;;
+        live)               printf '%s\n' "$SVC_BIN_DIR/recog" live --system-audio auto "$(svc_recording_flag)" ;;
         frontend)           printf '%s\n' "$SVC_BIN_DIR/recog-web" --host 127.0.0.1 --port 9080 --repo "$SVC_REPO_DIR" ;;
         copilot-channel)    printf '%s\n' "$SVC_BIN_DIR/recog-copilot-channel" --repo-root "$SVC_REPO_DIR" ;;
         copilot-supervisor) printf '%s\n' "$SVC_BIN_DIR/recog-copilot-supervisor" --repo-root "$SVC_REPO_DIR" ;;

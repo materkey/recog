@@ -35,6 +35,7 @@ pub struct Layout<'a> {
     pub logs: &'a Path,
     pub home: &'a Path,
     pub search_path: &'a std::ffi::OsStr,
+    pub unit_dir: &'a Path,
 }
 
 fn locate(name: &str, search_path: &std::ffi::OsStr) -> Option<PathBuf> {
@@ -44,10 +45,10 @@ fn locate(name: &str, search_path: &std::ffi::OsStr) -> Option<PathBuf> {
     })
 }
 
-fn arguments(name: &str, root: &str) -> Vec<String> {
+fn arguments(name: &str, root: &str, recording_flag: &str) -> Vec<String> {
     match name {
         "live" => {
-            [format!("{root}/bin/recog"), "live".into(), "--system-audio".into(), "auto".into(), "--ktalk".into()]
+            [format!("{root}/bin/recog"), "live".into(), "--system-audio".into(), "auto".into(), recording_flag.into()]
                 .into()
         }
         "frontend" => [
@@ -65,6 +66,45 @@ fn arguments(name: &str, root: &str) -> Vec<String> {
 }
 
 impl Backend {
+    pub fn unit_dir(self, home: &Path) -> PathBuf {
+        if let Some(path) = std::env::var_os("SVC_UNIT_DIR").filter(|v| !v.is_empty()) {
+            return path.into();
+        }
+        match self {
+            Self::Launchd => home.join("Library/LaunchAgents"),
+            Self::Systemd => std::env::var_os("XDG_CONFIG_HOME")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".config"))
+                .join("systemd/user"),
+        }
+    }
+
+    fn recording_flag(self, dir: &Path) -> io::Result<&'static str> {
+        let path = dir.join(match self {
+            Self::Launchd => "com.recog.live.plist",
+            Self::Systemd => "recog-live.service",
+        });
+        let unit = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok("--conferences-only"),
+            Err(e) => return Err(e),
+        };
+        for flag in ["--ktalk-only", "--conferences-only", "--ktalk"] {
+            let found = match self {
+                Self::Launchd => unit.contains(&format!("<string>{flag}</string>")),
+                Self::Systemd => unit
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("ExecStart="))
+                    .any(|args| args.split_whitespace().any(|arg| arg == flag)),
+            };
+            if found {
+                return Ok(flag);
+            }
+        }
+        Ok("--conferences-only")
+    }
+
     fn escape(self, value: &str) -> String {
         match self {
             Self::Launchd => value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"),
@@ -99,6 +139,7 @@ impl Backend {
 
     /// Writes each complete unit atomically; never contacts the service manager.
     pub fn render(self, layout: &Layout<'_>, dest: &Path) -> io::Result<Vec<PathBuf>> {
+        let recording_flag = self.recording_flag(layout.unit_dir)?;
         let node = locate("node", layout.search_path).unwrap_or_else(|| "/usr/bin".into());
         let prefix: String = ["claude", "tmux"]
             .iter()
@@ -124,7 +165,7 @@ impl Backend {
                     Self::Launchd => (format!("com.recog.{}.plist", unit.name), unit.mac),
                     Self::Systemd => (format!("recog-{}.service", unit.name), unit.linux),
                 };
-                let command = self.command(&arguments(unit.name, &root));
+                let command = self.command(&arguments(unit.name, &root, recording_flag));
                 let result = substitute(template, |key| {
                     if key == "@COMMAND@" {
                         return Some(command.clone());

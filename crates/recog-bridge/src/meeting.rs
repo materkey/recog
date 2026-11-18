@@ -91,7 +91,7 @@ impl Bridge {
         let url = data.get("url").cloned().unwrap_or(Value::Null);
         let title = data.get("title").cloned().unwrap_or(Value::Null);
         let platform = data.get("platform").map_or_else(|| "ktalk".to_owned(), text_of);
-        if self.config.ktalk_only && platform != "ktalk" {
+        if !self.config.recording_policy.accepts(&platform) {
             return self.reject_other_platform(client).await;
         }
         let Some(storage) = self.storage() else { return Ok(()) };
@@ -102,7 +102,7 @@ impl Bridge {
             return Err(format!("'{}' object has no attribute 'decode'", url.type_name()));
         };
         let switch = self.switch_join_meeting(storage.as_ref(), url, &title, &platform)?;
-        if self.config.ktalk_only && !self.start_ktalk_capture(&switch, client).await? {
+        if self.config.recording_policy.gated() && !self.start_ktalk_capture(&switch, client).await? {
             return Ok(());
         }
         self.enter_meeting(&switch, title, client).await
@@ -111,7 +111,8 @@ impl Bridge {
     /// `ktalk_only`: a conference of another platform is refused.
     async fn reject_other_platform(&self, client: Option<&Arc<Client>>) -> Result<(), String> {
         if let Some(client) = client {
-            let frame = obj! {"type" => protocol::MEETING_JOIN_REJECTED, "reason" => "ktalk_only"};
+            let frame =
+                obj! {"type" => protocol::MEETING_JOIN_REJECTED, "reason" => self.config.recording_policy.name()};
             client.sink.send(dumps_ascii(&frame)).await.map_err(|e| e.0)?;
         }
         Ok(())
@@ -174,8 +175,8 @@ impl Bridge {
         self.log(&format!("[KTalk Bridge] Joined {platform} meeting: {url}"));
         let new_path = storage.current_meeting_path();
         let path_changed = new_path != old_path;
-        let became_active =
-            !path_changed && (prev_source == Some(Value::from("orphan")) || (self.config.ktalk_only && !was_recording));
+        let became_active = !path_changed
+            && (prev_source == Some(Value::from("orphan")) || (self.config.recording_policy.gated() && !was_recording));
         Ok(JoinSwitch { meeting_id, prev_meeting_id, new_path, path_changed, became_active, live })
     }
 
@@ -260,7 +261,7 @@ impl Bridge {
     /// The live side's writers follow a join that moved the meeting path.
     fn move_live_writers(&self, switch: &JoinSwitch) -> Result<(), String> {
         if switch.path_changed
-            && !self.config.ktalk_only
+            && !self.config.recording_policy.gated()
             && let Some(live) = &switch.live
         {
             live.meeting_changed(switch.meeting_id.as_deref(), switch.new_path.as_deref())?;
@@ -283,7 +284,7 @@ impl Bridge {
         client: Option<&Arc<Client>>,
     ) -> Result<(), String> {
         let is_owner = client.map(|c| c.id) == self.st().meeting_owner;
-        if self.config.ktalk_only && !is_owner {
+        if self.config.recording_policy.gated() && !is_owner {
             return Ok(());
         }
         self.set_meeting_capture_active(false)?;

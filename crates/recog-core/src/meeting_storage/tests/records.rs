@@ -123,7 +123,7 @@ fn recording_when_flagged_then_meta_takes_the_session_mode_and_the_flag() {
     let mode = SessionMode {
         mic: true,
         ktalk: true,
-        ktalk_only: true,
+        recording_policy: crate::platforms::RecordingPolicy::KTalkOnly,
         system_audio_backend: "pulse".into(),
         ..SessionMode::default()
     };

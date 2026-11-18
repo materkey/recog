@@ -16,6 +16,7 @@ pub struct LiveArgs {
     pub list_devices: bool,
     pub ktalk: bool,
     pub ktalk_only: bool,
+    pub conferences_only: bool,
     pub zoom_app: bool,
     pub screencapture: bool,
     pub mic_speaker_name: Option<String>,
@@ -33,6 +34,7 @@ impl Default for LiveArgs {
             list_devices: false,
             ktalk: false,
             ktalk_only: false,
+            conferences_only: false,
             zoom_app: false,
             screencapture: false,
             mic_speaker_name: None,
@@ -125,7 +127,7 @@ const PREFETCH_USAGE: &str = "usage: recog prefetch [-h]";
 
 const LIVE_USAGE: &str = "usage: recog live [-h] [--mic-device MIC_DEVICE] [--system-audio BACKEND]
                   [--chunk-duration CHUNK_DURATION] [--output OUTPUT]
-                  [--list-devices] [--ktalk] [--ktalk-only] [--zoom-app]
+                  [--list-devices] [--ktalk] [--ktalk-only] [--conferences-only] [--zoom-app]
                   [--mic-speaker-name MIC_SPEAKER_NAME] [--no-save-audio]";
 
 const MEETINGS_USAGE: &str = "usage: recog meetings [-h] [--json] [--refresh-cache] [meeting_id]";
@@ -180,6 +182,7 @@ options:
   --list-devices        Показать доступные аудио устройства
   --ktalk               Использовать KTalk Chrome extension для определения
                         спикеров
+  --conferences-only    Захватывать звук только во время поддерживаемых конференций
   --ktalk-only          Захватывать звук только во время встречи KTalk
                         (включает --ktalk)
   --zoom-app            Определять спикеров в нативном приложении Zoom (macOS,
@@ -370,6 +373,7 @@ fn parse_live(args: &[String], mic_default: &str) -> Result<Command, Exit> {
         Spec { name: "--output", takes_value: true },
         Spec { name: "--list-devices", takes_value: false },
         Spec { name: "--ktalk", takes_value: false },
+        Spec { name: "--conferences-only", takes_value: false },
         Spec { name: "--ktalk-only", takes_value: false },
         Spec { name: "--zoom-app", takes_value: false },
         Spec { name: "--screencapture", takes_value: false },
@@ -412,6 +416,7 @@ fn set_live_flag(live: &mut LiveArgs, name: &str) {
     match name {
         "--list-devices" => live.list_devices = true,
         "--ktalk" => live.ktalk = true,
+        "--conferences-only" => live.conferences_only = true,
         "--ktalk-only" => live.ktalk_only = true,
         "--zoom-app" => live.zoom_app = true,
         "--screencapture" => live.screencapture = true,

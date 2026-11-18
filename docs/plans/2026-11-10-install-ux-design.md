@@ -124,6 +124,10 @@ signature.
 
 ### First public release acceptance on macOS
 
+New installations record during supported conferences only. Updates preserve the
+existing recording mode. During acceptance, verify both inputs stay closed before
+join and after leave. Perform audio checks inside an explicitly joined test call.
+
 On a clean Mac, install the release through Homebrew and run `recog setup`. Verify
 the following through the installed service launched by `Recog.app`:
 

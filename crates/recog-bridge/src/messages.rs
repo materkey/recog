@@ -454,7 +454,7 @@ impl Bridge {
             return Ok(());
         }
         let is_owner = client.map(|c| c.id) == self.st().meeting_owner;
-        if self.config.ktalk_only && is_owner {
+        if self.config.recording_policy.gated() && is_owner {
             self.end_meeting_on_extension_gone().await?;
             self.st().meeting_owner = None;
         }
@@ -517,7 +517,7 @@ impl Bridge {
 
     /// A `ktalk_only` installation takes PCM only from the owner's tab while it records.
     fn pcm_gate_open(&self, client: Option<&Arc<Client>>) -> bool {
-        if !self.config.ktalk_only {
+        if !self.config.recording_policy.gated() {
             return true;
         }
         let owner = self.st().meeting_owner;

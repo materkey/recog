@@ -55,7 +55,7 @@ impl Bridge {
 
     fn recording_section(&self, active: bool) -> Value {
         obj! {
-            "policy" => if self.config.ktalk_only { "ktalk_only" } else { "continuous" },
+            "policy" => self.config.recording_policy.name(),
             "active" => active,
         }
     }

@@ -17,3 +17,34 @@ pub const BUILTIN_WILDCARD_DOMAINS: [&str; 2] = ["ktalk.ru", "zoom.us"];
 pub fn in_builtin_wildcard_domain(hostname: &str) -> bool {
     BUILTIN_WILDCARD_DOMAINS.iter().any(|d| hostname == *d || hostname.ends_with(&format!(".{d}")))
 }
+
+/// Which conference signals can open the microphone and system capture.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RecordingPolicy {
+    #[default]
+    Continuous,
+    KTalkOnly,
+    ConferencesOnly,
+}
+
+impl RecordingPolicy {
+    pub fn gated(self) -> bool {
+        self != Self::Continuous
+    }
+
+    pub fn accepts(self, platform: &str) -> bool {
+        match self {
+            Self::Continuous => true,
+            Self::KTalkOnly => platform == "ktalk",
+            Self::ConferencesOnly => PLATFORMS.contains(&platform),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Continuous => "continuous",
+            Self::KTalkOnly => "ktalk_only",
+            Self::ConferencesOnly => "conferences_only",
+        }
+    }
+}
