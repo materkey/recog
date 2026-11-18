@@ -4,7 +4,7 @@
 //! `~/.recog`, or the absolute (or `~/…`) `RECOG_DATA_DIR`. Without an explicit
 //! override an installation whose data still lives in the checkout keeps the whole
 //! root there, with a warning; data in both roots is a fatal conflict until
-//! `scripts/migrate-data.py` resolves it.
+//! `recog migrate-data` resolves it.
 //!
 //! The environment is the one after `.env` is loaded (`install_config::load`, or
 //! [`get_data_dir_process`]): Python imports `install_config` before resolving, so a
@@ -98,13 +98,13 @@ pub fn get_data_dir(repo_dir: &Path, environ: &Environ, warn: &mut dyn FnMut(Str
         if !data_entries(&target).is_empty() {
             return Err(DataDirError::Conflict(format!(
                 "Recog data exists in both {} and {}; resolve the conflict before starting services \
-                 (scripts/migrate-data.py).",
+                 (recog migrate-data).",
                 repo_dir.display(),
                 target.display()
             )));
         }
         warn(format!(
-            "Recog: using legacy data in {}; run scripts/migrate-data.py to move it outside the checkout.",
+            "Recog: using legacy data in {}; run recog migrate-data to move it outside the checkout.",
             repo_dir.display()
         ));
         return Ok(repo_dir.to_path_buf());
@@ -186,7 +186,7 @@ mod tests {
             let root = get_data_dir(&repo, &environ, &mut |w| warnings.push(w)).unwrap();
             // then
             assert_eq!(root, repo, "{entry}");
-            assert!(warnings[0].contains("migrate-data.py"), "{entry}");
+            assert!(warnings[0].contains("recog migrate-data"), "{entry}");
         }
     }
 

@@ -130,3 +130,83 @@ mod tests {
         assert_eq!(fs::read_to_string(dest.join("config.toml")).unwrap(), "[test]");
     }
 }
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn optional_settings_when_backed_up_then_confidential_files_are_private_and_logs_follow_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let data = dir.path().join("data");
+        fs::create_dir_all(repo.join("recog/web")).unwrap();
+        fs::create_dir_all(data.join("meetings")).unwrap();
+        fs::create_dir_all(data.join("logs")).unwrap();
+        let config = repo.join("config.toml");
+        for (file, text) in [
+            (repo.join(".env"), "fixture"),
+            (repo.join("recog/web/.env"), "web"),
+            (config.clone(), "config"),
+            (data.join("speakers_custom.json"), "names"),
+            (data.join("privacy.json"), "privacy"),
+            (data.join("ai-settings.lock"), "lock"),
+            (data.join("logs/live.log"), "log"),
+            (data.join("meetings/transcript.jsonl"), "words"),
+        ] {
+            fs::write(file, text).unwrap();
+        }
+        for profile in [false, true] {
+            for ai in [false, true] {
+                if profile {
+                    fs::write(data.join("user-profile.json"), "profile").unwrap();
+                }
+                if ai {
+                    fs::write(data.join("ai-settings.json"), "ai").unwrap();
+                }
+                for logs in [false, true] {
+                    let dest = dir.path().join(format!("backup-{profile}-{ai}-{logs}"));
+                    snapshot(
+                        &repo,
+                        &data,
+                        &config,
+                        &Backup { destination: dest.clone(), remote: None, with_logs: logs },
+                    )
+                    .unwrap();
+                    assert_eq!(dest.join("logs/live.log").is_file(), logs);
+                    assert_eq!(dest.join("user-profile.json").is_file(), profile);
+                    assert_eq!(dest.join("ai-settings.json").is_file(), ai);
+                    assert!(!dest.join("ai-settings.lock").exists());
+                    for (name, text) in [
+                        ("meetings/transcript.jsonl", "words"),
+                        ("env.backup", "fixture"),
+                        ("frontend-env.backup", "web"),
+                        ("config.toml", "config"),
+                        ("privacy.json", "privacy"),
+                        ("speakers_custom.json", "names"),
+                    ] {
+                        assert_eq!(fs::read_to_string(dest.join(name)).unwrap(), text);
+                    }
+                    for name in [
+                        "env.backup",
+                        "frontend-env.backup",
+                        "config.toml",
+                        "privacy.json",
+                        "user-profile.json",
+                        "ai-settings.json",
+                    ] {
+                        if dest.join(name).is_file() {
+                            assert_eq!(fs::metadata(dest.join(name)).unwrap().mode() & 0o777, 0o600);
+                        }
+                    }
+                }
+                if ai {
+                    fs::remove_file(data.join("ai-settings.json")).unwrap();
+                }
+            }
+        }
+        assert_eq!(fs::read_to_string(repo.join(".env")).unwrap(), "fixture");
+        assert_eq!(fs::read_to_string(repo.join("recog/web/.env")).unwrap(), "web");
+    }
+}

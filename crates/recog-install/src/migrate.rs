@@ -91,3 +91,58 @@ mod tests {
         assert!(migrate(&repo, &repo.join("nested"), true).is_err());
     }
 }
+
+#[cfg(test)]
+mod entry_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn legacy_checkout_when_migrated_then_all_user_entries_keep_bytes_inodes_and_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let target = dir.path().join("home/data");
+        fs::create_dir_all(repo.join("meetings")).unwrap();
+        fs::create_dir_all(repo.join("logs")).unwrap();
+        fs::create_dir_all(repo.join("deploy/examples")).unwrap();
+        fs::write(repo.join(".env"), "fixture").unwrap();
+        fs::write(repo.join("deploy/examples/speakers.json.example"), "example").unwrap();
+        let files = [
+            "meetings/transcript.jsonl",
+            "logs/live.log",
+            "speakers_custom.json",
+            "user-profile.json",
+            "ai-settings.json",
+            "privacy.json",
+        ];
+        let mut inodes = Vec::new();
+        for name in files {
+            let file = repo.join(name);
+            fs::write(&file, name).unwrap();
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+            inodes.push(fs::metadata(&file).unwrap().ino());
+        }
+        migrate(&repo, &target, true).unwrap();
+        for (name, inode) in files.into_iter().zip(inodes) {
+            let file = target.join(name);
+            assert_eq!(fs::read_to_string(&file).unwrap(), name);
+            let meta = fs::metadata(file).unwrap();
+            assert_eq!((meta.ino(), meta.mode() & 0o777), (inode, 0o600));
+        }
+        assert!(repo.join(".env").exists());
+        assert!(repo.join("deploy/examples/speakers.json.example").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn separate_filesystems_when_checked_then_nothing_is_moved() {
+        let repo = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let other = tempfile::tempdir_in("/dev/shm").unwrap();
+        if fs::metadata(repo.path()).unwrap().dev() == fs::metadata(other.path()).unwrap().dev() {
+            return;
+        }
+        fs::create_dir(repo.path().join("logs")).unwrap();
+        assert!(migrate(repo.path(), other.path(), true).unwrap_err().to_string().contains("same filesystem"));
+        assert!(repo.path().join("logs").exists());
+    }
+}

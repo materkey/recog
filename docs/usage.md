@@ -495,9 +495,9 @@ To migrate an existing install, finish the current recording and stop any
 manually launched recording or speaker-enrollment commands, then run:
 
 ```bash
-python3 scripts/migrate-data.py  # inspect the proposed moves
+bin/recog migrate-data  # inspect the proposed moves
 ./recog-service.sh stop
-python3 scripts/migrate-data.py --apply
+bin/recog migrate-data --apply
 ./recog-service.sh install
 ./recog-service.sh restart
 ```
@@ -507,7 +507,7 @@ on the same filesystem. It leaves no old directories or symlinks, does not
 copy data, and refuses collisions or a destination inside the checkout.
 An interrupted migration can be re-run to move the remaining entries; it
 never merges two meeting archives or overwrites a database. `setup.sh` does
-not migrate existing data. `scripts/backup-data.sh` backs up the resolved
+not migrate existing data. `recog backup` backs up the resolved
 data root, the [installation configuration](configuration.md) `config.toml`
 (as `config.toml` in the snapshot) and the environment files in the checkout
 (`--with-logs` includes logs).

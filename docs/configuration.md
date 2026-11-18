@@ -72,7 +72,7 @@ One parser reads the file, `crates/recog-core` (the port of the former
 with the built-in hosts when there is no configuration file and fails when there
 is one.
 
-`scripts/backup-data.sh` copies the file into its snapshot as `config.toml`.
+`recog backup` copies the file into its snapshot as `config.toml`.
 
 After a change, rebuild the extension when conference hosts changed
 (`npm run build --prefix browser-extension`) and restart the services

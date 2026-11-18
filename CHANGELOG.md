@@ -23,6 +23,8 @@ reasoning.
 - After rebuilding, `recog service` can install, start, stop and restart the user
   services, display status and follow logs. `recog doctor` checks the installed
   programs, configuration and running transcription services.
+- **Action required:** replace `scripts/backup-data.sh` and `scripts/migrate-data.py`
+  in scheduled commands with `recog backup` and `recog migrate-data`.
 - `recog backup` creates a snapshot of meetings and private settings. The
   `--with-logs`, `--dest` and `--remote` options are available after rebuilding.
 - `recog migrate-data` previews a move of legacy data out of the checkout.

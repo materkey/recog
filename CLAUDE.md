@@ -326,7 +326,7 @@ checkout with a migration warning; data in both roots is a fatal conflict.
 Service units pin the resolved root in their environment; re-render and
 restart after changing it. Working directories still point at code.
 
-`scripts/migrate-data.py` defaults to a dry run; `--apply` requires stopped
+`recog migrate-data` defaults to a dry run; `--apply` requires stopped
 services and manual writers, then renames all data on the same filesystem
 without overwriting or merging entries. Re-run after an interruption to
 finish remaining moves, then `./recog-service.sh install` and
