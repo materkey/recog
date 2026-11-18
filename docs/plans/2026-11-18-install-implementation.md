@@ -47,6 +47,10 @@ replacements pass the same checks.
   output produced distinct local and remote transcript rows. Both audio files
   stopped growing after leave. The default microphone regression this exercise
   found is covered in `crates/recog-live/tests/live_policy.rs`.
+- Upgrading that Linux installation to the v0.1.3 release build changed the
+  extension's configured host list. Reload in Chrome's Extensions page preserved
+  the extension ID and enabled the new host. A second two-party Jitsi call
+  produced visible text from both audio sources and closed both inputs on exit.
 - The Mac acceptance host upgraded from the Python installation and kept its
   archive and recording mode. All four Rust services and the web readiness route
   responded. The installed launcher saw the microphone grant after the interactive
