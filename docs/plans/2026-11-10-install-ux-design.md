@@ -1,7 +1,7 @@
 # Installing and updating recog: one program, no shell scripts
 
-Status: proposed on 2026-11-10, nothing built. This document sets the route and designs
-its first step; steps 2 and 3 get their own designs when their turn comes.
+Proposed on 2026-11-10 and approved for implementation on 2026-11-18. See the
+[implementation and acceptance record](2026-11-18-install-implementation.md).
 
 ## Purpose
 

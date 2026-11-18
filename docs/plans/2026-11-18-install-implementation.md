@@ -32,3 +32,21 @@ replacements pass the same checks.
    with verified release checksums in `materkey/homebrew-apps`. Before visibility
    changes, detach personal runners from the public repository. External changes
    run on GitHub's machines; private builders take only reviewed revisions.
+
+## Acceptance evidence, 2026-11-18
+
+- The native checkout bootstrap was exercised with a build handover, dry run,
+  failed configuration/build, optional Copilot dependencies and an active
+  conference. Service rendering matches frozen shell output for all eight units.
+- The macOS release archive installed into an empty temporary home, applied
+  custom extension hosts, and preserved the launcher on repeated setup. Homebrew
+  installed and tested the generated formula using a local archive URL.
+- On Linux x86-64, the archive was built from the release candidate, installed
+  without a checkout, and its rendered user units passed systemd verification.
+- The Mac acceptance host upgraded from the Python installation and kept its
+  archive and recording mode. All four Rust services and the web readiness route
+  responded. Setup separately detected the missing microphone and system audio
+  grants. Verifying a first transcript with both grants still requires a test call.
+- Public distribution is pending. Old commit identifiers still resolve in the
+  existing private hosting repository, including identifiers in retained design
+  documents. Resolve the publication approach before changing visibility.
