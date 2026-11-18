@@ -28,10 +28,10 @@ struct Sandbox {
 impl Sandbox {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        for sub in ["home", "repo/bin", "bin"] {
+        for sub in ["home", "repo/bin", "repo/crates/recog-live", "bin"] {
             std::fs::create_dir_all(dir.path().join(sub)).unwrap();
         }
-        std::fs::write(dir.path().join("repo/recog-service.sh"), "#!/bin/bash\n").unwrap();
+        std::fs::write(dir.path().join("repo/crates/recog-live/Cargo.toml"), "").unwrap();
         let recog = dir.path().join("repo/bin/recog");
         common::place_recog(&recog);
         Self { dir, recog }

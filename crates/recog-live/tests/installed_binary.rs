@@ -10,7 +10,8 @@ use std::process::Command;
 /// A checkout with `recog` in its `bin/`: a file of its own, since a symlink would
 /// resolve back to the build directory.
 fn installed(repo: &Path) -> PathBuf {
-    std::fs::write(repo.join("recog-service.sh"), "#!/bin/bash\n").unwrap();
+    std::fs::create_dir_all(repo.join("crates/recog-live")).unwrap();
+    std::fs::write(repo.join("crates/recog-live/Cargo.toml"), "").unwrap();
     let bin = repo.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let program = bin.join("recog");

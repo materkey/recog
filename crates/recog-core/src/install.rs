@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 /// The installation's program directory, relative to the checkout.
 pub const BIN_DIR: &str = "bin";
 
-/// Whether `dir` is a checkout: the directory holding `recog-service.sh`.
+/// Whether `dir` is a checkout: the root of the workspace containing the live crate.
 #[must_use]
 pub fn is_checkout(dir: &Path) -> bool {
-    dir.join("recog-service.sh").is_file()
+    dir.join("crates/recog-live/Cargo.toml").is_file()
 }
 
 /// The checkout an installed program at `exe` (a canonical path) belongs to:
@@ -66,7 +66,8 @@ mod tests {
         // given
         let dir = tempfile::tempdir().unwrap();
         let repo = std::fs::canonicalize(dir.path()).unwrap();
-        std::fs::write(repo.join("recog-service.sh"), "").unwrap();
+        std::fs::create_dir_all(repo.join("crates/recog-live")).unwrap();
+        std::fs::write(repo.join("crates/recog-live/Cargo.toml"), "").unwrap();
         // when / then
         assert_eq!(installed_repo_of(&repo.join("bin/recog")), Some(repo.clone()));
         assert_eq!(installed_repo_of(&repo.join("target/release/recog")), None);

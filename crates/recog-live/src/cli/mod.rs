@@ -461,7 +461,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installed = dir.path().join("checkout");
         std::fs::create_dir_all(installed.join("bin")).unwrap();
-        std::fs::write(installed.join("recog-service.sh"), "#!/bin/bash\n").unwrap();
+        std::fs::create_dir_all(installed.join("crates/recog-live")).unwrap();
+        std::fs::write(installed.join("crates/recog-live/Cargo.toml"), "").unwrap();
         let elsewhere = Path::new("/opt/tools/recog");
         // when
         let from_bin = repo_root_of(Some(&installed.join("bin/recog")), Some("/ignored".into()));

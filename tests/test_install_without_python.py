@@ -48,7 +48,8 @@ def checkout(tmp_path):
     repo = tmp_path / "recog"
     repo.mkdir()
     shutil.copytree(REPO_ROOT / "scripts", repo / "scripts")
-    (repo / "recog-service.sh").write_text("#!/bin/bash\n")
+    (repo / "crates/recog-live").mkdir(parents=True)
+    (repo / "crates/recog-live/Cargo.toml").touch()
     (repo / "bin").mkdir()
     for name in PROGRAMS:
         program = repo / "bin" / name
