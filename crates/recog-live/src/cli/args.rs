@@ -95,6 +95,8 @@ pub enum Command {
     ServiceRender(String),
     Service(Vec<String>),
     Doctor,
+    Setup(Vec<String>, bool),
+    Update(Vec<String>),
     Copilot,
     Backup(Vec<String>),
     /// Whether the settings can serve: what `scripts/deps.sh` asked Python.
@@ -117,7 +119,7 @@ pub struct Exit {
     pub code: i32,
 }
 
-pub const MAIN_USAGE: &str = "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,service,doctor,copilot,backup,migrate-data} ...";
+pub const MAIN_USAGE: &str = "usage: recog [-h] {live,meetings,replay,desktop,check,config,launcher,prefetch,setup,update,service,doctor,copilot,backup,migrate-data} ...";
 
 pub const SERVICE_USAGE: &str =
     "usage: recog service install|uninstall|start|stop|restart|status|logs [name] [--stdout] | debug | render DIR";
@@ -147,7 +149,7 @@ pub fn main_help() -> String {
 CLI-утилита для live-транскрибирования и управления митингами
 
 positional arguments:
-  {{live,meetings,replay,desktop,check,config,launcher,prefetch,service,doctor,copilot,backup,migrate-data}}
+  {{live,meetings,replay,desktop,check,config,launcher,prefetch,setup,update,service,doctor,copilot,backup,migrate-data}}
                         Доступные команды
     live                Live транскрипция с микрофона и/или системного звука
     meetings            Просмотр сохранённых митингов
@@ -157,6 +159,8 @@ positional arguments:
     config              Напечатать значение для скриптов установки
     launcher            Собрать Recog.app, если её исходник изменился (macOS)
     prefetch            Скачать модель ASR в кэш Hugging Face
+    setup               Подготовить установку
+    update              Обновить установку
     service             Управление службами (см. recog service --help)
     doctor              Проверить готовность установки
     copilot             Запустить Claude Code в текущем терминале
@@ -574,6 +578,8 @@ pub fn parse(argv: &[String], mic_default: &str) -> Result<Command, Exit> {
             }
             _ => Err(error(SERVICE_USAGE, "recog service", "expected a service command")),
         },
+        "setup" | "__install-built" => Ok(Command::Setup(rest.to_vec(), first == "__install-built")),
+        "update" => Ok(Command::Update(rest.to_vec())),
         "doctor" => parse_bare(rest, "usage: recog doctor [-h]", "Проверить готовность установки", Command::Doctor),
         "backup" => Ok(Command::Backup(rest.to_vec())),
         "copilot" => {
@@ -603,7 +609,7 @@ fn unknown_command(other: &str) -> Exit {
         "recog",
         &format!(
             "argument command: invalid choice: {} (choose from 'live', 'meetings', 'replay', 'desktop', \
-             'check', 'config', 'launcher', 'prefetch', 'service', 'doctor', 'copilot', 'backup', 'migrate-data')",
+             'check', 'config', 'launcher', 'prefetch', 'setup', 'update', 'service', 'doctor', 'copilot', 'backup', 'migrate-data')",
             py_repr(other)
         ),
     )

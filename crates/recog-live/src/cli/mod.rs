@@ -4,6 +4,7 @@ pub mod args;
 pub mod install;
 pub mod meetings;
 mod services;
+mod setup;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -381,6 +382,16 @@ fn load_command(argv: &[String], repo_root: &Path, environ: &mut Environ) -> Res
     }
 }
 
+fn command_status(outcome: Result<(), Box<dyn std::error::Error>>) -> i32 {
+    match outcome {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
 fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo_root: &Path) -> i32 {
     match command {
         Command::None => {
@@ -404,6 +415,8 @@ fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo
             }
         },
         Command::Service(args) => services::command(repo_root, config, environ, &args),
+        Command::Setup(args, built) => command_status(setup::setup(repo_root, config, environ, &args, built)),
+        Command::Update(args) => command_status(setup::update(repo_root, config, environ, &args)),
         Command::Doctor => services::command(repo_root, config, environ, &["doctor".into()]),
         Command::Backup(args) => install::backup(repo_root, environ, &args),
         Command::Copilot => install::copilot(repo_root),

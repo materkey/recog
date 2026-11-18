@@ -11,6 +11,8 @@ reasoning.
 
 ### Changed
 
+- From a checkout, use `cargo setup` to build and install, and `recog update`
+  for a fast-forward update. Both defer installation during a conference.
 - After rebuilding, `recog service` can install, start, stop and restart the user
   services, display status and follow logs. `recog doctor` checks the installed
   programs, configuration and running transcription services.

@@ -1,0 +1,2 @@
+[alias]
+setup = "run --release --bin recog -- setup"
