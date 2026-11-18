@@ -11,6 +11,10 @@ reasoning.
 
 ### Changed
 
+- A conference now records the default microphone alongside system audio on
+  Linux. Previously an install using the default input opened only the output
+  monitor. After upgrading, both tracks start when the conference joins.
+
 - With native Zoom enabled, setup now checks Accessibility through Recog Zoom
   Helper itself. The terminal and web readiness checks show its current grant.
 

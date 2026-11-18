@@ -611,7 +611,7 @@ fn settings<'a>(root: &'a std::path::Path, config: &'a InstallConfig, platform: 
 }
 
 #[test]
-fn each_choice_building_captures_gives_the_sources_python_builds() {
+fn selected_inputs_when_building_captures_then_both_requested_sources_are_openable() {
     let root = tempfile::tempdir().unwrap();
     let config = InstallConfig::default();
     let linux = settings(root.path(), &config, "linux");
@@ -619,9 +619,10 @@ fn each_choice_building_captures_gives_the_sources_python_builds() {
     let (mic, system) = build_captures("pulse", &MicChoice::Named("usb".into()), &linux).unwrap();
     assert_eq!(mic.unwrap().argv().last().unwrap(), "--device=usb");
     assert_eq!(system.unwrap().argv().last().unwrap(), "--device=@DEFAULT_MONITOR@");
-    // pulse with the default input: Python builds no microphone in this mode
+    // A fresh Linux service has both the default microphone and the output monitor.
     let (mic, system) = build_captures("pulse", &MicChoice::Default, &linux).unwrap();
-    assert!(mic.is_none() && system.is_some());
+    assert_eq!(mic.unwrap().argv().last().unwrap(), "--device=@DEFAULT_SOURCE@");
+    assert!(system.is_some());
     // a device as system audio, the microphone beside it
     let (mic, system) = build_captures("device:alsa_input.loop", &MicChoice::Named("usb".into()), &linux).unwrap();
     assert!(mic.is_some());

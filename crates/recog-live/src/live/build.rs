@@ -102,54 +102,30 @@ pub fn create_device_capture(name: &str, settings: &CaptureSettings<'_>) -> Resu
 /// # Errors
 /// A capture cannot be built (no helper, a bad setting).
 pub fn build_captures(system_audio: &str, mic: &MicChoice, settings: &CaptureSettings<'_>) -> Result<Captures, String> {
-    let named = match mic {
-        MicChoice::Named(name) => Some(name.as_str()),
-        _ => None,
+    let echo = if *mic == MicChoice::Off { None } else { create_echo_stage(system_audio, settings.config) };
+    let microphone = match mic {
+        MicChoice::Off => None,
+        MicChoice::Default => Some(create_mic_capture(None, echo.clone(), settings)?),
+        MicChoice::Named(name) => Some(create_mic_capture(Some(name), echo.clone(), settings)?),
     };
-    if system_audio == "screencapture" || system_audio == "pulse" {
-        return server_captures(system_audio, named, settings);
-    }
-    if let Some(device) = system_audio.strip_prefix("device:") {
-        return device_captures(device, named, settings);
-    }
-    if *mic != MicChoice::Off {
-        return Ok((Some(create_mic_capture(named, None, settings)?), None));
-    }
-    Ok((None, None))
-}
-
-/// ScreenCaptureKit or the sound server, with a named microphone (and the echo stage
-/// between the two when it is on).
-fn server_captures(
-    system_audio: &str,
-    named: Option<&str>,
-    settings: &CaptureSettings<'_>,
-) -> Result<Captures, String> {
-    let mut mic_capture = None;
-    let mut echo = None;
-    if let Some(name) = named {
-        echo = create_echo_stage(system_audio, settings.config);
-        mic_capture = Some(create_mic_capture(Some(name), echo.clone(), settings)?);
-    }
-    let system = create_system_capture(
-        system_audio,
-        SAMPLE_RATE,
-        echo,
-        &SystemCaptureSettings {
-            repo_root: settings.repo_root,
-            pulse_monitor_source: &settings.config.live.pulse_monitor_source,
-            max_buffer_s: max_buffer_s(settings.config),
-            log: settings.log.clone(),
-        },
-    )?;
-    Ok((mic_capture, Some(Arc::new(system))))
-}
-
-/// An input device as the system audio, with a named microphone.
-fn device_captures(device: &str, named: Option<&str>, settings: &CaptureSettings<'_>) -> Result<Captures, String> {
-    let system = create_device_capture(device, settings)?;
-    let mic_capture = named.map(|name| create_mic_capture(Some(name), None, settings)).transpose()?;
-    Ok((mic_capture, Some(system)))
+    let system: Option<Arc<dyn LiveCapture>> = if system_audio == "screencapture" || system_audio == "pulse" {
+        Some(Arc::new(create_system_capture(
+            system_audio,
+            SAMPLE_RATE,
+            echo,
+            &SystemCaptureSettings {
+                repo_root: settings.repo_root,
+                pulse_monitor_source: &settings.config.live.pulse_monitor_source,
+                max_buffer_s: max_buffer_s(settings.config),
+                log: settings.log.clone(),
+            },
+        )?))
+    } else if let Some(device) = system_audio.strip_prefix("device:") {
+        Some(create_device_capture(device, settings)?)
+    } else {
+        None
+    };
+    Ok((microphone, system))
 }
 
 /// `build_asr`: the ASR `[asr] backend` asks for. `remote` is the gateway with wavo as
