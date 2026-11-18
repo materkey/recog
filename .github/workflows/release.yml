@@ -13,10 +13,12 @@ jobs:
       matrix:
         include:
           - runner: macos-latest
+            trusted: '["self-hosted","macos","recog"]'
             asset: macos-arm64
           - runner: ubuntu-24.04
+            trusted: '["self-hosted","linux","recog"]'
             asset: linux-x86_64
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event.repository.private && fromJSON(matrix.trusted) || matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,7 +36,7 @@ jobs:
 
   draft:
     needs: archive
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","macos","recog"]') || 'ubuntu-24.04' }}
     permissions:
       contents: write
     steps:
@@ -50,5 +52,5 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           python3 scripts/release.py formula "$TAG" dist > dist/recog.rb
-          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
-          gh release create "$TAG" --verify-tag --draft --generate-notes dist/*
+          (cd dist && shasum -a 256 ./*.tar.gz > SHA256SUMS)
+          PATH="/opt/homebrew/bin:$PATH" gh release create "$TAG" --verify-tag --draft --generate-notes dist/*
