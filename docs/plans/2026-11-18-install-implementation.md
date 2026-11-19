@@ -84,8 +84,7 @@ replacements pass the same checks.
   the screen recording entry and adding the installed app again restored
   system audio in both the terminal and web readiness checks. Switching the
   new entry off and back on made both checks follow it. Toggling the old
-  microphone entry did not grant the new app access. Its fresh consent
-  prompt and a call with both tracks still need owner confirmation.
+  microphone entry did not grant the new app access.
 - On v0.1.5 with only system audio granted, two participants joined a second
   private Jitsi call. A controlled clip played on the Mac during the call
   produced a visible transcript and 13 seconds of system audio. The microphone
@@ -94,3 +93,20 @@ replacements pass the same checks.
 - In a separate empty home, the packaged macOS runtime upgraded from v0.1.3
   to v0.1.5. The installed app's signature verified, its icon matched the
   release resource and a repeated setup preserved the launcher inode.
+- Once the installed app had microphone consent, a two-participant call
+  produced a local and a remote transcript row and 5.5 seconds on each
+  audio track. Switching off its current microphone permission made
+  `recog doctor` report `denied` and the web readiness list mark only the
+  microphone missing. Switching it back on restored both checks.
+- A live service rendered in an empty unit directory used
+  `--conferences-only`. Its microphone and system capture processes were
+  absent before joining, present with both participants in the call, and
+  absent after leaving. Both audio files stopped growing. The host's original
+  service definition and configuration were restored and matched their
+  pre-test checksums.
+- With developer mode on, reloading the installed unpacked extension through
+  Chrome's Extensions page activated the added test host and preserved the
+  extension identifier. The next call displayed both transcript rows and
+  recorded 3 seconds from the microphone and 5.5 seconds of system audio.
+  All four services were running afterward, and the setup guide and doctor
+  confirmed both capture grants and the optional Zoom grant.
