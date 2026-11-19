@@ -82,6 +82,7 @@ mod messages;
 mod relay;
 mod server;
 pub mod speakers;
+mod switch;
 pub mod testing;
 
 pub use bridge::{Bridge, BridgeConfig, Logger, RefineUpdate, TranscriptLine};

@@ -34,6 +34,7 @@ use crate::hooks::{
 use crate::json::{self, dumps, dumps_ascii};
 use crate::obj;
 use crate::speakers::Speakers;
+use crate::switch::StoreHandle;
 
 /// Where the bridge's lines go (all of Python's go to stderr).
 pub type Logger = Arc<dyn Fn(&str) + Send + Sync>;
@@ -459,13 +460,13 @@ impl Bridge {
 
     // ---- meeting state ----
 
-    pub(crate) fn storage(&self) -> Option<Arc<dyn MeetingStore>> {
-        lock(&self.wiring).storage.clone()
+    pub(crate) fn storage(&self) -> Option<StoreHandle> {
+        lock(&self.wiring).storage.clone().map(StoreHandle::new)
     }
 
     /// `meta and is_conference_source(meta.get("source"))`; a meta.json that is not
     /// an object counts as no conference (Python would raise).
-    pub(crate) fn is_conference_meta(storage: &dyn MeetingStore, meta: &Value) -> bool {
+    pub(crate) fn is_conference_meta(storage: &StoreHandle, meta: &Value) -> bool {
         if !meta.truthy() {
             return false;
         }
@@ -496,7 +497,7 @@ impl Bridge {
                 return false;
             }
         };
-        if !Self::is_conference_meta(storage.as_ref(), &meta) {
+        if !Self::is_conference_meta(&storage, &meta) {
             return false;
         }
         !self.st().clients.connected.is_empty()
@@ -509,7 +510,7 @@ impl Bridge {
             return false;
         }
         match storage.load_meta() {
-            Ok(meta) => Self::is_conference_meta(storage.as_ref(), &meta),
+            Ok(meta) => Self::is_conference_meta(&storage, &meta),
             Err(e) => {
                 self.log(&format!("[KTalk Bridge] pcm_chunk meeting guard failed: {e}"));
                 false

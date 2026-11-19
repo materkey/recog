@@ -223,9 +223,16 @@ pub trait MeetingStore: Send + Sync {
     fn load_meta(&self) -> Result<Value, String>;
     /// `is_conference_source(source)` with the installation's aliases.
     fn is_conference_source(&self, source: Option<&str>) -> bool;
+    /// Moves the storage to the conference's meeting and answers its id. The bridge
+    /// calls it only inside `Bridge::switch_stored_meeting`, so the live side's
+    /// writers follow.
+    ///
     /// # Errors
     /// As Python raises.
     fn on_meeting_join(&self, url: &str, title: Option<&str>, platform: &str) -> Result<Option<String>, String>;
+    /// Ends the meeting, opens an orphan after it and answers the orphan's id. The
+    /// bridge calls it only inside `Bridge::switch_stored_meeting`.
+    ///
     /// # Errors
     /// As Python raises.
     fn on_ktalk_leave(&self, reason: &str) -> Result<String, String>;
