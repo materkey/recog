@@ -133,6 +133,14 @@ fn file_name(path: &Path) -> String {
     path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+fn write_icon(contents: &Path, info: &[(&str, PlistValue)], icon: Option<&[u8]>) -> Result<(), BuildError> {
+    let Some(bytes) = icon else { return Ok(()) };
+    let name = info_string(info, "CFBundleIconFile").ok_or_else(|| BuildError("Missing CFBundleIconFile".into()))?;
+    let resources = contents.join("Resources");
+    std::fs::create_dir_all(&resources).map_err(|e| BuildError(format!("cannot create Resources: {e}")))?;
+    std::fs::write(resources.join(name), bytes).map_err(|e| BuildError(format!("cannot write bundle icon: {e}")))
+}
+
 /// Compile `source` into the executable of `app`, write its `Info.plist` and sign it.
 ///
 /// Built aside, in `<app>.build`, and swapped in on success: a failed build must not
@@ -151,13 +159,7 @@ pub fn build_app(
     let _ = std::fs::remove_dir_all(&staging);
     let contents = staging.join("Contents");
     std::fs::create_dir_all(contents.join("MacOS")).map_err(|e| fail("cannot create the bundle", e))?;
-    if let Some(bytes) = icon {
-        let name =
-            info_string(info, "CFBundleIconFile").ok_or_else(|| BuildError("Missing CFBundleIconFile".into()))?;
-        let resources = contents.join("Resources");
-        std::fs::create_dir_all(&resources).map_err(|e| fail("cannot create Resources", e))?;
-        std::fs::write(resources.join(name), bytes).map_err(|e| fail("cannot write bundle icon", e))?;
-    }
+    write_icon(&contents, info, icon)?;
     let executable_name = info_string(info, "CFBundleExecutable")
         .ok_or_else(|| BuildError("Info.plist names no CFBundleExecutable".into()))?;
     let executable = contents.join("MacOS").join(executable_name);
@@ -205,6 +207,17 @@ fn run_build_step(toolchain: &impl Toolchain, command: &[OsString], app: &Path) 
     Ok(())
 }
 
+fn source_digest(source: &Path, icon: Option<&[u8]>) -> Result<String, BuildError> {
+    let bytes = std::fs::read(source).map_err(|e| BuildError(format!("cannot read {}: {e}", source.display())))?;
+    let mut hash = Sha256::new();
+    hash.update(bytes);
+    if let Some(icon) = icon {
+        hash.update(b"\0");
+        hash.update(icon);
+    }
+    Ok(hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 /// The application; `build(app, source)` runs when it is missing or its source changed.
 ///
 /// Freshness hashes the source and optional icon, independent of mtime, so a checkout that merely
@@ -219,14 +232,7 @@ pub fn find_or_build_app(
     toolchain: &impl Toolchain,
     build: impl FnOnce(&Path, &Path) -> Result<(), BuildError>,
 ) -> Result<PathBuf, BuildError> {
-    let bytes = std::fs::read(source).map_err(|e| BuildError(format!("cannot read {}: {e}", source.display())))?;
-    let mut hash = Sha256::new();
-    hash.update(bytes);
-    if let Some(icon) = icon {
-        hash.update(b"\0");
-        hash.update(icon);
-    }
-    let digest: String = hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
+    let digest = source_digest(source, icon)?;
     let built = app.join("Contents/_CodeSignature/CodeResources").exists();
     if built && stamp.exists() {
         let recorded =

@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 use common::{RUSSIAN, meeting, participants, tile, zoom_app};
 use recog_zoom::helper_app::{
-    CommandOutcome, HELPER_SOURCE, HELPER_STAMP, Toolchain, find_or_build_helper, helper_info, info_plist, which,
+    CommandOutcome, HELPER_SOURCE, HELPER_STAMP, PlistValue, Toolchain, build_app, find_or_build_app,
+    find_or_build_helper, helper_info, info_plist, which,
 };
 use recog_zoom::log::Logger;
 use recog_zoom::run::{Options, RunError, prepare};
@@ -97,6 +98,25 @@ fn given_no_helper_when_located_then_a_signed_bundle_with_a_stable_identifier_is
     assert!(!app.join("Contents/Resources").exists());
     assert_eq!(toolchain.argument_after(1, "--sign"), "-");
     assert_eq!(toolchain.argument_after(1, "--identifier"), "com.recog.zoom-helper");
+}
+
+#[test]
+fn given_an_icon_when_only_its_contents_change_then_the_bundle_is_rebuilt_once() {
+    let root = repo("// source");
+    let app = root.path().join("Recog.app");
+    let source = root.path().join(HELPER_SOURCE);
+    let stamp = root.path().join("stamp");
+    let toolchain = FakeToolchain::default();
+    let info =
+        [("CFBundleExecutable", PlistValue::String("recog")), ("CFBundleIconFile", PlistValue::String("Recog.icns"))];
+    for icon in [b"first".as_slice(), b"first", b"second"] {
+        find_or_build_app(&app, &source, &stamp, Some(icon), &toolchain, |app, src| {
+            build_app(app, src, &info, Some(icon), &[], "-", &toolchain)
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(app.join("Contents/Resources/Recog.icns")).unwrap(), icon);
+    }
+    assert_eq!(toolchain.tools(), ["swiftc", "codesign", "swiftc", "codesign"]);
 }
 
 #[test]
