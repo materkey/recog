@@ -121,7 +121,7 @@ pub(crate) struct State {
 
 #[derive(Default, Clone)]
 pub(crate) struct Wiring {
-    pub storage: Option<Arc<dyn MeetingStore>>,
+    pub storage: Option<StoreHandle>,
     pub live: Option<Arc<dyn LiveEvents>>,
     pub capture: Option<Arc<dyn MeetingCapture>>,
     pub identity: Option<Arc<dyn IdentitySource>>,
@@ -290,7 +290,7 @@ impl Bridge {
     // ---- wiring (the Python setters) ----
 
     pub fn set_meeting_storage(&self, storage: Arc<dyn MeetingStore>) {
-        lock(&self.wiring).storage = Some(storage);
+        lock(&self.wiring).storage = Some(StoreHandle::new(storage));
     }
 
     /// The speaker, segment, meeting-switch and PCM callbacks.
@@ -461,7 +461,7 @@ impl Bridge {
     // ---- meeting state ----
 
     pub(crate) fn storage(&self) -> Option<StoreHandle> {
-        lock(&self.wiring).storage.clone().map(StoreHandle::new)
+        lock(&self.wiring).storage.clone()
     }
 
     /// `meta and is_conference_source(meta.get("source"))`; a meta.json that is not
