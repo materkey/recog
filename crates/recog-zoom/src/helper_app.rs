@@ -141,6 +141,7 @@ pub fn build_app(
     app: &Path,
     source: &Path,
     info: &[(&str, PlistValue)],
+    icon: Option<&[u8]>,
     frameworks: &[&str],
     identity: &str,
     toolchain: &impl Toolchain,
@@ -150,6 +151,13 @@ pub fn build_app(
     let _ = std::fs::remove_dir_all(&staging);
     let contents = staging.join("Contents");
     std::fs::create_dir_all(contents.join("MacOS")).map_err(|e| fail("cannot create the bundle", e))?;
+    if let Some(bytes) = icon {
+        let name =
+            info_string(info, "CFBundleIconFile").ok_or_else(|| BuildError("Missing CFBundleIconFile".into()))?;
+        let resources = contents.join("Resources");
+        std::fs::create_dir_all(&resources).map_err(|e| fail("cannot create Resources", e))?;
+        std::fs::write(resources.join(name), bytes).map_err(|e| fail("cannot write bundle icon", e))?;
+    }
     let executable_name = info_string(info, "CFBundleExecutable")
         .ok_or_else(|| BuildError("Info.plist names no CFBundleExecutable".into()))?;
     let executable = contents.join("MacOS").join(executable_name);
@@ -199,7 +207,7 @@ fn run_build_step(toolchain: &impl Toolchain, command: &[OsString], app: &Path) 
 
 /// The application; `build(app, source)` runs when it is missing or its source changed.
 ///
-/// Freshness is the source's content hash, not its mtime, so a checkout that merely
+/// Freshness hashes the source and optional icon, independent of mtime, so a checkout that merely
 /// touches the file does not rebuild. The stamp is written last: a build that failed
 /// half-way is repeated on the next call. Without a compiler a stale application is
 /// better than none.
@@ -207,11 +215,18 @@ pub fn find_or_build_app(
     app: &Path,
     source: &Path,
     stamp: &Path,
+    icon: Option<&[u8]>,
     toolchain: &impl Toolchain,
     build: impl FnOnce(&Path, &Path) -> Result<(), BuildError>,
 ) -> Result<PathBuf, BuildError> {
     let bytes = std::fs::read(source).map_err(|e| BuildError(format!("cannot read {}: {e}", source.display())))?;
-    let digest: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut hash = Sha256::new();
+    hash.update(bytes);
+    if let Some(icon) = icon {
+        hash.update(b"\0");
+        hash.update(icon);
+    }
+    let digest: String = hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
     let built = app.join("Contents/_CodeSignature/CodeResources").exists();
     if built && stamp.exists() {
         let recorded =
@@ -240,13 +255,20 @@ pub fn find_or_build_helper(
     logger: &Logger,
 ) -> Result<PathBuf, BuildError> {
     let app = repo_root.join(HELPER_APP);
-    find_or_build_app(&app, &repo_root.join(HELPER_SOURCE), &repo_root.join(HELPER_STAMP), toolchain, |app, source| {
-        logger.line(&format!("Building {} from {}...", file_name(app), source.display()));
-        build_app(app, source, &helper_info(), &HELPER_FRAMEWORKS, identity, toolchain)?;
-        logger.line(&format!(
-            "Built {}: allow \"{HELPER_NAME}\" in System Settings → Privacy & Security → Accessibility",
-            file_name(app)
-        ));
-        Ok(())
-    })
+    find_or_build_app(
+        &app,
+        &repo_root.join(HELPER_SOURCE),
+        &repo_root.join(HELPER_STAMP),
+        None,
+        toolchain,
+        |app, source| {
+            logger.line(&format!("Building {} from {}...", file_name(app), source.display()));
+            build_app(app, source, &helper_info(), None, &HELPER_FRAMEWORKS, identity, toolchain)?;
+            logger.line(&format!(
+                "Built {}: allow \"{HELPER_NAME}\" in System Settings → Privacy & Security → Accessibility",
+                file_name(app)
+            ));
+            Ok(())
+        },
+    )
 }

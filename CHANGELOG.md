@@ -7,6 +7,14 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-19
+
+### Changed
+
+- Recog has a microphone icon in macOS permission settings. Run setup to rebuild
+  the launcher. With ad-hoc signing, macOS may ask for the capture permissions
+  again after this update.
+
 ## 2026-11-18
 
 ### Changed

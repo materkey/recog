@@ -23,6 +23,7 @@ use crate::asr::WavoEngine;
 use crate::cli::args::ConfigQuery;
 use crate::cli::meetings::Printed;
 
+const LAUNCHER_ICON: &[u8] = include_bytes!("../../macos/Recog.icns");
 /// The application the live service runs under on macOS (`recog/macos_launcher.py`).
 pub const LAUNCHER_APP: &str = "Recog.app";
 /// The permissions are recorded under the bundle identifier, so it must not change.
@@ -259,6 +260,7 @@ fn copilot_launch(repo_root: &Path, config: &InstallConfig, environ: &Environ) -
 pub fn launcher_info() -> Vec<(&'static str, PlistValue)> {
     vec![
         ("CFBundleIdentifier", PlistValue::String(LAUNCHER_BUNDLE_ID)),
+        ("CFBundleIconFile", PlistValue::String("Recog.icns")),
         ("CFBundleName", PlistValue::String(LAUNCHER_NAME)),
         ("CFBundleDisplayName", PlistValue::String(LAUNCHER_NAME)),
         ("CFBundleExecutable", PlistValue::String(LAUNCHER_EXECUTABLE)),
@@ -284,10 +286,11 @@ pub fn launcher(repo_root: &Path, config: &InstallConfig) -> Printed {
         &app,
         &repo_root.join(LAUNCHER_SOURCE),
         &repo_root.join(LAUNCHER_STAMP),
+        Some(LAUNCHER_ICON),
         &toolchain,
         |app, source| {
             eprintln!("Building {LAUNCHER_APP} from {}...", source.display());
-            build_app(app, source, &launcher_info(), &[], identity, &toolchain)?;
+            build_app(app, source, &launcher_info(), Some(LAUNCHER_ICON), &[], identity, &toolchain)?;
             eprintln!(
                 "Built {LAUNCHER_APP}: macOS asks again for Screen Recording and the microphone, now for \"{LAUNCHER_NAME}\""
             );
@@ -344,8 +347,8 @@ mod tests {
     use super::*;
     use recog_zoom::helper_app::info_plist;
 
-    /// What `plistlib.dumps(recog.macos_launcher._launcher_info())` gives.
-    const PYTHON_LAUNCHER_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+    /// Plist sealed into the signed launcher bundle.
+    const LAUNCHER_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -353,6 +356,8 @@ mod tests {
 	<string>Recog</string>
 	<key>CFBundleExecutable</key>
 	<string>recog_launcher</string>
+	<key>CFBundleIconFile</key>
+	<string>Recog.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.recog.live</string>
 	<key>CFBundleName</key>
@@ -374,9 +379,9 @@ mod tests {
     }
 
     #[test]
-    fn launcher_info_when_written_then_the_bytes_python_writes() {
+    fn launcher_info_when_written_then_names_the_icon_and_permission_owner() {
         // given / when / then
-        assert_eq!(info_plist(&launcher_info()), PYTHON_LAUNCHER_PLIST);
+        assert_eq!(info_plist(&launcher_info()), LAUNCHER_PLIST);
     }
 
     #[test]
@@ -391,7 +396,13 @@ mod tests {
         std::fs::write(&signature, "sealed").unwrap();
         let digest: String = {
             use sha2::Digest as _;
-            sha2::Sha256::digest(b"// launcher\n").iter().map(|b| format!("{b:02x}")).collect()
+            sha2::Sha256::new()
+                .chain_update(b"// launcher\n\0")
+                .chain_update(LAUNCHER_ICON)
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
         };
         std::fs::write(repo.path().join(LAUNCHER_STAMP), &digest).unwrap();
         // when
