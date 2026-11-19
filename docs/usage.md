@@ -439,6 +439,12 @@ matters.
 **No system audio (macOS).** Check Screen Recording permission for **Recog**
 (the service) or for the terminal (a manual run), and that `sck_audio_capture`
 and `Recog.app` exist — `cargo setup` builds both when `swiftc` is available.
+After an update that changes the app's ad-hoc signature, System Settings can
+still show Recog as enabled while `recog doctor` reports missing system audio.
+In **Privacy & Security → Screen & System Audio Recording**, select the Recog
+entry, remove it with **−**, then use **+** to add the current `Recog.app`.
+Run `recog doctor` again. Microphone access has its own consent prompt in
+`recog setup --permissions`.
 
 **Setup says the install is not complete.** Nothing was activated on purpose.
 Missing `ffmpeg`, `parec`/`pactl`, PortAudio, or a macOS helper that will not

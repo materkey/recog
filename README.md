@@ -64,6 +64,9 @@ brew install materkey/apps/recog
 recog setup
 ```
 
+Если Homebrew сообщает `untrusted tap`, выполните `brew trust --formula materkey/apps/recog`
+и повторите установку. Так вы дадите доверие только формуле Recog.
+
 **Linux x86-64.** Скачайте архив с пометкой `linux-x86_64` из
 [последнего релиза](https://github.com/materkey/recog/releases/latest),
 распакуйте его и запустите `bin/recog setup` из распакованного каталога.

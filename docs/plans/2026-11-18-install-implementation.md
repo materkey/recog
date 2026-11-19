@@ -54,19 +54,43 @@ replacements pass the same checks.
 - The Mac acceptance host upgraded from the Python installation and kept its
   archive and recording mode. All four Rust services and the web readiness route
   responded. The installed launcher saw the microphone grant after the interactive
-  request. The system audio grant is pending. The native Zoom helper separately
-  reported missing Accessibility when enabled. The denial/recovery checks and
-  the Mac test call before and after upgrade still require an interactive session.
+  request. The native Zoom helper separately reported missing Accessibility when
+  enabled.
 - The shared Homebrew tap is public. The source repository remains private.
 
 ## Private release update verification, 2026-11-19
 
 - Homebrew upgraded 0.1.0 to 0.1.3 from the published formula. Setup in the same
   isolated home retained the launcher inode and digest and the unpacked extension
-  directory. This checks launcher identity; the interactive macOS grant and call
-  checks above remain outstanding.
+  directory.
 - On Z270XX the standalone 0.1.1 updater fetched 0.1.3 using the installing
   account, installed it and restarted four isolated user services. The web live
   status responded, and a second update reported the installed version as current.
 - Both release asset digests matched GitHub. The bundled Swift helpers target
   macOS 13. The formula is public and an anonymous release asset request returned 404.
+
+## Interactive Mac acceptance, 2026-11-19
+
+- Before the icon update, two automated participants joined a private Jitsi
+  call on the Mac that had migrated from Python. The extension displayed the
+  test phrase. Recog wrote 3 seconds of microphone audio and 5.5 seconds of
+  system audio. The microphone also heard the test phrase through the speakers.
+- With native Zoom detection enabled for the diagnostic, the helper initially
+  reported missing Accessibility. After its switch was enabled in System
+  Settings, a fresh `recog doctor` reported all three grants.
+- Installing the launcher with the new icon invalidated both capture grants.
+  The previously granted Zoom helper retained Accessibility. On macOS 26.3.1,
+  the old Recog entries still appeared enabled in System Settings. Removing
+  the screen recording entry and adding the installed app again restored
+  system audio in both the terminal and web readiness checks. Switching the
+  new entry off and back on made both checks follow it. Toggling the old
+  microphone entry did not grant the new app access. Its fresh consent
+  prompt and a call with both tracks still need owner confirmation.
+- On v0.1.5 with only system audio granted, two participants joined a second
+  private Jitsi call. A controlled clip played on the Mac during the call
+  produced a visible transcript and 13 seconds of system audio. The microphone
+  file contained zero samples. The call ended and the original conference
+  configuration was restored.
+- In a separate empty home, the packaged macOS runtime upgraded from v0.1.3
+  to v0.1.5. The installed app's signature verified, its icon matched the
+  release resource and a repeated setup preserved the launcher inode.
