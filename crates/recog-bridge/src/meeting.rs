@@ -98,16 +98,36 @@ impl Bridge {
         let Value::Str(url) = &url else {
             return Err(format!("'{}' object has no attribute 'decode'", url.type_name()));
         };
+        let Some(switch) = self.join_stored_meeting(&storage, url, &title, &platform, client).await? else {
+            return Ok(());
+        };
+        self.enter_meeting(&switch, title, client).await
+    }
+
+    /// The storage joins the meeting and, under `ktalk_only`, the capture starts.
+    /// None when the join was refused: the live side could not move to the meeting,
+    /// or the capture could not start.
+    async fn join_stored_meeting(
+        &self,
+        storage: &StoreHandle,
+        url: &str,
+        title: &Value,
+        platform: &str,
+        client: Option<&Arc<Client>>,
+    ) -> Result<Option<JoinSwitch>, String> {
         let gated = self.config.recording_policy.gated();
-        let switch = match self.switch_join_meeting(&storage, url, &title, &platform) {
+        let switch = match self.switch_join_meeting(storage, url, title, platform) {
             Ok(switch) => switch,
-            Err(SwitchError::Writers(e)) if gated => return self.refuse_capture(&e, client).await,
+            Err(SwitchError::Writers(e)) if gated => {
+                self.refuse_capture(&e, client).await?;
+                return Ok(None);
+            }
             Err(e) => return Err(e.into()),
         };
         if gated && !self.start_ktalk_capture(client).await? {
-            return Ok(());
+            return Ok(None);
         }
-        self.enter_meeting(&switch, title, client).await
+        Ok(Some(switch))
     }
 
     /// `ktalk_only`: a conference of another platform is refused.
