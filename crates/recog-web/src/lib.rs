@@ -35,6 +35,7 @@ pub mod json;
 pub mod live_stream;
 pub mod live_watcher;
 pub mod meeting_catalog;
+mod permissions_window;
 pub mod request;
 pub mod responses;
 pub mod router;

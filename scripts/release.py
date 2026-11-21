@@ -60,6 +60,7 @@ def archive(tag, output, binaries):
         # conference hosts and meeting recordings never enter the archive.
         resources = [
             "LICENSE",
+            "crates/speexdsp-aec/LICENSE",
             "CHANGELOG.md",
             ".env.example",
             ".claude/agents/copilot-session.md",
@@ -78,6 +79,9 @@ def archive(tag, output, binaries):
                 shutil.copy2(ROOT / name, tree / name)
         if target == "macos-arm64":
             mac = tree / "crates/recog-live/macos"
+            subprocess.run([tree / "bin/recog", "__package-macos-apps", tree], check=True)
+            for bundle in ["Recog.app", "RecogZoomHelper.app"]:
+                subprocess.run(["codesign", "--verify", "--strict", tree / bundle], check=True)
             swift = ["swiftc", "-target", "arm64-apple-macosx13.0"]
             subprocess.run(
                 [
@@ -94,15 +98,11 @@ def archive(tag, output, binaries):
                 ],
                 check=True,
             )
-            subprocess.run(
-                [
-                    *swift,
-                    mac / "recog_permission_probe.swift",
-                    "-o",
-                    tree / "bin/recog-permission-probe",
-                ],
-                check=True,
-            )
+            for source, name in [
+                ("recog_permission_probe.swift", "recog-permission-probe"),
+                ("recog_permissions_window.swift", "recog-permissions"),
+            ]:
+                subprocess.run([*swift, mac / source, "-o", tree / "bin" / name], check=True)
         # Build the extension outside the checkout. The temporary build has no
         # installation binary or configuration to inject developer-specific hosts.
         ext = Path(directory) / "source/browser-extension"

@@ -218,6 +218,21 @@ fn source_digest(source: &Path, icon: Option<&[u8]>) -> Result<String, BuildErro
     Ok(hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+fn matches_stamp(stamp: &Path, digest: &str) -> Result<bool, BuildError> {
+    match std::fs::read_to_string(stamp) {
+        Ok(recorded) => Ok(py::strip(&recorded) == digest),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(BuildError(format!("cannot read {}: {e}", stamp.display()))),
+    }
+}
+
+fn packaged_app(app: &Path) -> Result<PathBuf, BuildError> {
+    if app.join("Contents/_CodeSignature/CodeResources").is_file() {
+        return Ok(app.to_path_buf());
+    }
+    Err(BuildError(format!("Missing packaged {}. Run setup from the downloaded release again.", file_name(app))))
+}
+
 /// The application; `build(app, source)` runs when it is missing or its source changed.
 ///
 /// Freshness hashes the source and optional icon, independent of mtime, so a checkout that merely
@@ -232,20 +247,18 @@ pub fn find_or_build_app(
     toolchain: &impl Toolchain,
     build: impl FnOnce(&Path, &Path) -> Result<(), BuildError>,
 ) -> Result<PathBuf, BuildError> {
+    if app.with_file_name("recog-release").is_file() {
+        return packaged_app(app);
+    }
+    let built = app.join("Contents/_CodeSignature/CodeResources").is_file();
     let digest = source_digest(source, icon)?;
-    let built = app.join("Contents/_CodeSignature/CodeResources").exists();
-    if built && stamp.exists() {
-        let recorded =
-            std::fs::read_to_string(stamp).map_err(|e| BuildError(format!("cannot read {}: {e}", stamp.display())))?;
-        if py::strip(&recorded) == digest {
-            return Ok(app.to_path_buf());
-        }
+    if built && matches_stamp(stamp, &digest)? {
+        return Ok(app.to_path_buf());
     }
     if toolchain.which("swiftc").is_none() {
-        if built {
-            return Ok(app.to_path_buf());
-        }
-        return Err(BuildError(format!("swiftc not found — cannot build {} (xcode-select --install)", file_name(app))));
+        return built.then(|| app.to_path_buf()).ok_or_else(|| {
+            BuildError(format!("swiftc not found — cannot build {} (xcode-select --install)", file_name(app)))
+        });
     }
     build(app, source)?;
     std::fs::write(stamp, digest).map_err(|e| BuildError(format!("cannot write {}: {e}", stamp.display())))?;

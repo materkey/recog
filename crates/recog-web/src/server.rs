@@ -3,14 +3,15 @@
 //! `recog/web/server.py`.
 
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
-use axum::Router;
 use axum::body::Body;
 use axum::extract::{FromRequest as _, Request, State, WebSocketUpgrade};
 use axum::http::{Method, StatusCode, header};
 use axum::response::Response;
+use axum::{Extension, Router};
 use recog_ai::provider::{CliProviderFactory, ProviderFactory};
 use recog_ai::settings::AiSettingsStore;
 use recog_core::privacy::PrivacyStore;
@@ -31,7 +32,7 @@ use crate::transcript_watcher::TranscriptWatcher;
 use crate::user_profile::ProfileCoordinator;
 use crate::util::BoxFuture;
 use crate::watch::FsWatcher;
-use crate::{json, live_stream, routes, static_files};
+use crate::{json, live_stream, permissions_window, routes, static_files};
 
 /// Frames a browser may send upstream through the live stream.
 pub const INBOUND_COPILOT_TYPES: [&str; 3] =
@@ -72,6 +73,8 @@ pub struct AppState {
     pub copilot: Mutex<CopilotRelay>,
     pub debug_ai: Mutex<DebugAiContext>,
     pub readiness: tokio::sync::Mutex<Option<(std::time::Instant, recog_core::pyjson::Value)>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) permissions_window: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -116,6 +119,8 @@ impl AppState {
             copilot: Mutex::new(CopilotRelay::default()),
             debug_ai: Mutex::new(DebugAiContext::default()),
             readiness: Default::default(),
+            #[cfg(target_os = "macos")]
+            permissions_window: Default::default(),
         })
     }
 
@@ -292,7 +297,10 @@ pub async fn stop_services(state: &Arc<AppState>, services: Services) {
 
 /// The axum application.
 pub fn app(state: Arc<AppState>) -> Router {
-    Router::new().fallback(dispatch).with_state(state)
+    Router::new()
+        .route(permissions_window::PATH, axum::routing::post(permissions_window::open))
+        .fallback(dispatch)
+        .with_state(state)
 }
 
 fn quote_path(path: &str) -> String {
@@ -340,7 +348,12 @@ async fn dispatch(State(state): State<Arc<AppState>>, request: Request) -> Respo
         Match::MethodNotAllowed(allow) => responses::method_not_allowed(allow),
         Match::Redirect(twin) => redirect(&request, &twin),
         Match::Static(rest) => serve_static(&state, &method, request.headers(), &rest),
-        Match::Route(route, params) => handle_route(&state, request, path, route, params).await,
+        Match::Route(route, params) => {
+            let headers = permissions_window::readiness_headers(route, &request);
+            let mut reply = handle_route(&state, request, path, route, params).await;
+            reply.headers_mut().extend(headers);
+            reply
+        }
     }
 }
 
@@ -419,9 +432,11 @@ pub async fn serve(
     listener: tokio::net::TcpListener,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    let bound = permissions_window::BoundAddress(listener.local_addr()?);
+    let app = app(Arc::clone(&state)).layer(Extension(bound)).into_make_service_with_connect_info::<SocketAddr>();
     let services = start_services(&state).await;
     println!("Server started at http://{}:{}", state.config.host, state.config.port);
-    let result = axum::serve(listener, app(Arc::clone(&state))).with_graceful_shutdown(shutdown).await;
+    let result = axum::serve(listener, app).with_graceful_shutdown(shutdown).await;
     stop_services(&state, services).await;
     result
 }

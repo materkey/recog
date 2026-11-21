@@ -3,6 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 pub fn runtime(home: &Path) -> PathBuf {
     home.join(".local/share/recog/runtime")
 }
@@ -30,16 +33,22 @@ fn copy_tree(source: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Only declared program resources are installed. Local .env, recordings and
-/// the macOS app bundles are generated/owned by this user.
+/// Only declared program resources are installed. Local settings and recordings
+/// belong to the user.
 pub fn prepare(source: &Path, dest: &Path, extension: bool) -> io::Result<()> {
     if source == dest {
         return Ok(());
     }
+    fs::create_dir_all(dest)?;
+    let lock = fs::File::open(dest)?;
+    lock.lock()?;
+    #[cfg(target_os = "macos")]
+    macos::install_apps(source, dest)?;
     for path in [
         "bin",
         "crates/recog-web/static",
         "crates/recog-ai/prompts",
+        "crates/speexdsp-aec/LICENSE",
         "crates/recog-live/macos",
         "crates/recog-zoom/macos",
         ".claude",
@@ -86,4 +95,43 @@ pub fn configure_extension(root: &Path, jitsi: &[String], matrix: &[String]) -> 
     serde_json::to_writer_pretty(temp.as_file(), &manifest)?;
     temp.persist(dir.join("manifest.json"))?;
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_an_archive_when_installed_twice_then_resources_and_notices_are_kept_with_the_runtime() {
+        let package = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let root = runtime(home.path());
+        for path in [
+            "bin/recog",
+            "crates/recog-web/static/index.html",
+            "crates/recog-ai/prompts/test",
+            "crates/recog-live/macos/recog_launcher.swift",
+            "crates/recog-zoom/macos/zoom_ax_probe.swift",
+            "crates/speexdsp-aec/LICENSE",
+            ".claude/agents/copilot-session.md",
+            "CHANGELOG.md",
+            "LICENSE",
+            ".env.example",
+            "browser-extension/dist/manifest.json",
+            "recog-homebrew",
+            "recog-release",
+        ] {
+            let file = package.path().join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, path).unwrap();
+        }
+        prepare(package.path(), &root, false).unwrap();
+        assert!(!root.join("browser-extension/dist").exists());
+        prepare(package.path(), &root, true).unwrap();
+        assert!(is_release(&root));
+        assert!(root.join("browser-extension/dist/manifest.json").is_file());
+        assert_eq!(fs::read(root.join("crates/speexdsp-aec/LICENSE")).unwrap(), b"crates/speexdsp-aec/LICENSE");
+        assert!(!root.join("Recog.app").exists());
+        prepare(&root, &root, true).unwrap();
+    }
 }

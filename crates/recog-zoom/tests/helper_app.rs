@@ -6,6 +6,7 @@ mod common;
 
 use std::cell::RefCell;
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::{RUSSIAN, meeting, participants, tile, zoom_app};
@@ -117,6 +118,20 @@ fn given_an_icon_when_only_its_contents_change_then_the_bundle_is_rebuilt_once()
         assert_eq!(std::fs::read(app.join("Contents/Resources/Recog.icns")).unwrap(), icon);
     }
     assert_eq!(toolchain.tools(), ["swiftc", "codesign", "swiftc", "codesign"]);
+}
+
+#[test]
+fn given_a_packaged_helper_when_located_then_only_the_shipped_bundle_can_be_used() {
+    let root = repo("// source");
+    fs::write(root.path().join("recog-release"), "v1.0.0").unwrap();
+    let toolchain = FakeToolchain::default();
+    assert!(build(root.path(), "-", &toolchain).unwrap_err().contains("Missing packaged RecogZoomHelper.app"));
+    let app = root.path().join("RecogZoomHelper.app");
+    let signature = app.join("Contents/_CodeSignature");
+    fs::create_dir_all(&signature).unwrap();
+    fs::write(signature.join("CodeResources"), "seal").unwrap();
+    assert_eq!(build(root.path(), "-", &toolchain).unwrap(), app);
+    assert!(toolchain.tools().is_empty());
 }
 
 #[test]

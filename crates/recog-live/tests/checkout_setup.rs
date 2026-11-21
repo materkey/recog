@@ -6,6 +6,45 @@ fn write_exec(path: &Path, script: &str) {
     fs::write(path, script).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+#[test]
+fn given_release_sources_when_packed_then_both_apps_target_ventura_and_use_ad_hoc_signatures() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for (project, file) in [("recog-live", "recog_launcher.swift"), ("recog-zoom", "zoom_ax_probe.swift")] {
+        let mac = root.join("crates").join(project).join("macos");
+        fs::create_dir_all(&mac).unwrap();
+        fs::write(mac.join(file), "print(1)").unwrap();
+    }
+    write_exec(
+        &root.join("swiftc"),
+        r#"#!/bin/sh
+case "$*" in *"-target arm64-apple-macosx13.0"*) ;; *) exit 1;; esac
+while [ "$1" != -o ]; do shift; done
+echo built > "$2"
+"#,
+    );
+    write_exec(
+        &root.join("codesign"),
+        r#"#!/bin/sh
+[ "$2" = --sign ] && [ "$3" = - ] || exit 1
+mkdir -p "$6/Contents/_CodeSignature"
+echo sealed > "$6/Contents/_CodeSignature/CodeResources"
+"#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_recog"))
+        .arg("__package-macos-apps")
+        .arg(root)
+        .env("PATH", format!("{}:/usr/bin:/bin", root.display()))
+        .env("RECOG_CODESIGN_IDENTITY", "must not be used")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    for name in ["Recog", "RecogZoomHelper"] {
+        assert!(root.join(format!("{name}.app/Contents/_CodeSignature/CodeResources")).is_file());
+        assert!(root.join(format!("{name}.source-sha256")).is_file());
+    }
+}
 #[test]
 fn checkout_when_setup_runs_then_build_is_handed_off_and_no_services_flag_preserves_units() {
     let dir = tempfile::tempdir().unwrap();
@@ -28,6 +67,7 @@ fn checkout_when_setup_runs_then_build_is_handed_off_and_no_services_flag_preser
         "#!/bin/sh\ncase $1 in build) exit 0;; metadata) printf '{\"target_directory\":\"%s\"}\\n' \"$TEST_TARGET\";; *) exit 12;; esac\n",
     );
     fs::write(root.join("crates/recog-live/macos/recog_permission_probe.swift"), "print(1)").unwrap();
+    fs::write(root.join("crates/recog-live/macos/recog_permissions_window.swift"), "print(1)").unwrap();
     let run = |args: &[&str]| {
         Command::new(release.join("recog"))
             .env_clear()

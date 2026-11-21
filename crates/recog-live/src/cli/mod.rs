@@ -2,6 +2,8 @@
 
 pub mod args;
 pub mod install;
+#[cfg(target_os = "macos")]
+pub mod macos_permissions;
 pub mod meetings;
 mod release_update;
 mod services;
@@ -248,7 +250,7 @@ fn run_live(args: &LiveArgs, config: &InstallConfig, environ: &Environ, repo_roo
 
 /// The status of a command that printed nothing of its own failure: 1 and the error
 /// on stderr, else 0.
-fn exit_code(result: Result<(), String>) -> i32 {
+pub fn exit_code(result: Result<(), impl std::fmt::Display>) -> i32 {
     match result {
         Ok(()) => 0,
         Err(e) => {
@@ -359,7 +361,7 @@ pub fn main(argv: &[String]) -> i32 {
     }
     match load_command(argv, &repo_root, &mut environ) {
         Ok((Command::Setup(args, false), config)) if recog_install::distribution::is_release(&package_root) => {
-            command_status(setup::archive_setup(&package_root, &repo_root, &config, &environ, &args))
+            exit_code(setup::archive_setup(&package_root, &repo_root, &config, &environ, &args))
         }
 
         Ok((command, config)) => run_command(command, &config, &environ, &repo_root),
@@ -392,16 +394,6 @@ fn load_command(argv: &[String], repo_root: &Path, environ: &mut Environ) -> Res
     }
 }
 
-fn command_status(outcome: Result<(), Box<dyn std::error::Error>>) -> i32 {
-    match outcome {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("{e}");
-            1
-        }
-    }
-}
-
 fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo_root: &Path) -> i32 {
     match command {
         Command::None => {
@@ -425,8 +417,8 @@ fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo
             }
         },
         Command::Service(args) => services::command(repo_root, config, environ, &args),
-        Command::Setup(args, built) => command_status(setup::setup(repo_root, config, environ, &args, built)),
-        Command::Update(args) => command_status(setup::update(repo_root, config, environ, &args)),
+        Command::Setup(args, built) => exit_code(setup::setup(repo_root, config, environ, &args, built)),
+        Command::Update(args) => exit_code(setup::update(repo_root, config, environ, &args)),
         Command::Doctor => services::command(repo_root, config, environ, &["doctor".into()]),
         Command::Backup(args) => install::backup(repo_root, environ, &args),
         Command::Copilot => install::copilot(repo_root),

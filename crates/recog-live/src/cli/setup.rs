@@ -1,6 +1,10 @@
 //! Build a checkout, then let its freshly built binary install it.
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io;
+#[cfg(target_os = "macos")]
+use std::io::IsTerminal;
+#[cfg(any(target_os = "macos", test))]
+use std::io::Write;
 use std::os::unix::fs::symlink;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -134,12 +138,14 @@ fn copy_initial_env(root: &Path) -> Result<()> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn confirm_permission() -> Result<bool> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     read_confirmation(stdin.is_terminal() && stdout.is_terminal(), stdin.lock(), stdout.lock())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn read_confirmation(interactive: bool, mut input: impl io::BufRead, mut output: impl Write) -> Result<bool> {
     if !interactive {
         return Ok(false);
@@ -150,6 +156,7 @@ fn read_confirmation(interactive: bool, mut input: impl io::BufRead, mut output:
     Ok(input.read_line(&mut answer)? > 0 && answer.trim().is_empty())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn guide_grant(
     label: &str,
     granted: bool,
@@ -170,6 +177,23 @@ fn guide_grant(
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
+fn permissions(_: &Path, _: &InstallConfig, _: bool) -> Result<()> {
+    Err("macOS permission setup is available on a Mac".into())
+}
+
+#[cfg(target_os = "macos")]
+fn permissions(root: &Path, config: &InstallConfig, explicit: bool) -> Result<()> {
+    if super::macos_permissions::local_terminal() {
+        match super::macos_permissions::window(root, config, explicit) {
+            Ok(()) => return Ok(()),
+            Err(e) => eprintln!("Не удалось открыть окно разрешений: {e}. Продолжаем в терминале."),
+        }
+    }
+    guide_permissions(root, config)
+}
+
+#[cfg(target_os = "macos")]
 fn guide_permissions(root: &Path, config: &InstallConfig) -> Result<()> {
     use recog_install::permissions::probe;
     let grants = probe(root, None)?;
@@ -198,18 +222,24 @@ fn guide_permissions(root: &Path, config: &InstallConfig) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn zoom_helper(root: &Path, identity: &str) -> Result<PathBuf> {
+    Ok(recog_zoom::helper_app::find_or_build_helper(
+        root,
+        if identity.is_empty() { "-" } else { identity },
+        &recog_zoom::helper_app::SystemToolchain,
+        &recog_zoom::log::Logger::stderr(),
+    )?)
+}
+
+#[cfg(any(target_os = "macos", test))]
 fn guide_zoom_access(
     root: &Path,
     identity: &str,
     confirm: impl FnOnce() -> Result<bool>,
     probe: impl Fn(&Path, bool) -> std::result::Result<bool, recog_zoom::helper_link::LaunchError>,
 ) -> Result<()> {
-    let app = recog_zoom::helper_app::find_or_build_helper(
-        root,
-        if identity.is_empty() { "-" } else { identity },
-        &recog_zoom::helper_app::SystemToolchain,
-        &recog_zoom::log::Logger::stderr(),
-    )?;
+    let app = zoom_helper(root, identity)?;
     guide_grant(
         "Recog Zoom Helper — универсальный доступ для настольного Zoom",
         probe(&app, false)?,
@@ -225,10 +255,7 @@ pub(super) fn setup(root: &Path, config: &InstallConfig, env: &Environ, args: &[
         return Ok(());
     }
     if args == ["--permissions"] {
-        if cfg!(target_os = "macos") {
-            return guide_permissions(root, config);
-        }
-        return Err("macOS permission setup is available on a Mac".into());
+        return permissions(root, config, true);
     }
     if !args.iter().all(|a| {
         matches!(
@@ -299,7 +326,8 @@ fn finish(root: &Path, config: &InstallConfig, env: &Environ, args: &[String], p
             );
         }
     }
-    if cfg!(target_os = "macos") {
+    #[cfg(target_os = "macos")]
+    {
         use crate::capture::sck::{self, OsToolchain};
         if !packaged {
             sck::find_or_build_sck_utility(root, &OsToolchain, &crate::log::Logger::stderr())
@@ -307,16 +335,10 @@ fn finish(root: &Path, config: &InstallConfig, env: &Environ, args: &[String], p
         }
         run(Command::new(&bin).arg("launcher"))?;
         if !packaged {
-            let probe = tempfile::tempdir_in(root.join("bin"))?;
-            let target = probe.path().join("recog-permission-probe");
-            run(Command::new("swiftc")
-                .arg(root.join("crates/recog-live/macos/recog_permission_probe.swift"))
-                .arg("-o")
-                .arg(&target))?;
-            fs::rename(target, root.join("bin/recog-permission-probe"))?;
+            build_permission_tools(root)?;
         }
         if !has("--no-services") && manager.backend == recog_install::units::Backend::Launchd {
-            guide_permissions(root, config)?;
+            permissions(root, config, false)?;
         }
     }
     if !has("--no-prefetch")
@@ -347,6 +369,20 @@ fn finish(root: &Path, config: &InstallConfig, env: &Environ, args: &[String], p
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn build_permission_tools(root: &Path) -> Result<()> {
+    let stage = tempfile::tempdir_in(root.join("bin"))?;
+    for (source, name) in [
+        ("recog_permission_probe.swift", "recog-permission-probe"),
+        ("recog_permissions_window.swift", "recog-permissions"),
+    ] {
+        let target = stage.path().join(name);
+        run(Command::new("swiftc").arg(root.join("crates/recog-live/macos").join(source)).arg("-o").arg(&target))?;
+        fs::rename(target, root.join("bin").join(name))?;
+    }
+    Ok(())
+}
+
 pub(super) fn archive_setup(
     package: &Path,
     root: &Path,
@@ -359,7 +395,7 @@ pub(super) fn archive_setup(
         return Ok(());
     }
     if args == ["--permissions"] {
-        return guide_permissions(root, config);
+        return permissions(root, config, true);
     }
     if !args.iter().all(|a| {
         matches!(

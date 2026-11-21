@@ -195,14 +195,18 @@ virtual device, no rerouting of your output. The first run compiles the
 Recording** permission (System Settings → Privacy & Security → Screen
 Recording) — without it the helper produces silence.
 
-The service asks as **Recog**: its launchd job starts `Recog.app`, a small
-launcher that `cargo setup` builds and signs, and the launcher runs the Rust live program
-as its child. macOS attributes Screen Recording and the
-microphone to the program the job starts, so without the launcher the dialogs
-would name `python3.12` and a Homebrew upgrade of the interpreter would void
-the grant of the running service. `Recog.app` is rebuilt only when
-`crates/recog-live/macos/recog_launcher.swift` changes, and macOS then asks once
-more.
+The live service asks as **Recog**. The macOS release ships its signed launcher
+and the optional Zoom helper. A checkout builds them locally. Setup keeps a
+valid installed bundle with matching inputs at the same path so that an
+ordinary update preserves its grants. Changing the app itself can require a
+new grant with ad-hoc signing.
+
+Run `recog setup --permissions` on the Mac to reopen the native permissions
+window, or open **Settings → Готовность установки → Разрешения macOS…** in
+the local web interface. Each row explains its use and links to its System Settings pane.
+The microphone request belongs to Recog. Screen & System Audio Recording
+accepts the Recog app icon, and Accessibility accepts the separate Zoom helper
+when native Zoom detection is enabled. Remote terminals use the text guide.
 
 BlackHole still works as an alternative if you prefer a loopback device:
 install it, create a Multi-Output Device in Audio MIDI Setup, then run with

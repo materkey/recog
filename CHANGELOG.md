@@ -7,6 +7,20 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-21
+
+### Changed
+
+- The macOS release includes ad-hoc-signed Recog and Zoom helper apps. Homebrew
+  and archive installs no longer need Swift. Run `recog update` as usual.
+  Setup preserves an existing valid app with the same source stamp and bundle
+  metadata, including a locally built app from 0.1.5. If a future update
+  changes the permission holder itself, macOS may ask for access again.
+- On a Mac, interactive setup now shows a native permissions window with the
+  current state of each grant, individual request buttons and links to System
+  Settings. Reopen it from the local web readiness panel or with
+  `recog setup --permissions`. Remote terminals keep the text guide.
+
 ## 2026-11-19
 
 ### Changed

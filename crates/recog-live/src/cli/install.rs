@@ -17,7 +17,7 @@ use recog_ai::settings::{AiSettingsStore, Fallback, validate_models};
 use recog_core::data_dir::get_data_dir;
 use recog_core::install_config::{self, Environ, InstallConfig};
 use recog_core::user_profile::UserProfileStore;
-use recog_zoom::helper_app::{PlistValue, SystemToolchain, build_app, find_or_build_app};
+use recog_zoom::helper_app::{BuildError, PlistValue, SystemToolchain, Toolchain, build_app, find_or_build_app};
 
 use crate::asr::WavoEngine;
 use crate::cli::args::ConfigQuery;
@@ -280,27 +280,54 @@ pub fn launcher_info() -> Vec<(&'static str, PlistValue)> {
 pub fn launcher(repo_root: &Path, config: &InstallConfig) -> Printed {
     let identity =
         if config.macos.codesign_identity.is_empty() { "-" } else { config.macos.codesign_identity.as_str() };
-    let toolchain = SystemToolchain;
+    match launcher_bundle(repo_root, identity, &SystemToolchain) {
+        Ok(app) => printed(line(app.join("Contents/MacOS").join(LAUNCHER_EXECUTABLE).display()), "", 0),
+        Err(e) => printed("", line(e), 1),
+    }
+}
+
+fn launcher_bundle(repo_root: &Path, identity: &str, toolchain: &impl Toolchain) -> Result<PathBuf, BuildError> {
     let app = repo_root.join(LAUNCHER_APP);
-    let built = find_or_build_app(
+    find_or_build_app(
         &app,
         &repo_root.join(LAUNCHER_SOURCE),
         &repo_root.join(LAUNCHER_STAMP),
         Some(LAUNCHER_ICON),
-        &toolchain,
+        toolchain,
         |app, source| {
             eprintln!("Building {LAUNCHER_APP} from {}...", source.display());
-            build_app(app, source, &launcher_info(), Some(LAUNCHER_ICON), &[], identity, &toolchain)?;
+            build_app(app, source, &launcher_info(), Some(LAUNCHER_ICON), &[], identity, toolchain)?;
             eprintln!(
                 "Built {LAUNCHER_APP}: macOS asks again for Screen Recording and the microphone, now for \"{LAUNCHER_NAME}\""
             );
             Ok(())
         },
-    );
-    match built {
-        Ok(app) => printed(line(app.join("Contents/MacOS").join(LAUNCHER_EXECUTABLE).display()), "", 0),
-        Err(e) => printed("", line(e), 1),
+    )
+}
+
+/// Called only by the archive builder, in its fresh staging directory. Never
+/// read a developer's signing identity or start either permission holder here.
+pub fn package_macos_apps(root: &Path) -> Result<(), BuildError> {
+    use recog_zoom::helper_app::{CommandOutcome, find_or_build_helper};
+    use std::ffi::OsString;
+
+    struct ReleaseTools;
+    impl Toolchain for ReleaseTools {
+        fn which(&self, name: &str) -> Option<PathBuf> {
+            SystemToolchain.which(name)
+        }
+        fn run(&self, command: &[OsString]) -> std::io::Result<CommandOutcome> {
+            if command[0] != "swiftc" {
+                return SystemToolchain.run(command);
+            }
+            let mut compile = command.to_vec();
+            compile.extend(["-target".into(), "arm64-apple-macosx13.0".into()]);
+            SystemToolchain.run(&compile)
+        }
     }
+    launcher_bundle(root, "-", &ReleaseTools)?;
+    find_or_build_helper(root, "-", &ReleaseTools, &recog_zoom::log::Logger::stderr())?;
+    Ok(())
 }
 
 /// `recog prefetch`: the ASR model in the Hugging Face cache (`HF_HOME`), downloaded
