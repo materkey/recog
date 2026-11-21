@@ -61,8 +61,8 @@
       </figure>
 
       <div class="hero-action">
-        <a class="primary-link" href="#install">Как установить <span aria-hidden="true">↓</span></a>
-        <span>macOS и Linux</span>
+        <a class="primary-link" href="https://github.com/materkey/recog/releases/latest/download/Recog-macOS-arm64.dmg">Скачать для Mac <span aria-hidden="true">↓</span></a>
+        <span>macOS 13+ на Apple Silicon · <a href="#linux">Для Linux</a></span>
       </div>
     </section>
 
@@ -97,17 +97,22 @@
           <a class="guide-link" href="https://github.com/materkey/homebrew-apps">Инструкция на GitHub <span aria-hidden="true">↗</span></a>
         </div>
         <div class="install-body">
-          <h3>macOS <span>Apple Silicon</span></h3>
-          <p>Установите Recog через Homebrew и запустите настройку.</p>
-          <pre><code>brew install materkey/apps/recog
-recog setup</code></pre>
+          <h3>macOS 13+ <span>Apple Silicon</span></h3>
+          <p><a href="https://github.com/materkey/recog/releases/latest/download/Recog-macOS-arm64.dmg">Скачайте образ Recog</a> и откройте его. Перетащите <code>Recog.app</code> в папку «Программы» (Applications). В Finder запустите Recog из этой папки.</p>
+          <p>При первом запуске разрешите Recog доступ к микрофону и запись системного звука. Затем <a href="#chrome">добавьте расширение Chrome</a> из папки, которую покажет приложение.</p>
+          <p>У бесплатной бета-версии локальная подпись. Если macOS предупредит о непроверенном разработчике, в «Системных настройках» откройте «Конфиденциальность и безопасность» и нажмите «Всё равно открыть» (Open Anyway).</p>
+          <p>Recog использует FFmpeg для работы со звуком. Лицензия и исходники этой сборки FFmpeg доступны внутри <code>Recog.app</code>.</p>
 
-          <h3>Linux <span>x86-64</span></h3>
+          <h3 id="linux">Linux <span>x86-64</span></h3>
           <p>Откройте <a href="https://github.com/materkey/recog/releases/latest">релизы</a> и скачайте архив <code>linux-x86_64</code>. Распакуйте его и запустите настройку из каталога сборки.</p>
           <pre><code>bin/recog setup</code></pre>
 
-          <h3>Расширение Chrome</h3>
-          <p>Установщик покажет путь к готовому расширению. Откройте <code>chrome://extensions</code>, включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и выберите указанную папку.</p>
+          <h3 id="chrome">Расширение Chrome</h3>
+          <p>Откройте <code>chrome://extensions</code>, включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и выберите папку, которую показал Recog.</p>
+
+          <h3>Homebrew <span>Альтернатива для Mac</span></h3>
+          <pre><code>brew install materkey/apps/recog
+recog setup</code></pre>
           <p class="doctor">Проверьте установку командой <code>recog doctor</code>.</p>
         </div>
       </div>

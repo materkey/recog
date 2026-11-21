@@ -83,6 +83,12 @@ the last place to catch a broken archive.
 - Unpack the archive: `recog/recog-release` holds `vX.Y.Z` and `recog/bin/recog --help`
   runs. Do not run its `setup`: that would install the release over this machine.
 
+For a published tag missing the disk image, dispatch `release.yml` from `main`
+with input `tag=vX.Y.Z`. This read-only run downloads and verifies that tag's
+macOS archive and produces the `recog-macos-dmg` workflow artifact. Check the
+image and its checksum before attaching them with `gh release upload`. Keep
+the tag and previously published assets intact.
+
 ### 5. Publish with release notes
 
 - The generated body is only a compare link. Write the notes to a file in the scratch
