@@ -62,7 +62,7 @@ export default [
   {
     // Classic scripts of the web UI, loaded in order by index.html: their
     // top-level functions are globals called from markup and later scripts.
-    files: ['crates/recog-web/static/**/*.js', 'tests/e2e/**/*.js'],
+    files: ['crates/recog-web/static/**/*.js', 'deploy/landing/**/*.js', 'tests/e2e/**/*.js'],
     languageOptions: {
       sourceType: 'script',
       globals: globals.browser,
