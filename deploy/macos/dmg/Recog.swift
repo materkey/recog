@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import SwiftUI
 
 private let files = FileManager.default
@@ -47,6 +48,8 @@ private struct Inspection {
     var detail = ""
     var button = ""
     var canManage = false
+    var shouldSyncOnLaunch = false
+    var resumingUpdate = false
 }
 
 @MainActor
@@ -122,7 +125,21 @@ private struct Layout {
         return Release(local) == version
     }
 
-    func inspect() -> Inspection {
+    // setup copies recog-release before it finishes registering and starting
+    // services. Keep an unfinished update visible even if its tag now matches.
+    var pendingRuntimeUpdate: String? {
+        get { UserDefaults.standard.string(forKey: "RecogPendingRuntimeRelease") }
+        nonmutating set { UserDefaults.standard.set(newValue, forKey: "RecogPendingRuntimeRelease") }
+    }
+
+    func markRuntimeUpdatePending() throws {
+        guard let target = try tag(package), Release(target) != nil else {
+            throw Problem("Не удалось определить версию обновления Recog.")
+        }
+        pendingRuntimeUpdate = target
+    }
+
+    func inspect(afterSuccessfulSetup: Bool = false) -> Inspection {
         do {
             let registered = try installedServices()
             guard !files.fileExists(atPath: runtime.appendingPathComponent("crates/recog-live/Cargo.toml").path) else {
@@ -137,6 +154,7 @@ private struct Layout {
             }
             let newer = installed.map { $0 > version } ?? false
             let same = installed == version
+            let pending = !afterSuccessfulSetup && pendingRuntimeUpdate == label
             let hasCommand = executable(bin.appendingPathComponent("recog"))
             let owned = installed != nil && hasCommand && registered == units.count
             let installedTitle = "Установлен Recog \(installedTag ?? label)"
@@ -146,7 +164,7 @@ private struct Layout {
             let hasExtension = files.fileExists(atPath: extensionFolder.appendingPathComponent("manifest.json").path)
             if same || newer {
                 // A later release may implement audio playback differently.
-                if owned && hasWeb && hasPanel && hasExtension && (newer || hasPackagedAudio) {
+                if owned && hasWeb && hasPanel && hasExtension && (newer || (hasPackagedAudio && !pending)) {
                     return Inspection(plan: .ready, title: installedTitle,
                         detail: newer ? "На этом Mac уже установлена более новая версия." : "", canManage: true)
                 }
@@ -164,12 +182,24 @@ private struct Layout {
                 throw Problem("В комплекте отсутствуют необходимые программы Recog или ffmpeg для звука. Снова скопируйте приложение с установочного диска.")
             }
             if same {
+                if pending {
+                    return Inspection(plan: .repair, title: "Обновление Recog не завершено",
+                        detail: "Повторите обновление, чтобы завершить установку версии \(label).",
+                        button: "Повторить обновление", canManage: owned, resumingUpdate: true)
+                }
                 return Inspection(plan: .repair, title: installedTitle, detail: "Часть компонентов отсутствует. Их можно установить заново.",
                                   button: "Восстановить установку", canManage: owned)
             }
             if installed != nil {
-                return Inspection(plan: .update, title: "Доступен Recog \(label)", detail: "Установлена версия \(installedTag!). Записи и настройки сохранятся.",
-                                  button: "Обновить Recog", canManage: owned)
+                // The Finder distribution includes both the web launcher and
+                // its renamed executable. A Homebrew installation can share
+                // this runtime directory, so its release tag alone is not proof.
+                let managed = owned && hasWeb && hasPackagedAudio && hasPanel && hasExtension &&
+                    !files.fileExists(atPath: runtime.appendingPathComponent("recog-homebrew").path)
+                return Inspection(plan: .update, title: pending ? "Обновление Recog не завершено" : "Доступен Recog \(label)",
+                                  detail: "Установлена версия \(installedTag!). Записи и настройки сохранятся.",
+                                  button: pending ? "Повторить обновление" : "Обновить Recog", canManage: owned,
+                                  shouldSyncOnLaunch: managed && !pending)
             }
             return Inspection(plan: .install, title: "Установить Recog \(label) на этот Mac",
                               detail: "Recog распознаёт речь во встречах. Для первой загрузки модели может понадобиться интернет.",
@@ -213,6 +243,8 @@ private final class Manager: ObservableObject {
     private var child: Process?
     private var quitting = false
     private var retry = Retry.refresh
+    var deferredAppRelaunch: (() -> Void)?
+    var modifyingRuntime: Bool { operation == .installing || operation == .starting }
 
     init() { installation = layout.inspect() }
 
@@ -274,9 +306,20 @@ private final class Manager: ObservableObject {
         self.retry = retry
     }
 
-    private func end() {
+    @discardableResult private func end() -> Bool {
         operation = nil
-        if quitting { NSApp.reply(toApplicationShouldTerminate: true) }
+        if let resume = deferredAppRelaunch {
+            deferredAppRelaunch = nil
+            resume()
+            return false
+        }
+        if quitting { NSApp.reply(toApplicationShouldTerminate: true); return false }
+        return true
+    }
+
+    func launch() {
+        installation = layout.inspect()
+        if installation.shouldSyncOnLaunch { install(onLaunch: true) } else { refresh() }
     }
 
     func refresh() {
@@ -304,24 +347,28 @@ private final class Manager: ObservableObject {
         }
     }
 
-    func install(repeatSetup: Bool = false) {
+    func install(repeatSetup: Bool = false, onLaunch: Bool = false) {
         guard operation == nil else { return }
         let current = layout.inspect()
-        guard current.plan == installation.plan else { refresh(); return }
+        guard current.plan == installation.plan, !onLaunch || current.shouldSyncOnLaunch else { refresh(); return }
+        let updating = current.plan == .update || current.resumingUpdate
         installation = current
         let repeatSame = repeatSetup && layout.sameVersion && current.plan == .ready
         guard (repeatSame || [.install, .update, .repair].contains(current.plan)),
               begin(.installing, "Устанавливаем Recog…") else { return }
         Task {
             do {
+                if current.plan == .update { try layout.markRuntimeUpdatePending() }
                 let result = try await command(layout.package.appendingPathComponent("bin/recog"), layout.setupArguments)
                 try result.requireSuccess()
-                installation = layout.inspect()
+                installation = layout.inspect(afterSuccessfulSetup: true)
                 guard installation.plan == .ready else {
                     throw Problem("Установка не завершена. " + installation.detail)
                 }
-                end()
-                permissions()
+                layout.pendingRuntimeUpdate = nil
+                if end() {
+                    if updating { refresh() } else { permissions() }
+                }
             } catch {
                 installation = layout.inspect()
                 failed(error, retry: .repeatSetup)
@@ -338,8 +385,7 @@ private final class Manager: ObservableObject {
             do {
                 let result = try await command(layout.bin.appendingPathComponent("recog"), ["service", "start"])
                 try result.requireSuccess()
-                end()
-                refresh()
+                if end() { refresh() }
             } catch {
                 failed(error, retry: .start)
                 end()
@@ -511,9 +557,50 @@ private struct ManagerView: View {
 }
 
 @MainActor
-private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation, SPUUpdaterDelegate {
     let model = Manager()
     var window: NSWindow?
+    private lazy var updates = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: nil)
+
+    func addUpdateItems(to menu: NSMenu) {
+        menu.addItem(withTitle: "Проверить обновления…", action: #selector(checkForUpdates(_:)), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Проверять обновления автоматически", action: #selector(toggleAutomaticChecks(_:)), keyEquivalent: "").target = self
+        menu.addItem(.separator())
+    }
+
+    @objc private func checkForUpdates(_ sender: NSMenuItem) {
+        guard !model.modifyingRuntime && updates.updater.canCheckForUpdates else { return }
+        updates.checkForUpdates(sender)
+    }
+
+    @objc private func toggleAutomaticChecks(_ sender: NSMenuItem) {
+        updates.updater.automaticallyChecksForUpdates.toggle()
+        sender.state = updates.updater.automaticallyChecksForUpdates ? .on : .off
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(checkForUpdates(_:)) {
+            return !model.modifyingRuntime && updates.updater.canCheckForUpdates
+        }
+        if item.action == #selector(toggleAutomaticChecks(_:)) {
+            item.state = updates.updater.automaticallyChecksForUpdates ? .on : .off
+        }
+        return true
+    }
+
+    func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
+        if model.modifyingRuntime {
+            throw NSError(domain: "com.recog.manager", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Дождитесь завершения установки или запуска служб Recog."])
+        }
+    }
+
+    func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
+                 untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
+        guard model.modifyingRuntime else { return false }
+        model.deferredAppRelaunch = installHandler
+        return true
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let window = NSWindow(contentViewController: NSHostingController(rootView: ManagerView(model: model)))
@@ -525,7 +612,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        model.refresh()
+        model.launch()
+        updates.startUpdater()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -559,6 +647,7 @@ MainActor.assumeIsolated {
     let menu = NSMenu()
     let menuItem = menu.addItem(withTitle: "Recog", action: nil, keyEquivalent: "")
     let appMenu = NSMenu(title: "Recog")
+    delegate.addUpdateItems(to: appMenu)
     appMenu.addItem(withTitle: "Завершить Recog", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     menuItem.submenu = appMenu
     app.mainMenu = menu

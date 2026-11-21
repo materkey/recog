@@ -11,6 +11,10 @@ reasoning.
 
 ### Changed
 
+- The Finder app now checks GitHub Releases with Sparkle. Choose **Recog →
+  Проверить обновления…** to check manually or change automatic checks in the
+  same menu. Users of the original 0.2.0 disk image need to replace Recog.app
+  once from the first Sparkle-enabled disk image.
 - Homebrew downloads the prebuilt Mac archive directly from the public GitHub release.
 - A macOS disk image includes the Finder application, release runtime and FFmpeg
   for playback. Drag Recog into Applications and open it to set up the services

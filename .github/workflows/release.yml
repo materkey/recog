@@ -70,7 +70,8 @@ jobs:
           RECOG_DMG_TEST_SERVICES: '1'
         run: |
           scripts/build_dmg_ffmpeg.sh "$RUNNER_TEMP/recog-ffmpeg"
-          python3 scripts/build_macos_dmg.py "$TAG" dist "$RUNNER_TEMP/recog-ffmpeg"
+          scripts/fetch_sparkle.sh "$RUNNER_TEMP/recog-sparkle"
+          python3 scripts/build_macos_dmg.py "$TAG" dist "$RUNNER_TEMP/recog-ffmpeg" --sparkle-sdk "$RUNNER_TEMP/recog-sparkle"
       - uses: actions/upload-artifact@v4
         with:
           name: recog-macos-dmg

@@ -76,6 +76,12 @@ the last place to catch a broken archive.
 - Verify the disk image against its checksum. Mount it read-only and verify
   the Applications link, the Recog.app signature and the embedded release
   version before publishing.
+- The workflow builds the image with the committed Sparkle **public** key.
+  Before publishing a stable release, add its signed `appcast.xml` to the
+  draft. Follow [Signing the update feed](../../../docs/sparkle-updates.md).
+  Keep the private key on the trusted signing Mac. Since the installed
+  application's feed follows GitHub's latest release, publishing a draft
+  without the feed breaks checks in every existing Sparkle installation.
 - Download `SHA256SUMS`, `recog.rb` and the archive of this machine's platform into a
   new scratch directory (`gh release download vX.Y.Z --repo materkey/recog --pattern …`).
 - `shasum -a 256 -c` the archive against `SHA256SUMS`; the `sha256` and `version` in
@@ -103,6 +109,8 @@ the tag and previously published assets intact.
     (the generated link compares with the previous tag, which may be an unpublished draft).
 - `gh release edit vX.Y.Z --repo materkey/recog --draft=false --latest --notes-file <file>`
 - Verify: `gh api repos/materkey/recog/releases/latest --jq .tag_name` is `vX.Y.Z`.
+  Download `releases/latest/download/appcast.xml` anonymously and verify it
+  against the public key and the image downloaded from its versioned enclosure.
 
 ### 6. Update the Homebrew formula
 
