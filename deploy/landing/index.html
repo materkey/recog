@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8fa">
+  <meta name="description" content="Recog показывает русскую расшифровку с именами участников прямо во время звонка в KTalk, Jitsi, Google Meet и Zoom. Закрытая бета для macOS и Linux.">
+  <title>Recog — русская расшифровка встреч с именами</title>
+  <link rel="canonical" href="https://recog.vkkovalev.work/">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="site.css">
+  <script src="demo.js" defer></script>
+</head>
+<body id="top">
+  <a class="skip-link" href="#main">Перейти к содержанию</a>
+  <header class="masthead wrap">
+    <a class="wordmark" href="#top" aria-label="Recog, в начало страницы"><img src="favicon.svg" width="32" height="32" alt="">recog</a>
+    <nav aria-label="Навигация по странице">
+      <a href="#how">Как работает</a>
+      <a href="#install">Установка</a>
+    </nav>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="intro">
+        <span class="beta"><i aria-hidden="true"></i>Закрытая бета</span>
+        <h1 id="hero-title">Кто что сказал<br>на встрече</h1>
+        <p>Читайте русскую расшифровку по ходу звонка. Recog берёт имена из конференции и&nbsp;по&nbsp;умолчанию распознаёт речь на&nbsp;вашем компьютере.</p>
+      </div>
+      <figure class="demo" aria-labelledby="demo-title">
+        <figcaption class="signal">
+          <span class="sample-label" id="demo-title">Пример встречи</span>
+          <span class="signal-name">У старого маяка</span>
+          <div class="timeline" aria-hidden="true">
+            <img src="signal.svg" alt="" width="480" height="60">
+            <div class="scale"><span>00:12</span><span>00:16</span><span>00:20</span><span>00:24</span></div>
+          </div>
+        </figcaption>
+        <ol class="transcript" aria-label="Реплики">
+          <li>
+            <span class="stamp">00:12</span>
+            <div><span class="speaker kira">Кира</span><p>Где встречаемся в субботу?</p></div>
+          </li>
+          <li>
+            <span class="stamp">00:16</span>
+            <div><span class="speaker miron">Мирон</span><p>У старого маяка. Там видно всю бухту.</p></div>
+          </li>
+          <li>
+            <span class="stamp">00:20</span>
+            <div><span class="speaker lida">Лида</span><p><span>Тогда</span> <span>я захвачу</span> <span>бинокль.</span></p></div>
+          </li>
+        </ol>
+        <div class="demo-foot">
+          <span>Вымышленный разговор</span>
+          <button type="button" id="replay" hidden>
+            <svg aria-hidden="true" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M2.6 6a5.5 5.5 0 1 1 .3 4.8M2.5 2.7v3.8h3.8"/></svg>
+            Повторить<span class="sr-only"> пример</span>
+          </button>
+        </div>
+      </figure>
+
+      <div class="hero-action">
+        <a class="primary-link" href="#install">Как установить <span aria-hidden="true">↓</span></a>
+        <span>macOS и Linux</span>
+      </div>
+    </section>
+
+    <section class="platforms wrap" aria-labelledby="platforms-title">
+      <h2 id="platforms-title">Поддерживаемые встречи</h2>
+      <ul><li>KTalk</li><li>Jitsi</li><li>Google Meet</li><li>Zoom</li></ul>
+    </section>
+
+    <section class="how wrap" id="how" aria-labelledby="how-title">
+      <h2 class="heading" id="how-title">Как работает <br>Recog</h2>
+      <ol class="stages">
+        <li>
+          <h3>Подключитесь к звонку</h3>
+          <p>По умолчанию Recog начинает запись при входе в поддерживаемую встречу и останавливает её после выхода. Предупредите участников о записи заранее.</p>
+        </li>
+        <li>
+          <h3>Следите за репликами</h3>
+          <p>Свои реплики вы увидите под именем из профиля. При желании можно запустить помощника Copilot и задать ему вопрос по ходу разговора.</p>
+        </li>
+        <li>
+          <h3>Вернитесь к сказанному</h3>
+          <p>После звонка откройте сохранённую встречу и найдите нужную фразу по тексту. Рядом с ней останутся имя и время.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="installation" id="install" aria-labelledby="install-title">
+      <div class="install-grid wrap">
+        <div class="install-intro">
+          <h2 class="heading" id="install-title">Установка</h2>
+          <p>Recog в закрытой бете. Для скачивания нужен аккаунт GitHub, которому уже выдали доступ к <code>materkey/recog</code>.</p>
+          <a class="guide-link" href="https://github.com/materkey/homebrew-apps">Инструкция на GitHub <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="install-body">
+          <h3>macOS <span>Apple Silicon</span></h3>
+          <p>Войдите в GitHub командой <code>gh auth login</code>, затем установите и настройте Recog.</p>
+          <pre><code>brew install materkey/apps/recog
+recog setup</code></pre>
+
+          <h3>Linux <span>x86-64</span></h3>
+          <p>Откройте <a href="https://github.com/materkey/recog/releases/latest">релизы</a> под аккаунтом с доступом к <code>materkey/recog</code>. Скачайте архив <code>linux-x86_64</code>, распакуйте его и запустите настройку из каталога сборки.</p>
+          <pre><code>bin/recog setup</code></pre>
+
+          <h3>Расширение Chrome</h3>
+          <p>Установщик покажет путь к готовому расширению. Откройте <code>chrome://extensions</code>, включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и выберите указанную папку.</p>
+          <p class="doctor">Проверьте установку командой <code>recog doctor</code>.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer wrap">
+    <span class="wordmark"><img src="favicon.svg" width="25" height="25" alt="">recog</span>
+    <a href="#top">К началу <span aria-hidden="true">↑</span></a>
+  </footer>
+</body>
+</html>

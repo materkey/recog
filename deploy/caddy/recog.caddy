@@ -1,0 +1,5 @@
+recog.vkkovalev.work {
+	root * /srv/recog-site/current
+	encode zstd gzip
+	file_server
+}
