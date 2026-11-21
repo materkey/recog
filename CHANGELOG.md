@@ -11,6 +11,8 @@ reasoning.
 
 ### Changed
 
+- Homebrew downloads the prebuilt Mac archive directly from the public GitHub release.
+
 - The macOS release includes ad-hoc-signed Recog and Zoom helper apps. Homebrew
   and archive installs no longer need Swift. Run `recog update` as usual.
   Setup preserves an existing valid app with the same source stamp and bundle

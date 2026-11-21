@@ -128,37 +128,10 @@ def formula(tag, directory, revision=0):
     name = asset(tag, "macos-arm64")
     checksum = hashlib.sha256((directory / name).read_bytes()).hexdigest()
     revision_line = f"  revision {revision}\n" if revision else ""
-    return f'''require "download_strategy"
-
-class RecogReleaseDownloadStrategy < AbstractFileDownloadStrategy
-  def fetch(timeout: nil)
-    cached_location.dirname.mkpath
-    lock = DownloadLock.new(temporary_path)
-    begin
-      lock.lock_or_wait(quiet: quiet?, timeout: timeout)
-      unless cached_location.exist?
-        gh = HOMEBREW_PREFIX/"bin/gh"
-        gh = which("gh") unless gh.executable?
-        raise "Install gh and run gh auth login with access to materkey/recog" unless gh
-
-        system_command! gh, args: ["release", "download", "v#{{version}}",
-                                   "--repo", "github.com/materkey/recog",
-                                   "--pattern", File.basename(url),
-                                   "--output", temporary_path.to_s, "--clobber"],
-                            timeout: timeout
-        temporary_path.rename(cached_location)
-      end
-      create_symlink_to_cached_download(cached_location)
-    ensure
-      lock.unlock(unlink: true)
-    end
-  end
-end
-
-class Recog < Formula
+    return f'''class Recog < Formula
   desc "Live Russian conference transcription"
   homepage "{PROJECT}"
-  url "{PROJECT}/releases/download/{tag}/{name}", using: RecogReleaseDownloadStrategy
+  url "{PROJECT}/releases/download/{tag}/{name}"
   version "{tag[1:]}"
   sha256 "{checksum}"
   license "MIT"
