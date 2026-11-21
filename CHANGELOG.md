@@ -12,6 +12,9 @@ reasoning.
 ### Changed
 
 - Homebrew downloads the prebuilt Mac archive directly from the public GitHub release.
+- A macOS disk image includes the Finder application, release runtime and FFmpeg
+  for playback. Drag Recog into Applications and open it to set up the services
+  and their permissions. Meetings and settings stay in their user directories.
 
 - The macOS release includes ad-hoc-signed Recog and Zoom helper apps. Homebrew
   and archive installs no longer need Swift. Run `recog update` as usual.

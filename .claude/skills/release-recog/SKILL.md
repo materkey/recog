@@ -6,9 +6,10 @@ disable-model-invocation: true
 
 # Release Recog
 
-Publish a new version of Recog for the installations that run a prebuilt archive:
-Homebrew on macOS (`materkey/apps/recog`) and the unpacked archive on Linux.
-Both update with `recog update`, which takes the latest **published** release.
+Publish a new version of Recog for the macOS disk image, Homebrew on macOS
+(`materkey/apps/recog`) and the standalone archives. The download button on the
+site points to `releases/latest/download/Recog-macOS-arm64.dmg`, so keep that
+asset name the same across releases.
 A checkout installation follows `main` and does not need a release.
 
 **Input**: optionally a bump type or an explicit version. If omitted, infer it from the
@@ -42,8 +43,10 @@ kept by date in the commits themselves, so a release adds no commit to this repo
 
 ### 2. Check the runners
 
-The workflow runs on self-hosted runners; with one offline the job waits in the queue
-without failing.
+The public repository uses GitHub-hosted macOS and Linux runners. Check the
+repository visibility and `.github/workflows/release.yml` before checking local
+runner availability. Only a private workflow configured for those runners needs
+the following checks.
 
 - `gh api repos/materkey/recog/actions/runners --jq '.runners[]|[.name,.status,.busy]|@tsv'`
 - A macOS runner and a Linux runner must be `online`. Otherwise report which one is
@@ -53,7 +56,7 @@ without failing.
 
 - `git tag vX.Y.Z origin/main && git push origin vX.Y.Z`
 - The tag starts `Release archives` (`.github/workflows/release.yml`): one archive per
-  platform, then a **draft** release with both archives, `SHA256SUMS` and `recog.rb`.
+  platform and a disk image on the Mac, then a **draft** with the downloads and checksums.
 - Find the run (it appears a few seconds after the push; empty answer: retry in 10 s):
   `gh run list --repo materkey/recog --workflow release.yml --limit 5 --json databaseId,headBranch --jq '.[]|select(.headBranch=="vX.Y.Z")|.databaseId'`
 - `gh run watch <id> --repo materkey/recog --exit-status` in the background. With free
@@ -68,8 +71,11 @@ A published release is what `recog update` installs on the next run, so the draf
 the last place to catch a broken archive.
 
 - `gh release view vX.Y.Z --repo materkey/recog --json isDraft,assets --jq '.isDraft, (.assets[].name)'`:
-  a draft with four assets, `recog-vX.Y.Z-macos-arm64.tar.gz`,
-  `recog-vX.Y.Z-linux-x86_64.tar.gz`, `SHA256SUMS`, `recog.rb`.
+  a draft containing both versioned tar archives, `Recog-macOS-arm64.dmg`,
+  `Recog-macOS-arm64.dmg.sha256`, `SHA256SUMS` and `recog.rb`.
+- Verify the disk image against its checksum. Mount it read-only and verify
+  the Applications link, the Recog.app signature and the embedded release
+  version before publishing.
 - Download `SHA256SUMS`, `recog.rb` and the archive of this machine's platform into a
   new scratch directory (`gh release download vX.Y.Z --repo materkey/recog --pattern …`).
 - `shasum -a 256 -c` the archive against `SHA256SUMS`; the `sha256` and `version` in
@@ -139,7 +145,7 @@ to the user.
   launcher, its icon, the capture helper), macOS may ask users for the microphone and
   screen recording again. Say so in the release notes; `CHANGELOG.md` should already
   carry the line.
-- **The repository is private.** Installations download with the user's `gh` login,
-  so a release is visible only to accounts that can read `materkey/recog`.
+- Verify that the published downloads and the landing page's disk image link
+  work without GitHub credentials.
 - `scripts/release.py` builds the archive (`archive`) and renders the formula
   (`formula`); the workflow calls both. Run them locally only to debug the packaging.

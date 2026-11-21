@@ -3,12 +3,19 @@ name: Release archives
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release to build a macOS disk image for
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 jobs:
   archive:
+    if: github.event_name == 'push'
     strategy:
       matrix:
         include:
@@ -34,8 +41,47 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
-  draft:
+  disk-image:
     needs: archive
+    if: ${{ !cancelled() && (needs.archive.result == 'success' || github.event_name == 'workflow_dispatch') }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: recog-macos-arm64
+          path: dist
+      - name: Download the verified archive of the existing release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]
+          name="recog-$TAG-macos-arm64.tar.gz"
+          gh release download "$TAG" --pattern "$name" --pattern SHA256SUMS --dir dist
+          cd dist
+          awk -v name="$name" '$2 == name || $2 == "./"name {print $1"  "name; n++} END {if (n != 1) exit 1}' SHA256SUMS > expected
+          shasum -a 256 -c expected
+      - name: Build and verify the Finder disk image
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RECOG_DMG_TEST_SERVICES: '1'
+        run: |
+          scripts/build_dmg_ffmpeg.sh "$RUNNER_TEMP/recog-ffmpeg"
+          python3 scripts/build_macos_dmg.py "$TAG" dist "$RUNNER_TEMP/recog-ffmpeg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recog-macos-dmg
+          path: |
+            dist/*.dmg
+            dist/*.dmg.sha256
+          if-no-files-found: error
+
+  draft:
+    if: github.event_name == 'push'
+    needs: [archive, disk-image]
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","macos","recog"]') || 'ubuntu-24.04' }}
     permissions:
       contents: write
@@ -52,5 +98,5 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           python3 scripts/release.py formula "$TAG" dist > dist/recog.rb
-          (cd dist && shasum -a 256 ./*.tar.gz > SHA256SUMS)
+          (cd dist && shasum -a 256 ./*.tar.gz ./*.dmg > SHA256SUMS)
           PATH="/opt/homebrew/bin:$PATH" gh release create "$TAG" --verify-tag --draft --generate-notes dist/*
