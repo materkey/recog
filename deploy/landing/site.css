@@ -61,8 +61,6 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--link); outline-
   padding-block: clamp(48px, 5.8vw, 90px) clamp(45px, 4.7vw, 72px);
 }
 .intro { grid-column: 1; grid-row: 2; }
-.beta { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 580; color: var(--link); }
-.beta i { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 4px #e0e9fc; margin-inline: 4px; }
 h1, .heading { font-family: var(--display); font-weight: 500; letter-spacing: -.043em; word-spacing: .035em; }
 h1 { margin: 20px 0 19px; font-size: clamp(60px, 6.15vw, 88px); line-height: .99; }
 .intro p { max-width: 32ch; font-size: clamp(18px, 1.48vw, 22px); line-height: 1.5; color: var(--muted); }
@@ -192,7 +190,6 @@ h1 { margin: 20px 0 19px; font-size: clamp(60px, 6.15vw, 88px); line-height: .99
   .hero { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; gap: 20px 0; padding: 24px 0; }
   .intro, .hero-action, .demo { grid-column: auto; grid-row: auto; }
   .hero-action { margin-top: 3px; }
-  .beta { font-size: 13px; }
   h1 { margin: 12px 0; font-size: clamp(47px, 11vw, 68px); line-height: .99; }
   .intro p { font-size: 17px; line-height: 1.45; max-width: 39ch; }
   .signal { padding: 14px 17px 10px; }
