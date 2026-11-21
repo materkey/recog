@@ -13,9 +13,7 @@ import wave
 def check_playback(runtime, env, home):
     meeting = home / "data/meetings/dmg-check"
     meeting.mkdir(parents=True)
-    (meeting / "meta.json").write_text(
-        '{"id":"dmg-check","created_at":"2026-01-01T12:00:00Z"}'
-    )
+    (meeting / "meta.json").write_text('{"id":"dmg-check","created_at":"2026-01-01T12:00:00Z"}')
     (meeting / "transcript.jsonl").write_text(
         '{"text":"test","is_local":true,"audio_offset_ms":100}\n'
     )
@@ -49,16 +47,12 @@ def check_playback(runtime, env, home):
                     raise
                 except urllib.error.URLError:
                     if web.poll() is not None:
-                        raise RuntimeError(
-                            "Recog web exited before serving the audio"
-                        ) from None
+                        raise RuntimeError("Recog web exited before serving the audio") from None
                     time.sleep(0.2)
             else:
                 raise RuntimeError("Recog web did not start")
             with wave.open(io.BytesIO(audio)) as result:
-                if result.getparams()[:3] != (1, 2, 16000) or not any(
-                    result.readframes(16000)
-                ):
+                if result.getparams()[:3] != (1, 2, 16000) or not any(result.readframes(16000)):
                     raise ValueError(
                         "Bundled audio playback did not return non-silent 16 kHz mono audio"
                     )
@@ -77,9 +71,7 @@ def check_install(payload, home):
     tools.mkdir()
     for name in ("brew", "gh", "swiftc", "ffmpeg"):
         stub = tools / name
-        stub.write_text(
-            '#!/bin/sh\nprintf "%s\\n" "$0" >> "$HOME/unexpected-tool"\nexit 79\n'
-        )
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$0" >> "$HOME/unexpected-tool"\nexit 79\n')
         stub.chmod(0o755)
     env = {
         "HOME": str(home),
@@ -114,16 +106,12 @@ def check_services(payload, runtime, env):
         stdout=subprocess.DEVNULL,
         check=False,
     ).returncode:
-        print(
-            "::notice::No graphical login on the runner; launchd activation was not exercised."
-        )
+        print("::notice::No graphical login on the runner; launchd activation was not exercised.")
         return
     for name in ("live", "frontend", "copilot-channel", "copilot-supervisor"):
         job = f"gui/{os.getuid()}/com.recog.{name}"
         if (
-            subprocess.run(
-                ["launchctl", "print", job], capture_output=True, check=False
-            ).returncode
+            subprocess.run(["launchctl", "print", job], capture_output=True, check=False).returncode
             == 0
         ):
             raise RuntimeError(f"Existing registered service: {job}")

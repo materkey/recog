@@ -24,9 +24,7 @@ def test_release_archive_when_unpacked_then_only_the_expected_payload_is_extract
         contents = b"v0.1.5" if invalid == "version" else b"v0.2.0"
         release.size = len(contents)
         tar.addfile(release, io.BytesIO(contents))
-        entry = tarfile.TarInfo(
-            "recog/../outside" if invalid == "parent" else "recog/bin/recog"
-        )
+        entry = tarfile.TarInfo("recog/../outside" if invalid == "parent" else "recog/bin/recog")
         if invalid == "link":
             entry.type = tarfile.SYMTYPE
             entry.linkname = "/outside"

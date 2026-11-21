@@ -33,14 +33,8 @@ def unpack(archive, resources, tag):
         entries = tar.getmembers()
         for entry in entries:
             parts = Path(entry.name).parts
-            if (
-                parts[:1] != ("recog",)
-                or ".." in parts
-                or not (entry.isdir() or entry.isfile())
-            ):
-                raise ValueError(
-                    f"Unexpected entry in the release archive: {entry.name}"
-                )
+            if parts[:1] != ("recog",) or ".." in parts or not (entry.isdir() or entry.isfile()):
+                raise ValueError(f"Unexpected entry in the release archive: {entry.name}")
         if tar.extractfile("recog/recog-release").read().decode().strip() != tag:
             raise ValueError("Archive release does not match the requested disk image")
         options = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
@@ -64,9 +58,7 @@ def make_app(app, archive, tag, ffmpeg):
     shutil.copyfile(ROOT / "deploy/macos/dmg/recog-web.sh", web)
     web.chmod(0o755)
     shutil.copytree(ffmpeg / "licenses", resources / "Licenses/FFmpeg")
-    shutil.copy2(
-        payload / "Recog.app/Contents/Resources/Recog.icns", resources / "Recog.icns"
-    )
+    shutil.copy2(payload / "Recog.app/Contents/Resources/Recog.icns", resources / "Recog.icns")
     version = tag[1:].split("-")[0]
     with (contents / "Info.plist").open("wb") as stream:
         plistlib.dump(
@@ -144,9 +136,7 @@ def build(tag, directory, ffmpeg):
         )
         verify_image(image, stage / "mounted", tag)
         image.replace(directory / IMAGE)
-    (directory / (IMAGE + ".sha256")).write_text(
-        f"{digest(directory / IMAGE)}  {IMAGE}\n"
-    )
+    (directory / (IMAGE + ".sha256")).write_text(f"{digest(directory / IMAGE)}  {IMAGE}\n")
 
 
 if __name__ == "__main__":
@@ -157,8 +147,6 @@ if __name__ == "__main__":
         type=Path,
         help="release archive directory, also receives the disk image",
     )
-    parser.add_argument(
-        "ffmpeg", type=Path, help="output directory from build_dmg_ffmpeg.sh"
-    )
+    parser.add_argument("ffmpeg", type=Path, help="output directory from build_dmg_ffmpeg.sh")
     args = parser.parse_args()
     build(args.tag, args.directory.resolve(), args.ffmpeg.resolve())
