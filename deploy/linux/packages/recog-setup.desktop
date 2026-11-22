@@ -3,6 +3,6 @@ Type=Application
 Name=Set up Recog
 Name[ru]=Настроить Recog
 Comment=Set up transcription for the current user
-Exec=/usr/bin/recog setup
+Exec=/usr/bin/recog-setup
 Terminal=true
 Categories=AudioVideo;Audio;

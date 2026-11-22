@@ -114,7 +114,7 @@ recog setup
 | Arch Linux, Manjaro | [Скачать пакет pacman](https://github.com/materkey/recog/releases/latest/download/recog-x86_64.pkg.tar.zst) | `sudo pacman -U ./recog-x86_64.pkg.tar.zst` |
 
 После установки откройте **Настроить Recog** в меню приложений или выполните
-`/usr/bin/recog setup` от своего пользователя. Откройте
+`recog-setup` от своего пользователя. Откройте
 [расшифровки](http://127.0.0.1:9080) в браузере. Для обновления скачайте
 новый пакет и повторите установку и настройку. Перед удалением пакета выполните
 `/usr/bin/recog service uninstall` в тех профилях, где запускали настройку.

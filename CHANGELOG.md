@@ -13,7 +13,8 @@ reasoning.
 
 - Linux releases include downloadable packages for apt and pacman. Install the
   file with your package manager, then open **Set up Recog** in the applications
-  menu to configure the services for your user.
+  menu to configure the services for your user. If the package manager has just
+  installed a sound server, setup can activate its socket in the current login.
 
 ## 2026-11-21
 

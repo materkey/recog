@@ -18,6 +18,10 @@ contents:
   - src: /usr/lib/recog/bin/recog
     dst: /usr/bin/recog
     type: symlink
+  - src: recog-setup
+    dst: /usr/bin/recog-setup
+    file_info:
+      mode: 0755
   - src: recog-setup.desktop
     dst: /usr/share/applications/recog-setup.desktop
   - src: recog/LICENSE

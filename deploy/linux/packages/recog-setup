@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+# Packages installed during a login add user sockets after systemd has
+# started the session. Activate the configured sound server for this login.
+if [ "$(id -u)" -eq 0 ]; then
+    echo 'Запустите настройку Recog от обычного пользователя.' >&2
+    exit 1
+fi
+if [ -z "${PULSE_SERVER:-}" ] && ! pactl info >/dev/null 2>&1; then
+    systemctl --user daemon-reload
+    for socket in pipewire-pulse.socket pulseaudio.socket; do
+        if systemctl --user is-enabled --quiet "$socket"; then
+            systemctl --user start "$socket"
+            break
+        fi
+    done
+fi
+exec /usr/lib/recog/bin/recog setup
