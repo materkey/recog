@@ -1,0 +1,45 @@
+name: recog
+arch: amd64
+platform: linux
+version: ${RECOG_VERSION}
+release: "1"
+maintainer: materkey <materkey@users.noreply.github.com>
+description: Russian meeting transcription with speaker names
+homepage: https://recog.vkkovalev.work/
+license: MIT
+section: sound
+priority: optional
+archlinux:
+  packager: materkey <materkey@users.noreply.github.com>
+contents:
+  - src: recog/
+    dst: /usr/lib/recog
+    type: tree
+  - src: /usr/lib/recog/bin/recog
+    dst: /usr/bin/recog
+    type: symlink
+  - src: recog-setup.desktop
+    dst: /usr/share/applications/recog-setup.desktop
+  - src: recog/LICENSE
+    dst: /usr/share/licenses/recog/LICENSE
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.39)
+      - libgcc-s1
+      - ffmpeg
+      - pulseaudio-utils
+      - pipewire-audio | pulseaudio
+      - libvulkan1
+      - mesa-vulkan-drivers | vulkan-icd
+      - systemd
+      - dbus-user-session
+  archlinux:
+    depends:
+      - glibc>=2.39
+      - ffmpeg
+      - libpulse
+      - pulse-native-provider
+      - vulkan-icd-loader
+      - vulkan-swrast
+      - systemd

@@ -106,21 +106,23 @@ recog setup
 
 ### Linux x86-64
 
-Откройте терминал в своём сеансе Linux и выполните:
+Скачайте пакет для своей системы и выполните команду в папке загрузки.
 
-```sh
-curl -fsSL https://recog.vkkovalev.work/install.sh | sh
-```
+| Система | Пакет | Установка |
+| --- | --- | --- |
+| Ubuntu 24.04+, Debian 13+ | [Скачать .deb](https://github.com/materkey/recog/releases/latest/download/recog-amd64.deb) | `sudo apt install ./recog-amd64.deb` |
+| Arch Linux, Manjaro | [Скачать пакет pacman](https://github.com/materkey/recog/releases/latest/download/recog-x86_64.pkg.tar.zst) | `sudo pacman -U ./recog-x86_64.pkg.tar.zst` |
 
-Команда скачает готовую сборку из последнего релиза GitHub, сверит контрольную
-сумму и запустит настройку. В Debian и Ubuntu, Fedora, Arch и Manjaro
-установщик добавит недостающие звуковые утилиты, звуковой сервер и драйвер Vulkan для распознавания речи. Для установки системных
-пакетов он может запросить пароль через `sudo`. Для обновления повторите команду.
+После установки откройте **Настроить Recog** в меню приложений или выполните
+`/usr/bin/recog setup` от своего пользователя. Откройте
+[расшифровки](http://127.0.0.1:9080) в браузере. Для обновления скачайте
+новый пакет и повторите установку и настройку. Перед удалением пакета выполните
+`/usr/bin/recog service uninstall` в тех профилях, где запускали настройку.
 
-Для служб нужен пользовательский systemd. Сборка 0.3.0 требует glibc 2.39 или
-новее (например, Ubuntu 24.04). Для ручной установки скачайте архив
-`linux-x86_64` из [последнего релиза](https://github.com/materkey/recog/releases/latest),
-распакуйте его и запустите `bin/recog setup`. Для звука нужны `ffmpeg`, `pactl` и `parec`.
+Для других дистрибутивов доступен архив `linux-x86_64` в
+[GitHub Releases](https://github.com/materkey/recog/releases/latest).
+Распакуйте его и выполните `bin/recog setup`. Сборке 0.3.0 нужны glibc 2.39
+или новее, пользовательский systemd, драйвер Vulkan, `ffmpeg`, `pactl` и `parec`.
 
 Установщик покажет полный путь к готовому расширению для Chrome.
 На Mac при первой настройке откроется окно **Разрешения Recog**, если доступа

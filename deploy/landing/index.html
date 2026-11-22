@@ -112,11 +112,18 @@
           </details>
           <details>
             <summary>Linux x86-64</summary>
-            <p id="linux">Запустите в терминале от своего имени. Команда скачает Recog и установит нужные пакеты для записи и распознавания речи.</p>
+            <p id="linux">Скачайте пакет для своей системы. Откройте терминал в папке загрузки и выполните команду под ссылкой.</p>
+            <p><a href="https://github.com/materkey/recog/releases/latest/download/recog-amd64.deb">Скачать для Ubuntu 24.04+ и Debian 13+</a></p>
             <div class="install-command">
-              <code id="linux-command">curl -fsSL https://recog.vkkovalev.work/install.sh | sh</code>
-              <button id="copy-command" type="button" aria-live="polite" hidden>Скопировать</button>
+              <code>sudo apt install ./recog-amd64.deb</code>
+              <button type="button" aria-live="polite" hidden>Скопировать</button>
             </div>
+            <p><a href="https://github.com/materkey/recog/releases/latest/download/recog-x86_64.pkg.tar.zst">Скачать для Arch Linux и Manjaro</a></p>
+            <div class="install-command">
+              <code>sudo pacman -U ./recog-x86_64.pkg.tar.zst</code>
+              <button type="button" aria-live="polite" hidden>Скопировать</button>
+            </div>
+            <p>После установки откройте «Настроить Recog» в меню приложений.</p>
           </details>
           <a class="more" href="https://github.com/materkey/recog#установка">Homebrew и другие способы установки <span aria-hidden="true">↗</span></a>
         </div>

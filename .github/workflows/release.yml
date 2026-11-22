@@ -35,10 +35,19 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: python3 scripts/release.py archive "$TAG" dist
+      - name: Build Linux distribution packages
+        if: matrix.asset == 'linux-x86_64'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/build_linux_packages.sh "$TAG" dist
       - uses: actions/upload-artifact@v4
         with:
           name: recog-${{ matrix.asset }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.pkg.tar.zst
+            dist/linux-packages.sha256
           if-no-files-found: error
 
   disk-image:

@@ -7,6 +7,14 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-22
+
+### Changed
+
+- Linux releases include downloadable packages for apt and pacman. Install the
+  file with your package manager, then open **Set up Recog** in the applications
+  menu to configure the services for your user.
+
 ## 2026-11-21
 
 ### Changed
