@@ -84,8 +84,12 @@
         </div>
       </div>
       <details class="skill-help">
-        <summary>Как открыть скилл в Claude Code</summary>
-        <p>После установки готовой сборки запустите <code>cd ~/.local/share/recog/runtime &amp;&amp; claude</code>. Из этой папки Claude Code увидит скилл <a href="https://github.com/materkey/recog/tree/main/.claude/skills/recog-meetings">recog-meetings</a>. Задайте вопрос о встрече своими словами.</p>
+        <summary>Установить скилл для Claude Code</summary>
+        <div class="install-command">
+          <code>npx -y skills add materkey/recog@recog-meetings -g -a claude-code -y</code>
+          <button type="button" aria-live="polite" hidden>Скопировать</button>
+        </div>
+        <p>Откройте новый сеанс Claude Code в любой папке и спросите о встрече. Для установки нужен Node.js с <code>npx</code>, для поиска по встречам — <code>uv</code>.</p>
       </details>
     </section>
 

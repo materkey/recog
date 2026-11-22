@@ -1,14 +1,14 @@
-const copyButton = document.getElementById('copy-command');
-const command = document.getElementById('linux-command');
-
-copyButton.hidden = false;
-copyButton.addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(command.textContent);
-    copyButton.textContent = 'Скопировано';
-  } catch {
-    const selection = window.getSelection();
-    selection.selectAllChildren(command);
-    copyButton.textContent = 'Выделено для копирования';
-  }
-});
+for (const block of document.querySelectorAll('.install-command')) {
+  const button = block.querySelector('button');
+  const command = block.querySelector('code');
+  button.hidden = false;
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(command.textContent);
+      button.textContent = 'Скопировано';
+    } catch {
+      window.getSelection().selectAllChildren(command);
+      button.textContent = 'Выделено для копирования';
+    }
+  });
+}
