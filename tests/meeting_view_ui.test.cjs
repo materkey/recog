@@ -1,5 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { loadPage, json } = require('./web_page.cjs');
 
 const META = {
@@ -426,6 +428,20 @@ test('no meeting open - Generate Title or Delete called - nothing is requested',
     p.evaluate('generateTitle(); deleteMeeting()');
     assert.deepEqual(p.confirms, []);
     assert.deepEqual(p.requests, []);
+});
+
+// A fixed box pinned by both its top and its bottom stretches between them,
+// and the toast covered the page from top to bottom.
+test('meeting shown - a toast appears - its own style and the stylesheet pin one vertical edge', async () => {
+    const p = meetingPage();
+    await p.settle();
+    p.evaluate("showNotification('Скопировано')");
+    const css = fs.readFileSync(path.join(__dirname, '../crates/recog-web/static/style.css'), 'utf8');
+    const rules = [...css.matchAll(/\.notification\s*\{([^}]*)\}/g)].map(rule => rule[1]);
+    const declarations = [p.document.querySelector('.notification').style.cssText, ...rules].join(';');
+    const pinned = ['top', 'bottom'].filter(edge => new RegExp(`(?:^|[\\s;])${edge}\\s*:`).test(declarations));
+    assert.ok(rules.length > 0, 'the stylesheet has no toast rule');
+    assert.deepEqual(pinned, ['top']);
 });
 
 test('meeting page - route changes to live and to the list - the nav link follows', async () => {

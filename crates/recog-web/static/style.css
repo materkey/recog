@@ -703,7 +703,6 @@ a:hover {
 /* --- Notifications --- */
 .notification {
     position: fixed;
-    bottom: 20px;
     right: 20px;
     padding: 12px 20px;
     border-radius: var(--radius);

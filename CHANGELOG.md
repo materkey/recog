@@ -11,6 +11,9 @@ reasoning.
 
 ### Changed
 
+- A notification of the web UI, such as the one after **Copy**, is as tall as
+  its message. It used to cover the page from top to bottom until it went away.
+
 - Linux releases include downloadable packages for apt and pacman. Install the
   file with your package manager, then open **Set up Recog** in the applications
   menu to configure the services for your user. If the package manager has just
