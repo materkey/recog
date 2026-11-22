@@ -64,6 +64,31 @@
       <p class="recording">По умолчанию распознавание идёт на вашем компьютере. Запись начинается при входе во встречу и заканчивается при выходе. Предупредите участников о записи.</p>
     </section>
 
+    <section class="how wrap" id="agent" aria-labelledby="agent-title">
+      <h2 id="agent-title">Спросите агента о прошлых встречах</h2>
+      <div class="flow agent-flow">
+        <div class="input">
+          <h3>Ваш вопрос</h3>
+          <p>«У кого ключи от зала для фотовыставки?»</p>
+        </div>
+        <span class="connector" aria-hidden="true"><i></i></span>
+        <div class="processor">
+          <h3>Поиск по встречам</h3>
+          <p>Со скиллом из комплекта Recog агент Claude Code ищет реплики в сохранённых расшифровках по словам, датам и участникам.</p>
+        </div>
+        <span class="connector" aria-hidden="true"><i></i></span>
+        <div class="output">
+          <h3>Ключи у Миши</h3>
+          <blockquote>«В десять. Ключи у меня, я встречу тебя у входа».</blockquote>
+          <a class="quote-source" href="images/meeting.webp">«Подготовка фотовыставки» · 10:12:12</a>
+        </div>
+      </div>
+      <details class="skill-help">
+        <summary>Как открыть скилл в Claude Code</summary>
+        <p>После установки готовой сборки запустите <code>cd ~/.local/share/recog/runtime &amp;&amp; claude</code>. Из этой папки Claude Code увидит скилл <a href="https://github.com/materkey/recog/tree/main/.claude/skills/recog-meetings">recog-meetings</a>. Задайте вопрос о встрече своими словами.</p>
+      </details>
+    </section>
+
     <section class="installation wrap" id="install" aria-labelledby="install-title">
       <h2 id="install-title">Установка</h2>
       <div class="install-grid">

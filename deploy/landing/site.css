@@ -74,6 +74,9 @@ h2 { font-size: clamp(38px, 4vw, 58px); line-height: 1.04; }
 .merge::before { content: ""; position: absolute; inset: 24% 50% 24% 0; border: solid var(--arrow); border-width: 1.5px 1.5px 1.5px 0; border-radius: 0 4px 4px 0; }
 .merge i { width: 50%; right: 0; }
 .recording { max-width: 86ch; font-size: 14px; color: var(--muted); }
+.agent-flow blockquote { margin: 8px 0; font-size: 15px; }
+.quote-source { font-size: 13px; }
+.skill-help { max-width: 68ch; }
 .install-grid { display: grid; grid-template-columns: 1fr .88fr; gap: clamp(32px, 8vw, 105px); align-items: start; margin-top: 26px; }
 .install-copy h3 { font-size: 22px; letter-spacing: -.025em; }
 .install-copy ol { padding-left: 1.4em; margin-block: 10px 20px; }
