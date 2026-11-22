@@ -9,6 +9,7 @@
   <link rel="canonical" href="https://recog.vkkovalev.work/">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="site.css">
+  <script src="copy-command.js" defer></script>
 </head>
 <body id="top">
   <a class="skip" href="#main">Перейти к содержанию</a>
@@ -82,8 +83,11 @@
           </details>
           <details>
             <summary>Linux x86-64</summary>
-            <p id="linux">Установите <code>ffmpeg</code>, <code>pactl</code> и <code>parec</code>. Для фоновых служб нужен пользовательский systemd.</p>
-            <p>Скачайте <a href="https://github.com/materkey/recog/releases/latest">архив linux-x86_64 из релиза</a>, распакуйте его и запустите <code>bin/recog setup</code> из этой папки.</p>
+            <p id="linux">Запустите в терминале от своего имени. Команда скачает Recog и установит нужные пакеты для записи и распознавания речи.</p>
+            <div class="install-command">
+              <code id="linux-command">curl -fsSL https://recog.vkkovalev.work/install.sh | sh</code>
+              <button id="copy-command" type="button" aria-live="polite" hidden>Скопировать</button>
+            </div>
           </details>
           <a class="more" href="https://github.com/materkey/recog#установка">Homebrew и другие способы установки <span aria-hidden="true">↗</span></a>
         </div>

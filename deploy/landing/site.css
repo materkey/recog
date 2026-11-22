@@ -84,6 +84,9 @@ summary { padding: 11px 0; cursor: pointer; font-weight: 550; }
 summary:hover { color: var(--link); }
 details p { margin: 0 0 12px 1.15em; }
 code { font-size: .91em; overflow-wrap: anywhere; }
+.install-command { margin: 0 0 14px 1.15em; padding: 12px; background: #eef1f4; border-radius: 6px; }
+.install-command code { display: block; user-select: all; }
+.install-command button { margin-top: 8px; padding: 4px 9px; color: var(--link); background: white; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
 .more { display: inline-block; margin-top: 15px; font-size: 14px; }
 .permissions { width: min(100%, 400px); justify-self: center; }
 .permissions img { width: 100%; height: auto; }
