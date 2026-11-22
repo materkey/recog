@@ -3,125 +3,100 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f7f8fa">
-  <meta name="description" content="Recog показывает русскую расшифровку с именами участников прямо во время звонка в KTalk, Jitsi, Google Meet и Zoom. Для macOS и Linux.">
-  <title>Recog — русская расшифровка встреч с именами</title>
+  <meta name="theme-color" content="#faf9f6">
+  <meta name="description" content="Recog расшифровывает звонки на русском и подписывает реплики именами из встречи. Для macOS и Linux.">
+  <title>Recog — расшифровка встреч на русском</title>
   <link rel="canonical" href="https://recog.vkkovalev.work/">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="site.css">
-  <script src="demo.js" defer></script>
 </head>
 <body id="top">
-  <a class="skip-link" href="#main">Перейти к содержанию</a>
+  <a class="skip" href="#main">Перейти к содержанию</a>
   <header class="masthead wrap">
-    <a class="wordmark" href="#top" aria-label="Recog, в начало страницы"><img src="favicon.svg" width="32" height="32" alt="">recog</a>
-    <nav aria-label="Навигация по странице">
+    <a class="wordmark" href="#top" aria-label="Recog, в начало страницы"><img src="favicon.svg" width="28" height="28" alt="">recog</a>
+    <nav aria-label="Навигация">
       <a href="#how">Как работает</a>
       <a href="#install">Установка</a>
+      <a class="repo-link" href="https://github.com/materkey/recog">GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
 
   <main id="main" tabindex="-1">
     <section class="hero wrap" aria-labelledby="hero-title">
       <div class="intro">
-
         <h1 id="hero-title">Кто что сказал<br>на встрече</h1>
-        <p>Читайте русскую расшифровку по ходу звонка. Recog берёт имена из конференции и&nbsp;по&nbsp;умолчанию распознаёт речь на&nbsp;вашем компьютере.</p>
-      </div>
-      <figure class="demo" aria-labelledby="demo-title">
-        <figcaption class="signal">
-          <span class="sample-label" id="demo-title">Пример встречи</span>
-          <span class="signal-name">У старого маяка</span>
-          <div class="timeline" aria-hidden="true">
-            <img src="signal.svg" alt="" width="480" height="60">
-            <div class="scale"><span>00:12</span><span>00:16</span><span>00:20</span><span>00:24</span></div>
-          </div>
-        </figcaption>
-        <ol class="transcript" aria-label="Реплики">
-          <li>
-            <span class="stamp">00:12</span>
-            <div><span class="speaker kira">Кира</span><p>Где встречаемся в субботу?</p></div>
-          </li>
-          <li>
-            <span class="stamp">00:16</span>
-            <div><span class="speaker miron">Мирон</span><p>У старого маяка. Там видно всю бухту.</p></div>
-          </li>
-          <li>
-            <span class="stamp">00:20</span>
-            <div><span class="speaker lida">Лида</span><p><span>Тогда</span> <span>я захвачу</span> <span>бинокль.</span></p></div>
-          </li>
-        </ol>
-        <div class="demo-foot">
-          <span>Вымышленный разговор</span>
-          <button type="button" id="replay" hidden>
-            <svg aria-hidden="true" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M2.6 6a5.5 5.5 0 1 1 .3 4.8M2.5 2.7v3.8h3.8"/></svg>
-            Повторить<span class="sr-only"> пример</span>
-          </button>
+        <p>Читайте расшифровку по ходу звонка. Recog распознаёт русскую речь и подписывает реплики именами из конференции.</p>
+        <div class="actions">
+          <a class="download" href="https://github.com/materkey/recog/releases/latest/download/Recog-macOS-arm64.dmg">Скачать для Mac <span aria-hidden="true">↓</span></a>
+          <a href="#linux">Для Linux</a>
         </div>
-      </figure>
-
-      <div class="hero-action">
-        <a class="primary-link" href="https://github.com/materkey/recog/releases/latest/download/Recog-macOS-arm64.dmg">Скачать для Mac <span aria-hidden="true">↓</span></a>
-        <span>macOS 13+ на Apple Silicon · <a href="#linux">Для Linux</a></span>
+        <small>macOS 13 и новее · Apple Silicon</small>
       </div>
-    </section>
-
-    <section class="platforms wrap" aria-labelledby="platforms-title">
-      <h2 id="platforms-title">Поддерживаемые встречи</h2>
-      <ul><li>KTalk</li><li>Jitsi</li><li>Google Meet</li><li>Zoom</li></ul>
+      <figure class="transcript">
+        <picture>
+          <source media="(max-width: 480px)" srcset="images/transcript-mobile.webp" width="656" height="856">
+          <img src="images/transcript.webp" width="1280" height="840" fetchpriority="high" alt="Фрагмент расшифровки. В 10:12:05 Вера спрашивает, когда откроют зал. В 10:12:12 Миша отвечает, что в десять.">
+        </picture>
+        <figcaption><span>Встреча «Подготовка фотовыставки»</span><a href="images/meeting.webp">Открыть целиком <span aria-hidden="true">↗</span></a></figcaption>
+      </figure>
     </section>
 
     <section class="how wrap" id="how" aria-labelledby="how-title">
-      <h2 class="heading" id="how-title">Как работает <br>Recog</h2>
-      <ol class="stages">
-        <li>
-          <h3>Подключитесь к звонку</h3>
-          <p>По умолчанию Recog начинает запись при входе в поддерживаемую встречу и останавливает её после выхода. Предупредите участников о записи заранее.</p>
-        </li>
-        <li>
-          <h3>Следите за репликами</h3>
-          <p>Свои реплики вы увидите под именем из профиля. При желании можно запустить помощника Copilot и задать ему вопрос по ходу разговора.</p>
-        </li>
-        <li>
-          <h3>Вернитесь к сказанному</h3>
-          <p>После звонка откройте сохранённую встречу и найдите нужную фразу по тексту. Рядом с ней останутся имя и время.</p>
-        </li>
-      </ol>
+      <h2 id="how-title">Как работает Recog</h2>
+      <p class="platforms">Для звонков в KTalk, Jitsi, Google Meet и Zoom.</p>
+      <div class="flow">
+        <div class="inputs">
+          <div class="input"><strong>Микрофон и звук звонка</strong><span>Ваша речь и голоса собеседников</span></div>
+          <div class="input"><strong>Имена участников</strong><span>Из конференции и вашего профиля</span></div>
+        </div>
+        <span class="connector merge" aria-hidden="true"><i></i></span>
+        <div class="processor">
+          <h3><img src="favicon.svg" width="25" height="25" alt="">Recog</h3>
+          <p>Модель GigaAM переводит речь в текст. Recog сопоставляет реплики с тем, кто говорил.</p>
+        </div>
+        <span class="connector" aria-hidden="true"><i></i></span>
+        <div class="output">
+          <h3>Расшифровка встречи</h3>
+          <p>У каждой реплики есть имя и время. После звонка можно найти нужную фразу поиском и скопировать её.</p>
+        </div>
+      </div>
+      <p class="recording">По умолчанию распознавание идёт на вашем компьютере. Запись начинается при входе во встречу и заканчивается при выходе. Предупредите участников о записи.</p>
     </section>
 
-    <section class="installation" id="install" aria-labelledby="install-title">
-      <div class="install-grid wrap">
-        <div class="install-intro">
-          <h2 class="heading" id="install-title">Установка</h2>
-          <p>Установите Recog на компьютер, с которого подключаетесь к встречам. Для звонков в браузере добавьте расширение Chrome.</p>
-          <a class="guide-link" href="https://github.com/materkey/homebrew-apps">Инструкция на GitHub <span aria-hidden="true">↗</span></a>
+    <section class="installation wrap" id="install" aria-labelledby="install-title">
+      <h2 id="install-title">Установка</h2>
+      <div class="install-grid">
+        <div class="install-copy">
+          <h3>Mac с Apple Silicon</h3>
+          <ol>
+            <li><a href="https://github.com/materkey/recog/releases/latest/download/Recog-macOS-arm64.dmg">Скачайте образ для Mac</a> и перетащите Recog в «Программы».</li>
+            <li>Откройте Recog, запустите настройку и разрешите доступ к микрофону и системному звуку.</li>
+          </ol>
+          <details>
+            <summary>Если macOS блокирует запуск</summary>
+            <p>После первой попытки открыть Recog перейдите в «Системные настройки» → «Конфиденциальность и безопасность». Рядом с Recog нажмите «Всё равно открыть».</p>
+          </details>
+          <details id="chrome">
+            <summary>Расширение для звонков в Chrome</summary>
+            <p>В <code>chrome://extensions</code> включите «Режим разработчика». Нажмите «Загрузить распакованное расширение» и выберите папку, которую покажет Recog.</p>
+          </details>
+          <details>
+            <summary>Linux x86-64</summary>
+            <p id="linux">Установите <code>ffmpeg</code>, <code>pactl</code> и <code>parec</code>. Для фоновых служб нужен пользовательский systemd.</p>
+            <p>Скачайте <a href="https://github.com/materkey/recog/releases/latest">архив linux-x86_64 из релиза</a>, распакуйте его и запустите <code>bin/recog setup</code> из этой папки.</p>
+          </details>
+          <a class="more" href="https://github.com/materkey/recog#установка">Homebrew и другие способы установки <span aria-hidden="true">↗</span></a>
         </div>
-        <div class="install-body">
-          <h3>macOS 13+ <span>Apple Silicon</span></h3>
-          <p><a href="https://github.com/materkey/recog/releases/latest/download/Recog-macOS-arm64.dmg">Скачайте образ Recog</a> и откройте его. Перетащите <code>Recog.app</code> в папку «Программы» (Applications). В Finder запустите Recog из этой папки.</p>
-          <p>При первом запуске разрешите Recog доступ к микрофону и запись системного звука. Затем <a href="#chrome">добавьте расширение Chrome</a> из папки, которую покажет приложение.</p>
-          <p>У бесплатной бета-версии локальная подпись. Если macOS предупредит о непроверенном разработчике, в «Системных настройках» откройте «Конфиденциальность и безопасность» и нажмите «Всё равно открыть» (Open Anyway).</p>
-          <p>Recog использует FFmpeg для работы со звуком. Лицензия и исходники этой сборки FFmpeg доступны внутри <code>Recog.app</code>.</p>
-
-          <h3 id="linux">Linux <span>x86-64</span></h3>
-          <p>Откройте <a href="https://github.com/materkey/recog/releases/latest">релизы</a> и скачайте архив <code>linux-x86_64</code>. Распакуйте его и запустите настройку из каталога сборки.</p>
-          <pre><code>bin/recog setup</code></pre>
-
-          <h3 id="chrome">Расширение Chrome</h3>
-          <p>Откройте <code>chrome://extensions</code>, включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и выберите папку, которую показал Recog.</p>
-
-          <h3>Homebrew <span>Альтернатива для Mac</span></h3>
-          <pre><code>brew install materkey/apps/recog
-recog setup</code></pre>
-          <p class="doctor">Проверьте установку командой <code>recog doctor</code>.</p>
-        </div>
+        <figure class="permissions">
+          <a href="images/permissions.webp" aria-label="Увеличить снимок окна «Разрешения Recog»"><img src="images/permissions.webp" width="1136" height="1010" loading="lazy" alt="Окно «Разрешения Recog» на Mac. Доступ к микрофону выдан. У системного звука есть кнопка «Открыть настройки»."></a>
+          <figcaption>Окно разрешений в macOS</figcaption>
+        </figure>
       </div>
     </section>
   </main>
-
   <footer class="footer wrap">
-    <span class="wordmark"><img src="favicon.svg" width="25" height="25" alt="">recog</span>
-    <a href="#top">К началу <span aria-hidden="true">↑</span></a>
+    <small>В сборку для Mac входит FFmpeg. Лицензия и исходники находятся в Recog.app.</small>
+    <a href="https://github.com/materkey/recog">Исходный код на GitHub <span aria-hidden="true">↗</span></a>
   </footer>
 </body>
 </html>
