@@ -11,6 +11,12 @@ reasoning.
 
 ### Changed
 
+- The web UI fits a phone. On a screen up to 768 px wide the meeting filters
+  wrap instead of running off the side, which made the browser shrink the
+  whole page; the title of a view stands above its controls; a meeting's
+  transcript scrolls with the page, and the live transcript takes what the
+  screen has left. On a touch screen the controls are at least 44 px high.
+
 - A notification of the web UI, such as the one after **Copy**, is as tall as
   its message. It used to cover the page from top to bottom until it went away.
 

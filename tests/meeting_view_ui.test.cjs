@@ -58,7 +58,7 @@ test('stored meeting - opened - title, meta and grouped transcript are shown', a
     assert.notEqual(p.playButton(0), null);
     assert.equal(p.playButton(1), null);
     assert.equal(p.$('delete-meeting-btn').style.display, '');
-    assert.equal(p.$('view-meeting').style.display, 'block');
+    assert.equal(p.$('view-meeting').style.display, '');
     assert.equal(p.$('view-meetings').style.display, 'none');
 });
 
@@ -450,10 +450,10 @@ test('meeting page - route changes to live and to the list - the nav link follow
     p.setHash('#/live');
     const active = () => p.document.querySelectorAll('.nav-link.active').map(link => link.getAttribute('href'));
     assert.deepEqual(active(), ['#/live']);
-    assert.equal(p.$('view-live').style.display, 'block');
+    assert.equal(p.$('view-live').style.display, '');
     p.setHash('#/');
     assert.deepEqual(active(), ['#/']);
     p.setHash('#/unknown');
     assert.deepEqual(active(), []);
-    assert.equal(p.$('view-meetings').style.display, 'block');
+    assert.equal(p.$('view-meetings').style.display, '');
 });

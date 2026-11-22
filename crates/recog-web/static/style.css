@@ -53,7 +53,11 @@
     color: var(--text-primary);
     background: var(--bg-secondary);
     box-shadow: 0 6px 20px var(--shadow);
-    overflow: hidden;
+    /* The bar it hangs from stays on screen, so a menu taller than the
+       screen scrolls inside itself; its checks name long paths. */
+    max-height: calc(100dvh - 64px);
+    overflow-y: auto;
+    overflow-wrap: break-word;
 }
 .profile-settings-menu > button {
     display: block;
@@ -170,7 +174,7 @@ body {
     line-height: 1.5;
     background: var(--bg-primary);
     color: var(--text-primary);
-    min-height: 100vh;
+    min-height: 100dvh;
 }
 
 a {
@@ -187,7 +191,7 @@ a:hover {
 #app {
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
+    min-height: 100dvh;
 }
 
 .nav {
@@ -1438,22 +1442,155 @@ a:hover {
         flex-wrap: wrap;
     }
 
+    /* The title takes a row of its own, above the controls of its view. */
     .view-header h1 {
-        order: 1;
-        width: 100%;
+        flex-basis: 100%;
+    }
+
+    /* A row too long for the screen wraps: a row that does not makes the
+       browser shrink the whole page to show it. */
+    .filters {
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+
+    .date-nav,
+    .search-box,
+    .filter-select {
+        flex: 1 1 auto;
+    }
+
+    /* On the narrowest screens the date field gives up width, not its row. */
+    .date-nav {
+        min-width: 0;
+    }
+
+    .filter-date {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    /* .search-input's width is a percentage, which lets a shrinking row
+       squeeze the field down to its padding. */
+    .search-box .search-input {
+        flex: 1 1 auto;
+        width: auto;
+        max-width: none;
+        min-width: 8rem;
+    }
+
+    .meeting-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .search-result-header {
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    .search-result-date {
+        flex-shrink: 0;
+    }
+
+    #view-live .view-header {
+        gap: 8px;
+    }
+
+    #view-live .view-header h1 {
         margin-bottom: 8px;
     }
 
     .meetings-list {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .meta-grid {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    /* A meeting's transcript scrolls with its page: a box scrolling inside a
+       scrolling page takes the swipe meant for the page. */
     .transcript {
-        max-height: calc(100vh - 400px);
+        max-height: none;
+        overflow-y: visible;
+    }
+
+    /* The live transcript stays a box, since Follow scrolls it to its newest
+       row, and gets what the screen has left under the header. */
+    #view-live {
+        display: flex;
+        flex-direction: column;
+        height: calc(100dvh - 88px);  /* The nav bar and .main's padding. */
+    }
+
+    .live-transcript {
+        flex: 0 1 auto;
+        min-height: 12rem;
+        overflow-y: auto;
+    }
+
+    .profile-settings-menu {
+        max-width: calc(100vw - 32px);
+    }
+
+    .notification {
+        left: 20px;
+        max-width: none;
+    }
+}
+
+@media (max-width: 480px) {
+    .nav-brand {
+        margin-right: 8px;
+    }
+
+    .nav-link {
+        padding: 8px 12px;
+    }
+}
+
+/* A fingertip is less precise than a pointer: 44 by 44 for what it taps
+   (WCAG 2.5.5). The small round and cross buttons keep their look and get
+   the area around them instead. */
+@media (pointer: coarse) {
+    :where(button:not(.btn-play-segment, .chat-cite, .modal-close, .copilot-panel-close),
+           select, textarea, input:not([type="checkbox"], [type="radio"]),
+           summary, .nav-link, label:has(> input[type="checkbox"])) {
+        min-block-size: 44px;
+        min-inline-size: 44px;
+    }
+
+    .nav-link,
+    label:has(> input[type="checkbox"]) {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    summary {
+        align-content: center;
+    }
+
+    .btn-play-segment,
+    .modal-close,
+    .copilot-panel-close {
+        position: relative;
+    }
+
+    .btn-play-segment::after,
+    .modal-close::after,
+    .copilot-panel-close::after {
+        content: '';
+        position: absolute;
+        inset: -10px;
+    }
+
+    .modal-close::after,
+    .copilot-panel-close::after {
+        inset-inline: -15px;
     }
 }
 

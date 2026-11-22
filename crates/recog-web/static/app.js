@@ -130,7 +130,8 @@ const router = {
 
         document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
         const view = document.getElementById('view-' + name);
-        if (view) view.style.display = 'block';
+        // No value of its own: the stylesheet lays the shown view out.
+        if (view) view.style.display = '';
     }
 };
 
