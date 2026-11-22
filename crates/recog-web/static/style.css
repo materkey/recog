@@ -34,6 +34,11 @@
     --radius: 8px;
     --radius-sm: 4px;
 
+    /* What is computed from them: the height the Live view fills, the room
+       the Settings menu has under the bar. */
+    --nav-height: 56px;
+    --page-padding: 24px;
+
     --transition: 0.2s ease;
 }
 
@@ -55,7 +60,8 @@
     box-shadow: 0 6px 20px var(--shadow);
     /* The bar it hangs from stays on screen, so a menu taller than the
        screen scrolls inside itself; its checks name long paths. */
-    max-height: calc(100dvh - 64px);
+    max-width: calc(100vw - 2 * var(--page-padding));
+    max-height: calc(100dvh - var(--nav-height) - 8px);
     overflow-y: auto;
     overflow-wrap: break-word;
 }
@@ -197,8 +203,8 @@ a:hover {
 .nav {
     display: flex;
     align-items: center;
-    padding: 0 24px;
-    height: 56px;
+    padding: 0 var(--page-padding);
+    height: var(--nav-height);
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
     position: sticky;
@@ -237,7 +243,7 @@ a:hover {
 
 .main {
     flex: 1;
-    padding: 24px;
+    padding: var(--page-padding);
     max-width: 1200px;
     margin: 0 auto;
     width: 100%;
@@ -1426,16 +1432,12 @@ a:hover {
         max-width: none;
     }
 
-    .nav {
-        padding: 0 16px;
+    :root {
+        --page-padding: 16px;
     }
 
     .nav-brand {
         margin-right: 16px;
-    }
-
-    .main {
-        padding: 16px;
     }
 
     .view-header {
@@ -1523,17 +1525,13 @@ a:hover {
     #view-live {
         display: flex;
         flex-direction: column;
-        height: calc(100dvh - 88px);  /* The nav bar and .main's padding. */
+        height: calc(100dvh - var(--nav-height) - 2 * var(--page-padding));
     }
 
     .live-transcript {
         flex: 0 1 auto;
         min-height: 12rem;
         overflow-y: auto;
-    }
-
-    .profile-settings-menu {
-        max-width: calc(100vw - 32px);
     }
 
     .notification {
