@@ -713,48 +713,23 @@ a:hover {
 /* --- Notifications --- */
 .notification {
     position: fixed;
+    top: 20px;
     right: 20px;
     padding: 12px 20px;
     border-radius: var(--radius);
+    background: #22c55e;
     color: white;
     font-size: 14px;
+    font-weight: 500;
     /* Above the copilot panel (1050) so toasts are never swallowed. */
     z-index: 1200;
-    animation: slideIn 0.3s ease-out;
+    animation: slideIn 0.3s ease;
     max-width: 400px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
-.notification.success {
-    background: linear-gradient(135deg, #10b981, #059669);
-}
-
-.notification.error {
-    background: linear-gradient(135deg, #ef4444, #dc2626);
-}
-
-.notification.info {
-    background: linear-gradient(135deg, #3b82f6, #2563eb);
-}
-
-@keyframes slideIn {
-    from {
-        transform: translateX(100%);
-        opacity: 0;
-    }
-    to {
-        transform: translateX(0);
-        opacity: 1;
-    }
-}
-
-@keyframes fadeOut {
-    from {
-        opacity: 1;
-    }
-    to {
-        opacity: 0;
-    }
+.notification-error {
+    background: #ef4444;
 }
 
 /* --- Transcript --- */

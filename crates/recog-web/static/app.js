@@ -2505,24 +2505,9 @@ function showNotification(message, type = 'success') {
     const notification = document.createElement('div');
     notification.className = `notification notification-${type}`;
     notification.textContent = message;
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        padding: 12px 20px;
-        border-radius: 8px;
-        background: ${type === 'error' ? '#ef4444' : '#22c55e'};
-        color: white;
-        font-weight: 500;
-        z-index: 1200;
-        animation: slideIn 0.3s ease;
-    `;
     document.body.appendChild(notification);
 
-    setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease';
-        setTimeout(() => notification.remove(), 300);
-    }, 3000);
+    setTimeout(() => notification.remove(), 3300);
 }
 
 
