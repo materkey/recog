@@ -11,6 +11,12 @@ private struct Problem: Error {
     init(_ text: String) { self.text = text }
 }
 
+// The services are registered by another copy of Recog, usually a git checkout.
+private struct ForeignServices: Error {
+    let folder: URL?
+    let dataDir: String?
+}
+
 private struct Release: Comparable {
     let core: [Int]
     let prerelease: [String]
@@ -50,6 +56,14 @@ private struct Inspection {
     var canManage = false
     var shouldSyncOnLaunch = false
     var resumingUpdate = false
+    var foreign: Foreign?
+}
+
+// What the window offers when another installation owns the services.
+private struct Foreign {
+    let folder: URL?
+    let command: String
+    let meetings: String
 }
 
 @MainActor
@@ -108,12 +122,14 @@ private struct Layout {
             let data: Data
             do { data = try Data(contentsOf: url) }
             catch let e as NSError where e.domain == NSCocoaErrorDomain && e.code == NSFileReadNoSuchFileError { continue }
-            guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                  let wd = plist["WorkingDirectory"] as? String,
-                  URL(fileURLWithPath: wd).standardizedFileURL.path == runtime.standardizedFileURL.path,
-                  let program = (plist["ProgramArguments"] as? [String])?.first,
+            let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+            let wd = plist?["WorkingDirectory"] as? String
+            let ours = wd.map { URL(fileURLWithPath: $0).standardizedFileURL.path == runtime.standardizedFileURL.path } ?? false
+            guard ours, let program = (plist?["ProgramArguments"] as? [String])?.first,
                   program.hasPrefix(runtime.path + "/") else {
-                throw Problem("Службы Recog принадлежат другой установке. Обновите её из исходной папки или завершите переход на эту версию отдельно.")
+                let env = plist?["EnvironmentVariables"] as? [String: Any]
+                throw ForeignServices(folder: ours ? nil : wd.map { URL(fileURLWithPath: $0, isDirectory: true) },
+                                      dataDir: env?["RECOG_DATA_DIR"] as? String)
             }
             count += 1
         }
@@ -204,10 +220,46 @@ private struct Layout {
             return Inspection(plan: .install, title: "Установить Recog \(label) на этот Mac",
                               detail: "Recog распознаёт речь во встречах. Для первой загрузки модели может понадобиться интернет.",
                               button: "Установить Recog")
+        } catch let other as ForeignServices {
+            return foreign(other)
         } catch {
             return Inspection(plan: .blocked, title: "Установка недоступна",
                               detail: (error as? Problem)?.text ?? "Не удалось прочитать сведения об установке или её службах.")
         }
+    }
+
+    // Name the other installation and the command that hands the services over.
+    // The window does not remove someone else's services itself.
+    private func foreign(_ other: ForeignServices) -> Inspection {
+        var isFolder: ObjCBool = false
+        let folder = other.folder.flatMap { files.fileExists(atPath: $0.path, isDirectory: &isFolder) && isFolder.boolValue ? $0 : nil }
+        let own = folder.map { $0.appendingPathComponent("bin/recog") }
+        let program = own.flatMap { executable($0) ? $0 : nil } ?? package.appendingPathComponent("bin/recog")
+        let appData = home.appendingPathComponent(".recog").standardizedFileURL.path
+        let data = other.dataDir.map { URL(fileURLWithPath: $0).standardizedFileURL.path } ?? appData
+        var meetings = data == appData
+            ? "Встречи и настройки в \(shown(appData)) останутся."
+            : "Встречи той установки хранятся в \(shown(data)), а приложение ищет их в \(shown(appData))."
+        if let folder, files.fileExists(atPath: folder.appendingPathComponent(".env").path) {
+            meetings += " Файл .env из той папки приложение не читает."
+        }
+        return Inspection(plan: .blocked,
+            title: folder == nil ? "Recog уже установлен другим способом" : "Recog уже установлен из другой папки",
+            detail: (folder.map { "Службы записи работают из папки \(shown($0.path))." }
+                ?? "Службы записи зарегистрированы другой установкой Recog.") + " Приложение не меняет чужую установку.",
+            foreign: Foreign(folder: folder, command: shellWord(program.path) + " service uninstall", meetings: meetings))
+    }
+
+    private func shown(_ path: String) -> String {
+        path.hasPrefix(home.path + "/") ? "~/" + path.dropFirst(home.path.count + 1) : path
+    }
+
+    // A path the user can paste into a shell as is.
+    private func shellWord(_ path: String) -> String {
+        let plain = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+@%:,")
+        let short = shown(path)
+        if short.unicodeScalars.allSatisfy({ plain.contains($0) || $0 == "~" && short.hasPrefix("~/") }) { return short }
+        return "'" + path.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 }
 
@@ -437,6 +489,15 @@ private final class Manager: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([layout.extensionFolder])
     }
 
+    func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func reveal(_ folder: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
+    }
+
     func tryAgain() {
         let action = retry
         error = nil
@@ -470,6 +531,7 @@ private final class Manager: ObservableObject {
 
 private struct ManagerView: View {
     @ObservedObject var model: Manager
+    @State private var copied = false
     private var info: Inspection { model.installation }
 
     var body: some View {
@@ -520,6 +582,35 @@ private struct ManagerView: View {
                     Text(error).fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Button("Повторить") { model.tryAgain() }
+                }
+            }
+            if let foreign = info.foreign {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "arrow.right.circle").font(.title3).foregroundStyle(.secondary).frame(width: 28).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Перейти на это приложение").fontWeight(.semibold)
+                            Text("Вне звонка выполните в Терминале команду: она остановит и удалит службы той установки. Затем нажмите «Проверить снова» и установите Recog.")
+                                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            HStack(alignment: .top) {
+                                Text(foreign.command).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                                Button(copied ? "Скопировано" : "Скопировать") {
+                                    model.copy(foreign.command)
+                                    copied = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                                }
+                            }
+                            .padding(8).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                            Text(foreign.meetings).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if let folder = foreign.folder {
+                        Divider()
+                        row("folder", "Остаться на той установке", "Обновляйте её как раньше. Это приложение для неё не нужно.",
+                            "Показать папку") { model.reveal(folder) }
+                    }
                 }
             }
             if info.canManage {

@@ -7,6 +7,17 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-23
+
+### Changed
+
+- When the services belong to another installation, such as a git checkout,
+  the Finder app names its folder and shows the command that removes its
+  services, with a button to copy it; after that **Проверить снова** offers
+  to install from the app. It used to say only that the installation was
+  unavailable. The app still never removes the other installation's services
+  itself.
+
 ## 2026-11-22
 
 ### Changed
