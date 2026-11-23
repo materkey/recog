@@ -31,24 +31,28 @@ private half is the `com.recog.linux-packages` item in the login Keychain of
 the signing Mac, the same Mac that signs the Sparkle feed
 ([sparkle-updates.md](sparkle-updates.md)). It never goes to CI.
 
-1. After the release workflow has made the draft:
+1. After the release workflow has made the draft, sign it from the release
+   workstation together with the Sparkle feed:
 
    ```sh
-   python3 scripts/linux_repo.py sign "$TAG" "$SCRATCH/linux-repo"
+   python3 scripts/sign_release.py "$TAG" "$SCRATCH/signed" --upload
    ```
 
-   It downloads `Packages`, `Release` and `recog.db` from the draft, checks
-   each against the SHA-256 GitHub reports for the asset, checks that they
-   describe exactly the draft's `.deb` and Arch package of version `$TAG`, signs
-   them and verifies the signatures against `deploy/landing/recog.asc`. It
-   prints the `gh release upload` command for `InRelease` and `recog.db.sig`.
-2. Upload them, then run `python3 scripts/linux_repo.py ready "$TAG"`, which
-   repeats every check on the draft's own assets, signatures included.
-3. **Publish only after `ready` passes.** `pacman -Syu` synchronises every
+   `linux_repo.py prepare` (run by it) downloads `Packages`, `Release` and
+   `recog.db`, checks each against the SHA-256 GitHub reports for the asset and
+   that they describe exactly the draft's `.deb` and Arch package of version
+   `$TAG`, and lists the draft's asset digests in `assets.tsv`. On the signing
+   Mac, offline, `linux_repo.py sign` repeats those checks against
+   `assets.tsv`, signs with the Keychain key and verifies the signatures
+   against `deploy/landing/recog.asc`; the workstation verifies them again,
+   uploads `InRelease` and `recog.db.sig` and runs
+   `python3 scripts/linux_repo.py ready "$TAG"`, which repeats every check on
+   the draft's own assets, signatures included.
+2. **Publish only after `ready` passes.** `pacman -Syu` synchronises every
    repository or none: a latest release whose `recog.db.sig` is missing or
    invalid stops the whole system upgrade on every Arch system that uses the
    repository (apt only skips Recog with a warning).
-4. After publishing, `python3 scripts/linux_repo.py verify --tag "$TAG"` reads
+3. After publishing, `python3 scripts/linux_repo.py verify --tag "$TAG"` reads
    the repository through `releases/latest/download/` as apt and pacman do and
    checks the signatures and every package byte.
 
@@ -77,7 +81,8 @@ services. `journalctl --user -u recog-upgrade` shows those runs.
 
 `python3 scripts/linux_repo.py new-key` made the key once: it refuses to
 replace an existing Keychain item and writes the public key to
-`deploy/landing/recog.asc`. Keep a backup of the Keychain item under the
+`deploy/landing/recog.asc`. Run it at the signing Mac itself, in its
+graphical session: the Keychain refuses an ssh session. Keep a backup of the Keychain item under the
 owner's control: the trusted key lives outside the package
 (`/etc/apt/keyrings/recog.asc`, the pacman keyring), so after losing or
 replacing it every installation has to trust the new key by hand.

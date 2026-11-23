@@ -313,3 +313,53 @@ def test_command_line_when_no_action_is_given_then_usage_is_printed(monkeypatch)
     with pytest.raises(SystemExit) as stopped:
         repo.main()
     assert stopped.value.code == 2
+
+
+@pytest.fixture
+def signing_input(dist, tmp_path_factory):
+    """What the release workstation hands to the signing Mac: the indexes and the assets list."""
+    directory = tmp_path_factory.mktemp("signing-input")
+    for name in repo.INDEXES:
+        (directory / name).write_bytes((dist / name).read_bytes())
+    repo.write_assets(directory, published(dist))
+    return directory
+
+
+def run_sign(monkeypatch, directory, tag=TAG):
+    monkeypatch.setattr(sys, "argv", ["linux_repo.py", "sign", tag, str(directory)])
+    repo.main()
+
+
+def test_signing_input_when_signed_with_the_keychain_key_then_apt_and_pacman_accept_it(
+    signing_input, gnupg_home, monkeypatch, tmp_path_factory
+):
+    home = gnupg_home()
+    key = tmp_path_factory.mktemp("key") / "recog.asc"
+    key.write_bytes(sign_into(home, signing_input, tmp_path_factory.mktemp("unused")))
+    secret = repo.gpg(home, "--armor", "--export-secret-keys")
+    monkeypatch.setattr(repo, "keychain_key", lambda: secret)
+    monkeypatch.setattr(repo, "PUBLIC_KEY", key)
+    run_sign(monkeypatch, signing_input)
+    indexes = {name: (signing_input / name).read_bytes() for name in repo.INDEXES}
+    in_release = (signing_input / "InRelease").read_bytes()
+    repo.check_signatures(
+        indexes, in_release, (signing_input / "recog.db.sig").read_bytes(), key.read_bytes()
+    )
+
+
+def test_signing_input_when_an_index_changed_after_it_was_prepared_then_nothing_is_signed(
+    signing_input, monkeypatch
+):
+    monkeypatch.setattr(repo, "keychain_key", lambda: pytest.fail("the key must not be read"))
+    (signing_input / "Packages").write_bytes((signing_input / "Packages").read_bytes() + b"X: y\n")
+    with pytest.raises(SystemExit, match="differs from the release asset"):
+        run_sign(monkeypatch, signing_input)
+    assert not (signing_input / "InRelease").exists()
+
+
+def test_signing_input_when_signed_for_another_tag_then_nothing_is_signed(
+    signing_input, monkeypatch
+):
+    monkeypatch.setattr(repo, "keychain_key", lambda: pytest.fail("the key must not be read"))
+    with pytest.raises(ValueError, match="another version"):
+        run_sign(monkeypatch, signing_input, "v1.2.4")

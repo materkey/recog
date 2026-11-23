@@ -25,6 +25,9 @@ LATEST = f"https://github.com/{PROJECT}/releases/latest/download/"
 PACKAGES, RELEASE, IN_RELEASE = "Packages", "Release", "InRelease"
 DB, DB_SIG = "recog.db", "recog.db.sig"
 INDEXES = (PACKAGES, RELEASE, DB)
+# The draft's assets as GitHub reports them (name, size, SHA-256), handed with
+# the indexes from the release workstation to the signing Mac.
+ASSETS = "assets.tsv"
 ACCOUNT = "com.recog.linux-packages"
 SIGNER = "Recog packages <materkey@users.noreply.github.com>"
 PUBLIC_KEY = Path(__file__).resolve().parents[1] / "deploy/landing/recog.asc"
@@ -313,6 +316,13 @@ def release_files(tag):
     return files
 
 
+def unchanged(files, data):
+    """Each file is byte for byte the release asset of its name."""
+    for name, content in data.items():
+        if files.get(name) != (len(content), sha256(content)):
+            raise SystemExit(f"{name} differs from the release asset")
+
+
 def download(tag, names, out):
     """Release assets, each checked against the digest GitHub reports for it."""
     files = release_files(tag)
@@ -322,19 +332,48 @@ def download(tag, names, out):
         check=True,
     )
     data = {name: (Path(out) / name).read_bytes() for name in names}
-    for name, content in data.items():
-        if files.get(name) != (len(content), sha256(content)):
-            raise SystemExit(f"Downloaded {name} differs from the release asset")
+    unchanged(files, data)
     return files, data
 
 
-def sign(args):
-    out = Path(args.out)
+def write_assets(directory, files):
+    lines = (f"{name}\t{size}\t{digest}\n" for name, (size, digest) in sorted(files.items()))
+    (Path(directory) / ASSETS).write_text("".join(lines))
+
+
+def read_assets(directory):
+    files = {}
+    for line in (Path(directory) / ASSETS).read_text().splitlines():
+        name, size, digest = line.split("\t")
+        files[name] = (int(size), digest)
+    return files
+
+
+def signing_input(tag, out):
+    """On the release workstation: the draft's indexes and asset digests, for the signing Mac."""
+    out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    files, indexes = download(args.tag, INDEXES, out)
+    files, indexes = download(tag, INDEXES, out)
+    check(indexes, files, tag)
+    write_assets(out, files)
+
+
+def prepare(args):
+    signing_input(args.tag, args.dir)
+    print(
+        f"Copy {args.dir} to the signing Mac and run there: python3 scripts/linux_repo.py sign {args.tag} DIR"
+    )
+
+
+def sign(args):
+    """On the signing Mac, offline: check the prepared indexes again, then sign them."""
+    out = Path(args.dir)
+    files = read_assets(out)
+    indexes = {name: (out / name).read_bytes() for name in INDEXES}
+    unchanged(files, indexes)
     check(indexes, files, args.tag)
     sign_indexes(out, indexes)
-    print(f"gh release upload {args.tag} {out / IN_RELEASE} {out / DB_SIG} --repo {PROJECT}")
+    print(f"Signed: upload {out / IN_RELEASE} and {out / DB_SIG} to {args.tag}")
 
 
 def ready(args):
@@ -400,9 +439,15 @@ def main():
     sub.set_defaults(run=lambda a: index(a.dist))
     sub = subs.add_parser("new-key", help="create the signing key once, in the login Keychain")
     sub.set_defaults(run=new_key)
-    sub = subs.add_parser("sign", help="sign the indexes of a draft release on the trusted Mac")
+    sub = subs.add_parser(
+        "prepare", help="download and check a draft's indexes for the signing Mac"
+    )
     sub.add_argument("tag", type=stable_tag)
-    sub.add_argument("out")
+    sub.add_argument("dir")
+    sub.set_defaults(run=prepare)
+    sub = subs.add_parser("sign", help="sign prepared indexes on the signing Mac, offline")
+    sub.add_argument("tag", type=stable_tag)
+    sub.add_argument("dir")
     sub.set_defaults(run=sign)
     sub = subs.add_parser("ready", help="check a draft's signed repository before publishing it")
     sub.add_argument("tag", type=stable_tag)

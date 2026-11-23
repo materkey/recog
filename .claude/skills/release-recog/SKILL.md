@@ -1,6 +1,6 @@
 ---
 name: release-recog
-description: Publish a new Recog release - pick the version, tag origin/main, wait for the release workflow, check and publish the draft, update the Homebrew formula. Use when the user says "release", "publish", "new version", "cut a release", "зарелизь", "выпусти релиз", "сделай релиз", or asks to make the latest main available to Homebrew and archive installations.
+description: Publish a new Recog release - pick the version, tag origin/main, wait for the release workflow, check the draft and sign it on the signing Mac, publish it, update the Homebrew formula. Use when the user says "release", "publish", "new version", "cut a release", "зарелизь", "выпусти релиз", "сделай релиз", or asks to make the latest main available to Homebrew and archive installations.
 disable-model-invocation: true
 ---
 
@@ -79,20 +79,24 @@ the last place to catch a broken archive.
 - Verify the disk image against its checksum. Mount it read-only and verify
   the Applications link, the Recog.app signature and the embedded release
   version before publishing.
-- The workflow builds the image with the committed Sparkle **public** key.
-  Before publishing a stable release, add its signed `appcast.xml` to the
-  draft. Follow [Signing the update feed](../../../docs/sparkle-updates.md).
-  Keep the private key on the trusted signing Mac. Since the installed
-  application's feed follows GitHub's latest release, publishing a draft
-  without the feed breaks checks in every existing Sparkle installation.
-- Sign the Linux repository on the same Mac
-  ([Linux package repositories](../../../docs/linux-packages.md)):
-  `python3 scripts/linux_repo.py sign vX.Y.Z <scratch>/linux-repo`, run the
-  `gh release upload` command it prints, then
-  `python3 scripts/linux_repo.py ready vX.Y.Z`. **Do not publish until `ready`
-  passes.** apt and pacman read the latest release, and a latest release
-  without valid `InRelease` and `recog.db.sig` stops `pacman -Syu` as a whole
-  on every Arch system that uses the repository.
+- Sign the update feed and the Linux repository on the signing Mac, the one
+  Mac whose login Keychain holds both private keys
+  ([Signing the update feed](../../../docs/sparkle-updates.md),
+  [Linux package repositories](../../../docs/linux-packages.md)). The keys are
+  not on the release workstation: signing there fails with a missing Keychain
+  item. The signing Mac's host lives outside the repository: load it first
+  with `set -a; . ~/.config/recog/release.env; set +a`.
+  From the workstation run
+  `python3 scripts/sign_release.py vX.Y.Z <scratch>/signed --upload`. It
+  reaches the signing Mac over ssh (host `RECOG_SIGNING_MAC`) and
+  signs there in a one-shot launchd job of the user's graphical session,
+  because the Keychain does not answer an ssh session; it brings back `appcast.xml`, `InRelease` and `recog.db.sig`, verifies
+  them here, uploads them and ends with `linux_repo.py ready`. If the Keychain
+  asks for access, the owner allows it on that Mac. **Do not publish until it
+  passes.** The installed Finder app's feed, apt and pacman all read the latest
+  release: without `appcast.xml` every Sparkle installation's check breaks,
+  and without valid `InRelease` and `recog.db.sig` `pacman -Syu` stops as a
+  whole on every Arch system that uses the repository.
 - Download `SHA256SUMS`, `recog.rb` and the archive of this machine's platform into a
   new scratch directory (`gh release download vX.Y.Z --repo materkey/recog --pattern …`).
 - `shasum -a 256 -c` the archive against `SHA256SUMS`; the `sha256` and `version` in
