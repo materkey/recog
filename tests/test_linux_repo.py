@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).absolute().parents[1] / "scripts"))
 repo = importlib.import_module("linux_repo")
 TAG = "v1.2.3"
 
