@@ -1,6 +1,6 @@
 //! The Codex app-server client against a scripted server over an in-process pipe. The
 //! messages have the shapes codex-cli 0.171.0 sent in the spike of
-//! docs/plans/2026-11-23-codex-copilot.md (Task 1), trimmed to the fields that matter.
+//! docs/plans/completed/2026-11-23-codex-copilot.md (Task 1), trimmed to the fields that matter.
 
 use recog_copilot::codex::app_server::{AppServer, Error, Event, Failure, TurnStatus};
 use serde_json::{Value, json};

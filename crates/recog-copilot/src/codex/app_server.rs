@@ -1,6 +1,6 @@
 //! A client of `codex app-server` over its stdio: one JSON object per line, requests
 //! `{id, method, params}` answered by `{id, result}` or `{id, error}`, notifications
-//! without an id (docs/plans/2026-11-23-codex-copilot.md).
+//! without an id (docs/plans/completed/2026-11-23-codex-copilot.md).
 //!
 //! Only what the Copilot harness acts on becomes an [`Event`]; the rest of the stream
 //! (deltas, token usage, rate limits, MCP startup) is read and dropped. A request the

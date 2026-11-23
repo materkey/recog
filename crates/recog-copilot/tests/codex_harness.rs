@@ -1,4 +1,4 @@
-//! The Codex harness's decisions (docs/plans/2026-11-23-codex-copilot.md, D2 and D4),
+//! The Codex harness's decisions (docs/plans/completed/2026-11-23-codex-copilot.md, D2 and D4),
 //! fed with Copilot events and app-server events, no process involved.
 
 use recog_copilot::codex::app_server::{Event, Failure, TurnStatus};

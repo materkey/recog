@@ -144,7 +144,9 @@ Codex's model and reasoning effort for Copilot come from the same settings.
   - `events.rs`: the MCP client loop over `await_copilot_event`.
   - `instructions.rs`: developer instructions from the playbook files.
 - New binary `crates/recog-copilot/src/bin/recog-copilot-codex.rs`:
-  `--repo-root`, `--mcp-url`, `--meeting-id`; reads the Copilot settings once.
+  `--repo-root` only; the MCP address, data directory and Copilot settings come
+  from the installation's configuration like the supervisor's (`config::load`).
+  The session loop is `codex/session.rs`.
 - `rmcp` gains the `client` and streamable-HTTP client features.
 - Status line written with `\r\x1b[2K` on the last line so the pane always
   ends with the current state; the dialog stays above it for a human reader.
@@ -168,8 +170,9 @@ Codex's model and reasoning effort for Copilot come from the same settings.
 - [x] confirm the MCP tool runs without an approval request under D5
 - [x] decide D5's CODEX_HOME question from `instructionSources`; write the
       answer into this plan
-- [ ] keep the recorded lines as fixtures (no meeting content: a synthetic
-      transcript), with paths and the account replaced, in Task 2
+- [x] keep the recorded lines as fixtures (no meeting content: a synthetic
+      transcript), with paths and the account replaced, in Task 2 (inline in
+      `tests/codex_app_server.rs`, trimmed to the fields that matter)
 
 Results (2026-11-23, codex-cli 0.171.0, scratch run, not in the repository):
 `app-server` has no `--ignore-user-config`. With a separate `CODEX_HOME`
@@ -190,25 +193,25 @@ process with 0. The stream also carries `mcpServer/startupStatus/updated`,
 - Create: `crates/recog-copilot/src/codex/mod.rs`, `app_server.rs`
 - Create: `crates/recog-copilot/tests/codex_app_server.rs`
 
-- [ ] write failing tests against a scripted fake server (a shell or Rust stub
+- [x] write failing tests against a scripted fake server (a shell or Rust stub
       replaying the fixtures): handshake order, request/response matching,
       notification parsing, error with `codexErrorInfo`, EOF as exit
-- [ ] implement the client
-- [ ] tests for malformed lines and an early child exit
-- [ ] run `cargo test -p recog-copilot` - must pass before task 3
+- [x] implement the client
+- [x] tests for malformed lines and an early child exit
+- [x] run `cargo test -p recog-copilot` - must pass before task 3
 
 ### Task 3: Harness state machine
 
 **Files:**
 - Create: `crates/recog-copilot/src/codex/harness.rs`
 
-- [ ] failing tests, one per rule of D4: idle event → turn; user message during
+- [x] failing tests, one per rule of D4: idle event → turn; user message during
       a turn → steer; ticks during a turn → only the latest after completion;
       `meeting_ended` → exit after its turn; `usageLimitExceeded` /
       `unauthorized` / no login → blocked with reason; `contextWindowExceeded`
       → new thread
-- [ ] implement the pure state machine (no I/O)
-- [ ] run tests - must pass before task 4
+- [x] implement the pure state machine (no I/O)
+- [x] run tests - must pass before task 4
 
 ### Task 4: Events from the channel
 
@@ -216,11 +219,11 @@ process with 0. The stream also carries `mcpServer/startupStatus/updated`,
 - Create: `crates/recog-copilot/src/codex/events.rs`
 - Modify: `crates/recog-copilot/Cargo.toml`
 
-- [ ] failing test: an in-process channel MCP server delivers a queued bridge
+- [x] failing test: an in-process channel MCP server delivers a queued bridge
       event through `await_copilot_event` to the client loop; a timeout yields
       nothing; a lost server is reported and retried
-- [ ] implement the loop with rmcp's streamable-HTTP client
-- [ ] run tests - must pass before task 5
+- [x] implement the loop with rmcp's streamable-HTTP client
+- [x] run tests - must pass before task 5
 
 ### Task 5: `recog-copilot-codex` binary and instructions
 
@@ -229,11 +232,11 @@ process with 0. The stream also carries `mcpServer/startupStatus/updated`,
   `crates/recog-copilot/src/codex/instructions.rs`
 - Modify: `crates/recog-install` (programs copied into `bin/`)
 
-- [ ] failing tests: instructions built from the playbook and agent files with
+- [x] failing tests: instructions built from the playbook and agent files with
       the user-turn sentence; status line format; settings read once
-- [ ] wire client, events and state machine; write the status line
-- [ ] `cargo setup` installs the binary like the other Copilot programs
-- [ ] run tests - must pass before task 6
+- [x] wire client, events and state machine; write the status line
+- [x] `cargo setup` installs the binary like the other Copilot programs
+- [x] run tests - must pass before task 6
 
 ### Task 6: Copilot settings accept Codex
 
@@ -242,11 +245,11 @@ process with 0. The stream also carries `mcpServer/startupStatus/updated`,
 - Modify: `crates/recog-copilot/src/ai_settings.rs`
 - Modify: `crates/recog-web/static/ai-settings.js`, `tests/ai_settings_ui.test.cjs`
 
-- [ ] failing tests: `copilot` allows `["claude", "codex"]`, default order
+- [x] failing tests: `copilot` allows `["claude", "codex"]`, default order
       `["claude", "codex"]`, Codex model and effort accepted; a saved single
       provider stays single
-- [ ] implement; the UI shows the provider choice and fallback for Copilot
-- [ ] run tests - must pass before task 7
+- [x] implement; the UI shows the provider choice and fallback for Copilot
+- [x] run tests - must pass before task 7
 
 ### Task 7: Supervisor starts the chosen harness
 
@@ -254,39 +257,55 @@ process with 0. The stream also carries `mcpServer/startupStatus/updated`,
 - Modify: `crates/recog-copilot/src/supervisor/tmux.rs`
 - Modify: `crates/recog-install/src/readiness.rs`
 
-- [ ] failing tests: the first provider of the order whose CLI is found picks
+- [x] failing tests: the first provider of the order whose CLI is found picks
       the command; Codex builds `recog-copilot-codex --repo-root … --mcp-url …
       --meeting-id …`; Claude's command unchanged
-- [ ] implement; readiness says Copilot needs tmux and Claude Code or Codex
-- [ ] run tests - must pass before task 8
+- [x] implement; readiness says Copilot needs tmux and Claude Code or Codex
+- [x] run tests - must pass before task 8
 
 ### Task 8: Screen classifier knows the harness
 
 **Files:**
 - Modify: `crates/recog-copilot/src/supervisor/screen.rs`
 
-- [ ] failing fixture tests: each status line maps to its state; a Claude
+- [x] failing fixture tests: each status line maps to its state; a Claude
       screen is classified as before
-- [ ] implement the rule ahead of Claude's markers
-- [ ] run tests - must pass before task 9
+- [x] implement the rule ahead of Claude's markers
+- [x] run tests - must pass before task 9
 
 ### Task 9: Verify acceptance criteria
 
-- [ ] with `claude` off `PATH`, a manual session from the web UI starts the
-      Codex harness, answers a chat message and reports 🟢/🟡
-- [ ] with both installed, Copilot still starts Claude Code
-- [ ] `./scripts/check.sh`; the quality gate on Linux shows no new CRAP,
+- [ ] ⚠️ with `claude` off `PATH`, a manual session from the web UI starts the
+      Codex harness, answers a chat message and reports 🟢/🟡 (not run: it
+      needs the live services reinstalled; see Post-Completion)
+- [x] ➕ instead, `real_codex_when_the_user_asks_then_the_reply_reaches_the_bridge`
+      (ignored test) against a real `codex app-server` with the playbook: the
+      question came back to the bridge as `copilot_channel_reply` "4"
+- [x] with both installed, Copilot still starts Claude Code
+- [x] `./scripts/check.sh`; the quality gate on Linux shows no new CRAP,
       erosion or duplicates
 
 ### Task 10: [Final] Update documentation
 
-- [ ] `docs/usage.md` Copilot section, README requirements, CHANGELOG
-- [ ] CLAUDE.md: the Copilot supervisor section names the Codex harness
-- [ ] move this plan to `docs/plans/completed/`
+- [x] `docs/usage.md` Copilot section, README requirements, CHANGELOG
+- [x] CLAUDE.md: the Copilot supervisor section names the Codex harness
+- [x] move this plan to `docs/plans/completed/`
+
+## Deviations
+
+- Settings (Task 6) went in before the binary was wired, as their own commit;
+  until the supervisor commit choosing Codex changed nothing.
+- `CODEX_ISOLATION` and `codex_effort` moved into recog-ai so automation and the
+  Copilot share one list of isolation switches and one effort rule.
+- The readiness "claude" row is folded into "claude or codex", which now covers
+  Copilot as well.
 
 ## Post-Completion
 
 **Manual verification:**
+- after `cargo setup` and `recog service restart`, with `claude` off the
+  service PATH (or Codex saved for Copilot): Start in the web UI, ask in the
+  Copilot chat, watch the chip go 🟢/🟡.
 - a real test call (Jitsi or a personal KTalk room) with Codex only: a typed
   question gets a reply, proactive notes follow the instructions, a spent
   subscription shows 🔴 with the reason.

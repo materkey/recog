@@ -1,5 +1,5 @@
 //! What the Codex harness does with each Copilot event and app-server event, without
-//! I/O (docs/plans/2026-11-23-codex-copilot.md, D2 and D4).
+//! I/O (docs/plans/completed/2026-11-23-codex-copilot.md, D2 and D4).
 //!
 //! One turn runs at a time. A user message steers a running turn at once (Codex adds
 //! it to the turn); a transcript tick waits for the turn, and only the latest one is

@@ -1,5 +1,5 @@
 //! `recog-copilot-codex`: the Copilot on Codex, run by the supervisor in the Copilot's
-//! tmux session in place of Claude Code (docs/plans/2026-11-23-codex-copilot.md). The
+//! tmux session in place of Claude Code (docs/plans/completed/2026-11-23-codex-copilot.md). The
 //! checkout is `--repo-root`, else the one whose `bin/` holds the binary, else the
 //! working directory.
 #![forbid(unsafe_code)]
