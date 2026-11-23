@@ -64,18 +64,20 @@ pub fn prepare(source: &Path, dest: &Path, extension: bool) -> io::Result<()> {
     if extension {
         copy_tree(&source.join("browser-extension/dist"), &dest.join("browser-extension/dist"))?;
     }
-    if source.join("recog-homebrew").is_file() {
-        copy_tree(&source.join("recog-homebrew"), &dest.join("recog-homebrew"))?;
-    }
-    if source.join(PACKAGE_MARKER).is_file() {
-        copy_tree(&source.join(PACKAGE_MARKER), &dest.join(PACKAGE_MARKER))?;
-    } else if let Err(e) = fs::remove_file(dest.join(PACKAGE_MARKER))
-        && e.kind() != io::ErrorKind::NotFound
-    {
-        return Err(e);
+    for marker in ["recog-homebrew", PACKAGE_MARKER] {
+        mirror(&source.join(marker), &dest.join(marker))?;
     }
     copy_tree(&source.join("recog-release"), &dest.join("recog-release"))?;
     Ok(())
+}
+
+/// A marker of how the release was installed follows the release installed
+/// last: copied when it has one, removed when it has none.
+fn mirror(source: &Path, dest: &Path) -> io::Result<()> {
+    if source.is_file() {
+        return copy_tree(source, dest);
+    }
+    fs::remove_file(dest).or_else(|e| if e.kind() == io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
 }
 
 /// Written by the Linux packages (`deploy/linux/packages`): the package
@@ -126,6 +128,20 @@ pub fn configure_extension(root: &Path, jitsi: &[String], matrix: &[String]) -> 
 #[cfg(test)]
 mod services_release_tests {
     use super::*;
+
+    #[test]
+    fn marker_when_the_installed_release_has_it_or_not_then_the_runtime_follows() {
+        let release = tempfile::tempdir().unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let (source, dest) = (release.path().join("recog-homebrew"), runtime.path().join("recog-homebrew"));
+        fs::write(&source, "brew\n").unwrap();
+        mirror(&source, &dest).unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "brew\n");
+        fs::remove_file(&source).unwrap();
+        mirror(&source, &dest).unwrap();
+        assert!(!dest.exists());
+        mirror(&source, &dest).unwrap();
+    }
 
     #[test]
     fn release_root_when_its_services_have_started_then_their_version_is_recorded_apart_from_its_files() {

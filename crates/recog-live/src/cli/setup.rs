@@ -431,26 +431,36 @@ pub(super) fn archive_setup(
     }
     guard(root, config, env, args.iter().any(|a| a == "--force"))?;
     recog_install::distribution::prepare(package, root, !args.iter().any(|a| a == "--no-extension"))?;
-    finish(root, config, env, args, true)?;
-    if !args.iter().any(|a| a == "--no-services") {
-        watch_package_upgrades(&manager()?)?;
-        recog_install::distribution::record_services_release(root)?;
-    }
-    Ok(())
+    finish(root, config, env, args, true).and_then(|()| started(root, args))
 }
 
-/// A Linux package installs `recog-upgrade.path` for every user; it reruns
-/// this setup after an upgrade. The service is only enabled, for the check at
-/// login: starting it here would wait on itself when it is what runs setup.
-fn watch_package_upgrades(manager: &Manager) -> Result<()> {
+fn started(root: &Path, args: &[String]) -> Result<()> {
+    let backend = manager()?.backend;
+    let mut systemctl = |a: &[&str]| run(Command::new("systemctl").args(a));
+    keep_up_with_package(root, args, backend, Path::new("/usr/lib/systemd/user"), &mut systemctl)
+}
+
+/// Once setup has started a release's services: where a Linux package
+/// installed `recog-upgrade.path` (in `system_units`), enable it for this
+/// user, then record the release the services run, which the watcher compares
+/// with the package. The service is only enabled, for the check at login:
+/// starting it here would wait on itself when it is what runs setup.
+fn keep_up_with_package(
+    root: &Path,
+    args: &[String],
+    backend: recog_install::units::Backend,
+    system_units: &Path,
+    systemctl: &mut dyn FnMut(&[&str]) -> Result<()>,
+) -> Result<()> {
     use recog_install::services::{UPGRADE_SERVICE, UPGRADE_WATCH};
-    if manager.backend != recog_install::units::Backend::Systemd
-        || !Path::new("/usr/lib/systemd/user").join(UPGRADE_WATCH).is_file()
-    {
+    if args.iter().any(|a| a == "--no-services") {
         return Ok(());
     }
-    run(Command::new("systemctl").args(["--user", "enable", UPGRADE_SERVICE]))?;
-    run(Command::new("systemctl").args(["--user", "enable", "--now", UPGRADE_WATCH]))
+    if backend == recog_install::units::Backend::Systemd && system_units.join(UPGRADE_WATCH).is_file() {
+        systemctl(&["--user", "enable", UPGRADE_SERVICE])?;
+        systemctl(&["--user", "enable", "--now", UPGRADE_WATCH])?;
+    }
+    Ok(recog_install::distribution::record_services_release(root)?)
 }
 
 pub(super) fn update(root: &Path, config: &InstallConfig, env: &Environ, args: &[String]) -> Result<()> {
@@ -513,6 +523,50 @@ fn package_update(manager: &str) -> String {
 #[cfg(test)]
 mod package_tests {
     use super::*;
+    use recog_install::distribution::SERVICES_RELEASE;
+    use recog_install::services::UPGRADE_WATCH;
+    use recog_install::units::Backend;
+
+    /// The systemctl calls and the recorded release after setup has started the services.
+    fn after_start(args: &[&str], backend: Backend, watcher: bool) -> (Vec<String>, Option<String>) {
+        let root = tempfile::tempdir().unwrap();
+        let units = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("recog-release"), "v1.2.3\n").unwrap();
+        if watcher {
+            fs::write(units.path().join(UPGRADE_WATCH), "").unwrap();
+        }
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let mut calls = Vec::new();
+        let mut systemctl = |a: &[&str]| {
+            calls.push(a.join(" "));
+            Ok(())
+        };
+        keep_up_with_package(root.path(), &args, backend, units.path(), &mut systemctl).unwrap();
+        (calls, fs::read_to_string(root.path().join(SERVICES_RELEASE)).ok())
+    }
+
+    #[test]
+    fn linux_package_when_its_services_have_started_then_the_upgrade_watcher_is_enabled_and_the_release_recorded() {
+        let (calls, recorded) = after_start(&[], Backend::Systemd, true);
+        assert_eq!(calls, ["--user enable recog-upgrade.service", "--user enable --now recog-upgrade.path"]);
+        assert_eq!(recorded.as_deref(), Some("v1.2.3\n"));
+    }
+
+    #[test]
+    fn archive_or_mac_install_when_its_services_have_started_then_only_the_release_is_recorded() {
+        for (backend, watcher) in [(Backend::Systemd, false), (Backend::Launchd, true)] {
+            let (calls, recorded) = after_start(&[], backend, watcher);
+            assert!(calls.is_empty());
+            assert_eq!(recorded.as_deref(), Some("v1.2.3\n"));
+        }
+    }
+
+    #[test]
+    fn setup_without_services_when_finished_then_nothing_is_enabled_or_recorded() {
+        let (calls, recorded) = after_start(&["--no-services"], Backend::Systemd, true);
+        assert!(calls.is_empty());
+        assert_eq!(recorded, None);
+    }
 
     #[test]
     fn package_install_when_updated_then_the_package_manager_command_is_named() {

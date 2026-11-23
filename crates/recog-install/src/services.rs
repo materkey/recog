@@ -145,12 +145,11 @@ impl Manager {
     }
     /// The Linux packages ship `recog-upgrade.path`, which `recog setup`
     /// enables; it refreshes the services it would otherwise bring back.
-    pub fn forget_upgrades(&self) -> io::Result<()> {
+    /// Best effort, as `launchctl unload` in `stop`: an archive has no such unit.
+    pub fn forget_upgrades(&self) {
         if self.backend == Backend::Systemd {
-            // Missing on an archive install, where systemctl just reports it.
-            self.systemctl(&["disable", "--now", UPGRADE_WATCH, UPGRADE_SERVICE])?;
+            let _ = self.systemctl(&["disable", "--now", UPGRADE_WATCH, UPGRADE_SERVICE]);
         }
-        Ok(())
     }
     pub fn reap_copilot(&self) -> io::Result<()> {
         if self.backend == Backend::Systemd {
