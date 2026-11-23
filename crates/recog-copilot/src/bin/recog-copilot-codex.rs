@@ -4,7 +4,7 @@
 //! working directory.
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use recog_ai::provider::{CliEnv, resolve_cli};
@@ -52,31 +52,40 @@ fn main() -> ExitCode {
 }
 
 fn run(repo_root: Option<PathBuf>) -> Result<(), String> {
-    let repo_root = cli::repo_root(repo_root)?;
-    let settings = config::load(&repo_root, Env::from_process())?;
-    let task = AiSettingsFile::new(&settings.data_dir, settings.legacy).resolve()?;
-    let home = std::env::var_os("HOME").map(PathBuf::from).ok_or("HOME is not set")?;
-    let user_home = std::env::var_os("CODEX_HOME").map_or_else(|| home.join(".codex"), PathBuf::from);
-    let base = settings.data_dir.join("copilot");
-    let codex_home = base.join("codex-home");
-    let cwd = base.join("codex-cwd");
-    let made = |e: std::io::Error| format!("{}: {e}", base.display());
-    prepare_home(&codex_home, &user_home).map_err(made)?;
-    std::fs::create_dir_all(&cwd).map_err(made)?;
-    let logs = settings.data_dir.join("logs");
-    let options = Options {
-        codex: resolve_cli("codex", &CliEnv::from_process()).map_err(|e| e.to_string())?,
-        codex_home,
-        cwd,
-        mcp_url: settings.mcp_url,
-        instructions: developer_instructions(&repo_root)?,
-        model: task.codex_model,
-        reasoning_effort: task.reasoning_effort,
-        stderr: std::fs::create_dir_all(&logs).ok().map(|()| logs.join("copilot-codex.stderr.log")),
-    };
+    let options = options(&cli::repo_root(repo_root)?)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("cannot start the runtime: {e}"))?;
     runtime.block_on(session::run(&options, &mut Pane::new(std::io::stdout())))
+}
+
+/// The session's options from the installation: its settings, the Copilot's Codex
+/// home and working directory under the data directory, and the playbook.
+fn options(repo_root: &Path) -> Result<Options, String> {
+    let settings = config::load(repo_root, Env::from_process())?;
+    let task = AiSettingsFile::new(&settings.data_dir, settings.legacy).resolve()?;
+    let (codex_home, cwd) = directories(&settings.data_dir.join("copilot"))?;
+    let logs = settings.data_dir.join("logs");
+    Ok(Options {
+        codex: resolve_cli("codex", &CliEnv::from_process()).map_err(|e| e.to_string())?,
+        codex_home,
+        cwd,
+        mcp_url: settings.mcp_url,
+        instructions: developer_instructions(repo_root)?,
+        model: task.codex_model,
+        reasoning_effort: task.reasoning_effort,
+        stderr: std::fs::create_dir_all(&logs).ok().map(|()| logs.join("copilot-codex.stderr.log")),
+    })
+}
+
+/// `<base>/codex-home`, its login linked to the user's Codex home, and `<base>/codex-cwd`.
+fn directories(base: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from).ok_or("HOME is not set")?;
+    let user_home = std::env::var_os("CODEX_HOME").map_or_else(|| home.join(".codex"), PathBuf::from);
+    let (codex_home, cwd) = (base.join("codex-home"), base.join("codex-cwd"));
+    let made = |e: std::io::Error| format!("{}: {e}", base.display());
+    prepare_home(&codex_home, &user_home).map_err(made)?;
+    std::fs::create_dir_all(&cwd).map_err(made)?;
+    Ok((codex_home, cwd))
 }

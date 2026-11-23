@@ -11,10 +11,10 @@ use channel_support::{link_in, mcp_endpoint, object};
 use recog_copilot::codex::session::{Options, Pane, prepare_home, run, thread_params};
 
 /// Answers initialize, account/read and thread/start, completes every turn at once with
-/// one message, and logs every line it reads to $STUB_LOG.
+/// one message, and logs every line it reads to `stub.log` beside itself.
 const STUB: &str = r#"#!/bin/sh
 while IFS= read -r line; do
-  printf '%s\n' "$line" >> "$STUB_LOG"
+  printf '%s\n' "$line" >> "$(dirname "$0")/stub.log"
   id=$(printf '%s' "$line" | sed -n 's/^{"id":\([0-9]*\),.*/\1/p')
   case "$line" in
     *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id";;
@@ -55,8 +55,6 @@ async fn question_then_meeting_end_when_run_then_two_turns_on_one_thread_and_a_c
     link.events.push(object(r#"{"type": "copilot_user_message", "text": "Что решили?", "request_id": "r1"}"#));
     link.events.push(object(r#"{"type": "meeting_ended", "meeting_id": "m1"}"#));
     let log = dir.path().join("stub.log");
-    // SAFETY of the test: the stub reads its log path from the environment it inherits.
-    unsafe { std::env::set_var("STUB_LOG", &log) };
     let options = options(dir.path(), format!("http://{address}/mcp"));
     let mut pane = Pane::new(Vec::new());
 
@@ -166,4 +164,74 @@ async fn real_codex_when_the_user_asks_then_the_reply_reaches_the_bridge() {
     eprintln!("reply frame: {}\npane:\n{shown}", channel_support::dumps(&reply));
     assert!(reply.get("text").is_some_and(|text| text.py_str().contains('4')), "{reply:?}");
     assert_eq!(result, Ok(()), "{shown}");
+}
+
+/// A checkout with only the playbook files the harness reads.
+fn checkout(dir: &Path) -> std::path::PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo = dir.join("repo");
+    for file in [".claude/agents/copilot-session.md", ".claude/skills/copilot-mode/SKILL.md"] {
+        std::fs::create_dir_all(repo.join(file).parent().unwrap()).unwrap();
+        std::fs::copy(source.join(file), repo.join(file)).unwrap();
+    }
+    repo
+}
+
+#[tokio::test]
+async fn installed_program_when_started_then_its_own_codex_home_and_a_session_to_the_meetings_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let link = link_in(&dir);
+    let (_server, address) = mcp_endpoint(link.clone()).await;
+    link.events.push(object(r#"{"type": "copilot_user_message", "text": "Вопрос", "request_id": "r1"}"#));
+    link.events.push(object(r#"{"type": "meeting_ended", "meeting_id": "m1"}"#));
+    let stub = options(dir.path(), String::new()).codex;
+    let home = dir.path().join("home");
+    let data = dir.path().join("data");
+    let log = dir.path().join("stub.log");
+    let path = format!("{}:{}", stub.parent().unwrap().display(), std::env::var("PATH").unwrap());
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_recog-copilot-codex"))
+            .arg("--repo-root")
+            .arg(checkout(dir.path()))
+            .env("PATH", path)
+            .env("HOME", &home)
+            .env_remove("CODEX_HOME")
+            .env("RECOG_DATA_DIR", &data)
+            .env("RECOG_CONFIG_FILE", dir.path().join("missing-config.toml"))
+            .env("RECOG_COPILOT_MCP_URL", format!("http://{address}/mcp"))
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let sent = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(sent.matches(r#""method":"turn/start""#).count(), 2, "{sent}");
+    assert!(sent.contains("You run under Codex"), "{sent}");
+    let login = data.join("copilot/codex-home/auth.json");
+    assert_eq!(std::fs::read_link(login).unwrap(), home.join(".codex/auth.json"));
+    assert!(data.join("copilot/codex-cwd").is_dir());
+    assert!(data.join("logs/copilot-codex.stderr.log").exists());
+}
+
+#[tokio::test]
+async fn codex_gone_after_the_thread_when_run_then_the_session_ends_with_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_server, address) = mcp_endpoint(link_in(&dir)).await;
+    let mut options = options(dir.path(), format!("http://{address}/mcp"));
+    let quitting = STUB.replace(
+        r#"printf '{"id":%s,"result":{"thread":{"id":"th1"}}}\n' "$id";;"#,
+        r#"printf '{"id":%s,"result":{"thread":{"id":"th1"}}}\n' "$id"; exit 0;;"#,
+    );
+    assert_ne!(quitting, STUB);
+    std::fs::write(&options.codex, quitting).unwrap();
+    options.stderr = Some(dir.path().join("stderr.log"));
+
+    let result = tokio::time::timeout(Duration::from_secs(20), run(&options, &mut Pane::new(Vec::new()))).await;
+
+    assert_eq!(result.unwrap(), Err("codex app-server exited".to_owned()));
 }

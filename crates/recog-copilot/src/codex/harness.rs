@@ -126,26 +126,34 @@ impl Harness {
         self.busy = false;
         let failure = error.or_else(|| self.failure.take());
         self.failure = None;
-        let mut commands = Vec::new();
         self.status = Status::Online;
-        if status == TurnStatus::Failed
-            && let Some(info) = failure.and_then(|failure| failure.info)
-        {
-            match info.as_str() {
-                "usageLimitExceeded" => self.status = Status::Blocked("Codex usage limit reached".into()),
-                "rateLimitExceeded" => self.status = Status::Blocked("Codex rate limit reached".into()),
-                "unauthorized" => self.status = Status::Blocked(LOGIN.into()),
-                "contextWindowExceeded" => commands.push(Command::NewThread),
-                _ => {}
-            }
-        }
-        if self.ending {
-            commands.push(Command::Exit);
-        } else if let Some(tick) = self.held_tick.take()
-            && !matches!(self.status, Status::Blocked(_))
-        {
-            commands.extend(self.start(tick));
-        }
+        let info = failure.and_then(|failure| failure.info).filter(|_| status == TurnStatus::Failed);
+        let mut commands: Vec<Command> = info.and_then(|info| self.failed(&info)).into_iter().collect();
+        commands.extend(self.after_turn());
         commands
+    }
+
+    /// What a failed turn's cause does: blocks the harness, or asks for a new thread.
+    fn failed(&mut self, info: &str) -> Option<Command> {
+        let reason = match info {
+            "usageLimitExceeded" => "Codex usage limit reached",
+            "rateLimitExceeded" => "Codex rate limit reached",
+            "unauthorized" => LOGIN,
+            "contextWindowExceeded" => return Some(Command::NewThread),
+            _ => return None,
+        };
+        self.status = Status::Blocked(reason.into());
+        None
+    }
+
+    /// After a turn: exit once the meeting has ended, else the held tick unless blocked.
+    fn after_turn(&mut self) -> Vec<Command> {
+        if self.ending {
+            return vec![Command::Exit];
+        }
+        match self.held_tick.take() {
+            Some(tick) if !matches!(self.status, Status::Blocked(_)) => self.start(tick),
+            _ => Vec::new(),
+        }
     }
 }

@@ -208,27 +208,40 @@ fn text_at(value: &Value, path: &[&str]) -> Result<String, Error> {
 
 /// The event a notification carries, if the harness acts on it.
 fn event(method: &str, params: &Value) -> Option<Event> {
-    let turn_id = || params.pointer("/turn/id").and_then(Value::as_str).unwrap_or_default().to_owned();
     match method {
-        "turn/started" => Some(Event::TurnStarted { turn_id: turn_id() }),
-        "turn/completed" => Some(Event::TurnCompleted {
-            turn_id: turn_id(),
-            status: match params.pointer("/turn/status").and_then(Value::as_str) {
-                Some("completed") => TurnStatus::Completed,
-                Some("interrupted") => TurnStatus::Interrupted,
-                _ => TurnStatus::Failed,
-            },
-            error: params.pointer("/turn/error").and_then(failure),
-        }),
-        "item/completed" if params.pointer("/item/type").and_then(Value::as_str) == Some("agentMessage") => {
-            Some(Event::AgentMessage { text: params.pointer("/item/text")?.as_str()?.to_owned() })
-        }
+        "turn/started" => Some(Event::TurnStarted { turn_id: text(params, "/turn/id") }),
+        "turn/completed" => Some(turn_completed(params)),
+        "item/completed" => agent_message(params),
         "error" => Some(Event::Error {
             failure: params.get("error").and_then(failure)?,
             will_retry: params.get("willRetry").and_then(Value::as_bool).unwrap_or(false),
         }),
         _ => None,
     }
+}
+
+fn text(params: &Value, pointer: &str) -> String {
+    params.pointer(pointer).and_then(Value::as_str).unwrap_or_default().to_owned()
+}
+
+fn turn_completed(params: &Value) -> Event {
+    let status = match params.pointer("/turn/status").and_then(Value::as_str) {
+        Some("completed") => TurnStatus::Completed,
+        Some("interrupted") => TurnStatus::Interrupted,
+        _ => TurnStatus::Failed,
+    };
+    let error = params.pointer("/turn/error").and_then(failure);
+    Event::TurnCompleted { turn_id: text(params, "/turn/id"), status, error }
+}
+
+/// A finished agent message; other finished items (tool calls, the user's input) are
+/// not events.
+fn agent_message(params: &Value) -> Option<Event> {
+    let item = params.get("item")?;
+    if item.get("type").and_then(Value::as_str) != Some("agentMessage") {
+        return None;
+    }
+    Some(Event::AgentMessage { text: item.get("text")?.as_str()?.to_owned() })
 }
 
 fn failure(error: &Value) -> Option<Failure> {

@@ -100,28 +100,52 @@ pub fn thread_params(options: &Options) -> Value {
 /// # Errors
 /// Codex that cannot start or stops, or a broken protocol.
 pub async fn run<W: Write>(options: &Options, pane: &mut Pane<W>) -> Result<(), String> {
+    let mut child = spawn(options)?;
+    let (Some(stdout), Some(stdin)) = (child.stdout.take(), child.stdin.take()) else {
+        return Err("codex app-server has no pipes".into());
+    };
+    let mut app = AppServer::new(stdout, stdin);
+    let result = serve(&mut app, options, pane).await;
+    drop(app); // closes stdin: the app-server shuts down
+    let _ = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
+    result
+}
+
+/// `codex app-server` with the isolation switches, in its own `CODEX_HOME`.
+fn spawn(options: &Options) -> Result<tokio::process::Child, String> {
     let mut command = tokio::process::Command::new(&options.codex);
     command.arg("app-server");
     for setting in CODEX_ISOLATION {
         command.args(["-c", setting]);
     }
-    let stderr = match &options.stderr {
-        Some(path) => std::fs::File::create(path).map_or_else(|_| Stdio::null(), Stdio::from),
-        None => Stdio::null(),
-    };
-    let mut child = command
+    let stderr = options.stderr.as_ref().and_then(|path| std::fs::File::create(path).ok());
+    command
         .env("CODEX_HOME", &options.codex_home)
         .current_dir(&options.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(stderr)
+        .stderr(stderr.map_or_else(Stdio::null, Stdio::from))
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("cannot start {}: {e}", options.codex.display()))?;
-    let (Some(stdout), Some(stdin)) = (child.stdout.take(), child.stdin.take()) else {
-        return Err("codex app-server has no pipes".into());
-    };
-    let mut app = AppServer::new(stdout, stdin);
+        .map_err(|e| format!("cannot start {}: {e}", options.codex.display()))
+}
+
+/// Stops the channel poller when the session ends, however it ends.
+struct Poller(tokio::task::JoinHandle<()>);
+
+impl Drop for Poller {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// The thread, fed by the channel's events, until the harness exits.
+async fn serve<R, T, W>(app: &mut AppServer<R, T>, options: &Options, pane: &mut Pane<W>) -> Result<(), String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: tokio::io::AsyncWrite + Unpin,
+    W: Write,
+{
     let fail = |e: super::app_server::Error| e.to_string();
     app.initialize().await.map_err(fail)?;
     let logged_in = app.logged_in().await.map_err(fail)?;
@@ -130,34 +154,33 @@ pub async fn run<W: Write>(options: &Options, pane: &mut Pane<W>) -> Result<(), 
     let mut harness = Harness::new();
     harness.ready(logged_in);
     pane.status(harness.status());
-
     let (events, mut received) = mpsc::unbounded_channel();
-    let poller = tokio::spawn(poll(options.mcp_url.clone(), events));
-    let result = loop {
+    let _poller = Poller(tokio::spawn(poll(options.mcp_url.clone(), events)));
+    loop {
         let commands = tokio::select! {
-            event = received.recv() => match event {
-                Some(event) => harness.on_copilot(Kind::of(&event.event_type), event.text),
-                None => break Err("the channel poller stopped".to_owned()),
-            },
-            event = app.next_event() => match event {
-                Ok(Some(event)) => {
-                    show(pane, &event);
-                    harness.on_app(&event)
-                }
-                Ok(None) => break Err("codex app-server exited".to_owned()),
-                Err(e) => break Err(e.to_string()),
-            },
+            event = received.recv() => from_channel(&mut harness, event)?,
+            event = app.next_event() => from_codex(&mut harness, pane, event)?,
         };
-        match execute(&mut app, &mut thread, &params, commands, pane).await {
-            Ok(true) => break Ok(()),
-            Ok(false) => pane.status(harness.status()),
-            Err(e) => break Err(e),
+        if execute(app, &mut thread, &params, commands, pane).await? {
+            return Ok(());
         }
-    };
-    poller.abort();
-    drop(app); // closes stdin: the app-server shuts down
-    let _ = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
-    result
+        pane.status(harness.status());
+    }
+}
+
+fn from_channel(harness: &mut Harness, event: Option<CopilotEvent>) -> Result<Vec<Command>, String> {
+    let event = event.ok_or("the channel poller stopped")?;
+    Ok(harness.on_copilot(Kind::of(&event.event_type), event.text))
+}
+
+fn from_codex<W: Write>(
+    harness: &mut Harness,
+    pane: &mut Pane<W>,
+    event: Result<Option<Event>, super::app_server::Error>,
+) -> Result<Vec<Command>, String> {
+    let event = event.map_err(|e| e.to_string())?.ok_or("codex app-server exited")?;
+    show(pane, &event);
+    Ok(harness.on_app(&event))
 }
 
 /// Runs the harness's commands; `true` once it says to exit.

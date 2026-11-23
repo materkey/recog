@@ -194,3 +194,29 @@ async fn garbled_line_when_read_then_protocol_error() {
 
     assert!(matches!(client.next_event().await, Err(Error::Protocol(_))));
 }
+
+#[tokio::test]
+async fn other_items_and_unknown_notifications_when_read_then_skipped() {
+    let (mut client, mut server) = pair();
+    let script = tokio::spawn(async move {
+        let tool = json!({"type": "mcpToolCall", "server": "copilot", "tool": "get_recent_transcript"});
+        server.send(json!({"method": "item/completed", "params": {"item": tool}})).await;
+        server.send(json!({"method": "thread/tokenUsage/updated", "params": {}})).await;
+        server
+            .send(json!({"method": "turn/completed", "params": {"turn": {"id": TURN, "status": "interrupted"}}}))
+            .await;
+    });
+
+    assert_eq!(
+        client.next_event().await.unwrap(),
+        Some(Event::TurnCompleted { turn_id: TURN.into(), status: TurnStatus::Interrupted, error: None })
+    );
+    script.await.unwrap();
+}
+
+#[test]
+fn errors_when_shown_then_say_what_failed() {
+    assert_eq!(Error::Closed.to_string(), "codex app-server closed");
+    assert_eq!(Error::Protocol("x".into()).to_string(), "unreadable app-server line: x");
+    assert_eq!(Error::Rpc { code: -1, message: "no".into() }.to_string(), "app-server error -1: no");
+}

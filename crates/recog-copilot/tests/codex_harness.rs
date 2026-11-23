@@ -128,3 +128,11 @@ fn event_types_when_classified_then_kinds() {
     assert_eq!(Kind::of("meeting_ended"), Kind::MeetingEnded);
     assert_eq!(Kind::of("copilot_policy_updated"), Kind::Other);
 }
+
+#[test]
+fn rate_limit_when_a_turn_fails_then_blocked_naming_it() {
+    let mut harness = ready();
+    harness.on_copilot(Kind::UserMessage, "вопрос".into());
+    harness.on_app(&completed(TurnStatus::Failed, Some("rateLimitExceeded")));
+    assert!(matches!(harness.status(), Status::Blocked(reason) if reason.contains("rate limit")));
+}
