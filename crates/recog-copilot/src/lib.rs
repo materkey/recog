@@ -8,6 +8,7 @@
 pub mod ai_settings;
 pub mod channel;
 pub mod cli;
+pub mod codex;
 pub mod config;
 pub mod log;
 pub mod py;
