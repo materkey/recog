@@ -15,7 +15,9 @@ tar -xzf "$out/recog-$tag-linux-x86_64.tar.gz"
 [[ $(cat recog/recog-release) == "$tag" ]]
 cp "$root/deploy/linux/packages/"* .
 export RECOG_VERSION=${tag#v}
-./nfpm package -p deb -t "$out/recog-amd64.deb"
-./nfpm package -p archlinux -t "$out/recog-x86_64.pkg.tar.zst"
+# Versioned names: pacman keeps downloads in its cache by file name.
+./nfpm package -p deb -t "$out/"
+./nfpm package -p archlinux -t "$out/"
 cd "$out"
-sha256sum recog-amd64.deb recog-x86_64.pkg.tar.zst > linux-packages.sha256
+sha256sum recog_*_amd64.deb recog-*-x86_64.pkg.tar.zst > linux-packages.sha256
+python3 "$root/scripts/linux_repo.py" index "$out"

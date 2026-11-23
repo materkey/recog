@@ -11,6 +11,11 @@ reasoning.
 
 ### Action required
 
+- Linux: Recog now comes from apt and pacman repositories kept in GitHub
+  Releases, and its packages have versioned names; from the next release the
+  fixed names `recog-amd64.deb` and `recog-x86_64.pkg.tar.zst` are no longer
+  published. Connect the repository once as the README shows, and
+  `sudo apt upgrade` or `sudo pacman -Syu` will update Recog with the system.
 - Linux packages: after installing this version, open **Set up Recog** once
   more. From then on, installing a newer package moves your services to it by
   themselves: at once if you are logged in, otherwise at your next login, and

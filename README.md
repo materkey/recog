@@ -108,20 +108,49 @@ recog setup
 
 ### Linux x86-64
 
-Скачайте пакет для своей системы и выполните команду в папке загрузки.
+Ubuntu 24.04 и новее, Debian 13 и новее, Arch Linux и Manjaro получают Recog из
+репозитория пакетов, который лежит в
+[GitHub Releases](https://github.com/materkey/recog/releases/latest). Подключите
+его один раз, дальше Recog обновляется вместе с системой.
 
-| Система | Пакет | Установка |
-| --- | --- | --- |
-| Ubuntu 24.04+, Debian 13+ | [Скачать .deb](https://github.com/materkey/recog/releases/latest/download/recog-amd64.deb) | `sudo apt install ./recog-amd64.deb` |
-| Arch Linux, Manjaro | [Скачать пакет pacman](https://github.com/materkey/recog/releases/latest/download/recog-x86_64.pkg.tar.zst) | `sudo pacman -U ./recog-x86_64.pkg.tar.zst` |
+**Ubuntu и Debian**
+
+```bash
+sudo install -d /etc/apt/keyrings
+curl -fsSL https://recog.vkkovalev.work/recog.asc | sudo tee /etc/apt/keyrings/recog.asc >/dev/null
+printf 'Types: deb\nURIs: https://github.com/materkey/recog/releases/latest/download/\nSuites: ./\nSigned-By: /etc/apt/keyrings/recog.asc\n' |
+  sudo tee /etc/apt/sources.list.d/recog.sources >/dev/null
+sudo apt update && sudo apt install recog
+```
+
+**Arch Linux и Manjaro**
+
+```bash
+curl -fsSLo /tmp/recog.asc https://recog.vkkovalev.work/recog.asc
+sudo pacman-key --add /tmp/recog.asc
+sudo pacman-key --lsign-key 6E66571BB28E6EC3827CD813E2E87FE565091BC0
+printf '\n[recog]\nSigLevel = PackageOptional DatabaseRequired\nServer = https://github.com/materkey/recog/releases/latest/download\n' |
+  sudo tee -a /etc/pacman.conf >/dev/null
+sudo pacman -Syu recog
+```
 
 После установки откройте **Настроить Recog** в меню приложений или выполните
 `recog-setup` от своего пользователя. В конце настройки расшифровки откроются
 в браузере. Позже их открывает пункт **Recog** в меню приложений или адрес
-[127.0.0.1:9080](http://127.0.0.1:9080). Для обновления скачайте и
-установите новый пакет: службы перейдут на него сами, а во время звонка
-дождутся его конца. Перед удалением пакета выполните
-`/usr/bin/recog service uninstall` в тех профилях, где запускали настройку.
+[127.0.0.1:9080](http://127.0.0.1:9080).
+
+**Обновление.** `sudo apt update && sudo apt upgrade` или `sudo pacman -Syu`.
+Службы перейдут на новую версию сами, а во время звонка дождутся его конца.
+Пакет можно поставить и без репозитория, скачав его со страницы релиза, но
+тогда обновления придётся ставить вручную.
+
+**Удаление.** Сначала выполните `recog service uninstall` в каждом профиле, где
+запускали настройку. Затем на Ubuntu и Debian: `sudo apt remove recog` и
+удалите `/etc/apt/sources.list.d/recog.sources` и `/etc/apt/keyrings/recog.asc`.
+На Arch и Manjaro: `sudo pacman -R recog`, удалите раздел `[recog]` из
+`/etc/pacman.conf` и выполните
+`sudo pacman-key --delete 6E66571BB28E6EC3827CD813E2E87FE565091BC0`.
+Встречи и настройки в `~/.recog` остаются.
 
 Для других дистрибутивов доступен архив `linux-x86_64` в
 [GitHub Releases](https://github.com/materkey/recog/releases/latest).

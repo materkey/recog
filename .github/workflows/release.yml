@@ -48,6 +48,9 @@ jobs:
             dist/*.deb
             dist/*.pkg.tar.zst
             dist/linux-packages.sha256
+            dist/Packages
+            dist/Release
+            dist/recog.db
           if-no-files-found: error
 
   disk-image:

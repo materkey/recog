@@ -7,7 +7,8 @@ disable-model-invocation: true
 # Release Recog
 
 Publish a new version of Recog for the macOS disk image, Homebrew on macOS
-(`materkey/apps/recog`) and the standalone archives. The download button on the
+(`materkey/apps/recog`), the apt and pacman repositories and the standalone
+archives. The download button on the
 site points to `releases/latest/download/Recog-macOS-arm64.dmg`, so keep that
 asset name the same across releases.
 A checkout installation follows `main` and does not need a release.
@@ -72,7 +73,9 @@ the last place to catch a broken archive.
 
 - `gh release view vX.Y.Z --repo materkey/recog --json isDraft,assets --jq '.isDraft, (.assets[].name)'`:
   a draft containing both versioned tar archives, `Recog-macOS-arm64.dmg`,
-  `Recog-macOS-arm64.dmg.sha256`, `SHA256SUMS` and `recog.rb`.
+  `Recog-macOS-arm64.dmg.sha256`, `SHA256SUMS`, `recog.rb`, the versioned
+  `recog_X.Y.Z-1_amd64.deb` and `recog-X.Y.Z-1-x86_64.pkg.tar.zst`,
+  `linux-packages.sha256`, `Packages`, `Release` and `recog.db`.
 - Verify the disk image against its checksum. Mount it read-only and verify
   the Applications link, the Recog.app signature and the embedded release
   version before publishing.
@@ -82,6 +85,14 @@ the last place to catch a broken archive.
   Keep the private key on the trusted signing Mac. Since the installed
   application's feed follows GitHub's latest release, publishing a draft
   without the feed breaks checks in every existing Sparkle installation.
+- Sign the Linux repository on the same Mac
+  ([Linux package repositories](../../../docs/linux-packages.md)):
+  `python3 scripts/linux_repo.py sign vX.Y.Z <scratch>/linux-repo`, run the
+  `gh release upload` command it prints, then
+  `python3 scripts/linux_repo.py ready vX.Y.Z`. **Do not publish until `ready`
+  passes.** apt and pacman read the latest release, and a latest release
+  without valid `InRelease` and `recog.db.sig` stops `pacman -Syu` as a whole
+  on every Arch system that uses the repository.
 - Download `SHA256SUMS`, `recog.rb` and the archive of this machine's platform into a
   new scratch directory (`gh release download vX.Y.Z --repo materkey/recog --pattern …`).
 - `shasum -a 256 -c` the archive against `SHA256SUMS`; the `sha256` and `version` in
@@ -104,13 +115,21 @@ the tag and previously published assets intact.
     headings, **Action required** items first. Reword nothing into internals; the
     changelog is already written for users. If the range has user-visible commits and
     no changelog lines, say so in the report instead of inventing entries.
-  - an `## Update` section with `recog update`;
+  - an `## Update` section: `recog update` for Homebrew and archive
+    installations, **Recog → Проверить обновления…** in the Finder app, and
+    `sudo apt update && sudo apt upgrade` or `sudo pacman -Syu` for the Linux
+    packages;
   - `**Full Changelog**: https://github.com/materkey/recog/compare/<last-published>...vX.Y.Z`
     (the generated link compares with the previous tag, which may be an unpublished draft).
 - `gh release edit vX.Y.Z --repo materkey/recog --draft=false --latest --notes-file <file>`
 - Verify: `gh api repos/materkey/recog/releases/latest --jq .tag_name` is `vX.Y.Z`.
   Download `releases/latest/download/appcast.xml` anonymously and verify it
   against the public key and the image downloaded from its versioned enclosure.
+- `python3 scripts/linux_repo.py verify --tag vX.Y.Z` reads the repository as
+  apt and pacman do and must pass. The `Linux repository guard` run of the
+  release (`gh run list --repo materkey/recog --workflow release-guard.yml --limit 1`)
+  must be green: when it fails it has made an earlier release the latest
+  again. Then fix the signatures and `gh release edit vX.Y.Z --latest`.
 
 ### 6. Update the Homebrew formula
 
@@ -137,11 +156,12 @@ Release vX.Y.Z published.
 CI on the released commit: green
 Release workflow: completed (archives for macOS arm64 and Linux x86-64)
 Archive check: checksum, version file and --help passed on <platform>
+Linux repository: signed, verified through releases/latest/download
 Latest release: vX.Y.Z
 Homebrew formula: X.Y.Z pushed to materkey/homebrew-apps
 
 Release page: https://github.com/materkey/recog/releases/tag/vX.Y.Z
-Update: `recog update` (Homebrew and archive installations)
+Update: `recog update` (Homebrew and archive installations), apt or pacman (Linux packages)
 ```
 
 List the drafts of earlier versions that are still unpublished, if any, and leave them

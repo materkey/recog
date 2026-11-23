@@ -1,0 +1,46 @@
+name: Linux repository guard
+
+# apt and pacman read the Linux repository from the latest release. A latest
+# release without valid signatures stops pacman -Syu on every Arch system
+# that uses it, so a release published without them (by hand, past the
+# release steps) gives "latest" back to the previous release whose own
+# repository verifies, and the run fails for the owner to see.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify the repository, or restore the previous latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)
+          if [ "$latest" != "$TAG" ]; then
+            echo "$TAG is not the latest release; the repository is unchanged."
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            if python3 scripts/linux_repo.py verify --tag "$TAG"; then exit 0; fi
+            [ "$attempt" = 3 ] || sleep 30
+          done
+          while IFS=$'\t' read -r id tag; do
+            [ "$tag" != "$TAG" ] || continue
+            if python3 scripts/linux_repo.py verify --tag "$tag" \
+                --base "https://github.com/$REPO/releases/download/$tag/"; then
+              gh api -X PATCH "repos/$REPO/releases/$id" -f make_latest=true >/dev/null
+              echo "::error::$TAG has no valid Linux repository; $tag is the latest release again."
+              exit 1
+            fi
+          done < <(gh api --paginate "repos/$REPO/releases" \
+            --jq '.[] | select((.draft or .prerelease) | not) | [.id, .tag_name] | @tsv')
+          echo "::error::$TAG has no valid Linux repository, and no earlier release has one."
+          exit 1
