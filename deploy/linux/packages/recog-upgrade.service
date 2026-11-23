@@ -7,11 +7,17 @@ ConditionPathExists=%h/.local/share/recog/runtime/recog-release
 
 [Service]
 Type=oneshot
-ExecCondition=/bin/sh -c '! cmp -s /usr/lib/recog/recog-release %h/.local/share/recog/runtime/recog-release'
+# services-release is written once setup has restarted the services on the
+# copied release, so a run that fails halfway is not taken for done. Only cat:
+# Arch's base has no cmp, and a missing command would rerun setup every login.
+ExecCondition=/bin/sh -c 'test "$$(cat /usr/lib/recog/recog-release)" != "$$(cat %h/.local/share/recog/runtime/services-release 2>/dev/null)"'
 ExecStart=/usr/lib/recog/bin/recog setup --no-env
-# 75: a call is being recorded. Try again later instead of interrupting it.
-RestartForceExitStatus=75
-RestartSec=10min
+# Setup refuses during a call, and the upgrade itself can make systemd
+# re-execute this service manager under it: try again, 30 s to 10 min later.
+Restart=on-failure
+RestartSec=30s
+RestartSteps=5
+RestartMaxDelaySec=10min
 
 [Install]
 WantedBy=default.target

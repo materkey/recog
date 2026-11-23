@@ -34,32 +34,6 @@ fn manager() -> Result<Manager> {
     Ok(Manager { backend, dir: backend.unit_dir(home.as_ref()) })
 }
 
-/// Setup refused to restart the services while a call is being recorded.
-#[derive(Debug)]
-struct ConferenceActive;
-
-impl std::fmt::Display for ConferenceActive {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("A conference is active. Run this command after the call or pass --force.")
-    }
-}
-
-impl std::error::Error for ConferenceActive {}
-
-/// `EX_TEMPFAIL`: `recog-upgrade.service` of the Linux packages retries a
-/// setup refused during a call.
-const TRY_LATER: i32 = 75;
-
-pub(super) fn archive_exit_code(result: Result<()>) -> i32 {
-    match result {
-        Ok(()) => 0,
-        Err(e) => {
-            eprintln!("{e}");
-            if e.is::<ConferenceActive>() { TRY_LATER } else { 1 }
-        }
-    }
-}
-
 fn guard(root: &Path, config: &InstallConfig, env: &Environ, force: bool) -> Result<()> {
     if force || !matches!(manager()?.state("live")?, State::Running(_)) {
         return Ok(());
@@ -69,7 +43,7 @@ fn guard(root: &Path, config: &InstallConfig, env: &Environ, force: bool) -> Res
     for meeting in store.list_active_meetings()? {
         let source = meeting.as_object().and_then(|m| m.get("source")).and_then(|s| s.as_str());
         if store.is_conference_source(source) {
-            return Err(Box::new(ConferenceActive));
+            return Err("A conference is active. Run this command after the call or pass --force.".into());
         }
     }
     Ok(())
@@ -460,6 +434,7 @@ pub(super) fn archive_setup(
     finish(root, config, env, args, true)?;
     if !args.iter().any(|a| a == "--no-services") {
         watch_package_upgrades(&manager()?)?;
+        recog_install::distribution::record_services_release(root)?;
     }
     Ok(())
 }
@@ -538,13 +513,6 @@ fn package_update(manager: &str) -> String {
 #[cfg(test)]
 mod package_tests {
     use super::*;
-
-    #[test]
-    fn setup_refused_during_a_call_when_it_exits_then_the_upgrade_watcher_is_told_to_retry() {
-        assert_eq!(archive_exit_code(Err(Box::new(ConferenceActive))), TRY_LATER);
-        assert_eq!(archive_exit_code(Err("broken".into())), 1);
-        assert_eq!(archive_exit_code(Ok(())), 0);
-    }
 
     #[test]
     fn package_install_when_updated_then_the_package_manager_command_is_named() {

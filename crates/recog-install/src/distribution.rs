@@ -87,6 +87,16 @@ pub fn package_manager(root: &Path) -> Option<String> {
     fs::read_to_string(root.join(PACKAGE_MARKER)).ok().map(|s| s.trim().to_owned())
 }
 
+/// The release the services were last started with. `recog-release` changes
+/// as soon as the files are copied, before the services restart, so
+/// `recog-upgrade.service` of the Linux packages compares the package with this.
+pub const SERVICES_RELEASE: &str = "services-release";
+
+/// Record that the services now run this root's release.
+pub fn record_services_release(root: &Path) -> io::Result<()> {
+    copy_tree(&root.join("recog-release"), &root.join(SERVICES_RELEASE))
+}
+
 /// The checked-in manifest contains built-in hosts. Custom matches are scoped
 /// exactly like the checkout build, including Element's call iframe.
 pub fn configure_extension(root: &Path, jitsi: &[String], matrix: &[String]) -> io::Result<()> {
@@ -111,6 +121,23 @@ pub fn configure_extension(root: &Path, jitsi: &[String], matrix: &[String]) -> 
     serde_json::to_writer_pretty(temp.as_file(), &manifest)?;
     temp.persist(dir.join("manifest.json"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod services_release_tests {
+    use super::*;
+
+    #[test]
+    fn release_root_when_its_services_have_started_then_their_version_is_recorded_apart_from_its_files() {
+        let root = tempfile::tempdir().unwrap();
+        let recorded = || fs::read_to_string(root.path().join(SERVICES_RELEASE)).ok();
+        fs::write(root.path().join("recog-release"), "v1.2.3\n").unwrap();
+        assert_eq!(recorded(), None);
+        record_services_release(root.path()).unwrap();
+        assert_eq!(recorded().as_deref(), Some("v1.2.3\n"));
+        fs::write(root.path().join("recog-release"), "v1.2.4\n").unwrap();
+        assert_eq!(recorded().as_deref(), Some("v1.2.3\n"));
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

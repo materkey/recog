@@ -64,10 +64,14 @@ copy under `~/.local/share/recog/runtime` that `recog setup` makes. The
 package's install and upgrade scripts write the installed version to
 `/var/lib/recog/installed-release`; `recog setup` enables the user units
 `recog-upgrade.path`, which watches that file, and `recog-upgrade.service`,
-which runs `recog setup --no-env` when the package and the copy differ: after
-an upgrade, and at login for an upgrade made while the user was away. A setup
-refused during a call exits with 75 and is retried every ten minutes.
-`journalctl --user -u recog-upgrade` shows those runs.
+which runs `recog setup --no-env` when the package's release differs from
+`services-release` in the copy: after an upgrade, and at login for an upgrade
+made while the user was away. Setup writes `services-release` only after it
+has restarted the services, because it replaces the copy's `recog-release`
+before that. A failed run is retried 30 seconds to 10 minutes later: setup
+refuses while a call is being recorded, and on Arch the upgrade's pacman hook
+re-executes every user's service manager while setup is restarting the
+services. `journalctl --user -u recog-upgrade` shows those runs.
 
 ## Creating the key
 
