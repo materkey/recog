@@ -1,6 +1,6 @@
 ---
 name: release-recog
-description: Publish a new Recog release - pick the version, tag origin/main, wait for the release workflow, check the draft and sign it on the signing Mac, publish it, update the Homebrew formula. Use when the user says "release", "publish", "new version", "cut a release", "зарелизь", "выпусти релиз", "сделай релиз", or asks to make the latest main available to Homebrew and archive installations.
+description: Publish a new Recog release - pick the version, tag origin/main, wait for the release workflow, check the draft and sign it on the signing Mac, publish it, deploy the landing page, update the Homebrew formula. Use when the user says "release", "publish", "new version", "cut a release", "зарелизь", "выпусти релиз", "сделай релиз", or asks to make the latest main available to Homebrew and archive installations.
 disable-model-invocation: true
 ---
 
@@ -84,8 +84,8 @@ the last place to catch a broken archive.
   ([Signing the update feed](../../../docs/sparkle-updates.md),
   [Linux package repositories](../../../docs/linux-packages.md)). The keys are
   not on the release workstation: signing there fails with a missing Keychain
-  item. The signing Mac's host lives outside the repository: load it first
-  with `set -a; . ~/.config/recog/release.env; set +a`.
+  item. The hosts of the signing Mac and of the site live outside the
+  repository: load them first with `set -a; . ~/.config/recog/release.env; set +a`.
   From the workstation run
   `python3 scripts/sign_release.py vX.Y.Z <scratch>/signed --upload`. It
   reaches the signing Mac over ssh (host `RECOG_SIGNING_MAC`) and
@@ -134,6 +134,17 @@ the tag and previously published assets intact.
   release (`gh run list --repo materkey/recog --workflow release-guard.yml --limit 1`)
   must be green: when it fails it has made an earlier release the latest
   again. Then fix the signatures and `gh release edit vX.Y.Z --latest`.
+- Deploy the landing page from the tag right away:
+  `scripts/deploy_landing.sh vX.Y.Z` (host and directory from
+  `RECOG_SITE_HOST` and `RECOG_SITE_DIR`). The README and the release notes send
+  Linux users to its `install.sh` and `recog.asc`, and nothing else publishes
+  them. The script switches the site to `deploy/landing` of the tag and checks
+  that the site serves the tag's files.
+- Where a Linux machine with Docker is at hand, install the release the way a
+  user does: in fresh `ubuntu:24.04` and `archlinux` containers, as a user with
+  sudo, `curl -fsSL https://recog.vkkovalev.work/install.sh | sh -s -- --no-setup`
+  must end with `dpkg-query -W recog` or `pacman -Q recog` at `X.Y.Z-1`
+  (an Arch image needs `pacman -Syu` first).
 
 ### 6. Update the Homebrew formula
 
@@ -147,8 +158,10 @@ the old version while the archive ones already update.
 - Commit `Update Recog to X.Y.Z` with a body saying what the new version gives its
   users, then `git push origin main`. Publishing the formula is part of the release the
   user asked for.
-- If the tap is installed here (`brew tap | grep materkey/apps`):
-  `brew update && brew info materkey/apps/recog` shows `X.Y.Z`.
+- If the tap is installed here (`brew tap | grep materkey/apps`): after
+  `brew update`, `grep version "$(brew --repository materkey/apps)/Formula/recog.rb"`
+  shows `X.Y.Z`. `brew info` refuses a tap the user has not trusted
+  (`brew trust`); leave that setting to the user.
 
 ### 7. Report
 
@@ -161,6 +174,7 @@ CI on the released commit: green
 Release workflow: completed (archives for macOS arm64 and Linux x86-64)
 Archive check: checksum, version file and --help passed on <platform>
 Linux repository: signed, verified through releases/latest/download
+Landing: deploy/landing of vX.Y.Z served at https://recog.vkkovalev.work
 Latest release: vX.Y.Z
 Homebrew formula: X.Y.Z pushed to materkey/homebrew-apps
 
