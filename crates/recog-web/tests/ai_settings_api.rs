@@ -161,8 +161,8 @@ async fn absent_settings_given_get_when_resolved_then_defaults_without_persisten
     assert_eq!(text(&body, "revision"), "defaults");
     assert_eq!(get(&body, "copilot_application"), &obj(r#"{"state": "pending", "model_application": "next_session"}"#));
     let copilot = task_view(&body, "copilot");
-    assert_eq!(get(copilot, "providers"), &obj(r#"["claude"]"#));
-    assert_eq!(get(copilot, "allowed_providers"), &obj(r#"["claude"]"#));
+    assert_eq!(get(copilot, "providers"), &obj(r#"["claude", "codex"]"#));
+    assert_eq!(get(copilot, "allowed_providers"), &obj(r#"["claude", "codex"]"#));
     assert_eq!(get(copilot, "prompt"), get(copilot, "default_prompt"));
     assert!(!store(&app).path.exists());
 }
@@ -263,8 +263,8 @@ async fn task_override_given_a_reset_when_deleted_then_the_defaults_and_the_glob
 #[tokio::test]
 async fn invalid_task_given_put_when_validated_then_422_and_no_mutation() {
     for extra in [
-        r#", "providers": ["codex"]"#,
-        r#", "providers": ["claude", "codex"]"#,
+        r#", "providers": ["codex", "codex"]"#,
+        r#", "providers": ["gemini"]"#,
         r#", "providers": []"#,
         r#", "prompt": """#,
         &format!(r#", "prompt": "{}""#, "x".repeat(32001)),

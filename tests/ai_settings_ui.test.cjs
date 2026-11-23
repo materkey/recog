@@ -149,6 +149,23 @@ test('single-answer scenario at its default - opened, saved, fallback turned off
     assert.equal(h.get('fallback-row').hidden, true);
 });
 
+test('Copilot with both providers - opened and saved - Claude first, Codex as the stand-in when Claude is missing', async () => {
+    const data = payload();
+    data.tasks[3] = task('copilot', { providers: ['claude', 'codex'], multiple: false, placeholders: [], required_placeholders: [] });
+    const h = harness(async () => response(data));
+    await h.boot(); await h.click('open');
+    await h.select('task', 'copilot');
+    assert.deepEqual([h.provider('claude').checked, h.provider('codex').checked], [true, false]);
+    assert.equal(h.get('fallback-row').hidden, false);
+    assert.match(h.get('fallback-text').textContent, /не установлен, Copilot запустит другой/);
+    await h.click('save-task');
+    const sent = JSON.parse(h.calls[1][1].body);
+    assert.deepEqual(sent.providers, ['claude', 'codex']);
+    assert.equal(sent.reasoning_effort, 'xhigh');
+    await h.select('task', 'title');
+    assert.match(h.get('fallback-text').textContent, /или отказал/);
+});
+
 test('Codex effort - choose Auto and save - empty override reaches API', async () => {
     const h = harness(async () => response(payload()));
     await h.boot(); await h.click('open');

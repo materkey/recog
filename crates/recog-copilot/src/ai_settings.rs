@@ -1,4 +1,5 @@
-//! The Copilot scenario of `ai-settings.json`: its switch, model and Claude effort.
+//! The Copilot scenario of `ai-settings.json`: its switch, provider order, and each
+//! provider's model and effort.
 //!
 //! Read through `recog-ai`'s store, which owns the file's rules and which the web UI
 //! writes through, so the supervisor accepts exactly the files the settings page saves.
@@ -8,7 +9,7 @@
 use std::path::PathBuf;
 
 use recog_ai::AiError;
-use recog_ai::defaults::DEFAULT_CLAUDE_MODEL;
+use recog_ai::defaults::{DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL};
 use recog_ai::install::LegacyEnv;
 use recog_ai::settings::{AiSettingsStore, Fallback};
 
@@ -16,8 +17,15 @@ use recog_ai::settings::{AiSettingsStore, Fallback};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CopilotTask {
     pub enabled: bool,
+    /// The order the supervisor tries: the first provider whose CLI is installed runs
+    /// the Copilot.
+    pub providers: Vec<String>,
+    /// Claude's model.
     pub model: String,
     pub claude_effort: String,
+    pub codex_model: String,
+    /// Codex's reasoning effort.
+    pub reasoning_effort: String,
 }
 
 /// Where the supervisor learns the Copilot task, read afresh on every call as Python
@@ -53,6 +61,9 @@ impl CopilotSettings for AiSettingsFile {
             enabled: task.enabled.unwrap_or(true),
             model: task.models.get("claude").cloned().unwrap_or_else(|| DEFAULT_CLAUDE_MODEL.to_owned()),
             claude_effort: task.claude_effort,
+            codex_model: task.models.get("codex").cloned().unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_owned()),
+            reasoning_effort: task.reasoning_effort,
+            providers: task.providers,
         })
     }
 }

@@ -121,6 +121,9 @@
         }
         el('fallback-row').hidden = task.multiple || providerInputs.size < 2;
         el('fallback').checked = task.providers.length > 1;
+        el('fallback-text').textContent = task.id === 'copilot'
+            ? 'Если провайдер не установлен, Copilot запустит другой'
+            : 'Если провайдер не установлен или отказал, ответит другой';
         updateModelHints();
         el('reasoning').value = task.reasoning_effort;
         el('claude-effort').value = task.claude_effort || '';

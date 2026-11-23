@@ -41,8 +41,11 @@ impl TestSettings {
     pub fn enabled() -> Rc<Self> {
         Rc::new(TestSettings(RefCell::new(Ok(CopilotTask {
             enabled: true,
+            providers: vec!["claude".into(), "codex".into()],
             model: DEFAULT_CLAUDE_MODEL.to_owned(),
             claude_effort: String::new(),
+            codex_model: "gpt-6-astra".into(),
+            reasoning_effort: "xhigh".into(),
         }))))
     }
 

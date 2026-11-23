@@ -172,8 +172,16 @@ fn session_environment_keeps_only_the_nonempty_session_keys() {
     assert_eq!(keys, ["PATH", "HOME", "TERM"]);
 }
 
+/// A Copilot task with the shipped provider order and Codex settings.
 fn task(enabled: bool, model: &str, effort: &str) -> CopilotTask {
-    CopilotTask { enabled, model: model.to_owned(), claude_effort: effort.to_owned() }
+    CopilotTask {
+        enabled,
+        providers: vec!["claude".into(), "codex".into()],
+        model: model.to_owned(),
+        claude_effort: effort.to_owned(),
+        codex_model: "gpt-6-astra".into(),
+        reasoning_effort: "xhigh".into(),
+    }
 }
 
 fn resolve(body: Option<&str>, legacy: LegacyEnv) -> Result<CopilotTask, String> {
@@ -199,6 +207,20 @@ fn saved_switch_model_and_effort_are_read_back() {
     );
     // when / then
     assert_eq!(resolve(Some(&body), LegacyEnv::default()), Ok(task(false, "m", "max")));
+}
+
+#[test]
+fn codex_copilot_given_saved_when_resolved_then_its_order_model_and_effort() {
+    // given
+    let body = format!(
+        r#"{{"version": 1, "revision": "{REVISION}", "models": {{}}, "tasks": {{"copilot": {{"providers": ["codex"],
+        "models": {{"codex": "copilot-codex"}}, "reasoning_effort": "high"}}}}}}"#
+    );
+    // when
+    let task = resolve(Some(&body), LegacyEnv::default()).unwrap();
+    // then
+    assert_eq!(task.providers, ["codex"]);
+    assert_eq!((task.codex_model.as_str(), task.reasoning_effort.as_str()), ("copilot-codex", "high"));
 }
 
 #[test]

@@ -86,7 +86,7 @@ fn single_answer_scenarios_by_default_when_resolved_then_the_other_provider_foll
     assert_eq!(resolve(&store, "meeting_chat").providers, ["claude", "codex"]);
     assert_eq!(resolve(&store, "saved:my-increment").providers, ["codex", "claude"]);
     assert_eq!(resolve(&store, "saved:custom").providers, ["codex", "claude"]);
-    assert_eq!(resolve(&store, "copilot").providers, ["claude"]);
+    assert_eq!(resolve(&store, "copilot").providers, ["claude", "codex"]);
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn legacy_providers_and_effort_when_resolved_then_defaults_retained() {
     let store = store_in(dir.path(), legacy);
     assert_eq!(resolve(&store, "title").reasoning_effort, "high");
     assert_eq!(resolve(&store, "analysis.increment").providers, ["claude", "codex"]);
-    assert_eq!(resolve(&store, "copilot").allowed_providers, ["claude"]);
+    assert_eq!(resolve(&store, "copilot").allowed_providers, ["claude", "codex"]);
 }
 
 #[test]
@@ -312,13 +312,20 @@ fn invalid_task_input_when_saved_then_no_settings_file() {
 }
 
 #[test]
+fn codex_copilot_when_saved_then_its_provider_model_and_effort_resolve() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    let values = r#"{"providers": ["codex"], "models": {"codex": "copilot-codex"}, "reasoning_effort": "high"}"#;
+    store.write_task("copilot", &json(values), None).unwrap();
+    let copilot = resolve(&store, "copilot");
+    assert_eq!(copilot.providers, ["codex"]);
+    assert_eq!(copilot.models["codex"], "copilot-codex");
+    assert_eq!(copilot.reasoning_effort, "high");
+}
+
+#[test]
 fn task_capabilities_when_unsupported_then_rejected() {
-    let cases = [
-        ("copilot", r#"{"providers": ["codex"]}"#),
-        ("copilot", r#"{"models": {"codex": "model"}}"#),
-        ("copilot", r#"{"reasoning_effort": "high"}"#),
-        ("missing", r#"{"prompt": "{transcript}"}"#),
-    ];
+    let cases = [("missing", r#"{"prompt": "{transcript}"}"#)];
     for (task_id, values) in cases {
         let dir = tempfile::tempdir().unwrap();
         assert!(store(dir.path()).write_task(task_id, &json(values), None).unwrap_err().is_value_error(), "{task_id}");

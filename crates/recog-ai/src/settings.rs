@@ -145,8 +145,8 @@ fn prompt_value(task_id: &str, prompt: &Json) -> Result<Option<Json>> {
     Ok(Some(Json::from(prompt)))
 }
 
-fn providers_value(task_id: &str, providers: &Json) -> Result<Option<Json>> {
-    let allowed: &[&str] = if task_id == "copilot" { &["claude"] } else { &PROVIDERS };
+fn providers_value(_task_id: &str, providers: &Json) -> Result<Option<Json>> {
+    let allowed = &PROVIDERS;
     let names: Option<Vec<&str>> = providers.as_array().and_then(|items| items.iter().map(Json::as_str).collect());
     let valid = names.filter(|names| {
         (1..=allowed.len()).contains(&names.len())
@@ -159,21 +159,15 @@ fn providers_value(task_id: &str, providers: &Json) -> Result<Option<Json>> {
     Ok(Some(Json::from(names.iter().map(|name| name.to_string()).collect::<Vec<_>>())))
 }
 
-fn models_value(task_id: &str, models: &Json) -> Result<Option<Json>> {
+fn models_value(_task_id: &str, models: &Json) -> Result<Option<Json>> {
     let models = validate_models(models)?;
-    if task_id == "copilot" && models.keys().any(|provider| provider != "claude") {
-        return Err(value_error("Copilot supports only Claude"));
-    }
     Ok((!models.is_empty()).then(|| json::string_map(&models)))
 }
 
-fn reasoning_effort_value(task_id: &str, effort: &Json) -> Result<Option<Json>> {
+fn reasoning_effort_value(_task_id: &str, effort: &Json) -> Result<Option<Json>> {
     let Some(effort) = effort.as_str().filter(|effort| REASONING_EFFORTS.contains(effort)) else {
         return Err(value_error("Invalid Codex reasoning effort"));
     };
-    if task_id == "copilot" {
-        return Err(value_error("Copilot does not support Codex reasoning effort"));
-    }
     Ok(Some(Json::from(effort)))
 }
 
@@ -654,7 +648,8 @@ fn task_providers(task_id: &str, defined: Option<&[String]>, override_values: &M
     let mut providers: Vec<String> = if task_id.starts_with("analysis.") {
         vec!["claude".into(), "codex".into()]
     } else if task_id == "copilot" {
-        vec!["claude".into()]
+        // Claude Code when it is installed; Codex runs the Copilot otherwise.
+        vec!["claude".into(), "codex".into()]
     } else {
         defined.map_or_else(|| vec!["codex".into(), "claude".into()], <[String]>::to_vec)
     };
@@ -668,8 +663,8 @@ fn task_providers(task_id: &str, defined: Option<&[String]>, override_values: &M
     providers
 }
 
-/// What a scenario offers by kind: Copilot takes only Claude and no placeholders, and
-/// applies a model change at the next session.
+/// What a scenario offers by kind: Copilot takes no placeholders and applies a model
+/// change at the next session.
 struct TaskShape {
     allowed_providers: Vec<String>,
     placeholders: Vec<String>,
@@ -681,7 +676,7 @@ impl TaskShape {
     fn of(copilot: bool) -> TaskShape {
         if copilot {
             return TaskShape {
-                allowed_providers: vec!["claude".into()],
+                allowed_providers: PROVIDERS.map(str::to_owned).to_vec(),
                 placeholders: Vec::new(),
                 required_placeholders: Vec::new(),
                 apply_mode: "next_event_model_next_session".into(),
@@ -1022,12 +1017,9 @@ mod tests {
             ("title", r#"{"prompt": 5}"#, "Prompt must be nonempty text of at most 32000 characters"),
             ("title", r#"{"prompt": "No transcript"}"#, "Prompt must include {transcript}"),
             ("title", r#"{"providers": ["claude", "codex", "claude"]}"#, "Invalid provider selection"),
-            ("copilot", r#"{"providers": ["codex"]}"#, "Invalid provider selection"),
             ("analysis.increment", r#"{"providers": ["codex", "codex"]}"#, "Invalid provider selection"),
-            ("copilot", r#"{"models": {"codex": "m"}}"#, "Copilot supports only Claude"),
             ("title", r#"{"reasoning_effort": "max"}"#, "Invalid Codex reasoning effort"),
             ("copilot", r#"{"reasoning_effort": "max"}"#, "Invalid Codex reasoning effort"),
-            ("copilot", r#"{"reasoning_effort": "high"}"#, "Copilot does not support Codex reasoning effort"),
             ("title", r#"{"claude_effort": "turbo"}"#, "Invalid Claude effort"),
         ];
         for (task_id, values, message) in cases {
