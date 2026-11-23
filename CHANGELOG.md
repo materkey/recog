@@ -9,6 +9,15 @@ reasoning.
 
 ## 2026-11-23
 
+### Action required
+
+- Linux packages: after installing this version, open **Set up Recog** once
+  more. From then on, installing a newer package moves your services to it by
+  themselves: at once if you are logged in, otherwise at your next login, and
+  only after the call if one is being recorded. `recog update` on a package
+  installation names the package manager command instead of downloading an
+  archive over the package.
+
 ### Changed
 
 - The Linux packages add **Recog** to the applications menu, which opens the

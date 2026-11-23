@@ -34,6 +34,32 @@ fn manager() -> Result<Manager> {
     Ok(Manager { backend, dir: backend.unit_dir(home.as_ref()) })
 }
 
+/// Setup refused to restart the services while a call is being recorded.
+#[derive(Debug)]
+struct ConferenceActive;
+
+impl std::fmt::Display for ConferenceActive {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("A conference is active. Run this command after the call or pass --force.")
+    }
+}
+
+impl std::error::Error for ConferenceActive {}
+
+/// `EX_TEMPFAIL`: `recog-upgrade.service` of the Linux packages retries a
+/// setup refused during a call.
+const TRY_LATER: i32 = 75;
+
+pub(super) fn archive_exit_code(result: Result<()>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            if e.is::<ConferenceActive>() { TRY_LATER } else { 1 }
+        }
+    }
+}
+
 fn guard(root: &Path, config: &InstallConfig, env: &Environ, force: bool) -> Result<()> {
     if force || !matches!(manager()?.state("live")?, State::Running(_)) {
         return Ok(());
@@ -43,7 +69,7 @@ fn guard(root: &Path, config: &InstallConfig, env: &Environ, force: bool) -> Res
     for meeting in store.list_active_meetings()? {
         let source = meeting.as_object().and_then(|m| m.get("source")).and_then(|s| s.as_str());
         if store.is_conference_source(source) {
-            return Err("A conference is active. Run this command after the call or pass --force.".into());
+            return Err(Box::new(ConferenceActive));
         }
     }
     Ok(())
@@ -431,7 +457,25 @@ pub(super) fn archive_setup(
     }
     guard(root, config, env, args.iter().any(|a| a == "--force"))?;
     recog_install::distribution::prepare(package, root, !args.iter().any(|a| a == "--no-extension"))?;
-    finish(root, config, env, args, true)
+    finish(root, config, env, args, true)?;
+    if !args.iter().any(|a| a == "--no-services") {
+        watch_package_upgrades(&manager()?)?;
+    }
+    Ok(())
+}
+
+/// A Linux package installs `recog-upgrade.path` for every user; it reruns
+/// this setup after an upgrade. The service is only enabled, for the check at
+/// login: starting it here would wait on itself when it is what runs setup.
+fn watch_package_upgrades(manager: &Manager) -> Result<()> {
+    use recog_install::services::{UPGRADE_SERVICE, UPGRADE_WATCH};
+    if manager.backend != recog_install::units::Backend::Systemd
+        || !Path::new("/usr/lib/systemd/user").join(UPGRADE_WATCH).is_file()
+    {
+        return Ok(());
+    }
+    run(Command::new("systemctl").args(["--user", "enable", UPGRADE_SERVICE]))?;
+    run(Command::new("systemctl").args(["--user", "enable", "--now", UPGRADE_WATCH]))
 }
 
 pub(super) fn update(root: &Path, config: &InstallConfig, env: &Environ, args: &[String]) -> Result<()> {
@@ -441,6 +485,9 @@ pub(super) fn update(root: &Path, config: &InstallConfig, env: &Environ, args: &
     }
     if !args.is_empty() && args != ["--force"] {
         return Err("usage: recog update [--force]".into());
+    }
+    if let Some(manager) = recog_install::distribution::package_manager(root) {
+        return Err(package_update(&manager).into());
     }
     guard(root, config, env, args == ["--force"])?;
     if recog_install::distribution::is_release(root) {
@@ -473,6 +520,38 @@ pub(super) fn update(root: &Path, config: &InstallConfig, env: &Environ, args: &
         ])
         .current_dir(root))?;
     run(Command::new("cargo").arg("setup").args(args).current_dir(root))
+}
+
+/// How to update a release that a system package installed: the package
+/// manager owns the files, and `recog-upgrade.path` moves the services over.
+fn package_update(manager: &str) -> String {
+    let command = match manager {
+        "apt" => "sudo apt update && sudo apt upgrade",
+        "pacman" => "sudo pacman -Syu",
+        _ => "your package manager",
+    };
+    format!(
+        "Recog was installed as a system package. Update it with {command}; the services switch to the new version by themselves."
+    )
+}
+
+#[cfg(test)]
+mod package_tests {
+    use super::*;
+
+    #[test]
+    fn setup_refused_during_a_call_when_it_exits_then_the_upgrade_watcher_is_told_to_retry() {
+        assert_eq!(archive_exit_code(Err(Box::new(ConferenceActive))), TRY_LATER);
+        assert_eq!(archive_exit_code(Err("broken".into())), 1);
+        assert_eq!(archive_exit_code(Ok(())), 0);
+    }
+
+    #[test]
+    fn package_install_when_updated_then_the_package_manager_command_is_named() {
+        assert!(package_update("apt").contains("sudo apt update && sudo apt upgrade"));
+        assert!(package_update("pacman").contains("sudo pacman -Syu"));
+        assert!(package_update("dnf").contains("your package manager"));
+    }
 }
 
 #[cfg(test)]

@@ -67,8 +67,24 @@ pub fn prepare(source: &Path, dest: &Path, extension: bool) -> io::Result<()> {
     if source.join("recog-homebrew").is_file() {
         copy_tree(&source.join("recog-homebrew"), &dest.join("recog-homebrew"))?;
     }
+    if source.join(PACKAGE_MARKER).is_file() {
+        copy_tree(&source.join(PACKAGE_MARKER), &dest.join(PACKAGE_MARKER))?;
+    } else if let Err(e) = fs::remove_file(dest.join(PACKAGE_MARKER))
+        && e.kind() != io::ErrorKind::NotFound
+    {
+        return Err(e);
+    }
     copy_tree(&source.join("recog-release"), &dest.join("recog-release"))?;
     Ok(())
+}
+
+/// Written by the Linux packages (`deploy/linux/packages`): the package
+/// manager that installed the release, `apt` or `pacman`.
+const PACKAGE_MARKER: &str = "recog-package";
+
+/// The package manager that owns this release, if a system package installed it.
+pub fn package_manager(root: &Path) -> Option<String> {
+    fs::read_to_string(root.join(PACKAGE_MARKER)).ok().map(|s| s.trim().to_owned())
 }
 
 /// The checked-in manifest contains built-in hosts. Custom matches are scoped
@@ -101,30 +117,37 @@ pub fn configure_extension(root: &Path, jitsi: &[String], matrix: &[String]) -> 
 mod tests {
     use super::*;
 
-    #[test]
-    fn given_an_archive_when_installed_twice_then_resources_and_notices_are_kept_with_the_runtime() {
+    const RELEASE_FILES: [&str; 13] = [
+        "bin/recog",
+        "crates/recog-web/static/index.html",
+        "crates/recog-ai/prompts/test",
+        "crates/recog-live/macos/recog_launcher.swift",
+        "crates/recog-zoom/macos/zoom_ax_probe.swift",
+        "crates/speexdsp-aec/LICENSE",
+        ".claude/agents/copilot-session.md",
+        "CHANGELOG.md",
+        "LICENSE",
+        ".env.example",
+        "browser-extension/dist/manifest.json",
+        "recog-homebrew",
+        "recog-release",
+    ];
+
+    fn unpacked() -> tempfile::TempDir {
         let package = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let root = runtime(home.path());
-        for path in [
-            "bin/recog",
-            "crates/recog-web/static/index.html",
-            "crates/recog-ai/prompts/test",
-            "crates/recog-live/macos/recog_launcher.swift",
-            "crates/recog-zoom/macos/zoom_ax_probe.swift",
-            "crates/speexdsp-aec/LICENSE",
-            ".claude/agents/copilot-session.md",
-            "CHANGELOG.md",
-            "LICENSE",
-            ".env.example",
-            "browser-extension/dist/manifest.json",
-            "recog-homebrew",
-            "recog-release",
-        ] {
+        for path in RELEASE_FILES {
             let file = package.path().join(path);
             fs::create_dir_all(file.parent().unwrap()).unwrap();
             fs::write(file, path).unwrap();
         }
+        package
+    }
+
+    #[test]
+    fn given_an_archive_when_installed_twice_then_resources_and_notices_are_kept_with_the_runtime() {
+        let package = unpacked();
+        let home = tempfile::tempdir().unwrap();
+        let root = runtime(home.path());
         prepare(package.path(), &root, false).unwrap();
         assert!(!root.join("browser-extension/dist").exists());
         prepare(package.path(), &root, true).unwrap();
@@ -133,5 +156,22 @@ mod tests {
         assert_eq!(fs::read(root.join("crates/speexdsp-aec/LICENSE")).unwrap(), b"crates/speexdsp-aec/LICENSE");
         assert!(!root.join("Recog.app").exists());
         prepare(&root, &root, true).unwrap();
+    }
+
+    #[test]
+    fn given_a_package_install_when_an_archive_replaces_it_then_the_package_manager_is_forgotten() {
+        let home = tempfile::tempdir().unwrap();
+        let root = runtime(home.path());
+        let release = |marker: Option<&str>| {
+            let package = unpacked();
+            if let Some(marker) = marker {
+                fs::write(package.path().join("recog-package"), format!("{marker}\n")).unwrap();
+            }
+            package
+        };
+        prepare(release(Some("apt")).path(), &root, false).unwrap();
+        assert_eq!(package_manager(&root).as_deref(), Some("apt"));
+        prepare(release(None).path(), &root, false).unwrap();
+        assert_eq!(package_manager(&root), None);
     }
 }

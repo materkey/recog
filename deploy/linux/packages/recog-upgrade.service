@@ -1,0 +1,17 @@
+# Each user's services run a copy of the package in their home directory.
+# recog setup enables this unit; it refreshes that copy after an upgrade,
+# and at login for an upgrade that happened while the user was away.
+[Unit]
+Description=Move Recog to the version of the installed package
+ConditionPathExists=%h/.local/share/recog/runtime/recog-release
+
+[Service]
+Type=oneshot
+ExecCondition=/bin/sh -c '! cmp -s /usr/lib/recog/recog-release %h/.local/share/recog/runtime/recog-release'
+ExecStart=/usr/lib/recog/bin/recog setup --no-env
+# 75: a call is being recorded. Try again later instead of interrupting it.
+RestartForceExitStatus=75
+RestartSec=10min
+
+[Install]
+WantedBy=default.target

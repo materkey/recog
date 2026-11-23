@@ -11,6 +11,9 @@ use std::time::Duration;
 use crate::units::Backend;
 
 pub const NAMES: [&str; 4] = ["live", "frontend", "copilot-channel", "copilot-supervisor"];
+/// User units of the Linux packages (`deploy/linux/packages`), outside [`NAMES`].
+pub const UPGRADE_WATCH: &str = "recog-upgrade.path";
+pub const UPGRADE_SERVICE: &str = "recog-upgrade.service";
 
 pub struct Manager {
     pub backend: Backend,
@@ -137,6 +140,15 @@ impl Manager {
             if uninstall {
                 fs::remove_file(self.unit(name))?;
             }
+        }
+        Ok(())
+    }
+    /// The Linux packages ship `recog-upgrade.path`, which `recog setup`
+    /// enables; it refreshes the services it would otherwise bring back.
+    pub fn forget_upgrades(&self) -> io::Result<()> {
+        if self.backend == Backend::Systemd {
+            // Missing on an archive install, where systemctl just reports it.
+            self.systemctl(&["disable", "--now", UPGRADE_WATCH, UPGRADE_SERVICE])?;
         }
         Ok(())
     }

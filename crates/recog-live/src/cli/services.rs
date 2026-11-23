@@ -45,6 +45,7 @@ fn run(root: &Path, config: &InstallConfig, env: &Environ, args: &[String]) -> R
             manager.stop(name, action == "uninstall").map_err(fail)?;
         }
         if action == "uninstall" {
+            manager.forget_upgrades().map_err(fail)?;
             manager.reload().map_err(fail)?;
         }
         if names.contains(&"copilot-supervisor") {

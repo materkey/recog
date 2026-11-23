@@ -361,7 +361,7 @@ pub fn main(argv: &[String]) -> i32 {
     }
     match load_command(argv, &repo_root, &mut environ) {
         Ok((Command::Setup(args, false), config)) if recog_install::distribution::is_release(&package_root) => {
-            exit_code(setup::archive_setup(&package_root, &repo_root, &config, &environ, &args))
+            setup::archive_exit_code(setup::archive_setup(&package_root, &repo_root, &config, &environ, &args))
         }
 
         Ok((command, config)) => run_command(command, &config, &environ, &repo_root),

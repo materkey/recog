@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for upgrades of the Recog package
+
+[Path]
+# The package rewrites this file after every installation or upgrade.
+PathChanged=/var/lib/recog/installed-release
+Unit=recog-upgrade.service
+
+[Install]
+WantedBy=default.target
