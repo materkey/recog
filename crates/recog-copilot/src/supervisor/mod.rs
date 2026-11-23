@@ -12,7 +12,7 @@ pub mod tmux;
 pub mod watchdog;
 
 pub use glue::{Supervisor, Tunables};
-pub use lifecycle::{Command, MANUAL_MEETING_ID, SessionLifecycle, State, reconcile};
+pub use lifecycle::{Command, MANUAL_MEETING_ID, SessionLifecycle, State, reconcile, reconcile_without_autostart};
 pub use screen::{AgentState, classify_screen, trust_dialog_keys};
 pub use tmux::{CommandRunner, Error, ProcessRunner, Runner, TMUX_SESSION, TMUX_SESSION_MANUAL, TmuxRunner};
 pub use watchdog::{Watchdog, WatchdogHost};

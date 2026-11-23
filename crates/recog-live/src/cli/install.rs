@@ -246,6 +246,9 @@ fn copilot_launch(repo_root: &Path, config: &InstallConfig, environ: &Environ) -
         Ok(task) => task,
         Err(e) => return printed("", warnings + &line(e), 1),
     };
+    if !task.access.allows_manual() {
+        return printed("", warnings + recog_ai::error::DISABLED + "\n", 1);
+    }
     if task.enabled == Some(false) {
         return printed("", warnings + "Copilot выключен в настройках.\n", 1);
     }
@@ -564,5 +567,26 @@ mod tests {
         // then
         assert_eq!((off.code, off.stdout.as_str(), off.stderr.as_str()), (1, "", "Copilot выключен в настройках.\n"));
         assert_eq!((on.code, on.stdout.as_str()), (0, "installed-model\nhigh\n"));
+    }
+
+    #[test]
+    fn access_off_when_copilot_launch_then_refused_with_disabled_text() {
+        // given
+        let repo = tempfile::tempdir().unwrap();
+        let data = repo.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let env = environ(&[("RECOG_DATA_DIR", data.to_str().unwrap())]);
+        std::fs::write(
+            data.join("ai-settings.json"),
+            r#"{"version":1,"revision":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","models":{},"tasks":{},"access":"off"}"#,
+        )
+        .unwrap();
+        // when
+        let off = config(ConfigQuery::CopilotLaunch, repo.path(), &InstallConfig::default(), &env);
+        // then
+        assert_eq!(
+            (off.code, off.stdout.as_str(), off.stderr.as_str()),
+            (1, "", "AI-функции выключены в настройках recog.\n")
+        );
     }
 }

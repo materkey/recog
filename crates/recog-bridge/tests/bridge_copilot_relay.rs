@@ -1432,3 +1432,28 @@ async fn given_pending_requests_when_settings_switch_copilot_off_then_each_fails
     assert!(h.bridge.pending_requests().is_empty());
     assert_eq!(subscriber.of_type("ai_settings_applied").len(), 1);
 }
+
+#[tokio::test]
+async fn copilot_off_when_channel_asks_recent_transcript_then_no_segments() {
+    // given
+    let h = Harness::new();
+    h.bridge.set_meeting_storage(storage_for_meeting("m-1"));
+    h.clock.set(NOW);
+    h.bridge.send_transcript(&line("Alice", "первая", "10:00:00", 1));
+    let (_subscriber, sub) = h.add(Role::Subscriber);
+    h.policy.set_enabled(false);
+    h.process(r#"{"type": "ai_settings_refresh"}"#, Some(&sub)).await.unwrap();
+    let (requester, requester_ws) = unregistered(1);
+    // when
+    h.process(
+        r#"{"type": "get_recent_transcript_request", "request_id": "snap-1", "window_seconds": 60}"#,
+        Some(&requester_ws),
+    )
+    .await
+    .unwrap();
+    // then
+    let frames = requester.frames();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(field(&frames[0], "type").as_str(), Some("get_recent_transcript_response"));
+    assert!(segment_ids(&frames[0]).is_empty());
+}

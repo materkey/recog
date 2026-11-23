@@ -176,6 +176,7 @@ fn session_environment_keeps_only_the_nonempty_session_keys() {
 fn task(enabled: bool, model: &str, effort: &str) -> CopilotTask {
     CopilotTask {
         enabled,
+        automatic: true,
         providers: vec!["claude".into(), "codex".into()],
         model: model.to_owned(),
         claude_effort: effort.to_owned(),
@@ -294,4 +295,22 @@ fn unreadable_settings_given_directory_in_its_place_when_resolved_then_error_nam
     let error = AiSettingsFile::new(dir.path(), LegacyEnv::default()).resolve().unwrap_err();
     // then
     assert!(error.contains("ai-settings.json"), "{error}");
+}
+
+fn at_level(access: &str) -> String {
+    format!(r#"{{"version": 1, "revision": "{REVISION}", "models": {{}}, "tasks": {{}}, "access": "{access}"}}"#)
+}
+
+#[test]
+fn access_manual_when_resolved_then_enabled_and_not_automatic() {
+    let task = resolve(Some(&at_level("manual")), LegacyEnv::default()).unwrap();
+    assert!(task.enabled);
+    assert!(!task.automatic);
+}
+
+#[test]
+fn access_off_when_resolved_then_disabled() {
+    let task = resolve(Some(&at_level("off")), LegacyEnv::default()).unwrap();
+    assert!(!task.enabled);
+    assert!(!task.automatic);
 }

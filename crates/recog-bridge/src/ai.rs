@@ -27,8 +27,9 @@ impl PolicySource for AiSettingsPolicy {
         Ok(CopilotPolicy {
             instructions: Value::from(task.prompt),
             revision: Value::from(task.revision),
-            // `resolve_task` always sets it for the Copilot.
-            enabled: Value::Bool(task.enabled.unwrap_or(true)),
+            // `resolve_task` always sets the switch for the Copilot; the AI functions
+            // level must allow a click too.
+            enabled: Value::Bool(task.enabled.unwrap_or(true) && task.access.allows_manual()),
         })
     }
 }
@@ -40,5 +41,24 @@ impl IncrementGenerator for AiIncrements {
     fn generate_all(&self, meeting_id: String, meeting_path: PathBuf) -> BoxFuture<Result<(), String>> {
         let generator = self.0.clone();
         Box::pin(async move { generator.generate_all(&meeting_id, &meeting_path).await.map_err(|e| e.to_string()) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use recog_ai::install::LegacyEnv;
+
+    use super::*;
+
+    #[test]
+    fn settings_access_off_when_policy_read_then_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ai-settings.json"),
+            r#"{"version": 1, "revision": "0f8fad5b-d9cb-469f-a165-70867728950e", "models": {}, "tasks": {}, "access": "off"}"#,
+        )
+        .unwrap();
+        let policy = AiSettingsPolicy(AiSettingsStore::new(dir.path(), None).with_legacy_env(LegacyEnv::default()));
+        assert_eq!(policy.read_policy().unwrap().enabled, Value::Bool(false));
     }
 }

@@ -375,7 +375,8 @@ impl Bridge {
             self.log("[KTalk Bridge] get_recent_transcript_request missing/invalid request_id — ignored");
             return Ok(());
         };
-        let segments = self.recent_segments(&RecentWindow::of(data));
+        // While the Copilot is off nothing of the meeting goes to an agent on the channel.
+        let segments = if self.policy_enabled() { self.recent_segments(&RecentWindow::of(data)) } else { Vec::new() };
         let response = with_identity(
             self,
             protocol::GET_RECENT_TRANSCRIPT_RESPONSE,

@@ -1096,3 +1096,154 @@ async fn non_string_meeting_ids_are_used_as_python_str_and_never_match_an_end() 
     })
     .await;
 }
+
+// --- the AI functions level below `automatic` ---
+
+/// A supervisor at the `manual` level; `alive` answers the session probe when given.
+fn manual_level_supervisor(grace_s: f64, alive: Option<bool>) -> (FakeSupervisor, Rc<FakeRunner>, Rc<TestSettings>) {
+    let runner = FakeRunner::new();
+    let settings = TestSettings::enabled();
+    settings.set_automatic(false);
+    let sup = match alive {
+        Some(alive) => Supervisor::with_alive_probe(
+            "ws://127.0.0.1:1",
+            runner.clone(),
+            settings.clone(),
+            true,
+            Tunables::new(grace_s),
+            Box::new(move || alive),
+        ),
+        None => Supervisor::new("ws://127.0.0.1:1", runner.clone(), settings.clone(), true, Tunables::new(grace_s)),
+    };
+    (sup, runner, settings)
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_when_meeting_started_then_no_spawn() {
+    local(async {
+        let (sup, runner, _settings) = manual_level_supervisor(10.0, None);
+        send(&sup, STARTED_A).await;
+        assert!(runner.spawned().is_empty());
+        assert_eq!(sup.state(), State::Idle);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_when_meeting_state_active_without_session_then_no_spawn() {
+    local(async {
+        let (sup, runner, _settings) = manual_level_supervisor(10.0, Some(false));
+        send(&sup, r#"{"type": "meeting_state", "active": true, "meeting_id": "A"}"#).await;
+        assert!(runner.spawned().is_empty());
+        assert_eq!(sup.state(), State::Idle);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_and_live_conference_session_when_meeting_ended_then_grace_then_kill() {
+    local(async {
+        let (sup, runner, _settings) = manual_level_supervisor(0.05, None);
+        sup.with_lifecycle(|l| l.adopt(Some("A")));
+        send(&sup, ENDED_A).await;
+        assert_eq!(sup.state(), State::Grace);
+        tokio::time::sleep(ms(150)).await;
+        assert_eq!(runner.kills.get(), 1);
+        assert_eq!(sup.state(), State::Idle);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_when_spawn_requested_then_manual_session_spawns() {
+    local(async {
+        let (sup, runner, _settings) = manual_level_supervisor(10.0, None);
+        send(&sup, SPAWN_R1).await;
+        assert_eq!(runner.spawned(), manual(1));
+        sup.stop();
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_and_a_manual_session_when_a_reconnect_reports_a_conference_then_it_keeps_running() {
+    local(async {
+        let (sup, runner, _settings) = manual_level_supervisor(10.0, Some(true));
+        sup.with_lifecycle(|l| l.adopt(Some(MANUAL_MEETING_ID)));
+        send(&sup, r#"{"type": "meeting_state", "active": true, "meeting_id": "A"}"#).await;
+        assert_eq!(runner.kills.get(), 0);
+        assert!(runner.spawned().is_empty());
+        assert_eq!((sup.state(), sup.meeting_id().as_deref()), (State::Running, Some(MANUAL_MEETING_ID)));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_and_a_conference_session_put_in_grace_by_a_bridge_restart_when_the_same_meeting_starts_then_it_keeps_running()
+ {
+    local(async {
+        let (sup, runner, _settings) = manual_level_supervisor(10.0, None);
+        sup.with_lifecycle(|l| l.adopt(Some("A")));
+        send(&sup, r#"{"type": "meeting_state", "active": false, "meeting_id": null}"#).await;
+        assert_eq!(sup.state(), State::Grace);
+        send(&sup, STARTED_A).await;
+        assert_eq!(sup.state(), State::Running);
+        assert!(!sup.grace_pending());
+        assert_eq!(runner.kills.get(), 0);
+        assert!(runner.spawned().is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_then_automatic_during_a_conference_when_settings_change_then_the_conference_session_spawns() {
+    local(async {
+        let (sup, runner, settings) = manual_level_supervisor(10.0, None);
+        send(&sup, STARTED_A).await;
+        assert!(runner.spawned().is_empty());
+        settings.set_automatic(true);
+        send(&sup, r#"{"type": "copilot_settings_changed"}"#).await;
+        assert_eq!(runner.spawned(), ids(&["A"]));
+        sup.stop();
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_and_a_manual_session_when_automatic_is_chosen_without_a_conference_then_it_keeps_running() {
+    // The bridge's last word was "no conference": its hello reply, or a conference that ended.
+    for latest in [r#"{"type": "meeting_state", "active": false, "meeting_id": null}"#, ENDED_A] {
+        local(async {
+            let (sup, runner, settings) = manual_level_supervisor(0.05, Some(true));
+            send(&sup, latest).await;
+            sup.with_lifecycle(|l| l.adopt(Some(MANUAL_MEETING_ID)));
+            settings.set_automatic(true);
+            send(&sup, r#"{"type": "copilot_settings_changed"}"#).await;
+            tokio::time::sleep(ms(150)).await;
+            assert_eq!(runner.kills.get(), 0, "{latest}");
+            assert_eq!(
+                (sup.state(), sup.meeting_id().as_deref()),
+                (State::Running, Some(MANUAL_MEETING_ID)),
+                "{latest}"
+            );
+        })
+        .await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_level_and_a_manual_session_when_automatic_is_chosen_during_a_conference_then_the_conference_takes_it_over()
+ {
+    local(async {
+        let (sup, runner, settings) = manual_level_supervisor(10.0, Some(true));
+        sup.with_lifecycle(|l| l.adopt(Some(MANUAL_MEETING_ID)));
+        send(&sup, STARTED_A).await;
+        assert_eq!(sup.meeting_id().as_deref(), Some(MANUAL_MEETING_ID));
+        settings.set_automatic(true);
+        send(&sup, r#"{"type": "copilot_settings_changed"}"#).await;
+        assert_eq!(runner.kills.get(), 1);
+        assert_eq!(runner.spawned(), ids(&["A"]));
+        sup.stop();
+    })
+    .await;
+}

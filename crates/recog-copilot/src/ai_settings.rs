@@ -16,7 +16,10 @@ use recog_ai::settings::{AiSettingsStore, Fallback};
 /// What a Copilot session is started with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CopilotTask {
+    /// The Copilot's switch and the AI functions level both allow it.
     pub enabled: bool,
+    /// The level lets the Copilot start by itself for a conference.
+    pub automatic: bool,
     /// The order the supervisor tries: the first provider whose CLI is installed runs
     /// the Copilot.
     pub providers: Vec<String>,
@@ -58,7 +61,8 @@ impl CopilotSettings for AiSettingsFile {
             other => other.to_string(),
         })?;
         Ok(CopilotTask {
-            enabled: task.enabled.unwrap_or(true),
+            enabled: task.enabled.unwrap_or(true) && task.access.allows_manual(),
+            automatic: task.access.allows_automatic(),
             model: task.models.get("claude").cloned().unwrap_or_else(|| DEFAULT_CLAUDE_MODEL.to_owned()),
             claude_effort: task.claude_effort,
             codex_model: task.models.get("codex").cloned().unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_owned()),

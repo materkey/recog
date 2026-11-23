@@ -16,7 +16,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_tungstenite::tungstenite::Message;
 
-use super::lifecycle::{Command, MANUAL_MEETING_ID, SessionLifecycle, State, reconcile};
+use super::lifecycle::{Command, MANUAL_MEETING_ID, SessionLifecycle, State, reconcile, reconcile_without_autostart};
 use super::screen::AgentState;
 use super::tmux::{Runner, TMUX_SESSION, TMUX_SESSION_MANUAL};
 use super::watchdog::{self, Watchdog, WatchdogHost};
@@ -94,6 +94,8 @@ impl RawId {
 struct Inner {
     lifecycle: SessionLifecycle,
     enabled: bool,
+    /// The level let the Copilot start by itself at the last check.
+    automatic: bool,
     settings_error_logged: bool,
     latest_meeting_state: Option<Value>,
     respawn_attempts: usize,
@@ -184,7 +186,7 @@ impl<R: Runner + 'static> Supervisor<R> {
             alive_probe,
             log_prefix: log::SUPERVISOR_PREFIX.to_owned(),
             tunables: RefCell::new(tunables),
-            st: RefCell::new(Inner { enabled: true, ..Inner::default() }),
+            st: RefCell::new(Inner { enabled: true, automatic: true, ..Inner::default() }),
             execute_lock: tokio::sync::Mutex::new(()),
         })
     }
@@ -313,18 +315,20 @@ impl<R: Runner + 'static> Supervisor<R> {
         if !self.autospawn {
             return;
         }
+        let automatic = self.read_automatic();
+        // Kept, so that the level reaching `automatic` later replays this meeting.
+        self.st.borrow_mut().automatic = automatic;
         match kind {
             protocol::MEETING_STATE => {
                 let session_alive = self.probe_session_alive().await;
                 let active = frame.get("active").is_some_and(py::truthy);
                 let meeting_id = frame.get("meeting_id").filter(|v| py::truthy(v)).map(py::str_of);
-                let commands =
-                    reconcile(&mut self.st.borrow_mut().lifecycle, active, meeting_id.as_deref(), session_alive);
+                let commands = self.reconcile_at_level(automatic, active, meeting_id.as_deref(), session_alive);
                 self.apply(commands).await;
             }
             protocol::MEETING_STARTED => {
                 if let Some(meeting_id) = frame.get("meeting_id").filter(|v| py::truthy(v)).map(py::str_of) {
-                    let commands = self.st.borrow_mut().lifecycle.meeting_started(&meeting_id);
+                    let commands = self.meeting_started_at_level(automatic, &meeting_id);
                     self.apply(commands).await;
                 }
             }
@@ -333,6 +337,30 @@ impl<R: Runner + 'static> Supervisor<R> {
                 let commands = self.st.borrow_mut().lifecycle.meeting_ended(meeting_id);
                 self.apply(commands).await;
             }
+        }
+    }
+
+    /// A conference started: below the `automatic` level it can only revive the
+    /// session already running for it.
+    fn meeting_started_at_level(&self, automatic: bool, meeting_id: &str) -> Vec<Command> {
+        let lifecycle = &mut self.st.borrow_mut().lifecycle;
+        if automatic { lifecycle.meeting_started(meeting_id) } else { lifecycle.meeting_resumed(meeting_id) }
+    }
+
+    /// The bridge's meeting state: below the `automatic` level no conference session is
+    /// spawned, killed or replaced; the manual session's own state is reconciled as before.
+    fn reconcile_at_level(
+        &self,
+        automatic: bool,
+        active: bool,
+        meeting_id: Option<&str>,
+        session_alive: bool,
+    ) -> Vec<Command> {
+        let lifecycle = &mut self.st.borrow_mut().lifecycle;
+        if automatic || meeting_id == Some(MANUAL_MEETING_ID) {
+            reconcile(lifecycle, active, meeting_id, session_alive)
+        } else {
+            reconcile_without_autostart(lifecycle, active, meeting_id, session_alive)
         }
     }
 
@@ -400,7 +428,8 @@ impl<R: Runner + 'static> Supervisor<R> {
         }
     }
 
-    /// The Copilot switch of the AI settings; an unreadable file counts as off.
+    /// The Copilot switch of the AI settings, as far as the AI functions level allows a
+    /// Copilot at all; an unreadable file counts as off.
     pub fn read_enabled(&self) -> bool {
         match self.settings.resolve() {
             Ok(task) => {
@@ -417,10 +446,13 @@ impl<R: Runner + 'static> Supervisor<R> {
         }
     }
 
-    /// Follows the switch: turning it off stops the session and its retries; turning
-    /// it back on replays the latest conference state.
+    /// Follows the switch and the AI functions level: turning the Copilot off stops the
+    /// session and its retries; turning it back on replays the latest conference state;
+    /// the level reaching `automatic` is `replay_for_automatic`.
     pub async fn refresh_enabled(&self) -> bool {
+        let automatic_turned_on = self.note_automatic();
         if self.st.borrow().enabled && self.read_enabled() {
+            self.replay_for_automatic(automatic_turned_on).await;
             return true;
         }
         let was_enabled;
@@ -444,15 +476,50 @@ impl<R: Runner + 'static> Supervisor<R> {
             }
         }
         let enabled = self.st.borrow().enabled;
+        if enabled && !was_enabled {
+            self.replay_latest_meeting().await;
+        }
+        enabled
+    }
+
+    /// Whether the AI functions level just reached `automatic`; keeps the new value.
+    fn note_automatic(&self) -> bool {
+        let automatic = self.read_automatic();
+        let mut st = self.st.borrow_mut();
+        let turned_on = automatic && !st.automatic;
+        st.automatic = automatic;
+        turned_on
+    }
+
+    /// The level just reached `automatic`: the latest state is replayed only while it has
+    /// a conference on, so that conference gets its Copilot and a session started by hand
+    /// is not ended by a state saying no conference is on.
+    async fn replay_for_automatic(&self, turned_on: bool) {
+        if turned_on && self.conference_on() {
+            self.replay_latest_meeting().await;
+        }
+    }
+
+    /// Whether the bridge's latest state has a conference on.
+    fn conference_on(&self) -> bool {
+        let st = self.st.borrow();
+        st.latest_meeting_state.as_ref().and_then(|state| state.get("active")).is_some_and(py::truthy)
+    }
+
+    /// The level lets the Copilot start by itself; unreadable settings do not.
+    pub fn read_automatic(&self) -> bool {
+        self.settings.resolve().is_ok_and(|task| task.automatic)
+    }
+
+    /// Replays the bridge's latest conference state, so a Copilot just allowed starts
+    /// for the meeting already on.
+    async fn replay_latest_meeting(&self) {
         let latest = self.st.borrow().latest_meeting_state.clone();
         if let Some(latest) = latest
-            && enabled
-            && !was_enabled
             && latest.get("meeting_id") != Some(&json!(MANUAL_MEETING_ID))
         {
             Box::pin(self.handle_frame(&latest)).await;
         }
-        enabled
     }
 
     /// Re-adopts a surviving manual session at startup (DW-9). The session's name

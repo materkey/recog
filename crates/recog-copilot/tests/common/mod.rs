@@ -41,6 +41,7 @@ impl TestSettings {
     pub fn enabled() -> Rc<Self> {
         Rc::new(TestSettings(RefCell::new(Ok(CopilotTask {
             enabled: true,
+            automatic: true,
             providers: vec!["claude".into(), "codex".into()],
             model: DEFAULT_CLAUDE_MODEL.to_owned(),
             claude_effort: String::new(),
@@ -52,6 +53,13 @@ impl TestSettings {
     pub fn set_enabled(&self, enabled: bool) {
         if let Ok(task) = self.0.borrow_mut().as_mut() {
             task.enabled = enabled;
+        }
+    }
+
+    /// The `automatic` level (true) or `manual` (false).
+    pub fn set_automatic(&self, automatic: bool) {
+        if let Ok(task) = self.0.borrow_mut().as_mut() {
+            task.automatic = automatic;
         }
     }
 

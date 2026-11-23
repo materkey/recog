@@ -91,6 +91,19 @@ impl SessionLifecycle {
         vec![Command::Kill, Command::Spawn(Some(meeting_id.to_owned()))]
     }
 
+    /// The same-meeting branch of [`SessionLifecycle::meeting_started`] alone, for when
+    /// the Copilot may not start by itself: a rejoin still revives a session in GRACE,
+    /// and nothing is ever spawned, killed or replaced.
+    pub fn meeting_resumed(&mut self, meeting_id: &str) -> Vec<Command> {
+        if self.state != State::Idle && self.same_meeting(Some(meeting_id)) {
+            self.meeting_id = Some(meeting_id.to_owned());
+            if self.state == State::Grace {
+                self.state = State::Running;
+            }
+        }
+        vec![]
+    }
+
     pub fn meeting_ended(&mut self, meeting_id: Option<&str>) -> Vec<Command> {
         if matches!(self.state, State::Running | State::Spawning) && self.same_meeting(meeting_id) {
             self.state = State::Grace;
@@ -175,6 +188,32 @@ pub fn reconcile(
         // Same id: no-op or GRACE revival; another id: kill + spawn.
         return machine.meeting_started(meeting_id);
     }
+    no_active_meeting(machine, session_exists)
+}
+
+/// [`reconcile`] below the `automatic` level: a running session is still adopted and
+/// ended, but none is spawned, killed or replaced for a conference.
+pub fn reconcile_without_autostart(
+    machine: &mut SessionLifecycle,
+    active: bool,
+    meeting_id: Option<&str>,
+    session_alive: bool,
+) -> Vec<Command> {
+    let session_exists = machine.state != State::Idle || session_alive;
+    if let (true, Some(meeting_id)) = (active, meeting_id) {
+        if !session_exists {
+            return vec![];
+        }
+        if machine.state == State::Idle {
+            return machine.adopt(Some(meeting_id));
+        }
+        return machine.meeting_resumed(meeting_id);
+    }
+    no_active_meeting(machine, session_exists)
+}
+
+/// The bridge reports no active meeting: a session that exists goes to GRACE.
+fn no_active_meeting(machine: &mut SessionLifecycle, session_exists: bool) -> Vec<Command> {
     if session_exists {
         if machine.state == State::Idle {
             machine.adopt(None);

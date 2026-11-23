@@ -2,7 +2,7 @@
 //! "SessionLifecycle: pure state machine, table-driven").
 #![forbid(unsafe_code)]
 
-use recog_copilot::supervisor::{Command, SessionLifecycle, State, reconcile};
+use recog_copilot::supervisor::{Command, SessionLifecycle, State, reconcile, reconcile_without_autostart};
 
 fn spawn(id: &str) -> Command {
     Command::Spawn(Some(id.to_owned()))
@@ -178,4 +178,46 @@ fn commands_print_as_the_python_dataclass_repr() {
     assert_eq!(Command::Kill.to_string(), "Kill()");
     assert_eq!(spawn("A").to_string(), "Spawn(meeting_id='A')");
     assert_eq!(Command::Spawn(None).to_string(), "Spawn(meeting_id=None)");
+}
+
+// --- Below the `automatic` level: nothing is spawned, killed or replaced ---
+
+#[test]
+fn meeting_resumed_for_the_same_meeting_in_grace_then_running_without_commands() {
+    let mut m = machine(State::Grace, Some("A"));
+    assert_eq!(m.meeting_resumed("A"), vec![]);
+    assert_eq!((m.state, m.meeting_id.as_deref()), (State::Running, Some("A")));
+    let mut adopted = machine(State::Running, None);
+    assert_eq!(adopted.meeting_resumed("A"), vec![]);
+    assert_eq!(adopted.meeting_id.as_deref(), Some("A"));
+}
+
+#[test]
+fn meeting_resumed_while_idle_or_for_another_meeting_then_nothing_changes() {
+    let mut idle = machine(State::Idle, None);
+    assert_eq!(idle.meeting_resumed("A"), vec![]);
+    assert_eq!((idle.state, idle.meeting_id.as_deref()), (State::Idle, None));
+    let mut other = machine(State::Running, Some("manual"));
+    assert_eq!(other.meeting_resumed("A"), vec![]);
+    assert_eq!((other.state, other.meeting_id.as_deref()), (State::Running, Some("manual")));
+}
+
+#[test]
+fn reconcile_without_autostart_active_meeting_and_no_session_then_no_spawn() {
+    let mut m = machine(State::Idle, None);
+    assert_eq!(reconcile_without_autostart(&mut m, true, Some("A"), false), vec![]);
+    assert_eq!(m.state, State::Idle);
+    let mut alive = machine(State::Idle, None);
+    assert_eq!(reconcile_without_autostart(&mut alive, true, Some("A"), true), vec![]);
+    assert_eq!((alive.state, alive.meeting_id.as_deref()), (State::Running, Some("A")));
+}
+
+#[test]
+fn reconcile_without_autostart_manual_session_and_a_conference_active_then_no_kill_and_no_spawn() {
+    let mut m = machine(State::Running, Some("manual"));
+    assert_eq!(reconcile_without_autostart(&mut m, true, Some("A"), true), vec![]);
+    assert_eq!((m.state, m.meeting_id.as_deref()), (State::Running, Some("manual")));
+    let mut ended = machine(State::Running, Some("A"));
+    assert_eq!(reconcile_without_autostart(&mut ended, false, None, true), vec![]);
+    assert_eq!(ended.state, State::Grace);
 }
