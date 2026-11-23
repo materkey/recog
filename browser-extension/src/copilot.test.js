@@ -1,6 +1,6 @@
 /**
  * Tests for the Copilot DOM panel: rendering, reply / status handling,
- * proactive cooldown and mute, dismiss.
+ * proactive cooldown and mute.
  *
  * @jest-environment jsdom
  * @jest-environment-options {"url": "https://ktalk.ru/"}
@@ -65,7 +65,7 @@ describe('Copilot DOM panel', () => {
     resetCopilotState();
   });
 
-  test('renderCopilotMessage creates a kind-tagged element with copy/dismiss for assistant', () => {
+  test('renderCopilotMessage creates a kind-tagged element with copy only for assistant', () => {
     const el = renderCopilotMessage({
       id: 'a1',
       kind: 'assistant',
@@ -77,7 +77,7 @@ describe('Copilot DOM panel', () => {
     expect(el.classList.contains('copilot-msg-assistant')).toBe(true);
     expect(el.querySelector('.copilot-msg-text').textContent).toBe('привет');
     expect(el.querySelector('.copilot-msg-copy-btn')).not.toBeNull();
-    expect(el.querySelector('.copilot-msg-dismiss-btn')).not.toBeNull();
+    expect(el.querySelectorAll('.copilot-msg-action-btn')).toHaveLength(1);
   });
 
   test('renderCopilotMessage for user kind has no action buttons', () => {
@@ -88,8 +88,7 @@ describe('Copilot DOM panel', () => {
       time: '10:00:00',
     });
     expect(el.classList.contains('copilot-msg-user')).toBe(true);
-    expect(el.querySelector('.copilot-msg-copy-btn')).toBeNull();
-    expect(el.querySelector('.copilot-msg-dismiss-btn')).toBeNull();
+    expect(el.querySelectorAll('.copilot-msg-action-btn')).toHaveLength(0);
   });
 
   test('recreating the panel after the host SPA re-renders the sidebar replays message history', () => {
@@ -195,7 +194,7 @@ describe('Copilot DOM panel', () => {
     expect(assistant.kind).toBe('error');
     expect(assistant.text).toMatch(/offline/i);
     expect(state.copilotPending.has(requestId)).toBe(false);
-    // The Copy/Dismiss row that the assistant placeholder owned must be
+    // The Copy row that the assistant placeholder owned must be
     // removed when the kind flips to error — otherwise the user can copy
     // the now-stale spinner text.
     const dom = document.querySelector('[data-copilot-id="a-x"]');
@@ -249,22 +248,6 @@ describe('Copilot DOM panel', () => {
     expect(last.text).toBe('встреча началась');
     const dom = document.querySelector('.copilot-msg-status .copilot-msg-text');
     expect(dom.textContent).toBe('встреча началась');
-  });
-
-  test('dismiss button removes the message from state and DOM', () => {
-    const el = renderCopilotMessage({
-      id: 'a-dismiss',
-      kind: 'assistant',
-      text: 'дроп меня',
-      time: '10:00:00',
-    });
-    state.copilotMessages.push({ id: 'a-dismiss', kind: 'assistant', text: 'дроп меня' });
-
-    const btn = el.querySelector('.copilot-msg-dismiss-btn');
-    btn.click();
-
-    expect(state.copilotMessages.find((m) => m.id === 'a-dismiss')).toBeUndefined();
-    expect(document.querySelector('[data-copilot-id="a-dismiss"]')).toBeNull();
   });
 
   test('handleCopilotStatus terminal done without prior reply releases pending and re-enables input', () => {

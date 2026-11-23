@@ -38,6 +38,10 @@ reasoning.
   unavailable. The app still never removes the other installation's services
   itself.
 
+- The Copilot panel on the conference page no longer has a **Dismiss** button
+  under Claude's replies; **Copy** stays. Rebuild the extension (`cargo setup`
+  does it) and reload it in Chrome.
+
 ## 2026-11-22
 
 ### Changed

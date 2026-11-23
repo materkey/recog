@@ -1075,17 +1075,6 @@ function clearCopilotEmptyPlaceholder() {
   if (empty) empty.remove();
 }
 
-function showCopilotEmptyIfNoneLeft() {
-  const messagesEl = getCopilotMessagesEl();
-  if (!messagesEl) return;
-  if (state.copilotMessages.length === 0 && !messagesEl.querySelector('.ktalk-copilot-empty')) {
-    const div = document.createElement('div');
-    div.className = 'ktalk-copilot-empty';
-    div.textContent = 'Сообщений пока нет.';
-    messagesEl.appendChild(div);
-  }
-}
-
 function scrollCopilotToBottom() {
   const messagesEl = getCopilotMessagesEl();
   if (!messagesEl) return;
@@ -1126,7 +1115,6 @@ export function renderCopilotMessage(msg) {
     actionsHtml = `
         <div class="copilot-msg-actions">
           <button type="button" class="copilot-msg-action-btn copilot-msg-copy-btn" title="Copy">Copy</button>
-          <button type="button" class="copilot-msg-action-btn copilot-msg-dismiss-btn" title="Dismiss">Dismiss</button>
         </div>
       `;
   }
@@ -1151,11 +1139,6 @@ export function renderCopilotMessage(msg) {
       }
     });
   }
-  const dismissBtn = wrapper.querySelector('.copilot-msg-dismiss-btn');
-  if (dismissBtn) {
-    dismissBtn.addEventListener('click', () => dismissCopilotMessage(msg.id));
-  }
-
   messagesEl.appendChild(wrapper);
   scrollCopilotToBottom();
   return wrapper;
@@ -1176,13 +1159,6 @@ function findCopilotMessageElement(id) {
   const messagesEl = getCopilotMessagesEl();
   if (!messagesEl || !id) return null;
   return messagesEl.querySelector(`[data-copilot-id="${id}"]`);
-}
-
-function dismissCopilotMessage(id) {
-  state.copilotMessages = state.copilotMessages.filter((m) => m.id !== id);
-  const el = findCopilotMessageElement(id);
-  if (el) el.remove();
-  showCopilotEmptyIfNoneLeft();
 }
 
 function copilotKindHasActions(kind) {
@@ -1213,7 +1189,7 @@ function setCopilotMessageKind(el, kind) {
   el.classList.add(`copilot-msg-${kind}`);
   const roleEl = el.querySelector('.copilot-msg-role');
   if (roleEl) roleEl.textContent = getCopilotRoleLabel(kind);
-  // Drop the copy/dismiss row when the kind flips to one that does not
+  // Drop the copy row when the kind flips to one that does not
   // own actions (status/error/user), so an assistant bubble downgraded
   // to error does not keep a Copy button that copies stale text. A
   // placeholder never flips back to assistant/proactive: every flip away

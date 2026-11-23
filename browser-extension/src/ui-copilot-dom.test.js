@@ -343,15 +343,6 @@ describe('Copilot placeholder updates', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('ответ');
   });
 
-  test('the placeholder was dismissed - its reply arrives - nothing is rendered for it', () => {
-    placeholder().querySelector('.copilot-msg-dismiss-btn').click();
-
-    ui.handleCopilotReply({ request_id: requestId, text: 'ответ' });
-
-    expect(texts()).toEqual(['вопрос']);
-    expect(state.copilotPending.size).toBe(0);
-  });
-
   test('a bridge disconnect with a pending entry lacking its placeholder id - received - clears it', () => {
     state.copilotPending.set('ghost', null);
 
