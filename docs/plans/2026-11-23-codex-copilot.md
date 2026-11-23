@@ -118,12 +118,13 @@ without `AGENTS.md` under the data directory, and the `config` overrides of
 `mcp_servers.copilot.url = <RECOG_COPILOT_MCP_URL>` and
 `mcp_servers.copilot.default_tools_approval_mode = "approve"`. The playbook and
 the agent's prompt go in as `developerInstructions`, with one sentence saying
-that events arrive as user turns rather than channel blocks. Task 1 checks with
-`instructionSources` whether `--ignore-user-config` keeps the personal
-`AGENTS.md` out of an `app-server` thread; if not, the harness uses its own
-`CODEX_HOME` with `auth.json` linked to the user's (Codex follows the link on
-refresh, tested upstream but undocumented) and reports `blocked: codex login`
-when the login is kept in the keyring instead.
+that events arrive as user turns rather than channel blocks. `app-server` has no
+`--ignore-user-config`, so the harness runs Codex with its own `CODEX_HOME`
+under the data directory (`<data>/copilot/codex-home`) whose `auth.json` links
+to the user's (Codex follows the link on refresh, tested upstream but
+undocumented); a login kept in the keyring instead shows as `account: null`
+and the harness reports `blocked: codex login`. The model is passed explicitly:
+without the user's config Codex falls back to its own default.
 
 **D6. Provider choice.** The `copilot` scenario allows Claude and Codex;
 default order `["claude", "codex"]`. At spawn the supervisor takes the first
@@ -161,15 +162,27 @@ Codex's model and reasoning effort for Copilot come from the same settings.
 - Create: `crates/recog-copilot/tests/fixtures/codex/` (recorded lines)
 - Modify: `docs/plans/2026-11-23-codex-copilot.md`
 
-- [ ] start `codex app-server` with `--ignore-user-config` and the D5 overrides;
-      record `initialize`, `account/read`, `thread/start` (with
-      `instructionSources`) and one turn calling `get_recent_transcript` on a
-      running channel
-- [ ] confirm the MCP tool runs without an approval request under D5
-- [ ] decide D5's CODEX_HOME question from `instructionSources`; write the
+- [x] start `codex app-server` with the D5 overrides; record `initialize`,
+      `account/read`, `thread/start` (with `instructionSources`) and one turn
+      calling `get_recent_transcript` on a running channel
+- [x] confirm the MCP tool runs without an approval request under D5
+- [x] decide D5's CODEX_HOME question from `instructionSources`; write the
       answer into this plan
 - [ ] keep the recorded lines as fixtures (no meeting content: a synthetic
-      transcript)
+      transcript), with paths and the account replaced, in Task 2
+
+Results (2026-11-23, codex-cli 0.171.0, scratch run, not in the repository):
+`app-server` has no `--ignore-user-config`. With a separate `CODEX_HOME`
+holding only a link to `~/.codex/auth.json`: `account/read` gave the ChatGPT
+account; `thread/start` with `approvalPolicy: never`, `sandbox: read-only`,
+`ephemeral` and the MCP server in its `config` map gave
+`instructionSources: []` (no personal `AGENTS.md`, none of the user's 13 MCP
+servers) and the default model `gpt-6.2-sol`; one turn called
+`copilot/get_recent_transcript` with no approval request (the isolated channel
+had no bridge, so it returned "bridge not connected"); closing stdin ended the
+process with 0. The stream also carries `mcpServer/startupStatus/updated`,
+`thread/status/changed`, `account/rateLimits/updated` and
+`remoteControl/status/changed`, which the client ignores.
 
 ### Task 2: app-server protocol client
 
