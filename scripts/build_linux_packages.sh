@@ -13,7 +13,7 @@ echo '2afaa5ffb5e3493402e31e7c67a5a1fb42133e3f66fc315ca0051934125561c7  nfpm.tar
 tar -xzf nfpm.tar.gz nfpm
 tar -xzf "$out/recog-$tag-linux-x86_64.tar.gz"
 [[ $(cat recog/recog-release) == "$tag" ]]
-cp "$root/deploy/linux/packages/"{nfpm.yaml,recog-setup,recog-setup.desktop} .
+cp "$root/deploy/linux/packages/"{nfpm.yaml,recog-setup,recog-setup.desktop,recog.desktop,recog.svg} .
 export RECOG_VERSION=${tag#v}
 ./nfpm package -p deb -t "$out/recog-amd64.deb"
 ./nfpm package -p archlinux -t "$out/recog-x86_64.pkg.tar.zst"

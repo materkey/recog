@@ -24,6 +24,10 @@ contents:
       mode: 0755
   - src: recog-setup.desktop
     dst: /usr/share/applications/recog-setup.desktop
+  - src: recog.desktop
+    dst: /usr/share/applications/recog.desktop
+  - src: recog.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/recog.svg
   - src: recog/LICENSE
     dst: /usr/share/licenses/recog/LICENSE
 overrides:
@@ -38,6 +42,7 @@ overrides:
       - mesa-vulkan-drivers | vulkan-icd
       - systemd
       - dbus-user-session
+      - xdg-utils
   archlinux:
     depends:
       - glibc>=2.39
@@ -47,3 +52,4 @@ overrides:
       - vulkan-icd-loader
       - vulkan-swrast
       - systemd
+      - xdg-utils

@@ -16,4 +16,28 @@ if [ -z "${PULSE_SERVER:-}" ] && ! pactl info >/dev/null 2>&1; then
         fi
     done
 fi
-exec /usr/lib/recog/bin/recog setup
+
+address=http://127.0.0.1:9080
+status=0
+/usr/lib/recog/bin/recog setup || status=$?
+echo
+if [ "$status" -eq 0 ]; then
+    echo "Recog настроен. Расшифровки встреч открываются в браузере: $address"
+    echo 'Позже их можно открыть пунктом «Recog» в меню приложений.'
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then
+        # The web service has just been started; give it a moment to listen.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            ss -ltn 2>/dev/null | grep -q '127\.0\.0\.1:9080 ' && break
+            sleep 1
+        done
+        xdg-open "$address" >/dev/null 2>&1 || true
+    fi
+else
+    echo "Настройка не завершена. Причина в сообщениях выше." >&2
+fi
+# The menu entry runs this in a terminal that closes when the command ends.
+if [ -t 0 ] && [ -t 1 ]; then
+    printf 'Нажмите Enter, чтобы закрыть окно.'
+    read -r _ || true
+fi
+exit "$status"

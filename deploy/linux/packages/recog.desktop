@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Recog
+Comment=Meeting transcripts in the browser
+Comment[ru]=Расшифровки встреч в браузере
+Exec=xdg-open http://127.0.0.1:9080
+Icon=recog
+Categories=AudioVideo;Audio;

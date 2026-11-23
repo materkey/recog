@@ -11,6 +11,12 @@ reasoning.
 
 ### Changed
 
+- The Linux packages add **Recog** to the applications menu, which opens the
+  meeting transcripts at http://127.0.0.1:9080 in the browser. **Set up Recog**
+  opens them when setup succeeds and keeps its terminal open until you press
+  Enter, so the result and any error stay readable. Install the new package
+  to get both.
+
 - When the services belong to another installation, such as a git checkout,
   the Finder app names its folder and shows the command that removes its
   services, with a button to copy it; after that **Проверить снова** offers
