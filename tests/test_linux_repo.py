@@ -132,28 +132,23 @@ def test_packages_when_changed_after_release_was_written_then_the_chain_is_broke
         repo.check(changed, published(dist), TAG)
 
 
-def test_signatures_when_made_with_another_key_then_they_do_not_verify(dist, gnupg_home):
+def sign_into(home, dist, out):
+    """A new key signs dist's indexes into out; returns its public key."""
     if not (shutil.which("gpg") and shutil.which("gpgv")):
         pytest.skip("GnuPG is not installed")
+    no_passphrase = ("--pinentry-mode", "loopback", "--passphrase", "")
+    repo.gpg(home, *no_passphrase, "--quick-gen-key", "recog test", "ed25519", "sign")
+    repo.gpg(home, "--clearsign", "--output", out / "InRelease", dist / "Release")
+    repo.gpg(home, "--detach-sign", "--output", out / "recog.db.sig", dist / "recog.db")
+    return repo.gpg(home, "--armor", "--export")
+
+
+def test_signatures_when_made_with_another_key_then_they_do_not_verify(dist, gnupg_home):
     keys = {}
     for name in ("ours", "other"):
-        home = gnupg_home()
-        repo.gpg(
-            home,
-            "--pinentry-mode",
-            "loopback",
-            "--passphrase",
-            "",
-            "--quick-gen-key",
-            name,
-            "ed25519",
-            "sign",
-        )
         out = dist / name
         out.mkdir()
-        repo.gpg(home, "--clearsign", "--output", out / "InRelease", dist / "Release")
-        repo.gpg(home, "--detach-sign", "--output", out / "recog.db.sig", dist / "recog.db")
-        keys[name] = (repo.gpg(home, "--armor", "--export"), out)
+        keys[name] = (sign_into(gnupg_home(), dist, out), out)
     key, ours = keys["ours"]
     signed = [(ours / "InRelease").read_bytes(), (ours / "recog.db.sig").read_bytes()]
     repo.check_signatures(indexes(dist), *signed, key)
@@ -162,3 +157,43 @@ def test_signatures_when_made_with_another_key_then_they_do_not_verify(dist, gnu
         repo.check_signatures(indexes(dist), (other / "InRelease").read_bytes(), signed[1], key)
     with pytest.raises(ValueError, match="does not verify"):
         repo.check_signatures(indexes(dist), signed[0], (other / "recog.db.sig").read_bytes(), key)
+
+
+@pytest.fixture
+def published_repository(dist, gnupg_home, monkeypatch, tmp_path_factory):
+    key = tmp_path_factory.mktemp("key") / "recog.asc"
+    key.write_bytes(sign_into(gnupg_home(), dist, dist))
+    monkeypatch.setattr(repo, "PUBLIC_KEY", key)
+    return dist
+
+
+def run_verify(monkeypatch, dist):
+    monkeypatch.setattr(
+        sys, "argv", ["linux_repo.py", "verify", "--base", dist.as_uri(), "--tag", TAG]
+    )
+    repo.main()
+
+
+def test_published_repository_when_verified_then_apt_and_pacman_get_what_was_signed(
+    published_repository, monkeypatch, capsys
+):
+    run_verify(monkeypatch, published_repository)
+    assert "signed indexes of recog 1.2.3-1 match their packages" in capsys.readouterr().out
+
+
+def test_package_when_replaced_after_signing_then_the_repository_fails_verification(
+    published_repository, monkeypatch
+):
+    package = published_repository / "recog-1.2.3-1-x86_64.pkg.tar.zst"
+    package.write_bytes(package.read_bytes() + b"tampered")
+    with pytest.raises(ValueError, match="does not match the published"):
+        run_verify(monkeypatch, published_repository)
+
+
+def test_release_when_changed_after_signing_then_the_repository_fails_verification(
+    published_repository, monkeypatch
+):
+    release = published_repository / "Release"
+    release.write_bytes(release.read_bytes().replace(b"Label: Recog", b"Label: Other"))
+    with pytest.raises(ValueError, match="InRelease signs a different Release"):
+        run_verify(monkeypatch, published_repository)
