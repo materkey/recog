@@ -7,7 +7,7 @@ GigaAM runs locally across four inference surfaces in recog, all sharing one mod
 3. `ASRModule.transcribe_with_timestamps(audio, sample_rate=16000)` — refine contour (ADR-0019). Wraps `model.transcribe(path, word_timestamps=True)` and normalizes each `Word.start/end` to **int milliseconds in place**, returning the `TranscriptionResult`.
 4. `LiveTranscriber._transcribe_direct(audio_chunk)` — direct `model.forward()` + `decode[0][0]` for mic / mixed-fallback (`recog/live.py:441-479`). No public `ASRModule` method today; the body is inlined in `LiveTranscriber`.
 
-Z270XX (RTX PRO 6000 Blackwell, 96 GiB) fronts GigaAM v3 behind an OpenAI-Whisper-compatible gateway. Verified live:
+A GPU server (RTX PRO 6000 Blackwell, 96 GiB) fronts GigaAM v3 behind an OpenAI-Whisper-compatible gateway. Verified live:
 
 - `GET /healthz` → `{"gigaam":{"ok":true,"variant":"v3_e2e_rnnt","diarization":true}, ...}`.
 - `GET /v1/models` → aliases including `gigaam`, `gigaam-v3-e2e-rnnt`.
@@ -25,7 +25,7 @@ Z270XX (RTX PRO 6000 Blackwell, 96 GiB) fronts GigaAM v3 behind an OpenAI-Whispe
 ## Goals / Non-Goals
 
 **Goals:**
-- Offload all four GigaAM paths to Z270XX behind one constructor `build_asr()`.
+- Offload all four GigaAM paths to the GPU server behind one constructor `build_asr()`.
 - Lazy local fallback: do not load the local model until the first remote failure.
 - Circuit breaker so a dead remote fails fast and re-probes on a schedule.
 - Extend the gateway in-repo to emit word-level timestamps for refine.
@@ -141,9 +141,9 @@ else:
 
 ### D7. Gateway extended in-repo for word timestamps
 
-**Choice:** `recog/asr_server/gigaam_backend.py` is a patched copy of the current Z270XX backend. It adds an optional form field `timestamp_granularities` (string; `"word"` enables word timestamps). When word timestamps are requested, the backend calls `state["model"].transcribe(wav_path, word_timestamps=True)` (returns `TranscriptionResult` with `.text` and `.words[Word(text, start_sec, end_sec)]`) instead of `transcribe_longform`, and includes a top-level `"words": [{"word": w.text, "start": float(w.start), "end": float(w.end)}]` in the JSON response alongside `text`. All existing behaviour (json / verbose_json / diarized / srt / vtt, ffmpeg transcode) is intact when word ts is not requested.
+**Choice:** `recog/asr_server/gigaam_backend.py` is a patched copy of the GPU server's current backend. It adds an optional form field `timestamp_granularities` (string; `"word"` enables word timestamps). When word timestamps are requested, the backend calls `state["model"].transcribe(wav_path, word_timestamps=True)` (returns `TranscriptionResult` with `.text` and `.words[Word(text, start_sec, end_sec)]`) instead of `transcribe_longform`, and includes a top-level `"words": [{"word": w.text, "start": float(w.start), "end": float(w.end)}]` in the JSON response alongside `text`. All existing behaviour (json / verbose_json / diarized / srt / vtt, ffmpeg transcode) is intact when word ts is not requested.
 
-`docs/asr-server.md` documents: scp target `~/projects/asr-api/gigaam_backend.py` on Z270XX, restart `systemctl --user restart asr-gigaam`, curl smoke test that the response carries `words` when `timestamp_granularities=word` is sent.
+`docs/asr-server.md` documents: scp target `~/projects/asr-api/gigaam_backend.py` on the GPU server, restart `systemctl --user restart asr-gigaam`, curl smoke test that the response carries `words` when `timestamp_granularities=word` is sent.
 
 **Why in-repo (user decision):** the client (`recog/remote_asr.py`) and the gateway contract it depends on must version together. A separate `asr-api` repo would let the two drift; a deploy artifact in `recog/asr_server/` keeps them in one place.
 
@@ -166,14 +166,14 @@ else:
 
 ## Migration Plan
 
-1. **Phase 0 — gateway patch:** deploy `recog/asr_server/gigaam_backend.py` to Z270XX; `systemctl --user restart asr-gigaam`; curl smoke test confirms `words` in the response for `timestamp_granularities=word`.
+1. **Phase 0 — gateway patch:** deploy `recog/asr_server/gigaam_backend.py` to the GPU server; `systemctl --user restart asr-gigaam`; curl smoke test confirms `words` in the response for `timestamp_granularities=word`.
 2. **Phase 1 — client + fallback:** land `recog/remote_asr.py`, `transcribe_chunk` extraction, config consts, `build_asr()` wiring, exports. Default `RECOG_ASR_BACKEND=local` — repository behaviour unchanged; full unit suite green.
 3. **Phase 2 — opt-in validation:** set `RECOG_ASR_BACKEND=remote` in a personal `.env`; run a real KTalk meeting on confirmed LAN; verify live + refine offload, force a remote outage and confirm transparent fallback + circuit-breaker logs.
 4. **Rollback:** `RECOG_ASR_BACKEND=local` (or unset) + restart → `build_asr()` returns plain `ASRModule`; zero data migration.
 
 ## Open Questions
 
-1. **Default flip:** should `RECOG_ASR_BACKEND` ever default to `remote`? Proposed: no — network/GPU dependency must stay an explicit opt-in. Revisit only if Z270XX becomes a guaranteed-present LAN peer.
+1. **Default flip:** should `RECOG_ASR_BACKEND` ever default to `remote`? Proposed: no — network/GPU dependency must stay an explicit opt-in. Revisit only if the GPU server becomes a guaranteed-present LAN peer.
 2. **Per-method timeouts:** `transcribe_simple` on a long offline file legitimately exceeds 15 s. Proposed: a longer timeout (or no timeout) for `transcribe_simple` only; live/refine keep the tight bound. Decide during Phase 2 if offline-CLI offload trips the breaker spuriously.
 3. **Batch parallelism cap:** `max_workers=8` matches `PCM_MAX_BATCH_SIZE`. If the gateway serializes internally, parallel requests gain nothing; revisit if remote batch latency is dominated by queueing.
 4. **Healthz cadence:** `load_model()` probes `healthz` once at meeting start in remote mode. A mid-meeting remote death surfaces only on the next dispatch failure. Proposed: rely on the circuit breaker rather than a background poller (no extra thread).

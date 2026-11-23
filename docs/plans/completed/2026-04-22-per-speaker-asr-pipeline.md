@@ -39,7 +39,7 @@
 - MPS/Metal ускорение.
 - VAD-gate в браузере (follow-up, поверх рабочего MVP).
 - Унификация local mic в PCM pipe.
-- Удалённый ASR worker на Z270XX.
+- Удалённый ASR worker на GPU-сервере.
 - Изменения frontend, meetings storage, AI summary (anchor/catchup).
 
 ## Implementation Tasks

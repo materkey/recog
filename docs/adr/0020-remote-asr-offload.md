@@ -1,4 +1,4 @@
-# ADR-0020: Remote GigaAM offload to Z270XX with lazy local fallback
+# ADR-0020: Remote GigaAM offload to a GPU server with lazy local fallback
 
 ## Status
 Accepted (2026-05-31)
@@ -18,13 +18,13 @@ MacBook. Все hot inference paths делят один экземпляр мо�
   машины ASR + UI + браузер + расширение.
 - Offline-CLI на длинных файлах надолго занимает локальный GPU/CPU.
 
-В той же LAN живёт **Z270XX** — RTX PRO 6000 Blackwell, 96 GiB GDDR7
+В той же LAN живёт **GPU-сервер** — RTX PRO 6000 Blackwell, 96 GiB GDDR7
 (см. skill `local-linux-models`). На нём поднят OpenAI-Whisper-совместимый
-ASR-gateway (`https://materkey-z270x-1.tail4799d.ts.net/asr`), фронтящий GigaAM v3
+ASR-gateway (`https://<gpu-host>/asr`), фронтящий GigaAM v3
 + Qwen3-ASR. Замеры:
 
 - **RTF ~99×** на GigaAM на Blackwell — на порядок выше локального батча.
-- **LAN RTT 3–5 ms** (`ping materkey-z270x-1...` → min 3.858 ms). По правилу из
+- **LAN RTT 3–5 ms** (`ping <gpu-host>` → min 3.858 ms). По правилу из
   global CLAUDE.md это настоящая LAN, не DERP-relay; сетевой round-trip
   пренебрежимо мал относительно inference.
 - Gateway уже отдаёт `GET /healthz → {ok, variant: v3_e2e_rnnt, diarization}` и
@@ -57,7 +57,7 @@ offload'ить нельзя — а это один из четырёх путе�
 
 ## Decision
 
-Ввести опциональный **remote ASR offload** на Z270XX за единым конструктором
+Ввести опциональный **remote ASR offload** на GPU-сервер за единым конструктором
 `build_asr()` с **ленивым** локальным fallback'ом и circuit breaker'ом. Включается
 строго через env; committed default оставляет всё локально.
 
@@ -140,7 +140,7 @@ thread-safe circuit breaker (`threading.Lock`, `time.monotonic()`).
 
 ### D5. Gateway расширяется в этом репозитории под word-timestamps
 
-Патч текущего Z270XX backend'а лежит в `recog/asr_server/gigaam_backend.py` (один
+Патч текущего backend'а GPU-сервера лежит в `recog/asr_server/gigaam_backend.py` (один
 репозиторий — отдельного asr-api нет). Добавляется опциональное form-поле
 `timestamp_granularities` (string; `"word"` включает word-timestamps). Когда
 запрошены word ts — backend зовёт `state["model"].transcribe(wav_path,
@@ -149,7 +149,7 @@ word_timestamps=True)` (вернёт `TranscriptionResult` с `.text` и
 JSON top-level `"words": [{"word", "start", "end"}]` рядом с `text`. Без флага —
 всё текущее поведение (json/verbose_json/diarized/srt/vtt, ffmpeg transcode)
 нетронуто. Deploy: `docs/asr-server.md` — scp в `~/projects/asr-api/
-gigaam_backend.py` на Z270XX, `systemctl --user restart asr-gigaam`, curl
+gigaam_backend.py` на GPU-сервере, `systemctl --user restart asr-gigaam`, curl
 smoke-test на word ts.
 
 ### D6. Safety default — opt-in
@@ -211,7 +211,7 @@ Env-консты в `recog/config.py` (паттерн `os.environ.get(...)` на
   `load_model()` на локали (~секунды). Это происходит один раз на инцидент;
   circuit breaker не молотит remote повторно. Тёплый локальный путь после этого.
 - **Контрактный дрейф gateway.** Word-timestamps добавлены патчем нашего же
-  backend'а; если на Z270XX выкатят несовместимую версию, `transcribe_with_
+  backend'а; если на GPU-сервере выкатят несовместимую версию, `transcribe_with_
   timestamps` упадёт → fallback на локаль. Smoke-test в `docs/asr-server.md`
   обязателен после деплоя.
 - **Батч теряет batched-forward выигрыш.** `transcribe_batch` на remote'е —
@@ -257,10 +257,10 @@ Env-консты в `recog/config.py` (паттерн `os.environ.get(...)` на
 
 - **OpenSpec change** (детальный дизайн): `openspec/changes/remote-asr-offload/`
   — `proposal.md`, `design.md`, `tasks.md`.
-- Gateway: `https://materkey-z270x-1.tail4799d.ts.net/asr`
+- Gateway: `https://<gpu-host>/asr`
   (`GET /healthz`, `GET /v1/models`, `POST /v1/audio/transcriptions`).
 - Deploy-артефакт: `recog/asr_server/gigaam_backend.py`, `docs/asr-server.md`.
-- Skill `local-linux-models` — Z270XX (RTX PRO 6000 Blackwell), ASR gateway,
+- Skill `local-linux-models` — GPU-сервер (RTX PRO 6000 Blackwell), ASR gateway,
   модельные алиасы.
 - Prior ADRs: ADR-0018 (per-speaker ASR pipeline — `transcribe_batch`,
   `_transcribe_direct`), ADR-0019 (stream-refine — `transcribe_with_timestamps`,

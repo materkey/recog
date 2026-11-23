@@ -2,7 +2,7 @@
 
 GigaAM (`v3_e2e_rnnt`) runs locally on the MacBook for every inference surface: the per-speaker live batch (ADR-0018), the offline CLI, the refine contour (ADR-0019), and the direct `model.forward()` for mic / mixed-fallback in `live.py`. All four share a single model instance under `ASRModule._model_lock` (~1.6 GB RSS on M1 Pro 16 GB, ~60× realtime batched). Refine and live contend for that one mutex; long meetings accrue an MPS NSObject leak (ADR-0019 "Operational concerns") that is the symptom of one machine carrying ASR + UI + browser + extension at once.
 
-On the same LAN sits **Z270XX** — an RTX PRO 6000 Blackwell, 96 GiB GDDR7 (skill `local-linux-models`) — fronting GigaAM v3 + Qwen3-ASR behind an OpenAI-Whisper-compatible gateway at `https://materkey-z270x-1.tail4799d.ts.net/asr`. GigaAM there runs at **~99× RTF**, an order of magnitude over the local batch, and LAN RTT is **3–5 ms** (`ping` min 3.858 ms — real LAN, not a DERP relay). Offloading inference there frees the MacBook's GPU/CPU for the UI and removes the live↔refine mutex contention.
+On the same LAN sits **a GPU server** — an RTX PRO 6000 Blackwell, 96 GiB GDDR7 (skill `local-linux-models`) — fronting GigaAM v3 + Qwen3-ASR behind an OpenAI-Whisper-compatible gateway at `https://<gpu-host>/asr`. GigaAM there runs at **~99× RTF**, an order of magnitude over the local batch, and LAN RTT is **3–5 ms** (`ping` min 3.858 ms — real LAN, not a DERP relay). Offloading inference there frees the MacBook's GPU/CPU for the UI and removes the live↔refine mutex contention.
 
 This change adds an **opt-in** remote ASR offload behind a single `build_asr()` constructor with a **lazy** local fallback and a circuit breaker. The committed default is `RECOG_ASR_BACKEND=local`, so repository behaviour is unchanged until the user flips the env var. All four GigaAM paths are offloaded — including refine, which requires word-level timestamps the current gateway does not emit; the gateway is extended in-repo (`recog/asr_server/`) to supply them.
 
@@ -20,7 +20,7 @@ This change adds an **opt-in** remote ASR offload behind a single `build_asr()` 
 
 ### Modified Capabilities
 
-- `per-speaker-transcription`: gains an optional remote inference backend for all four GigaAM paths, a lazy-loaded local fallback, and a circuit breaker. When `RECOG_ASR_BACKEND=local` (default) behaviour is identical to ADR-0018/0019; when `remote`, inference is offloaded to Z270XX with transparent fallback.
+- `per-speaker-transcription`: gains an optional remote inference backend for all four GigaAM paths, a lazy-loaded local fallback, and a circuit breaker. When `RECOG_ASR_BACKEND=local` (default) behaviour is identical to ADR-0018/0019; when `remote`, inference is offloaded to the GPU server with transparent fallback.
 
 ### New Capabilities
 

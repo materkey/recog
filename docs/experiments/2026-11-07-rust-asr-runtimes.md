@@ -12,7 +12,7 @@ entirely.
 - It returns the same word timings.
 - It is 6× faster on the live 3 s windows and 12× faster on refine windows. A 20 s
   refine takes 60-100 ms, which makes the decoder abort hook unnecessary.
-- On the Z270XX GPU (Vulkan) the same WER, 4.5× faster than PyTorch on CUDA, with a
+- On the GPU server (Vulkan) the same WER, 4.5× faster than PyTorch on CUDA, with a
   quarter of its memory. `gigastt` does not run on that card's CUDA (below).
 
 ## Runtimes
@@ -74,7 +74,7 @@ The figure is the time from that request until the call returns.
 **Hosts.**
 - MacBook Pro M3 Pro, macOS 27.0.1. The live service ran its ASR remotely during the
   runs, so the GPU was free and the CPU lightly loaded.
-- Z270XX: 32 cores and an RTX PRO 6000 Blackwell (driver 615.71). CPU runs `nice`, 8
+- GPU server: 32 cores and an RTX PRO 6000 Blackwell (driver 615.71). CPU runs `nice`, 8
   threads; GPU runs with the LLM asleep (the `comfyui` lease held), about 58 GB free.
 
 ## Results: Mac
@@ -105,7 +105,7 @@ Labelled corpus, WER %:
 - The labelled "live" figures are left out: that shape holds 8 long utterances there,
   not 3 s windows.
 
-## Results: Z270XX
+## Results: GPU server
 
 Labelled corpus, CPU, 8 threads:
 

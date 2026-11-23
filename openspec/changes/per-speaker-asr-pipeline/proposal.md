@@ -49,5 +49,5 @@ None. The repository currently has no `openspec/specs/` entries; this is a green
 - Shorter `chunk_duration` / live-latency optimization.
 - MPS / Metal GPU acceleration.
 - Alternative ASR backends (Whisper, etc.).
-- Any remote ASR worker or offload to Z270XX — benchmark proved unnecessary.
+- Any remote ASR worker or offload to a GPU server — benchmark proved unnecessary.
 - Changes to meeting storage, frontend rendering, or AI summary features (anchor / catchup / increments) — they operate on aggregated transcript and are unaffected.

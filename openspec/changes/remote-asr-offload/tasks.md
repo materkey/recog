@@ -1,14 +1,14 @@
 ## 0. Gateway patch (recog/asr_server)
 
-- [ ] 0.1 Copy the current Z270XX backend into `recog/asr_server/gigaam_backend.py`; add an optional form field `timestamp_granularities` (string) to the `/v1/audio/transcriptions` handler
+- [ ] 0.1 Copy the GPU server's current backend into `recog/asr_server/gigaam_backend.py`; add an optional form field `timestamp_granularities` (string) to the `/v1/audio/transcriptions` handler
 - [ ] 0.2 When `timestamp_granularities == "word"`, call `state["model"].transcribe(wav_path, word_timestamps=True)` instead of `transcribe_longform`; include top-level `"words": [{"word": w.text, "start": float(w.start), "end": float(w.end)}]` in the JSON response alongside `text`
 - [ ] 0.3 Confirm all existing behaviour (json / verbose_json / diarized / srt / vtt, ffmpeg transcode) is byte-identical when `timestamp_granularities` is absent
 - [ ] 0.4 Write `docs/asr-server.md`: scp target `~/projects/asr-api/gigaam_backend.py`, `systemctl --user restart asr-gigaam`, curl smoke test asserting `words` is present for `timestamp_granularities=word` and absent otherwise
-- [ ] 0.5 Deploy to Z270XX and run the smoke test from the README
+- [ ] 0.5 Deploy to the GPU server and run the smoke test from the README
 
 ## 1. Config
 
-- [ ] 1.1 Add to `recog/config.py` (module-top `os.environ.get`, matching `MIC_SPEAKER_NAME` / `PCM_*`): `RECOG_ASR_BACKEND` (default `"local"`), `RECOG_ASR_REMOTE_URL` (default `https://materkey-z270x-1.tail4799d.ts.net/asr`), `RECOG_ASR_REMOTE_MODEL` (default `"gigaam"`), `RECOG_ASR_REMOTE_TIMEOUT_S` (`float`, default `15`), `RECOG_ASR_CIRCUIT_FAILS` (`int`, default `3`), `RECOG_ASR_CIRCUIT_OPEN_S` (`float`, default `60`)
+- [ ] 1.1 Add to `recog/config.py` (module-top `os.environ.get`, matching `MIC_SPEAKER_NAME` / `PCM_*`): `RECOG_ASR_BACKEND` (default `"local"`), `RECOG_ASR_REMOTE_URL` (default `https://<gpu-host>/asr`), `RECOG_ASR_REMOTE_MODEL` (default `"gigaam"`), `RECOG_ASR_REMOTE_TIMEOUT_S` (`float`, default `15`), `RECOG_ASR_CIRCUIT_FAILS` (`int`, default `3`), `RECOG_ASR_CIRCUIT_OPEN_S` (`float`, default `60`)
 - [ ] 1.2 Document the new vars in `.env.example` with one-line comments; committed default keeps offload OFF
 
 ## 2. ASRModule.transcribe_chunk extraction

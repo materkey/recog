@@ -27,7 +27,7 @@ replacements pass the same checks.
 7. Guide the macOS grants through the installed Recog launcher and the optional
    Zoom helper. Report readiness in the terminal and web interface. Verify on a
    fresh Mac through the first transcript and an upgrade. Check Linux user services
-   on Z270XX.
+   on the Linux GPU server.
 8. Keep release archives in the private source repository. Publish the formula in
    `materkey/homebrew-apps` once installation from a private release is verified.
 
@@ -40,7 +40,7 @@ replacements pass the same checks.
   custom extension hosts, and preserved the launcher on repeated setup. Homebrew
   installed the public formula and fetched the matching private archive with
   the installing user’s GitHub login. An anonymous request returned 404.
-- On Z270XX, the Linux x86-64 release archive for v0.1.2 ran a real two-participant
+- On the Linux GPU server, the Linux x86-64 release archive for v0.1.2 ran a real two-participant
   Jitsi call in an isolated network. The installed unpacked extension opened
   capture on join, displayed the first transcript and closed capture on leave.
   Separate Russian clips played through a virtual microphone and the system
@@ -63,7 +63,7 @@ replacements pass the same checks.
 - Homebrew upgraded 0.1.0 to 0.1.3 from the published formula. Setup in the same
   isolated home retained the launcher inode and digest and the unpacked extension
   directory.
-- On Z270XX the standalone 0.1.1 updater fetched 0.1.3 using the installing
+- On the Linux GPU server the standalone 0.1.1 updater fetched 0.1.3 using the installing
   account, installed it and restarted four isolated user services. The web live
   status responded, and a second update reported the installed version as current.
 - Both release asset digests matched GitHub. The bundled Swift helpers target

@@ -52,7 +52,7 @@
 - VAD-gate для экономии батареи. Возможно потом.
 - Замена локального mic-capture. Microphone input остаётся через `sounddevice` как сейчас — там нет проблемы атрибуции (там один спикер по определению).
 - Frontend UI-изменения. Протокол `transcript` WS-frame остаётся тот же.
-- Удалённые ASR workers (Z270XX). Бенч показал что не нужны.
+- Удалённые ASR workers (GPU-сервер). Бенч показал что не нужны.
 - Изменение diarization БД (ECAPA-TDNN) — останется для не-KTalk путей.
 
 ## Architecture

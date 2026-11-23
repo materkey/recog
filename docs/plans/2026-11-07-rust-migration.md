@@ -55,7 +55,7 @@ where they can.
 1. **ASR experiment.** Transcribe our recordings with the current GigaAM
    (`v3_e2e_rnnt`, PyTorch) and with Rust runtimes: `wavo` (pure Rust, Metal and the
    Neural Engine, GGUF Q8_0) and `gigastt` (ONNX Runtime, CUDA on Linux), on the Mac and
-   on Z270XX. Measure WER against the current text, speed and memory, word timings,
+   on the GPU server. Measure WER against the current text, speed and memory, word timings,
    batching of several speakers in one pass, and how fast a refine can be aborted.
    Outcome: a runtime, or "not yet".
    **Done 2026-11-07** ([report](../experiments/2026-11-07-rust-asr-runtimes.md)).
@@ -204,7 +204,7 @@ where they can.
      validation) and the Python backend beside the Rust one with the same fake model
      and fake ffmpeg (132 requests: every format over awkward times, words,
      diarization, failures, validation, a model still loading); a manual run with the
-     real model transcribed GigaAM's own examples on Z270XX's GPU.
+     real model transcribed GigaAM's own examples on the GPU server.
 9. **Installation without Python.** `setup.sh` and the launchd/systemd units run
    binaries; `Recog.app` starts the Rust binary, so the permissions stay with "Recog".
    Python modules are deleted as they are replaced; each step gets its CHANGELOG entry.

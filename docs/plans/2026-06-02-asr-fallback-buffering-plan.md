@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Сбой remote ASR (Z270XX) не теряет речь — аудио буферизуется, локальная GigaAM грузится в фоне, бэклог обрабатывается с capture-временем, дедуп ограничен окном, ошибки логируются.
+**Goal:** Сбой remote ASR (GPU-сервер) не теряет речь — аудио буферизуется, локальная GigaAM грузится в фоне, бэклог обрабатывается с capture-временем, дедуп ограничен окном, ошибки логируются.
 
 **Architecture:** `FallbackASR` перестаёт блокировать вызывающий поток (фоновая загрузка локали + `ASRTemporarilyUnavailable`); потребители (`_process_chunk`, `PerSpeakerIngest.tick`, `RefineWorker`) гейтятся на `asr.available` и не вычитывают свои буферы, пока ASR недоступен.
 
@@ -1867,9 +1867,9 @@ tail -3 logs/live.stdout.log
 
 Expected: реплика появилась. Также проверить отсутствие новых ошибок: `tail -20 logs/live.stderr.log | grep -v "Clock sync"`.
 
-- [x] **Step 9.6: Финальная проверка инцидент-сценария (опционально, при доступе к Z270XX)**
+- [x] **Step 9.6: Финальная проверка инцидент-сценария (опционально, при доступе к GPU-серверу)**
 
-Эмулировать сбой remote: на Z270XX выполнить `ssh Z270XX 'systemctl --user stop asr-gateway'`, сказать 2–3 фразы в течение минуты, затем `ssh Z270XX 'systemctl --user start asr-gateway'`. Проверить:
+Эмулировать сбой remote: на GPU-сервере выполнить `ssh <gpu-host> 'systemctl --user stop asr-gateway'`, сказать 2–3 фразы в течение минуты, затем `ssh <gpu-host> 'systemctl --user start asr-gateway'`. Проверить:
 1. В stderr: `loading local GigaAM in background` (один раз), затем `local GigaAM ready`
 2. Все сказанные фразы появились в transcript.jsonl с временем произнесения
 3. После восстановления gateway: `remote recovered — circuit CLOSED` в stderr при следующем probe

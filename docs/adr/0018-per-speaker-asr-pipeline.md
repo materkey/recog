@@ -116,7 +116,7 @@ PCM — recovery-маркер `[PCM recovered — back to per-speaker]`.
 1. **Улучшенная server-side diarization** (pyannote-community v3.1). Отклонено: ADR-0006 и ADR-0007 показали, что qualitatively overlap-случаи не решаются кластеризацией post-hoc, пока ASR видит mixed chunk.
 2. **VAD-гейтинг в расширении** (не шлём чанки, когда no-speech). Отклонено для MVP — добавляет поверхность для багов (false-silence); вернёмся как follow-up поверх рабочего PCM-пути.
 3. **Унификация local mic в PCM pipe**. Отклонено (D9): host-tab не отдаёт local mic как remote track, унификация = лишняя работа без выгоды.
-4. **Remote ASR worker на Z270XX**. Отклонено: бенч показал запас 30× на локальной машине, инфраструктурная сложность не оправдана.
+4. **Remote ASR worker на GPU-сервере**. Отклонено: бенч показал запас 30× на локальной машине, инфраструктурная сложность не оправдана.
 5. **Бинарный WS-frame вместо base64 JSON**. Отклонено для MVP (D1), оставлено как follow-up при профайл-индикации.
 
 ## References

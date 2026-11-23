@@ -46,7 +46,7 @@ Dominant-speaker attribution is a guess: the ASR sees one stream containing over
 - Shorter chunk / UI-latency optimization.
 - MPS (Metal) acceleration.
 - Alternate ASR backends.
-- Remote / Z270XX worker.
+- Remote / GPU-server worker.
 - Changing meeting storage format, frontend rendering, or AI summary features.
 - Encoding (Opus / Ogg) — PCM is simpler and bandwidth is trivial on localhost.
 
