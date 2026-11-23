@@ -7,6 +7,9 @@ description: Search and analyze recog meeting transcripts - find quotes by speak
 
 Search and analyze meeting transcripts from the recog speech recognition system.
 
+`${CLAUDE_SKILL_DIR}` below is the directory holding this SKILL.md. Claude Code
+fills it in; where it stays literal (Codex), write that directory instead.
+
 ## Quick Start
 
 ```bash

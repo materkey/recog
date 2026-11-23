@@ -46,14 +46,15 @@ AI-анализ. Copilot запускается из веб-интерфейса
 в новых установках выключен. Новые установки хранят встречи, логи и профиль
 пользователя в `~/.recog`, настройки установки — в `~/.config/recog/config.toml`.
 
-Чтобы Claude Code мог искать по сохранённым встречам из любого проекта, установите
-скилл [`recog-meetings`](.claude/skills/recog-meetings/SKILL.md) в свой профиль:
+Чтобы Claude Code или Codex мог искать по сохранённым встречам из любого проекта,
+установите скилл [`recog-meetings`](.claude/skills/recog-meetings/SKILL.md) в свой
+профиль:
 
 ```sh
-npx -y skills add materkey/recog@recog-meetings -g -a claude-code -y
+npx -y skills add materkey/recog@recog-meetings -g -a claude-code codex -y
 ```
 
-Откройте новый сеанс Claude Code в любой папке и задайте вопрос о встрече.
+Откройте новый сеанс Claude Code или Codex в любой папке и задайте вопрос о встрече.
 Для установки нужен Node.js с `npx`, для поиска по участникам, словам и датам — `uv`.
 
 ## Установка

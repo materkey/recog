@@ -34,6 +34,9 @@ reasoning.
   установлен или отказал, ответит другой** to allow the other. **Готовность
   установки** shows whether either is installed.
 
+- The `recog-meetings` search skill installs for Codex as well:
+  `npx -y skills add materkey/recog@recog-meetings -g -a claude-code codex -y`.
+
 - On Linux, `curl -fsSL https://recog.vkkovalev.work/install.sh | sh` connects
   the package repository to apt or pacman, installs Recog and sets it up for
   you; running it again is safe. It replaces the earlier installer, which
