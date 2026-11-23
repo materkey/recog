@@ -1036,3 +1036,56 @@ async fn failing_prompt_when_generating_all_then_reported_and_the_others_still_r
     assert!(!meeting.join("increments/other/v2_meta.json").exists());
     assert_eq!(factory.prompts().len(), 1);
 }
+
+// --- The AI functions level ---
+
+fn settings_with_access(data: &Path, access: &str) {
+    std::fs::create_dir_all(data).unwrap();
+    let text = format!(
+        r#"{{"version": 1, "revision": "0f8fad5b-d9cb-469f-a165-70867728950e", "models": {{}}, "tasks": {{}}, "access": "{access}"}}"#
+    );
+    std::fs::write(data.join("ai-settings.json"), text).unwrap();
+}
+
+#[tokio::test]
+async fn level_manual_when_meeting_ends_then_no_summary_version_and_no_provider_call() {
+    let dir = tempfile::tempdir().unwrap();
+    settings_with_access(dir.path(), "manual");
+    let meetings = dir.path().join("meetings");
+    let meeting = make_meeting(&meetings, MEETING, None);
+    let prompts = write_prompts(dir.path(), &[("my-increment.md", "---\nname: Mine\nfilter: null\n---\n{transcript}")]);
+    let factory = FakeFactory::new("claude", "model", None, "Summary");
+    generator(&meetings, Some(prompts), &factory).generate_all(MEETING, &meeting).await.unwrap();
+    assert!(!meeting.join("increments").exists());
+    assert!(factory.calls().is_empty());
+}
+
+#[tokio::test]
+async fn unreadable_settings_when_meeting_ends_then_no_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ai-settings.json"), "{").unwrap();
+    let meetings = dir.path().join("meetings");
+    let meeting = make_meeting(&meetings, MEETING, None);
+    let prompts = write_prompts(dir.path(), &[("my-increment.md", "---\nname: Mine\nfilter: null\n---\n{transcript}")]);
+    let factory = FakeFactory::new("claude", "model", None, "Summary");
+    generator(&meetings, Some(prompts), &factory).generate_all(MEETING, &meeting).await.unwrap();
+    assert!(!meeting.join("increments").exists());
+    assert!(factory.calls().is_empty());
+}
+
+#[tokio::test]
+async fn level_off_when_regenerating_then_disabled_and_no_version_claimed() {
+    let dir = tempfile::tempdir().unwrap();
+    settings_with_access(dir.path(), "off");
+    let meetings = dir.path().join("meetings");
+    let meeting = make_meeting(&meetings, MEETING, None);
+    let factory = FakeFactory::new("claude", "model", None, "Summary");
+    let error = generator(&meetings, None, &factory)
+        .generate(MEETING, &meeting, &default_prompt(), true, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, AiError::Disabled(_)), "{error:?}");
+    assert_eq!(error.to_string(), recog_ai::error::DISABLED);
+    assert!(!meeting.join("increments").exists());
+    assert!(factory.calls().is_empty());
+}

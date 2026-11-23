@@ -303,3 +303,24 @@ async fn no_transcript_when_orphan_titled_then_no_title_even_with_broken_setting
     assert_eq!(meeting_title_update(&store(dir.path()), &meeting, &*factory).await, None);
     assert!(factory.calls().is_empty());
 }
+
+#[tokio::test]
+async fn level_manual_when_recording_closes_then_no_title_and_no_provider_call() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("ai-settings.json"),
+        r#"{"version": 1, "revision": "0f8fad5b-d9cb-469f-a165-70867728950e", "models": {}, "tasks": {}, "access": "manual"}"#,
+    )
+    .unwrap();
+    let meeting = dir.path().join("meetings/m1");
+    write_meeting(
+        &meeting,
+        r#"{"title": null, "participants": {"local": {"name": "User", "is_local": true}}}"#,
+        &[
+            r#"{"id": 1, "ts_display": "12:00:00", "speaker": "User", "speaker_id": "local", "text": "Обсуждаем архитектуру системы и все необходимые изменения."}"#,
+        ],
+    );
+    let factory = FakeFactory::new("claude", "model", None, "Архитектура");
+    assert_eq!(meeting_title_update(&store(dir.path()), &meeting, &*factory).await, None);
+    assert!(factory.calls().is_empty());
+}

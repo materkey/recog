@@ -20,13 +20,13 @@ use std::time::{Duration, Instant};
 use recog_core::meeting_storage::{self, UnnamedLocal};
 use recog_core::pyjson::Value as CoreValue;
 
-use crate::error::{AiError, Result};
+use crate::error::{AiError, DISABLED, Result};
 use crate::install::{LegacyEnv, default_prompts_dir};
 use crate::json::{self, Json, Map};
 use crate::prompt_registry::{PromptConfig, PromptRegistry};
 use crate::provider::{AiProvider, CliProviderFactory, ProviderFactory, complete_in_order};
 use crate::pytext;
-use crate::settings::{AiSettingsStore, Fallback, INCREMENT_TASK, ResolvedTask, render_prompt};
+use crate::settings::{AiSettingsStore, Fallback, INCREMENT_TASK, ResolvedTask, access_of, render_prompt};
 use crate::template::Variables;
 use crate::timestamp;
 
@@ -503,6 +503,28 @@ impl IncrementGenerator {
         self.meetings_base.join(meeting_id).join("increments").join(prompt_id)
     }
 
+    /// Why a summary may not start on its own after a meeting: a level below
+    /// `automatic`, or settings that cannot be read (which fail closed).
+    fn automatic_refusal(&self) -> Option<String> {
+        match self.store().read() {
+            Ok(snapshot) => {
+                let access = access_of(&snapshot);
+                (!access.allows_automatic())
+                    .then(|| format!("AI functions after meetings are off ({})", access.as_str()))
+            }
+            Err(error) => Some(error.to_string()),
+        }
+    }
+
+    /// The refusal of a click below the `manual` level, before any version is claimed.
+    fn require_manual(&self) -> Result<()> {
+        if access_of(&self.store().read()?).allows_manual() {
+            Ok(())
+        } else {
+            Err(AiError::Disabled(DISABLED.to_owned()))
+        }
+    }
+
     fn store(&self) -> AiSettingsStore {
         let parent = self.meetings_base.parent().unwrap_or(Path::new("")).to_path_buf();
         let store = AiSettingsStore::new(parent, Some(self.prompts_dir.clone()));
@@ -645,6 +667,7 @@ impl IncrementGenerator {
         if !meta_path.exists() {
             return Ok(None);
         }
+        self.require_manual()?;
         let Some(segments) = read_segments(meeting_path)? else {
             return Ok(None);
         };
@@ -794,6 +817,10 @@ impl IncrementGenerator {
     /// `generate_all`: every prompt matching the meeting title, concurrently. A failing
     /// prompt is reported and does not stop the others.
     pub async fn generate_all(&self, meeting_id: &str, meeting_path: &Path) -> Result<()> {
+        if let Some(reason) = self.automatic_refusal() {
+            eprintln!("[increment] skipped: {reason}");
+            return Ok(());
+        }
         self.migrate_flat_increments(meeting_path, "my-increment")?;
         let registry = PromptRegistry::new(&self.prompts_dir);
         let meta_path = meeting_path.join("meta.json");

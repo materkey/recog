@@ -233,11 +233,15 @@ async fn try_meeting_title(
     meeting_path: &Path,
     factory: &dyn ProviderFactory,
 ) -> Result<Option<TitleUpdate>> {
+    let settings = store.resolve_task("title", None, Fallback::default())?;
+    if !settings.access.allows_automatic() {
+        println!("Title generation skipped: AI functions after meetings are off");
+        return Ok(None);
+    }
     let transcript = transcript_as_text(meeting_path)?;
     if transcript.is_empty() {
         return Ok(None);
     }
-    let settings = store.resolve_task("title", None, Fallback::default())?;
     let meta = read_meta(meeting_path)?;
     let variables = meeting_variables(&meta)?;
     let Some(update) = generate_title(&transcript, None, Some(&settings), &variables, factory).await else {
