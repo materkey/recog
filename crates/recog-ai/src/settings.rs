@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 
+use crate::access::{Access, has_finished_meeting};
 use crate::defaults::{
     CLAUDE_EFFORTS, DEFAULT_MODELS, DEFAULT_TASKS, PLACEHOLDERS, PROVIDERS, REASONING_EFFORTS, default_task,
 };
@@ -35,8 +36,15 @@ pub const INCREMENT_TASK: &str = "analysis.increment";
 pub const SAVED_INCREMENT_TASK: &str = "saved:my-increment";
 const TASK_FIELDS: [&str; 6] = ["prompt", "providers", "models", "reasoning_effort", "claude_effort", "enabled"];
 
-/// The parsed settings file: `version`, `revision`, `models`, `tasks`, in file order.
+/// The parsed settings file: `version`, `revision`, `models`, `tasks` and the optional
+/// `access`, in file order.
 pub type Snapshot = Map;
+
+/// The AI functions level of a validated snapshot; a file without the field is from
+/// before the level existed and counts as `Automatic`.
+pub fn access_of(snapshot: &Snapshot) -> Access {
+    snapshot.get("access").and_then(Json::as_str).and_then(Access::parse).unwrap_or(Access::Automatic)
+}
 
 fn value_error(message: impl Into<String>) -> AiError {
     AiError::Value(message.into())
@@ -199,6 +207,8 @@ pub struct ResolvedTask {
     pub apply_mode: String,
     pub customized: bool,
     pub revision: String,
+    /// The installation's AI functions level, from the same snapshot.
+    pub access: Access,
 }
 
 impl ResolvedTask {
@@ -237,6 +247,7 @@ impl ResolvedTask {
 #[derive(Clone, Debug, PartialEq)]
 pub struct View {
     pub revision: String,
+    pub access: Access,
     pub models: IndexMap<String, String>,
     pub model_overrides: IndexMap<String, String>,
     pub tasks: Vec<ResolvedTask>,
@@ -246,6 +257,7 @@ impl View {
     pub fn to_json(&self) -> Json {
         json::object([
             ("revision", Json::from(self.revision.as_str())),
+            ("access", Json::from(self.access.as_str())),
             ("models", json::string_map(&self.models)),
             ("model_overrides", json::string_map(&self.model_overrides)),
             ("tasks", Json::Array(self.tasks.iter().map(ResolvedTask::to_json).collect())),
@@ -439,6 +451,7 @@ impl AiSettingsStore {
             apply_mode: shape.apply_mode,
             customized: !override_values.is_empty(),
             revision: snapshot.get("revision").and_then(Json::as_str).unwrap_or_default().to_owned(),
+            access: access_of(&snapshot),
         })
     }
 
@@ -472,6 +485,7 @@ impl AiSettingsStore {
             .unwrap_or_default();
         Ok(View {
             revision: snapshot.get("revision").and_then(Json::as_str).unwrap_or_default().to_owned(),
+            access: access_of(snapshot),
             models,
             model_overrides,
             tasks,
@@ -543,6 +557,41 @@ impl AiSettingsStore {
                 saved.insert(provider, Json::Str(model));
             }
         })
+    }
+
+    /// The AI functions level the user chose; `Unasked` is only ever written by
+    /// [`AiSettingsStore::settle_access`].
+    pub fn write_access(&self, access: Access, expected_revision: Option<&str>) -> Result<View> {
+        if access == Access::Unasked {
+            return Err(value_error("Invalid AI access"));
+        }
+        self.mutate(expected_revision, |snapshot| {
+            snapshot.insert("access".into(), Json::from(access.as_str()));
+        })
+    }
+
+    /// The level of this installation, creating the settings file when there is none:
+    /// a finished meeting of an earlier run means an installation from before the level
+    /// existed, whose file gets no `access` field (it means `Automatic`, and a build from
+    /// before the level reads it); none means a new installation, which is `Unasked`.
+    /// An existing file is never rewritten. Everything happens under one write lock, so
+    /// a second process settling at the same start finds the first one's file.
+    pub fn settle_access(&self, meetings_dir: &Path) -> Result<Access> {
+        let _lock = self.write_lock()?;
+        if let Some(data) = self.read_bytes()? {
+            return Ok(access_of(&parse_snapshot(&data)?));
+        }
+        let access = if has_finished_meeting(meetings_dir) { Access::Automatic } else { Access::Unasked };
+        let mut snapshot = Map::new();
+        snapshot.insert("version".into(), Json::Int(1));
+        snapshot.insert("revision".into(), Json::from(uuid::Uuid::new_v4().to_string()));
+        snapshot.insert("models".into(), Json::Object(Map::new()));
+        snapshot.insert("tasks".into(), Json::Object(Map::new()));
+        if access == Access::Unasked {
+            snapshot.insert("access".into(), Json::from(access.as_str()));
+        }
+        self.replace_file(&(Json::Object(snapshot).dumps(Some(2)) + "\n"))?;
+        Ok(access)
     }
 
     /// Replace one scenario's override (an empty one removes it). Copilot keeps its
@@ -757,8 +806,9 @@ fn drop_retired_features(raw: &mut Json) {
 
 /// `_validate_raw`.
 fn validate_raw(raw: &Json) -> Result<()> {
-    let map = known_fields(raw, &["version", "revision", "models", "tasks"], "settings")?;
+    let map = known_fields(raw, &["version", "revision", "models", "tasks", "access"], "settings")?;
     validate_header(map)?;
+    validate_access(map.get("access"))?;
     let models = &map["models"];
     if json::string_map(&validate_models(models)?) != *models {
         return Err(value_error("Noncanonical model overrides"));
@@ -766,9 +816,18 @@ fn validate_raw(raw: &Json) -> Result<()> {
     validate_tasks(&map["tasks"])
 }
 
-/// Every field present, version 1, a canonical UUID revision.
+/// An absent level (a file from before it existed), or one of the four.
+fn validate_access(access: Option<&Json>) -> Result<()> {
+    match access {
+        None => Ok(()),
+        Some(value) if value.as_str().and_then(Access::parse).is_some() => Ok(()),
+        Some(_) => Err(value_error("Invalid AI access")),
+    }
+}
+
+/// Every field present (the level may be absent), version 1, a canonical UUID revision.
 fn validate_header(map: &Map) -> Result<()> {
-    if map.len() != 4 {
+    if map.len() != 4 + usize::from(map.contains_key("access")) {
         return Err(value_error("Incomplete AI settings"));
     }
     if !matches!(map.get("version"), Some(Json::Int(1))) {
