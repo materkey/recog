@@ -235,6 +235,24 @@ pub fn mark_ccs_automation(prompt: &str, task: &str) -> String {
     format!("{CCS_AUTOMATION_MARKER_PREFIX} task={} -->\n{prompt}", sanitize_ccs_task(task))
 }
 
+/// The `-c` switches that keep the user's instructions, skills, plugins, hooks and
+/// memories out of a Codex run recog starts.
+pub const CODEX_ISOLATION: [&str; 7] = [
+    "skills.include_instructions=false",
+    "skills.bundled.enabled=false",
+    "features.plugins=false",
+    "features.hooks=false",
+    "features.memories=false",
+    "features.skill_search=false",
+    "project_doc_max_bytes=0",
+];
+
+/// The reasoning effort to pass to Codex for `model`: none when unset, and none for a
+/// spark model, which takes no effort setting.
+pub fn codex_effort<'a>(model: &str, effort: Option<&'a str>) -> Option<&'a str> {
+    effort.filter(|effort| !effort.is_empty() && !model.contains("spark"))
+}
+
 /// `build_codex_exec_command`.
 pub fn build_codex_exec_command(
     cli: &OsStr,
@@ -247,20 +265,12 @@ pub fn build_codex_exec_command(
     if isolated {
         // Keep CODEX_HOME and its login while excluding customization from analysis.
         cmd.push("--ignore-user-config".into());
-        for setting in [
-            "skills.include_instructions=false",
-            "skills.bundled.enabled=false",
-            "features.plugins=false",
-            "features.hooks=false",
-            "features.memories=false",
-            "features.skill_search=false",
-            "project_doc_max_bytes=0",
-        ] {
+        for setting in CODEX_ISOLATION {
             cmd.push("-c".into());
             cmd.push(setting.into());
         }
     }
-    if let Some(effort) = reasoning_effort.filter(|effort| !effort.is_empty() && !model.contains("spark")) {
+    if let Some(effort) = codex_effort(model, reasoning_effort) {
         cmd.push("-c".into());
         cmd.push(format!("model_reasoning_effort=\"{effort}\"").into());
     }
