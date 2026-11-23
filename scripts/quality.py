@@ -17,6 +17,7 @@ from quality_policy import (
     CRAP_CEILING,
     crap_regressions,
     duplicate_regressions,
+    erosion_regressions,
     format_regressions,
     lint_regressions,
     number,
@@ -687,6 +688,9 @@ def main(argv=None):
         tests(head, output)
         data["failures"] = style(baseline, head, moved)
         data["failures"] += crap_regressions(
+            data["baseline"]["functions"], data["head"]["functions"]
+        )
+        data["failures"] += erosion_regressions(
             data["baseline"]["functions"], data["head"]["functions"]
         )
         exceptions = json.loads((CONFIG / "quality-exceptions.json").read_text())

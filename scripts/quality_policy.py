@@ -52,6 +52,46 @@ def crap_regressions(baseline, head):
     return failures
 
 
+# scb-check's erosion, per function: a function is complex above this
+# complexity, and its mass is that complexity times the square root of its
+# lines. Deterministic, so no tolerance as for coverage-driven CRAP.
+EROSION_THRESHOLD = 10
+EROSION_KINDS = (("erosion", "ccn"), ("cognitive-erosion", "cognitive"))
+
+
+def shape_index(rows):
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Missing function inventory")
+    result = {}
+    for row in rows:
+        key = identity(row)
+        if key in result:
+            raise ValueError(f"Ambiguous function: {key}")
+        for field in ("ccn", "cognitive", "nloc"):
+            number(row[field])
+        result[key] = row
+    return result
+
+
+def complex_mass(row, field):
+    return row[field] * math.sqrt(row["nloc"]) if row[field] > EROSION_THRESHOLD else 0.0
+
+
+def erosion_regressions(baseline, head):
+    """A complex function that is new, or heavier than in the baseline."""
+    previous, current = shape_index(baseline), shape_index(head)
+    failures = []
+    for key, row in current.items():
+        old = previous.get(key)
+        for kind, field in EROSION_KINDS:
+            mass, before = complex_mass(row, field), complex_mass(old, field) if old else 0.0
+            if mass > before:
+                failures.append(
+                    {"kind": kind, "function": key, "baseline": before or None, "head": mass}
+                )
+    return failures
+
+
 def unchanged_lines(before, after):
     matcher = difflib.SequenceMatcher(a=before.splitlines(), b=after.splitlines(), autojunk=False)
     return {

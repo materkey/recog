@@ -65,6 +65,61 @@ def test_missing_or_malformed_scores_when_compared_then_fail_closed(rows):
         policy.crap_regressions(rows, [scored()])
 
 
+def shaped(name="f()", ccn=12, cognitive=3, nloc=16):
+    return {
+        "path": "crates/a/src/lib.rs",
+        "key_name": name,
+        "ccn": ccn,
+        "cognitive": cognitive,
+        "nloc": nloc,
+    }
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "fails"),
+    [
+        ((12, 3, 16), (12, 3, 16), False),
+        ((12, 3, 16), (12, 3, 17), True),
+        ((12, 3, 16), (13, 3, 16), True),
+        ((12, 3, 16), (11, 3, 16), False),
+        ((12, 3, 16), (5, 3, 40), False),
+        ((9, 3, 16), (10, 3, 40), False),
+        ((10, 3, 16), (11, 3, 16), True),
+        ((3, 12, 16), (3, 13, 16), True),
+        ((3, 12, 16), (3, 12, 9), False),
+    ],
+)
+def test_existing_function_when_compared_then_complex_functions_must_not_gain_mass(old, new, fails):
+    before, after = [shaped("f()", *old)], [shaped("f()", *new)]
+    assert bool(policy.erosion_regressions(before, after)) == fails
+
+
+@pytest.mark.parametrize(
+    ("ccn", "cognitive", "kinds"),
+    [
+        (10, 10, []),
+        (11, 3, ["erosion"]),
+        (3, 11, ["cognitive-erosion"]),
+        (11, 11, ["erosion", "cognitive-erosion"]),
+    ],
+)
+def test_new_function_when_measured_then_it_must_not_be_complex(ccn, cognitive, kinds):
+    failures = policy.erosion_regressions(
+        [shaped()], [shaped(), shaped("new()", ccn, cognitive, 16)]
+    )
+    assert [failure["kind"] for failure in failures] == kinds
+    assert all(failure["function"] == "crates/a/src/lib.rs::new()" for failure in failures)
+    assert all(failure["baseline"] is None and failure["head"] > 0 for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "bad", [{"ccn": "12"}, {"nloc": -1}, {"cognitive": float("nan")}, {"ccn": True}]
+)
+def test_malformed_function_shape_when_compared_then_fail_closed(bad):
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        policy.erosion_regressions([shaped()], [{**shaped(), **bad}])
+
+
 def diagnostic(line, code="F821", message="Undefined name x"):
     return {"code": code, "message": message, "location": {"row": line, "column": 1}}
 
@@ -210,6 +265,52 @@ def test_real_baseline_when_head_has_new_uncovered_function_then_gate_fails(
         "uncovered": 0.0,
     }
     assert "1 passed" in next(output.glob("run-*/head-tests.log")).read_text()
+
+
+NESTED = """pub fn nested(values: &[u32]) -> u32 {
+    let mut total = 0;
+    for value in values {
+        if *value > 1 {
+            if *value > 2 {
+                if *value > 3 {
+                    if *value > 4 {
+                        total += value;
+                    }
+                }
+            }
+        }
+    }
+    total
+}
+
+"""
+
+
+@needs_rust_tools
+def test_real_baseline_when_head_adds_a_tested_but_deeply_nested_function_then_erosion_fails(
+    repository, tmp_path, monkeypatch
+):
+    """given: a function every line of which a test runs, so its CRAP is its low cyclomatic complexity
+    when: its nesting makes it hard to read (cognitive complexity over 10)
+    then: the gate fails on cognitive erosion alone, which CRAP would let through"""
+    monkeypatch.setattr(quality, "ROOT", repository)
+    monkeypatch.setattr(quality, "versions", lambda: {})
+    library = repository / "crates/demo/src/lib.rs"
+    test = "    #[test]\n    fn nested_when_deep_then_summed() {\n        assert_eq!(super::nested(&[5]), 5);\n    }\n"
+    library.write_text(
+        NESTED + library.read_text().replace("mod tests {\n", "mod tests {\n" + test, 1)
+    )
+    output = tmp_path / "reports"
+    assert quality.main(["--base", "HEAD", "--output", str(output)]) == 1
+    result = json.loads(next(output.glob("run-*/report.json")).read_text())
+    failures = [
+        (item["kind"], item["function"].split("::")[1].split()[0]) for item in result["failures"]
+    ]
+    assert failures == [("cognitive-erosion", "nested")], result["failures"]
+    nested = next(
+        row for row in result["head"]["functions"] if row["long_name"].startswith("nested")
+    )
+    assert nested["crap"] <= 10 and nested["cognitive"] > 10
 
 
 @needs_rust_tools

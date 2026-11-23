@@ -88,8 +88,17 @@ run also builds the dependencies with instrumentation.
   duplication is better than extracting it. The initial exception list is empty.
   Existing pairs remain visible in the JSON report; this adoption gate does not
   demand a repository-wide duplication cleanup.
-- SCB verbosity, erosion, cognitive erosion, source LOC, per-function cognitive
-  complexity and LOC are informational. They are not independent pass thresholds.
+- Erosion fails per function, measured as SCB defines it: a function is
+  complex when its cyclomatic or its cognitive complexity is **greater than
+  10**, and its mass is that complexity times the square root of its lines.
+  A new complex function fails, and so does an existing one whose mass grew
+  (it became more complex or longer) in either measure; one that shrinks or
+  drops to 10 passes. The measure is static, so there is no tolerance as for
+  CRAP. A function that is complex only cognitively (deep nesting) fails here
+  even when its CRAP passes. Complexity comes from crapkit, as for CRAP.
+- SCB's repository-wide verbosity, erosion and cognitive erosion ratios and
+  source LOC stay informational: a ratio also rises when simple code is
+  deleted, so it is no pass threshold.
 
 Structural analysis covers production Rust and production JavaScript.
 
