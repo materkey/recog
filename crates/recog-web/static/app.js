@@ -615,7 +615,7 @@ const views = {
                 ` : ''}
                 ${showGenerateTitle ? `
                     <div class="meta-title-actions">
-                        <button class="btn btn-generate-title" onclick="generateTitle()">
+                        <button class="btn btn-generate-title ai-entry" onclick="generateTitle()">
                             Generate Title (Codex)
                         </button>
                     </div>
@@ -2578,7 +2578,9 @@ function showAiHistory(session, saved, increments, prompts, selectEmpty) {
         showStoredIncrements(session.meetingId, increments, prompts);
     } else {
         saved.querySelector('.modal-body').innerHTML = '<div class="empty">Сохранённых результатов пока нет.</div>';
-        if (selectEmpty && session.mode === 'saved') switchAiMode('new');
+        // With the AI functions off there is no new analysis to switch to.
+        const aiOff = window.recogAiAccess?.level() === 'off';
+        if (selectEmpty && session.mode === 'saved' && !aiOff) switchAiMode('new');
     }
 }
 
@@ -2716,7 +2718,7 @@ function showStoredIncrements(meetingId, incrementsByPrompt, prompts) {
 
     modal.querySelector('.modal-footer').innerHTML =
         '<button class="btn" onclick="copyAiResponse()">Copy</button>' +
-        '<button class="btn" onclick="regeneratePrompt()">Regenerate</button>' +
+        '<button class="btn ai-entry" onclick="regeneratePrompt()">Regenerate</button>' +
         '<button class="btn" onclick="closeAiModal()">Close</button>';
 
     // Store state
@@ -2851,7 +2853,7 @@ function renderMissingIncrement() {
         ? '<div class="loading">Generating increment...</div>'
         : (error ? '<div class="error">Generation failed: ' + escapeHtml(error) + '</div>' :
             '<div class="empty">Сохранённых версий пока нет.</div>') +
-            (isParticipantIncrement ? '<button class="btn" onclick="generateParticipantIncrement()">Создать сохранённый результат</button>' : '');
+            (isParticipantIncrement ? '<button class="btn ai-entry" onclick="generateParticipantIncrement()">Создать сохранённый результат</button>' : '');
 }
 
 function switchIncrementParticipant(participantId) {

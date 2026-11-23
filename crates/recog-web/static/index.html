@@ -76,7 +76,7 @@
                         <button class="btn" onclick="copyToClipboard()">Copy</button>
                         <button class="btn" onclick="exportMarkdown()">Export MD</button>
                         <button class="btn btn-privacy" id="privacy-mode-btn" onclick="togglePrivacy()" title="Replace speaker names and profile in Copy/Export and Copilot MCP; text stays unchanged">Privacy</button>
-                        <button class="btn btn-ai" id="meeting-chat-btn" aria-expanded="false" aria-controls="meeting-chat" title="Задать вопрос по этой встрече">Ask</button>
+                        <button class="btn btn-ai ai-entry" id="meeting-chat-btn" aria-expanded="false" aria-controls="meeting-chat" title="Задать вопрос по этой встрече">Ask</button>
                         <button class="btn btn-ai" onclick="analyzeIncrement()">AI Analysis</button>
                         <button class="btn btn-danger" id="delete-meeting-btn" onclick="deleteMeeting()">Delete</button>
                     </div>
@@ -111,7 +111,7 @@
                     <button class="btn" id="copy-live-btn" onclick="copyLiveToClipboard()" title="Copy transcript as Markdown">Copy MD</button>
                     <button class="btn" id="download-live-btn" onclick="downloadLiveMarkdown()" title="Download transcript as Markdown file">↓ MD</button>
                     <button class="btn btn-privacy" id="live-privacy-btn" onclick="togglePrivacy()" title="Replace speaker names and profile in Copy/Download and Copilot MCP; text stays unchanged">Privacy</button>
-                    <button class="btn btn-copilot" id="copilot-btn" onclick="copilotButtonClick()" title="Recog Copilot session">
+                    <button class="btn btn-copilot ai-entry" id="copilot-btn" onclick="copilotButtonClick()" title="Recog Copilot session">
                         Recog Copilot
                         <span class="copilot-agent-chip offline" id="copilot-chip">&#9899; offline</span>
                         <span class="copilot-unread-dot" id="copilot-unread-dot" hidden></span>
@@ -153,6 +153,18 @@
         </form>
     </dialog>
 
+    <dialog id="ai-access-dialog" class="profile-dialog" aria-labelledby="ai-access-title" aria-describedby="ai-access-description">
+        <h2 id="ai-access-title">Когда recog может обращаться к AI?</h2>
+        <p id="ai-access-description" class="profile-hint">AI-анализ, вопросы по встрече, названия встреч и Copilot отправляют транскрипт в Claude Code или Codex под вашей подпиской. Выбор можно изменить в «Промпты и модели».</p>
+        <p id="ai-access-error" class="profile-error" role="alert" hidden></p>
+        <div class="profile-actions">
+            <button type="button" class="btn" id="ai-access-off">Выключено</button>
+            <button type="button" class="btn" id="ai-access-manual">Только по кнопке</button>
+            <button type="button" class="btn" id="ai-access-automatic">По кнопке и после каждой встречи</button>
+            <button type="button" class="btn" id="ai-access-later">Позже</button>
+        </div>
+    </dialog>
+
     <dialog id="ai-settings-dialog" class="profile-dialog ai-settings-dialog" aria-labelledby="ai-settings-title">
         <div class="modal-header">
             <h2 id="ai-settings-title">Промпты и модели</h2>
@@ -161,6 +173,13 @@
         <div class="ai-settings-body">
             <p class="profile-hint">Общие настройки Recog для всех браузеров. Пустое поле модели сценария — использовать общую модель.</p>
             <p id="ai-settings-error" class="profile-error" role="alert" hidden></p>
+            <fieldset class="ai-settings-section ai-settings-access" id="ai-settings-access">
+                <legend>AI-функции</legend>
+                <label><input type="radio" name="ai-settings-access" id="ai-settings-access-off" value="off"> Выключено</label>
+                <label><input type="radio" name="ai-settings-access" id="ai-settings-access-manual" value="manual"> Только по кнопке</label>
+                <label><input type="radio" name="ai-settings-access" id="ai-settings-access-automatic" value="automatic"> По кнопке и после каждой встречи</label>
+                <p class="profile-hint">Когда recog может отправлять транскрипт в Claude Code или Codex. Выбор сохраняется сразу.</p>
+            </fieldset>
             <div id="ai-settings-conflict" class="ai-settings-conflict" role="alert" hidden>
                 <p>Настройки изменились в другом окне. Ваш черновик сохранён здесь. Скопируйте нужный текст перед загрузкой новой версии.</p>
                 <button type="button" class="btn" id="ai-settings-reload">Загрузить актуальные настройки</button>
@@ -233,7 +252,7 @@
             </div>
             <div class="ai-mode-tabs" role="group" aria-label="Режим анализа">
                 <button class="tab-btn" data-ai-mode="saved" onclick="switchAiMode('saved')">Сохранённые результаты</button>
-                <button class="tab-btn" data-ai-mode="new" onclick="switchAiMode('new')">Новый анализ</button>
+                <button class="tab-btn ai-entry" data-ai-mode="new" onclick="switchAiMode('new')">Новый анализ</button>
             </div>
             <div id="ai-run-notice" class="ai-mode-notice" role="status" hidden></div>
             <div id="ai-saved-view" class="ai-mode-view">
@@ -248,7 +267,7 @@
                     <div id="ai-new-content" aria-live="polite"></div>
                 </div>
                 <div class="modal-footer">
-                    <button class="btn" id="ai-run-button" onclick="generateIncrementSSE()">Запустить анализ</button>
+                    <button class="btn ai-entry" id="ai-run-button" onclick="generateIncrementSSE()">Запустить анализ</button>
                     <button class="btn" onclick="copyAiResponse()">Copy</button>
                     <button class="btn" onclick="closeAiModal()">Close</button>
                 </div>
@@ -286,6 +305,7 @@
 
     <script src="/static/datepicker.js"></script>
     <script src="/static/user-profile.js"></script>
+    <script src="/static/ai-access.js"></script>
     <script src="/static/ai-settings.js"></script>
     <script src="/static/installation-readiness.js"></script>
     <script src="/static/desktop-status.js"></script>

@@ -208,15 +208,21 @@ class Element {
         return null;
     }
 
-    addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); }
-    removeEventListener(type, listener) {
-        this.listeners[type] = (this.listeners[type] || []).filter(known => known !== listener);
-    }
+    addEventListener(type, listener, options) { addListener(this, type, listener, options); }
+    removeEventListener(type, listener, options) { removeListener(this, type, listener, options); }
     dispatchEvent(event) {
         event.target ||= this;
         const path = [];
         for (let at = this; at; at = at.parentNode) path.push(at);
         if (path.at(-1) === this.ownerDocument.documentElement) path.push(this.ownerDocument);
+        // Capture phase: from the document down to the target, before any bubble listener
+        // or inline handler; stopPropagation there keeps all of them from running.
+        for (const at of [...path].reverse()) {
+            if (event.propagationStopped) return !event.defaultPrevented;
+            event.currentTarget = at;
+            for (const listener of [...(at.captureListeners?.[event.type] || [])]) listener.call(at, event);
+        }
+        if (event.propagationStopped) return !event.defaultPrevented;
         for (const at of event.bubbles ? path : path.slice(0, 1)) {
             if (event.propagationStopped) break;
             event.currentTarget = at;
@@ -244,6 +250,19 @@ class Element {
     getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }; }
     showModal() { this.open = true; this.setAttribute('open', ''); }
     close() { this.open = false; this.removeAttribute('open'); this.dispatchEvent(makeEvent('close', { bubbles: false })); }
+}
+
+const isCapture = options => options === true || options?.capture === true;
+
+// Capture listeners are kept apart from bubble ones, as in the DOM.
+function addListener(node, type, listener, options) {
+    const table = isCapture(options) ? (node.captureListeners ||= {}) : node.listeners;
+    (table[type] ||= []).push(listener);
+}
+
+function removeListener(node, type, listener, options) {
+    const table = isCapture(options) ? (node.captureListeners ||= {}) : node.listeners;
+    table[type] = (table[type] || []).filter(known => known !== listener);
 }
 
 function makeEvent(type, init = {}) {
@@ -343,12 +362,11 @@ function createDocument(html) {
         listeners: {},
         hidden: false,
         activeElement: null,
-        addEventListener(type, listener) { (this.listeners[type] ||= []).push(listener); },
-        removeEventListener(type, listener) {
-            this.listeners[type] = (this.listeners[type] || []).filter(known => known !== listener);
-        },
+        addEventListener(type, listener, options) { addListener(this, type, listener, options); },
+        removeEventListener(type, listener, options) { removeListener(this, type, listener, options); },
         dispatchEvent(event) {
             event.target ||= this;
+            for (const listener of [...(this.captureListeners?.[event.type] || [])]) listener.call(this, event);
             for (const listener of [...(this.listeners[event.type] || [])]) listener.call(this, event);
             return !event.defaultPrevented;
         },

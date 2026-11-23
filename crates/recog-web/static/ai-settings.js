@@ -16,6 +16,10 @@
     let pollTimer = null;
     let pollDelay = 5000;
 
+    const ACCESS_LEVELS = ['off', 'manual', 'automatic'];
+    const accessRadios = () => ACCESS_LEVELS.map(
+        (level) => el('access-' + level)
+    );
     const dirty = () => globalDirty || taskDirty;
     const selectedTask = () => snapshot?.tasks.find(
         (task) => task.id === selectedId
@@ -69,7 +73,15 @@
         for (const input of [...globalInputs.values(), ...modelInputs.values(), ...providerInputs.values()]) {
             input.disabled = unavailable;
         }
+        // A level is saved on change, so it can only change while it can be saved.
+        for (const radio of accessRadios()) radio.disabled = unavailable || conflict;
         schedulePoll();
+    }
+
+    // The level has no draft: every snapshot shown sets the radio and the page.
+    function showAccess(level) {
+        for (const radio of accessRadios()) radio.checked = radio.value === level;
+        window.recogAiAccess?.set(level);
     }
 
     function modelField(provider, prefix, onInput) {
@@ -202,6 +214,7 @@
             el('task').append(option);
         }
         el('task').value = selectedId || '';
+        showAccess(data.access);
         if (!preserveGlobals) fillGlobals();
         if (!preserveTask) fillTask();
         else {
@@ -339,10 +352,11 @@
                 headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
             } : {}) });
             if (kind === 'models') globalDirty = false;
-            else taskDirty = false;
+            else if (kind !== 'access') taskDirty = false;
             render(data, { preserveGlobals: globalDirty, preserveTask: taskDirty });
             el('status').textContent = savedStatus(kind);
         } catch (failure) {
+            if (kind === 'access') showAccess(snapshot.access);
             reportFailure(failure);
         } finally {
             busy = false;
@@ -352,6 +366,10 @@
 
     // The request a Save or Reset makes; null when it must not be made.
     function saveTarget(kind) {
+        if (kind === 'access') {
+            const chosen = accessRadios().find((radio) => radio.checked);
+            return chosen ? { path: '/access', method: 'PUT', body: { access: chosen.value, revision: snapshot.revision } } : null;
+        }
         if (kind === 'models') {
             const body = { models: Object.fromEntries([...globalInputs].map(([key, input]) => [key, input.value.trim()])), revision: snapshot.revision };
             return { path: '/models', method: 'PUT', body };
@@ -385,6 +403,7 @@
     }
 
     function savedStatus(kind) {
+        if (kind === 'access') return 'Уровень AI-функций сохранён.';
         return kind === 'models' ? 'Общие модели сохранены. Новые запросы используют эти модели, Copilot — новая сессия.'
             : (kind === 'reset' ? 'Настройки сценария сброшены.' : 'Настройки сценария сохранены.');
     }
@@ -418,6 +437,9 @@
             fillTask();
             controls();
         });
+        for (const radio of accessRadios()) {
+            radio.addEventListener('change', () => save('access'));
+        }
         el('save-models').addEventListener('click', () => save('models'));
         el('save-task').addEventListener('click', () => save('task'));
         el('reset').addEventListener('click', () => save('reset'));

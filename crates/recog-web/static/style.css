@@ -1094,6 +1094,11 @@ a:hover {
     border: none;
 }
 
+/* The AI functions are off: nothing that would start one is shown (ai-access.js). */
+:root[data-ai-access="off"] .ai-entry {
+    display: none !important;
+}
+
 /* --- Modal --- */
 .modal {
     position: fixed;

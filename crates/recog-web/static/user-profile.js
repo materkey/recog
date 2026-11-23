@@ -12,6 +12,10 @@
     let generation = 0;
     let readPromise = null;
     let pollTimer = null;
+    // Settled once the first read has decided on the welcome, so that another first-run
+    // question (ai-access.js) comes after it.
+    let welcomeDecided = () => {};
+    window.recogWelcomeDecided = new Promise((resolve) => { welcomeDecided = resolve; });
     let pollDelay = 5000;
     let stopped = false;
 
@@ -134,6 +138,7 @@
         if (firstRead) {
             firstRead = false;
             if (!data.profile.configured && !dismissed && !el('dialog').open) open(true);
+            welcomeDecided();
         }
     }
 

@@ -436,3 +436,76 @@ test('no scenarios on the server - opened - empty form without providers or prom
     assert.equal(h.get('provenance').textContent, 'Сценарий использует настройки по умолчанию.');
     assert.equal(h.get('save-task').disabled, true);
 });
+
+// --- The AI functions level ---
+
+const atLevel = (access, revision = 'r1') => ({ ...payload(revision), access });
+const radios = (h) => ['off', 'manual', 'automatic'].map((level) => h.get('access-' + level));
+const checkedLevel = (h) => radios(h).filter((radio) => radio.checked).map((radio) => radio.value);
+
+// The page's level, as ai-access.js would keep it; the radios get their markup's values,
+// which this harness does not read from the attributes.
+function withPageLevel(h) {
+    for (const radio of radios(h)) radio.value = radio.id.replace('ai-settings-access-', '');
+    const levels = [];
+    h.window.recogAiAccess = { set(level) { levels.push(level); } };
+    return levels;
+}
+
+async function changeLevel(h, level) {
+    for (const radio of radios(h)) radio.checked = radio.value === level;
+    await h.get('access-' + level).listeners.change();
+    await flush();
+}
+
+test('level radio changed - access saved with the snapshot revision - view replaces the snapshot', async () => {
+    const h = harness(async (_url, options) => response(options?.method ? atLevel('off', 'r2') : atLevel('automatic')));
+    const levels = withPageLevel(h);
+    await h.boot(); await h.click('open');
+    assert.deepEqual(checkedLevel(h), ['automatic']);
+    await changeLevel(h, 'off');
+    assert.equal(h.calls[1][0], '/api/ai-settings/access');
+    assert.equal(h.calls[1][1].method, 'PUT');
+    assert.deepEqual(JSON.parse(h.calls[1][1].body), { access: 'off', revision: 'r1' });
+    assert.deepEqual(checkedLevel(h), ['off']);
+    assert.equal(levels.at(-1), 'off');
+});
+
+test('level save answered 409 - conflict banner shown', async () => {
+    const h = harness(async (_url, options) => (options?.method ? response({ detail: 'stale' }, 409) : response(atLevel('automatic'))));
+    withPageLevel(h);
+    await h.boot(); await h.click('open');
+    await changeLevel(h, 'off');
+    assert.equal(h.get('conflict').hidden, false);
+});
+
+test('level save fails - radio back on the saved level and page root unchanged', async () => {
+    const h = harness(async (_url, options) => (options?.method ? response({}, 500) : response(atLevel('automatic'))));
+    const levels = withPageLevel(h);
+    await h.boot(); await h.click('open');
+    await changeLevel(h, 'off');
+    assert.deepEqual(checkedLevel(h), ['automatic']);
+    assert.ok(!levels.includes('off'));
+});
+
+test('settings busy or in conflict - level radios disabled', async () => {
+    const h = harness(async (_url, options) => (options?.method ? response({ detail: 'stale' }, 409) : response(atLevel('automatic'))));
+    withPageLevel(h);
+    await h.boot();
+    assert.ok(radios(h).every((radio) => radio.disabled), 'no snapshot yet');
+    await h.click('open');
+    assert.ok(radios(h).every((radio) => !radio.disabled));
+    await changeLevel(h, 'off');
+    assert.ok(radios(h).every((radio) => radio.disabled), 'in conflict');
+});
+
+test('focus refresh with another level - radio and page root follow it', async () => {
+    let current = atLevel('automatic');
+    const h = harness(async () => response(current));
+    const levels = withPageLevel(h);
+    await h.boot(); await h.click('open');
+    current = atLevel('manual', 'r2');
+    await h.event('focus');
+    assert.deepEqual(checkedLevel(h), ['manual']);
+    assert.equal(levels.at(-1), 'manual');
+});
