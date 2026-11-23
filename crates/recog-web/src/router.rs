@@ -13,6 +13,7 @@
 //! | GET | `/api/desktop/status` |
 //! | GET | `/api/ai-settings` |
 //! | PUT | `/api/ai-settings/models` |
+//! | PUT | `/api/ai-settings/access` |
 //! | PUT | `/api/ai-settings/tasks/{task_id}` |
 //! | DELETE | `/api/ai-settings/tasks/{task_id}?revision=` |
 //! | GET, PUT | `/api/privacy` |
@@ -53,6 +54,7 @@ pub enum Route {
     Readiness,
     GetAiSettings,
     SaveAiModels,
+    SaveAiAccess,
     SaveAiTask,
     ResetAiTask,
     GetPrivacy,
@@ -98,6 +100,7 @@ const HTTP_ROUTES: &[(&str, &str, Route)] = &[
     ("GET", "/api/desktop/status", Route::DesktopStatus),
     ("GET", "/api/ai-settings", Route::GetAiSettings),
     ("PUT", "/api/ai-settings/models", Route::SaveAiModels),
+    ("PUT", "/api/ai-settings/access", Route::SaveAiAccess),
     ("PUT", "/api/ai-settings/tasks/{task_id}", Route::SaveAiTask),
     ("DELETE", "/api/ai-settings/tasks/{task_id}", Route::ResetAiTask),
     ("GET", "/api/privacy", Route::GetPrivacy),

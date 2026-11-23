@@ -51,6 +51,22 @@ pub(super) async fn save_ai_models(state: &AppState, req: &Req) -> Reply {
     Ok(responses::json(&result))
 }
 
+pub(super) async fn save_ai_access(state: &AppState, req: &Req) -> Reply {
+    let mut errors = Vec::new();
+    let fields = [field("access", Ty::Str, true), field("revision", Ty::Str, true)];
+    let body = body_model(req, &fields, true, &mut errors)?;
+    check(&errors)?;
+    let body = body.unwrap_or_default();
+    let access = body.get("access").map(Value::py_str).unwrap_or_default();
+    let revision = body.get("revision").map(Value::py_str);
+    let result = state
+        .ai_settings
+        .write(move |store| store.write_access(&access, revision.as_deref()))
+        .await
+        .map_err(ai_write_error)?;
+    Ok(responses::json(&result))
+}
+
 pub(super) async fn save_ai_task(state: &AppState, req: &Req) -> Reply {
     let mut errors = Vec::new();
     let optional_str = || Ty::Optional(Box::new(Ty::Str));

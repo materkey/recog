@@ -262,6 +262,38 @@ async fn recorded_meeting_when_a_title_is_generated_then_stored_with_its_provide
     assert!(prompt.contains("[10:00:05] Алиса: Привет"), "{prompt}");
 }
 
+fn level_off(app: &App) {
+    write(
+        &app.data().join("ai-settings.json"),
+        r#"{"version": 1, "revision": "0f8fad5b-d9cb-469f-a165-70867728950e", "models": {}, "tasks": {}, "access": "off"}"#,
+    );
+}
+
+#[tokio::test]
+async fn level_off_when_title_requested_then_403_refusal_text_and_no_provider() {
+    let app = meeting();
+    level_off(&app);
+
+    let (status, body) = app.json("POST", "/api/meetings/m1/generate-title", None).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(detail(&body), "AI-функции выключены в настройках recog.");
+    assert!(app.factory.prompts().is_empty());
+}
+
+#[tokio::test]
+async fn level_off_when_regenerate_requested_then_403_refusal_text_and_no_version() {
+    let app = meeting();
+    level_off(&app);
+
+    let (status, body) = app.json("POST", &format!("{GENERATE}?force=true"), None).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(detail(&body), "AI-функции выключены в настройках recog.");
+    assert!(!app.meetings().join("m1/increments").exists());
+    assert!(app.factory.prompts().is_empty());
+}
+
 #[tokio::test]
 async fn meeting_without_rows_or_text_when_a_title_is_generated_then_400() {
     for (rows, message) in

@@ -32,14 +32,14 @@ use debug::{debug, get_debug_ai_context, live_status, pcm_diagnostics, set_debug
 use increments::{generate_increment, generate_title, increments};
 use meetings::{delete_meeting, get_meeting, list_meetings, search};
 use settings::{
-    get_ai_settings, get_privacy, read_profile_error, reset_ai_task, save_ai_models, save_ai_task, save_privacy,
-    save_user_profile,
+    get_ai_settings, get_privacy, read_profile_error, reset_ai_task, save_ai_access, save_ai_models, save_ai_task,
+    save_privacy, save_user_profile,
 };
 
 /// One route.
 pub async fn handle(state: &Arc<AppState>, route: Route, req: Req) -> Reply {
     match route {
-        Route::GetAiSettings | Route::SaveAiModels | Route::SaveAiTask | Route::ResetAiTask => {
+        Route::GetAiSettings | Route::SaveAiModels | Route::SaveAiAccess | Route::SaveAiTask | Route::ResetAiTask => {
             ai_settings_route(state, route, &req).await
         }
         Route::GetPrivacy
@@ -80,6 +80,7 @@ async fn ai_settings_route(state: &Arc<AppState>, route: Route, req: &Req) -> Re
     match route {
         Route::GetAiSettings => get_ai_settings(state).await,
         Route::SaveAiModels => save_ai_models(state, req).await,
+        Route::SaveAiAccess => save_ai_access(state, req).await,
         Route::SaveAiTask => save_ai_task(state, req).await,
         _ => reset_ai_task(state, req).await,
     }
@@ -175,6 +176,15 @@ async fn desktop_status(state: &AppState) -> Reply {
 /// `HTTPException(500, detail=str(e))`.
 pub fn fail(message: impl std::fmt::Display) -> axum::response::Response {
     responses::detail(StatusCode::INTERNAL_SERVER_ERROR, &message.to_string())
+}
+
+/// An AI call's error: the AI functions level's refusal is a 403 with its text, any
+/// other error a 500 as [`fail`] gives it.
+pub fn ai_failure(error: recog_ai::AiError) -> axum::response::Response {
+    match error {
+        recog_ai::AiError::Disabled(message) => responses::detail(StatusCode::FORBIDDEN, &message),
+        other => fail(other),
+    }
 }
 
 fn not_found(message: &str) -> axum::response::Response {

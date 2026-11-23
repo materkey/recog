@@ -11,7 +11,7 @@ use recog_ai::title::{self, TitleUpdate};
 use recog_core::meeting_storage::{MeetingStorage, UnnamedLocal, local_participant_names};
 use recog_core::pyjson::{Map, Value};
 
-use super::{bad_request, check, fail, meeting, meta_of, not_found, segments_of, storage};
+use super::{ai_failure, bad_request, check, fail, meeting, meta_of, not_found, segments_of, storage};
 use crate::json;
 use crate::request::Req;
 use crate::responses::{self, Reply};
@@ -144,8 +144,10 @@ pub(super) async fn generate_increment(state: &AppState, req: &Req) -> Reply {
     let (meeting_path, prompt) = directory_and_prompt(state, meeting_id, prompt_id)?;
     let generator = generator(state);
     generator.migrate_flat_increments(&meeting_path, "my-increment").map_err(fail)?;
-    let version =
-        generator.generate(meeting_id, &meeting_path, &prompt, force, participant_id.as_deref()).await.map_err(fail)?;
+    let version = generator
+        .generate(meeting_id, &meeting_path, &prompt, force, participant_id.as_deref())
+        .await
+        .map_err(ai_failure)?;
     let Some(version) = version else {
         return not_generated(&generator, meeting_id, prompt_id, participant_id.as_deref());
     };
@@ -229,6 +231,9 @@ pub(super) async fn generate_title(state: &AppState, req: &Req) -> Reply {
     let found = meeting(&storage, &meeting_id)?;
     let transcript = title_transcript(&found)?;
     let settings = state.ai.task_settings("title").map_err(fail)?;
+    if !settings.access.allows_manual() {
+        return Err(ai_failure(recog_ai::AiError::Disabled(recog_ai::error::DISABLED.to_owned())));
+    }
     let vars = title_variables(&storage, &meeting_id, &found)?;
     let title = title::generate_title(&transcript, None, Some(&settings), &vars, state.ai.factory.as_ref()).await;
     let Some(title) = title else { return Err(fail("Failed to generate title")) };

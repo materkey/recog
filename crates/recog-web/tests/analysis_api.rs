@@ -55,6 +55,20 @@ async fn recorded_meeting_when_analyzed_then_the_answer_of_the_selected_provider
 }
 
 #[tokio::test]
+async fn level_off_when_analysis_requested_then_refusal_text_and_no_provider() {
+    let app = meeting();
+    write(
+        &app.data().join("ai-settings.json"),
+        r#"{"version": 1, "revision": "0f8fad5b-d9cb-469f-a165-70867728950e", "models": {}, "tasks": {}, "access": "off"}"#,
+    );
+
+    let (_status, body) = app.json("POST", "/api/meetings/m1/analyze", Some("{}")).await;
+
+    assert_eq!(detail(&body), "AI-функции выключены в настройках recog.");
+    assert!(app.factory.prompts().is_empty());
+}
+
+#[tokio::test]
 async fn invalid_bodies_when_analyzed_then_422_before_any_prompt() {
     let app = meeting();
     for body in [r#"{"question": "custom"}"#, r#"{"debug": "maybe"}"#, r#"{"x": 1}"#] {

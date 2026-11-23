@@ -152,6 +152,51 @@ async fn copilot_switch_given_an_api_save_when_reloaded_then_the_boolean_is_pers
 }
 
 #[tokio::test]
+async fn access_off_when_saved_then_view_off_and_bridge_refreshed() {
+    let app = App::new();
+    let coordinator = &app.state.ai_settings;
+    let (_bridge, mut rx) = connect(coordinator, "defaults").await;
+
+    let payload = r#"{"access": "off", "revision": "defaults"}"#;
+    let ((status, body), ()) = tokio::join!(app.json("PUT", "/api/ai-settings/access", Some(payload)), async {
+        let refresh = next(&mut rx).await;
+        assert_eq!(text(&refresh, "type"), "ai_settings_refresh");
+        acknowledge(coordinator, &revision(&app)).await;
+    });
+
+    assert_eq!(status, 200);
+    assert_eq!(text(&body, "access"), "off");
+    assert_eq!(text(&app.json("GET", "/api/ai-settings", None).await.1, "access"), "off");
+}
+
+#[tokio::test]
+async fn access_unasked_when_saved_then_422() {
+    let app = App::new();
+
+    let unasked =
+        app.call("PUT", "/api/ai-settings/access", Some(r#"{"access": "unasked", "revision": "defaults"}"#)).await;
+    let unknown =
+        app.call("PUT", "/api/ai-settings/access", Some(r#"{"access": "sometimes", "revision": "defaults"}"#)).await;
+
+    assert_eq!(unasked.0, 422);
+    assert_eq!(unknown.0, 422);
+    assert!(!store(&app).path.exists());
+}
+
+#[tokio::test]
+async fn stale_revision_when_access_saved_then_409() {
+    let app = App::new();
+    store(&app).write_models(&Json::parse(r#"{"claude": "human-edit"}"#).unwrap(), None).unwrap();
+    let before = std::fs::read(&store(&app).path).unwrap();
+
+    let (status, _) =
+        app.call("PUT", "/api/ai-settings/access", Some(r#"{"access": "off", "revision": "defaults"}"#)).await;
+
+    assert_eq!(status, 409);
+    assert_eq!(std::fs::read(&store(&app).path).unwrap(), before);
+}
+
+#[tokio::test]
 async fn absent_settings_given_get_when_resolved_then_defaults_without_persistence() {
     let app = App::new();
 
@@ -388,6 +433,9 @@ impl AiStore for PausingStore {
     }
     fn write_models(&self, models: &Value, expected: Option<&str>) -> Result<Value, AiError> {
         AiStore::write_models(&self.inner, models, expected)
+    }
+    fn write_access(&self, access: &str, expected: Option<&str>) -> Result<Value, AiError> {
+        AiStore::write_access(&self.inner, access, expected)
     }
     fn write_task(&self, task_id: &str, values: &Value, expected: Option<&str>) -> Result<Value, AiError> {
         AiStore::write_task(&self.inner, task_id, values, expected)

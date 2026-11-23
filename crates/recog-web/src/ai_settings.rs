@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use recog_ai::AiError;
+use recog_ai::access::Access;
 use recog_ai::json::Json;
 use recog_ai::settings::AiSettingsStore;
 use recog_core::protocol;
@@ -33,6 +34,9 @@ pub trait AiStore: Send + Sync + 'static {
     /// Invalid models, a stale revision, a failed write.
     fn write_models(&self, models: &Value, expected_revision: Option<&str>) -> Result<Value, AiError>;
     /// # Errors
+    /// A level the user cannot choose, a stale revision, a failed write.
+    fn write_access(&self, access: &str, expected_revision: Option<&str>) -> Result<Value, AiError>;
+    /// # Errors
     /// An unknown scenario, invalid values, a stale revision, a failed write.
     fn write_task(&self, task_id: &str, values: &Value, expected_revision: Option<&str>) -> Result<Value, AiError>;
     /// # Errors
@@ -49,6 +53,10 @@ impl AiStore for AiSettingsStore {
     }
     fn write_models(&self, models: &Value, expected_revision: Option<&str>) -> Result<Value, AiError> {
         Ok(json::to_core(&AiSettingsStore::write_models(self, &json::to_ai(models), expected_revision)?.to_json()))
+    }
+    fn write_access(&self, access: &str, expected_revision: Option<&str>) -> Result<Value, AiError> {
+        let access = Access::parse(access).ok_or_else(|| AiError::Value("Invalid AI access".into()))?;
+        Ok(json::to_core(&AiSettingsStore::write_access(self, access, expected_revision)?.to_json()))
     }
     fn write_task(&self, task_id: &str, values: &Value, expected_revision: Option<&str>) -> Result<Value, AiError> {
         Ok(json::to_core(
