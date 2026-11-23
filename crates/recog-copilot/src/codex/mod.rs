@@ -2,4 +2,5 @@
 //! `codex app-server` in the Copilot's tmux session when Codex is the Copilot provider.
 
 pub mod app_server;
+pub mod events;
 pub mod harness;

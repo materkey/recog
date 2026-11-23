@@ -20,7 +20,7 @@ chrono = { version = "0.4.42", default-features = false, features = ["clock", "s
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 http-body-util = "0.1"
 # The channel's HTTP transport: HTTP/1.1, as uvicorn serves the Python channel.
-hyper = { version = "1", features = ["http1", "server"] }
+hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 # The owner of `ai-settings.json`: the supervisor reads the Copilot scenario through its store.
 recog-ai = { path = "../recog-ai" }
