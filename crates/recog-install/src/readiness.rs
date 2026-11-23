@@ -6,8 +6,8 @@ use std::path::Path;
 
 use crate::units::Backend;
 
-pub const PROGRAMS: [&str; 5] =
-    ["recog", "recog-web", "recog-copilot-channel", "recog-copilot-supervisor", "recog-desktop"];
+pub const PROGRAMS: [&str; 6] =
+    ["recog", "recog-web", "recog-copilot-channel", "recog-copilot-supervisor", "recog-copilot-codex", "recog-desktop"];
 
 pub fn executable(path: &Path) -> bool {
     path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)

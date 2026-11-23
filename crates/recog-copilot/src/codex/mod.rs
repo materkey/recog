@@ -4,3 +4,5 @@
 pub mod app_server;
 pub mod events;
 pub mod harness;
+pub mod instructions;
+pub mod session;

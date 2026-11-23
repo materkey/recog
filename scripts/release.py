@@ -36,6 +36,7 @@ def archive(tag, output, binaries):
         "recog-desktop",
         "recog-copilot-supervisor",
         "recog-copilot-channel",
+        "recog-copilot-codex",
     ]
     if target == "macos-arm64":
         names.append("recog-mic")

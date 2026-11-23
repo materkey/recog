@@ -38,7 +38,14 @@ impl Rig {
             fs::write(root.join("crates/recog-live/macos").join(source), "").unwrap();
         }
         common::place_recog(&built.join("recog"));
-        for name in ["recog-web", "recog-desktop", "recog-copilot-supervisor", "recog-copilot-channel", "recog-mic"] {
+        for name in [
+            "recog-web",
+            "recog-desktop",
+            "recog-copilot-supervisor",
+            "recog-copilot-channel",
+            "recog-copilot-codex",
+            "recog-mic",
+        ] {
             exe(&built.join(name), "#!/bin/sh\nexit 0\n");
         }
         exe(

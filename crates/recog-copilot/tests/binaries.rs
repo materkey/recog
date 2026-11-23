@@ -12,6 +12,7 @@ use futures_util::StreamExt as _;
 
 const CHANNEL: &str = env!("CARGO_BIN_EXE_recog-copilot-channel");
 const SUPERVISOR: &str = env!("CARGO_BIN_EXE_recog-copilot-supervisor");
+const CODEX: &str = env!("CARGO_BIN_EXE_recog-copilot-codex");
 
 /// The user's live services: never bind or reach these.
 const LIVE_PORTS: [u16; 8] = [8765, 8766, 8767, 9080, 8770, 9001, 9002, 9003];
@@ -118,7 +119,9 @@ fn bad_supervisor_argument_when_given_then_one_usage_line_and_error_with_status_
 
 #[test]
 fn malformed_installation_config_when_starting_then_named_error_and_status_1() {
-    for (binary, name) in [(CHANNEL, "recog-copilot-channel"), (SUPERVISOR, "recog-copilot-supervisor")] {
+    for (binary, name) in
+        [(CHANNEL, "recog-copilot-channel"), (SUPERVISOR, "recog-copilot-supervisor"), (CODEX, "recog-copilot-codex")]
+    {
         // given
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("config.toml");
@@ -139,7 +142,9 @@ fn malformed_installation_config_when_starting_then_named_error_and_status_1() {
 
 #[test]
 fn relative_data_dir_when_starting_then_named_error_and_status_1() {
-    for (binary, name) in [(CHANNEL, "recog-copilot-channel"), (SUPERVISOR, "recog-copilot-supervisor")] {
+    for (binary, name) in
+        [(CHANNEL, "recog-copilot-channel"), (SUPERVISOR, "recog-copilot-supervisor"), (CODEX, "recog-copilot-codex")]
+    {
         // given
         let dir = tempfile::tempdir().unwrap();
         // when
@@ -279,4 +284,22 @@ fn port_taken_when_channel_starts_then_task_crash_and_status_1() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = text(&output.stderr);
     assert!(stderr.contains("[copilot-channel] task crashed: Address already in use"), "{stderr}");
+}
+
+#[test]
+fn codex_harness_when_asked_for_help_or_given_an_unknown_argument_then_usage() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    // when
+    let help = command(CODEX, dir.path()).arg("--help").output().unwrap();
+    let wrong = command(CODEX, dir.path()).arg("--mcp-port").output().unwrap();
+    // then
+    assert_eq!(help.status.code(), Some(0));
+    assert!(text(&help.stdout).starts_with("usage: recog-copilot-codex [-h] [--repo-root REPO_ROOT]"));
+    assert_eq!(wrong.status.code(), Some(2));
+    assert_eq!(
+        text(&wrong.stderr),
+        "usage: recog-copilot-codex [-h] [--repo-root REPO_ROOT]\n\
+         recog-copilot-codex: error: unrecognized arguments: --mcp-port\n"
+    );
 }

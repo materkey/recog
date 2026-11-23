@@ -13,6 +13,10 @@ path = "src/bin/recog-copilot-supervisor.rs"
 name = "recog-copilot-channel"
 path = "src/bin/recog-copilot-channel.rs"
 
+[[bin]]
+name = "recog-copilot-codex"
+path = "src/bin/recog-copilot-codex.rs"
+
 [dependencies]
 bytes = "1"
 # The SSE ping comments carry the UTC time as Python's datetime prints it.
@@ -30,7 +34,7 @@ recog-core = { path = "../recog-core" }
 rmcp = { version = "3.9", default-features = false, features = ["server"] }
 # Insertion order keeps the frames' keys in the order the Python dicts have.
 serde_json = { version = "1", features = ["preserve_order"] }
-tokio = { version = "1.49", features = ["macros", "net", "rt", "signal", "sync", "time"] }
+tokio = { version = "1.49", features = ["io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 tokio-tungstenite = "0.29"
 tokio-util = "0.7"
 # Unicode 15.0, the tables of Python 3.12's unicodedata: `repr()` of a string escapes the

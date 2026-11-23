@@ -57,7 +57,14 @@ fn checkout_when_setup_runs_then_build_is_handed_off_and_no_services_flag_preser
     }
     fs::write(root.join("crates/recog-live/Cargo.toml"), "").unwrap();
     common::place_recog(&release.join("recog"));
-    for name in ["recog-web", "recog-copilot-channel", "recog-copilot-supervisor", "recog-desktop", "recog-mic"] {
+    for name in [
+        "recog-web",
+        "recog-copilot-channel",
+        "recog-copilot-supervisor",
+        "recog-copilot-codex",
+        "recog-desktop",
+        "recog-mic",
+    ] {
         write_exec(&release.join(name), "#!/bin/sh\nexit 0\n");
     }
     write_exec(&root.join("sck_audio_capture"), "#!/bin/sh\nexit 0\n");
