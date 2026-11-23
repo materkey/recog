@@ -31,15 +31,20 @@ def tar_gz(files):
     return out.getvalue()
 
 
-def deb(version):
-    control = (
-        f"Package: recog\nVersion: {version}\nArchitecture: amd64\nDescription: test\n".encode()
-    )
+CONTROL = "Package: recog\nVersion: {}\nArchitecture: amd64\nDescription: test\n test package\n"
+
+
+def deb(version, extra=(), control=CONTROL):
     members = [
         ("debian-binary", b"2.0\n"),
-        ("control.tar.gz", tar_gz({"./control": control})),
+        *extra,
+        ("control.tar.gz", tar_gz({"./control": control.format(version).encode()})),
         ("data.tar.gz", tar_gz({"./usr/bin/recog": b"x"})),
     ]
+    return ar(members)
+
+
+def ar(members):
     out = b"!<arch>\n"
     for name, data in members:
         out += f"{name:<16}{0:<12}{0:<6}{0:<6}{644:<8}{len(data):<10}`\n".encode() + data
@@ -197,3 +202,114 @@ def test_release_when_changed_after_signing_then_the_repository_fails_verificati
     release.write_bytes(release.read_bytes().replace(b"Label: Recog", b"Label: Other"))
     with pytest.raises(ValueError, match="InRelease signs a different Release"):
         run_verify(monkeypatch, published_repository)
+
+
+def test_signed_deb_when_an_odd_sized_member_precedes_control_then_its_fields_are_read():
+    # dpkg-sig puts _gpgbuilder between debian-binary and the control archive.
+    control = repo.deb_control(deb("1.2.3-1", extra=[("_gpgbuilder", b"odd")]))
+    assert repo.stanza(control)["Version"] == "1.2.3-1"
+
+
+@pytest.mark.parametrize(
+    ("package", "message"),
+    [
+        (b"not an archive", "Not a Debian package"),
+        (ar([("debian-binary", b"2.0\n")]), "no control file"),
+    ],
+)
+def test_file_when_it_is_not_a_complete_deb_then_indexing_is_refused(package, message):
+    with pytest.raises(ValueError, match=message):
+        repo.deb_control(package)
+
+
+def test_description_when_a_continuation_line_looks_like_a_field_then_it_changes_nothing():
+    control = CONTROL.format("1.2.3-1") + " Size: 1\n SHA256: forged\n"
+    fields = repo.stanza(control)
+    assert "Size" not in fields
+    assert "SHA256" not in fields
+    assert fields["Version"] == "1.2.3-1"
+
+
+def test_release_directory_when_it_holds_two_debian_packages_then_indexing_is_refused(dist):
+    (dist / "recog_1.2.4-1_amd64.deb").write_bytes(deb("1.2.4-1"))
+    with pytest.raises(ValueError, match="one Debian and one Arch package"):
+        repo.index(dist)
+
+
+def with_packages(dist, text):
+    """The indexes with another Packages and the Release that lists it."""
+    return dict(indexes(dist), Packages=text.encode(), Release=repo.apt_release(text.encode(), 0))
+
+
+def test_packages_when_it_names_a_file_outside_the_release_then_signing_is_refused(dist):
+    text = (dist / "Packages").read_text().replace("Filename: ./", "Filename: ../")
+    with pytest.raises(ValueError, match="unexpected package files"):
+        repo.check(with_packages(dist, text), published(dist), TAG)
+
+
+def test_packages_when_it_lists_two_packages_then_signing_is_refused(dist):
+    text = (dist / "Packages").read_text()
+    with pytest.raises(ValueError, match="one recog package"):
+        repo.check(with_packages(dist, text + "\n" + text), published(dist), TAG)
+
+
+def merged(*databases):
+    out = io.BytesIO()
+    with (
+        gzip.GzipFile(fileobj=out, mode="wb") as packed,
+        tarfile.open(fileobj=packed, mode="w") as tar,
+    ):
+        for data in databases:
+            with tarfile.open(fileobj=io.BytesIO(data)) as source:
+                for member in source.getmembers():
+                    tar.addfile(member, source.extractfile(member) if member.isfile() else None)
+    return out.getvalue()
+
+
+@pytest.fixture
+def other_package(tmp_path_factory):
+    return arch_package(tmp_path_factory.mktemp("other"), "1.2.4-1")
+
+
+def test_pacman_database_when_it_lists_two_packages_then_signing_is_refused(dist, other_package):
+    two = merged((dist / "recog.db").read_bytes(), repo.pacman_db(other_package))
+    with pytest.raises(ValueError, match="one package"):
+        repo.db_entry(two)
+
+
+def test_indexes_when_apt_and_pacman_disagree_on_the_version_then_signing_is_refused(
+    dist, other_package
+):
+    digest = hashlib.sha256(other_package.read_bytes()).hexdigest()
+    files = dict(published(dist), **{other_package.name: (other_package.stat().st_size, digest)})
+    with pytest.raises(ValueError, match="another version"):
+        repo.check(dict(indexes(dist), **{"recog.db": repo.pacman_db(other_package)}), files, TAG)
+
+
+def test_published_repository_when_verified_for_another_release_then_it_fails(
+    published_repository, monkeypatch
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["linux_repo.py", "verify", "--base", published_repository.as_uri(), "--tag", "v1.2.4"],
+    )
+    with pytest.raises(ValueError, match="another version"):
+        repo.main()
+
+
+def test_published_repository_when_verified_without_a_tag_then_its_own_version_is_checked(
+    published_repository, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        sys, "argv", ["linux_repo.py", "verify", "--base", published_repository.as_uri()]
+    )
+    repo.main()
+    assert "recog 1.2.3-1" in capsys.readouterr().out
+
+
+def test_command_line_when_no_action_is_given_then_usage_is_printed(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["linux_repo.py"])
+    with pytest.raises(SystemExit) as stopped:
+        repo.main()
+    assert stopped.value.code == 2

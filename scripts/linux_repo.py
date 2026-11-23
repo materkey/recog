@@ -75,23 +75,23 @@ def deb_control(data):
         header = data[position : position + 60]
         name = header[:16].decode().strip().rstrip("/")
         size = int(header[48:58])
+        start = position + 60
         if name.startswith("control.tar"):
-            body = io.BytesIO(data[position + 60 : position + 60 + size])
-            with tarfile.open(fileobj=body) as tar:
+            with tarfile.open(fileobj=io.BytesIO(data[start : start + size])) as tar:
                 for member in tar.getmembers():
                     if member.name.removeprefix("./") == "control":
                         return tar.extractfile(member).read().decode()
-        position += 60 + size + size % 2
+        position = start + size + size % 2
     raise ValueError("The Debian package has no control file")
 
 
 def stanza(text):
-    fields, key = {}, None
+    """The fields of a control stanza by name. A continuation line of the
+    Description keeps its leading space in the name, so it matches no field."""
+    fields = {}
     for line in text.splitlines():
-        if line[:1] in (" ", "\t") and key:
-            fields[key] += "\n" + line
-        elif ":" in line:
-            key, _, value = line.partition(":")
+        key, separator, value = line.partition(":")
+        if separator:
             fields[key] = value.strip()
     return fields
 
@@ -102,7 +102,7 @@ def pkginfo(path):
     info = {}
     for line in text.decode().splitlines():
         key, separator, value = line.partition(" = ")
-        if separator and not line.startswith("#"):
+        if separator:
             info.setdefault(key, []).append(value)
     return info
 
@@ -134,10 +134,10 @@ def pacman_db(path):
 
 def db_entry(data):
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
-        descs = [m for m in tar.getmembers() if m.isfile() and m.name.endswith("/desc")]
-        if len(descs) != 1 or len([m for m in tar.getmembers() if m.isfile()]) != 1:
+        files = [m for m in tar.getmembers() if m.isfile()]
+        if len(files) != 1 or not files[0].name.endswith("/desc"):
             raise ValueError("Expected one package in the pacman database")
-        text = tar.extractfile(descs[0]).read().decode()
+        text = tar.extractfile(files[0]).read().decode()
     fields = {}
     for block in text.strip().split("\n\n"):
         name, _, values = block.partition("\n")
@@ -179,6 +179,11 @@ def referenced(indexes):
     return deb, pkg
 
 
+def published_as(files, name, size, digest):
+    """Whether the release has name with this size and SHA-256, given as index text."""
+    return tuple(map(str, files.get(name, ()))) == (size, digest)
+
+
 def check(indexes, files, tag):
     """Bind the indexes to the packages: files maps a name to (size, sha256)."""
     deb, pkg = referenced(indexes)
@@ -189,12 +194,11 @@ def check(indexes, files, tag):
     fields = stanza(packages.decode())
     if packages.decode().strip().count("\n\n") or fields.get("Package") != "recog":
         raise ValueError("Expected one recog package in Packages")
-    if files.get(deb) != (int(fields.get("Size", -1)), fields.get("SHA256")):
+    if not published_as(files, deb, fields.get("Size"), fields.get("SHA256")):
         raise ValueError(f"Packages does not match the published {deb}")
     entry = db_entry(indexes[DB])
-    if entry.get("NAME") != "recog" or files.get(pkg) != (
-        int(entry.get("CSIZE", -1)),
-        entry.get("SHA256SUM"),
+    if entry.get("NAME") != "recog" or not published_as(
+        files, pkg, entry.get("CSIZE"), entry.get("SHA256SUM")
     ):
         raise ValueError(f"{DB} does not match the published {pkg}")
     version = f"{tag[1:]}-1"
