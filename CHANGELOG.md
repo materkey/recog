@@ -28,8 +28,8 @@ reasoning.
 - Meeting titles, questions about a meeting and saved summaries no longer fail
   when their provider is missing or refuses, for example on a spent Claude or
   ChatGPT subscription: the other of Claude Code and Codex answers, and the
-  result names it. With only one of them installed, everything but Copilot
-  works. A scenario whose provider you chose in **Settings → Промпты и
+  result names it. With only one of them installed, all of these work. A
+  scenario whose provider you chose in **Settings → Промпты и
   модели** keeps asking only that provider; tick **Если провайдер не
   установлен или отказал, ответит другой** to allow the other. **Готовность
   установки** shows whether either is installed.
