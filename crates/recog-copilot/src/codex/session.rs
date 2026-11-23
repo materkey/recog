@@ -146,13 +146,8 @@ where
     T: tokio::io::AsyncWrite + Unpin,
     W: Write,
 {
-    let fail = |e: super::app_server::Error| e.to_string();
-    app.initialize().await.map_err(fail)?;
-    let logged_in = app.logged_in().await.map_err(fail)?;
     let params = thread_params(options);
-    let mut thread = app.start_thread(params.clone()).await.map_err(fail)?;
-    let mut harness = Harness::new();
-    harness.ready(logged_in);
+    let (mut thread, mut harness) = open(app, &params).await?;
     pane.status(harness.status());
     let (events, mut received) = mpsc::unbounded_channel();
     let _poller = Poller(tokio::spawn(poll(options.mcp_url.clone(), events)));
@@ -166,6 +161,21 @@ where
         }
         pane.status(harness.status());
     }
+}
+
+/// The handshake, the login check and the thread; the harness ready on it.
+async fn open<R, T>(app: &mut AppServer<R, T>, params: &Value) -> Result<(String, Harness), String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: tokio::io::AsyncWrite + Unpin,
+{
+    let fail = |e: super::app_server::Error| e.to_string();
+    app.initialize().await.map_err(fail)?;
+    let logged_in = app.logged_in().await.map_err(fail)?;
+    let thread = app.start_thread(params.clone()).await.map_err(fail)?;
+    let mut harness = Harness::new();
+    harness.ready(logged_in);
+    Ok((thread, harness))
 }
 
 fn from_channel(harness: &mut Harness, event: Option<CopilotEvent>) -> Result<Vec<Command>, String> {
