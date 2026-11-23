@@ -144,7 +144,9 @@ the tag and previously published assets intact.
   user does: in fresh `ubuntu:24.04` and `archlinux` containers, as a user with
   sudo, `curl -fsSL https://recog.vkkovalev.work/install.sh | sh -s -- --no-setup`
   must end with `dpkg-query -W recog` or `pacman -Q recog` at `X.Y.Z-1`
-  (an Arch image needs `pacman -Syu` first).
+  (an Arch image needs `pacman-key --init` and `pacman -Syu` first: the
+  Docker image ships without a keyring, and the installer's
+  `pacman-key --lsign-key` fails with "no secret key available to sign with").
 
 ### 6. Update the Homebrew formula
 
