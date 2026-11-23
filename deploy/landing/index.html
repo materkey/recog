@@ -113,18 +113,13 @@
           </details>
           <details>
             <summary>Linux x86-64</summary>
-            <p id="linux">Скачайте пакет для своей системы. Откройте терминал в папке загрузки и выполните команду под ссылкой.</p>
-            <p><a href="https://github.com/materkey/recog/releases/latest/download/recog-amd64.deb">Скачать для Ubuntu 24.04+ и Debian 13+</a></p>
+            <p id="linux">Ubuntu 24.04+, Debian 13+, Arch Linux и Manjaro. Выполните в терминале от своего пользователя:</p>
             <div class="install-command">
-              <code>sudo apt install ./recog-amd64.deb</code>
+              <code>curl -fsSL https://recog.vkkovalev.work/install.sh | sh</code>
               <button type="button" aria-live="polite" hidden>Скопировать</button>
             </div>
-            <p><a href="https://github.com/materkey/recog/releases/latest/download/recog-x86_64.pkg.tar.zst">Скачать для Arch Linux и Manjaro</a></p>
-            <div class="install-command">
-              <code>sudo pacman -U ./recog-x86_64.pkg.tar.zst</code>
-              <button type="button" aria-live="polite" hidden>Скопировать</button>
-            </div>
-            <p>После установки откройте «Настроить Recog» в меню приложений. В конце настройки расшифровки откроются в браузере. Позже их открывает пункт «Recog» в меню или адрес <a href="http://127.0.0.1:9080">127.0.0.1:9080</a>.</p>
+            <p>Команда подключит репозиторий Recog к apt или pacman, установит пакет и настроит его. В конце расшифровки откроются в браузере. Позже их открывает пункт «Recog» в меню приложений или адрес <a href="http://127.0.0.1:9080">127.0.0.1:9080</a>.</p>
+            <p>Recog обновляется вместе с системой: <code>sudo apt upgrade</code> или <code>sudo pacman -Syu</code>. <a href="https://github.com/materkey/recog#linux-x86-64">Установка без скрипта и удаление</a></p>
           </details>
           <a class="more" href="https://github.com/materkey/recog#установка">Homebrew и другие способы установки <span aria-hidden="true">↗</span></a>
         </div>

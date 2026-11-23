@@ -25,6 +25,12 @@ reasoning.
 
 ### Changed
 
+- On Linux, `curl -fsSL https://recog.vkkovalev.work/install.sh | sh` connects
+  the package repository to apt or pacman, installs Recog and sets it up for
+  you; running it again is safe. It replaces the earlier installer, which
+  unpacked the archive itself, and the landing page shows it instead of
+  package downloads.
+
 - The Linux packages add **Recog** to the applications menu, which opens the
   meeting transcripts at http://127.0.0.1:9080 in the browser. **Set up Recog**
   opens them when setup succeeds and keeps its terminal open until you press
