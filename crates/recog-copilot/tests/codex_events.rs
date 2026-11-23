@@ -5,7 +5,7 @@
 mod channel_support;
 
 use channel_support::{link_in, mcp_endpoint, object};
-use recog_copilot::codex::events::ChannelClient;
+use recog_copilot::codex::events::{ChannelClient, relay};
 
 #[tokio::test]
 async fn queued_question_when_polled_then_the_block_a_claude_session_would_get() {
@@ -66,4 +66,45 @@ async fn no_channel_when_connecting_then_an_error() {
 
     assert!(client.connect().await.is_err());
     assert!(ChannelClient::new("https://example.org/mcp").is_err());
+}
+
+#[tokio::test]
+async fn unreachable_channel_when_relayed_then_try_again() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut client = ChannelClient::new(&format!("http://{address}/mcp")).unwrap();
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+
+    assert!(relay(&mut client, &events, 1).await);
+}
+
+#[tokio::test]
+async fn session_gone_when_an_event_is_relayed_then_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let link = link_in(&dir);
+    let (_server, address) = mcp_endpoint(link.clone()).await;
+    link.events.push(object(r#"{"type": "transcript_tick", "new_segments": [1]}"#));
+    let mut client = ChannelClient::new(&format!("http://{address}/mcp")).unwrap();
+    let (events, received) = tokio::sync::mpsc::unbounded_channel();
+    drop(received);
+
+    assert!(!relay(&mut client, &events, 1).await);
+}
+
+#[tokio::test]
+async fn quiet_channel_then_an_event_when_relayed_then_the_event_arrives() {
+    let dir = tempfile::tempdir().unwrap();
+    let link = link_in(&dir);
+    let (_server, address) = mcp_endpoint(link.clone()).await;
+    let mut client = ChannelClient::new(&format!("http://{address}/mcp")).unwrap();
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let relaying = tokio::spawn(async move { relay(&mut client, &events, 1).await });
+
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    link.events.push(object(r#"{"type": "meeting_ended", "meeting_id": "m1"}"#));
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), received.recv()).await.unwrap().unwrap();
+
+    assert_eq!(event.event_type, "meeting_ended");
+    relaying.abort();
 }

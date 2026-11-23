@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::app_server::{AppServer, Event};
-use super::events::{ChannelClient, CopilotEvent};
+use super::events::{ChannelClient, CopilotEvent, relay};
 use super::harness::{Command, Harness, Kind, Status};
 
 /// How long one `await_copilot_event` call waits.
@@ -234,20 +234,7 @@ fn show<W: Write>(pane: &mut Pane<W>, event: &Event) {
 /// The channel's events, forever: reconnects when the channel restarts.
 async fn poll(url: String, events: mpsc::UnboundedSender<CopilotEvent>) {
     let Ok(mut client) = ChannelClient::new(&url) else { return };
-    loop {
-        if client.connect().await.is_ok() {
-            loop {
-                match client.next_event(POLL_S).await {
-                    Ok(Some(event)) => {
-                        if events.send(event).is_err() {
-                            return;
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(_) => break,
-                }
-            }
-        }
+    while relay(&mut client, &events, POLL_S).await {
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }

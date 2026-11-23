@@ -111,6 +111,30 @@ impl ChannelClient {
     }
 }
 
+/// One connection's events, sent to `events` until the connection breaks (`true`:
+/// connect again) or nobody receives them any more (`false`). Each poll waits up to
+/// `poll_seconds`.
+pub async fn relay(
+    client: &mut ChannelClient,
+    events: &tokio::sync::mpsc::UnboundedSender<CopilotEvent>,
+    poll_seconds: u64,
+) -> bool {
+    if client.connect().await.is_err() {
+        return true;
+    }
+    loop {
+        match client.next_event(poll_seconds).await {
+            Ok(Some(event)) => {
+                if events.send(event).is_err() {
+                    return false;
+                }
+            }
+            Ok(None) => {}
+            Err(_) => return true,
+        }
+    }
+}
+
 /// The JSON-RPC result in a JSON or SSE body.
 fn result_of(body: &str) -> Result<serde_json::Value, String> {
     let messages = body.lines().filter_map(|line| line.strip_prefix("data:")).map(str::trim).chain([body.trim()]);
