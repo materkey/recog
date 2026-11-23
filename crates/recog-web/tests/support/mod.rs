@@ -137,7 +137,7 @@ impl AiProvider for FakeProvider {
 }
 
 impl ProviderFactory for FakeFactory {
-    fn create(
+    fn build(
         &self,
         settings: &ResolvedTask,
         _task: &str,

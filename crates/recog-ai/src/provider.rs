@@ -22,7 +22,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use crate::defaults::{DEFAULT_CLAUDE_MODEL, DEFAULT_CODEX_MODEL};
-use crate::error::{AiError, Result};
+use crate::error::{AiError, DISABLED, Result};
 use crate::json::{Json, Map};
 use crate::pytext;
 use crate::settings::ResolvedTask;
@@ -800,7 +800,16 @@ pub fn provider_for_settings(
 
 /// Creates the provider of a scenario; the CLI factory in production, a fake in tests.
 pub trait ProviderFactory: Send + Sync {
-    fn create(&self, settings: &ResolvedTask, task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>>;
+    /// Makes the provider; callers go through [`ProviderFactory::create`].
+    fn build(&self, settings: &ResolvedTask, task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>>;
+
+    /// The provider, unless the AI functions level of the settings refuses a click.
+    fn create(&self, settings: &ResolvedTask, task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>> {
+        if !settings.access.allows_manual() {
+            return Err(AiError::Disabled(DISABLED.to_owned()));
+        }
+        self.build(settings, task, provider)
+    }
 }
 
 /// The answer of the first of the scenario's providers that gives one, and that
@@ -845,7 +854,7 @@ pub struct CliProviderFactory {
 }
 
 impl ProviderFactory for CliProviderFactory {
-    fn create(&self, settings: &ResolvedTask, task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>> {
+    fn build(&self, settings: &ResolvedTask, task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>> {
         provider_for_settings(settings, task, provider, self.env.clone())
     }
 }

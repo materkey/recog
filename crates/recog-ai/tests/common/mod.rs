@@ -97,7 +97,7 @@ impl FakeFactory {
 }
 
 impl ProviderFactory for FakeFactory {
-    fn create(&self, settings: &ResolvedTask, task: &str, _provider: Option<&str>) -> Result<Box<dyn AiProvider>> {
+    fn build(&self, settings: &ResolvedTask, task: &str, _provider: Option<&str>) -> Result<Box<dyn AiProvider>> {
         self.calls.lock().unwrap().push((settings.clone(), task.to_owned()));
         Ok(Box::new(FakeProvider {
             key: self.key.clone(),
@@ -127,7 +127,7 @@ impl KeyedFactory {
 }
 
 impl ProviderFactory for KeyedFactory {
-    fn create(&self, settings: &ResolvedTask, _task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>> {
+    fn build(&self, settings: &ResolvedTask, _task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>> {
         let key = provider.unwrap_or(settings.provider()).to_owned();
         self.asked.lock().unwrap().push(key.clone());
         let (_, answer) =

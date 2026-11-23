@@ -5,6 +5,9 @@
 use std::fmt;
 use std::io;
 
+/// What a user is told when the AI functions level refuses a provider.
+pub const DISABLED: &str = "AI-функции выключены в настройках recog.";
+
 #[derive(Debug)]
 pub enum AiError {
     /// `ValueError`: invalid input or settings.
@@ -28,6 +31,8 @@ pub enum AiError {
     Provider(String),
     /// `asyncio.TimeoutError`.
     Timeout,
+    /// The AI functions level does not allow the call; the message is [`DISABLED`].
+    Disabled(String),
 }
 
 impl AiError {
@@ -51,7 +56,8 @@ impl fmt::Display for AiError {
             | AiError::NotFound(message)
             | AiError::Runtime(message)
             | AiError::Type(message)
-            | AiError::Provider(message) => formatter.write_str(message),
+            | AiError::Provider(message)
+            | AiError::Disabled(message) => formatter.write_str(message),
             AiError::Io(error) => write!(formatter, "{error}"),
             AiError::Key(key) => write!(formatter, "'{key}'"),
             AiError::Timeout => Ok(()),

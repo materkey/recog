@@ -624,7 +624,7 @@ async fn generation_dropped_mid_call_when_cancelled_then_failed_meta_replaces_pl
     }
     struct HangingFactory;
     impl recog_ai::provider::ProviderFactory for HangingFactory {
-        fn create(
+        fn build(
             &self,
             _settings: &recog_ai::settings::ResolvedTask,
             _task: &str,
@@ -988,7 +988,7 @@ struct HeartbeatFactory {
 }
 
 impl recog_ai::provider::ProviderFactory for HeartbeatFactory {
-    fn create(
+    fn build(
         &self,
         _settings: &recog_ai::settings::ResolvedTask,
         _task: &str,

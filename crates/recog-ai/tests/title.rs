@@ -142,7 +142,7 @@ async fn hanging_provider_when_title_generated_then_none_after_bounded_timeout()
     }
     struct HangingFactory;
     impl recog_ai::provider::ProviderFactory for HangingFactory {
-        fn create(
+        fn build(
             &self,
             _settings: &ResolvedTask,
             _task: &str,
