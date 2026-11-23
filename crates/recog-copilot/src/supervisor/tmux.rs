@@ -129,13 +129,21 @@ pub fn which(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
+const DISABLED: &str = "Copilot выключен в настройках.";
+
+/// Whether a provider's CLI is installed, where recog-ai looks for it (PATH,
+/// `~/.local/bin`, Homebrew, nvm).
+pub fn cli_installed(name: &str) -> bool {
+    recog_ai::provider::resolve_cli(name, &recog_ai::provider::CliEnv::from_process()).is_ok()
+}
+
 /// Arguments shared by foreground Claude and the meeting session in tmux.
 /// The foreground caller passes them directly to the executable.
 pub fn claude_arguments(settings: &dyn CopilotSettings, url: &str) -> Result<Vec<String>, Error> {
     let mcp_config = py::json_dumps(&json!({"mcpServers": {"copilot": {"type": "http", "url": url}}}));
     let task = settings.resolve().map_err(Error)?;
     if !task.enabled {
-        return Err(Error("Copilot выключен в настройках.".to_owned()));
+        return Err(Error(DISABLED.to_owned()));
     }
     let mut args = vec!["claude".to_owned(), "--agent".into(), "copilot-session".into(), "--model".into(), task.model];
     if !task.claude_effort.is_empty() {
@@ -168,6 +176,8 @@ pub struct TmuxRunner<C: CommandRunner> {
     pub kill_retry_delay: Duration,
     pub unit_stop_timeout: Duration,
     pub unit_poll: Duration,
+    /// Whether a provider's CLI is installed ([`cli_installed`]; tests replace it).
+    pub cli_installed: Box<dyn Fn(&str) -> bool>,
 }
 
 impl<C: CommandRunner> TmuxRunner<C> {
@@ -187,6 +197,7 @@ impl<C: CommandRunner> TmuxRunner<C> {
             kill_retry_delay: KILL_RETRY_DELAY,
             unit_stop_timeout: SYSTEMD_UNIT_STOP_TIMEOUT,
             unit_poll: SYSTEMD_UNIT_POLL,
+            cli_installed: Box::new(cli_installed),
         }
     }
 
@@ -291,6 +302,23 @@ impl<C: CommandRunner> TmuxRunner<C> {
         Ok(py::shlex_join(&claude_arguments(self.settings.as_ref(), &self.mcp_url)?))
     }
 
+    /// The session's program: the first provider of the Copilot's order whose CLI is
+    /// installed, Claude Code or the Codex harness (plan D6); the first provider when
+    /// none is found, as before Codex could run the Copilot.
+    pub fn build_command(&self) -> Result<String, Error> {
+        let task = self.settings.resolve().map_err(Error)?;
+        let installed = task.providers.iter().find(|provider| (self.cli_installed)(provider));
+        if installed.or(task.providers.first()).map(String::as_str) != Some("codex") {
+            return self.build_claude_command();
+        }
+        if !task.enabled {
+            return Err(Error(DISABLED.to_owned()));
+        }
+        let program = recog_core::install::program(&self.repo_root, "recog-copilot-codex");
+        let root = self.repo_root.display().to_string();
+        Ok(py::shlex_join(&[program.display().to_string(), "--repo-root".to_owned(), root]))
+    }
+
     fn sibling_of(&self, name: &str) -> String {
         if name == TMUX_SESSION_MANUAL { self.default_session_name.clone() } else { TMUX_SESSION_MANUAL.to_owned() }
     }
@@ -330,7 +358,7 @@ impl<C: CommandRunner> TmuxRunner<C> {
     /// when systemd-run is used.
     async fn create_session(&self, name: &str) -> Result<(), Error> {
         let root = self.repo_root.display().to_string();
-        let command = self.build_claude_command()?;
+        let command = self.build_command()?;
         let mut argv = self.tmux(&["new-session", "-d", "-s", name, "-c", &root, &command]);
         if self.use_systemd_run {
             // Only on the creating path: an adopted session's unit is never recreated.

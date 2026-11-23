@@ -34,6 +34,13 @@ reasoning.
   установлен или отказал, ответит другой** to allow the other. **Готовность
   установки** shows whether either is installed.
 
+- Copilot runs on Codex when Claude Code is not installed: the Copilot
+  scenario in **Settings → Промпты и модели** now offers Claude and Codex, in
+  that order, and the first one installed runs it. On Codex it keeps your login
+  but not your personal `AGENTS.md` or MCP servers. Run `cargo setup` (or
+  install the release) to get the new `recog-copilot-codex` program; with only
+  Claude Code installed nothing changes.
+
 - The `recog-meetings` search skill installs for Codex as well:
   `npx -y skills add materkey/recog@recog-meetings -g -a claude-code codex -y`.
 

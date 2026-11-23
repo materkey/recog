@@ -12,7 +12,7 @@ Commands below run from the repository root.
 | System audio | ScreenCaptureKit — built in, needs `swiftc` (`xcode-select --install`) to build the helper | PulseAudio **or** PipeWire with `pipewire-pulse`, plus `parec`/`pactl` (`pulseaudio-utils` / `libpulse`) |
 | Microphone | built in (`recog-mic`) | `parec` on the default source |
 | Required | `ffmpeg` | same |
-| Optional | `tmux`+`claude` (Copilot), `node`+`npm` (extension build, AI summaries), `jq` (`debug` output) | same |
+| Optional | `tmux` with `claude` or `codex` (Copilot), `node`+`npm` (extension build, AI summaries), `jq` (`debug` output) | same |
 | Disk | ~0.3 GB for the model, ~3 GB for the Rust build | same |
 | GPU | Metal | Vulkan |
 
@@ -294,16 +294,29 @@ meeting: `.env.example` ships `RECOG_COPILOT_AUTOSPAWN=0`, so a fresh install
 never starts a Claude session unattended. The manual Start/Stop button and the
 agent-status chip in the web UI work regardless.
 
-To use Copilot, install `tmux` and Claude Code and make both commands available
-on `PATH`. Setup preserves their discovered directories in the service PATH,
-including a custom npm prefix. Run `claude` interactively as the same user to
-sign in before starting Copilot; setup checks CLI availability, not authentication.
-After moving or installing a CLI in a new directory, rerun `cargo setup`.
+To use Copilot, install `tmux` and Claude Code or Codex and make the commands
+available on `PATH`. Setup preserves their discovered directories in the service
+PATH, including a custom npm prefix. Run `claude` or `codex` interactively as the
+same user to sign in before starting Copilot; setup checks CLI availability, not
+authentication. After moving or installing a CLI in a new directory, rerun
+`cargo setup`.
+
+Copilot runs on the first provider of its scenario in **Settings → Промпты и
+модели** whose CLI is installed: Claude Code by default, Codex when Claude Code
+is missing. On Codex the tmux session runs `recog-copilot-codex`, which drives
+`codex app-server` with its own `CODEX_HOME` under `<data dir>/copilot/`: its
+`auth.json` links to your `~/.codex/auth.json`, so your login holds while your
+personal `AGENTS.md` and MCP servers stay out of the meeting. The thread asks for
+no approvals, has a read-only sandbox and only the Copilot channel's tools. The
+session's last line is its status (`recog-copilot-codex: online`); `tmux -L
+recog-copilot attach` shows the dialog above it, and Codex's own log is
+`<data dir>/logs/copilot-codex.stderr.log`. A spent subscription or an expired
+login shows as 🔴 with the reason on that line.
 
 Setup reports missing Copilot tools as optional. Transcription and service management
 work without them.
 
-To enable auto-spawn: put `tmux` and the `claude` CLI on `PATH`, set
+To enable auto-spawn: put `tmux` and the `claude` or `codex` CLI on `PATH`, set
 `RECOG_COPILOT_AUTOSPAWN=1` in `.env`, then
 `recog service restart copilot-supervisor`.
 
@@ -404,7 +417,7 @@ At their default they ask one provider (Codex for titles and summaries, Claude
 for questions) and, when its CLI is not installed or it refuses, for example on
 a spent subscription, the other one; the title, the answer and the summary
 record which provider gave them. Recog therefore works with only Claude Code
-or only Codex; only Copilot needs Claude Code. Clear **Если провайдер не
+or only Codex, Copilot included (see [Copilot](#copilot)). Clear **Если провайдер не
 установлен или отказал, ответит другой** in a scenario to send its transcripts
 to the chosen provider only.
 

@@ -189,7 +189,7 @@ where
 
 fn show<W: Write>(pane: &mut Pane<W>, event: &Event) {
     match event {
-        Event::AgentMessage { text } => pane.say(&format!("codex: {text}")),
+        Event::AgentMessage { text } if !text.trim().is_empty() => pane.say(&format!("codex: {text}")),
         Event::Refused { method } => pane.say(&format!("refused: {method}")),
         Event::Error { failure, will_retry } => {
             pane.say(&format!("error ({}): {}", if *will_retry { "retrying" } else { "final" }, failure.message));

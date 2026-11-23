@@ -167,7 +167,7 @@ async fn spawn_probes_the_sibling_and_the_target_then_creates_the_session_on_the
     let new_session = fake.calls.borrow()[2].clone();
     assert_eq!(new_session[..3], ["tmux", "-L", "recog-copilot"]);
     assert_eq!(new_session[3..9], ["new-session", "-d", "-s", "copilot", "-c", "/tmp/checkout"]);
-    assert_eq!(new_session[9], runner.build_claude_command().unwrap());
+    assert_eq!(new_session[9], runner.build_command().unwrap());
 }
 
 #[tokio::test]
@@ -509,7 +509,7 @@ async fn linux_spawn_wraps_tmux_in_a_transient_unit_with_its_properties_and_envi
     let tmux = &argv[argv.iter().position(|a| a == "tmux").unwrap()..];
     assert_eq!(tmux[..4], ["tmux", "-L", "recog-copilot", "new-session"]);
     assert_eq!(tmux[4..9], ["-d", "-s", TMUX_SESSION, "-c", "/tmp/checkout"]);
-    assert_eq!(tmux[9], runner.build_claude_command().unwrap());
+    assert_eq!(tmux[9], runner.build_command().unwrap());
 }
 
 #[tokio::test]
@@ -607,4 +607,50 @@ async fn macos_path_runs_only_tmux() {
     runner.spawn(Some("A")).await.unwrap();
     // then
     assert!(runner.command_runner().programs().iter().all(|p| p == "tmux"));
+}
+
+#[test]
+fn only_codex_installed_when_the_session_command_is_built_then_the_codex_harness_in_the_checkout() {
+    // given
+    let mut runner = tmux_runner(FakeTmux::default());
+    runner.cli_installed = Box::new(|name| name == "codex");
+    // when
+    let tokens = split(&runner.build_command().unwrap());
+    // then
+    assert!(tokens[0].ends_with("/recog-copilot-codex"), "{tokens:?}");
+    assert_eq!(tokens[1..], ["--repo-root", "/repo"]);
+}
+
+#[test]
+fn both_installed_when_built_then_claude_code_unless_codex_is_saved_alone() {
+    // given
+    let settings = TestSettings::enabled();
+    let mut runner = TmuxRunner::new(FakeTmux::default(), settings.clone(), "/repo", "http://x/mcp");
+    runner.cli_installed = Box::new(|_| true);
+    // when / then
+    assert_eq!(split(&runner.build_command().unwrap())[0], "claude");
+    settings.set_providers(&["codex"]);
+    assert!(split(&runner.build_command().unwrap())[0].ends_with("/recog-copilot-codex"));
+}
+
+#[test]
+fn neither_installed_when_built_then_the_first_provider_as_before_codex() {
+    // given
+    let mut runner = tmux_runner(FakeTmux::default());
+    runner.cli_installed = Box::new(|_| false);
+    // when / then
+    assert_eq!(split(&runner.build_command().unwrap())[0], "claude");
+}
+
+#[test]
+fn disabled_codex_copilot_refuses_to_build_the_command() {
+    // given
+    let settings = TestSettings::enabled();
+    settings.set_enabled(false);
+    let mut runner = TmuxRunner::new(FakeTmux::default(), settings, "/repo", "http://x/mcp");
+    runner.cli_installed = Box::new(|name| name == "codex");
+    // when
+    let error = runner.build_command().unwrap_err();
+    // then
+    assert!(error.0.contains("выключен"), "{error}");
 }

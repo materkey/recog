@@ -28,16 +28,15 @@ pub fn checks(root: &Path, path: &OsStr, backend: Backend) -> Vec<Check> {
     for (name, required, hint) in [
         ("ffmpeg", true, "Install ffmpeg for audio playback"),
         ("tmux", false, "Install tmux to start Copilot sessions"),
-        ("claude", false, "Install Claude Code and sign in to use Copilot"),
     ] {
         rows.push(Check { name: name.into(), ready: available(name, path), required, hint: hint.into() });
     }
-    // Titles, summaries and meeting questions take whichever of the two answers.
+    // Copilot, titles, summaries and meeting questions take whichever of the two is there.
     rows.push(Check {
         name: "claude or codex".into(),
         ready: available("claude", path) || available("codex", path),
         required: false,
-        hint: "Install Claude Code or Codex and sign in for meeting titles, summaries and questions".into(),
+        hint: "Install Claude Code or Codex and sign in for Copilot, meeting titles, summaries and questions".into(),
     });
     if backend == Backend::Systemd {
         for name in ["pactl", "parec"] {
@@ -123,7 +122,8 @@ mod tests {
             for name in PROGRAMS {
                 assert!(rows.iter().any(|r| r.name.ends_with(&format!("/bin/{name}")) && !r.ready && r.required));
             }
-            for name in ["tmux", "claude", "claude or codex"] {
+            assert!(!rows.iter().any(|r| r.name == "claude"));
+            for name in ["tmux", "claude or codex"] {
                 assert!(rows.iter().any(|r| r.name == name && !r.required && !r.ready));
             }
             assert_eq!(rows.iter().any(|r| r.name == "parec"), backend == Backend::Systemd);
@@ -137,14 +137,12 @@ mod tests {
     }
 
     #[test]
-    fn only_codex_installed_when_checking_then_ai_is_ready_and_copilot_is_not() {
+    fn only_codex_installed_when_checking_then_the_ai_row_is_ready() {
         let dir = tempfile::tempdir().unwrap();
         let codex = dir.path().join("codex");
         fs::write(&codex, "fixture").unwrap();
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
         let rows = checks(dir.path(), dir.path().as_os_str(), Backend::Launchd);
-        let ready = |name: &str| rows.iter().find(|r| r.name == name).unwrap().ready;
-        assert!(ready("claude or codex"));
-        assert!(!ready("claude"));
+        assert!(rows.iter().find(|r| r.name == "claude or codex").unwrap().ready);
     }
 }

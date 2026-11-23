@@ -112,3 +112,58 @@ fn fresh_home_when_prepared_then_the_users_login_is_linked_and_an_existing_one_k
 
     assert_eq!(std::fs::read_link(home.join("auth.json")).unwrap(), user.join("auth.json"));
 }
+
+/// The acceptance check of the plan (Task 9) against the real `codex app-server` with
+/// the user's login: a typed question reaches the bridge as a Copilot reply. Spends a
+/// few Codex turns, so it runs only on request:
+/// `cargo test -p recog-copilot --test codex_session -- --ignored`.
+#[tokio::test]
+#[ignore = "needs an installed, signed-in Codex and spends turns of its subscription"]
+async fn real_codex_when_the_user_asks_then_the_reply_reaches_the_bridge() {
+    use recog_ai::provider::{CliEnv, resolve_cli};
+    let dir = tempfile::tempdir().unwrap();
+    let link = link_in(&dir);
+    let socket = channel_support::RecordingSocket::new();
+    link.set_socket(Some(socket.clone()));
+    let (_server, address) = mcp_endpoint(link.clone()).await;
+    let user = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join(".codex");
+    let options = Options {
+        codex: resolve_cli("codex", &CliEnv::from_process()).unwrap(),
+        codex_home: dir.path().join("home"),
+        cwd: dir.path().join("cwd"),
+        mcp_url: format!("http://{address}/mcp"),
+        instructions: recog_copilot::codex::instructions::developer_instructions(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
+        )
+        .unwrap(),
+        model: recog_ai::defaults::DEFAULT_CODEX_MODEL.into(),
+        reasoning_effort: "low".into(),
+        stderr: Some(dir.path().join("codex.stderr.log")),
+    };
+    prepare_home(&options.codex_home, &user).unwrap();
+    std::fs::create_dir_all(&options.cwd).unwrap();
+    link.events.push(object(
+        r#"{"type": "copilot_user_message", "text": "Сколько будет 2+2? Ответь одним числом.", "request_id": "r1", "meeting_id": "m1"}"#,
+    ));
+    let session = tokio::spawn(async move {
+        let mut pane = Pane::new(Vec::new());
+        let result = run(&options, &mut pane).await;
+        (result, String::from_utf8(pane.into_inner()).unwrap())
+    });
+
+    let mut reply = None;
+    for _ in 0..240 {
+        reply = socket.frames().into_iter().find(|frame| frame.get("request_id").is_some_and(|id| id.py_str() == "r1"));
+        if reply.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    link.events.push(object(r#"{"type": "meeting_ended", "meeting_id": "m1"}"#));
+    let (result, shown) = tokio::time::timeout(Duration::from_secs(180), session).await.unwrap().unwrap();
+
+    let reply = reply.unwrap_or_else(|| panic!("no reply; pane:\n{shown}"));
+    eprintln!("reply frame: {}\npane:\n{shown}", channel_support::dumps(&reply));
+    assert!(reply.get("text").is_some_and(|text| text.py_str().contains('4')), "{reply:?}");
+    assert_eq!(result, Ok(()), "{shown}");
+}

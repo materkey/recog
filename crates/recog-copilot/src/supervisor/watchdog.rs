@@ -11,7 +11,8 @@
 
 use super::lifecycle::State;
 use super::screen::{
-    AUTO_DISMISS_MARKERS, AgentState, TRUST_DIALOG_MARKERS, classify_screen, dialog_shown, trust_dialog_keys,
+    AUTO_DISMISS_MARKERS, AgentState, TRUST_DIALOG_MARKERS, classify_screen, dialog_shown, harness_state,
+    trust_dialog_keys,
 };
 use super::tmux::{Error, Runner};
 
@@ -117,6 +118,11 @@ impl Watchdog {
         }
         let text = runner.capture().await?;
         let state = classify_screen(Some(&text));
+        if harness_state(&text).is_some() {
+            // The Codex harness answers no dialog; keys would only garble its status line.
+            self.dismissed_dialog = None;
+            return Ok(state);
+        }
         // Only a dialog is answered: a pane blocked for usage may quote anything.
         let lowered = text.to_lowercase();
         if dialog_shown(&lowered)

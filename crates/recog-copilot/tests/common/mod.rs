@@ -54,6 +54,12 @@ impl TestSettings {
             task.enabled = enabled;
         }
     }
+
+    pub fn set_providers(&self, providers: &[&str]) {
+        if let Ok(task) = self.0.borrow_mut().as_mut() {
+            task.providers = providers.iter().map(|provider| (*provider).to_owned()).collect();
+        }
+    }
 }
 
 impl CopilotSettings for TestSettings {
@@ -426,6 +432,8 @@ pub fn tmux_supervisor(fake: FakeTmux, grace_s: f64, autospawn: bool) -> Rc<Supe
 pub fn tmux_runner<C: CommandRunner>(fake: C) -> TmuxRunner<C> {
     let mut runner = TmuxRunner::new(fake, TestSettings::enabled(), "/repo", "http://127.0.0.1:8767/mcp");
     runner.kill_retry_delay = std::time::Duration::ZERO;
+    // Whatever this machine has installed, the tests' session runs Claude Code.
+    runner.cli_installed = Box::new(|name| name == "claude");
     runner
 }
 

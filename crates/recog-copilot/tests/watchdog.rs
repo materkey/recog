@@ -399,3 +399,38 @@ async fn idle_lifecycle_closes_the_chip_to_offline_once_and_never_probes_tmux() 
     assert_eq!(host.statuses(), vec![AgentState::Offline]);
     assert!(runner.keys().is_empty());
 }
+
+/// A Codex harness pane: the dialog above, its status as the last line. The quoted
+/// message carries Claude's dialog and spinner markers on purpose.
+fn harness_screen(status: &str) -> String {
+    format!(
+        "codex: The folder dialog said \"Do you trust this folder? Enter to confirm\" (esc to interrupt)\n\
+         codex: ❯ 1. done\nrecog-copilot-codex: {status}"
+    )
+}
+
+#[test]
+fn harness_status_lines_when_classified_then_their_states_whatever_the_dialog_quotes() {
+    for (status, expected) in [
+        ("spawning", AgentState::Spawning),
+        ("online", AgentState::Online),
+        ("working", AgentState::Working),
+        ("blocked: Codex usage limit reached", AgentState::Blocked),
+    ] {
+        assert_eq!(classify_screen(Some(&harness_screen(status))), expected, "{status}");
+    }
+    assert_eq!(classify_screen(Some(&format!("{}\n\n", harness_screen("online")))), AgentState::Online);
+}
+
+#[tokio::test]
+async fn harness_pane_quoting_a_dialog_when_watched_then_no_keys_and_its_own_status() {
+    // given
+    let runner = WatchdogRunner::new(true, &harness_screen("online"));
+    let host = Host::new(State::Running, Some("A"));
+    let (_clock, mut watchdog) = fake_clock();
+    // when
+    watchdog.tick(&host, &runner).await.unwrap();
+    // then
+    assert!(runner.keys().is_empty());
+    assert_eq!(host.statuses(), vec![AgentState::Online]);
+}

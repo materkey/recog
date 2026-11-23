@@ -20,7 +20,7 @@
   участниках конференции и из вашего профиля, а не из распознавания голоса.
 - **Распознавание на вашем компьютере.** GigaAM по умолчанию работает локально;
   [удалённый шлюз распознавания](docs/asr-server.md) необязателен, как и
-  AI-анализ (ему хватает Claude Code или Codex) и Copilot (Claude Code).
+  AI-анализ и Copilot, которым хватает Claude Code или Codex.
 - **Поддерживаемые конференции:** KTalk (Контур.Толк, `*.ktalk.ru`), Jitsi,
   Google Meet и Zoom (веб-клиент; приложение для macOS
   [включается отдельно](docs/zoom-app.md)). Для Element Call укажите свой
@@ -192,9 +192,9 @@ sudo pacman -Syu recog
   занимает около **274 МБ**, для сборки Rust нужно дополнительное место.
 - Для названий встреч, итогов и вопросов по встрече: **Claude Code или Codex**,
   хватит одного; один раз запустите `claude` или `codex`, чтобы войти.
-- Для Copilot, необязательной сессии Claude Code, которая следит за встречей и
-  отвечает в чате: **tmux + Claude Code**; один раз запустите `claude`, чтобы
-  войти.
+- Для Copilot, необязательного агента, который следит за встречей и отвечает в
+  чате: **tmux + Claude Code или Codex**; без Claude Code Copilot работает на
+  Codex.
 
 ```bash
 git clone https://github.com/materkey/recog.git && cd recog
