@@ -40,7 +40,7 @@ pub const DEFAULT_TASKS: [TaskDefault; 4] = [
         label: "Вопросы по встрече",
         prompt: MEETING_CHAT_PROMPT,
         multiple: false,
-        providers: Some(&["claude"]),
+        providers: Some(&["claude", "codex"]),
     },
     TaskDefault { id: "copilot", label: "Copilot", prompt: COPILOT_PROMPT, multiple: false, providers: None },
 ];

@@ -32,6 +32,13 @@ pub fn checks(root: &Path, path: &OsStr, backend: Backend) -> Vec<Check> {
     ] {
         rows.push(Check { name: name.into(), ready: available(name, path), required, hint: hint.into() });
     }
+    // Titles, summaries and meeting questions take whichever of the two answers.
+    rows.push(Check {
+        name: "claude or codex".into(),
+        ready: available("claude", path) || available("codex", path),
+        required: false,
+        hint: "Install Claude Code or Codex and sign in for meeting titles, summaries and questions".into(),
+    });
     if backend == Backend::Systemd {
         for name in ["pactl", "parec"] {
             rows.push(Check {
@@ -116,8 +123,8 @@ mod tests {
             for name in PROGRAMS {
                 assert!(rows.iter().any(|r| r.name.ends_with(&format!("/bin/{name}")) && !r.ready && r.required));
             }
-            for name in ["tmux", "claude"] {
-                assert!(rows.iter().any(|r| r.name == name && !r.required));
+            for name in ["tmux", "claude", "claude or codex"] {
+                assert!(rows.iter().any(|r| r.name == name && !r.required && !r.ready));
             }
             assert_eq!(rows.iter().any(|r| r.name == "parec"), backend == Backend::Systemd);
             assert_eq!(rows.iter().any(|r| r.name.ends_with("recog_launcher")), backend == Backend::Launchd);
@@ -127,5 +134,17 @@ mod tests {
         assert!(!available("ffmpeg", dir.path().as_os_str()));
         fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(available("ffmpeg", dir.path().as_os_str()));
+    }
+
+    #[test]
+    fn only_codex_installed_when_checking_then_ai_is_ready_and_copilot_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let codex = dir.path().join("codex");
+        fs::write(&codex, "fixture").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+        let rows = checks(dir.path(), dir.path().as_os_str(), Backend::Launchd);
+        let ready = |name: &str| rows.iter().find(|r| r.name == name).unwrap().ready;
+        assert!(ready("claude or codex"));
+        assert!(!ready("claude"));
     }
 }

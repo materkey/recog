@@ -109,6 +109,39 @@ impl ProviderFactory for FakeFactory {
     }
 }
 
+/// A factory whose providers answer by key, like several installed CLIs: a key without
+/// an answer is a CLI that is not installed. Records the keys asked, in order.
+pub struct KeyedFactory {
+    pub answers: Vec<(&'static str, Answer)>,
+    pub asked: Mutex<Vec<String>>,
+}
+
+impl KeyedFactory {
+    pub fn new(answers: Vec<(&'static str, Answer)>) -> KeyedFactory {
+        KeyedFactory { answers, asked: Mutex::default() }
+    }
+
+    pub fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl ProviderFactory for KeyedFactory {
+    fn create(&self, settings: &ResolvedTask, _task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>> {
+        let key = provider.unwrap_or(settings.provider()).to_owned();
+        self.asked.lock().unwrap().push(key.clone());
+        let (_, answer) =
+            self.answers.iter().find(|(name, _)| *name == key).ok_or_else(|| AiError::NotFound(key.clone()))?;
+        Ok(Box::new(FakeProvider {
+            key: key.clone(),
+            model: format!("{key}-model"),
+            effort: None,
+            answer: answer.clone(),
+            prompts: Arc::default(),
+        }))
+    }
+}
+
 /// A stub CLI in `dir`: records its argv (one per line) and stdin next to itself,
 /// prints `stdout` and `stderr`, exits with `code`.
 pub fn shell_stub(dir: &Path, name: &str, stdout: &str, stderr: &str, code: i32) -> PathBuf {

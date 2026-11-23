@@ -126,6 +126,29 @@ test('task and global drafts - saving task - encoded id and original revision se
     assert.equal(JSON.parse(h.calls[2][1].body).models.claude, 'claude-new');
 });
 
+test('single-answer scenario at its default - opened, saved, fallback turned off - first provider chosen and the other stands in until then', async () => {
+    const data = payload();
+    data.tasks[1] = task('title', { providers: ['codex', 'claude'], multiple: false });
+    const h = harness(async () => response(data));
+    await h.boot(); await h.click('open');
+    await h.select('task', 'title');
+    assert.equal(h.provider('codex').type, 'radio');
+    assert.deepEqual([h.provider('codex').checked, h.provider('claude').checked], [true, false]);
+    assert.deepEqual([h.get('fallback-row').hidden, h.get('fallback').checked], [false, true]);
+    assert.equal(h.get('claude-effort-row').hidden, false);
+    await h.click('save-task');
+    assert.deepEqual(JSON.parse(h.calls[1][1].body).providers, ['codex', 'claude']);
+    h.get('fallback').checked = false;
+    h.get('fallback').listeners.change();
+    assert.equal(h.get('claude-effort-row').hidden, true);
+    await h.click('save-task');
+    assert.deepEqual(JSON.parse(h.calls.at(-1)[1].body).providers, ['codex']);
+    await h.select('task', 'analysis.increment');
+    assert.equal(h.get('fallback-row').hidden, true);
+    await h.select('task', 'copilot');
+    assert.equal(h.get('fallback-row').hidden, true);
+});
+
 test('Codex effort - choose Auto and save - empty override reaches API', async () => {
     const h = harness(async () => response(payload()));
     await h.boot(); await h.click('open');

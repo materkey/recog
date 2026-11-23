@@ -399,9 +399,18 @@ individual scenarios. Claude defaults to `claude-opus-5-5`, Codex to
 `gpt-6-astra`; the installation's models (`[ai]` of `config.toml`) remain
 effective until overridden in Settings. Claude and Codex continue to use their CLI subscription login.
 
+Meeting titles, questions about a meeting and saved summaries take one answer.
+At their default they ask one provider (Codex for titles and summaries, Claude
+for questions) and, when its CLI is not installed or it refuses, for example on
+a spent subscription, the other one; the title, the answer and the summary
+record which provider gave them. Recog therefore works with only Claude Code
+or only Codex; only Copilot needs Claude Code. Clear **Если провайдер не
+установлен или отказал, ответит другой** in a scenario to send its transcripts
+to the chosen provider only.
+
 The **Инкремент** scenario configures both new analysis and saved increments.
-New analysis compares the selected providers; a saved version uses Codex when
-selected, otherwise the first selected provider. Existing saved versions keep
+New analysis compares the selected providers; a saved version asks Codex first
+when it is selected, then the other selected provider. Existing saved versions keep
 their history under the same prompt ID.
 
 Claude and Codex have separate reasoning effort controls. Claude supports

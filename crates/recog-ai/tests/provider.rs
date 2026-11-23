@@ -6,12 +6,13 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use common::{shell_stub, stub_argv, stub_env, stub_stdin};
+use common::{Answer, KeyedFactory, shell_stub, stub_argv, stub_env, stub_stdin};
+use recog_ai::install::LegacyEnv;
 use recog_ai::provider::{
     AiProvider, CCS_AUTOMATION_MARKER_PREFIX, ClaudeCliProvider, CliEnv, CodexCliProvider, build_codex_exec_command,
-    mark_ccs_automation, node_env, provider_for_settings, resolve_cli,
+    complete_in_order, mark_ccs_automation, node_env, provider_for_settings, resolve_cli,
 };
-use recog_ai::settings::{AiSettingsStore, Fallback};
+use recog_ai::settings::{AiSettingsStore, Fallback, ResolvedTask};
 
 const AGENT_ANSWER: &str = r#"{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}"#;
 const TURN_FAILED: &str = r#"{"type":"turn.failed","error":{"message":"stream disconnected"}}"#;
@@ -594,4 +595,60 @@ async fn independent_efforts_given_generation_when_spawned_then_claude_gets_only
             }
         }
     }
+}
+
+// --- The scenario's providers in order: the next one answers when one cannot ---
+
+fn in_order(providers: &[&str]) -> ResolvedTask {
+    let dir = tempfile::tempdir().unwrap();
+    let store =
+        AiSettingsStore::new(dir.path(), Some(dir.path().join("prompts"))).with_legacy_env(LegacyEnv::default());
+    let mut settings = store.resolve_task("title", None, Fallback::default()).unwrap();
+    settings.providers = providers.iter().map(|provider| provider.to_string()).collect();
+    settings
+}
+
+#[tokio::test]
+async fn first_provider_not_installed_when_completed_in_order_then_the_next_one_answers() {
+    let factory = KeyedFactory::new(vec![("codex", Answer::Text("from codex".into()))]);
+    let (provider, answer) =
+        complete_in_order(&factory, &in_order(&["claude", "codex"]), "title", "prompt", &mut |_| {}).await.unwrap();
+    assert_eq!((provider.key(), answer.as_str()), ("codex", "from codex"));
+    assert_eq!(factory.asked(), ["claude", "codex"]);
+}
+
+#[tokio::test]
+async fn first_provider_refuses_when_completed_in_order_then_the_next_one_answers_and_each_attempt_is_reported() {
+    let factory = KeyedFactory::new(vec![
+        ("claude", Answer::Fail("You've reached your usage limit".into())),
+        ("codex", Answer::Text("ok".into())),
+    ]);
+    let mut attempted = Vec::new();
+    let mut report = |provider: &dyn AiProvider| attempted.push(provider.key().to_owned());
+    let (provider, answer) =
+        complete_in_order(&factory, &in_order(&["claude", "codex"]), "title", "prompt", &mut report).await.unwrap();
+    assert_eq!((provider.key(), answer.as_str()), ("codex", "ok"));
+    assert_eq!(attempted, ["claude", "codex"]);
+}
+
+#[tokio::test]
+async fn every_provider_failing_when_completed_in_order_then_the_last_error() {
+    let factory = KeyedFactory::new(vec![
+        ("claude", Answer::Fail("claude is down".into())),
+        ("codex", Answer::Fail("codex is down".into())),
+    ]);
+    let error = complete_in_order(&factory, &in_order(&["claude", "codex"]), "title", "prompt", &mut |_| {})
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("codex is down"), "{error}");
+}
+
+#[tokio::test]
+async fn single_chosen_provider_failing_when_completed_in_order_then_no_other_provider_is_asked() {
+    let factory =
+        KeyedFactory::new(vec![("claude", Answer::Fail("down".into())), ("codex", Answer::Text("ok".into()))]);
+    let result = complete_in_order(&factory, &in_order(&["claude"]), "title", "prompt", &mut |_| {}).await;
+    assert!(result.is_err());
+    assert_eq!(factory.asked(), ["claude"]);
 }

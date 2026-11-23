@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::error::{AiError, Result};
 use crate::install;
 use crate::json::{self, Json};
-use crate::provider::ProviderFactory;
+use crate::provider::{AiProvider, ProviderFactory, complete_in_order};
 use crate::pytext;
 use crate::settings::{AiSettingsStore, Fallback, ResolvedTask, Variables, render_prompt};
 
@@ -59,7 +59,7 @@ async fn try_generate(
     settings: Option<&ResolvedTask>,
     variables: &Variables,
     factory: &dyn ProviderFactory,
-) -> Result<Option<String>> {
+) -> Result<Option<TitleUpdate>> {
     let mut settings = title_settings(settings)?;
     if let Some(model) = model {
         let provider = settings.provider().to_owned();
@@ -70,25 +70,30 @@ async fn try_generate(
     let mut variables = variables.clone();
     variables.insert("transcript".into(), sample_transcript(transcript, 6000, 6));
     let prompt = render_prompt(&settings.prompt, &variables)?;
-    let provider = factory.create(&settings, "title", None)?;
-    let result =
-        tokio::time::timeout(TITLE_TIMEOUT, provider.complete(&prompt)).await.map_err(|_| AiError::Timeout)??;
+    let mut attempt = |_: &dyn AiProvider| {};
+    let answered = complete_in_order(factory, &settings, "title", &prompt, &mut attempt);
+    let (provider, result) = tokio::time::timeout(TITLE_TIMEOUT, answered).await.map_err(|_| AiError::Timeout)??;
     let title = pytext::strip(&result).trim_matches(['"', '\'']);
     let title = pytext::prefix_chars(title, 100);
-    Ok((!title.is_empty()).then(|| title.to_owned()))
+    Ok((!title.is_empty()).then(|| TitleUpdate {
+        title: title.to_owned(),
+        title_source: provider.key().to_owned(),
+        title_model: provider.model().to_owned(),
+        title_settings_revision: settings.revision.clone(),
+    }))
 }
 
 /// `generate_title_async`: a title from one resolved settings snapshot (the saved
-/// `title` scenario when `None`); `model` overrides the selected provider's model for
-/// this call. Any failure is printed and gives `None`, as does a transcript shorter than
-/// 50 characters, for which no settings are read.
+/// `title` scenario when `None`) with the provider that gave it; `model` overrides the
+/// first provider's model for this call. Any failure is printed and gives `None`, as
+/// does a transcript shorter than 50 characters, for which no settings are read.
 pub async fn generate_title(
     transcript: &str,
     model: Option<&str>,
     settings: Option<&ResolvedTask>,
     variables: &Variables,
     factory: &dyn ProviderFactory,
-) -> Option<String> {
+) -> Option<TitleUpdate> {
     if transcript.is_empty() || pytext::char_len(pytext::strip(transcript)) < 50 {
         return None;
     }
@@ -112,7 +117,7 @@ pub fn generate_title_blocking(
     settings: Option<&ResolvedTask>,
     variables: &Variables,
     factory: &dyn ProviderFactory,
-) -> Option<String> {
+) -> Option<TitleUpdate> {
     std::thread::scope(|scope| {
         scope
             .spawn(|| {
@@ -235,17 +240,11 @@ async fn try_meeting_title(
     let settings = store.resolve_task("title", None, Fallback::default())?;
     let meta = read_meta(meeting_path)?;
     let variables = meeting_variables(&meta)?;
-    let Some(title) = generate_title(&transcript, None, Some(&settings), &variables, factory).await else {
+    let Some(update) = generate_title(&transcript, None, Some(&settings), &variables, factory).await else {
         return Ok(None);
     };
-    println!("Generated title: {title}");
-    let provider = settings.provider().to_owned();
-    Ok(Some(TitleUpdate {
-        title,
-        title_model: settings.models.get(&provider).cloned().unwrap_or_default(),
-        title_source: provider,
-        title_settings_revision: settings.revision.clone(),
-    }))
+    println!("Generated title: {}", update.title);
+    Ok(Some(update))
 }
 
 /// `_generate_title_for_meeting`: a title for the meeting at `meeting_path` from the

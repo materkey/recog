@@ -120,6 +120,18 @@ async fn failed_model_call_when_asked_then_502_and_nothing_stored() {
 }
 
 #[tokio::test]
+async fn claude_not_installed_when_asked_then_codex_answers_and_the_turn_names_it() {
+    let app = chat();
+    app.factory.missing.lock().unwrap().push("claude".into());
+
+    let (status, turn) = ask(&app, "Что сказал Пётр?", "m1").await;
+
+    assert_eq!(status, 200);
+    assert_eq!(text(&turn, "answer"), ANSWER);
+    assert_eq!(text(&turn, "provider"), format!("Fake ({})", recog_ai::defaults::DEFAULT_CODEX_MODEL));
+}
+
+#[tokio::test]
 async fn empty_model_answer_when_asked_then_it_counts_as_a_failure() {
     let app = chat();
     app.factory.answer(Answer::Text("  \n".into()));
@@ -237,7 +249,7 @@ async fn edited_prompt_and_model_when_asked_then_the_chat_uses_them() {
 
     assert!(app.factory.prompts()[0].starts_with("Мой промпт"));
     let seen = app.factory.settings.lock().unwrap().last().cloned().unwrap();
-    assert_eq!(seen.providers, ["claude"]);
+    assert_eq!(seen.providers, ["claude", "codex"]);
     assert_eq!(seen.models.get("claude").map(String::as_str), Some("other"));
     assert_eq!(text(&turn, "settings_revision"), seen.revision);
 }

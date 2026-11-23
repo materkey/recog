@@ -6,9 +6,8 @@ use std::sync::Arc;
 use recog_ai::increment::IncrementGenerator;
 use recog_ai::json::Json;
 use recog_ai::prompt_registry::{PromptConfig, PromptRegistry};
-use recog_ai::settings::ResolvedTask;
 use recog_ai::template::{Variables, variables};
-use recog_ai::title;
+use recog_ai::title::{self, TitleUpdate};
 use recog_core::meeting_storage::{MeetingStorage, UnnamedLocal, local_participant_names};
 use recog_core::pyjson::{Map, Value};
 
@@ -215,15 +214,13 @@ fn title_variables(
 }
 
 /// What a generated title writes to `meta.json`.
-fn title_update(title: &str, settings: &ResolvedTask) -> Result<Map, axum::response::Response> {
-    let provider = settings.provider();
+fn title_update(title: &TitleUpdate) -> Map {
     let mut update = Map::new();
-    update.insert("title", Value::from(title));
-    update.insert("title_source", Value::from(provider));
-    let model = settings.models.get(provider).ok_or_else(|| fail(format!("'{provider}'")))?;
-    update.insert("title_model", Value::from(model.as_str()));
-    update.insert("title_settings_revision", Value::from(settings.revision.as_str()));
-    Ok(update)
+    update.insert("title", Value::from(title.title.as_str()));
+    update.insert("title_source", Value::from(title.title_source.as_str()));
+    update.insert("title_model", Value::from(title.title_model.as_str()));
+    update.insert("title_settings_revision", Value::from(title.title_settings_revision.as_str()));
+    update
 }
 
 pub(super) async fn generate_title(state: &AppState, req: &Req) -> Reply {
@@ -234,15 +231,14 @@ pub(super) async fn generate_title(state: &AppState, req: &Req) -> Reply {
     let settings = state.ai.task_settings("title").map_err(fail)?;
     let vars = title_variables(&storage, &meeting_id, &found)?;
     let title = title::generate_title(&transcript, None, Some(&settings), &vars, state.ai.factory.as_ref()).await;
-    let provider = settings.provider().to_owned();
     let Some(title) = title else { return Err(fail("Failed to generate title")) };
-    storage.store_title(&meeting_id, &title_update(&title, &settings)?).map_err(fail)?;
+    storage.store_title(&meeting_id, &title_update(&title)).map_err(fail)?;
     if let Some(catalog) = state.catalog() {
         catalog.refresh(None).await;
     }
     Ok(responses::json(&json::object([
         ("meeting_id", Value::from(meeting_id.as_str())),
-        ("title", Value::from(title)),
-        ("title_source", Value::from(provider)),
+        ("title", Value::from(title.title)),
+        ("title_source", Value::from(title.title_source)),
     ])))
 }

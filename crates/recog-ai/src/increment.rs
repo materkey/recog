@@ -24,7 +24,7 @@ use crate::error::{AiError, Result};
 use crate::install::{LegacyEnv, default_prompts_dir};
 use crate::json::{self, Json, Map};
 use crate::prompt_registry::{PromptConfig, PromptRegistry};
-use crate::provider::{AiProvider, CliProviderFactory, ProviderFactory};
+use crate::provider::{AiProvider, CliProviderFactory, ProviderFactory, complete_in_order};
 use crate::pytext;
 use crate::settings::{AiSettingsStore, Fallback, INCREMENT_TASK, ResolvedTask, render_prompt};
 use crate::template::Variables;
@@ -730,15 +730,15 @@ impl IncrementGenerator {
         let rendered = self.render(prompt, meta, user_name, transcript)?;
         std::fs::create_dir_all(&dir)?;
 
-        let provider = self.factory.create(&rendered.settings, "increment", None)?;
-        let generation = generation_meta(&*provider, &rendered.settings);
-        cancel.generation = generation.clone();
-
+        let settings = &rendered.settings;
         let meta_file = dir.join(format!("v{version}_meta.json"));
         let heartbeat = AbortOnDrop(tokio::spawn(heartbeat(meta_file.clone(), self.heartbeat_interval)));
-        let result = provider.complete(&rendered.prompt).await;
+        // A failed or cancelled version names the provider that was being asked.
+        let mut attempt = |provider: &dyn AiProvider| cancel.generation = generation_meta(provider, settings);
+        let answered = complete_in_order(&*self.factory, settings, "increment", &rendered.prompt, &mut attempt).await;
         drop(heartbeat);
-        let result = result?;
+        let (provider, result) = answered?;
+        let generation = generation_meta(&*provider, settings);
         let duration = cancel.started.elapsed();
 
         Self::write_markdown(&dir, meta, meeting_id, claim, &rendered.participants, &result)?;

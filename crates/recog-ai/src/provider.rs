@@ -793,6 +793,41 @@ pub trait ProviderFactory: Send + Sync {
     fn create(&self, settings: &ResolvedTask, task: &str, provider: Option<&str>) -> Result<Box<dyn AiProvider>>;
 }
 
+/// The answer of the first of the scenario's providers that gives one, and that
+/// provider: one whose CLI is missing or whose call fails hands the prompt to the next,
+/// so a scenario left at its default works with only Claude Code or only Codex. Each
+/// provider is reported to `attempt` before it is asked; all of them failing gives the
+/// last error.
+///
+/// # Errors
+/// The last provider's error, when none answers.
+pub async fn complete_in_order(
+    factory: &dyn ProviderFactory,
+    settings: &ResolvedTask,
+    task: &str,
+    prompt: &str,
+    attempt: &mut (dyn FnMut(&dyn AiProvider) + Send),
+) -> Result<(Box<dyn AiProvider>, String)> {
+    let mut failure = AiError::Value(format!("No provider selected for {task}"));
+    for key in &settings.providers {
+        let answer = match factory.create(settings, task, Some(key)) {
+            Ok(provider) => {
+                attempt(&*provider);
+                provider.complete(prompt).await.map(|answer| (provider, answer))
+            }
+            Err(error) => Err(error),
+        };
+        match answer {
+            Ok(answered) => return Ok(answered),
+            Err(error) => {
+                eprintln!("[ai] {task}: {key} did not answer: {error}");
+                failure = error;
+            }
+        }
+    }
+    Err(failure)
+}
+
 /// [`provider_for_settings`] with the given environment (`None`: the process's).
 #[derive(Clone, Debug, Default)]
 pub struct CliProviderFactory {

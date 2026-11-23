@@ -147,10 +147,9 @@ fn prompt_value(task_id: &str, prompt: &Json) -> Result<Option<Json>> {
 
 fn providers_value(task_id: &str, providers: &Json) -> Result<Option<Json>> {
     let allowed: &[&str] = if task_id == "copilot" { &["claude"] } else { &PROVIDERS };
-    let limit = if task_id.starts_with("analysis.") { allowed.len() } else { 1 };
     let names: Option<Vec<&str>> = providers.as_array().and_then(|items| items.iter().map(Json::as_str).collect());
     let valid = names.filter(|names| {
-        (1..=limit).contains(&names.len())
+        (1..=allowed.len()).contains(&names.len())
             && names.iter().all(|name| allowed.contains(name))
             && names.iter().enumerate().all(|(index, name)| !names[..index].contains(name))
     });
@@ -647,22 +646,24 @@ fn text_values(models: Option<&Json>) -> IndexMap<String, String> {
         .unwrap_or_default()
 }
 
-/// The selected providers: the override's, else the scenario's default.
+/// The selected providers: the override's, else the scenario's default. An analysis
+/// asks every one of them; any other scenario takes the answer of the first that gives
+/// one, so by default the other provider answers when the first is not installed or
+/// refuses (a spent subscription).
 fn task_providers(task_id: &str, defined: Option<&[String]>, override_values: &Map) -> Vec<String> {
     let mut providers: Vec<String> = if task_id.starts_with("analysis.") {
         vec!["claude".into(), "codex".into()]
     } else if task_id == "copilot" {
         vec!["claude".into()]
     } else {
-        defined.map_or_else(|| vec!["codex".into()], <[String]>::to_vec)
+        defined.map_or_else(|| vec!["codex".into(), "claude".into()], <[String]>::to_vec)
     };
     if let Some(Json::Array(items)) = override_values.get("providers") {
         providers = items.iter().filter_map(Json::as_str).map(str::to_owned).collect();
     }
     if task_id == SAVED_INCREMENT_TASK {
-        // A saved version holds one result: Codex when comparison selects both.
-        let codex = providers.iter().any(|provider| provider == "codex");
-        providers = vec![if codex { "codex".into() } else { providers[0].clone() }];
+        // A saved version holds one result: Codex first when comparison selects both.
+        providers.sort_by_key(|provider| provider != "codex");
     }
     providers
 }
@@ -1020,7 +1021,7 @@ mod tests {
             ),
             ("title", r#"{"prompt": 5}"#, "Prompt must be nonempty text of at most 32000 characters"),
             ("title", r#"{"prompt": "No transcript"}"#, "Prompt must include {transcript}"),
-            ("title", r#"{"providers": ["claude", "codex"]}"#, "Invalid provider selection"),
+            ("title", r#"{"providers": ["claude", "codex", "claude"]}"#, "Invalid provider selection"),
             ("copilot", r#"{"providers": ["codex"]}"#, "Invalid provider selection"),
             ("analysis.increment", r#"{"providers": ["codex", "codex"]}"#, "Invalid provider selection"),
             ("copilot", r#"{"models": {"codex": "m"}}"#, "Copilot supports only Claude"),

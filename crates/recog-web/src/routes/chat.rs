@@ -5,6 +5,7 @@ use std::path::Path;
 use axum::http::StatusCode;
 use recog_ai::AiError;
 use recog_ai::meeting_chat::{self, ChatTurn};
+use recog_ai::provider::{AiProvider, complete_in_order};
 use recog_ai::settings::ResolvedTask;
 use recog_core::meeting_storage::{MeetingStorage, UnnamedLocal, local_participant_names};
 use recog_core::pyjson::Value;
@@ -128,8 +129,11 @@ async fn chat_answer(
     settings: &ResolvedTask,
     prompt: &str,
 ) -> Result<(String, String), axum::response::Response> {
-    let provider = state.ai.provider("meeting_chat", settings).map_err(bad_gateway)?;
-    let answer = provider.complete(prompt).await.map_err(bad_gateway)?;
+    let mut attempt = |_: &dyn AiProvider| {};
+    let (provider, answer) =
+        complete_in_order(state.ai.factory.as_ref(), settings, "meeting_chat", prompt, &mut attempt)
+            .await
+            .map_err(bad_gateway)?;
     let answer = recog_core::py::strip(&answer).to_owned();
     if answer.is_empty() {
         return Err(bad_gateway("Модель вернула пустой ответ"));

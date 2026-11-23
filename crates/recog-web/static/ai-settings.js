@@ -110,6 +110,7 @@
         providerInputs.clear();
         el('prompt').value = task?.prompt || '';
         el('enabled-row').hidden = task?.id !== 'copilot';
+        el('fallback-row').hidden = true;
         el('enabled').checked = task?.enabled !== false;
         el('provenance').textContent = task?.customized ? 'Сценарий настроен вручную.' : 'Сценарий использует настройки по умолчанию.';
         el('placeholders').textContent = placeholdersText(task);
@@ -118,6 +119,8 @@
         for (const provider of task.allowed_providers) {
             if (PROVIDERS[provider]) addProviderChoice(task, provider);
         }
+        el('fallback-row').hidden = task.multiple || providerInputs.size < 2;
+        el('fallback').checked = task.providers.length > 1;
         updateModelHints();
         el('reasoning').value = task.reasoning_effort;
         el('claude-effort').value = task.claude_effort || '';
@@ -138,7 +141,7 @@
         input.type = task.multiple ? 'checkbox' : 'radio';
         input.name = 'ai-settings-provider';
         input.value = provider;
-        input.checked = task.providers.includes(provider);
+        input.checked = task.multiple ? task.providers.includes(provider) : task.providers[0] === provider;
         input.addEventListener('change', () => {
             markDirty('task');
             updateReasoning();
@@ -154,9 +157,22 @@
         el('task-models').append(field.label);
     }
 
+    // The providers in the order the scenario asks them: every checked one for an
+    // analysis; otherwise the chosen one, then the other when it may stand in.
+    function selectedProviders() {
+        const chosen = [...providerInputs]
+            .filter(([, input]) => input.checked)
+            .map(([key]) => key);
+        if (el('fallback-row').hidden || !el('fallback').checked || !chosen.length) return chosen;
+        const others = [...providerInputs.keys()]
+            .filter((key) => key !== chosen[0]);
+        return [chosen[0], ...others];
+    }
+
     function updateReasoning() {
-        el('reasoning-row').hidden = !providerInputs.get('codex')?.checked;
-        el('claude-effort-row').hidden = !providerInputs.get('claude')?.checked;
+        const providers = selectedProviders();
+        el('reasoning-row').hidden = !providers.includes('codex');
+        el('claude-effort-row').hidden = !providers.includes('claude');
     }
 
     function fillGlobals() {
@@ -342,9 +358,7 @@
     }
 
     function taskSaveBody() {
-        const providers = [...providerInputs]
-            .filter(([, input]) => input.checked)
-            .map(([key]) => key);
+        const providers = selectedProviders();
         if (!providers.length) { error('Выберите хотя бы одного провайдера.'); return null; }
         const body = {
             prompt: el('prompt').value, providers,
@@ -379,6 +393,10 @@
         el('reasoning').addEventListener('change', () => markDirty('task'));
         el('enabled').addEventListener('change', () => markDirty('task'));
         el('claude-effort').addEventListener('change', () => markDirty('task'));
+        el('fallback').addEventListener('change', () => {
+            markDirty('task');
+            updateReasoning();
+        });
         el('task').addEventListener('change', () => {
             if (taskDirty && !window.confirm('Переключить сценарий и потерять его несохранённые изменения?')) {
                 el('task').value = selectedId;

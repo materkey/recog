@@ -5,7 +5,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{FakeFactory, shell_stub, stub_argv, stub_env, stub_stdin};
+use common::{Answer, FakeFactory, KeyedFactory, shell_stub, stub_argv, stub_env, stub_stdin};
 use recog_ai::install::LegacyEnv;
 use recog_ai::json::Json;
 use recog_ai::provider::CliProviderFactory;
@@ -36,7 +36,7 @@ async fn default_title_settings_when_generated_then_marked_prompt_and_ephemeral_
     let transcript = format!("[12:00:00] User: {}", "обсуждаем архитектуру ".repeat(4));
     let settings = title_settings(&store(dir.path()));
     let title = generate_title(&transcript, None, Some(&settings), &variables([]), &factory).await;
-    assert_eq!(title.as_deref(), Some("Test Title"));
+    assert_eq!(title.map(|title| title.title).as_deref(), Some("Test Title"));
     let argv = stub_argv(&bin, "codex");
     assert_eq!(argv[2], "gpt-6-astra");
     assert!(argv.contains(&"--ephemeral".to_owned()));
@@ -57,7 +57,7 @@ async fn saved_claude_title_when_generated_then_selected_model_and_single_pass_p
     let factory = FakeFactory::new("claude", "claude-custom", None, "  \"Название\"  ");
     let title =
         generate_title(&transcript, None, Some(&settings), &variables([("user_name", "User")]), &*factory).await;
-    assert_eq!(title.as_deref(), Some("Название"));
+    assert_eq!(title.map(|title| title.title).as_deref(), Some("Название"));
     let calls = factory.calls();
     assert_eq!(calls[0].0.models["claude"], "claude-custom");
     assert_eq!(calls[0].1, "title");
@@ -76,10 +76,27 @@ async fn explicit_model_when_title_generated_then_snapshot_and_saved_settings_un
     let factory = FakeFactory::new("claude", "saved", None, &"x".repeat(150));
     let title =
         generate_title(&"speech ".repeat(20), Some("one-call"), Some(&settings), &variables([]), &*factory).await;
-    assert_eq!(title, Some("x".repeat(100)));
+    assert_eq!(title.map(|title| title.title), Some("x".repeat(100)));
     assert_eq!(factory.calls()[0].0.models["claude"], "one-call");
     assert_eq!(settings.models["claude"], "saved");
     assert_eq!(std::fs::read(&store.path).unwrap(), before);
+}
+
+#[tokio::test]
+async fn first_provider_refusing_when_title_generated_then_the_next_ones_title_with_its_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = title_settings(&store(dir.path()));
+    assert_eq!(settings.providers, ["codex", "claude"]);
+    let factory = KeyedFactory::new(vec![
+        ("codex", Answer::Fail("usage limit reached".into())),
+        ("claude", Answer::Text("Тема встречи".into())),
+    ]);
+    let title = generate_title(&"speech ".repeat(20), None, Some(&settings), &variables([]), &factory).await.unwrap();
+    assert_eq!(
+        (title.title.as_str(), title.title_source.as_str(), title.title_model.as_str()),
+        ("Тема встречи", "claude", "claude-model")
+    );
+    assert_eq!(title.title_settings_revision, settings.revision);
 }
 
 #[tokio::test]
@@ -166,7 +183,7 @@ fn sync_title_when_given_snapshot_then_forwards_settings_and_variables() {
     let factory = FakeFactory::new("codex", "m", None, "Title");
     let vars = variables([("user_name", "User")]);
     let title = generate_title_blocking(&"speech ".repeat(20), None, Some(&settings), &vars, &*factory);
-    assert_eq!(title.as_deref(), Some("Title"));
+    assert_eq!(title.map(|title| title.title).as_deref(), Some("Title"));
     assert_eq!(factory.calls()[0].0, settings);
 }
 

@@ -74,7 +74,31 @@ fn increment_registry_given_catalog_when_configured_then_one_entry_controls_both
         assert_eq!(task.models["claude"], "chosen");
     }
     store.write_task("analysis.increment", &json(r#"{"providers": ["claude", "codex"]}"#), None).unwrap();
-    assert_eq!(resolve(&store, "saved:my-increment").providers, ["codex"]);
+    assert_eq!(resolve(&store, "saved:my-increment").providers, ["codex", "claude"]);
+}
+
+#[test]
+fn single_answer_scenarios_by_default_when_resolved_then_the_other_provider_follows_the_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    write_prompt(&store, "custom.md", "---\nname: Custom\n---\nCustom {transcript}");
+    assert_eq!(resolve(&store, "title").providers, ["codex", "claude"]);
+    assert_eq!(resolve(&store, "meeting_chat").providers, ["claude", "codex"]);
+    assert_eq!(resolve(&store, "saved:my-increment").providers, ["codex", "claude"]);
+    assert_eq!(resolve(&store, "saved:custom").providers, ["codex", "claude"]);
+    assert_eq!(resolve(&store, "copilot").providers, ["claude"]);
+}
+
+#[test]
+fn chosen_provider_order_when_saved_then_resolved_as_chosen() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    store.write_task("title", &json(r#"{"providers": ["claude"]}"#), None).unwrap();
+    assert_eq!(resolve(&store, "title").providers, ["claude"]);
+    store.write_task("title", &json(r#"{"providers": ["claude", "codex"]}"#), None).unwrap();
+    assert_eq!(resolve(&store, "title").providers, ["claude", "codex"]);
+    store.write_task("analysis.increment", &json(r#"{"providers": ["claude"]}"#), None).unwrap();
+    assert_eq!(resolve(&store, "saved:my-increment").providers, ["claude"]);
 }
 
 #[test]
@@ -111,7 +135,7 @@ fn retired_features_given_legacy_file_when_loaded_then_active_settings_remain_us
     assert_eq!(view.models.keys().collect::<Vec<_>>(), ["claude", "codex"]);
     assert_eq!(view.models["codex"], "kept");
     assert_eq!(task_ids(&store), ["analysis.increment", "title", "meeting_chat", "copilot"]);
-    assert_eq!(resolve(&store, "title").providers, ["codex"]);
+    assert_eq!(resolve(&store, "title").providers, ["codex", "claude"]);
     assert_eq!(resolve(&store, "title").prompt, "Keep {transcript}");
     assert_eq!(std::fs::read_to_string(&store.path).unwrap(), raw);
     assert!(store.write_models(&json(r#"{"openrouter": "removed"}"#), None).unwrap_err().is_value_error());
@@ -290,7 +314,6 @@ fn invalid_task_input_when_saved_then_no_settings_file() {
 #[test]
 fn task_capabilities_when_unsupported_then_rejected() {
     let cases = [
-        ("title", r#"{"providers": ["claude", "codex"]}"#),
         ("copilot", r#"{"providers": ["codex"]}"#),
         ("copilot", r#"{"models": {"codex": "model"}}"#),
         ("copilot", r#"{"reasoning_effort": "high"}"#),

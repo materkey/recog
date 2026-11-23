@@ -231,6 +231,45 @@ async fn provider_failure_when_generated_then_failed_meta_without_markdown() {
 }
 
 #[tokio::test]
+async fn first_provider_refusing_when_generated_then_the_next_one_writes_the_version_and_is_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let meeting = make_meeting(dir.path(), MEETING, None);
+    let factory = Arc::new(common::KeyedFactory::new(vec![
+        ("codex", common::Answer::Fail("usage limit reached".into())),
+        ("claude", common::Answer::Text("## Итоги".into())),
+    ]));
+    let generator = IncrementGenerator::new(dir.path(), Some(dir.path().join("no-prompts")))
+        .with_factory(factory.clone())
+        .with_legacy_env(LegacyEnv::default());
+    let version = generator.generate(MEETING, &meeting, &default_prompt(), false, None).await;
+    assert_eq!(version.unwrap(), Some(1));
+    let inc = meeting.join("increments/my-increment");
+    let meta = read_json(&inc.join("v1_meta.json"));
+    assert_eq!(meta["provider"], Json::from("claude"));
+    assert_eq!(meta["model"], Json::from("claude-model"));
+    assert!(std::fs::read_to_string(inc.join("v1.md")).unwrap().ends_with("## Итоги"));
+    assert_eq!(factory.asked(), ["codex", "claude"]);
+}
+
+#[tokio::test]
+async fn every_provider_refusing_when_generated_then_failed_meta_names_the_last_one_tried() {
+    let dir = tempfile::tempdir().unwrap();
+    let meeting = make_meeting(dir.path(), MEETING, None);
+    let factory = Arc::new(common::KeyedFactory::new(vec![
+        ("codex", common::Answer::Fail("codex limit".into())),
+        ("claude", common::Answer::Fail("claude limit".into())),
+    ]));
+    let generator = IncrementGenerator::new(dir.path(), Some(dir.path().join("no-prompts")))
+        .with_factory(factory)
+        .with_legacy_env(LegacyEnv::default());
+    assert_eq!(generator.generate(MEETING, &meeting, &default_prompt(), false, None).await.unwrap(), None);
+    let meta = read_json(&meeting.join("increments/my-increment/v1_meta.json"));
+    assert_eq!(meta["status"], Json::from("failed"));
+    assert_eq!(meta["provider"], Json::from("claude"));
+    assert!(meta["error"].as_str().unwrap().contains("claude limit"));
+}
+
+#[tokio::test]
 async fn failed_version_when_generated_again_then_counter_moves_past_it_and_segments_are_retried() {
     let dir = tempfile::tempdir().unwrap();
     let meeting = make_meeting(dir.path(), MEETING, None);
