@@ -2,7 +2,6 @@
 //! `await_copilot_event` and renders each event as the `<channel>` block a Claude
 //! session receives, against the real channel server on a random port.
 
-#[allow(dead_code)]
 mod channel_support;
 
 use channel_support::{link_in, mcp_endpoint, object};
