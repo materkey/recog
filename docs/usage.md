@@ -292,7 +292,10 @@ All four units — including the copilot supervisor — are installed everywhere
 there is no separate flag. What is off by default is the *automatic* spawn per
 meeting: `.env.example` ships `RECOG_COPILOT_AUTOSPAWN=0`, so a fresh install
 never starts a Claude session unattended. The manual Start/Stop button and the
-agent-status chip in the web UI work regardless.
+agent-status chip in the web UI work regardless. Above both stands **AI-функции**
+in **Settings → Промпты и модели**: the Copilot runs only at **Только по кнопке**
+or higher, and starts for a conference only at **По кнопке и после каждой
+встречи**.
 
 To use Copilot, install `tmux` and Claude Code or Codex and make the commands
 available on `PATH`. Setup preserves their discovered directories in the service
@@ -412,6 +415,30 @@ individual scenarios. Claude defaults to `claude-opus-5-5`, Codex to
 `gpt-6-astra`; the installation's models (`[ai]` of `config.toml`) remain
 effective until overridden in Settings. Claude and Codex continue to use their CLI subscription login.
 
+**AI-функции**, at the top of the dialog, decides whether Recog sends transcripts
+to Claude Code or Codex at all; the choice is saved at once, as `access` in
+`ai-settings.json`:
+
+- **Выключено** — nothing is sent. Ask, Generate Title, Recog Copilot and the
+  controls of the AI Analysis window that start a generation are hidden; saved
+  summaries stay readable. A request that gets through is refused with
+  «AI-функции выключены в настройках recog.», and a running Copilot stops.
+- **Только по кнопке** — AI Analysis, Ask, Generate Title and a Copilot started
+  from the web UI run when you start them. Nothing runs by itself after a
+  meeting and the Copilot does not start for a conference; a Copilot already
+  running for one keeps running until the meeting ends. The bridge refuses a
+  manual Copilot start while a conference is on, so at this level there is no
+  Copilot during a conference unless it was running before.
+- **По кнопке и после каждой встречи** — also the saved summaries and the title
+  after each meeting, and the Copilot's conference autostart (still behind
+  `RECOG_COPILOT_AUTOSPAWN`).
+
+A new installation has no level yet: the web UI asks right after the profile
+question and on the first click of an AI control, and nothing is sent until you
+answer («Позже» asks again in the next browser session). An installation that
+already has a finished recording keeps the last level, which is what it did
+before the choice existed.
+
 Meeting titles, questions about a meeting and saved summaries take one answer.
 At their default they ask one provider (Codex for titles and summaries, Claude
 for questions) and, when its CLI is not installed or it refuses, for example on
@@ -435,7 +462,8 @@ The Copilot scenario also has an **Copilot включён** switch. Save it off 
 the active agent and block manual starts, conference starts and crash retries.
 Transcription continues. The supervisor checks the saved switch on startup and
 every two seconds even while disconnected from the bridge; enabling it permits
-manual starts and the existing conference autostart policy again.
+manual starts and the existing conference autostart policy again, as far as
+**AI-функции** allows.
 
 Changes apply to the next request; an in-flight generation keeps its original
 settings. Copilot receives edited instructions on its next event, while its
