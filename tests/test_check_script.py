@@ -486,6 +486,20 @@ def test_ci_has_the_rust_components_check_script_runs(workflow):
     assert "rustup component add clippy rustfmt" in _run_script(workflow)
 
 
+def test_ci_when_on_a_hosted_machine_then_the_rust_build_comes_from_the_cache_main_saved(
+    workflow,
+):
+    """A hosted machine starts empty; a runner that keeps its home keeps its build
+    itself, and rust-cache removed rustup from such a runner's ~/.cargo/bin."""
+    steps = _steps(workflow)
+    cache = next(s for s in steps if str(s.get("uses", "")).startswith("Swatinem/rust-cache@"))
+    assert cache["if"] == "runner.environment == 'github-hosted'"
+    assert cache["with"]["save-if"] == "${{ github.ref == 'refs/heads/main' }}"
+    # Its key carries rustc's version, so the cache comes after the update of stable.
+    components = next(s for s in steps if s.get("name") == "Install Rust components")
+    assert steps.index(components) < steps.index(cache)
+
+
 def test_ci_when_gate_measures_rust_then_a_pinned_cargo_llvm_cov_and_llvm_tools_are_installed(
     workflow,
 ):

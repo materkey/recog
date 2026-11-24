@@ -72,12 +72,21 @@ jobs:
           tool: cargo-llvm-cov@0.9.1
 
       # A runner keeps its files between jobs, but checkout cleans the workspace,
-      # so the build lives outside it. (No rust-cache: on a runner that keeps its
-      # home it removed rustup itself from ~/.cargo/bin after a job.)
+      # so the build lives outside it. (No rust-cache there: on a runner that keeps
+      # its home it removed rustup itself from ~/.cargo/bin after a job.)
       - name: Keep the Rust build between jobs
         if: runner.environment == 'self-hosted'
         shell: bash
         run: echo "CARGO_TARGET_DIR=$HOME/.cache/recog-ci/target" >> "$GITHUB_ENV"
+
+      # A hosted machine starts empty: the dependencies come built from the cache
+      # of the last run on main. After the update of stable, since the cache's key
+      # carries rustc's version; saved by main alone, so pull requests do not push
+      # main's cache out of the repository's storage.
+      - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The quality tools and pytest, and PyYAML for the workflow's own tests.
       - name: Install quality tools
