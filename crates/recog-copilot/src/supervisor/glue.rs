@@ -318,6 +318,14 @@ impl<R: Runner + 'static> Supervisor<R> {
         let automatic = self.read_automatic();
         // Kept, so that the level reaching `automatic` later replays this meeting.
         self.st.borrow_mut().automatic = automatic;
+        // Checked per meeting: a tool installed later serves the next one.
+        if let Some(tool) = self.runner.missing_tool() {
+            if automatic && kind == protocol::MEETING_STARTED {
+                let meeting = frame.get("meeting_id").and_then(Value::as_str);
+                self.log(&format!("{tool} is not installed: no Copilot for meeting {}", py::repr_opt(meeting)));
+            }
+            return;
+        }
         match kind {
             protocol::MEETING_STATE => {
                 let session_alive = self.probe_session_alive().await;

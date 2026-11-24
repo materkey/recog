@@ -151,6 +151,20 @@ fn disabled_copilot_refuses_to_build_the_command() {
     assert!(error.0.contains("выключен"), "{error}");
 }
 
+#[test]
+fn missing_tool_names_tmux_first_then_the_cli_of_any_copilot_provider() {
+    // given: tmux and Claude Code installed
+    let mut runner = tmux_runner(FakeTmux::default());
+    // when / then
+    assert_eq!(runner.missing_tool(), None);
+    runner.cli_installed = Box::new(|name| name == "codex");
+    assert_eq!(runner.missing_tool(), None);
+    runner.cli_installed = Box::new(|_| false);
+    assert_eq!(runner.missing_tool(), Some("Claude Code or Codex"));
+    runner.tmux_installed = Box::new(|| false);
+    assert_eq!(runner.missing_tool(), Some("tmux"));
+}
+
 #[tokio::test]
 async fn spawn_probes_the_sibling_and_the_target_then_creates_the_session_on_the_socket_in_the_checkout() {
     // given

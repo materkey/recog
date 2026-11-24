@@ -109,6 +109,12 @@ pub trait Runner {
     fn observable(&self) -> bool {
         true
     }
+
+    /// What a session cannot start without, while it is missing; a meeting then gets
+    /// no session, which the watchdog would otherwise probe for the whole meeting.
+    fn missing_tool(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Whether the session must be wrapped in a transient systemd unit: Linux with
@@ -178,6 +184,8 @@ pub struct TmuxRunner<C: CommandRunner> {
     pub unit_poll: Duration,
     /// Whether a provider's CLI is installed ([`cli_installed`]; tests replace it).
     pub cli_installed: Box<dyn Fn(&str) -> bool>,
+    /// Whether tmux is on PATH (tests replace it).
+    pub tmux_installed: Box<dyn Fn() -> bool>,
 }
 
 impl<C: CommandRunner> TmuxRunner<C> {
@@ -198,6 +206,7 @@ impl<C: CommandRunner> TmuxRunner<C> {
             unit_stop_timeout: SYSTEMD_UNIT_STOP_TIMEOUT,
             unit_poll: SYSTEMD_UNIT_POLL,
             cli_installed: Box::new(cli_installed),
+            tmux_installed: Box::new(|| which("tmux").is_some()),
         }
     }
 
@@ -422,6 +431,19 @@ impl<C: CommandRunner> Runner for TmuxRunner<C> {
         let target = session_name.filter(|n| !n.is_empty()).map_or_else(|| self.session_name(), str::to_owned);
         let (rc, _) = self.run.run(&self.tmux(&["has-session", "-t", &Self::exact_target(&target)])).await?;
         Ok(rc == 0)
+    }
+
+    /// tmux, then a CLI of the Copilot's providers. Unreadable settings name nothing:
+    /// the spawn reports them itself.
+    fn missing_tool(&self) -> Option<&'static str> {
+        if !(self.tmux_installed)() {
+            return Some("tmux");
+        }
+        let task = self.settings.resolve().ok()?;
+        if task.providers.iter().any(|provider| (self.cli_installed)(provider)) {
+            return None;
+        }
+        Some("Claude Code or Codex")
     }
 
     async fn send_keys(&self, keys: &[String]) -> Result<(), Error> {

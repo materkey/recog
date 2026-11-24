@@ -317,7 +317,8 @@ recog-copilot attach` shows the dialog above it, and Codex's own log is
 login shows as 🔴 with the reason on that line.
 
 Setup reports missing Copilot tools as optional. Transcription and service management
-work without them.
+work without them. While `tmux` or the Copilot's CLI is missing the supervisor
+starts no session for a meeting and its log says which one.
 
 To enable auto-spawn: put `tmux` and the `claude` or `codex` CLI on `PATH`, set
 `RECOG_COPILOT_AUTOSPAWN=1` in `.env`, then

@@ -129,6 +129,8 @@ impl Rig {
         }
         common::pre_change_settings(&dir.path().join("data"));
         write_script(&dir.path().join("bin/tmux"), TMUX_STUB);
+        // Never run (tmux is the stub): the supervisor starts no session without a CLI.
+        write_script(&dir.path().join("bin/claude"), "#!/bin/sh\nexit 0\n");
         write_script(&dir.path().join("bin/systemd-run"), SYSTEMD_RUN_STUB);
         write_script(&dir.path().join("bin/systemctl"), SYSTEMCTL_STUB);
         std::fs::write(dir.path().join("state/screen"), PROMPT_SCREEN).unwrap();

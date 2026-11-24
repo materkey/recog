@@ -246,6 +246,30 @@ async fn autospawn_off_makes_meeting_frames_inert() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn meeting_without_tmux_or_a_copilot_cli_starts_no_session_and_says_what_is_missing() {
+    local(async {
+        // given: autospawn on, tmux not installed
+        let (sup, runner) = fake_supervisor(0.05, true);
+        runner.missing.set(Some("tmux"));
+        let capture = log::Capture::start();
+        // when
+        send(&sup, STARTED_A).await;
+        send(&sup, r#"{"type": "meeting_state", "active": true, "meeting_id": "A"}"#).await;
+        send(&sup, ENDED_A).await;
+        // then: no session the watchdog would probe for the whole meeting
+        assert!(runner.spawned().is_empty());
+        assert_eq!(sup.state(), State::Idle);
+        assert!(capture.text().contains("tmux is not installed: no Copilot for meeting 'A'"), "{}", capture.text());
+        // when: the tool is installed before the next meeting
+        runner.missing.set(None);
+        send(&sup, STARTED_B).await;
+        // then
+        assert_eq!(runner.spawned(), ids(&["B"]));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn autospawn_off_still_runs_manual_spawn_and_stop() {
     local(async {
         // given

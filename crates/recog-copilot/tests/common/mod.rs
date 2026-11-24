@@ -94,6 +94,8 @@ pub struct FakeRunner {
     pub session: RefCell<String>,
     pub fail_kill: Cell<bool>,
     pub fail_alive: Cell<bool>,
+    /// What `missing_tool` reports.
+    pub missing: Cell<Option<&'static str>>,
     /// While set, `spawn` waits for this notify (blocking-runner tests).
     pub gates: RefCell<HashMap<String, Rc<Gate>>>,
 }
@@ -188,6 +190,10 @@ impl Runner for FakeRunner {
 
     fn observable(&self) -> bool {
         false
+    }
+
+    fn missing_tool(&self) -> Option<&'static str> {
+        self.missing.get()
     }
 }
 
@@ -449,8 +455,9 @@ pub fn tmux_supervisor(fake: FakeTmux, grace_s: f64, autospawn: bool) -> Rc<Supe
 pub fn tmux_runner<C: CommandRunner>(fake: C) -> TmuxRunner<C> {
     let mut runner = TmuxRunner::new(fake, TestSettings::enabled(), "/repo", "http://127.0.0.1:8767/mcp");
     runner.kill_retry_delay = std::time::Duration::ZERO;
-    // Whatever this machine has installed, the tests' session runs Claude Code.
+    // Whatever this machine has installed, the tests' session runs Claude Code in tmux.
     runner.cli_installed = Box::new(|name| name == "claude");
+    runner.tmux_installed = Box::new(|| true);
     runner
 }
 
