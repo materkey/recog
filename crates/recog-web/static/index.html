@@ -154,10 +154,14 @@
     </dialog>
 
     <dialog id="ai-access-dialog" class="profile-dialog" aria-labelledby="ai-access-title" aria-describedby="ai-access-description">
-        <h2 id="ai-access-title">Когда recog может обращаться к AI?</h2>
-        <p id="ai-access-description" class="profile-hint">AI-анализ, вопросы по встрече, названия встреч и Copilot отправляют транскрипт в Claude Code или Codex под вашей подпиской. Выбор можно изменить в «Промпты и модели».</p>
-        <p id="ai-access-error" class="profile-error" role="alert" hidden></p>
-        <div class="profile-actions">
+        <div class="modal-header">
+            <h2 id="ai-access-title">Когда recog может обращаться к AI?</h2>
+        </div>
+        <div class="profile-body">
+            <p id="ai-access-description">AI-анализ, вопросы по встрече, названия встреч и Copilot отправляют транскрипт в Claude Code или Codex под вашей подпиской. Выбор можно изменить в «Промпты и модели».</p>
+            <p id="ai-access-error" class="profile-error" role="alert" hidden></p>
+        </div>
+        <div class="modal-footer profile-actions">
             <button type="button" class="btn" id="ai-access-off">Выключено</button>
             <button type="button" class="btn" id="ai-access-manual">Только по кнопке</button>
             <button type="button" class="btn" id="ai-access-automatic">По кнопке и после каждой встречи</button>
