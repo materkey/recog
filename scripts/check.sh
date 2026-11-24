@@ -117,17 +117,9 @@ if [ -f Cargo.toml ]; then
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test -p speexdsp-aec --lib --test properties --test cli --test adapted_golden
     cargo test -p speexdsp-aec --doc
-    cargo test -p recog-mic
-    cargo test -p recog-copilot
-    cargo test -p recog-zoom
-    cargo test -p recog-core
-    cargo test -p recog-install
-    cargo test -p recog-ai
-    cargo test -p recog-live
-    cargo test -p recog-bridge
-    cargo test -p recog-web
-    cargo test -p recog-desktop
-    cargo test -p recog-asr-server
+    # Every other crate in one run: a run per crate built a shared dependency
+    # again for each set of features it was asked with (tokio eight times).
+    cargo test --workspace --exclude speexdsp-aec
     if [ -n "${SPEEXDSP_AEC_GOLDEN:-}" ]; then
         cargo test -p speexdsp-aec --test parity --test fft_parity
     fi

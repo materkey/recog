@@ -234,7 +234,9 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
     """given: a checkout with the Rust workspace and no golden data configured
     when: the checks run
     then: rustfmt, clippy with warnings as errors and the data-free tests of every
-    crate run, and the golden parity tests do not"""
+    crate run, the other crates' in one build of the workspace (a run per crate
+    builds a shared dependency again for each set of features it is asked with),
+    and the golden parity tests do not"""
     add_rust_workspace(repo)
 
     result = run_check(repo, stub_bin)
@@ -247,17 +249,7 @@ def test_rust_workspace_when_checking_then_format_lint_and_data_free_tests_run_b
         "cargo clippy --workspace --all-targets -- -D warnings",
         "cargo test -p speexdsp-aec --lib --test properties --test cli --test adapted_golden",
         "cargo test -p speexdsp-aec --doc",
-        "cargo test -p recog-mic",
-        "cargo test -p recog-copilot",
-        "cargo test -p recog-zoom",
-        "cargo test -p recog-core",
-        "cargo test -p recog-install",
-        "cargo test -p recog-ai",
-        "cargo test -p recog-live",
-        "cargo test -p recog-bridge",
-        "cargo test -p recog-web",
-        "cargo test -p recog-desktop",
-        "cargo test -p recog-asr-server",
+        "cargo test --workspace --exclude speexdsp-aec",
         "cargo run -q -p recog-live --bin recog -- --help",
     ]
     # "-m pytest": the logged interpreter paths hold this test's name, "pytest" too.
