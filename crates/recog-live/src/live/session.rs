@@ -476,6 +476,7 @@ fn write_transcript_file(live: &Live) {
 /// A setup step failed before the loop (storage, a `ktalk_only` bridge, the model).
 pub fn run(live: &Arc<Live>, mut config: SessionConfig) -> Result<(), String> {
     banner(live);
+    settle_ai_access(live);
     let golden = start_golden_recording(live, config.golden_record)?;
     live.set_golden(golden.clone());
     let storage = setup_meeting_storage(live, config.storage.clone())?;
@@ -499,6 +500,16 @@ pub fn run(live: &Arc<Live>, mut config: SessionConfig) -> Result<(), String> {
     }
     teardown(live, bridge.as_ref());
     Ok(())
+}
+
+/// Writes the AI functions level of an installation without a settings file, before this
+/// run records a meeting of its own; a failure is logged and transcription goes on.
+fn settle_ai_access(live: &Live) {
+    let data_dir = &live.env.data_dir;
+    match AiSettingsStore::new(data_dir, None).settle_access(&data_dir.join("meetings")) {
+        Ok(access) => live.env.log.line(&format!("[ai] AI functions: {}", access.as_str())),
+        Err(e) => live.env.log.line(&format!("[ai] cannot settle the AI functions level: {e}")),
+    }
 }
 
 /// The data directory's `meetings`, the repository's prompts and the installation's

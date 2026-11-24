@@ -46,7 +46,7 @@ fn missing_settings_when_read_then_defaults_without_creating_data() {
     let store = store(dir.path());
     assert_eq!(
         Json::Object(store.read().unwrap()),
-        json(r#"{"version": 1, "revision": "defaults", "models": {}, "tasks": {}}"#)
+        json(r#"{"version": 1, "revision": "defaults", "models": {}, "tasks": {}, "access": "unasked"}"#)
     );
     let view = store.view().unwrap();
     let defaults: Vec<(String, String)> = DEFAULT_MODELS.iter().map(|(p, m)| (p.to_string(), m.to_string())).collect();

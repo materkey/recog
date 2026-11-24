@@ -108,7 +108,18 @@ fn serve(args: Args) -> ExitCode {
     runtime.block_on(run(args, config))
 }
 
+/// Writes the AI functions level of an installation without a settings file, before
+/// any client can connect; a failure is logged and the server starts all the same.
+fn settle_ai_access(config: &Config) {
+    let store = recog_ai::settings::AiSettingsStore::new(&config.data_dir, None);
+    match store.settle_access(&config.data_dir.join("meetings")) {
+        Ok(access) => eprintln!("[ai] AI functions: {}", access.as_str()),
+        Err(e) => eprintln!("[ai] cannot settle the AI functions level: {e}"),
+    }
+}
+
 async fn run(args: Args, config: Config) -> ExitCode {
+    settle_ai_access(&config);
     let listener = match tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await {
         Ok(listener) => listener,
         Err(e) => {

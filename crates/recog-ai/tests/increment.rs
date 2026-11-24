@@ -83,7 +83,7 @@ const MEETING: &str = "2026-03-21_test";
 
 #[tokio::test]
 async fn meeting_without_increments_when_generated_then_v1_files_in_prompt_directory() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = FakeFactory::new("codex", "gpt-5.4", Some("xhigh"), "## Задачи\n- Сделать ревью\n");
     let version =
@@ -119,7 +119,7 @@ async fn meeting_without_increments_when_generated_then_v1_files_in_prompt_direc
 #[tokio::test]
 async fn local_participants_one_without_a_name_when_generated_then_the_unnamed_is_recorded_by_id() {
     // given
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     std::fs::write(
         meeting.join("meta.json"),
@@ -139,7 +139,7 @@ async fn local_participants_one_without_a_name_when_generated_then_the_unnamed_i
 
 #[tokio::test]
 async fn other_participant_when_generated_then_uses_their_name_and_metadata() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = FakeFactory::new("codex", "gpt-5.6-sol", Some("xhigh"), "## Задачи\n- Сделать ревью\n");
     let version = generator(dir.path(), None, &factory)
@@ -155,7 +155,7 @@ async fn other_participant_when_generated_then_uses_their_name_and_metadata() {
 
 #[tokio::test]
 async fn unknown_participant_when_generated_then_value_error_and_nothing_claimed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = FakeFactory::new("codex", "m", None, "x");
     let error = generator(dir.path(), None, &factory)
@@ -168,7 +168,7 @@ async fn unknown_participant_when_generated_then_value_error_and_nothing_claimed
 
 #[tokio::test]
 async fn local_increment_exists_when_other_participant_generated_then_full_transcript_is_used() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     make_v1_meta(&meeting.join("increments/my-increment"), 1, 3);
     let factory = FakeFactory::new("codex", "gpt-5.6-sol", Some("xhigh"), "## Задачи\n");
@@ -182,7 +182,7 @@ async fn local_increment_exists_when_other_participant_generated_then_full_trans
 
 #[tokio::test]
 async fn v1_covers_first_segments_when_generated_then_v2_has_only_the_delta() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, Some(numbered(8)));
     let inc = meeting.join("increments/my-increment");
     make_v1_meta(&inc, 1, 5);
@@ -201,7 +201,7 @@ async fn v1_covers_first_segments_when_generated_then_v2_has_only_the_delta() {
 
 #[tokio::test]
 async fn zero_delta_when_generated_then_skipped_without_provider_or_files() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, Some(numbered(5)));
     let inc = meeting.join("increments/my-increment");
     make_v1_meta(&inc, 1, 5);
@@ -215,7 +215,7 @@ async fn zero_delta_when_generated_then_skipped_without_provider_or_files() {
 
 #[tokio::test]
 async fn provider_failure_when_generated_then_failed_meta_without_markdown() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = FakeFactory::failing("codex", "gpt-5.4", "Codex CLI error: timeout");
     let version =
@@ -232,7 +232,7 @@ async fn provider_failure_when_generated_then_failed_meta_without_markdown() {
 
 #[tokio::test]
 async fn first_provider_refusing_when_generated_then_the_next_one_writes_the_version_and_is_named() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = Arc::new(common::KeyedFactory::new(vec![
         ("codex", common::Answer::Fail("usage limit reached".into())),
@@ -253,7 +253,7 @@ async fn first_provider_refusing_when_generated_then_the_next_one_writes_the_ver
 
 #[tokio::test]
 async fn every_provider_refusing_when_generated_then_failed_meta_names_the_last_one_tried() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = Arc::new(common::KeyedFactory::new(vec![
         ("codex", common::Answer::Fail("codex limit".into())),
@@ -271,7 +271,7 @@ async fn every_provider_refusing_when_generated_then_failed_meta_names_the_last_
 
 #[tokio::test]
 async fn failed_version_when_generated_again_then_counter_moves_past_it_and_segments_are_retried() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let failing = FakeFactory::failing("codex", "m", "boom");
     generator(dir.path(), None, &failing).generate(MEETING, &meeting, &default_prompt(), false, None).await.unwrap();
@@ -285,7 +285,7 @@ async fn failed_version_when_generated_again_then_counter_moves_past_it_and_segm
 
 #[tokio::test]
 async fn stale_generating_placeholder_when_generated_then_marked_failed_and_segments_retried() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let inc = meeting.join("increments/my-increment");
     std::fs::create_dir_all(&inc).unwrap();
@@ -302,7 +302,7 @@ async fn stale_generating_placeholder_when_generated_then_marked_failed_and_segm
 
 #[tokio::test]
 async fn fresh_generating_placeholder_when_generated_then_its_segments_are_not_duplicated() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let inc = meeting.join("increments/my-increment");
     std::fs::create_dir_all(&inc).unwrap();
@@ -320,7 +320,7 @@ async fn fresh_generating_placeholder_when_generated_then_its_segments_are_not_d
 
 #[tokio::test]
 async fn malformed_transcript_line_when_generated_then_error_names_the_line() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     std::fs::write(meeting.join("transcript.jsonl"), "{\"id\": 1, \"text\": \"a\"}\n{broken\n").unwrap();
     let factory = FakeFactory::new("codex", "m", None, "x");
@@ -333,7 +333,7 @@ async fn malformed_transcript_line_when_generated_then_error_names_the_line() {
 
 #[tokio::test]
 async fn only_events_in_delta_when_generated_then_placeholder_removed_and_skipped() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let segments = vec![Json::parse(r#"{"id": 1, "event_type": "gap", "text": "marker"}"#).unwrap()];
     let meeting = make_meeting(dir.path(), MEETING, Some(segments));
     let factory = FakeFactory::new("codex", "m", None, "x");
@@ -345,7 +345,7 @@ async fn only_events_in_delta_when_generated_then_placeholder_removed_and_skippe
 
 #[tokio::test]
 async fn missing_meta_or_transcript_when_generated_then_skipped() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = dir.path().join("empty");
     std::fs::create_dir_all(&meeting).unwrap();
     let factory = FakeFactory::new("codex", "m", None, "x");
@@ -357,7 +357,7 @@ async fn missing_meta_or_transcript_when_generated_then_skipped() {
 
 #[test]
 fn two_versions_when_listed_then_sorted_by_version() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let inc = dir.path().join(MEETING).join("increments/my-increment");
     std::fs::create_dir_all(&inc).unwrap();
     for version in [2, 1] {
@@ -372,7 +372,7 @@ fn two_versions_when_listed_then_sorted_by_version() {
 
 #[test]
 fn stored_version_when_fetched_then_meta_and_content() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let inc = dir.path().join(MEETING).join("increments/my-increment");
     std::fs::create_dir_all(&inc).unwrap();
     std::fs::write(inc.join("v1_meta.json"), r#"{"version": 1, "status": "completed"}"#).unwrap();
@@ -387,7 +387,7 @@ fn stored_version_when_fetched_then_meta_and_content() {
 
 #[test]
 fn no_increments_when_fetched_then_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     std::fs::create_dir_all(dir.path().join(MEETING)).unwrap();
     let factory = FakeFactory::new("codex", "m", None, "x");
     assert!(generator(dir.path(), None, &factory).get_increment(MEETING, "my-increment", 1).unwrap().is_none());
@@ -395,7 +395,7 @@ fn no_increments_when_fetched_then_none() {
 
 #[tokio::test]
 async fn custom_prompt_when_generated_then_every_variable_is_substituted() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let prompt = PromptConfig {
         id: "team-facts".into(),
@@ -425,7 +425,7 @@ fn write_prompts(dir: &Path, files: &[(&str, &str)]) -> PathBuf {
 
 #[tokio::test]
 async fn filtered_and_universal_prompts_when_generating_all_then_both_produce_v1() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let prompts = write_prompts(
         dir.path(),
@@ -443,7 +443,7 @@ async fn filtered_and_universal_prompts_when_generating_all_then_both_produce_v1
 
 #[tokio::test]
 async fn non_matching_filter_when_generating_all_then_nothing_generated() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let prompts =
         write_prompts(dir.path(), &[("retro-only.md", "---\nname: Retro only\nfilter: retro\n---\n\n{transcript}")]);
@@ -455,7 +455,7 @@ async fn non_matching_filter_when_generating_all_then_nothing_generated() {
 
 #[tokio::test]
 async fn callback_when_generation_succeeds_then_receives_meeting_version_and_prompt() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = FakeFactory::new("codex", "gpt-5.4", Some("xhigh"), "Result");
     let seen: Arc<Mutex<Vec<(String, i64, String)>>> = Arc::default();
@@ -472,7 +472,7 @@ async fn callback_when_generation_succeeds_then_receives_meeting_version_and_pro
 
 #[test]
 fn flat_increments_when_migrated_then_moved_into_default_prompt_directory() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = dir.path().join(MEETING);
     let inc = meeting.join("increments");
     std::fs::create_dir_all(&inc).unwrap();
@@ -495,7 +495,7 @@ fn flat_increments_when_migrated_then_moved_into_default_prompt_directory() {
 
 #[test]
 fn migrated_layout_when_migrated_again_then_nothing_changes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = dir.path().join(MEETING);
     let target = meeting.join("increments/my-increment");
     std::fs::create_dir_all(&target).unwrap();
@@ -509,7 +509,7 @@ fn migrated_layout_when_migrated_again_then_nothing_changes() {
 
 #[test]
 fn no_increments_directory_when_migrated_then_nothing_created() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = dir.path().join(MEETING);
     std::fs::create_dir_all(&meeting).unwrap();
     let factory = FakeFactory::new("codex", "m", None, "x");
@@ -519,7 +519,7 @@ fn no_increments_directory_when_migrated_then_nothing_created() {
 
 #[tokio::test]
 async fn flat_increments_when_generating_all_then_migrated_first_and_covered_segments_skipped() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let inc = meeting.join("increments");
     std::fs::create_dir_all(&inc).unwrap();
@@ -540,6 +540,7 @@ async fn flat_increments_when_generating_all_then_migrated_first_and_covered_seg
 #[tokio::test]
 async fn saved_prompt_override_when_generated_then_config_and_revision_recorded_without_rewriting_history() {
     let dir = tempfile::tempdir().unwrap();
+    common::pre_change_settings(dir.path());
     let meetings = dir.path().join("meetings");
     let meeting = make_meeting(&meetings, "configured", None);
     let prompts = write_prompts(dir.path(), &[("my-increment.md", "---\nname: Registry\n---\nRegistry {transcript}")]);
@@ -576,6 +577,7 @@ async fn saved_prompt_override_when_generated_then_config_and_revision_recorded_
 #[tokio::test]
 async fn same_registry_id_when_caller_template_supplied_then_caller_text_and_transcript_braces_preserved() {
     let dir = tempfile::tempdir().unwrap();
+    common::pre_change_settings(dir.path());
     let meetings = dir.path().join("meetings");
     let literal = r#"spoken {participants} {meeting_title} {user_name} {"outer":{"key":1}}"#;
     let segment = recog_ai::json::object([
@@ -633,7 +635,7 @@ async fn generation_dropped_mid_call_when_cancelled_then_failed_meta_replaces_pl
             Ok(Box::new(Hanging))
         }
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let generator = IncrementGenerator::new(dir.path(), Some(dir.path().join("none")))
         .with_factory(Arc::new(HangingFactory))
@@ -664,7 +666,7 @@ async fn generate(base: &Path, meeting: &Path, factory: &Arc<FakeFactory>) -> re
 
 #[tokio::test]
 async fn completed_stale_and_broken_versions_when_generated_then_v4_covers_after_completed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, Some(numbered(9)));
     let completed = r#"{"version": 1, "participant_id": null, "status": "completed", "generated_at": "2026-03-21T14:45:00+00:00", "segment_range": [1, 5]}"#;
     let stale = r#"{"version": 2, "participant_id": null, "status": "generating", "generated_at": "2026-03-21T14:45:00+00:00", "segment_range": [6, 6]}"#;
@@ -683,7 +685,7 @@ async fn completed_stale_and_broken_versions_when_generated_then_v4_covers_after
 
 #[tokio::test]
 async fn unreadable_time_or_range_when_generated_then_placeholder_kept_and_bad_range_ignored() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let generating = r#"{"version": 1, "status": "generating", "generated_at": "garbage", "segment_range": [1, 3]}"#;
     write_meta(&meeting, 1, generating.as_bytes());
@@ -691,7 +693,7 @@ async fn unreadable_time_or_range_when_generated_then_placeholder_kept_and_bad_r
     assert_eq!(generate(dir.path(), &meeting, &factory).await.unwrap(), None);
     assert_eq!(read_json(&inc_dir(&meeting).join("v1_meta.json"))["status"], Json::from("generating"));
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     write_meta(&meeting, 1, br#"{"version": 1, "status": "completed", "segment_range": [3]}"#);
     write_meta(&meeting, 2, br#"{"version": 2, "status": "completed", "segment_range": [1, "3"]}"#);
@@ -702,7 +704,7 @@ async fn unreadable_time_or_range_when_generated_then_placeholder_kept_and_bad_r
 
 #[tokio::test]
 async fn version_file_claiming_a_lower_number_when_generated_then_runtime_error_after_retries() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     write_meta(&meeting, 1, br#"{"version": 0, "status": "failed"}"#);
     let factory = FakeFactory::new("codex", "m", None, "x");
@@ -721,7 +723,7 @@ async fn malformed_version_metadata_when_generated_then_python_errors_and_no_cla
         (b"\xff", "invalid utf-8 sequence of 1 bytes from index 0"),
     ];
     for (content, message) in cases {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = common::meetings_dir();
         let meeting = make_meeting(dir.path(), MEETING, None);
         write_meta(&meeting, 1, content);
         let factory = FakeFactory::new("codex", "m", None, "x");
@@ -733,7 +735,7 @@ async fn malformed_version_metadata_when_generated_then_python_errors_and_no_cla
 
 #[tokio::test]
 async fn segment_ids_given_transcript_when_claimed_then_missing_id_is_zero_and_text_id_is_an_error() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let segments = vec![
         Json::parse(r#"{"speaker": "Вася", "text": "Без номера"}"#).unwrap(),
         Json::parse(r#"{"id": 4, "speaker": "Вася", "text": "Четыре"}"#).unwrap(),
@@ -743,7 +745,7 @@ async fn segment_ids_given_transcript_when_claimed_then_missing_id_is_zero_and_t
     assert_eq!(generate(dir.path(), &meeting, &factory).await.unwrap(), Some(1));
     assert_eq!(read_json(&inc_dir(&meeting).join("v1_meta.json"))["segment_range"], Json::parse("[0, 4]").unwrap());
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, Some(vec![Json::parse(r#"{"id": "x", "text": "t"}"#).unwrap()]));
     let error = generate(dir.path(), &meeting, &factory).await.unwrap_err();
     assert_eq!(error.to_string(), "segment id is a str");
@@ -751,7 +753,7 @@ async fn segment_ids_given_transcript_when_claimed_then_missing_id_is_zero_and_t
 
 #[tokio::test]
 async fn covered_meeting_when_forced_then_next_version_has_the_whole_transcript() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = FakeFactory::new("codex", "m", None, "x");
     let generator = generator(dir.path(), None, &factory);
@@ -786,7 +788,7 @@ async fn unreadable_meeting_meta_when_generated_then_error_before_any_claim() {
         ),
     ];
     for (meta, participant, message) in cases {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = common::meetings_dir();
         let meeting = make_meeting(dir.path(), MEETING, None);
         write_meeting_meta(&meeting, meta);
         let factory = FakeFactory::new("codex", "m", None, "x");
@@ -801,7 +803,7 @@ async fn unreadable_meeting_meta_when_generated_then_error_before_any_claim() {
 
 #[tokio::test]
 async fn participant_without_name_when_generated_then_recorded_by_id() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     write_meeting_meta(&meeting, br#"{"participants": {"speaker_2": {"name": ""}}}"#);
     let factory = FakeFactory::new("codex", "m", None, "x");
@@ -825,7 +827,7 @@ async fn malformed_meta_fields_after_the_claim_when_generated_then_failed_versio
         (br#"{"created_at": 5, "participants": {}}"#, "'int' object is not subscriptable", 1),
     ];
     for (meta, message, calls) in cases {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = common::meetings_dir();
         let meeting = make_meeting(dir.path(), MEETING, None);
         write_meeting_meta(&meeting, meta);
         let factory = FakeFactory::new("codex", "m", None, "x");
@@ -840,7 +842,7 @@ async fn malformed_meta_fields_after_the_claim_when_generated_then_failed_versio
 
 #[test]
 fn several_prompt_directories_when_listing_all_then_sorted_nonempty_ones_after_migration() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = dir.path().join(MEETING);
     let increments = meeting.join("increments");
     for (prompt, version) in [("team", 2), ("team", 1), ("alpha", 1)] {
@@ -870,7 +872,7 @@ fn several_prompt_directories_when_listing_all_then_sorted_nonempty_ones_after_m
 
 #[test]
 fn meeting_without_increments_when_listing_all_then_empty() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     std::fs::create_dir_all(dir.path().join(MEETING)).unwrap();
     let factory = FakeFactory::new("codex", "m", None, "x");
     assert!(generator(dir.path(), None, &factory).list_all_increments(MEETING).unwrap().is_empty());
@@ -884,14 +886,14 @@ fn malformed_version_metadata_when_listed_then_python_errors_and_unversioned_fir
         (br#"{"version": 1.5}"#, "version is a float"),
     ];
     for (content, message) in cases {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = common::meetings_dir();
         let meeting = dir.path().join(MEETING);
         write_meta(&meeting, 1, content);
         let factory = FakeFactory::new("codex", "m", None, "x");
         let error = generator(dir.path(), None, &factory).list_increments(MEETING, "my-increment").unwrap_err();
         assert_eq!(error.to_string(), message);
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = dir.path().join(MEETING);
     write_meta(&meeting, 2, br#"{"version": 2}"#);
     write_meta(&meeting, 1, br#"{"status": "completed"}"#);
@@ -902,7 +904,7 @@ fn malformed_version_metadata_when_listed_then_python_errors_and_unversioned_fir
 
 #[test]
 fn unreadable_version_when_fetched_then_none_or_decode_error_and_no_markdown_is_none() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = dir.path().join(MEETING);
     write_meta(&meeting, 1, b"{broken");
     write_meta(&meeting, 2, b"\xff");
@@ -922,7 +924,7 @@ fn unreadable_version_when_fetched_then_none_or_decode_error_and_no_markdown_is_
 
 #[tokio::test]
 async fn meeting_meta_missing_or_broken_when_generating_all_then_nothing_or_error() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let prompts = write_prompts(dir.path(), &[("all.md", "---\nname: All\nfilter: null\n---\n\n{transcript}")]);
     let meeting = make_meeting(dir.path(), MEETING, None);
     let factory = FakeFactory::new("codex", "m", None, "x");
@@ -1000,7 +1002,7 @@ impl recog_ai::provider::ProviderFactory for HeartbeatFactory {
 
 #[tokio::test]
 async fn long_generation_when_heartbeat_fires_then_generating_placeholder_gets_a_fresh_generated_at() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let meeting = make_meeting(dir.path(), MEETING, None);
     let seen = Arc::new(Mutex::new(None));
     let factory = Arc::new(HeartbeatFactory { meta: inc_dir(&meeting).join("v1_meta.json"), seen: seen.clone() });
@@ -1019,7 +1021,7 @@ async fn long_generation_when_heartbeat_fires_then_generating_placeholder_gets_a
 
 #[tokio::test]
 async fn failing_prompt_when_generating_all_then_reported_and_the_others_still_run() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     let prompts = write_prompts(
         dir.path(),
         &[
@@ -1049,7 +1051,7 @@ fn settings_with_access(data: &Path, access: &str) {
 
 #[tokio::test]
 async fn level_manual_when_meeting_ends_then_no_summary_version_and_no_provider_call() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     settings_with_access(dir.path(), "manual");
     let meetings = dir.path().join("meetings");
     let meeting = make_meeting(&meetings, MEETING, None);
@@ -1062,7 +1064,7 @@ async fn level_manual_when_meeting_ends_then_no_summary_version_and_no_provider_
 
 #[tokio::test]
 async fn unreadable_settings_when_meeting_ends_then_no_summary() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     std::fs::write(dir.path().join("ai-settings.json"), "{").unwrap();
     let meetings = dir.path().join("meetings");
     let meeting = make_meeting(&meetings, MEETING, None);
@@ -1075,7 +1077,7 @@ async fn unreadable_settings_when_meeting_ends_then_no_summary() {
 
 #[tokio::test]
 async fn level_off_when_regenerating_then_disabled_and_no_version_claimed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::meetings_dir();
     settings_with_access(dir.path(), "off");
     let meetings = dir.path().join("meetings");
     let meeting = make_meeting(&meetings, MEETING, None);

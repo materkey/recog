@@ -740,13 +740,16 @@ impl TaskShape {
     }
 }
 
-/// What `read` gives without a settings file.
+/// What `read` gives without a settings file: the startup settle has not run or failed,
+/// so the AI functions stay off until asked (a file from before the level existed
+/// carries no `access` instead).
 fn default_snapshot() -> Snapshot {
     let mut snapshot = Map::new();
     snapshot.insert("version".into(), Json::Int(1));
     snapshot.insert("revision".into(), Json::from("defaults"));
     snapshot.insert("models".into(), Json::Object(Map::new()));
     snapshot.insert("tasks".into(), Json::Object(Map::new()));
+    snapshot.insert("access".into(), Json::from(Access::Unasked.as_str()));
     snapshot
 }
 

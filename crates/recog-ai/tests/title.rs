@@ -12,7 +12,12 @@ use recog_ai::provider::CliProviderFactory;
 use recog_ai::settings::{AiSettingsStore, Fallback, ResolvedTask, variables};
 use recog_ai::title::{generate_title, generate_title_blocking, meeting_title_update, sample_transcript};
 
+/// A store over `dir`; with no settings file there yet, an installation from before
+/// the AI functions level, which generates titles.
 fn store(dir: &Path) -> AiSettingsStore {
+    if !dir.join("ai-settings.json").exists() {
+        common::pre_change_settings(dir);
+    }
     AiSettingsStore::new(dir, Some(dir.join("prompts"))).with_legacy_env(LegacyEnv::default())
 }
 

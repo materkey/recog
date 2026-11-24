@@ -127,6 +127,7 @@ impl Rig {
         for sub in ["repo", "data", "home", "bin", "state/sessions"] {
             std::fs::create_dir_all(dir.path().join(sub)).unwrap();
         }
+        common::pre_change_settings(&dir.path().join("data"));
         write_script(&dir.path().join("bin/tmux"), TMUX_STUB);
         write_script(&dir.path().join("bin/systemd-run"), SYSTEMD_RUN_STUB);
         write_script(&dir.path().join("bin/systemctl"), SYSTEMCTL_STUB);

@@ -111,10 +111,8 @@ fn model_change_in_the_settings_is_picked_up_by_the_next_command() {
 fn effort_change_in_the_settings_applies_to_the_next_command_and_disappears_when_reset() {
     // given
     let dir = tempfile::tempdir().unwrap();
-    let settings = settings_file(
-        dir.path(),
-        &format!(r#"{{"version": 1, "revision": "{REVISION}", "models": {{}}, "tasks": {{}}}}"#),
-    );
+    let base = format!(r#"{{"version": 1, "revision": "{REVISION}", "models": {{}}, "tasks": {{}}}}"#);
+    let settings = settings_file(dir.path(), &base);
     let runner = TmuxRunner::new(FakeTmux::default(), settings, "/repo", "http://x/mcp");
     // when / then
     assert!(!split(&runner.build_claude_command().unwrap()).iter().any(|t| t == "--effort"));
@@ -123,7 +121,7 @@ fn effort_change_in_the_settings_applies_to_the_next_command_and_disappears_when
     );
     std::fs::write(dir.path().join("ai-settings.json"), max).unwrap();
     assert_eq!(after(&split(&runner.build_claude_command().unwrap()), "--effort"), "max");
-    std::fs::remove_file(dir.path().join("ai-settings.json")).unwrap();
+    std::fs::write(dir.path().join("ai-settings.json"), base).unwrap();
     assert!(!split(&runner.build_claude_command().unwrap()).iter().any(|t| t == "--effort"));
 }
 

@@ -10,6 +10,37 @@ use recog_ai::error::{AiError, Result};
 use recog_ai::provider::{AiProvider, BoxFuture, CliEnv, ProviderFactory};
 use recog_ai::settings::ResolvedTask;
 
+/// The settings file of an installation from before the AI functions level: no
+/// `access`, so everything is allowed (`automatic`).
+pub fn pre_change_settings(data_dir: &Path) {
+    std::fs::create_dir_all(data_dir).unwrap();
+    let revision = uuid::Uuid::new_v4();
+    let text = format!(r#"{{"version": 1, "revision": "{revision}", "models": {{}}, "tasks": {{}}}}"#);
+    std::fs::write(data_dir.join("ai-settings.json"), text).unwrap();
+}
+
+/// A temporary meetings directory inside a data directory of its own, holding the
+/// settings of an installation from before the AI functions level; `path()` is the
+/// meetings directory, whose parent the increment generator reads its settings from.
+pub struct MeetingsDir {
+    _root: tempfile::TempDir,
+    meetings: PathBuf,
+}
+
+impl MeetingsDir {
+    pub fn path(&self) -> &Path {
+        &self.meetings
+    }
+}
+
+pub fn meetings_dir() -> MeetingsDir {
+    let root = tempfile::tempdir().unwrap();
+    pre_change_settings(root.path());
+    let meetings = root.path().join("meetings");
+    std::fs::create_dir_all(&meetings).unwrap();
+    MeetingsDir { _root: root, meetings }
+}
+
 /// What a fake provider answers.
 #[derive(Clone)]
 pub enum Answer {

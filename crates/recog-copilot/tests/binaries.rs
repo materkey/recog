@@ -4,6 +4,8 @@
 //! never run past its configuration (it would probe the real tmux).
 #![forbid(unsafe_code)]
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -172,6 +174,7 @@ fn foreground_copilot_when_started_then_claude_runs_in_the_checkout_and_owns_the
     let claude = dir.path().join("claude");
     std::fs::write(&claude, "#!/bin/sh\npwd -P\nprintf '%s\\n' \"$@\"\nexit 17\n").unwrap();
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::pre_change_settings(&dir.path().join("data"));
     let output = command(SUPERVISOR, dir.path())
         .env("PATH", dir.path())
         .args(["foreground", "--repo-root"])

@@ -1,6 +1,8 @@
 //! The AI functions level of `ai-settings.json`: how it is read and how a missing
 //! settings file is settled at startup, on temporary data directories only.
 
+mod common;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -131,6 +133,19 @@ fn write_access_unasked_when_saved_then_invalid_ai_access() {
     write_settings(dir.path(), PRE_CHANGE);
     let error = store(dir.path()).write_access(Access::Unasked, None).unwrap_err();
     assert!(matches!(error, AiError::Value(ref message) if message == "Invalid AI access"), "{error:?}");
+}
+
+#[tokio::test]
+async fn no_file_when_resolved_then_unasked_and_no_provider_built() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    assert_eq!(store.view().unwrap().to_json()["access"].as_str(), Some("unasked"));
+    let settings = store.resolve_task("title", None, Fallback::default()).unwrap();
+    let factory = common::KeyedFactory::new(vec![("claude", common::Answer::Text("x".into()))]);
+    let result = recog_ai::provider::complete_in_order(&factory, &settings, "title", "prompt", &mut |_| {}).await;
+    assert!(matches!(result, Err(AiError::Disabled(_))));
+    assert!(factory.asked().is_empty());
+    assert!(!store.path.exists());
 }
 
 #[test]

@@ -601,6 +601,7 @@ async fn independent_efforts_given_generation_when_spawned_then_claude_gets_only
 
 fn in_order(providers: &[&str]) -> ResolvedTask {
     let dir = tempfile::tempdir().unwrap();
+    common::pre_change_settings(dir.path());
     let store =
         AiSettingsStore::new(dir.path(), Some(dir.path().join("prompts"))).with_legacy_env(LegacyEnv::default());
     let mut settings = store.resolve_task("title", None, Fallback::default()).unwrap();

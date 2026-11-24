@@ -70,7 +70,7 @@ fn last(rx: &mut UnboundedReceiver<String>) -> Option<Value> {
 
 #[tokio::test]
 async fn claude_effort_given_an_api_save_when_reloaded_then_preserved_and_an_invalid_value_rejected() {
-    let app = App::new();
+    let app = App::without_settings();
 
     let (status, body) = app
         .json(
@@ -97,7 +97,7 @@ async fn claude_effort_given_an_api_save_when_reloaded_then_preserved_and_an_inv
 
 #[tokio::test]
 async fn removed_features_given_a_request_when_routed_then_unavailable() {
-    let app = App::new();
+    let app = App::without_settings();
 
     assert_eq!(app.call("POST", "/api/live/anchor", Some("{}")).await.0, 404);
     assert_eq!(app.call("GET", "/api/speakers", None).await.0, 404);
@@ -108,7 +108,7 @@ async fn removed_features_given_a_request_when_routed_then_unavailable() {
 
 #[tokio::test]
 async fn retired_summary_given_a_request_when_made_then_no_setting_or_generation_is_available() {
-    let app = App::new();
+    let app = App::without_settings();
 
     let settings = app.json("GET", "/api/ai-settings", None).await.1;
     let Value::Array(tasks) = get(&settings, "tasks") else { panic!() };
@@ -127,7 +127,7 @@ async fn retired_summary_given_a_request_when_made_then_no_setting_or_generation
 
 #[tokio::test]
 async fn copilot_switch_given_an_api_save_when_reloaded_then_the_boolean_is_persisted() {
-    let app = App::new();
+    let app = App::without_settings();
 
     let (status, body) = app
         .json(
@@ -153,7 +153,7 @@ async fn copilot_switch_given_an_api_save_when_reloaded_then_the_boolean_is_pers
 
 #[tokio::test]
 async fn access_off_when_saved_then_view_off_and_bridge_refreshed() {
-    let app = App::new();
+    let app = App::without_settings();
     let coordinator = &app.state.ai_settings;
     let (_bridge, mut rx) = connect(coordinator, "defaults").await;
 
@@ -171,7 +171,7 @@ async fn access_off_when_saved_then_view_off_and_bridge_refreshed() {
 
 #[tokio::test]
 async fn access_unasked_when_saved_then_422() {
-    let app = App::new();
+    let app = App::without_settings();
 
     let unasked =
         app.call("PUT", "/api/ai-settings/access", Some(r#"{"access": "unasked", "revision": "defaults"}"#)).await;
@@ -185,7 +185,7 @@ async fn access_unasked_when_saved_then_422() {
 
 #[tokio::test]
 async fn stale_revision_when_access_saved_then_409() {
-    let app = App::new();
+    let app = App::without_settings();
     store(&app).write_models(&Json::parse(r#"{"claude": "human-edit"}"#).unwrap(), None).unwrap();
     let before = std::fs::read(&store(&app).path).unwrap();
 
@@ -198,7 +198,7 @@ async fn stale_revision_when_access_saved_then_409() {
 
 #[tokio::test]
 async fn absent_settings_given_get_when_resolved_then_defaults_without_persistence() {
-    let app = App::new();
+    let app = App::without_settings();
 
     let (status, body) = app.json("GET", "/api/ai-settings", None).await;
 
@@ -214,7 +214,7 @@ async fn absent_settings_given_get_when_resolved_then_defaults_without_persisten
 
 #[tokio::test]
 async fn disconnected_bridge_given_a_model_save_when_read_back_then_persisted_pending() {
-    let app = App::new();
+    let app = App::without_settings();
     let mut rx = listening(&app);
 
     let (status, body) = app
@@ -241,7 +241,7 @@ async fn disconnected_bridge_given_a_model_save_when_read_back_then_persisted_pe
 
 #[tokio::test]
 async fn connected_bridge_given_a_task_save_when_the_current_ack_arrives_then_applied() {
-    let app = App::new();
+    let app = App::without_settings();
     let coordinator = &app.state.ai_settings;
     let (_bridge, mut rx) = connect(coordinator, "defaults").await;
     let mut live = listening(&app);
@@ -262,7 +262,7 @@ async fn connected_bridge_given_a_task_save_when_the_current_ack_arrives_then_ap
 
 #[tokio::test]
 async fn stale_browser_given_a_model_task_or_reset_when_written_then_409_and_the_settings_kept() {
-    let app = App::new();
+    let app = App::without_settings();
     let current = store(&app).write_models(&Json::parse(r#"{"claude": "human-edit"}"#).unwrap(), None).unwrap();
     let before = std::fs::read(&store(&app).path).unwrap();
     let mut live = listening(&app);
@@ -283,7 +283,7 @@ async fn stale_browser_given_a_model_task_or_reset_when_written_then_409_and_the
 
 #[tokio::test]
 async fn task_override_given_a_reset_when_deleted_then_the_defaults_and_the_global_model_return() {
-    let app = App::new();
+    let app = App::without_settings();
     store(&app).write_models(&Json::parse(r#"{"claude": "global-model"}"#).unwrap(), None).unwrap();
     let original = store(&app)
         .write_task(
@@ -320,7 +320,7 @@ async fn invalid_task_given_put_when_validated_then_422_and_no_mutation() {
         r#", "prompt": null"#,
         r#", "revision": null"#,
     ] {
-        let app = App::new();
+        let app = App::without_settings();
         store(&app).write_task("copilot", &Json::parse(r#"{"prompt": "Original"}"#).unwrap(), None).unwrap();
         let before = std::fs::read(&store(&app).path).unwrap();
         let mut live = listening(&app);
@@ -343,7 +343,7 @@ async fn invalid_scenario_given_put_when_validated_then_422_without_creating_set
         ("title", r#"{"prompt": "{transcript}", "providers": ["codex"], "reasoning_effort": "invalid"}"#),
         ("unknown", r#"{"prompt": "{transcript}", "providers": ["claude"]}"#),
     ] {
-        let app = App::new();
+        let app = App::without_settings();
         let body = payload.replacen('{', r#"{"revision": "defaults", "#, 1);
 
         let (status, _) = app.call("PUT", &format!("/api/ai-settings/tasks/{route}"), Some(&body)).await;
@@ -355,7 +355,7 @@ async fn invalid_scenario_given_put_when_validated_then_422_without_creating_set
 
 #[tokio::test]
 async fn overlapping_saves_given_an_old_ack_when_the_current_revision_differs_then_it_stays_pending() {
-    let app = App::new();
+    let app = App::without_settings();
     let coordinator = &app.state.ai_settings;
     let (_bridge, mut rx) = connect(coordinator, "defaults").await;
 
@@ -394,7 +394,7 @@ async fn overlapping_saves_given_an_old_ack_when_the_current_revision_differs_th
 #[tokio::test]
 async fn applied_settings_given_a_disconnect_and_reconnect_when_the_revision_is_the_same_then_a_fresh_ack_is_required()
 {
-    let app = App::new();
+    let app = App::without_settings();
     let coordinator = &app.state.ai_settings;
     connect(coordinator, "defaults").await;
     acknowledge(coordinator, "defaults").await;
@@ -481,7 +481,7 @@ async fn old_connection_given_an_ack_read_in_flight_when_reconnected_then_the_st
 
 #[tokio::test]
 async fn bridge_apply_error_given_a_waiting_save_when_the_error_arrives_then_saved_pending_without_internal_details() {
-    let app = App::new();
+    let app = App::without_settings();
     let coordinator = &app.state.ai_settings;
     let (_bridge, mut rx) = connect(coordinator, "defaults").await;
 
@@ -503,7 +503,7 @@ async fn bridge_apply_error_given_a_waiting_save_when_the_error_arrives_then_sav
 
 #[tokio::test]
 async fn bridge_send_failure_given_a_save_when_not_delivered_then_saved_pending() {
-    let app = App::new();
+    let app = App::without_settings();
     let (bridge, _rx) = fake_bridge(false);
     app.state.ai_settings.connected(bridge).await.unwrap();
 
@@ -518,7 +518,7 @@ async fn bridge_send_failure_given_a_save_when_not_delivered_then_saved_pending(
 
 #[tokio::test]
 async fn unwritable_data_directory_given_put_when_the_file_system_fails_then_500_without_details_or_broadcast() {
-    let app = App::new();
+    let app = App::without_settings();
     std::fs::create_dir_all(app.data()).unwrap();
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(app.data(), std::fs::Permissions::from_mode(0o500)).unwrap();
@@ -537,7 +537,7 @@ async fn unwritable_data_directory_given_put_when_the_file_system_fails_then_500
 
 #[tokio::test]
 async fn corrupt_file_given_get_when_the_read_fails_then_500_without_overwriting() {
-    let app = App::new();
+    let app = App::without_settings();
     support::write(&store(&app).path, "broken JSON");
 
     let (status, _) = app.call("GET", "/api/ai-settings", None).await;
@@ -558,7 +558,7 @@ async fn invalid_saved_storage_given_a_mutation_when_the_read_fails_then_500_wit
             ),
             ("DELETE", "/api/ai-settings/tasks/copilot?revision=defaults", None),
         ] {
-            let app = App::new();
+            let app = App::without_settings();
             support::write(&store(&app).path, corrupt);
             let mut live = listening(&app);
 

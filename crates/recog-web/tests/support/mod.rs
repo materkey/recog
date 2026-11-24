@@ -161,15 +161,33 @@ pub struct App {
     pub factory: FakeFactory,
 }
 
+/// The settings file of an installation from before the AI functions level: no
+/// `access`, so everything is allowed (`automatic`).
+pub fn pre_change_settings(data_dir: &std::path::Path) {
+    std::fs::create_dir_all(data_dir).unwrap();
+    let revision = uuid::Uuid::new_v4();
+    let text = format!(r#"{{"version": 1, "revision": "{revision}", "models": {{}}, "tasks": {{}}}}"#);
+    std::fs::write(data_dir.join("ai-settings.json"), text).unwrap();
+}
+
 impl App {
+    /// An installation from before the AI functions level, which allows every AI path.
     pub fn new() -> App {
         Self::with(|_| {})
+    }
+
+    /// An installation without a settings file (the settle at startup did not run).
+    pub fn without_settings() -> App {
+        let app = Self::new();
+        std::fs::remove_file(app.data().join("ai-settings.json")).unwrap();
+        app
     }
 
     pub fn with(change: impl FnOnce(&mut Config)) -> App {
         let dir = tempfile::tempdir().unwrap();
         let mut config = config(dir.path());
         change(&mut config);
+        pre_change_settings(&config.data_dir);
         let factory = FakeFactory::new("Ответ");
         let state = AppState::with_factory(config, Arc::new(factory.clone()));
         App { dir, state, factory }

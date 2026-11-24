@@ -194,9 +194,10 @@ fn resolve(body: Option<&str>, legacy: LegacyEnv) -> Result<CopilotTask, String>
 }
 
 #[test]
-fn missing_settings_file_gives_the_enabled_default_copilot() {
+fn missing_settings_file_when_resolved_then_the_default_copilot_is_off_until_asked() {
     // given / when / then
-    assert_eq!(resolve(None, LegacyEnv::default()), Ok(task(true, "claude-opus-5-5", "")));
+    let off = CopilotTask { automatic: false, ..task(false, "claude-opus-5-5", "") };
+    assert_eq!(resolve(None, LegacyEnv::default()), Ok(off));
 }
 
 #[test]

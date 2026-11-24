@@ -7,6 +7,21 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-24
+
+### Changed
+
+- How far Recog may send transcripts to Claude Code or Codex is now one
+  choice, **AI-функции** in **Settings → Промпты и модели**: **Выключено**
+  (nothing is sent, and the controls that would send it are hidden), **Только
+  по кнопке** (AI analysis, questions about a meeting, meeting titles and the
+  Copilot run only when you start them; nothing is made by itself after a
+  meeting, and the Copilot cannot be started during a conference) or **По
+  кнопке и после каждой встречи** (everything, as before). A new installation
+  asks when the web UI first opens and sends nothing until you answer; an
+  existing installation with a finished recording keeps everything as it was.
+  Run `cargo setup` and `recog service restart`.
+
 ## 2026-11-23
 
 ### Action required

@@ -100,6 +100,35 @@ fn wait_listening(child: &mut Child, port: u16) {
     }
 }
 
+/// The settings file once the server listens on an empty port, stopped afterwards.
+fn settings_after_start(dir: &Path) -> String {
+    let port = free_port();
+    let repo = repo(dir);
+    let mut child = command(dir, &["--repo", &repo, "--port", &port.to_string()]).spawn().unwrap();
+    wait_listening(&mut child, port);
+    let settings = std::fs::read_to_string(dir.join("data/ai-settings.json")).unwrap_or_default();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    settings
+}
+
+#[test]
+fn fresh_data_dir_when_server_starts_then_access_unasked_is_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_after_start(dir.path());
+    assert!(settings.contains(r#""access": "unasked""#), "{settings}");
+}
+
+#[test]
+fn data_dir_with_a_finished_meeting_when_server_starts_then_a_file_without_access_is_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let meeting = dir.path().join("data/meetings/m1");
+    std::fs::create_dir_all(&meeting).unwrap();
+    std::fs::write(meeting.join("meta.json"), r#"{"id": "m1", "ended_at": "2026-11-01T10:00:00"}"#).unwrap();
+    let settings = settings_after_start(dir.path());
+    assert!(settings.contains(r#""revision""#) && !settings.contains("access"), "{settings}");
+}
+
 #[test]
 fn running_server_when_terminated_then_it_stops_with_exit_zero() {
     let dir = tempfile::tempdir().unwrap();

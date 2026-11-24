@@ -11,6 +11,15 @@ use recog_ai::defaults::DEFAULT_CLAUDE_MODEL;
 use recog_copilot::ai_settings::{CopilotSettings, CopilotTask};
 use recog_copilot::supervisor::{CommandRunner, Error, Runner, Supervisor, TmuxRunner, Tunables};
 
+/// The settings file of an installation from before the AI functions level: no
+/// `access`, so the Copilot runs at the automatic level.
+pub fn pre_change_settings(data_dir: &std::path::Path) {
+    std::fs::create_dir_all(data_dir).unwrap();
+    let revision = uuid::Uuid::new_v4();
+    let text = format!(r#"{{"version": 1, "revision": "{revision}", "models": {{}}, "tasks": {{}}}}"#);
+    std::fs::write(data_dir.join("ai-settings.json"), text).unwrap();
+}
+
 /// Runs `f` on a `LocalSet`, where the supervisor spawns its tasks.
 pub async fn local<F: Future>(f: F) -> F::Output {
     tokio::task::LocalSet::new().run_until(f).await

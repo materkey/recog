@@ -582,6 +582,26 @@ fn an_hour_in_the_main_loop_running_the_session_deletes_audio_past_retention() {
 }
 
 #[test]
+fn unusable_ai_settings_lock_when_the_session_starts_then_the_main_loop_runs_and_the_failure_is_logged() {
+    // given: the settings lock is a directory, so the AI functions level cannot be settled
+    let r = rig(RigOptions::default());
+    std::fs::create_dir_all(r.data_dir().join("ai-settings.lock")).unwrap();
+    let mut config = session_config();
+    config.storage = recog_core::meeting_storage::StorageOptions::new(r.dir.path());
+    config.storage.log = Arc::new(|_, _| {});
+    let live = r.live.clone();
+    // when
+    let session = std::thread::spawn(move || session::run(&live, config));
+    let started = r.clock.wait_until(0.5, std::time::Duration::from_secs(30));
+    r.live.set_running(false);
+    let result = session.join().unwrap();
+    // then
+    assert!(started, "the main loop did not start");
+    assert!(result.is_ok(), "{result:?}");
+    assert!(r.stderr.text().contains("[ai] cannot settle the AI functions level:"), "{}", r.stderr.text());
+}
+
+#[test]
 fn a_speaker_update_reaching_the_hooks_sets_the_current_ktalk_speaker() {
     // given: no bridge object, only the speaker callback (Python's `_ktalk_current_speaker`)
     let r = rig(RigOptions {
