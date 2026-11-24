@@ -64,6 +64,28 @@
       <p class="recording">По умолчанию распознавание идёт на вашем компьютере. Запись начинается при входе во встречу и заканчивается при выходе. Предупредите участников о записи.</p>
     </section>
 
+    <section class="how wrap" id="copilot" aria-labelledby="copilot-title">
+      <h2 id="copilot-title">Подсказки во время звонка</h2>
+      <div class="flow agent-flow">
+        <div class="input">
+          <h3>Идёт звонок</h3>
+          <p>Вера: «Надо ещё напечатать подписи к фотографиям».<br>Миша: «Да, обязательно».</p>
+        </div>
+        <span class="connector" aria-hidden="true"><i></i></span>
+        <div class="processor">
+          <h3>Copilot</h3>
+          <p>Claude Code или Codex читает расшифровку по ходу встречи и пишет, когда есть повод: к вам обратились по имени, у задачи нет ответственного или срока, участники упустили риск.</p>
+        </div>
+        <span class="connector" aria-hidden="true"><i></i></span>
+        <div class="output">
+          <h3>Подсказка на странице звонка</h3>
+          <blockquote>«Подписи к фотографиям никто не взял на себя, и срок не назван».</blockquote>
+          <p>В том же чате Copilot можно спросить и самому.</p>
+        </div>
+      </div>
+      <p class="recording">Copilot отправляет расшифровку в Claude Code или Codex под вашей подпиской. Он запускается на каждой встрече, если в настройках AI-функций выбрано «По кнопке и после каждой встречи», и ему нужен tmux. Когда подсказывать, меняется в «Промпты и модели».</p>
+    </section>
+
     <section class="how wrap" id="agent" aria-labelledby="agent-title">
       <h2 id="agent-title">Спросите агента о прошлых встречах</h2>
       <div class="flow agent-flow">
