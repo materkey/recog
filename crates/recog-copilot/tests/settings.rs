@@ -78,7 +78,7 @@ fn flag_outside_the_accepted_words_stops_startup_with_its_name() {
 
 #[test]
 fn dotenv_fills_unset_variables_with_quotes_stripped_and_never_overrides_the_environment() {
-    // given: the shipped .env.example turns autospawn off
+    // given: an .env from before 2026-11-24 turns autospawn off
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join(".env"),

@@ -289,13 +289,15 @@ names written or spoken inside them. Saved recordings retain their original
 labels, and enabling Privacy cannot retract context already sent to an agent.
 
 All four units — including the copilot supervisor — are installed everywhere;
-there is no separate flag. What is off by default is the *automatic* spawn per
-meeting: `.env.example` ships `RECOG_COPILOT_AUTOSPAWN=0`, so a fresh install
-never starts a Claude session unattended. The manual Start/Stop button and the
-agent-status chip in the web UI work regardless. Above both stands **AI-функции**
-in **Settings → Промпты и модели**: the Copilot runs only at **Только по кнопке**
-or higher, and starts for a conference only at **По кнопке и после каждой
-встречи**.
+there is no separate flag. **AI-функции** in **Settings → Промпты и модели**
+decides when the Copilot runs: at **Только по кнопке** or higher it starts from
+the web UI, and only at **По кнопке и после каждой встречи** it also starts by
+itself for every conference, which is when it gives hints during the call. A new
+installation asks for the level before anything is sent.
+`RECOG_COPILOT_AUTOSPAWN=0` (`[copilot] autospawn = false`) turns the conference
+autostart off at every level; installations set up before 2026-11-24 carry it in
+`.env`. The manual Start/Stop button and the agent-status chip in the web UI work
+regardless.
 
 To use Copilot, install `tmux` and Claude Code or Codex and make the commands
 available on `PATH`. Setup preserves their discovered directories in the service
@@ -320,9 +322,9 @@ Setup reports missing Copilot tools as optional. Transcription and service manag
 work without them. While `tmux` or the Copilot's CLI is missing the supervisor
 starts no session for a meeting and its log says which one.
 
-To enable auto-spawn: put `tmux` and the `claude` or `codex` CLI on `PATH`, set
-`RECOG_COPILOT_AUTOSPAWN=1` in `.env`, then
-`recog service restart copilot-supervisor`.
+To enable auto-spawn: put `tmux` and the `claude` or `codex` CLI on `PATH`,
+choose **По кнопке и после каждой встречи**, remove `RECOG_COPILOT_AUTOSPAWN=0`
+from `.env` if it is there, then `recog service restart copilot-supervisor`.
 
 On both operating systems `restart` and `restart copilot-supervisor` keep a live
 copilot session — on Linux the session runs in its own transient
@@ -431,8 +433,8 @@ to Claude Code or Codex at all; the choice is saved at once, as `access` in
   manual Copilot start while a conference is on, so at this level there is no
   Copilot during a conference unless it was running before.
 - **По кнопке и после каждой встречи** — also the saved summaries and the title
-  after each meeting, and the Copilot's conference autostart (still behind
-  `RECOG_COPILOT_AUTOSPAWN`).
+  after each meeting, and the Copilot's conference autostart (unless
+  `RECOG_COPILOT_AUTOSPAWN=0`).
 
 A new installation has no level yet: the web UI asks right after the profile
 question and on the first click of an AI control, and nothing is sent until you

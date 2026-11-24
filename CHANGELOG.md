@@ -11,6 +11,13 @@ reasoning.
 
 ### Changed
 
+- At **По кнопке и после каждой встречи** a new installation also starts the
+  Copilot for every conference, which gives hints during the call: its `.env`
+  no longer carries `RECOG_COPILOT_AUTOSPAWN=0`. The Copilot needs `tmux` and
+  Claude Code or Codex; without them a meeting starts none and the Copilot
+  supervisor's log says what is missing. An existing installation keeps the
+  line: to get the Copilot on calls, remove `RECOG_COPILOT_AUTOSPAWN=0` from
+  `.env`, choose that level and run `recog service restart copilot-supervisor`.
 - How far Recog may send transcripts to Claude Code or Codex is now one
   choice, **AI-функции** in **Settings → Промпты и модели**: **Выключено**
   (nothing is sent, and the controls that would send it are hidden), **Только

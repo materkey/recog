@@ -386,7 +386,7 @@ On refine arrival the webapp renders tier-1 (opacity 0.6, dashed border) → tie
 
 See `docs/plans/completed/2026-04-24-per-speaker-refine-backend.md`, `openspec/changes/per-speaker-stream-refine/`, and ADR-0019 for the decisions table and task breakdown.
 
-### Auto-spawn Copilot supervisor (meeting-triggered; code default on, `.env.example` ships it off)
+### Auto-spawn Copilot supervisor (meeting-triggered; on at the `automatic` AI functions level)
 A service daemon (`deploy/macos/com.recog.copilot-supervisor.plist.in` or `deploy/linux/recog-copilot-supervisor.service.in` → `crates/recog-copilot/src/supervisor/`) spawns a fresh headless Claude Code copilot session per conference meeting (any `is_conference_source`: KTalk / Jitsi vas3k·jitsi / Matrix / Google Meet / Zoom) and tears it down after the meeting, so the manual `recog copilot` step disappears. Lifecycle model is "по триггеру" (variant B): fresh session per meeting, zero cost between meetings, ~6–10 s cold start.
 
 - `claude -p` is impossible (`--dangerously-load-development-channels` isn't parsed by print mode, `channel_enable` needs a marketplace plugin) — the only path is an interactive TUI in a PTY. The supervisor runs it in a detached tmux on a dedicated socket (`tmux -L recog-copilot`) so its env is deterministic (from the service unit) and isolated from the personal tmux.
@@ -475,7 +475,7 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 - `RECOG_ASR_LIVE_TIMEOUT_S` - Remote timeout for live chunk/batch requests (default `5`). Refine/offline keep `RECOG_ASR_REMOTE_TIMEOUT_S`.
 - `DEDUP_MAX_GAP_S` - Live dedup window (default `2.0`): last-words dedup applies only to chunks captured within this many seconds of the previous segment.
 - `ASR_PENDING_BUFFER_CAP_S` - Max audio buffered in memory while ASR is unavailable (default `600`).
-- `RECOG_COPILOT_AUTOSPAWN` - Gate for meeting-driven auto-spawn only (code default `1`, but `.env.example` ships `0` so a fresh install never spawns Claude unattended | `0` keeps the daemon connected and makes meeting frames inert; manual webapp spawn/stop and crash-respawn work regardless — webapp plan D3). Meeting frames are inert too while `tmux` or every provider CLI of the Copilot is missing (`Runner::missing_tool`, logged on `meeting_started`). Read by `crates/recog-copilot/src/supervisor/`.
+- `RECOG_COPILOT_AUTOSPAWN` - Gate for meeting-driven auto-spawn only (default `1`; a fresh install is kept from spawning Claude unattended by the AI functions level, which must be `automatic`; `.env` files created before 2026-11-24 still carry `0` | `0` keeps the daemon connected and makes meeting frames inert; manual webapp spawn/stop and crash-respawn work regardless — webapp plan D3). Meeting frames are inert too while `tmux` or every provider CLI of the Copilot is missing (`Runner::missing_tool`, logged on `meeting_started`). Read by `crates/recog-copilot/src/supervisor/`.
 - `RECOG_COPILOT_GRACE_S` - Seconds the supervisor waits after `meeting_ended` before killing the copilot tmux session (default `90`); cancelled by a same-id `meeting_started` (flap). Not used for an explicit webapp Stop — that kills immediately.
 - `RECOG_COPILOT_MCP_URL` - URL of the copilot MCP daemon the spawned Claude session connects to (default `http://127.0.0.1:8767/mcp`).
 - `RECOG_COPILOT_RUNTIME` - no effect: the supervisor and the MCP channel are always `bin/recog-copilot-supervisor` / `bin/recog-copilot-channel` with `--repo-root <checkout>`; still accepted from older configurations.
