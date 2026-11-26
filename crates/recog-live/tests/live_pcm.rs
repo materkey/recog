@@ -108,6 +108,19 @@ fn a_batch_transcribing_attributes_by_the_chunk_and_never_asks_the_bridge() {
 }
 
 #[test]
+fn a_participant_s_own_audio_transcribing_marks_the_row_for_the_refine() {
+    // given
+    let (r, _conference) = ktalk_rig(false);
+    ingest(&r);
+    r.asr.batch(&["привет"]);
+    let now = now_ms(&r);
+    // when
+    r.live.on_pcm_batch(&[chunk("pid-alice", "Alice", now - 3000.0, now, (0.0, 3000.0))]).unwrap();
+    // then
+    assert_eq!(field(&r.rows()[0], "refinable"), &Value::Bool(true));
+}
+
+#[test]
 fn a_name_with_newlines_or_none_transcribing_sanitizes_it_or_names_the_pid() {
     // given
     let (r, _conference) = ktalk_rig(false);
@@ -353,6 +366,7 @@ fn no_pcm_yet_processing_system_audio_runs_the_mixed_path() {
     // then
     assert_eq!(r.asr.chunk_calls.load(Ordering::SeqCst), 1);
     assert_eq!(text(&r.rows()[0], "uncertain_reason"), "no_speaker");
+    assert_eq!(field(&r.rows()[0], "refinable"), &Value::Null);
 }
 
 #[test]

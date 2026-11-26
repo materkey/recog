@@ -20,6 +20,11 @@ reasoning.
   before its conference tab reloads, is now refined into that meeting
   instead of staying preliminary. Run `cargo setup` and
   `recog service restart`.
+- During a call the web UI shows as preliminary only the lines a refine will
+  rewrite, those from a participant's own audio. Your microphone and the
+  mixed system audio (before the participants' own audio arrives) are final
+  as written, and so are lines written before this update. Run
+  `cargo setup` and `recog service restart`.
 
 ## 2026-11-24
 

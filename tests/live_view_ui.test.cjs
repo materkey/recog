@@ -65,14 +65,20 @@ test('meeting shown - meeting_change arrives - old rows go and the new meeting i
     assert.equal(p.transcript(), 'Waiting for transcription...');
 });
 
-test('refine enabled - tier-1 rows arrive - marked as preliminary until refined', () => {
+test('refine enabled - tier-1 rows arrive - only the refinable ones are preliminary until refined', () => {
     const p = livePage();
     p.init([], { refine_enabled: true });
-    p.receive({ type: 'segments', data: [segment(1, 'черновик'), { ...segment(2, 'Встреча началась'), event_type: 'meeting_start' }] });
-    const [row, event] = p.rows();
+    p.receive({ type: 'segments', data: [
+        segment(1, 'черновик', { refinable: true }),
+        { ...segment(2, 'Встреча началась'), event_type: 'meeting_start' },
+        segment(3, 'с микрофона', { is_local: true, speaker: 'Я' }),
+    ] });
+    const [row, event, local] = p.rows();
     assert.equal(row.dataset.refined, 'false');
     assert.equal(row.title, 'Предварительная расшифровка — будет уточнена');
     assert.equal(event.dataset.refined, undefined);
+    assert.equal(local.dataset.refined, undefined);
+    assert.equal(local.title, '');
     p.receive({ type: 'transcript_refine', meeting_id: 'm1', updates: [{ segment_id: 1, text: 'чистовик' }] });
     assert.deepEqual(p.shown()[0], { id: '1', text: 'чистовик', refined: 'true' });
     assert.equal(p.rows()[0].title, '');
@@ -84,14 +90,14 @@ test('refine disabled - rows arrive - no preliminary cue unless already refined'
     assert.deepEqual(p.shown().map(row => row.refined), [undefined, 'true']);
 });
 
-test('orphan meeting - refine_state turns refine on - new rows get the cue and the meeting counts as KTalk', () => {
+test('orphan meeting - refine_state turns refine on - the meeting counts as KTalk and refinable rows get the cue', () => {
     const p = livePage();
     p.init([segment(1, 'до')], { meeting: { ...MEETING, source: 'orphan' } });
     p.receive({ type: 'refine_state', meeting_id: 'other', refine_enabled: true });
     p.receive({ type: 'segments', data: [segment(2, 'другая встреча')] });
     assert.equal(p.rows()[1].dataset.refined, undefined);
     p.receive({ type: 'refine_state', meeting_id: 'm1', refine_enabled: true });
-    p.receive({ type: 'segments', data: [segment(3, 'после')] });
+    p.receive({ type: 'segments', data: [segment(3, 'после', { refinable: true })] });
     assert.deepEqual(p.shown().map(row => row.text), ['до', 'другая встреча', 'после']);
     assert.equal(p.rows()[0].dataset.refined, undefined);
     assert.equal(p.rows()[2].dataset.refined, 'false');

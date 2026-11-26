@@ -1178,6 +1178,7 @@ impl Live {
                     uncertain_reason: String::new(),
                     audio_offset_ms: audio_offset,
                     captured_at: Some(chunk_time),
+                    refinable: false,
                 })
                 .map_err(storage_error)?;
         }
@@ -1237,6 +1238,7 @@ impl Live {
                     uncertain_reason: persisted_reason(fallback_mixed, uncertain_reason),
                     audio_offset_ms: audio_offset,
                     captured_at: Some(chunk_time),
+                    refinable: false,
                 })
                 .map_err(storage_error)?;
         }
@@ -1410,6 +1412,7 @@ impl Live {
                     uncertain_reason: "no_conference_identity".into(),
                     audio_offset_ms: audio_offset,
                     captured_at: Some(chunk_time),
+                    refinable: false,
                 })
                 .map_err(storage_error)?;
         }
@@ -1714,6 +1717,7 @@ impl Live {
                     uncertain_reason: String::new(),
                     audio_offset_ms,
                     captured_at: Some(item.chunk_end_ms / 1000.0),
+                    refinable: true,
                 })
                 .map_err(|e| AsrError::Failed(e.to_string()))?;
             register_pcm_live_segment(
@@ -2119,6 +2123,7 @@ fn marker(msg: &str, reason: &str) -> NewSegment {
         uncertain_reason: reason.to_owned(),
         audio_offset_ms: 0,
         captured_at: None,
+        refinable: false,
     }
 }
 

@@ -215,6 +215,9 @@ pub struct NewSegment {
     pub audio_offset_ms: i64,
     /// Speech time as Unix seconds; None for events emitted now.
     pub captured_at: Option<f64>,
+    /// A refine will rewrite the row (a participant's own audio): the row says so, and
+    /// shows as preliminary until then.
+    pub refinable: bool,
 }
 
 type Logger = Arc<dyn Fn(Stream, &str) + Send + Sync>;
@@ -888,6 +891,9 @@ impl Shared {
         row.insert("uncertain_reason", Value::from(segment.uncertain_reason.as_str()));
         row.insert("audio_offset_ms", Value::from(segment.audio_offset_ms));
         row.insert("refined", Value::Bool(false));
+        if segment.refinable {
+            row.insert("refinable", Value::Bool(true));
+        }
         Value::Object(row)
     }
 

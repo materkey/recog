@@ -87,6 +87,21 @@ fn a_new_segment_when_appended_then_its_row_has_python_keys_and_refined_false() 
 }
 
 #[test]
+fn a_segment_a_refine_will_cover_when_appended_then_only_its_row_says_so() {
+    // given
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _) = storage_at(dir.path());
+    storage.start_session(&ktalk()).unwrap();
+    // when
+    storage.append_segment(&NewSegment { refinable: true, ..said("Alice", "hello") }).unwrap();
+    storage.append_segment(&said("Me", "hi")).unwrap();
+    // then
+    let rows = rows(&storage);
+    assert_eq!(field(&rows[0], &["refinable"]), &Value::Bool(true));
+    assert_eq!(field(&rows[1], &["refinable"]), &Value::Null);
+}
+
+#[test]
 fn update_segments_with_text_when_applied_then_text_rewritten_refined_true_and_words_counted() {
     // given
     let dir = tempfile::tempdir().unwrap();

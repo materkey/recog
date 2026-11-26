@@ -883,9 +883,8 @@ const views = {
                     break;
 
                 case 'refine_state':
-                    // In-place orphan -> KTalk promotion: update the refine
-                    // flag so newly appended segments get the tier-1 cue,
-                    // without clearing the rendered transcript.
+                    // In-place orphan -> KTalk promotion: the meeting becomes
+                    // a conference without clearing the rendered transcript.
                     if (!msg.meeting_id || !this.currentMeeting
                             || msg.meeting_id === this.currentMeeting.id) {
                         this.refineEnabled = msg.refine_enabled === true;
@@ -1084,8 +1083,10 @@ const views = {
             return div;
         },
 
+        // Only a row the refine will rewrite (a participant's own audio) shows as
+        // preliminary; the microphone and the mixed system audio are final as written.
         markLiveRefineState(div, seg) {
-            if (!seg.event_type && (this.refineEnabled || seg.refined === true)) {
+            if (!seg.event_type && (seg.refinable === true || seg.refined === true)) {
                 div.dataset.refined = seg.refined === true ? 'true' : 'false';
                 if (div.dataset.refined === 'false') {
                     div.title = 'Предварительная расшифровка — будет уточнена';
