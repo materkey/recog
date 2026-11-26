@@ -573,7 +573,7 @@ impl Live {
             Err(e) => {
                 self.env.log.rate_limited(
                     "live-transcribe-direct",
-                    &format!("[LiveTranscriber] _transcribe_direct failed: {}: {e}", exception_name(&e)),
+                    &format!("[LiveTranscriber] _transcribe_direct failed: {}: {e}", e.python_name()),
                 );
                 Ok(None)
             }
@@ -2098,15 +2098,6 @@ fn marker(msg: &str, reason: &str) -> NewSegment {
         uncertain_reason: reason.to_owned(),
         audio_offset_ms: 0,
         captured_at: None,
-    }
-}
-
-fn exception_name(e: &AsrError) -> &'static str {
-    match e {
-        AsrError::InvalidInput(_) => "ValueError",
-        AsrError::TemporarilyUnavailable => "ASRTemporarilyUnavailable",
-        AsrError::Aborted => "RefineAborted",
-        AsrError::Failed(_) => "RuntimeError",
     }
 }
 

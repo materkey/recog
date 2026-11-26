@@ -364,15 +364,6 @@ impl Drop for RefineWorker {
     }
 }
 
-fn error_kind(e: &AsrError) -> &'static str {
-    match e {
-        AsrError::InvalidInput(_) => "ValueError",
-        AsrError::TemporarilyUnavailable => "ASRTemporarilyUnavailable",
-        AsrError::Aborted => "RefineAborted",
-        AsrError::Failed(_) => "RuntimeError",
-    }
-}
-
 impl Inner {
     fn lock_queue(&self) -> MutexGuard<'_, Queue> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
@@ -428,7 +419,7 @@ impl Inner {
                 continue;
             }
             if let Err(e) = self.process_task(&task) {
-                self.options.logger.line(&format!("[RefineWorker] task processing raised {}: {e}", error_kind(&e)));
+                self.options.logger.line(&format!("[RefineWorker] task processing raised {}: {e}", e.python_name()));
             }
         }
     }

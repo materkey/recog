@@ -130,16 +130,6 @@ pub struct WavoAsr {
     logger: Logger,
 }
 
-/// The Python exception name of an error, for the log line.
-fn exception_name(e: &AsrError) -> &'static str {
-    match e {
-        AsrError::InvalidInput(_) => "ValueError",
-        AsrError::TemporarilyUnavailable => "ASRTemporarilyUnavailable",
-        AsrError::Aborted => "RefineAborted",
-        AsrError::Failed(_) => "RuntimeError",
-    }
-}
-
 impl WavoAsr {
     /// An ASR whose engine `loader` makes on first use; lines go to `logger`.
     #[must_use]
@@ -224,7 +214,7 @@ impl WavoAsr {
             Err(e) => {
                 self.logger.rate_limited(
                     "asr-transcribe-chunk",
-                    &format!("[WavoASR] transcribe_chunk failed: {}: {e}", exception_name(&e)),
+                    &format!("[WavoASR] transcribe_chunk failed: {}: {e}", e.python_name()),
                 );
                 None
             }

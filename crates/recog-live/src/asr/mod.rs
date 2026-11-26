@@ -52,6 +52,19 @@ pub enum AsrError {
     Failed(String),
 }
 
+impl AsrError {
+    /// The Python exception the error stands for, as the log lines name it.
+    #[must_use]
+    pub fn python_name(&self) -> &'static str {
+        match self {
+            AsrError::InvalidInput(_) => "ValueError",
+            AsrError::TemporarilyUnavailable => "ASRTemporarilyUnavailable",
+            AsrError::Aborted => "RefineAborted",
+            AsrError::Failed(_) => "RuntimeError",
+        }
+    }
+}
+
 impl fmt::Display for AsrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
