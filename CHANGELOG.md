@@ -7,6 +7,16 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-26
+
+### Changed
+
+- A transcript line that the refine (the second, word-timed recognition of a
+  participant's last seconds) confirmed word for word is now marked refined
+  too: during a call it no longer stays dimmed with «Предварительная
+  расшифровка — будет уточнена» for good. Run `cargo setup` and
+  `recog service restart`.
+
 ## 2026-11-24
 
 ### Changed

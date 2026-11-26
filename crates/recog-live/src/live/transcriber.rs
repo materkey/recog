@@ -161,6 +161,8 @@ struct State {
     pcm_pid_state: HashMap<String, PidState>,
     /// pid → (segment_id, pid_audio_ms_start, pid_audio_ms_end), oldest first.
     pcm_live_segments: HashMap<String, Vec<(i64, f64, f64)>>,
+    /// segment_id → the text a refine wrote, so the same text is not written twice. A
+    /// live text is not here: a refine that confirms it still marks the row refined.
     pcm_segment_texts: HashMap<i64, String>,
     last_pcm_degraded: bool,
     system_capture_lost: bool,
@@ -428,7 +430,7 @@ impl Live {
         lock(&self.state).pcm_live_segments.get(pid).cloned().unwrap_or_default()
     }
 
-    /// The cached text of a live PCM segment.
+    /// The text a refine wrote into a live PCM segment.
     #[must_use]
     pub fn pcm_segment_text(&self, segment_id: i64) -> Option<String> {
         lock(&self.state).pcm_segment_texts.get(&segment_id).cloned()
@@ -1721,7 +1723,6 @@ impl Live {
                 item.pid_audio_ms_start,
                 item.pid_audio_ms_end,
             );
-            st.pcm_segment_texts.insert(segment_id, deduped.clone());
         }
         if let Some(conference) = self.conference() {
             conference.send_transcript(&TranscriptLine {

@@ -284,7 +284,7 @@ fn chunks_of_one_pid_registering_live_segments_keeps_their_own_bounds_in_order()
     r.live.on_pcm_batch(&batch).unwrap();
     // then
     assert_eq!(r.live.pcm_live_segments("a"), [(1, 0.0, 3000.0), (2, 3000.0, 6000.0)]);
-    assert_eq!(r.live.pcm_segment_text(2).as_deref(), Some("два"));
+    assert!(r.live.pcm_segment_text(2).is_none());
 }
 
 #[test]
@@ -541,14 +541,31 @@ fn refined_words_applying_align_by_their_start_even_across_a_boundary() {
 }
 
 #[test]
-fn the_same_text_applying_a_refine_rewrites_nothing() {
+fn the_live_text_confirmed_applying_a_refine_marks_the_segment_refined() {
     // given
     let (r, conference) = refine_rig();
     // when
     r.live.apply_refine(&result(&r, 0.0, vec![word("раз", 0, 100), word("два", 200, 300)])).unwrap();
     // then
-    assert_eq!(field(&r.rows()[0], "refined"), &Value::Bool(false));
-    assert!(conference.refines.lock().unwrap().is_empty());
+    let rows = r.rows();
+    assert_eq!(text(&rows[0], "text"), "раз два");
+    assert_eq!(field(&rows[0], "refined"), &Value::Bool(true));
+    let refines = conference.refines.lock().unwrap().clone();
+    assert_eq!(refines.len(), 1);
+    assert_eq!(refines[0].0.len(), 1);
+    assert_eq!(refines[0].0[0].text, "раз два");
+}
+
+#[test]
+fn a_refined_text_refined_again_unchanged_rewrites_nothing() {
+    // given
+    let (r, conference) = refine_rig();
+    let confirming = result(&r, 0.0, vec![word("раз", 0, 100), word("два", 200, 300)]);
+    r.live.apply_refine(&confirming).unwrap();
+    // when
+    r.live.apply_refine(&confirming).unwrap();
+    // then
+    assert_eq!(conference.refines.lock().unwrap().len(), 1);
 }
 
 #[test]
