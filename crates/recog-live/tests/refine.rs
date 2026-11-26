@@ -19,6 +19,7 @@ fn task(pid: &str) -> RefineTask {
         offset_base_ms: 0.0,
         submitted_at: 1.7e9,
         meeting_generation: 0,
+        target: None,
     }
 }
 
@@ -409,21 +410,6 @@ fn asr_temporarily_unavailable_when_processing_then_apply_is_not_called() {
     );
     w.process_task(task("p1")).unwrap();
     assert!(!applied.load(Ordering::SeqCst));
-}
-
-#[test]
-fn task_of_an_old_generation_when_submitted_or_processed_then_it_is_ignored() {
-    let (transcribe, calls) = counting();
-    let w = RefineWorker::new(
-        new_model_lock(),
-        transcribe,
-        no_apply(),
-        RefineOptions { generation_getter: Some(Arc::new(|| 2)), ..options(AbortMode::Coarse) },
-    );
-    w.submit(RefineTask { meeting_generation: 1, ..task("p1") });
-    assert_eq!(w.queued(), 0);
-    w.process_task(RefineTask { meeting_generation: 1, ..task("p1") }).unwrap();
-    assert_eq!(*calls.lock().unwrap(), 0);
 }
 
 #[test]

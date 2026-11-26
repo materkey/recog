@@ -480,6 +480,7 @@ fn task(r: &Rig, pid: &str, base: f64) -> RefineTask {
         offset_base_ms: base,
         submitted_at: T0,
         meeting_generation: r.live.generation(),
+        target: None,
     }
 }
 
@@ -516,8 +517,12 @@ fn refine_rig() -> (Rig, Arc<FakeConference>) {
     (r, conference)
 }
 
+/// The words a refine of pid a's window at `base` heard, the window addressed as the
+/// transcriber addresses it on its way to the worker.
 fn result(r: &Rig, base: f64, words: Vec<Word>) -> RefineResult {
-    RefineResult { task: Arc::new(task(r, "a", base)), text: String::new(), words }
+    r.live.submit_refine(task(r, "a", base));
+    let task = r.live.refine_worker().unwrap().take_queued().expect("an addressed window");
+    RefineResult { task, text: String::new(), words }
 }
 
 #[test]
@@ -581,18 +586,20 @@ fn a_window_offset_applying_rebases_the_words_into_the_pid_frame() {
 }
 
 #[test]
-fn an_old_meeting_or_a_paused_worker_applying_a_refine_drops_it() {
+fn a_refine_finishing_after_a_meeting_boundary_writes_the_meeting_it_was_said_in() {
     // given
     let (r, _conference) = refine_rig();
+    let said_in = r.storage().current_meeting_path().unwrap();
     let old = result(&r, 0.0, vec![word("Старое", 0, 100)]);
-    r.live.refine_worker().unwrap().pause();
+    r.live.invalidate_pending_chunks();
+    r.storage().on_ktalk_join("https://example.ktalk.ru/next", None).unwrap();
     // when
     r.live.apply_refine(&old).unwrap();
     // then
-    assert_eq!(field(&r.rows()[0], "refined"), &Value::Bool(false));
-    r.live.refine_worker().unwrap().resume();
-    r.live.invalidate_pending_chunks();
-    r.live.apply_refine(&old).unwrap();
+    let rows = rows_of(&said_in);
+    assert_eq!(text(&rows[0], "text"), "Старое");
+    assert_eq!(field(&rows[0], "refined"), &Value::Bool(true));
+    assert!(r.rows().is_empty());
     assert!(r.live.pcm_segment_text(1).is_none());
 }
 
@@ -634,4 +641,91 @@ fn a_refine_worker_end_to_end_running_rewrites_the_row_through_the_ingest() {
     assert_eq!(text(&rows[0], "text"), "Привет Мир", "{rows:?}");
     assert_eq!(r.asr.refine_calls.load(Ordering::SeqCst), 1);
     r.live.stop_audio();
+}
+
+/// The ingest, the worker and the transcriber wired as the session wires them, none
+/// of them running a thread: the test ticks the ingest and runs the queued tasks. The
+/// model hears `words` in every refine window.
+fn wired_by_hand(r: &Rig, words: Vec<Word>) -> (Arc<PerSpeakerIngest>, Arc<RefineWorker>) {
+    let weak = Arc::downgrade(&r.live);
+    let ingest = {
+        let (weak, generation) = (weak.clone(), weak.clone());
+        Arc::new(PerSpeakerIngest::new(
+            Arc::new(move |batch| weak.upgrade().map_or(Ok(()), |live| live.on_pcm_batch(batch))),
+            IngestOptions {
+                clock: r.clock.shared(),
+                meeting_active_getter: Some(Arc::new(|| true)),
+                generation_getter: Some(Arc::new(move || generation.upgrade().map_or(0, |live| live.generation()))),
+                logger: recog_live::log::Logger::capture(r.clock.shared()).0,
+                ..IngestOptions::default()
+            },
+        ))
+    };
+    r.live.set_ingest(Some(ingest.clone()));
+    let submit = weak.clone();
+    ingest.set_refine_submit_callback(Some(Arc::new(move |task| {
+        if let Some(live) = submit.upgrade() {
+            live.submit_refine(task);
+        }
+        Ok(())
+    })));
+    let worker = Arc::new(RefineWorker::new(
+        new_model_lock(),
+        Arc::new(move |_, _| Ok(recog_live::asr::Transcription { text: String::new(), words: words.clone() })),
+        Arc::new(move |result| weak.upgrade().map_or(Ok(()), |live| live.apply_refine(result))),
+        RefineOptions { transcribe_manages_lock: true, ..RefineOptions::default() },
+    ));
+    r.live.set_refine_worker(Some(worker.clone()));
+    (ingest, worker)
+}
+
+fn run_queued(worker: &RefineWorker) {
+    while let Some(task) = worker.take_queued() {
+        worker.process_task(task).unwrap();
+    }
+}
+
+fn rows_of(meeting: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(meeting.join("transcript.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| recog_core::pyjson::loads(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn speech_not_yet_refined_at_a_meeting_boundary_is_refined_into_the_meeting_it_was_said_in() {
+    // given: a live segment of 100 ms whose refine trigger has not fired yet
+    let (r, _conference) = ktalk_rig(false);
+    let said_in = r.storage().current_meeting_path().unwrap();
+    let (ingest, worker) = wired_by_hand(&r, vec![word("Раз", 0, 40), word("два", 50, 90)]);
+    r.asr.batch(&["раз два"]);
+    feed_pcm(&ingest);
+    ingest.tick(Some(T0 + 1.0));
+    assert_eq!(text(&r.rows()[0], "text"), "раз два");
+    // when: the meeting ends and the next one starts before the refine
+    r.live.invalidate_pending_chunks();
+    r.storage().on_ktalk_join("https://example.ktalk.ru/next", None).unwrap();
+    run_queued(&worker);
+    // then
+    let rows = rows_of(&said_in);
+    assert_eq!(text(&rows[0], "text"), "Раз два");
+    assert_eq!(field(&rows[0], "refined"), &Value::Bool(true));
+    assert!(r.rows().is_empty());
+}
+
+#[test]
+fn a_window_built_before_a_meeting_boundary_submitted_after_it_queues_nothing() {
+    // given
+    let (r, _conference) = ktalk_rig(false);
+    ingest(&r);
+    let worker = refine_worker(&r);
+    r.live.register_pcm_live_segment("a", 1, 0.0, 3000.0);
+    let stale = task(&r, "a", 0.0);
+    r.live.invalidate_pending_chunks();
+    r.live.register_pcm_live_segment("a", 1, 0.0, 3000.0);
+    // when
+    r.live.submit_refine(stale);
+    // then
+    assert!(worker.queued_tasks().is_empty());
 }

@@ -555,9 +555,21 @@ impl PerSpeakerIngest {
     /// `PCM_REFINE_WINDOW_S`; the watermark moves to the drained end atomically, and a
     /// monolog trigger also resets the continuous-speech counter.
     pub fn get_refine_candidate(&self, pid: &str) -> Option<RefineTask> {
+        self.refine_candidate(pid, false)
+    }
+
+    /// A refine task for every pid's drained speech after its watermark, due or not:
+    /// what a meeting boundary would otherwise drop with the rings.
+    pub fn take_unrefined_speech(&self) -> Vec<RefineTask> {
+        let pids = self.inner.lock().pid_audio_order.clone();
+        pids.iter().filter_map(|pid| self.refine_candidate(pid, true)).collect()
+    }
+
+    /// `get_refine_candidate`, or with `forced` whether a trigger fired or not.
+    fn refine_candidate(&self, pid: &str, forced: bool) -> Option<RefineTask> {
         let inner = &self.inner;
         let mut state = inner.lock();
-        let trigger = refine_trigger(&state, pid)?;
+        let trigger = refine_trigger(&state, pid, forced)?;
         let ring = state.pcm_rings.get(pid).filter(|r| !r.is_empty())?;
         let sr = f64::from(pid_sample_rate(&state, pid));
         let window_ms = PCM_REFINE_WINDOW_S * 1000.0;
@@ -581,6 +593,7 @@ impl PerSpeakerIngest {
             offset_base_ms,
             submitted_at: inner.clock.wall(),
             meeting_generation: (inner.generation)(),
+            target: None,
         })
     }
 
@@ -617,8 +630,8 @@ struct RefineTrigger {
 }
 
 /// The pid's drained audio after its watermark, when a turn gap or the monolog cap
-/// makes it due.
-fn refine_trigger(state: &State, pid: &str) -> Option<RefineTrigger> {
+/// makes it due, or `forced`.
+fn refine_trigger(state: &State, pid: &str, forced: bool) -> Option<RefineTrigger> {
     let drained_ms = state.pid_drained_ms.get(pid).copied().unwrap_or(0.0);
     let watermark = state.refine_watermark_ms.get(pid).copied().unwrap_or(0.0);
     let unrefined_ms = drained_ms - watermark;
@@ -629,7 +642,7 @@ fn refine_trigger(state: &State, pid: &str) -> Option<RefineTrigger> {
     let continuous_ms = state.continuous_speech_ms.get(pid).copied().unwrap_or(0.0);
     let gap_triggered = silence_ms >= SPEAKER_TURN_GAP * 1000.0;
     let monolog = continuous_ms >= PCM_REFINE_MONOLOG_CAP_S * 1000.0;
-    if !(gap_triggered || monolog) {
+    if !(forced || gap_triggered || monolog) {
         return None;
     }
     Some(RefineTrigger { drained_ms, watermark, unrefined_ms, monolog })

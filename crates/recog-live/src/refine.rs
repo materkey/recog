@@ -2,7 +2,10 @@
 //!
 //! [`RefineWorker`] reruns ASR with word timestamps on a trailing per-pid PCM window
 //! ([`RefineTask`], built by `PerSpeakerIngest::get_refine_candidate`) and hands the
-//! result to `apply_fn`, which replaces live-segment text with `refined: true`.
+//! result to `apply_fn`, which replaces live-segment text with `refined: true`. The
+//! transcriber addresses each task ([`RefineTarget`]) before it is queued: the meeting
+//! and the live segments the window covers, so a task finishing after a meeting
+//! boundary still lands in the meeting it was said in.
 //!
 //! Threading is Python's (design.md D11): one worker thread pops tasks from a queue,
 //! takes the shared model lock unless the callback manages it
@@ -30,6 +33,7 @@
 //!   hands out `&RefineResult` holding an `Arc<RefineTask>`.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -63,6 +67,16 @@ pub struct RefineTask {
     pub submitted_at: f64,
     /// The live process's meeting generation when the task was built.
     pub meeting_generation: i64,
+    /// Where the refined text goes; None until the transcriber addresses the task.
+    pub target: Option<RefineTarget>,
+}
+
+/// The meeting a refine window was said in and its live segments the window covers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefineTarget {
+    pub meeting_path: PathBuf,
+    /// (segment_id, pid_audio_ms_start, pid_audio_ms_end), oldest first.
+    pub segments: Vec<(i64, f64, f64)>,
 }
 
 /// What one refine run produced for a task.
@@ -110,8 +124,6 @@ impl AbortMode {
 pub type TranscribeFn = Arc<dyn Fn(&[i16], Option<&dyn Fn() -> bool>) -> Result<Transcription, AsrError> + Send + Sync>;
 /// `apply_fn(result)`, called outside the model lock; an `Err` is logged.
 pub type ApplyFn = Arc<dyn Fn(&RefineResult) -> Result<(), String> + Send + Sync>;
-/// The current meeting generation.
-pub type GenerationGetter = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 /// A settable flag with a wait, Python's `threading.Event`.
 #[derive(Debug, Default)]
@@ -153,8 +165,6 @@ pub struct RefineOptions {
     pub abort_mode: AbortMode,
     /// The callback owns the model lock for local decode; the worker takes none.
     pub transcribe_manages_lock: bool,
-    /// Old tasks are rejected before inference and not resubmitted after a switch.
-    pub generation_getter: Option<GenerationGetter>,
     /// Sleeps the requeue pause.
     pub clock: SharedClock,
     pub logger: Logger,
@@ -171,7 +181,6 @@ impl Default for RefineOptions {
         Self {
             abort_mode: AbortMode::Cooperative,
             transcribe_manages_lock: false,
-            generation_getter: None,
             clock: SystemClock::shared(),
             logger: Logger::stderr(),
             poll_s: RefineWorker::POLL_S,
@@ -261,7 +270,7 @@ impl RefineWorker {
         *thread = Some((handle, finished));
     }
 
-    /// Enqueues a task; no-op while paused or stopped, or of another generation.
+    /// Enqueues a task; no-op while paused or stopped.
     pub fn submit(&self, task: impl Into<Arc<RefineTask>>) {
         self.inner.submit(task.into());
     }
@@ -369,25 +378,21 @@ impl Inner {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn generation_matches(&self, task: &RefineTask) -> bool {
-        self.options.generation_getter.as_ref().is_none_or(|g| task.meeting_generation == g())
-    }
-
     fn submit(&self, task: Arc<RefineTask>) {
         if self.stopped.is_set() {
             return;
         }
         let mut queue = self.lock_queue();
-        if queue.paused || !self.generation_matches(&task) {
+        if queue.paused {
             return;
         }
         queue.items.push_back(Some(task));
         self.queue_cond.notify_one();
     }
 
-    fn task_is_current(&self, task: &RefineTask) -> bool {
+    fn active(&self) -> bool {
         let queue = self.lock_queue();
-        !self.stopped.is_set() && !queue.paused && self.generation_matches(task)
+        !self.stopped.is_set() && !queue.paused
     }
 
     /// `queue.get(timeout)`: `None` on timeout, `Some(None)` for the sentinel.
@@ -440,14 +445,14 @@ impl Inner {
             self.wait_for_live_released();
         }
         let _guard = (!self.options.transcribe_manages_lock).then(|| self.model_lock.lock());
-        if !self.task_is_current(task) {
+        if !self.active() {
             return Ok(Outcome::NotCurrent);
         }
         if cooperative && self.live_pending.load(Ordering::SeqCst) {
             return Err(AsrError::Aborted);
         }
         let result = if cooperative {
-            let should_abort = || self.live_pending.load(Ordering::SeqCst) || !self.task_is_current(task);
+            let should_abort = || self.live_pending.load(Ordering::SeqCst) || !self.active();
             (self.transcribe_fn)(&task.pcm_samples, Some(&should_abort))
         } else {
             (self.transcribe_fn)(&task.pcm_samples, None)
@@ -456,7 +461,7 @@ impl Inner {
     }
 
     fn process_task(&self, task: &Arc<RefineTask>) -> Result<(), AsrError> {
-        if !self.task_is_current(task) {
+        if !self.active() {
             return Ok(());
         }
         let transcription = match self.transcribe_task(task) {
@@ -465,7 +470,7 @@ impl Inner {
             Err(e) => return self.resubmit_after(task, e),
         };
         // pause() may have landed during the inference: no spurious promotions.
-        if !self.task_is_current(task) {
+        if !self.active() {
             return Ok(());
         }
         let result = RefineResult { task: task.clone(), text: transcription.text, words: transcription.words };
@@ -480,7 +485,7 @@ impl Inner {
     fn resubmit_after(&self, task: &Arc<RefineTask>, error: AsrError) -> Result<(), AsrError> {
         match error {
             AsrError::TemporarilyUnavailable => {
-                if self.task_is_current(task) {
+                if self.active() {
                     self.options.clock.sleep(self.options.unavailable_retry_delay_s);
                 }
             }

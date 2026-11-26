@@ -16,6 +16,10 @@ reasoning.
   too: during a call it no longer stays dimmed with «Предварительная
   расшифровка — будет уточнена» for good. Run `cargo setup` and
   `recog service restart`.
+- What a participant said in the last seconds before a meeting ends, or
+  before its conference tab reloads, is now refined into that meeting
+  instead of staying preliminary. Run `cargo setup` and
+  `recog service restart`.
 
 ## 2026-11-24
 

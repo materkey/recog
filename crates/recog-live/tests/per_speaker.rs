@@ -521,6 +521,22 @@ fn unknown_pid_or_everything_refined_when_asking_for_a_candidate_then_none() {
 }
 
 #[test]
+fn speech_under_the_monolog_cap_without_a_gap_when_a_meeting_ends_then_only_the_boundary_takes_it() {
+    let clock = clock100();
+    let ingest = PerSpeakerIngest::new(Arc::new(|_| Ok(())), with_clock(&clock));
+    for s in 1..=3 {
+        ingest.enqueue(second("p1", s));
+    }
+    ingest.tick(now(&clock));
+    assert!(ingest.get_refine_candidate("p1").is_none());
+    let tasks = ingest.take_unrefined_speech();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].pcm_samples.len(), 3 * SR as usize);
+    assert_eq!(ingest.refine_state("p1").unwrap().watermark_ms, Some(3000.0));
+    assert!(ingest.take_unrefined_speech().is_empty());
+}
+
+#[test]
 fn a_candidate_taken_when_asking_again_without_new_audio_then_none() {
     let clock = clock100();
     let ingest = PerSpeakerIngest::new(Arc::new(|_| Ok(())), with_clock(&clock));

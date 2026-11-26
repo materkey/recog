@@ -19,8 +19,10 @@ use crate::golden::{GoldenRecorder, remove_old_sessions};
 use crate::live::parts::Conference;
 use crate::live::transcriber::Live;
 use crate::live::{AUDIO_CLEANUP_INTERVAL_S, GOLDEN_KEEP_DAYS};
-use crate::per_speaker::{IngestOptions, IngestStats, PcmChunk, PerSpeakerIngest, TranscribeCallback};
-use crate::refine::{AbortMode, GenerationGetter, RefineOptions, RefineWorker, new_model_lock};
+use crate::per_speaker::{
+    GenerationGetter, IngestOptions, IngestStats, PcmChunk, PerSpeakerIngest, TranscribeCallback,
+};
+use crate::refine::{AbortMode, RefineOptions, RefineWorker, new_model_lock};
 
 /// Makes the increment generator of a meetings directory.
 pub type IncrementsFactory = Box<dyn Fn(&Path) -> Arc<dyn IncrementGenerator> + Send>;
@@ -268,8 +270,8 @@ pub fn setup_per_speaker_ingest(live: &Arc<Live>) {
         let weak = weak.clone();
         Arc::new(move || weak.upgrade().map_or(0, |live| live.generation()))
     };
-    let ingest = start_ingest(live, &weak, generation.clone());
-    let worker = start_refine_worker(live, &weak, generation);
+    let ingest = start_ingest(live, &weak, generation);
+    let worker = start_refine_worker(live, &weak);
     if !live.is_recording_active() {
         worker.pause();
     }
@@ -318,7 +320,7 @@ fn start_ingest(live: &Arc<Live>, weak: &Weak<Live>, generation: GenerationGette
 
 /// `_setup_refine_worker`: the worker, not started, re-transcribing through the
 /// transcriber and applying there.
-fn start_refine_worker(live: &Arc<Live>, weak: &Weak<Live>, generation: GenerationGetter) -> Arc<RefineWorker> {
+fn start_refine_worker(live: &Arc<Live>, weak: &Weak<Live>) -> Arc<RefineWorker> {
     let transcribe = {
         let weak = weak.clone();
         Arc::new(move |pcm: &[i16], should_abort: Option<&dyn Fn() -> bool>| match weak.upgrade() {
@@ -339,7 +341,6 @@ fn start_refine_worker(live: &Arc<Live>, weak: &Weak<Live>, generation: Generati
         RefineOptions {
             abort_mode: AbortMode::Cooperative,
             transcribe_manages_lock: true,
-            generation_getter: Some(generation),
             clock: live.env.clock.clone(),
             logger: live.env.log.clone(),
             ..RefineOptions::default()

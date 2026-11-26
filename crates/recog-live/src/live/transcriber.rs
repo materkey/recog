@@ -35,7 +35,7 @@ use crate::live::text::{deduplicate, last_words, pcm_is_silent, rms_f32};
 use crate::live::{SILENCE_CHECK_INTERVAL_S, SYSTEM_AUDIO_SPEAKER};
 use crate::log::Logger;
 use crate::per_speaker::{BatchedChunk, PerSpeakerIngest};
-use crate::refine::{RefineResult, RefineTask, RefineWorker};
+use crate::refine::{RefineResult, RefineTarget, RefineTask, RefineWorker};
 
 /// Where stdout text goes: `sys.stdout.write(text)`, no newline added.
 pub type Out = Arc<dyn Fn(&str) + Send + Sync>;
@@ -830,9 +830,16 @@ impl Live {
         }
     }
 
-    /// `_invalidate_pending_chunks`: a meeting boundary; in-flight work of the old
-    /// meeting is dropped and the capture buffers emptied.
+    /// `_invalidate_pending_chunks`: a meeting boundary; the old meeting's speech not
+    /// refined yet goes to the worker addressed to it, its other in-flight work is
+    /// dropped and the capture buffers emptied.
     pub fn invalidate_pending_chunks(&self) {
+        if self.is_recording_active()
+            && let Some(worker) = self.refine_worker()
+        {
+            worker.resume();
+        }
+        self.submit_unrefined_speech();
         {
             let mut st = lock(&self.state);
             self.generation.fetch_add(1, Ordering::SeqCst);
@@ -851,12 +858,6 @@ impl Live {
             st.pcm_live_segments.clear();
             st.pcm_segment_texts.clear();
             st.last_pcm_degraded = false;
-            if let Some(worker) = self.refine_worker() {
-                worker.pause();
-                if self.is_recording_active() {
-                    worker.resume();
-                }
-            }
         }
         if let Some(ingest) = self.ingest() {
             ingest.drain();
@@ -1747,16 +1748,42 @@ impl Live {
         register_pcm_live_segment(&mut st, has_ingest, pid, segment_id, start_ms, end_ms);
     }
 
-    /// `_submit_refine`: a refine window goes to the worker only when it holds a live
-    /// segment of its pid.
-    pub fn submit_refine(&self, task: RefineTask) {
-        let task_end_ms = task.offset_base_ms + PCM_REFINE_WINDOW_S * 1000.0;
-        let has_live_segment = lock(&self.state)
-            .pcm_live_segments
-            .get(&task.pid)
-            .is_some_and(|segs| segs.iter().any(|&(_, start, end)| end >= task.offset_base_ms && start <= task_end_ms));
-        if has_live_segment && let Some(worker) = self.refine_worker() {
+    /// `_submit_refine`: a refine window goes to the worker addressed to the meeting
+    /// and the live segments of its pid it covers, only when it covers one and was
+    /// built in the current meeting.
+    pub fn submit_refine(&self, mut task: RefineTask) {
+        let Some(target) = self.refine_target(&task) else { return };
+        task.target = Some(target);
+        if let Some(worker) = self.refine_worker() {
             worker.submit(task);
+        }
+    }
+
+    /// The current meeting and the window's live segments in it; None for a window of
+    /// an earlier meeting, one with no live segment, or no meeting at all.
+    fn refine_target(&self, task: &RefineTask) -> Option<RefineTarget> {
+        let st = lock(&self.state);
+        if task.meeting_generation != self.generation() {
+            return None;
+        }
+        let meeting_path = self.storage()?.current_meeting_path()?;
+        let task_end_ms = task.offset_base_ms + PCM_REFINE_WINDOW_S * 1000.0;
+        let segments: Vec<(i64, f64, f64)> = st
+            .pcm_live_segments
+            .get(&task.pid)?
+            .iter()
+            .copied()
+            .filter(|&(_, start, end)| end >= task.offset_base_ms && start <= task_end_ms)
+            .collect();
+        (!segments.is_empty()).then_some(RefineTarget { meeting_path, segments })
+    }
+
+    /// Every pid's speech not refined yet, to the worker before a meeting boundary
+    /// drops the ingest's rings and the segment registry.
+    fn submit_unrefined_speech(&self) {
+        let Some(ingest) = self.ingest() else { return };
+        for task in ingest.take_unrefined_speech() {
+            self.submit_refine(task);
         }
     }
 
@@ -1767,8 +1794,8 @@ impl Live {
     /// The transcript rewrite failed.
     pub fn apply_refine(&self, result: &RefineResult) -> Result<(), String> {
         let task = &result.task;
-        let rebased = rebased_words(result);
-        let Some((target_meeting_path, updates)) = self.refine_updates(task, &rebased) else { return Ok(()) };
+        let Some(target) = &task.target else { return Ok(()) };
+        let updates = self.refine_updates(task, target, &rebased_words(result));
         if updates.is_empty() {
             return Ok(());
         }
@@ -1777,43 +1804,36 @@ impl Live {
             .iter()
             .map(|(id, text)| SegmentUpdate { segment_id: *id, text: Some(text.clone()), ..SegmentUpdate::default() })
             .collect();
-        storage.update_segments(&rows, Some(&target_meeting_path)).map_err(storage_error)?;
+        storage.update_segments(&rows, Some(&target.meeting_path)).map_err(storage_error)?;
         if let Some(conference) = self.conference() {
             let refined: Vec<RefineUpdate> =
                 updates.iter().map(|(id, text)| RefineUpdate { segment_id: *id, text: text.clone() }).collect();
-            let meeting_id = target_meeting_path.file_name().map(|n| n.to_string_lossy().into_owned());
+            let meeting_id = target.meeting_path.file_name().map(|n| n.to_string_lossy().into_owned());
             conference.send_refine(&refined, meeting_id.as_deref());
         }
         self.remember_refined_texts(task, updates);
         Ok(())
     }
 
-    /// The meeting the refine belongs to and the new text of each of its pid's live
-    /// segments the window overlaps; None when the recording changed, refine is
-    /// paused, or there is no meeting.
-    fn refine_updates(&self, task: &RefineTask, rebased: &[(f64, String)]) -> Option<(PathBuf, Vec<(i64, String)>)> {
+    /// The new text of each segment the window covers, but a text a refine already
+    /// wrote there while its meeting is still the current one.
+    fn refine_updates(
+        &self,
+        task: &RefineTask,
+        target: &RefineTarget,
+        rebased: &[(f64, String)],
+    ) -> Vec<(i64, String)> {
         let st = lock(&self.state);
-        if task.meeting_generation != self.generation() {
-            return None;
-        }
-        if self.refine_worker().is_some_and(|w| w.is_paused()) {
-            return None;
-        }
-        let path = self.storage()?.current_meeting_path()?;
-        let task_start_ms = task.offset_base_ms;
-        let task_end_ms = task.offset_base_ms + PCM_REFINE_WINDOW_S * 1000.0;
-        let mut updates = Vec::new();
-        for &(segment_id, seg_start, seg_end) in st.pcm_live_segments.get(&task.pid).into_iter().flatten() {
-            if seg_end < task_start_ms || seg_start > task_end_ms {
-                continue;
-            }
-            let Some(new_text) = refined_text(rebased, seg_start, seg_end) else { continue };
-            if st.pcm_segment_texts.get(&segment_id) == Some(&new_text) {
-                continue;
-            }
-            updates.push((segment_id, new_text));
-        }
-        Some((path, updates))
+        let current = task.meeting_generation == self.generation();
+        target
+            .segments
+            .iter()
+            .filter_map(|&(segment_id, seg_start, seg_end)| {
+                let new_text = refined_text(rebased, seg_start, seg_end)?;
+                let written = current && st.pcm_segment_texts.get(&segment_id) == Some(&new_text);
+                (!written).then_some((segment_id, new_text))
+            })
+            .collect()
     }
 
     /// The refined texts kept for the identical-text skip, for segments still live.
