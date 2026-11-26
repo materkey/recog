@@ -20,7 +20,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::lifecycle::MANUAL_MEETING_ID;
-use crate::ai_settings::CopilotSettings;
+use crate::ai_settings::{CopilotSettings, CopilotTask};
 use crate::{log, py};
 
 pub const TMUX_SOCKET: &str = "recog-copilot";
@@ -34,6 +34,9 @@ pub const SYSTEMD_UNIT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 pub const SYSTEMD_UNIT_POLL: Duration = Duration::from_millis(100);
 pub const KILL_RETRIES: u32 = 3;
 pub const KILL_RETRY_DELAY: Duration = Duration::from_millis(500);
+/// The tmux session option that records the session's launch ([`TmuxRunner::launch`]);
+/// it lives as long as the tmux server, so a restarted supervisor reads it too.
+pub const LAUNCH_OPTION: &str = "@recog-launch";
 
 /// A failed tmux, systemd or settings step, worded like the Python RuntimeError.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +118,10 @@ pub trait Runner {
     fn missing_tool(&self) -> Option<&'static str> {
         None
     }
+
+    /// Whether the current session was started with another provider, model or effort
+    /// than the settings ask for now; `false` while that is unknown.
+    async fn launch_outdated(&self) -> Result<bool, Error>;
 }
 
 /// Whether the session must be wrapped in a transient systemd unit: Linux with
@@ -316,8 +323,7 @@ impl<C: CommandRunner> TmuxRunner<C> {
     /// none is found, as before Codex could run the Copilot.
     pub fn build_command(&self) -> Result<String, Error> {
         let task = self.settings.resolve().map_err(Error)?;
-        let installed = task.providers.iter().find(|provider| (self.cli_installed)(provider));
-        if installed.or(task.providers.first()).map(String::as_str) != Some("codex") {
+        if !self.runs_codex(&task) {
             return self.build_claude_command();
         }
         if !task.enabled {
@@ -326,6 +332,36 @@ impl<C: CommandRunner> TmuxRunner<C> {
         let program = recog_core::install::program(&self.repo_root, "recog-copilot-codex");
         let root = self.repo_root.display().to_string();
         Ok(py::shlex_join(&[program.display().to_string(), "--repo-root".to_owned(), root]))
+    }
+
+    /// Whether the Copilot's order lands on the Codex harness.
+    fn runs_codex(&self, task: &CopilotTask) -> bool {
+        let installed = task.providers.iter().find(|provider| (self.cli_installed)(provider));
+        installed.or(task.providers.first()).map(String::as_str) == Some("codex")
+    }
+
+    /// What a session started now runs with and keeps while it lives: the provider, its
+    /// model and effort. Not the command: the Codex harness reads its model from the
+    /// settings itself.
+    pub fn launch(&self) -> Result<String, Error> {
+        let task = self.settings.resolve().map_err(Error)?;
+        Ok(if self.runs_codex(&task) {
+            format!("codex/{}/{}", task.codex_model, task.reasoning_effort)
+        } else {
+            format!("claude/{}/{}", task.model, task.claude_effort)
+        })
+    }
+
+    /// Records the launch on the session. Without the record the session never counts
+    /// as outdated, so a failure here only keeps it from being replaced.
+    async fn record_launch(&self, name: &str, launch: &str) {
+        let target = Self::exact_pane_target(name);
+        let failure = match self.run.run(&self.tmux(&["set-option", "-t", &target, LAUNCH_OPTION, launch])).await {
+            Ok((0, _)) => return,
+            Ok((rc, out)) => format!("rc={rc}): {}", py::strip(&out)),
+            Err(e) => format!("{e})"),
+        };
+        log::line(&format!("{} tmux set-option failed ({failure}", log::SUPERVISOR_PREFIX));
     }
 
     fn sibling_of(&self, name: &str) -> String {
@@ -368,6 +404,7 @@ impl<C: CommandRunner> TmuxRunner<C> {
     async fn create_session(&self, name: &str) -> Result<(), Error> {
         let root = self.repo_root.display().to_string();
         let command = self.build_command()?;
+        let launch = self.launch()?;
         let mut argv = self.tmux(&["new-session", "-d", "-s", name, "-c", &root, &command]);
         if self.use_systemd_run {
             // Only on the creating path: an adopted session's unit is never recreated.
@@ -378,6 +415,7 @@ impl<C: CommandRunner> TmuxRunner<C> {
         if rc != 0 {
             return Err(Error(format!("tmux new-session failed (rc={rc}): {}", py::strip(&out))));
         }
+        self.record_launch(name, &launch).await;
         Ok(())
     }
 
@@ -444,6 +482,16 @@ impl<C: CommandRunner> Runner for TmuxRunner<C> {
             return None;
         }
         Some("Claude Code or Codex")
+    }
+
+    async fn launch_outdated(&self) -> Result<bool, Error> {
+        let target = Self::exact_pane_target(&self.session_name());
+        let (rc, out) = self.run.run(&self.tmux(&["show-options", "-t", &target, "-v", "-q", LAUNCH_OPTION])).await?;
+        let recorded = py::strip(&out);
+        if rc != 0 || recorded.is_empty() {
+            return Ok(false);
+        }
+        Ok(recorded != self.launch()?)
     }
 
     async fn send_keys(&self, keys: &[String]) -> Result<(), Error> {

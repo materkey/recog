@@ -460,6 +460,8 @@ Claude and Codex have separate reasoning effort controls. Claude supports
 `low`, `medium`, `high`, `xhigh`, `max`. Both providers offer Auto, which lets
 their CLI choose the reasoning effort.
 Copilot applies effort changes, like model changes, at the next session start.
+A Copilot session whose provider refuses it for usage (the chip shows 🔴 blocked)
+starts again at once when you save another model, effort or provider for it.
 
 The Copilot scenario also has an **Copilot включён** switch. Save it off to stop
 the active agent and block manual starts, conference starts and crash retries.
@@ -470,7 +472,8 @@ manual starts and the existing conference autostart policy again, as far as
 
 Changes apply to the next request; an in-flight generation keeps its original
 settings. Copilot receives edited instructions on its next event, while its
-model changes on the next session start. Saving does not restart a live session.
+model changes on the next session start. Saving does not restart a live session,
+unless its provider refuses it for usage.
 Templates support `{transcript}`, `{user_name}`, `{participants}` and
 `{meeting_title}`; the editor lists required fields. Copilot instructions are
 literal text. Reset restores the selected scenario's shipped defaults.

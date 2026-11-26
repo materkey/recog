@@ -423,6 +423,42 @@ impl<R: Runner + 'static> Supervisor<R> {
         }
     }
 
+    /// The provider refuses the session's turns for usage, which no turn or crash ends.
+    /// When the settings now start it with another provider, model or effort (the way
+    /// out the user took), it is replaced at once, off the respawn budget, which is for
+    /// crashes. A session whose launch is unknown stays.
+    pub async fn replace_session_blocked_for_usage(&self) {
+        let _guard = self.execute_lock.lock().await;
+        let meeting_id = {
+            let st = self.st.borrow();
+            if st.lifecycle.state != State::Running {
+                return;
+            }
+            st.lifecycle.meeting_id.clone()
+        };
+        match self.runner.launch_outdated().await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                let message = format!("{} launch check failed: {e}", self.log_prefix);
+                log::rate_limited("copilot-supervisor.launch-check", &message);
+                return;
+            }
+        }
+        let meeting = py::repr_opt(meeting_id.as_deref());
+        self.log(&format!("session for {meeting} refused for usage, settings changed — restarting it"));
+        self.execute_locked(&[Command::Kill]).await;
+        // A frame may have ended or replaced the session while the runner was stopping.
+        let commands = {
+            let mut st = self.st.borrow_mut();
+            if st.lifecycle.state != State::Running || st.lifecycle.meeting_id != meeting_id {
+                return;
+            }
+            st.lifecycle.session_died()
+        };
+        self.execute_locked(&commands).await;
+    }
+
     async fn probe_session_alive(&self) -> bool {
         if let Some(probe) = &self.alive_probe {
             return probe();
@@ -868,5 +904,9 @@ impl<R: Runner + 'static> WatchdogHost for Supervisor<R> {
 
     async fn on_session_died(&self) {
         Supervisor::on_session_died(self);
+    }
+
+    async fn on_blocked_for_usage(&self) {
+        self.replace_session_blocked_for_usage().await;
     }
 }

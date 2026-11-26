@@ -11,6 +11,12 @@ reasoning.
 
 ### Changed
 
+- A Copilot session that its provider refuses for usage (Claude's
+  `You've hit your … limit`, the chip at 🔴 blocked) no longer stays blocked
+  after you save another model, effort or provider for the Copilot: it starts
+  again at once with them. A session started before this update is not
+  restarted this way; it ends with its meeting. Run `cargo setup` and
+  `recog service restart copilot-supervisor`.
 - A transcript line that the refine (the second, word-timed recognition of a
   participant's last seconds) confirmed word for word is now marked refined
   too: during a call it no longer stays dimmed with «Предварительная

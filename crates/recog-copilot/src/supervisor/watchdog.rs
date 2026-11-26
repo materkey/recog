@@ -8,11 +8,13 @@
 //! [`HEARTBEAT_S`] (the bridge measures the supervisor's freshness by it), and feeds
 //! `session_ready` / `session_died` back. A pane stuck in `spawning` past
 //! [`SPAWN_DEADLINE_S`] is reported `blocked`: fail-visible, a respawn would not help.
+//! A pane blocked because the provider refuses its turns for usage is reported to the
+//! host on every tick, which replaces the session once the settings change.
 
 use super::lifecycle::State;
 use super::screen::{
-    AUTO_DISMISS_MARKERS, AgentState, TRUST_DIALOG_MARKERS, classify_screen, dialog_shown, harness_state,
-    trust_dialog_keys,
+    AUTO_DISMISS_MARKERS, AgentState, TRUST_DIALOG_MARKERS, blocked_for_usage, classify_screen, dialog_shown,
+    harness_state, trust_dialog_keys,
 };
 use super::tmux::{Error, Runner};
 
@@ -31,6 +33,8 @@ pub trait WatchdogHost {
     fn spawn_in_flight(&self) -> bool;
     async fn send_status(&self, status: AgentState);
     async fn on_session_died(&self);
+    /// The session's provider refuses its turns for usage.
+    async fn on_blocked_for_usage(&self);
 }
 
 /// Seconds on a monotonic clock.
@@ -70,7 +74,7 @@ impl Watchdog {
             return Ok(());
         }
 
-        let mut observed = self.observe(runner).await?;
+        let (mut observed, pane) = self.observe(runner).await?;
         if host.spawn_in_flight() {
             // The visible pane still belongs to the previous session (or to a
             // half-created replacement): it cannot mark the replacement ready yet.
@@ -84,9 +88,7 @@ impl Watchdog {
         if Some(effective) != self.last_reported || now - self.last_report_ts >= HEARTBEAT_S {
             self.report(host, effective, now).await;
         }
-        if observed == AgentState::Offline {
-            host.on_session_died().await;
-        }
+        hand_over(host, observed, &pane).await;
         Ok(())
     }
 
@@ -111,17 +113,18 @@ impl Watchdog {
         if now - since >= SPAWN_DEADLINE_S { AgentState::Blocked } else { observed }
     }
 
-    async fn observe<R: Runner>(&mut self, runner: &R) -> Result<AgentState, Error> {
+    /// The pane's state and its text; a gone session has no text.
+    async fn observe<R: Runner>(&mut self, runner: &R) -> Result<(AgentState, String), Error> {
         if !runner.alive(None).await? {
             self.dismissed_dialog = None;
-            return Ok(AgentState::Offline);
+            return Ok((AgentState::Offline, String::new()));
         }
         let text = runner.capture().await?;
         let state = classify_screen(Some(&text));
         if harness_state(&text).is_some() {
             // The Codex harness answers no dialog; keys would only garble its status line.
             self.dismissed_dialog = None;
-            return Ok(state);
+            return Ok((state, text));
         }
         // Only a dialog is answered: a pane blocked for usage may quote anything.
         let lowered = text.to_lowercase();
@@ -129,10 +132,10 @@ impl Watchdog {
             && let Some(marker) = AUTO_DISMISS_MARKERS.iter().find(|m| lowered.contains(*m))
         {
             self.dismiss(runner, marker, &text).await?;
-            return Ok(AgentState::Spawning);
+            return Ok((AgentState::Spawning, text));
         }
         self.dismissed_dialog = None;
-        Ok(state)
+        Ok((state, text))
     }
 
     /// The latch is per dialog kind, not global: startup dialogs come back to back
@@ -154,5 +157,15 @@ impl Watchdog {
         self.last_reported = Some(state);
         self.last_report_ts = now;
         host.send_status(state).await;
+    }
+}
+
+/// What the host does about the observed pane: respawns a gone session, and checks one
+/// refused for usage against the settings.
+async fn hand_over<H: WatchdogHost>(host: &H, observed: AgentState, pane: &str) {
+    match observed {
+        AgentState::Offline => host.on_session_died().await,
+        AgentState::Blocked if blocked_for_usage(pane) => host.on_blocked_for_usage().await,
+        _ => {}
     }
 }

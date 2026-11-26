@@ -72,6 +72,12 @@ impl TestSettings {
         }
     }
 
+    pub fn set_model(&self, model: &str) {
+        if let Ok(task) = self.0.borrow_mut().as_mut() {
+            model.clone_into(&mut task.model);
+        }
+    }
+
     pub fn set_providers(&self, providers: &[&str]) {
         if let Ok(task) = self.0.borrow_mut().as_mut() {
             task.providers = providers.iter().map(|provider| (*provider).to_owned()).collect();
@@ -96,6 +102,9 @@ pub struct FakeRunner {
     pub fail_alive: Cell<bool>,
     /// What `missing_tool` reports.
     pub missing: Cell<Option<&'static str>>,
+    /// What `launch_outdated` reports, unless the check fails.
+    pub outdated: Cell<bool>,
+    pub fail_launch_check: Cell<bool>,
     /// While set, `spawn` waits for this notify (blocking-runner tests).
     pub gates: RefCell<HashMap<String, Rc<Gate>>>,
 }
@@ -195,6 +204,13 @@ impl Runner for FakeRunner {
     fn missing_tool(&self) -> Option<&'static str> {
         self.missing.get()
     }
+
+    async fn launch_outdated(&self) -> Result<bool, Error> {
+        if self.fail_launch_check.get() {
+            return Err(Error("tmux unavailable".into()));
+        }
+        Ok(self.outdated.get())
+    }
 }
 
 /// A runner whose session is alive while spawned, as `Runner` in test_copilot_toggle.py.
@@ -238,6 +254,10 @@ impl Runner for LiveRunner {
 
     fn observable(&self) -> bool {
         false
+    }
+
+    async fn launch_outdated(&self) -> Result<bool, Error> {
+        Ok(false)
     }
 }
 

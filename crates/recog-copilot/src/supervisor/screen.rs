@@ -6,7 +6,7 @@
 
 use recog_core::protocol;
 
-use crate::codex::harness::STATUS_PREFIX;
+use crate::codex::harness::{RATE_LIMIT, STATUS_PREFIX, USAGE_LIMIT};
 use crate::py;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,12 +103,17 @@ fn usage_limited(lowered: &str) -> bool {
     notice.is_some_and(|notice| reply.is_none_or(|reply| notice > reply))
 }
 
+/// What follows the prefix of a Codex harness pane's last line.
+fn harness_status(text: &str) -> Option<&str> {
+    let last = py::splitlines(py::rstrip(text)).last().copied()?;
+    last.trim().strip_prefix(STATUS_PREFIX)
+}
+
 /// The state a Codex harness pane reports on its last line (`recog-copilot-codex:
 /// <state>`); `None` for any other pane. It wins over every Claude marker, which the
 /// dialog above it may quote.
 pub fn harness_state(text: &str) -> Option<AgentState> {
-    let last = py::splitlines(py::rstrip(text)).last().copied()?;
-    let state = last.trim().strip_prefix(STATUS_PREFIX)?;
+    let state = harness_status(text)?;
     Some(if state.starts_with("online") {
         AgentState::Online
     } else if state.starts_with("working") {
@@ -118,6 +123,18 @@ pub fn harness_state(text: &str) -> Option<AgentState> {
     } else {
         AgentState::Spawning
     })
+}
+
+/// Whether the pane is blocked because the provider refuses its turns for usage:
+/// Claude's limit notice where [`classify_screen`] reads it, or the Codex harness
+/// blocked on its usage or rate limit. Another provider, model or effort can get the
+/// Copilot out of this, unlike out of a dialog.
+pub fn blocked_for_usage(text: &str) -> bool {
+    if let Some(state) = harness_status(text) {
+        return state.strip_prefix("blocked: ").is_some_and(|reason| [USAGE_LIMIT, RATE_LIMIT].contains(&reason));
+    }
+    let lowered = text.to_lowercase();
+    !dialog_shown(&lowered) && !lowered.contains(WORKING_MARKER) && usage_limited(&lowered)
 }
 
 /// The agent state a captured pane shows. First match wins: no session → a Codex

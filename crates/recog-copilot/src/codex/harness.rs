@@ -63,6 +63,10 @@ impl Kind {
 }
 
 const LOGIN: &str = "not signed in to Codex: run codex login";
+/// The reasons Codex refuses turns for usage, which the supervisor reads back from the
+/// status line.
+pub const USAGE_LIMIT: &str = "Codex usage limit reached";
+pub const RATE_LIMIT: &str = "Codex rate limit reached";
 
 #[derive(Debug)]
 pub struct Harness {
@@ -136,8 +140,8 @@ impl Harness {
     /// What a failed turn's cause does: blocks the harness, or asks for a new thread.
     fn failed(&mut self, info: &str) -> Option<Command> {
         let reason = match info {
-            "usageLimitExceeded" => "Codex usage limit reached",
-            "rateLimitExceeded" => "Codex rate limit reached",
+            "usageLimitExceeded" => USAGE_LIMIT,
+            "rateLimitExceeded" => RATE_LIMIT,
             "unauthorized" => LOGIN,
             "contextWindowExceeded" => return Some(Command::NewThread),
             _ => return None,

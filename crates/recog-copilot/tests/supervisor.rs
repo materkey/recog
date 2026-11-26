@@ -1000,6 +1000,130 @@ async fn channel_loss_reported_for_an_older_meeting_leaves_the_current_session_a
     .await;
 }
 
+// --- a session refused for usage ---
+
+#[tokio::test(start_paused = true)]
+async fn pane_refused_for_usage_after_a_model_change_when_watched_then_the_session_is_started_again() {
+    local(async {
+        // given: the session runs the old model and refuses every turn
+        let fake = FakeTmux::named(&[TMUX_SESSION]);
+        fake.respond("capture-pane", 0, USAGE_LIMIT_SCREEN);
+        fake.respond("show-options", 0, "claude/claude-fable-5-2/\n");
+        let sup = tmux_supervisor(fake, 90.0, true);
+        sup.with_lifecycle(|l| l.adopt(Some("A")));
+        // when
+        Watchdog::new(Box::new(|| 0.0)).tick(&*sup, &*sup.runner).await.unwrap();
+        // then: replaced at once, with its new launch recorded
+        let fake = sup.runner.command_runner();
+        assert_eq!(fake.kill_targets(), [TMUX_SESSION]);
+        assert_eq!(fake.new_session_names(), [TMUX_SESSION]);
+        assert_eq!(fake.subcommands().last().map(String::as_str), Some("set-option"));
+        assert_eq!((sup.state(), sup.meeting_id().as_deref()), (State::Spawning, Some("A")));
+        assert_eq!(sup.respawn_attempts(), 0);
+        assert!(!sup.respawn_pending());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn session_refused_for_usage_with_an_unchanged_launch_stays() {
+    local(async {
+        // given
+        let (sup, runner) = fake_supervisor(90.0, true);
+        sup.with_lifecycle(|l| l.adopt(Some("A")));
+        // when
+        sup.replace_session_blocked_for_usage().await;
+        // then
+        assert_eq!(runner.kills.get(), 0);
+        assert!(runner.spawned().is_empty());
+        assert_eq!(sup.state(), State::Running);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn session_refused_for_usage_whose_launch_cannot_be_read_stays_and_says_why() {
+    local(async {
+        // given
+        let (sup, runner) = fake_supervisor(90.0, true);
+        runner.fail_launch_check.set(true);
+        sup.with_lifecycle(|l| l.adopt(Some("A")));
+        log::reset_rate_limits();
+        let logs = log::Capture::start();
+        // when
+        sup.replace_session_blocked_for_usage().await;
+        // then
+        assert_eq!(runner.kills.get(), 0);
+        assert!(runner.spawned().is_empty());
+        assert!(logs.text().contains("launch check failed: tmux unavailable"), "{}", logs.text());
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn meeting_ending_while_the_refused_session_is_killed_gets_no_new_session() {
+    local(async {
+        // given: the replacement's kill is in flight
+        let fake = FakeTmux::named(&[TMUX_SESSION]);
+        fake.respond("show-options", 0, "claude/claude-fable-5-2/\n");
+        let gate = Rc::new(Gate::default());
+        *fake.kill_gate.borrow_mut() = Some(gate.clone());
+        let sup = tmux_supervisor(fake, 90.0, true);
+        sup.with_lifecycle(|l| l.adopt(Some("A")));
+        let replacing = {
+            let sup = sup.clone();
+            spawn_local(async move { sup.replace_session_blocked_for_usage().await })
+        };
+        // a replacement that never kills must fail here, not hang
+        tokio::time::timeout(ms(1000), gate.wait_started()).await.expect("the old session is being killed");
+        // when
+        sup.handle_frame(&frame(ENDED_A)).await;
+        gate.open();
+        replacing.await.unwrap();
+        // then
+        assert!(sup.runner.command_runner().new_session_names().is_empty());
+        assert_eq!(sup.state(), State::Grace);
+        sup.stop();
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn session_refused_for_usage_in_grace_is_left_to_end() {
+    local(async {
+        // given: the meeting ended, the settings changed since the spawn
+        let (sup, runner) = fake_supervisor(90.0, true);
+        runner.outdated.set(true);
+        sup.with_lifecycle(|l| l.adopt(Some("A")));
+        send(&sup, ENDED_A).await;
+        // when
+        sup.replace_session_blocked_for_usage().await;
+        // then
+        assert_eq!(runner.kills.get(), 0);
+        assert!(runner.spawned().is_empty());
+        assert_eq!(sup.state(), State::Grace);
+        sup.stop();
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_session_refused_for_usage_after_a_model_change_is_started_again_as_manual() {
+    local(async {
+        // given
+        let (sup, runner) = fake_supervisor(90.0, true);
+        runner.outdated.set(true);
+        sup.with_lifecycle(|l| l.adopt(Some(MANUAL_MEETING_ID)));
+        // when
+        sup.replace_session_blocked_for_usage().await;
+        // then
+        assert_eq!(runner.kills.get(), 1);
+        assert_eq!(runner.spawned(), manual(1));
+        assert_eq!(sup.respawn_attempts(), 0);
+    })
+    .await;
+}
+
 // --- the Copilot switch (test_copilot_toggle.py) ---
 
 fn toggle_supervisor(autospawn: bool) -> (Rc<Supervisor<LiveRunner>>, Rc<LiveRunner>, Rc<TestSettings>) {

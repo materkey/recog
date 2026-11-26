@@ -10,7 +10,8 @@ use std::rc::Rc;
 use common::*;
 use recog_copilot::supervisor::watchdog::{DISMISS_RETRY_S, SPAWN_DEADLINE_S};
 use recog_copilot::supervisor::{
-    AgentState, Error, Runner, SessionLifecycle, State, Watchdog, WatchdogHost, classify_screen, trust_dialog_keys,
+    AgentState, Error, Runner, SessionLifecycle, State, Watchdog, WatchdogHost, blocked_for_usage, classify_screen,
+    trust_dialog_keys,
 };
 
 #[test]
@@ -39,6 +40,21 @@ fn a_turn_refused_for_usage_when_classified_then_blocked_until_the_model_replies
     // when / then: a reply quoting a limit opening outside a notice does not count
     assert_eq!(classify_screen(Some(USAGE_LIMIT_SCREEN)), AgentState::Blocked);
     assert_eq!(classify_screen(Some(REPLY_AFTER_USAGE_LIMIT_SCREEN)), AgentState::Online);
+}
+
+#[test]
+fn panes_refused_for_usage_are_told_apart_from_other_blocked_panes() {
+    // given / when / then: Claude's notice, until the model replies again
+    assert!(blocked_for_usage(USAGE_LIMIT_SCREEN));
+    assert!(!blocked_for_usage(REPLY_AFTER_USAGE_LIMIT_SCREEN));
+    // a dialog is no usage refusal, even with a notice above it
+    assert!(!blocked_for_usage(MODEL_DIALOG_SCREEN));
+    assert!(!blocked_for_usage(&format!("{USAGE_LIMIT_SCREEN}\n{MODEL_DIALOG_SCREEN}")));
+    // the Codex harness: its usage and rate limits, not a lost login
+    assert!(blocked_for_usage(&harness_screen("blocked: Codex usage limit reached")));
+    assert!(blocked_for_usage(&harness_screen("blocked: Codex rate limit reached")));
+    assert!(!blocked_for_usage(&harness_screen("blocked: not signed in to Codex: run codex login")));
+    assert!(!blocked_for_usage(&harness_screen("online")));
 }
 
 #[test]
@@ -115,6 +131,9 @@ impl Runner for WatchdogRunner {
         "copilot".into()
     }
     fn set_session_name(&self, _: &str) {}
+    async fn launch_outdated(&self) -> Result<bool, Error> {
+        Ok(false)
+    }
 }
 
 /// A bare lifecycle with recorded statuses and deaths (`_make_watchdog`).
@@ -123,6 +142,7 @@ struct Host {
     statuses: RefCell<Vec<AgentState>>,
     died: Cell<usize>,
     in_flight: Cell<bool>,
+    blocked_for_usage: Cell<usize>,
 }
 
 impl Host {
@@ -132,6 +152,7 @@ impl Host {
             statuses: RefCell::default(),
             died: Cell::new(0),
             in_flight: Cell::new(false),
+            blocked_for_usage: Cell::new(0),
         }
     }
 
@@ -159,6 +180,9 @@ impl WatchdogHost for Host {
     }
     async fn on_session_died(&self) {
         self.died.set(self.died.get() + 1);
+    }
+    async fn on_blocked_for_usage(&self) {
+        self.blocked_for_usage.set(self.blocked_for_usage.get() + 1);
     }
 }
 
@@ -286,6 +310,27 @@ async fn usage_limit_below_a_reply_with_dialog_words_reports_blocked_and_is_not_
     // then
     assert_eq!(host.statuses(), vec![AgentState::Blocked]);
     assert!(runner.keys().is_empty());
+}
+
+#[tokio::test]
+async fn blocked_panes_on_two_ticks_reach_the_host_as_usage_refusals_only_when_the_provider_refused() {
+    for (screen, in_flight, reports) in [
+        (USAGE_LIMIT_SCREEN.to_owned(), false, 2),  // every tick, until the host acts
+        (MODEL_DIALOG_SCREEN.to_owned(), false, 0), // an unknown dialog
+        (harness_screen("blocked: not signed in to Codex: run codex login"), false, 0), // a lost login
+        (USAGE_LIMIT_SCREEN.to_owned(), true, 0),   // the old pane while its replacement spawns
+    ] {
+        // given
+        let runner = WatchdogRunner::new(true, &screen);
+        let host = Host::new(State::Running, Some("A"));
+        host.in_flight.set(in_flight);
+        let (_clock, mut watchdog) = fake_clock();
+        // when
+        watchdog.tick(&host, &runner).await.unwrap();
+        watchdog.tick(&host, &runner).await.unwrap();
+        // then
+        assert_eq!(host.blocked_for_usage.get(), reports, "{screen:?}");
+    }
 }
 
 #[tokio::test]

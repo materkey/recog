@@ -9,11 +9,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::*;
+use recog_ai::defaults::DEFAULT_CLAUDE_MODEL;
 use recog_ai::install::LegacyEnv;
 use recog_copilot::ai_settings::AiSettingsFile;
 use recog_copilot::log;
 use recog_copilot::supervisor::tmux::{KILL_RETRIES, KILL_RETRY_DELAY, SYSTEMD_SESSION_UNIT, session_manager_for};
-use recog_copilot::supervisor::{MANUAL_MEETING_ID, Runner, TMUX_SESSION, TMUX_SESSION_MANUAL, TmuxRunner};
+use recog_copilot::supervisor::{
+    LAUNCH_OPTION, MANUAL_MEETING_ID, Runner, TMUX_SESSION, TMUX_SESSION_MANUAL, TmuxRunner,
+};
 
 fn split(command: &str) -> Vec<String> {
     // The command is shlex.join'ed; a tiny POSIX splitter for the quoting it uses.
@@ -175,11 +178,77 @@ async fn spawn_probes_the_sibling_and_the_target_then_creates_the_session_on_the
     // then
     let fake = runner.command_runner();
     assert!(created);
-    assert_eq!(fake.subcommands(), ["has-session", "has-session", "new-session"]);
+    assert_eq!(fake.subcommands(), ["has-session", "has-session", "new-session", "set-option"]);
     let new_session = fake.calls.borrow()[2].clone();
     assert_eq!(new_session[..3], ["tmux", "-L", "recog-copilot"]);
     assert_eq!(new_session[3..9], ["new-session", "-d", "-s", "copilot", "-c", "/tmp/checkout"]);
     assert_eq!(new_session[9], runner.build_command().unwrap());
+}
+
+#[tokio::test]
+async fn spawn_records_the_launch_on_the_session_it_created() {
+    // given
+    let runner = tmux_runner(FakeTmux::with_session(false));
+    // when
+    runner.spawn(Some(MANUAL_MEETING_ID)).await.unwrap();
+    // then
+    let record = runner.command_runner().calls.borrow().last().cloned().unwrap();
+    let launch = format!("claude/{DEFAULT_CLAUDE_MODEL}/");
+    assert_eq!(record, ["tmux", "-L", "recog-copilot", "set-option", "-t", "=copilot-manual:", LAUNCH_OPTION, &launch]);
+}
+
+#[tokio::test]
+async fn spawn_whose_launch_cannot_be_recorded_still_reports_the_session_created() {
+    // given
+    let fake = FakeTmux::with_session(false);
+    fake.respond("set-option", 1, "no server running");
+    let runner = tmux_runner(fake);
+    let logs = log::Capture::start();
+    // when
+    let created = runner.spawn(Some("A")).await.unwrap();
+    // then
+    assert!(created);
+    assert!(logs.text().contains("tmux set-option failed (rc=1): no server running"), "{}", logs.text());
+}
+
+#[test]
+fn launch_names_the_provider_that_runs_with_its_model_and_effort() {
+    // given
+    let mut runner = tmux_runner(FakeTmux::default());
+    // when / then
+    assert_eq!(runner.launch().unwrap(), format!("claude/{DEFAULT_CLAUDE_MODEL}/"));
+    runner.cli_installed = Box::new(|name| name == "codex");
+    assert_eq!(runner.launch().unwrap(), "codex/gpt-6-astra/xhigh");
+}
+
+#[tokio::test]
+async fn recorded_launch_when_the_settings_change_the_model_then_outdated() {
+    // given
+    let settings = TestSettings::enabled();
+    let fake = FakeTmux::default();
+    fake.respond("show-options", 0, &format!("claude/{DEFAULT_CLAUDE_MODEL}/\n"));
+    let mut runner = TmuxRunner::new(fake, settings.clone(), "/repo", "http://x/mcp");
+    runner.cli_installed = Box::new(|name| name == "claude");
+    // when / then
+    assert!(!runner.launch_outdated().await.unwrap());
+    settings.set_model("claude-sonnet-5-5");
+    assert!(runner.launch_outdated().await.unwrap());
+    let show = runner.command_runner().calls.borrow().last().cloned().unwrap();
+    assert_eq!(show, ["tmux", "-L", "recog-copilot", "show-options", "-t", "=copilot:", "-v", "-q", LAUNCH_OPTION]);
+}
+
+#[tokio::test]
+async fn session_without_a_recorded_launch_is_never_outdated() {
+    // given: a session started before the record existed, and one tmux cannot read
+    for (rc, out) in [(0, ""), (1, "no server running")] {
+        let fake = FakeTmux::default();
+        fake.respond("show-options", rc, out);
+        let settings = TestSettings::enabled();
+        settings.set_model("claude-sonnet-5-5");
+        let runner = TmuxRunner::new(fake, settings, "/repo", "http://x/mcp");
+        // when / then
+        assert!(!runner.launch_outdated().await.unwrap(), "{out:?}");
+    }
 }
 
 #[tokio::test]
@@ -481,6 +550,54 @@ async fn capture_and_send_keys_drive_a_real_tmux_session_named_with_the_default_
     assert!(!real(TMUX_SESSION).alive(None).await.unwrap());
 }
 
+#[tokio::test]
+async fn launch_recorded_on_a_real_tmux_session_reads_back_for_that_session_only() {
+    // given
+    if recog_copilot::supervisor::tmux::which("tmux").is_none() {
+        eprintln!("tmux not installed: skipped");
+        return;
+    }
+    let server = TestServer(format!("recog-test-launch-{}", std::process::id()));
+    let settings = TestSettings::enabled();
+    let real = |name: &str| {
+        let mut runner = TmuxRunner::new(
+            recog_copilot::supervisor::ProcessRunner::default(),
+            settings.clone(),
+            "/tmp",
+            "http://x/mcp",
+        )
+        .with_session_name(name);
+        runner.socket_name = server.0.clone();
+        runner.cli_installed = Box::new(|name| name == "claude");
+        runner
+    };
+    for name in [TMUX_SESSION, TMUX_SESSION_MANUAL] {
+        let argv: Vec<String> =
+            ["tmux", "-L", &server.0, "new-session", "-d", "-s", name, "cat"].map(str::to_owned).into();
+        let created = tokio::time::timeout(
+            Duration::from_secs(10),
+            recog_copilot::supervisor::CommandRunner::run(&recog_copilot::supervisor::ProcessRunner::default(), &argv),
+        )
+        .await
+        .expect("new-session returned")
+        .unwrap();
+        assert_eq!(created.0, 0, "{created:?}");
+    }
+    let launch = real(TMUX_SESSION).launch().unwrap();
+    let record: Vec<String> =
+        ["tmux", "-L", &server.0, "set-option", "-t", "=copilot:", LAUNCH_OPTION, &launch].map(str::to_owned).into();
+    let recorded =
+        recog_copilot::supervisor::CommandRunner::run(&recog_copilot::supervisor::ProcessRunner::default(), &record)
+            .await
+            .unwrap();
+    assert_eq!(recorded.0, 0, "{recorded:?}");
+    // when
+    settings.set_model("claude-sonnet-5-5");
+    // then: the recorded session is outdated, the one without a record is not
+    assert!(real(TMUX_SESSION).launch_outdated().await.unwrap());
+    assert!(!real(TMUX_SESSION_MANUAL).launch_outdated().await.unwrap());
+}
+
 #[test]
 fn session_manager_is_the_transient_unit_only_on_linux_with_systemd_run() {
     // given / when / then
@@ -506,7 +623,7 @@ async fn linux_spawn_wraps_tmux_in_a_transient_unit_with_its_properties_and_envi
     let created = runner.spawn(Some("A")).await.unwrap();
     // then
     assert!(created);
-    let argv = runner.command_runner().calls.borrow().last().cloned().unwrap();
+    let argv = runner.command_runner().calls.borrow().iter().find(|c| c[0] == "systemd-run").cloned().unwrap();
     let has = |a: &str| argv.iter().any(|x| x == a);
     assert_eq!(argv[0], "systemd-run");
     assert!(has("--user") && has("--collect"));
