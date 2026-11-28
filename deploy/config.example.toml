@@ -24,6 +24,8 @@
 # fallback and a circuit breaker (enable only on a confirmed LAN). "local" (the
 # PyTorch model) is gone: it runs on wavo, and the log says so.
 # backend = "auto"
+# RECOG_ASR_MODEL: local recognition and fallback model; use "gigaam-v3" to roll back.
+# model = "gigaam-v4"
 # RECOG_ASR_REMOTE_URL: gateway base URL. No default: backend = "remote"
 # without it fails at startup instead of silently running on-device.
 # remote_url = "https://<asr-gateway>/asr"

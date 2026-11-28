@@ -70,7 +70,7 @@ Every service is a program of `crates/`, and recog has no Python. `cargo setup`:
 4. builds the extension (the hosts come from `bin/recog config conferences`),
    `sck_audio_capture` and `Recog.app` (`bin/recog launcher`, rebuilt only when its
    source changed, so the permissions of "Recog" stay), downloads the ASR model
-   `gigaam-v3` into the Hugging Face cache (`bin/recog prefetch`), and installs and
+   (`gigaam-v4` by default) into the Hugging Face cache (`bin/recog prefetch`), and installs and
    starts the units.
 
 The units then run the binaries: the live one as
@@ -352,12 +352,14 @@ real LAN (`ping` RTT < 5 ms).
 
 ## ASR on wavo
 
-The live process runs GigaAM v3 e2e_rnnt on [wavo](https://crates.io/crates/wavo),
+The live process runs GigaAM v4 by default on [wavo](https://github.com/vladkens/wavo),
 a Rust runtime, on the GPU: Metal on macOS, Vulkan on Linux, for every `[asr]
-backend` but `remote`, where it is the gateway's fallback. `cargo setup` downloads the model (274 MB, Q8_0 GGUF) into the
-Hugging Face cache (`bin/recog prefetch`); without it the first start does.
+backend` but `remote`, where it is the gateway's fallback. `cargo setup` downloads the selected model into the
+Hugging Face cache (`bin/recog prefetch`). For v4 it verifies the SHA-256 digest of the
+255 MB Q8_0 GGUF. With an empty cache the first start downloads it too.
+Set `model = "gigaam-v3"` under `[asr]` to use the previous model.
 
-Measured against the PyTorch model (`docs/experiments/2026-11-07-rust-asr-runtimes.md`):
+GigaAM v3 was measured against its PyTorch model (`docs/experiments/2026-11-07-rust-asr-runtimes.md`):
 the same WER within 0.06 points and the same word timings, 6-12 times faster on an
 M3 Pro, 4.5 times on an RTX PRO 6000, about half the memory. It has no batch (the
 per-speaker clips run one after another) and a refine runs to its end instead of

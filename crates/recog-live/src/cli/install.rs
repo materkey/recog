@@ -15,7 +15,7 @@ use recog_ai::install::LegacyEnv;
 use recog_ai::json::{self, Json};
 use recog_ai::settings::{AiSettingsStore, Fallback, validate_models};
 use recog_core::data_dir::get_data_dir;
-use recog_core::install_config::{self, Environ, InstallConfig};
+use recog_core::install_config::{self, AsrModel, Environ, InstallConfig};
 use recog_core::user_profile::UserProfileStore;
 use recog_zoom::helper_app::{BuildError, PlistValue, SystemToolchain, Toolchain, build_app, find_or_build_app};
 
@@ -336,14 +336,9 @@ pub fn package_macos_apps(root: &Path) -> Result<(), BuildError> {
 /// `recog prefetch`: the ASR model in the Hugging Face cache (`HF_HOME`), downloaded
 /// when it is missing; its path on stdout.
 #[must_use]
-pub fn prefetch() -> Printed {
-    let notice = if WavoEngine::cached_path().is_some() {
-        String::new()
-    } else {
-        line("Downloading the ASR model gigaam-v3...")
-    };
-    eprint!("{notice}");
-    match WavoEngine::fetch() {
+pub fn prefetch(model: AsrModel) -> Printed {
+    let path = WavoEngine::fetch(model, || eprintln!("Downloading the ASR model {}...", model.name()));
+    match path {
         Ok(path) => printed(line(path.display()), "", 0),
         Err(e) => printed("", line(format!("Could not download the ASR model: {e}")), 1),
     }

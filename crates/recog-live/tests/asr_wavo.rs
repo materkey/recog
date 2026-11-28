@@ -57,7 +57,7 @@ fn asr_with(fake: &Arc<Fake>) -> (WavoAsr, Captured) {
     let engine = fake.clone();
     let loader: Loader = Box::new(move || Ok(engine.clone() as Arc<dyn Engine>));
     let (logger, captured) = Logger::capture(ManualClock::new(0.0).shared());
-    (WavoAsr::new(loader, logger), captured)
+    (WavoAsr::new(Default::default(), loader, logger), captured)
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn two_threads_load_model_loads_once() {
         Ok(Fake::new() as Arc<dyn Engine>)
     });
     let (logger, _) = Logger::capture(ManualClock::new(0.0).shared());
-    let asr = Arc::new(WavoAsr::new(loader, logger));
+    let asr = Arc::new(WavoAsr::new(Default::default(), loader, logger));
     // when: both call load_model
     let handles: Vec<_> = (0..2)
         .map(|_| {
@@ -176,7 +176,7 @@ fn explicit_load_load_model_says_so_and_names_the_device() {
     asr.load_model(false).unwrap();
     asr.transcribe_chunk(Clip::F32(&[0.0; 10]), 16000);
     // then: one loading line, and the device named after the engine's
-    assert_eq!(captured.lines(), vec!["Загрузка модели gigaam-v3 (wavo)..."]);
+    assert_eq!(captured.lines(), vec!["Загрузка модели gigaam-v4 (wavo)..."]);
     assert_eq!(asr.device(), "wavo Fake GPU Metal");
 }
 
@@ -193,7 +193,7 @@ fn failed_load_transcribe_chunk_answers_none_and_the_next_call_loads_again() {
         }
     });
     let (logger, captured) = Logger::capture(ManualClock::new(0.0).shared());
-    let asr = WavoAsr::new(loader, logger);
+    let asr = WavoAsr::new(Default::default(), loader, logger);
     // when: two chunks come
     let first = asr.transcribe_chunk(Clip::F32(&[0.0; 10]), 16000);
     let second = asr.transcribe_chunk(Clip::F32(&[0.0; 10]), 16000);

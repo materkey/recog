@@ -1,4 +1,4 @@
-//! ASR backend "wavo": GigaAM v3 e2e_rnnt on the wavo crate, in place of
+//! ASR backend "wavo": GigaAM on the wavo crate, in place of
 //! `recog/wavo_backend.py` (which reaches the same crate through `rust/wavo-asr-py`).
 //!
 //! [`WavoAsr`] has `WavoASR`'s methods and answers: the live chunk's text
@@ -22,15 +22,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use recog_core::install_config::AsrModel;
 use recog_core::py;
 
+use super::gigaam_v4;
 use super::words::words_from_tokens;
 use super::{AsrError, Clip, Transcription};
 use crate::config::SAMPLE_RATE;
 use crate::log::Logger;
-
-/// The hub name of GigaAM v3 e2e_rnnt (Q8_0 GGUF) in wavo's model table.
-pub const GIGAAM: &str = "gigaam-v3";
 
 /// A model's answer: the text, and its tokens as `(piece, start_ms)`.
 pub type EngineAnswer = (String, Vec<(String, u32)>);
@@ -73,32 +72,43 @@ impl WavoEngine {
         Ok(Self { inner })
     }
 
-    /// The cached `gigaam-v3` of the Hugging Face cache (`HF_HOME`), without downloading.
-    #[must_use]
-    pub fn cached_path() -> Option<PathBuf> {
-        wavo::hub::Hub::new().find(GIGAAM)
-    }
-
-    /// The path of `gigaam-v3` in the Hugging Face cache, downloaded there first when it
-    /// is missing; nothing is loaded (`recog prefetch`).
+    /// Find the selected model in the Hugging Face cache without downloading.
     ///
     /// # Errors
-    /// The download's error, as [`AsrError::Failed`].
-    pub fn fetch() -> Result<PathBuf, AsrError> {
+    /// An I/O error while checking the v4 weights.
+    pub fn cached_path(model: AsrModel) -> Result<Option<PathBuf>, AsrError> {
         let hub = wavo::hub::Hub::new();
-        match hub.find(GIGAAM) {
-            Some(path) => Ok(path),
-            None => hub.pull(GIGAAM, |_| std::ops::ControlFlow::Continue(())).map_err(|e| engine_error(&e)),
+        match model {
+            AsrModel::V4 => gigaam_v4::cached(hub.root()).map_err(|e| AsrError::Failed(e.to_string())),
+            AsrModel::V3 => Ok(hub.find(model.name())),
         }
     }
 
-    /// `gigaam-v3` from the Hugging Face cache, downloaded there first when it is missing:
-    /// what `wavo_asr.Model()` does.
+    /// Return the selected model's path, calling `on_miss` before fetching missing weights.
+    ///
+    /// # Errors
+    /// A cache, download or integrity check failure.
+    pub fn fetch(model: AsrModel, on_miss: impl FnOnce()) -> Result<PathBuf, AsrError> {
+        if let Some(path) = Self::cached_path(model)? {
+            return Ok(path);
+        }
+        on_miss();
+        let hub = wavo::hub::Hub::new().prepare(false);
+        match model {
+            AsrModel::V4 => gigaam_v4::download(hub.root()).map_err(|e| AsrError::Failed(e.to_string())),
+            AsrModel::V3 => {
+                hub.pull(model.name(), |_| std::ops::ControlFlow::Continue(())).map_err(|e| engine_error(&e))
+            }
+        }
+    }
+
+    /// Load the selected model from the cache, downloading it first if needed.
     ///
     /// # Errors
     /// The download's or the load's error, as [`AsrError::Failed`].
-    pub fn from_hub() -> Result<Self, AsrError> {
-        Self::load(&Self::fetch()?)
+    pub fn from_hub(model: AsrModel) -> Result<Self, AsrError> {
+        let path = Self::fetch(model, || {})?;
+        Self::load(&path)
     }
 }
 
@@ -121,8 +131,9 @@ pub struct ModelGuard<'a> {
     _guard: MutexGuard<'a, ()>,
 }
 
-/// GigaAM v3 e2e_rnnt on wavo with the methods recog's live and refine paths call.
+/// GigaAM on wavo with the methods recog's live and refine paths call.
 pub struct WavoAsr {
+    selected: AsrModel,
     loader: Loader,
     model: Mutex<Option<Arc<dyn Engine>>>,
     device: Mutex<String>,
@@ -133,15 +144,25 @@ pub struct WavoAsr {
 impl WavoAsr {
     /// An ASR whose engine `loader` makes on first use; lines go to `logger`.
     #[must_use]
-    pub fn new(loader: Loader, logger: Logger) -> Self {
-        Self { loader, model: Mutex::new(None), device: Mutex::new("wavo".into()), model_lock: Mutex::new(()), logger }
+    pub fn new(selected: AsrModel, loader: Loader, logger: Logger) -> Self {
+        Self {
+            selected,
+            loader,
+            model: Mutex::new(None),
+            device: Mutex::new("wavo".into()),
+            model_lock: Mutex::new(()),
+            logger,
+        }
     }
 
-    /// The production ASR: `gigaam-v3` from the hub (downloaded when missing), lines on
-    /// stderr.
+    /// The selected local model, downloaded on first use if missing, with logs on stderr.
     #[must_use]
-    pub fn from_hub() -> Self {
-        Self::new(Box::new(|| Ok(Arc::new(WavoEngine::from_hub()?) as Arc<dyn Engine>)), Logger::stderr())
+    pub fn from_hub(model: AsrModel) -> Self {
+        Self::new(
+            model,
+            Box::new(move || Ok(Arc::new(WavoEngine::from_hub(model)?) as Arc<dyn Engine>)),
+            Logger::stderr(),
+        )
     }
 
     /// Always true: wavo has no remote side that can be down.
@@ -166,7 +187,7 @@ impl WavoAsr {
             return Ok(engine.clone());
         }
         if !quiet {
-            self.logger.line("Загрузка модели gigaam-v3 (wavo)...");
+            self.logger.line(&format!("Загрузка модели {} (wavo)...", self.selected.name()));
         }
         let engine = (self.loader)()?;
         *self.device.lock().unwrap_or_else(PoisonError::into_inner) = format!("wavo {}", engine.device());

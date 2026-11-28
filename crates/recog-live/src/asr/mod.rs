@@ -77,6 +77,7 @@ impl fmt::Display for AsrError {
 
 impl std::error::Error for AsrError {}
 
+mod gigaam_v4;
 pub mod remote;
 pub mod wavo;
 pub mod words;

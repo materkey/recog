@@ -7,6 +7,16 @@ Refactors and fixes without a visible effect stay in `git log`. An entry is
 written in the same commit as the change; the commit hashes lead to the
 reasoning.
 
+## 2026-11-28
+
+### Changed
+
+- Local recognition (backend `auto` or `wavo`) and the local fallback of
+  `backend = "remote"` now use GigaAM v4. The optional ASR gateway keeps its own
+  model. After `git pull`, run `cargo setup` to download and verify the
+  model (255 MB). To switch back, set `model = "gigaam-v3"` in the `[asr]`
+  section of `config.toml`, run `recog prefetch` and restart the live service.
+
 ## 2026-11-26
 
 ### Changed

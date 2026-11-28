@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 **Recog** is a Russian speech recognition system with live speaker identification via KTalk. It combines:
-- **GigaAM** (v3_e2e_rnnt) for Russian ASR
+- **GigaAM** for Russian ASR (v4 by default, v3 with `[asr] model = "gigaam-v3"`)
 - **Conference participant signals** for speaker identification
 
 ## Repository layout
@@ -466,6 +466,7 @@ Non-secret settings belong in the installation configuration `~/.config/recog/co
 - `RECOG_CONFIG_FILE` - Path of the installation configuration (default `$XDG_CONFIG_HOME/recog/config.toml`, i.e. `~/.config/recog/config.toml`): non-secret per-installation settings such as conference hosts, source aliases and the web UI names of importer sources, parsed only by `crates/recog-core/src/install_config.rs` (`docs/configuration.md`). The old `.local/conference-hosts.json` (`RECOG_CONFERENCE_HOSTS_FILE`) is still read with a warning while `config.toml` is absent; both present is a startup error.
 - `RECOG_BRIDGE_WS_URL` - Overrides the bridge WebSocket URL the frontend subscriber connects to (default `ws://localhost:8766`). Used by `crates/recog-web/src/bridge_subscriber.rs` to forward `transcript_refine` events from `crates/recog-bridge` to webapp clients (D10 — JSONL tail cannot see refine rewrites).
 - `RECOG_WEB_RUNTIME` - no effect: the web server is always `bin/recog-web --host 127.0.0.1 --port 9080 --repo <checkout>`, which also runs the KTalk desktop integration's observer; still accepted from older configurations.
+- `RECOG_ASR_MODEL` - local model, including the remote gateway fallback: `gigaam-v4` (default) or `gigaam-v3`.
 - `RECOG_ASR_BACKEND` - `auto` (default) | `wavo`: GigaAM on the Rust runtime wavo inside the live process (`crates/recog-live/src/asr/wavo.rs`; no batch, refine not abortable mid-decode) | `remote` (offload GigaAM to a configured ASR gateway through `FallbackAsr` in `crates/recog-live/src/asr/remote.rs`, built by `build_asr()`, with wavo as the lazy local fallback + circuit breaker) | `local` (the PyTorch model, gone: runs on wavo with a line in the log).
 - `RECOG_ASR_REMOTE_URL` - Gateway base URL. **No default**: `RECOG_ASR_BACKEND=remote` with an empty URL makes `build_asr()` raise at startup instead of silently serving from the local model (different RAM and latency). the installer checks the pair before any service is activated.
 - `RECOG_ASR_REMOTE_MODEL` - Model alias sent to the gateway (default `gigaam`).

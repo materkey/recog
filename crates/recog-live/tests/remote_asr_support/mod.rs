@@ -299,7 +299,7 @@ pub fn run_rust(url: &str, index: usize, scenario: &Json) -> Json {
         Ok(outcome) if outcome == "ok" => Ok(Arc::new(FakeEngine) as Arc<dyn Engine>),
         _ => Err(AsrError::Failed("weights missing".into())),
     });
-    let local = Arc::new(WavoAsr::new(loader, logger.clone()));
+    let local = Arc::new(WavoAsr::new(Default::default(), loader, logger.clone()));
     let client = RemoteAsrClient::new(
         &format!("{url}/s{index}/"),
         config["model"].as_str().unwrap(),

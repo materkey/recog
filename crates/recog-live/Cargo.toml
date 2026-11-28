@@ -41,9 +41,8 @@ sha1 = "0.10.6"
 sha2 = "0.10.9"
 # The remote ASR gateway: the client wavo's hub already brings, without default features.
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
-# Pinned exactly, as in wavo-asr-py: the measurements of
-# docs/experiments/2026-11-07-rust-asr-runtimes.md hold for this version.
-wavo = { version = "=0.4.0", default-features = false, features = ["hub"] }
+# wavo PR #120 adds the GigaAM v4 encoder.
+wavo = { git = "https://github.com/vladkens/wavo", rev = "fb472d33f721b52c67eb3811739e7a90fbd94cd6", default-features = false, features = ["hub"] }
 
 # The device list of `--list-devices` and `--mic-device`: CoreAudio, nothing opened.
 [target.'cfg(target_os = "macos")'.dependencies]

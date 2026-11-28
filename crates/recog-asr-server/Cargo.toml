@@ -29,7 +29,7 @@ tokio = { version = "1.49", features = ["macros", "net", "rt-multi-thread", "sig
 # The gateway's requests to the backends: the client wavo's hub already brings.
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 # Pinned exactly, as in recog-live.
-wavo = { version = "=0.4.0", default-features = false, features = ["hub"] }
+wavo = { git = "https://github.com/vladkens/wavo", rev = "fb472d33f721b52c67eb3811739e7a90fbd94cd6", default-features = false, features = ["hub"] }
 
 [dev-dependencies]
 # The answers the frozen tests compare, recorded as JSON with the SHA-256 of the steps.

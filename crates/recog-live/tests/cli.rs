@@ -271,7 +271,7 @@ fn cached_model(cache: &Path) -> PathBuf {
 }
 
 #[test]
-fn a_cached_model_when_prefetching_then_its_path_and_nothing_downloaded() {
+fn v3_selected_when_prefetching_then_its_cached_path_and_nothing_downloaded() {
     // given
     let sandbox = Sandbox::new();
     let cache = sandbox.path("hf-hub");
@@ -279,6 +279,7 @@ fn a_cached_model_when_prefetching_then_its_path_and_nothing_downloaded() {
     // when
     let output = sandbox
         .command(&["prefetch"])
+        .env("RECOG_ASR_MODEL", "gigaam-v3")
         .env("HF_HUB_CACHE", &cache)
         .env("HF_ENDPOINT", "http://127.0.0.1:9")
         .output()
@@ -287,6 +288,23 @@ fn a_cached_model_when_prefetching_then_its_path_and_nothing_downloaded() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), format!("{}\n", model.display()));
     assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
+fn invalid_cached_v3_when_starting_live_then_wavo_reports_the_model_error() {
+    let sandbox = Sandbox::new();
+    let cache = sandbox.path("hf-hub");
+    cached_model(&cache);
+    let output = sandbox
+        .command(&["live", "--system-audio", "none"])
+        .env("RECOG_ASR_MODEL", "gigaam-v3")
+        .env("HF_HUB_CACHE", cache)
+        .env("HF_ENDPOINT", "http://127.0.0.1:9")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a GGUF file"), "{stderr}");
 }
 
 #[test]
@@ -305,9 +323,48 @@ fn no_cached_model_and_no_hub_when_prefetching_then_the_download_fails_with_stat
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert!(
-        stderr.starts_with("Downloading the ASR model gigaam-v3...\nCould not download the ASR model: "),
+        stderr.starts_with("Downloading the ASR model gigaam-v4...\nCould not download the ASR model: "),
         "{stderr}"
     );
+}
+
+#[test]
+fn corrupt_download_when_prefetching_v4_then_no_model_is_published() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    let sandbox = Sandbox::new();
+    let server = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", server.local_addr().unwrap());
+    let reply = std::thread::spawn(move || {
+        let (mut client, _) = server.accept().unwrap();
+        let mut request = BufReader::new(&client).lines();
+        let method = request.next().unwrap().unwrap();
+        for line in request {
+            if line.unwrap().is_empty() {
+                break;
+            }
+        }
+        client.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nwrong").unwrap();
+        method
+    });
+
+    let output = sandbox
+        .command(&["prefetch"])
+        .env("HF_HOME", sandbox.path("hf"))
+        .env("HF_ENDPOINT", endpoint)
+        .output()
+        .unwrap();
+    let repo = "70sh1/gigaam-v4-e2e-rnnt-gguf";
+    let revision = "2a312d783963ca3433768281faea00cdcf2569c5";
+    let file = "gigaam-v4-e2e-rnnt-Q8_0.gguf";
+    assert_eq!(reply.join().unwrap(), format!("GET /{repo}/resolve/{revision}/{file} HTTP/1.1"));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("expected 255076352 bytes with SHA-256"));
+    let cache = sandbox.path("hf/hub/models--70sh1--gigaam-v4-e2e-rnnt-gguf");
+    assert!(!cache.join("snapshots").exists());
+    assert_eq!(std::fs::read_dir(cache.join("blobs")).unwrap().count(), 0);
 }
 
 #[test]

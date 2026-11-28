@@ -157,20 +157,20 @@ pub fn build_asr(settings: &AsrSettings, log: &Logger) -> Result<Arc<dyn LiveAsr
             );
             Ok(Arc::new(FallbackAsr::new(
                 remote,
-                Arc::new(WavoAsr::from_hub()),
+                Arc::new(WavoAsr::from_hub(settings.model)),
                 settings.circuit_fails,
                 settings.circuit_open_s,
                 SystemClock::shared(),
                 log.clone(),
             )))
         }
-        "auto" | "wavo" => Ok(Arc::new(WavoAsr::from_hub())),
+        "auto" | "wavo" => Ok(Arc::new(WavoAsr::from_hub(settings.model))),
         other => {
             log.line(&format!(
                 "[asr] backend = {} is not available in the Rust live process; it runs on wavo",
                 recog_core::py::repr(other)
             ));
-            Ok(Arc::new(WavoAsr::from_hub()))
+            Ok(Arc::new(WavoAsr::from_hub(settings.model)))
         }
     }
 }

@@ -135,7 +135,7 @@ impl WavoTranscriber {
 
 /// The model's file in the Hugging Face cache, downloaded there first when missing.
 fn model_path(name: &str) -> Result<std::path::PathBuf, String> {
-    let hub = wavo::hub::Hub::new();
+    let hub = wavo::hub::Hub::new().prepare(false);
     hub.find(name)
         .map_or_else(|| hub.pull(name, |_| std::ops::ControlFlow::Continue(())).map_err(|e| e.to_string()), Ok)
 }

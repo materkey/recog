@@ -26,7 +26,7 @@ The programs are `target/release/recog-asr-gigaam` and
 from the checkout. Qwen is an external backend: this repository neither
 installs nor starts it.
 
-The backend runs GigaAM v3 on the `wavo` crate, as the live process does: the
+The backend runs GigaAM v3 on the `wavo` crate. The
 Q8_0 GGUF of `GIGAAM_VARIANT` (`v3_e2e_rnnt` is `gigaam-v3`; `v3_e2e_ctc`,
 `v3_rnnt` and `v3_ctc` also exist, older variants stop the start with an
 error) comes from the Hugging Face cache (`HF_HOME`) and is downloaded there on

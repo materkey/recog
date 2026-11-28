@@ -88,7 +88,7 @@ fn remote_down_and_local_loaded_refining_with_live_waiting_then_the_local_path_g
     });
     let fb = FallbackAsr::new(
         RemoteAsrClient::new(&format!("http://127.0.0.1:{port}"), "gigaam", 2.0, Some(1.0)),
-        Arc::new(WavoAsr::new(loader, logger.clone())),
+        Arc::new(WavoAsr::new(Default::default(), loader, logger.clone())),
         3,
         60.0,
         clock.shared(),

@@ -156,7 +156,20 @@ fn setting_keys_when_naming_a_variable_then_its_table_and_key_are_given() {
     assert_eq!(setting_key("NOT_A_SETTING"), None);
     assert_eq!(setting_key("RECOG_INSTALL_RUNTIME").as_deref(), Some("[install] runtime"));
     assert_eq!(setting_key("CODEX_MODEL").as_deref(), Some("[ai] codex_model"));
-    assert_eq!(all_settings().count(), 29);
+    assert_eq!(all_settings().count(), 30);
+}
+
+#[test]
+fn local_model_when_parsing_and_overlaying_then_only_supported_versions_are_accepted() {
+    let key = "RECOG_ASR_MODEL";
+    let file = parse("[asr]\nmodel = 'gigaam-v3'").unwrap();
+    let (resolved, overridden) = with_environment(&file, &environ(&[(key, "gigaam-v4")])).unwrap();
+    assert_eq!(parse("").unwrap().asr.model, AsrModel::V4);
+    assert_eq!(file.asr.model, AsrModel::V3);
+    assert_eq!(resolved.asr.model, AsrModel::V4);
+    assert_eq!(overridden, vec![key]);
+    assert!(parse("[asr]\nmodel = 'typo'").unwrap_err().contains("asr.model"));
+    assert!(with_environment(&file, &environ(&[(key, "typo")])).unwrap_err().contains(key));
 }
 
 #[test]

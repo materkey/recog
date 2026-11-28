@@ -425,7 +425,7 @@ fn run_command(command: Command, config: &InstallConfig, environ: &Environ, repo
         Command::Check => install::print(install::check(repo_root, config, environ)),
         Command::Config(query) => install::print(install::config(query, repo_root, config, environ)),
         Command::Launcher => install::print(install::launcher(repo_root, config)),
-        Command::Prefetch => install::print(install::prefetch()),
+        Command::Prefetch => install::print(install::prefetch(config.asr.model)),
     }
 }
 

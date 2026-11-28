@@ -48,6 +48,12 @@ over it once at startup and gives the typed result (`config.asr.backend`,
 `config.copilot.grace_s`, ...): code reads that, never the environment. Each field
 declares its variable, type and default there. `RECOG_CONFIG_FILE` may be set in `.env` too.
 
+`[asr] model` (`RECOG_ASR_MODEL`) selects the model for local recognition,
+including the fallback when a remote gateway is unavailable. The default is
+`gigaam-v4`. To roll back, set `model = "gigaam-v3"` under `[asr]`, run
+`recog prefetch` and restart the live service. The gateway still uses
+`[asr] remote_model`.
+
 `[install] runtime` is read by the same configuration parser as every other
 setting. The supported value is `rust`. `recog check` reports a legacy Python
 installation before setup activates its services.

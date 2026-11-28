@@ -41,6 +41,7 @@ pub const CONFIGURABLE_PLATFORMS: [&str; 2] = ["jitsi", "matrix"];
 /// How a setting's value is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    AsrModel,
     Flag,
     Integer,
     Number,
@@ -60,6 +61,7 @@ pub struct Setting {
 /// A setting's value, whatever its kind.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SettingValue {
+    AsrModel(AsrModel),
     Flag(bool),
     Integer(Option<i64>),
     Number(f64),
@@ -70,6 +72,41 @@ pub enum SettingValue {
 trait SettingType: Sized {
     fn to_value(&self) -> SettingValue;
     fn from_value(value: SettingValue) -> Option<Self>;
+}
+
+/// The local GigaAM model, also used when the remote gateway is unavailable.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum AsrModel {
+    #[default]
+    V4,
+    V3,
+}
+
+impl AsrModel {
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::V4 => "gigaam-v4",
+            Self::V3 => "gigaam-v3",
+        }
+    }
+
+    fn parse(raw: &str, key: &str) -> Result<SettingValue, String> {
+        [Self::V4, Self::V3]
+            .into_iter()
+            .find(|model| model.name() == raw)
+            .map(SettingValue::AsrModel)
+            .ok_or_else(|| format!("{key} must be gigaam-v4 or gigaam-v3, got {}", py::repr(raw)))
+    }
+}
+
+impl SettingType for AsrModel {
+    fn to_value(&self) -> SettingValue {
+        SettingValue::AsrModel(*self)
+    }
+    fn from_value(value: SettingValue) -> Option<Self> {
+        if let SettingValue::AsrModel(model) = value { Some(model) } else { None }
+    }
 }
 
 impl SettingType for bool {
@@ -178,6 +215,7 @@ section!(
         /// "auto" | "local" | "remote" | "wavo": auto is wavo on a Mac where setup.sh
         /// built it, else local (PyTorch); remote offloads GigaAM to a gateway (ADR-0020).
         backend: String = ("RECOG_ASR_BACKEND", Text, "auto".into()),
+        model: AsrModel = ("RECOG_ASR_MODEL", AsrModel, AsrModel::default()),
         /// auto (cuda > mps > cpu) | cuda | mps | cpu; explicit + unavailable fails.
         device: String = ("RECOG_ASR_DEVICE", Text, "auto".into()),
         /// torch.set_num_threads() cap for CPU inference; None leaves torch alone.
@@ -525,6 +563,7 @@ fn file_value(kind: Kind, value: &Doc, name: &str) -> Result<SettingValue, Strin
         #[allow(clippy::cast_precision_loss)]
         (Kind::Number, Doc::Int(n)) => Ok(SettingValue::Number(*n as f64)),
         (Kind::Number, Doc::Float(x)) => Ok(SettingValue::Number(*x)),
+        (Kind::AsrModel, Doc::Str(s)) => AsrModel::parse(s, name),
         (Kind::Text, Doc::Str(s)) => Ok(SettingValue::Text(s.clone())),
         (Kind::List, Doc::Array(items)) => string_list(items, name).map(SettingValue::List),
         _ => Err(wrong_type(name)),
@@ -623,6 +662,7 @@ fn environment_value(setting: &Setting, environ: &Environ) -> Result<Option<Sett
     }
     let name = setting.env;
     let value = match setting.kind {
+        Kind::AsrModel => AsrModel::parse(raw, name),
         Kind::Flag => environment_flag(name, raw),
         Kind::Integer => environment_integer(name, raw),
         Kind::Number => py::parse_float(raw).map(SettingValue::Number).map_err(|e| format!("{name}: {e}")),
